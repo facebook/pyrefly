@@ -26,6 +26,10 @@ jobs:
   # is bounded and the instruction counts are stable run-to-run.
   simulation:
     name: Microbenchmarks (simulation)
+    # The trigger includes `edited` only to let `#bench` in the description
+    # start the walltime job below. The microbenchmark results do not change
+    # when the description changes.
+    if: ${{ github.event.action != 'edited' }}
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6
