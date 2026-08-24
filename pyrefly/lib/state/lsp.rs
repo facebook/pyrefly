@@ -3215,6 +3215,12 @@ impl<'a> Transaction<'a> {
         // Actions that carry more than one edit (e.g. the missing-`@override` fix,
         // which inserts both the decorator and an import).
         let mut multi_actions: Vec<(String, Vec<(Module, TextRange, String)>)> = Vec::new();
+        // Deduplicates the actions pushed onto `other_actions`. The same fix can
+        // be generated more than once -- e.g. several errors on one line all
+        // produce an identical "add pyrefly ignore" action, or one unused binding
+        // is reported through multiple imports -- and we don't want to offer the
+        // user the same quick fix twice. Keying on (title, edit range, edit text)
+        // treats two actions as equal when they would make the same visible edit.
         let mut other_action_keys: HashSet<(String, TextRange, String)> = HashSet::new();
         if let Some(bindings) = self.get_bindings(handle) {
             for unused in bindings.unused_imports() {
@@ -3226,7 +3232,12 @@ impl<'a> Transaction<'a> {
                             unused,
                         )
                 {
-                    other_actions.push(action);
+                    // `insert` returns false when this exact edit was already
+                    // queued, so a duplicate action is dropped rather than pushed.
+                    let key = (action.0.clone(), action.2, action.3.clone());
+                    if other_action_keys.insert(key) {
+                        other_actions.push(action);
+                    }
                 }
             }
         }

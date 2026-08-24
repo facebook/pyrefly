@@ -1374,6 +1374,11 @@ fn unused_import_action_after(code: &str, cursor_offset: usize) -> Option<String
     let (_, edits) = actions
         .into_iter()
         .find(|(title, _)| title.starts_with("Remove unused import: `"))?;
+    assert_eq!(
+        1,
+        edits.len(),
+        "removing an unused import should be a single edit"
+    );
     let (module, range, patch) = edits.into_iter().next()?;
     if module.path() != module_info.path() {
         return None;
@@ -1560,6 +1565,37 @@ fn remove_unused_import_quickfix_removes_from_import_alias() {
     let cursor_offset = code.find("Dict").unwrap();
     let after = unused_import_action_after(code, cursor_offset).unwrap();
     assert_eq!("from typing import List\nx: List[int] = []\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_first_parenthesized_alias() {
+    let code = "from typing import (\n    Dict,\n    List,\n)\nx: List[int] = []\n";
+    let cursor_offset = code.find("Dict").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import (\n    List,\n)\nx: List[int] = []\n",
+        after
+    );
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_last_parenthesized_alias() {
+    let code = "from typing import (\n    Dict,\n    List,\n)\nx: Dict[str, int] = {}\n";
+    let cursor_offset = code.find("List").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import (\n    Dict,\n)\nx: Dict[str, int] = {}\n",
+        after
+    );
+}
+
+// A dotted import binds only its first component, so the whole statement goes.
+#[test]
+fn remove_unused_import_quickfix_removes_dotted_import() {
+    let code = "import os.path\nx = 1\n";
+    let cursor_offset = code.find("os.path").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("x = 1\n", after);
 }
 
 #[test]
