@@ -343,20 +343,19 @@ fn compute_public_fqns(
         let exports = transaction.get_exports(handle);
 
         // prioritize `__all__` if present, otherwise local defs + `import x as x`
-        let names: Vec<Name> =
-            if let Some(all_iter) = exports_data.get_explicit_dunder_all_names_iter() {
-                all_iter.cloned().collect()
-            } else {
-                exports
-                    .iter()
-                    .filter_map(|(name, loc)| {
-                        let is_local = matches!(loc, ExportLocation::ThisModule(_));
-                        let is_reexport = exports_data.is_explicit_reexport(name);
-                        (is_public_name(name.as_str()) && (is_local || is_reexport))
-                            .then_some(name.clone())
-                    })
-                    .collect()
-            };
+        let names: Vec<Name> = if let Some(all) = exports_data.explicit_dunder_all_names() {
+            all.iter().cloned().collect()
+        } else {
+            exports
+                .iter()
+                .filter_map(|(name, loc)| {
+                    let is_local = matches!(loc, ExportLocation::ThisModule(_));
+                    let is_reexport = exports_data.is_explicit_reexport(name);
+                    (is_public_name(name.as_str()) && (is_local || is_reexport))
+                        .then_some(name.clone())
+                })
+                .collect()
+        };
 
         // collect both the local and traced origin FQN so a file-scoped run matches the module
         for name in names {
@@ -1071,8 +1070,8 @@ fn has_decorator_named(decorators: &[Idx<KeyDecorator>], bindings: &Bindings, na
 fn collect_dunder_all(transaction: &Transaction, handle: &Handle) -> Option<SmallSet<Name>> {
     transaction
         .get_exports_data(handle)
-        .get_explicit_dunder_all_names_iter()
-        .map(|it| it.cloned().collect())
+        .explicit_dunder_all_names()
+        .cloned()
 }
 
 /// The `(module_prefix, __all__ FQNs)` that gate which `.py`-only symbols a stub merge keeps,

@@ -714,8 +714,8 @@ impl Bindings {
             );
         }
 
-        if let Some(exported_names) = exports.get_explicit_dunder_all_names_iter() {
-            builder.record_used_imports_from_dunder_all_names(exported_names);
+        if let Some(exported_names) = exports.explicit_dunder_all_names() {
+            builder.record_used_imports_from_dunder_all_names(exported_names.iter());
         }
 
         let unused_imports = builder.scopes.collect_module_unused_imports();

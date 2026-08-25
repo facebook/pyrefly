@@ -148,7 +148,7 @@ impl Exports {
         );
         definitions.inject_implicit_globals();
         let partially_known_dunder_all = Self::get_partially_known_dunder_all(&definitions);
-        let explicit_dunder_all_names = Self::get_explicit_dunder_all_names(&definitions);
+        let explicit_dunder_all_names = Self::compute_explicit_dunder_all_names(&definitions);
         definitions.ensure_dunder_all(module_info.path().style());
         if module_info.name() == ModuleName::builtins() {
             // The `builtins` module is a bit weird. It has no `__all__` in TypeShed,
@@ -317,15 +317,13 @@ impl Exports {
             .contains(name)
     }
 
-    /// Return an iterator with entries in `__all__` that are user-defined or None if `__all__` was not present.
-    pub fn get_explicit_dunder_all_names_iter(&self) -> Option<impl Iterator<Item = &Name>> {
-        self.explicit_dunder_all_names
-            .as_ref()
-            .map(|names| names.iter())
+    /// Returns the entries in a user-defined `__all__`, or `None` if `__all__` was not present.
+    pub fn explicit_dunder_all_names(&self) -> Option<&SmallSet<Name>> {
+        self.explicit_dunder_all_names.as_ref()
     }
 
     /// Returns statically known entries in an explicit `__all__`.
-    pub fn get_explicit_dunder_all_names(definitions: &Definitions) -> Option<SmallSet<Name>> {
+    fn compute_explicit_dunder_all_names(definitions: &Definitions) -> Option<SmallSet<Name>> {
         if definitions.dunder_all.kind != DunderAllKind::Specified {
             return None;
         }
