@@ -1,0 +1,26 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+# Runtime dependencies for the tensor-shape test suites, installed into the
+# shared virtualenv by bootstrap_venv.py.
+#
+# Versions are pinned because these tests assert the shapes the libraries
+# actually produce, so an unpinned minor bump can turn a correct stub into a
+# red build. Bump deliberately, and rerun the suites when you do.
+#
+# The builds are CPU-only. Shape checking never executes a kernel, so a CUDA
+# stack would add gigabytes to every CI run and dev bootstrap for no coverage.
+# Linux and Windows need the explicit `+cpu` build from PyTorch's CPU index;
+# the macOS wheels on PyPI are already CPU-only and have no `+cpu` variant.
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+numpy==2.5.0
+jax==0.10.2
+# Pinned alongside `jax`: it is a separate distribution that would otherwise
+# resolve freely under a pinned `jax`.
+jaxlib==0.10.2
+torch==2.12.1+cpu ; sys_platform != "darwin"
+torch==2.12.1 ; sys_platform == "darwin"

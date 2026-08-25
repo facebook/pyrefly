@@ -239,14 +239,18 @@ Use `--nocapture` when you want the full Pyrefly output on success. By default,
 the runner prints a compact `PASS ...` line and only dumps checker output on
 failure.
 
-In an internal Buck checkout, the equivalent static validation targets are:
+There are no Buck test targets for the stubs. An internal checkout runs the same
+runner and only sources Pyrefly differently, via `--buck`:
 
 ```bash
-buck test tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_all_test
-buck test tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_error_test
-buck test tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_jaxtyping_test
-buck test tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_jaxtyping_error_test
-buck test tensor-shapes/pyrefly-torch-stubs/examples:torch_examples_test
+python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --buck
+```
+
+To run every library at once, static and runtime, exactly as both CI systems do:
+
+```bash
+python3 tensor-shapes/run_tests.py           # add --buck in an internal checkout
+python3 tensor-shapes/run_tests.py --static-only   # no virtualenv needed
 ```
 
 The project-level `test.py` runner keeps tensor-shape validation separate from
@@ -267,15 +271,19 @@ The tests live in:
 tensor-shapes/pyrefly-torch-stubs/test/runtime_tests/
 ```
 
-Run them from a Python 3.12+ virtualenv with `torch` installed:
+Runtime tests need the shared virtualenv, which serves torch, numpy and jax
+together. Bootstrapping is the only step that downloads anything, so it is also
+the only step that needs network access -- on a Meta machine, via fwdproxy:
 
 ```bash
-python3.12 -m venv .tensor-shapes-venv
-. .tensor-shapes-venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install torch
-python tensor-shapes/pyrefly-torch-stubs/run_runtime_tests.py
+python3 tensor-shapes/bootstrap_venv.py            # add --fwdproxy internally
+python3 tensor-shapes/run_tests.py --runtime-only
 ```
+
+The virtualenv defaults to `~/.tensor-shapes-venv`; set `$TENSOR_SHAPES_VENV` to
+put it elsewhere. The runners never create it, and never reach the network: if it
+is missing they say so and print the bootstrap command. Type checking does not
+need it at all.
 
 Run one suite while iterating:
 
@@ -285,12 +293,9 @@ python tensor-shapes/pyrefly-torch-stubs/run_runtime_tests.py --suite model
 ```
 
 The runtime runner sets up import paths for `shape_extensions` and the runnable
-example modules. In an internal Buck checkout, the existing runtime targets are:
-
-```bash
-buck test tensor-shapes/pyrefly-torch-stubs/test:annotation_runtime_test
-buck test tensor-shapes/pyrefly-torch-stubs/test:model_runtime_test
-```
+example modules. Runtime tests are the same in an internal checkout: they run
+against the virtualenv, never through Buck, so that no workflow ever rebuilds
+torch, numpy or jax.
 
 ## Kernel Tests
 

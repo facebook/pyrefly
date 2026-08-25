@@ -65,8 +65,6 @@ jobs:
       # be Windows: the check keys results by splitting paths on "/".
       if: ${{ matrix.os == 'ubuntu-latest' }}
       run: python conformance/conformance_output.py conformance/third_party --mode check --executable target/release/pyrefly
-    - name: Run torch stub tests
-      run: python tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --release
     - name: Run Scrut tests
       env:
         PYREFLY: ${{ github.workspace }}/target/release/pyrefly
@@ -76,19 +74,22 @@ jobs:
         PYREFLY_PY: ${{ github.workspace }}/pyrefly/python
       run: env -u GITHUB_ACTIONS scrut test test
       if: ${{ matrix.os != 'windows-latest' }}
-    - name: Set up torch runtime test environment
-      shell: bash
-      run: |
-        python -m venv .tensor-shapes-venv
-        if [ -x .tensor-shapes-venv/bin/python ]; then
-          TENSOR_SHAPES_PYTHON=.tensor-shapes-venv/bin/python
-        else
-          TENSOR_SHAPES_PYTHON=.tensor-shapes-venv/Scripts/python.exe
-        fi
-        echo "TENSOR_SHAPES_PYTHON=$TENSOR_SHAPES_PYTHON" >> "$GITHUB_ENV"
-        "$TENSOR_SHAPES_PYTHON" -m pip install --upgrade pip
-        "$TENSOR_SHAPES_PYTHON" -m pip install torch
-    - name: Run torch runtime tests
-      shell: bash
-      run: |
-        "$TENSOR_SHAPES_PYTHON" tensor-shapes/pyrefly-torch-stubs/run_runtime_tests.py
+    # Every library's stub tests run in one step rather than one job per
+    # library. Type checking runs on the whole matrix: it needs no virtualenv,
+    # and the runners carry Windows-specific interpreter and `.exe` path
+    # handling that nothing else would exercise. Only the runtime half is
+    # Ubuntu-only, so that torch and jax are not installed three times to run
+    # platform-independent assertions.
+    - name: Run tensor-shape type checks
+      run: python tensor-shapes/run_tests.py --release --static-only
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+      if: ${{ matrix.os == 'ubuntu-latest' }}
+    - name: Bootstrap tensor-shapes virtualenv
+      run: python tensor-shapes/bootstrap_venv.py
+      if: ${{ matrix.os == 'ubuntu-latest' }}
+    - name: Run tensor-shape runtime tests
+      run: python tensor-shapes/run_tests.py --runtime-only
+      if: ${{ matrix.os == 'ubuntu-latest' }}

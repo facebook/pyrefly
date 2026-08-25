@@ -37,30 +37,6 @@ TYPES_TEST_FILTERS: tuple[str, ...] = ("shape", "int", "dimension")
 BUCK_TYPES_TARGET: str = "fbcode//pyrefly/crates/pyrefly_types:pyrefly_types"
 BUCK_RUST_TARGET: str = "pyrefly:pyrefly_library"
 
-BUCK_STATIC_CORPUS_TARGETS: tuple[str, ...] = (
-    "fbcode//pyrefly/tensor-shapes/pyrefly-torch-stubs/examples:torch_examples_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_all_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_error_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_jaxtyping_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_jaxtyping_error_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-numpy-stubs:numpy_arithmetic_static_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-numpy-stubs:numpy_broadcasting_static_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-numpy-stubs:numpy_creation_basics_static_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-numpy-stubs:numpy_dtype_properties_static_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-numpy-stubs:numpy_examples_static_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-numpy-stubs:numpy_indexing_static_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-numpy-stubs:numpy_linalg_static_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-numpy-stubs:numpy_math_ufuncs_static_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-numpy-stubs:numpy_random_static_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-numpy-stubs:numpy_reductions_static_test",
-)
-
-BUCK_RUNTIME_TARGETS: tuple[str, ...] = (
-    "fbcode//pyrefly/tensor-shapes/pyrefly-torch-stubs/test:annotation_runtime_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-torch-stubs/test:model_runtime_test",
-    "fbcode//pyrefly/tensor-shapes/pyrefly-numpy-stubs:numpy_runtime_test",
-)
-
 
 def print_step(message: str) -> None:
     print(f"\033[92mRunning {message}...\033[0m", flush=True)
@@ -79,8 +55,13 @@ def select_mode(mode: str) -> str:
     if mode == "cargo" and shutil.which("cargo") is None:
         print("cargo is not on PATH; falling back to buck mode.", flush=True)
         mode = "buck"
-    if mode == "buck" and shutil.which("buck") is None:
-        raise RuntimeError("buck mode requested, but `buck` is not on PATH")
+    # Both binaries are required: the Rust tests below shell out to `buck`, and
+    # the stub suites reach Pyrefly through `buck2` in `shape_testing.py`.
+    missing = [name for name in ("buck", "buck2") if shutil.which(name) is None]
+    if mode == "buck" and missing:
+        raise RuntimeError(
+            f"buck mode requested, but {' and '.join(missing)} is not on PATH"
+        )
     return mode
 
 
@@ -105,43 +86,20 @@ def run_cargo_rust_tests() -> None:
         )
 
 
-def run_cargo_static_corpus(nocapture: bool) -> None:
-    extra_args = ["--nocapture"] if nocapture else []
-    print_step("torch static tensor-shape corpus")
+def run_static_corpus(nocapture: bool, buck: bool) -> None:
+    print_step("static tensor-shape corpus")
     run(
-        [
-            sys.executable,
-            "tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py",
-            *extra_args,
-        ]
-    )
-    print_step("numpy static tensor-shape corpus")
-    run(
-        [
-            sys.executable,
-            "tensor-shapes/pyrefly-numpy-stubs/run_pyrefly.py",
-            *extra_args,
-        ]
+        [sys.executable, "tensor-shapes/run_tests.py", "--static-only"]
+        + (["--buck"] if buck else [])
+        + (["--nocapture"] if nocapture else [])
     )
 
 
-def run_cargo_runtime_tests() -> None:
-    print_step("torch runtime tests")
+def run_runtime_tests(buck: bool) -> None:
+    print_step("runtime tests")
     run(
-        [
-            sys.executable,
-            "-m",
-            "unittest",
-            "discover",
-            "tensor-shapes/pyrefly-torch-stubs/test/runtime_tests",
-        ]
-    )
-    print_step("numpy runtime tests")
-    run(
-        [
-            sys.executable,
-            "tensor-shapes/pyrefly-numpy-stubs/run_runtime_tests.py",
-        ]
+        [sys.executable, "tensor-shapes/run_tests.py", "--runtime-only"]
+        + (["--buck"] if buck else [])
     )
 
 
@@ -163,14 +121,6 @@ def run_buck_rust_tests() -> None:
         )
 
 
-def run_buck_corpus(include_runtime_tests: bool) -> None:
-    print_step("Buck tensor-shape corpus")
-    targets = list(BUCK_STATIC_CORPUS_TARGETS)
-    if include_runtime_tests:
-        targets.extend(BUCK_RUNTIME_TARGETS)
-    run(["buck", "test", *targets, "--", "--run-disabled", "--return-zero-on-skips"])
-
-
 def run_shape_tests(
     *,
     mode: str,
@@ -179,14 +129,16 @@ def run_shape_tests(
 ) -> None:
     selected_mode = select_mode(mode)
     print(f"Using {selected_mode} mode.", flush=True)
-    if selected_mode == "cargo":
-        run_cargo_rust_tests()
-        run_cargo_static_corpus(nocapture)
-        if include_runtime_tests:
-            run_cargo_runtime_tests()
-    else:
+    buck = selected_mode == "buck"
+    if buck:
         run_buck_rust_tests()
-        run_buck_corpus(include_runtime_tests)
+    else:
+        run_cargo_rust_tests()
+    # The stub corpus runs through the same runner either way; the build tool
+    # only decides where the Pyrefly binary comes from.
+    run_static_corpus(nocapture, buck)
+    if include_runtime_tests:
+        run_runtime_tests(buck)
 
 
 def main() -> None:
@@ -211,8 +163,8 @@ def main() -> None:
         "--nocapture",
         action="store_true",
         help=(
-            "Stream Pyrefly output from the cargo-mode static tensor-shape corpus "
-            "runners. Has no effect on the Rust unit-test filters or on buck mode."
+            "Stream Pyrefly output from the static tensor-shape corpus instead of "
+            "printing it only on failure. Has no effect on the Rust unit-test filters."
         ),
     )
     args = parser.parse_args()
