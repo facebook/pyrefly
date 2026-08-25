@@ -412,6 +412,46 @@ fn assert_no_introduce_parameter_action(code: &str) {
     );
 }
 
+fn compute_change_signature_actions(
+    code: &str,
+) -> (
+    ModuleInfo,
+    Vec<Vec<(Module, TextRange, String)>>,
+    Vec<String>,
+) {
+    let (handles, state) =
+        mk_multi_file_state_assert_no_errors(&[("main", code)], Require::Everything);
+    let handle = handles.get("main").unwrap();
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle).unwrap();
+    let selection = cursor_selection(code);
+    let actions = transaction
+        .change_signature_code_actions(handle, selection)
+        .unwrap_or_default();
+    let edit_sets: Vec<Vec<(Module, TextRange, String)>> =
+        actions.iter().map(|action| action.edits.clone()).collect();
+    let titles = actions.iter().map(|action| action.title.clone()).collect();
+    (module_info, edit_sets, titles)
+}
+
+fn apply_change_signature_action(code: &str, title: &str) -> Option<String> {
+    let (module_info, actions, titles) = compute_change_signature_actions(code);
+    let index = titles.iter().position(|candidate| candidate == title)?;
+    Some(apply_refactor_edits_for_module(
+        &module_info,
+        &actions[index],
+    ))
+}
+
+fn assert_no_change_signature_action(code: &str) {
+    let (_, actions, _) = compute_change_signature_actions(code);
+    assert!(
+        actions.is_empty(),
+        "expected no change-signature actions, found {}",
+        actions.len()
+    );
+}
+
 fn assert_no_extract_variable_action(code: &str) {
     let (_, actions, _) = compute_extract_variable_actions(code);
     assert!(
@@ -682,8 +722,14 @@ my_export
 
 #[test]
 fn prefer_public_stdlib_module_for_reexports() {
-    let report =
-        get_batched_lsp_operations_report_allow_error(&[("main", "BytesIO\n# ^")], get_test_report);
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[
+            ("main", "BytesIO\n# ^"),
+            ("_io", "class BytesIO: pass\n"),
+            ("io", "from _io import BytesIO as BytesIO\n"),
+        ],
+        get_test_report,
+    );
     assert_eq!(
         r#"
 # main.py
@@ -746,6 +792,12 @@ BytesIO
 # pyrefly: ignore [unknown-name]
 BytesIO
 # ^
+
+
+
+# _io.py
+
+# io.py
 "#
         .trim(),
         report.trim(),
@@ -1305,6 +1357,255 @@ x = x
     );
 }
 
+fn unused_import_action_after(code: &str, cursor_offset: usize) -> Option<String> {
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main")?;
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(handle)?;
+    let position = TextSize::try_from(cursor_offset).ok()?;
+    let actions = transaction
+        .local_quickfix_code_actions_sorted(
+            handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+            None,
+        )
+        .unwrap_or_default();
+    let (_, edits) = actions
+        .into_iter()
+        .find(|(title, _)| title.starts_with("Remove unused import: `"))?;
+    assert_eq!(
+        1,
+        edits.len(),
+        "removing an unused import should be a single edit"
+    );
+    let (module, range, patch) = edits.into_iter().next()?;
+    if module.path() != module_info.path() {
+        return None;
+    }
+    let (_before, after) = apply_patch(&module_info, range, patch);
+    Some(after)
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_import_line() {
+    let code = "import os\nx = 1\n";
+    let cursor_offset = code.find("os").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("x = 1\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_import_alias() {
+    let code = "import os, sys\nprint(sys.version)\n";
+    let cursor_offset = code.find("os").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("import sys\nprint(sys.version)\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_last_alias() {
+    let code = "import os, sys\nprint(os.getcwd())\n";
+    let cursor_offset = code.find("sys").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("import os\nprint(os.getcwd())\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_alias_in_type_checking_block() {
+    let code = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\n    import sys\nprint(sys.version)\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import sys\nprint(sys.version)\n",
+        after
+    );
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_emptied_type_checking_block() {
+    let code = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("from typing import TYPE_CHECKING\nx = 1\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_nested_emptied_blocks() {
+    let code = "from typing import TYPE_CHECKING\nx = 1\nif x:\n    if TYPE_CHECKING:\n        import os\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("from typing import TYPE_CHECKING\nx = 1\n", after);
+}
+
+// Removing the whole `if` would drop the `else` branch, so the body keeps a `pass`.
+#[test]
+fn remove_unused_import_quickfix_passes_block_with_else_clause() {
+    let code =
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\nelse:\n    x = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    pass\nelse:\n    x = 1\n",
+        after
+    );
+}
+
+// A loop header runs whatever its body does, so the loop stays with a `pass`.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_loop_body() {
+    let code = "for i in range(3):\n    import os\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("for i in range(3):\n    pass\nx = 1\n", after);
+}
+
+// A `try` body that keeps another statement is edited in place; emptying it
+// leaves a `pass`, which is what the next test pins down.
+#[test]
+fn remove_unused_import_quickfix_removes_alias_in_try_block() {
+    let code =
+        "try:\n    import os\n    import sys\nexcept ImportError:\n    pass\nprint(sys.version)\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    import sys\nexcept ImportError:\n    pass\nprint(sys.version)\n",
+        after
+    );
+}
+
+// Dropping the `try` would take handlers that may do real work with it, so the
+// body keeps a `pass` and the handlers are left for the user to judge.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_statement() {
+    let code = "try:\n    import os\nexcept ImportError:\n    pass\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    pass\nexcept ImportError:\n    pass\nx = 1\n",
+        after
+    );
+}
+
+// The capability probe from the review of D116863962: the handler sets a
+// fallback that the rest of the program reads, so it must survive the fix.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_keeping_capability_probe() {
+    let code = "available = True\ntry:\n    import os\nexcept ImportError:\n    available = False\nprint(available)\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "available = True\ntry:\n    pass\nexcept ImportError:\n    available = False\nprint(available)\n",
+        after
+    );
+}
+
+// A `finally` block runs even when the body is empty, so it must not be dropped.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_with_finally() {
+    let code =
+        "try:\n    import os\nexcept ImportError:\n    pass\nfinally:\n    print('done')\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    pass\nexcept ImportError:\n    pass\nfinally:\n    print('done')\nx = 1\n",
+        after
+    );
+}
+
+// An `else` block runs whenever the body completes, so it must not be dropped.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_with_else() {
+    let code =
+        "try:\n    import os\nexcept ImportError:\n    pass\nelse:\n    print('ok')\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    pass\nexcept ImportError:\n    pass\nelse:\n    print('ok')\nx = 1\n",
+        after
+    );
+}
+
+// Emptying a handler body says nothing about the `try` body, which must survive.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_except_handler() {
+    let code = "try:\n    x = 1\nexcept ImportError:\n    import os\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("try:\n    x = 1\nexcept ImportError:\n    pass\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_keeps_statement_after_semicolon() {
+    let code = "import os; x = 1\n";
+    let cursor_offset = code.find("os").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("x = 1\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_keeps_statement_before_semicolon() {
+    let code = "x = 1; import os\n";
+    let cursor_offset = code.find("os").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("x = 1\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_trailing_comment() {
+    let code = "import os  # only needed for os\nx = 1\n";
+    let cursor_offset = code.find("os").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("x = 1\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_from_import_alias() {
+    let code = "from typing import Dict, List\nx: List[int] = []\n";
+    let cursor_offset = code.find("Dict").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("from typing import List\nx: List[int] = []\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_first_parenthesized_alias() {
+    let code = "from typing import (\n    Dict,\n    List,\n)\nx: List[int] = []\n";
+    let cursor_offset = code.find("Dict").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import (\n    List,\n)\nx: List[int] = []\n",
+        after
+    );
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_last_parenthesized_alias() {
+    let code = "from typing import (\n    Dict,\n    List,\n)\nx: Dict[str, int] = {}\n";
+    let cursor_offset = code.find("List").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import (\n    Dict,\n)\nx: Dict[str, int] = {}\n",
+        after
+    );
+}
+
+// A dotted import binds only its first component, so the whole statement goes.
+#[test]
+fn remove_unused_import_quickfix_removes_dotted_import() {
+    let code = "import os.path\nx = 1\n";
+    let cursor_offset = code.find("os.path").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("x = 1\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_aliased_from_import() {
+    let code = "from typing import Dict as D, List\nx: List[int] = []\n";
+    let cursor_offset = code.find("D,").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("from typing import List\nx: List[int] = []\n", after);
+}
+
 #[test]
 fn redundant_cast_fix_all() {
     let (handles, state) = mk_multi_file_state(
@@ -1432,22 +1733,12 @@ fn test_import_from_stdlib() {
         &[("a", "TypeVar('T')\n# ^")],
         get_test_report,
     );
-    // TODO: Ideally `typing` would be preferred over `ast`.
     assert_eq!(
         r#"
 # a.py
 1 | TypeVar('T')
       ^
 Code Actions Results:
-# Title: Insert import: `from ast import TypeVar`
-
-## Before:
-TypeVar('T')
-# ^
-## After:
-from ast import TypeVar
-TypeVar('T')
-# ^
 # Title: Insert import: `from typing import TypeVar`
 
 ## Before:
@@ -1500,6 +1791,41 @@ TypeVar('T')
         .trim(),
         report.trim()
     );
+}
+
+#[test]
+fn test_import_for_unimported_directives() {
+    for (directive, call) in [
+        ("reveal_type", "reveal_type(1)\n"),
+        ("assert_type", "assert_type(1, int)\n"),
+    ] {
+        let files = [("main", call)];
+        let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+        let handle = handles.get("main").unwrap();
+        let transaction = state.transaction();
+        let module_info = transaction.get_module_info(handle).unwrap();
+        let actions = transaction
+            .local_quickfix_code_actions_sorted(
+                handle,
+                TextRange::new(TextSize::new(0), TextSize::new(0)),
+                ImportFormat::Absolute,
+                None,
+            )
+            .unwrap_or_default();
+        let expected_title = format!("Insert import: `from typing import {directive}`");
+        let (_, edits) = actions
+            .iter()
+            .find(|(title, _)| title == &expected_title)
+            .unwrap_or_else(|| panic!("expected import quick fix for `{directive}`"));
+        assert_eq!(edits.len(), 1);
+
+        let expected_import = format!("from typing import {directive}\n");
+        assert_eq!(expected_import, edits[0].2);
+        assert_eq!(
+            format!("{expected_import}{call}"),
+            apply_refactor_edits_for_module(&module_info, edits)
+        );
+    }
 }
 
 #[test]
@@ -3647,12 +3973,13 @@ A = 1
 
 #[test]
 fn convert_star_import_multiline() {
-    // Multi-line star imports with parentheses should be handled correctly.
+    // A star import whose statement spans multiple lines should have its full
+    // range replaced. `*` can't be parenthesized, so a backslash continuation is
+    // the only valid multi-line star import.
     let code_main = r#"
 # MULTILINE-START
-from foo import (
-    *,
-)
+from foo import \
+    *
 # MULTILINE-END
 x = A
 "#;
@@ -3685,13 +4012,13 @@ fn convert_star_import_shadowed_name() {
 # CONVERT-START
 from foo import *
 # CONVERT-END
-A = 42
-print(A)
-print(B)
+a = 42
+print(a)
+print(b)
 "#;
     let code_foo = r#"
-A = 1
-B = 2
+a = 1
+b = 2
 "#;
     let selection = find_marked_range_with(code_main, "# CONVERT-START", "# CONVERT-END");
     let (module_info, actions, titles) = compute_convert_star_import_actions(
@@ -3701,14 +4028,14 @@ B = 2
     );
     assert_eq!(vec!["Convert to explicit imports from `foo`"], titles);
     let updated = apply_refactor_edits_for_module(&module_info, &actions[0]);
-    // Only B should be imported since A is shadowed by a local assignment.
+    // Only b should be imported since a is shadowed by a local assignment.
     let expected = r#"
 # CONVERT-START
-from foo import B
+from foo import b
 # CONVERT-END
-A = 42
-print(A)
-print(B)
+a = 42
+print(a)
+print(b)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3801,7 +4128,36 @@ def greet(name, param):
     )
 
 def caller():
-    greet("Ada", "Hello " + ("Ada"))
+    greet("Ada", "Hello " + "Ada")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn introduce_parameter_parenthesizes_int_before_attribute() {
+    let code = r#"
+def f(x):
+    return (
+        # EXTRACT-START
+        x.bit_length()
+        # EXTRACT-END
+    )
+
+def caller():
+    f(42)
+"#;
+    let updated =
+        apply_introduce_parameter_action(code, 0).expect("expected introduce-parameter action");
+    let expected = r#"
+def f(x, param):
+    return (
+        # EXTRACT-START
+        param
+        # EXTRACT-END
+    )
+
+def caller():
+    f(42, (42).bit_length())
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3832,7 +4188,7 @@ def add_one(x, param):
     return param
 
 def caller():
-    add_one(3, (3) + 1)
+    add_one(3, 3 + 1)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3871,7 +4227,7 @@ class Greeter:
 
 def caller():
     greeter = Greeter()
-    greeter.greet("Ada", greeter.prefix + ("Ada"))
+    greeter.greet("Ada", greeter.prefix + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3900,7 +4256,7 @@ def mix(x, *, param, y):
     )
 
 def caller():
-    mix(1, param=(1) + (2), y=2)
+    mix(1, param=1 + 2, y=2)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3962,7 +4318,7 @@ class Utils:
         )
 
 def caller():
-    Utils.join("Hi ", "Ada", ("Hi ") + ("Ada"))
+    Utils.join("Hi ", "Ada", "Hi " + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -3991,7 +4347,7 @@ def add(a, b, param):
     )
 
 def caller():
-    add(1, param=(1) + (2), b=2)
+    add(1, param=1 + 2, b=2)
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4028,7 +4384,7 @@ class Greeter:
         )
 
 def caller():
-    Greeter.greet("Ada", Greeter.prefix + ("Ada"))
+    Greeter.greet("Ada", Greeter.prefix + "Ada")
 "#;
     assert_eq!(expected.trim(), updated.trim());
 }
@@ -4079,6 +4435,136 @@ def caller():
     accept(**values)
 "#;
     assert_no_introduce_parameter_action(code);
+}
+
+#[test]
+fn change_signature_remove_unused_parameter_updates_calls() {
+    let code = r#"
+def greet(name, message):
+#                ^
+    return name
+
+def caller():
+    greet("Ada", "Hello")
+    greet(name="Bob", message="Hi")
+"#;
+    let updated = apply_change_signature_action(code, "Remove parameter `message`")
+        .expect("expected remove-parameter action");
+    let expected = r#"
+def greet(name):
+#                ^
+    return name
+
+def caller():
+    greet(name="Ada")
+    greet(name="Bob")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn change_signature_does_not_remove_used_parameter() {
+    let code = r#"
+def greet(name, message):
+#                ^
+    return f"{message}, {name}"
+"#;
+    let (_, _, titles) = compute_change_signature_actions(code);
+    assert!(
+        !titles
+            .iter()
+            .any(|title| title == "Remove parameter `message`"),
+        "did not expect remove-parameter action for used parameter, found {titles:?}"
+    );
+}
+
+#[test]
+fn change_signature_move_parameter_left_updates_calls() {
+    let code = r#"
+def greet(name, message):
+#                ^
+    return f"{message}, {name}"
+
+def caller():
+    greet("Ada", "Hello")
+    greet(name="Bob", message="Hi")
+"#;
+    let updated = apply_change_signature_action(code, "Move parameter `message` left")
+        .expect("expected move-parameter action");
+    let expected = r#"
+def greet(message, name):
+#                ^
+    return f"{message}, {name}"
+
+def caller():
+    greet(message="Hello", name="Ada")
+    greet(message="Hi", name="Bob")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn change_signature_move_parameter_right_updates_calls() {
+    let code = r#"
+def greet(name, message):
+#         ^
+    return f"{message}, {name}"
+
+def caller():
+    greet("Ada", "Hello")
+    greet(name="Bob", message="Hi")
+"#;
+    let updated = apply_change_signature_action(code, "Move parameter `name` right")
+        .expect("expected move-parameter action");
+    let expected = r#"
+def greet(message, name):
+#         ^
+    return f"{message}, {name}"
+
+def caller():
+    greet(message="Hello", name="Ada")
+    greet(message="Hi", name="Bob")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn change_signature_move_method_parameter_left_updates_bound_and_unbound_calls() {
+    let code = r#"
+class Greeter:
+    def greet(self, name, message):
+#                         ^
+        return f"{message}, {name}"
+
+def caller():
+    greeter = Greeter()
+    greeter.greet("Ada", "Hello")
+    Greeter.greet(greeter, "Bob", "Hi")
+"#;
+    let updated = apply_change_signature_action(code, "Move parameter `message` left")
+        .expect("expected move-parameter action");
+    let expected = r#"
+class Greeter:
+    def greet(self, message, name):
+#                         ^
+        return f"{message}, {name}"
+
+def caller():
+    greeter = Greeter()
+    greeter.greet(message="Hello", name="Ada")
+    Greeter.greet(greeter, message="Hi", name="Bob")
+"#;
+    assert_eq!(expected.trim(), updated.trim());
+}
+
+#[test]
+fn change_signature_rejects_variadic_functions() {
+    let code = r#"
+def greet(name, *args):
+#         ^
+    return args
+"#;
+    assert_no_change_signature_action(code);
 }
 
 mod extract_field_tests {
@@ -4374,6 +4860,118 @@ def compute():
 }
 
 #[test]
+fn inline_variable_parens_for_bin_op_in_attribute() {
+    let code = r#"
+value = 1 + 3
+result = value.real
+#        ^
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+result = (1 + 3).real
+#        ^
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_no_parens_for_number_literal() {
+    let code = r#"
+value = 42
+result = value + 1
+#        ^
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+result = 42 + 1
+#        ^
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_parens_for_number_literal_in_attribute() {
+    let code = r#"
+def compute():
+    value = 42
+    result = value.bit_length()
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = (42).bit_length()
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_no_parens_for_float_literal_in_attribute() {
+    let code = r#"
+def compute():
+    value = 4.2
+    result = value.hex()
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = 4.2.hex()
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_parens_for_bool_op() {
+    let code = r#"
+def compute(a, b, c):
+    value = a and b
+    result = value or c
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute(a, b, c):
+    result = (a and b) or c
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_parens_for_tuple() {
+    let code = r#"
+def compute():
+    value = 1, 2
+    result = len(value)
+#                ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = len((1, 2))
+#                ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
 fn inline_method_basic_refactor() {
     let code = r#"
 def add(a, b):
@@ -4546,7 +5144,7 @@ def compute():
     let expected = r#"
 def add(a):
 #          ^
-    return a + (2)
+    return a + 2
 
 def compute():
     return add(1)
@@ -4594,6 +5192,19 @@ def foo():
 #   ^
     return 1
 foo()
+"#;
+    assert!(apply_first_safe_delete_action(code).is_none());
+}
+
+#[test]
+fn safe_delete_rejects_called_constructor() {
+    let code = r#"
+class Foo:
+    def __init__(self) -> None:
+    #       ^
+        pass
+
+Foo()
 "#;
     assert!(apply_first_safe_delete_action(code).is_none());
 }
@@ -4812,6 +5423,83 @@ def test_one(answer: int, user: str):
     print(answer, user)
 "#;
     assert_eq!(expected.trim(), updated_all.trim());
+}
+
+#[test]
+fn pytest_fixture_dataframe_annotation_uses_plain_class() {
+    // The quick fix emits the plain class on both the fixture return and the test parameter.
+    let mut env = TestEnv::new();
+    env.add_with_path(
+        "polars.dataframe.frame",
+        "polars/dataframe/frame.pyi",
+        "class DataFrame:\n    def __init__(self, data: object = None) -> None: ...\n",
+    );
+    env.add(
+        "polars",
+        "from polars.dataframe.frame import DataFrame as DataFrame\n",
+    );
+    let code = r#"
+import pytest  # type: ignore
+import polars as pl
+
+@pytest.fixture
+def frame():
+    return pl.DataFrame({"a": [1]})
+
+def test_uses_frame(frame):
+    print(frame)
+"#;
+    env.add("main", code);
+    let (state, handle_for_module) = env
+        .with_default_require_level(Require::Everything)
+        .to_state();
+    let handle = handle_for_module("main");
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(&handle).unwrap();
+
+    let fixture_cursor = TextSize::try_from(code.find("def frame").unwrap()).unwrap();
+    let fixture_actions = transaction
+        .pytest_fixture_type_annotation_code_actions(
+            &handle,
+            TextRange::new(fixture_cursor, fixture_cursor),
+            ImportFormat::Absolute,
+        )
+        .unwrap_or_default();
+    let return_action = fixture_actions
+        .iter()
+        .find(|action| action.title == "Add pytest fixture type annotation")
+        .expect("missing fixture return annotation action");
+    let updated_return = apply_refactor_edits_for_module(&module_info, &return_action.edits);
+    assert!(
+        updated_return.contains("def frame() -> DataFrame:"),
+        "expected a plain class return annotation, got:\n{updated_return}"
+    );
+    assert!(
+        !updated_return.contains("DataFrame["),
+        "the schema display form is not legal annotation syntax, got:\n{updated_return}"
+    );
+
+    let param_cursor = TextSize::try_from(code.find("frame):").unwrap()).unwrap();
+    let param_actions = transaction
+        .pytest_fixture_type_annotation_code_actions(
+            &handle,
+            TextRange::new(param_cursor, param_cursor),
+            ImportFormat::Absolute,
+        )
+        .unwrap_or_default();
+    let param_action = param_actions
+        .iter()
+        .find(|action| action.title == "Add pytest fixture parameter type annotation")
+        .expect("missing fixture parameter annotation action");
+    let updated_param = apply_refactor_edits_for_module(&module_info, &param_action.edits);
+    assert!(
+        updated_param.contains("def test_uses_frame(frame: DataFrame):"),
+        "expected a plain class parameter annotation, got:\n{updated_param}"
+    );
+    assert!(
+        !updated_param.contains("DataFrame["),
+        "the schema display form is not legal annotation syntax, got:\n{updated_param}"
+    );
 }
 
 /// Returns the edits of the "Add `@override` decorator" quick fix for the method

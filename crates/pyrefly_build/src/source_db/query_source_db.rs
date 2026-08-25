@@ -36,6 +36,7 @@ use crate::query::QueryResult;
 use crate::query::SourceDbQuerier;
 use crate::query::TargetManifestDatabase;
 use crate::query::path_is_from_stubs_package;
+use crate::source_db::LiveSourceDatabase;
 use crate::source_db::ModulePathCache;
 use crate::source_db::SourceDatabase;
 use crate::source_db::Target;
@@ -323,11 +324,6 @@ impl QuerySourceDatabase {
 }
 
 impl SourceDatabase for QuerySourceDatabase {
-    fn modules_to_check(&self) -> Vec<Handle> {
-        // TODO(connernilsen): implement modules_to_check
-        vec![]
-    }
-
     fn may_contain_module(&self, module: ModuleName) -> bool {
         self.inner.read().known_modules.contains(&module)
     }
@@ -420,6 +416,12 @@ impl SourceDatabase for QuerySourceDatabase {
         ))
     }
 
+    fn as_live_source_database(&self) -> Option<&dyn LiveSourceDatabase> {
+        Some(self)
+    }
+}
+
+impl LiveSourceDatabase for QuerySourceDatabase {
     fn query_source_db(
         &self,
         mut files: SmallSet<InternedPath>,
@@ -897,7 +899,7 @@ mod tests {
                     None,
                 ),
                 Target::from_string("//zzz/torch-stubs:torch-stubs".to_owned()) => TargetManifest::lib(
-                    &[("torch-stubs", &["pyrefly/tensor-shapes/torch-stubs/__init__.pyi"])],
+                    &[("torch-stubs", &["pyrefly/tensor-shapes/pyrefly-torch-stubs/torch-stubs/__init__.pyi"])],
                     &["//aaa/torch:torch"],
                     "pyrefly/tensor-shapes/BUCK",
                     &[],
@@ -916,9 +918,9 @@ mod tests {
                 Some(&root.join("app/model.py")),
                 None
             ),
-            Some(ModulePath::filesystem(
-                root.join("pyrefly/tensor-shapes/torch-stubs/__init__.pyi")
-            ))
+            Some(ModulePath::filesystem(root.join(
+                "pyrefly/tensor-shapes/pyrefly-torch-stubs/torch-stubs/__init__.pyi"
+            )))
         );
     }
 

@@ -186,3 +186,50 @@ jobs:
             "${{ matrix.artifact_name }}.zip" `
             "${{ matrix.artifact_name }}.zip.sha256" `
             --clobber
+
+  wasm:
+    name: Build pyrefly-wasm
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name || inputs.tag_name }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: pyrefly-release-wasm
+
+      - name: Install wasm-pack and wasm-opt
+        run: cargo install wasm-pack wasm-opt
+
+      - name: Build wasm
+        run: chmod +x pyrefly_wasm/build.sh && pyrefly_wasm/build.sh
+
+      - name: Package wasm
+        run: |
+          mkdir -p staging
+          cp pyrefly_wasm/target/pyrefly_wasm.js staging/
+          # build.sh writes the optimized binary to *.wasm.opt; ship it under the
+          # name the JS glue imports so the tarball loads as-is.
+          cp pyrefly_wasm/target/pyrefly_wasm_bg.wasm.opt staging/pyrefly_wasm_bg.wasm
+          cd staging
+          tar -czvf ../pyrefly-wasm.tar.gz pyrefly_wasm.js pyrefly_wasm_bg.wasm
+
+      - name: Generate checksum
+        run: sha256sum pyrefly-wasm.tar.gz > pyrefly-wasm.tar.gz.sha256
+
+      - name: Upload to release
+        run: |
+          gh release upload ${{ env.TAG_NAME }} \
+            pyrefly-wasm.tar.gz \
+            pyrefly-wasm.tar.gz.sha256 \
+            --clobber

@@ -9,6 +9,7 @@ use std::fmt;
 use std::fmt::Display;
 
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 
 use crate::types::quantified::Quantified;
@@ -22,7 +23,9 @@ use crate::types::types::Type;
 /// a class, we either determine that the name is *not* a type variable and return the type
 /// for the name, or we determine that it is one and create a `Quantified` that
 /// represents that variable as a type parameter.
-#[derive(Debug, Clone, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, PartialOrd, Ord, Hash
+)]
 pub enum LegacyTypeParameterLookup {
     Parameter(Quantified),
     NotParameter(Type),

@@ -169,7 +169,7 @@ fn unions_internal(
         collapse_tuple_unions_with_empty(&mut res, heap);
         collapse_builtins_type(&mut res, heap);
         collapse_wide_tuple_unions(&mut res, heap);
-        collapse_quantifieds(&mut res, heap);
+        collapse_quantifieds(&mut res, stdlib, heap);
         // Second pass: squashing can still leave a pathologically large union (e.g. thousands
         // of distinct class types). Widen anything still over the cap to `Any`.
         if res.len() > MAX_UNION_MEMBERS {
@@ -444,7 +444,7 @@ fn collapse_tuple_unions_with_empty(types: &mut Vec<Type>, heap: &TypeHeap) {
                 empty_is_redundant = true;
             }
             Type::Tuple(Tuple::Unpacked(unpacked)) => {
-                let (prefix, middle, suffix) = &**unpacked;
+                let (prefix, middle, suffix) = unpacked.parts();
                 if prefix.len() + suffix.len() == 1
                     && let Type::Tuple(Tuple::Unbounded(elem)) = middle
                     && prefix
@@ -520,7 +520,7 @@ fn collapse_builtins_type(types: &mut Vec<Type>, heap: &TypeHeap) {
 /// A restricted quantified `Q` whose restriction consists of the types `c_1, ..., c_n` is fully
 /// covered by the union `(Q & c_1) | ... | (Q & c_n)`: every value of `Q` satisfies one of its
 /// restrictions, so the union collapses to just `Q`.
-fn collapse_quantifieds(types: &mut Vec<Type>, heap: &TypeHeap) {
+fn collapse_quantifieds(types: &mut Vec<Type>, stdlib: Option<&Stdlib>, heap: &TypeHeap) {
     // For each quantified appearing in a `Q & t` member, gather the `t`s.
     let mut quantified_intersects: SmallMap<&Quantified, Vec<(usize, &Type)>> = SmallMap::new();
     for (idx, ty) in types.iter().enumerate() {
@@ -533,10 +533,20 @@ fn collapse_quantifieds(types: &mut Vec<Type>, heap: &TypeHeap) {
     let mut indices_to_remove = SmallSet::new();
     let mut quantifieds_to_collapse = Vec::new();
     for (q, ts) in quantified_intersects {
+        let flag_types;
         let restrictions = match q.restriction() {
             Restriction::Constraints(cs) => cs.iter().collect(),
             Restriction::Bound(Type::Union(u)) => u.members.iter().collect(),
             Restriction::Bound(b) => vec![b],
+            Restriction::Flag(domain) => {
+                let Some(stdlib) = stdlib else {
+                    // Raw union construction cannot materialize the builtin domain, so preserve
+                    // the unsimplified intersection until a Stdlib-aware normalization boundary.
+                    continue;
+                };
+                flag_types = domain.types(stdlib);
+                flag_types.iter().collect()
+            }
             Restriction::Unrestricted => continue,
         };
         if restrictions.iter().all(|r| ts.iter().any(|(_, t)| t == r)) {
@@ -573,7 +583,7 @@ pub fn simplify_tuples(tuple: Tuple, _heap: &TypeHeap) -> Tuple {
     match tuple {
         Tuple::Concrete(elts) => Tuple::Concrete(flatten_unpacked_concrete_tuples(elts)),
         Tuple::Unpacked(unpacked) => {
-            let (prefix, middle, suffix) = *unpacked;
+            let (prefix, middle, suffix) = unpacked.into_parts();
             if prefix.is_empty()
                 && suffix.is_empty()
                 && let Type::Tuple(middle) = middle
@@ -591,7 +601,7 @@ pub fn simplify_tuples(tuple: Tuple, _heap: &TypeHeap) -> Tuple {
                     ))
                 }
                 Type::Tuple(Tuple::Unpacked(m_unpacked)) => {
-                    let (m_prefix, m_middle, m_suffix) = *m_unpacked;
+                    let (m_prefix, m_middle, m_suffix) = m_unpacked.into_parts();
                     let mut new_prefix = flatten_unpacked_concrete_tuples(prefix);
                     new_prefix.extend(flatten_unpacked_concrete_tuples(m_prefix));
                     let mut new_suffix = flatten_unpacked_concrete_tuples(m_suffix);
@@ -647,7 +657,7 @@ fn collect_tuple_elements(tuple: &Tuple, heap: &TypeHeap, out: &mut Vec<Type>) {
             out.push((**elem).clone());
         }
         Tuple::Unpacked(unpacked) => {
-            let (prefix, middle, suffix) = unpacked.as_ref();
+            let (prefix, middle, suffix) = unpacked.parts();
             for elt in prefix {
                 collect_tuple_member(elt, heap, out);
             }

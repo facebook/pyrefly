@@ -21,6 +21,7 @@ use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Identifier;
 
+use crate::dimension::gradual_size;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::heap::TypeHeap;
@@ -29,6 +30,11 @@ use crate::quantified::QuantifiedKind;
 use crate::simplify::unions;
 use crate::stdlib::Stdlib;
 use crate::types::Type;
+
+mod flag;
+
+pub use flag::FlagDomain;
+pub use flag::FlagMember;
 
 /// Used to represent TypeVar calls. Each TypeVar is unique, so use the ArcId to separate them.
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -56,20 +62,25 @@ impl Display for TypeVar {
 pub enum Restriction {
     Constraints(Vec<Type>),
     Bound(Type),
+    /// A literal-preserving upper bound for the experimental shape type system.
+    /// See [`FlagDomain`] for its relationship to ordinary type-variable bounds.
+    Flag(FlagDomain),
     Unrestricted,
 }
 
 impl Restriction {
     pub fn is_restricted(&self) -> bool {
-        matches!(self, Self::Bound(_) | Self::Constraints(_))
+        matches!(self, Self::Bound(_) | Self::Constraints(_) | Self::Flag(_))
     }
 
     fn as_type(&self, stdlib: &Stdlib, heap: &TypeHeap, kind: QuantifiedKind) -> Type {
         match self {
             Self::Bound(t) => t.clone(),
             Self::Constraints(ts) => unions(ts.clone(), heap),
+            Self::Flag(domain) => domain.as_type(stdlib, heap),
             Self::Unrestricted => match kind {
                 QuantifiedKind::TypeVar => stdlib.object().clone().to_type(),
+                QuantifiedKind::IntVar => gradual_size(),
                 QuantifiedKind::ParamSpec => Type::Ellipsis,
                 QuantifiedKind::TypeVarTuple => Type::any_tuple(),
             },
@@ -159,6 +170,7 @@ impl Display for Variance {
 #[derive(Debug, PartialEq, TypeEq, Eq, Ord, PartialOrd)]
 struct TypeVarInner {
     qname: QName,
+    kind: QuantifiedKind,
     restriction: Restriction,
     default: Option<Type>,
     /// The variance if known, or None for infer_variance=True
@@ -173,9 +185,28 @@ impl TypeVar {
         default: Option<Type>,
         variance: PreInferenceVariance,
     ) -> Self {
+        Self::new_with_kind(
+            name,
+            module,
+            QuantifiedKind::TypeVar,
+            restriction,
+            default,
+            variance,
+        )
+    }
+
+    pub fn new_with_kind(
+        name: Identifier,
+        module: Module,
+        kind: QuantifiedKind,
+        restriction: Restriction,
+        default: Option<Type>,
+        variance: PreInferenceVariance,
+    ) -> Self {
         Self(ArcId::new(TypeVarInner {
             // TODO: properly take parent from caller of new()
             qname: QName::new(name, NestingContext::toplevel(), module),
+            kind,
             restriction,
             default,
             variance,
@@ -188,6 +219,10 @@ impl TypeVar {
 
     pub fn restriction(&self) -> &Restriction {
         &self.0.restriction
+    }
+
+    pub fn kind(&self) -> QuantifiedKind {
+        self.0.kind
     }
 
     pub fn default(&self) -> Option<&Type> {
@@ -204,8 +239,7 @@ impl TypeVar {
 
     /// The upper bound of this legacy TypeVar as a type.
     pub fn upper_bound(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
-        self.restriction()
-            .as_type(stdlib, heap, QuantifiedKind::TypeVar)
+        self.restriction().as_type(stdlib, heap, self.kind())
     }
 
     pub fn type_eq_inner(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {

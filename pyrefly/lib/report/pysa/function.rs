@@ -15,22 +15,24 @@ use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::FuncDefIndex;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
-use pyrefly_types::callable::PropertyRole;
 use pyrefly_types::class::Class;
+use pyrefly_types::function::FuncDefIndex;
+use pyrefly_types::function::FuncMetadata;
+use pyrefly_types::function::PropertyRole;
 use pyrefly_types::types::BoundMethodType;
 use pyrefly_types::types::Overload;
 use pyrefly_types::types::Type;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::name::Name;
+use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
 use serde::Serialize;
 
 use crate::alt::class::class_field::ClassField;
-use crate::alt::types::decorated_function::DecoratedFunction;
+use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::binding::binding::Binding;
 use crate::binding::binding::BindingClassField;
 use crate::binding::binding::ClassFieldDefinition;
@@ -40,6 +42,7 @@ use crate::report::pysa::ModuleContext;
 use crate::report::pysa::call_graph::Target;
 use crate::report::pysa::call_graph::resolve_decorator_callees;
 use crate::report::pysa::captured_variable::CapturedVariableRef;
+use crate::report::pysa::class::ClassFieldId;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
 use crate::report::pysa::class::get_all_classes;
@@ -64,7 +67,10 @@ pub enum FunctionId {
     /// Implicit function containing the class body.
     ClassTopLevel { class_id: ClassId },
     /// Function-like class field that is not a `def` statement.
-    ClassField { class_id: ClassId, name: Name },
+    ClassField {
+        class_id: ClassId,
+        field_id: ClassFieldId,
+    },
     /// Decorated target, which represents an artificial function containing all
     /// decorators of a function, inlined as an expression.
     /// For e.g, `@foo` on `def bar()` -> `return foo(bar)`
@@ -77,8 +83,8 @@ impl FunctionId {
             FunctionId::Function { func_def_index } => format!("F:{}", func_def_index.0),
             FunctionId::ModuleTopLevel => "MTL".to_owned(),
             FunctionId::ClassTopLevel { class_id } => format!("CTL:{}", class_id.to_int()),
-            FunctionId::ClassField { class_id, name } => {
-                format!("CF:{}:{}", class_id.to_int(), name)
+            FunctionId::ClassField { class_id, field_id } => {
+                format!("CF:{}:{}", class_id.to_int(), field_id.to_int())
             }
             FunctionId::FunctionDecoratedTarget { func_def_index } => {
                 format!("FDT:{}", func_def_index.0)
@@ -357,7 +363,7 @@ fn export_function_parameter(param: &Param, context: &ModuleContext) -> Function
 
 fn export_function_parameters(params: &Params, context: &ModuleContext) -> FunctionParameters {
     match params {
-        Params::List(params) => FunctionParameters::List(
+        Params::List(params) | Params::Partial(params) => FunctionParameters::List(
             params
                 .items()
                 .iter()
@@ -374,11 +380,8 @@ fn assert_decorated_function_in_context(
     function: &DecoratedFunction,
     context: &ModuleAnswersContext,
 ) {
-    match &function.undecorated.metadata.kind {
-        FunctionKind::Def(func_id) => {
-            assert_eq!(func_id.module, context.module_info);
-        }
-        _ => (),
+    if let Some(func_symbol) = function.undecorated.metadata.kind.to_func_symbol() {
+        assert_eq!(func_symbol.module, context.module_info);
     }
 }
 
@@ -396,21 +399,21 @@ pub fn should_export_decorated_function(
 
 // From any decorated function, returns the function that should be exported.
 // Requires `context` to be the module context of the decorated function.
-pub fn get_exported_decorated_function(
+pub fn get_exported_decorated_function<'a>(
     key_decorated_function: Idx<KeyDecoratedFunction>,
     skip_property_getter: bool,
-    context: &ModuleAnswersContext,
-) -> DecoratedFunction {
+    context: &'a ModuleAnswersContext,
+) -> DecoratedFunction<'a> {
     // Follow the successor chain to find either the last function, or a function that is not an overload,
     // or a property setter when `skip_property_getter` is true.
     let mut last_decorated_function = key_decorated_function;
-    loop {
+    let (idx, undecorated) = loop {
         let binding_decorated_function = context.bindings.get(last_decorated_function);
 
         let undecorated_function = context
             .answers
-            .get_idx(binding_decorated_function.undecorated_idx)
-            .unwrap();
+            .get_idx_ref(binding_decorated_function.undecorated_idx)
+            .expect("undecorated function must be solved before building Pysa solutions");
         let is_getter_but_should_skip = skip_property_getter
             && undecorated_function
                 .metadata
@@ -421,22 +424,18 @@ pub fn get_exported_decorated_function(
                     matches!(property_metadata.role, PropertyRole::Getter)
                 });
         if !undecorated_function.metadata.flags.is_overload && !is_getter_but_should_skip {
-            break;
+            break (last_decorated_function, undecorated_function);
         }
 
         let successor = binding_decorated_function.successor;
         if let Some(successor) = successor {
             last_decorated_function = successor;
         } else {
-            break;
+            break (last_decorated_function, undecorated_function);
         }
-    }
+    };
 
-    DecoratedFunction::from_bindings_answers(
-        last_decorated_function,
-        &context.bindings,
-        &context.answers,
-    )
+    DecoratedFunction { idx, undecorated }
 }
 
 fn export_function_signature(function: &Callable, context: &ModuleContext) -> FunctionSignature {
@@ -489,11 +488,35 @@ fn export_signatures_from_type(ty: &Type, context: &ModuleContext) -> Vec<Functi
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DecoratedFunction<'a> {
+    pub idx: Idx<KeyDecoratedFunction>,
+    pub undecorated: &'a UndecoratedFunction,
+}
+
+impl DecoratedFunction<'_> {
+    pub(crate) fn metadata(&self) -> &FuncMetadata {
+        &self.undecorated.metadata
+    }
+
+    fn id_range(&self) -> TextRange {
+        self.undecorated.identifier.range()
+    }
+
+    fn defining_cls(&self) -> Option<&Class> {
+        self.undecorated.defining_cls.as_ref()
+    }
+
+    fn is_overload(&self) -> bool {
+        self.undecorated.metadata.flags.is_overload
+    }
+}
+
 /// Represents a function definition in pyrefly.
 #[derive(Debug, Clone)]
-pub enum FunctionNode {
+pub enum FunctionNode<'a> {
     // Function defined with a `def` statement.
-    DecoratedFunction(DecoratedFunction),
+    DecoratedFunction(DecoratedFunction<'a>),
     // Function-like class field that is not a `def` statement.
     // For instance, `foo: Callable[.., int]` or a synthesized `__init__` method.
     ClassField {
@@ -503,7 +526,7 @@ pub enum FunctionNode {
     },
 }
 
-impl FunctionNode {
+impl<'a> FunctionNode<'a> {
     // For many function implementations, we need to pass the module context where the function is defined.
     fn assert_in_context(&self, context: &ModuleAnswersContext) {
         match self {
@@ -600,7 +623,7 @@ impl FunctionNode {
         class: &Class,
         field_name: &Name,
         class_field: Arc<ClassField>,
-        context: &ModuleAnswersContext,
+        context: &'a ModuleAnswersContext,
     ) -> Option<Self> {
         let function_node = match get_class_field_declaration(class, field_name, context) {
             // Class field is a `def` statement.
@@ -609,9 +632,9 @@ impl FunctionNode {
                 ..
             }) => {
                 let binding = context.bindings.get(*definition);
-                if let Binding::Function(key_decorated_function, _, _) = binding {
+                if let Binding::Function { decorated_idx, .. } = binding {
                     let exported_function = get_exported_decorated_function(
-                        *key_decorated_function,
+                        *decorated_idx,
                         /* skip_property_getter */ false,
                         context,
                     );
@@ -648,7 +671,7 @@ impl FunctionNode {
                 module_name: class.module().name(),
                 function_id: FunctionId::ClassField {
                     class_id: ClassId::from_class(class),
-                    name: name.clone(),
+                    field_id: ClassFieldId::from_class_and_name(class, name, context),
                 },
                 function_name: name.clone(),
             },
@@ -658,7 +681,7 @@ impl FunctionNode {
     fn get_scope_parent(&self, context: &ModuleAnswersContext) -> ScopeParent {
         self.assert_in_context(context);
         match self {
-            FunctionNode::DecoratedFunction(function) => match &function.undecorated.defining_cls {
+            FunctionNode::DecoratedFunction(function) => match function.defining_cls() {
                 Some(cls) => ScopeParent::Class {
                     class_id: ClassId::from_class(cls),
                 },
@@ -679,7 +702,7 @@ impl FunctionNode {
 
     fn is_overload(&self) -> bool {
         match self {
-            FunctionNode::DecoratedFunction(function) => function.metadata().flags.is_overload,
+            FunctionNode::DecoratedFunction(function) => function.is_overload(),
             FunctionNode::ClassField { .. } => false,
         }
     }
@@ -729,7 +752,9 @@ impl FunctionNode {
 
     fn is_stub(&self) -> bool {
         match self {
-            FunctionNode::DecoratedFunction(function) => function.is_stub(),
+            FunctionNode::DecoratedFunction(function) => {
+                function.metadata().flags.facts().is_stub()
+            }
             FunctionNode::ClassField { .. } => false,
         }
     }
@@ -741,10 +766,10 @@ impl FunctionNode {
         }
     }
 
-    fn get_define_stmt<'a>(
+    fn get_define_stmt<'b>(
         &self,
-        context: &'a ModuleAnswersContext,
-    ) -> Option<&'a StmtFunctionDef> {
+        context: &'b ModuleAnswersContext,
+    ) -> Option<&'b StmtFunctionDef> {
         self.assert_in_context(context);
         match self {
             FunctionNode::DecoratedFunction(function) => {
@@ -775,23 +800,24 @@ impl FunctionNode {
 }
 
 /// Return all functions defined with a `def` statement.
-pub fn get_all_decorated_functions(
-    context: &ModuleAnswersContext,
-) -> impl Iterator<Item = DecoratedFunction> {
-    context.bindings.keys::<KeyDecoratedFunction>().map(|idx| {
-        DecoratedFunction::from_bindings_answers(idx, &context.bindings, &context.answers)
-    })
+pub fn get_all_decorated_functions<'a>(
+    context: &'a ModuleAnswersContext,
+) -> impl Iterator<Item = DecoratedFunction<'a>> + 'a {
+    context
+        .bindings
+        .keys::<KeyDecoratedFunction>()
+        .map(|idx| DecoratedFunction {
+            idx,
+            undecorated: context.undecorated_function(idx),
+        })
 }
 
 /// Return all function defined in the module.
-pub fn get_all_functions(context: &ModuleAnswersContext) -> impl Iterator<Item = FunctionNode> {
-    let decorated_functions = context.bindings.keys::<KeyDecoratedFunction>().map(|idx| {
-        FunctionNode::DecoratedFunction(DecoratedFunction::from_bindings_answers(
-            idx,
-            &context.bindings,
-            &context.answers,
-        ))
-    });
+pub fn get_all_functions<'a>(
+    context: &'a ModuleAnswersContext,
+) -> impl Iterator<Item = FunctionNode<'a>> + 'a {
+    let decorated_functions =
+        get_all_decorated_functions(context).map(FunctionNode::DecoratedFunction);
     let class_fields = get_all_classes(context)
         .flat_map(|class| {
             get_class_fields(&class, context)
@@ -840,7 +866,7 @@ pub fn export_all_functions(
                         name: current_function.function_name.clone(),
                         name_location: match &function {
                             FunctionNode::DecoratedFunction(f) => Some(
-                                PysaLocation::from_text_range(f.id_range(), &context.module_info)
+                                PysaLocation::from_text_range(f.id_range(), &context.module_info),
                             ),
                             FunctionNode::ClassField { .. } => None,
                         },
@@ -857,7 +883,7 @@ pub fn export_all_functions(
                             class_id: ClassId::from_class(class),
                             class: class.clone(),
                         }),
-                    }
+                    },
                 )
                 .is_none(),
             "Found function definitions with the same location"
