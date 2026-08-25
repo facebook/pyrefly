@@ -471,6 +471,88 @@ mod tests {
             .to_owned()
     }
 
+    /// Render the contents of `scripts/error_presets.json`: for every error
+    /// kind, which presets report it.
+    ///
+    /// Written by hand rather than with `to_string_pretty` to keep each kind on
+    /// one line, so that adding an error kind is a one-line diff.
+    fn render_error_presets() -> String {
+        const COMMENT: [&str; 3] = [
+            "Generated from Preset::apply() and ErrorKind::default_severity().",
+            "Do not edit by hand; run `UPDATE_EXPECT=1 cargo test -p pyrefly_config test_error_presets_json`.",
+            "Lists, for each error kind, the presets that report it.",
+        ];
+
+        // `Preset::apply()` rebuilds its severity map on every call, so do it
+        // once per preset rather than once per (preset, kind) pair.
+        let presets: Vec<(String, Option<ErrorDisplayConfig>)> = all::<Preset>()
+            .map(|preset| (preset_name(preset), preset.apply().errors))
+            .collect();
+        // `ErrorKind` is declared in lexicographic order, so the rendered file
+        // comes out sorted.
+        let enabled_by: Vec<(&'static str, Vec<&str>)> = all::<ErrorKind>()
+            .map(|kind| {
+                let enabling = presets
+                    .iter()
+                    .filter(|(_, errors)| match errors {
+                        Some(errors) => errors.severity(kind).is_enabled(),
+                        // A preset that overrides nothing leaves the kind's own default.
+                        None => kind.default_severity().is_enabled(),
+                    })
+                    .map(|(name, _)| name.as_str())
+                    .collect();
+                (kind.to_name(), enabling)
+            })
+            .collect();
+
+        // Every name involved is a kebab-case identifier, but go through serde
+        // so the output is quoted and escaped like real JSON regardless.
+        let quote = |s: &str| serde_json::to_string(s).expect("a string is serializable");
+        let mut out = String::from("{\n  \"comment\": [\n");
+        for (i, line) in COMMENT.iter().enumerate() {
+            let comma = if i + 1 == COMMENT.len() { "" } else { "," };
+            out.push_str(&format!("    {}{comma}\n", quote(line)));
+        }
+        out.push_str("  ],\n  \"enabled_by\": {\n");
+        for (i, (kind, enabling)) in enabled_by.iter().enumerate() {
+            let comma = if i + 1 == enabled_by.len() { "" } else { "," };
+            let list = enabling
+                .iter()
+                .map(|p| quote(p))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!("    {}: [{list}]{comma}\n", quote(kind)));
+        }
+        out.push_str("  }\n}\n");
+        out
+    }
+
+    /// Keeps `scripts/error_presets.json` in step with the presets. CI tooling
+    /// reads that file to attribute mypy_primer results to presets, and has no
+    /// other way to know which kinds a preset reports.
+    #[test]
+    fn test_error_presets_json() {
+        let path = std::env::var("ERROR_PRESETS_PATH").expect(
+            "ERROR_PRESETS_PATH env var not set: cargo or buck should set this automatically",
+        );
+        let actual = render_error_presets();
+        if std::env::var("UPDATE_EXPECT").is_ok() {
+            std::fs::write(&path, &actual)
+                .unwrap_or_else(|e| panic!("Failed to write {path}: {e}"));
+            return;
+        }
+        let expected = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read {path}: {e}"))
+            // Normalize Windows line endings so the test passes on all platforms.
+            .replace("\r\n", "\n");
+        pretty_assertions::assert_eq!(
+            expected,
+            actual,
+            "{path} is out of date. To update, run: \
+             UPDATE_EXPECT=1 cargo test -p pyrefly_config test_error_presets_json"
+        );
+    }
+
     /// Verifies that every Preset variant has a corresponding `#### Preset: \`name\``
     /// section in the configuration docs and that the documented error codes match
     /// what `Preset::apply()` actually produces.
