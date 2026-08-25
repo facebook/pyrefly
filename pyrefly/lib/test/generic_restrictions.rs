@@ -1993,3 +1993,51 @@ def f[T: bytes | str](x: T):
         y: str = 2 * x
     "#,
 );
+
+testcase!(
+    bug = "We sometimes solve to the wrong constraint when one constraint is a subtype of another",
+    test_constraint_subtyping,
+    r#"
+from typing import assert_type
+
+class Parent: ...
+class Child(Parent): ...
+class Unrelated: ...
+
+def f[T: (Child, Parent, Unrelated)](x: T, y: T) -> T:
+    return x
+
+assert_type(f(Parent(), Child()), Parent)
+# BUG: this `f` call and `assert_type` should succeed
+assert_type(f(Child(), Parent()), Parent)  # E: assert_type(Child, Parent)  # E: `Parent` is not assignable to parameter `y` with type `Child`
+
+# The below is a real error that we need to make sure to catch.
+# This shows why it would be incorrect for the solver to just ignore the `Child` bound when it does
+# not unambiguously solve the type parameter.
+f(Child(), Unrelated())  # E: `Unrelated` is not assignable to parameter `y` with type `Child`
+    "#,
+);
+
+testcase!(
+    test_constraint_do_not_pin_to_any,
+    r#"
+from typing import Any, assert_type
+
+def f1[T: (int, str)](x: T, y: T) -> T: ...
+def f2[T: (list[int], list[str])](x: T, y: T) -> T: ...
+def g(x: Any):
+    assert_type(f1(x, 0), int)
+    assert_type(f1(0, x), int)
+    assert_type(f2([x], [0]), list[int])
+    assert_type(f2([0], [x]), list[int])
+
+class A: ...
+class B(A): ...
+def f3[T: (A, B)](x: T, y: T) -> T: ...
+def h(x: Any):
+    # In cases that are ambiguous due to `Any`, we solve to the narrowest constraint. This is
+    # technically unsound (`x` could have type `A`) but is more useful than degrading to `Any`.
+    assert_type(f3(x, B()), B)
+    assert_type(f3(B(), x), B)
+    "#,
+);

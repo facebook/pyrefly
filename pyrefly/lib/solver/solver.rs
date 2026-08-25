@@ -4125,7 +4125,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                                 .insert(*v2, specialization_error);
                         }
                         if q.kind() == QuantifiedKind::ParamSpec
-                            || matches!(q.restriction(), Restriction::Constraints(_))
+                            // For constraints, `Any` usually does not provide any information, so
+                            // we drop it and pin to the first non-`Any` answer.
+                            || (matches!(q.restriction(), Restriction::Constraints(_)) && !answer.is_any())
                             || is_shape_flag_binding_source
                         {
                             // If the TypeVar has constraints, we write the answer immediately to
