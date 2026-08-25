@@ -1486,6 +1486,7 @@ fn matches_fix_all_kind(kind: &CodeActionKind) -> bool {
 
 struct TypeHierarchyTarget {
     def_index: ClassDefIndex,
+    module_name: ModuleName,
     module_path: ModulePath,
     name_range: TextRange,
     is_object: bool,
@@ -6259,7 +6260,8 @@ impl Server {
         let def_index = bindings.class_def_index(class_def)?;
         Some(TypeHierarchyTarget {
             def_index,
-            module_path: definition.module.path().dupe(),
+            module_name: definition.module.name(),
+            module_path: definition.module.path().to_key_eq(),
             name_range: class_def.name.range,
             is_object: class_def.name.id == "object"
                 && definition.module.name().as_str() == "builtins",
@@ -6321,7 +6323,8 @@ impl Server {
                     continue;
                 };
                 if class_def_index == target.def_index
-                    && module_info.path().as_path() == target.module_path.as_path()
+                    && module_info.name() == target.module_name
+                    && module_info.path().to_key_eq() == target.module_path
                 {
                     continue;
                 }
@@ -6331,13 +6334,10 @@ impl Server {
                     let mro = solutions.get(&KeyClassMro(class_def_index));
                     mro.ancestors_no_object().iter().any(|ancestor| {
                         let ancestor_class = ancestor.class_object();
-                        // Compare the underlying file, not the `ModulePath`. An open file is held
-                        // as `ModulePathDetails::Memory` while a module that merely imports it
-                        // resolves the ancestor to `FileSystem`, so `==` on `ModulePath` is false
-                        // for the same file and every cross-module subtype is silently dropped.
+                        // Imports resolve an open module through its filesystem counterpart.
                         ancestor_class.index() == target.def_index
-                            && ancestor_class.module_path().as_path()
-                                == target.module_path.as_path()
+                            && ancestor_class.module_name() == target.module_name
+                            && ancestor_class.module_path().to_key_eq() == target.module_path
                     })
                 };
                 if !is_subtype {
