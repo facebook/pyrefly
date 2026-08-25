@@ -3620,17 +3620,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         &mut self,
         t1: &Type,
         q: &Quantified,
+        lower_bound: Option<&Type>,
         upper_bound: Option<&Type>,
+        is_shape_flag_binding_source: bool,
     ) -> (Type, Option<TypeVarSpecializationError>) {
-        if let Restriction::Flag(domain) = q.restriction() {
-            let specialization_error =
-                (!domain.accepts(t1)).then(|| TypeVarSpecializationError::BadFlagSpecialization {
-                    name: q.name().clone(),
-                    got: t1.clone(),
-                    domain: *domain,
-                });
-            return (t1.clone(), specialization_error);
-        }
         let t1_p = {
             let t1_p = t1
                 .clone()
@@ -3647,50 +3640,90 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             }
         };
         let bound = q.upper_bound(self.type_order.stdlib(), &self.solver.heap);
-        // For constrained TypeVars, promote to the matching constraint type.
-        if let Restriction::Constraints(constraints) = &q.restriction {
-            if let Type::Quantified(q_t1) = t1 {
-                let err = (!self.quantified_satisfies_constraints(q_t1, constraints)).then(|| {
-                    TypeVarSpecializationError::BadConstraintSpecialization {
-                        name: q.name.clone(),
-                        got: t1.clone(),
-                        want: constraints.clone(),
-                    }
-                });
-                (t1.clone(), err)
-            // Try promoted type first, then fall back to original (for literal bounds).
-            } else if let Some(constraint) = self.find_matching_constraint(&t1_p, constraints) {
-                (constraint.clone(), None)
-            } else if let Some(constraint) = self.find_matching_constraint(t1, constraints) {
-                (constraint.clone(), None)
-            } else {
-                // `Any` falls through to here because it does not match a specific constraint.
-                let specialization_error = (!t1_p.is_any()).then(|| {
-                    TypeVarSpecializationError::BadConstraintSpecialization {
+        match q.restriction() {
+            Restriction::Constraints(constraints) => {
+                // For constrained TypeVars, promote to the matching constraint type.
+                if let Type::Quantified(q_t1) = t1 {
+                    let err =
+                        (!self.quantified_satisfies_constraints(q_t1, constraints)).then(|| {
+                            TypeVarSpecializationError::BadConstraintSpecialization {
+                                name: q.name.clone(),
+                                got: t1.clone(),
+                                want: constraints.clone(),
+                            }
+                        });
+                    (t1.clone(), err)
+                // Try promoted type first, then fall back to original (for literal bounds).
+                } else if let Some(constraint) = self.find_matching_constraint(&t1_p, constraints) {
+                    (constraint.clone(), None)
+                } else if let Some(constraint) = self.find_matching_constraint(t1, constraints) {
+                    (constraint.clone(), None)
+                } else {
+                    // `Any` falls through to here because it does not match a specific constraint.
+                    let specialization_error = (!t1_p.is_any()).then(|| {
+                        TypeVarSpecializationError::BadConstraintSpecialization {
+                            name: q.name().clone(),
+                            got: t1_p.clone(),
+                            want: constraints.clone(),
+                        }
+                    });
+                    (t1_p.clone(), specialization_error)
+                }
+            }
+            Restriction::Flag(domain) if is_shape_flag_binding_source => {
+                let specialization_error = if !domain.accepts(t1) {
+                    Some(TypeVarSpecializationError::BadFlagSpecialization {
                         name: q.name().clone(),
-                        got: t1_p.clone(),
-                        want: constraints.clone(),
-                    }
-                });
-                (t1_p.clone(), specialization_error)
-            }
-        } else if self.is_subset_eq(&t1_p, &bound).is_err() {
-            // If the promoted type fails, try again with the original type, in case the bound itself is literal.
-            // This could be more optimized, but errors are rare, so this code path should not be hot.
-            if self.is_subset_eq(t1, &bound).is_err() {
-                // If the original type is also an error, use the promoted type.
-                let specialization_error = TypeVarSpecializationError::BadBoundSpecialization {
-                    name: q.name().clone(),
-                    got: t1_p.clone(),
-                    want: bound,
+                        got: t1.clone(),
+                        domain: *domain,
+                    })
+                } else if let Some(lower_bound) = lower_bound
+                    && self.is_subset_eq(lower_bound, t1).is_err()
+                {
+                    Some(TypeVarSpecializationError::ConflictingFlagSpecialization {
+                        name: q.name().clone(),
+                        selected: t1.clone(),
+                        constraint: lower_bound.clone(),
+                    })
+                } else if let Some(upper_bound) = upper_bound
+                    && self.is_subset_eq(t1, upper_bound).is_err()
+                {
+                    Some(TypeVarSpecializationError::ConflictingFlagSpecialization {
+                        name: q.name().clone(),
+                        selected: t1.clone(),
+                        constraint: upper_bound.clone(),
+                    })
+                } else {
+                    None
                 };
-                (t1_p.clone(), Some(specialization_error))
-            } else {
-                (t1.clone(), None)
+                (t1.clone(), specialization_error)
             }
-        } else {
-            (t1_p.clone(), None)
+            Restriction::Flag(_) | Restriction::Bound(_) | Restriction::Unrestricted => {
+                if self.is_subset_eq(&t1_p, &bound).is_err() {
+                    // If the promoted type fails, try again with the original type, in case the bound itself is literal.
+                    // This could be more optimized, but errors are rare, so this code path should not be hot.
+                    if self.is_subset_eq(t1, &bound).is_err() {
+                        // If the original type is also an error, use the promoted type.
+                        let specialization_error =
+                            TypeVarSpecializationError::BadBoundSpecialization {
+                                name: q.name().clone(),
+                                got: t1_p.clone(),
+                                want: bound,
+                            };
+                        (t1_p.clone(), Some(specialization_error))
+                    } else {
+                        (t1.clone(), None)
+                    }
+                } else {
+                    (t1_p.clone(), None)
+                }
+            }
         }
+    }
+
+    fn is_shape_flag_binding_source(&self, q: &Quantified, v: Var) -> bool {
+        matches!(q.restriction(), Restriction::Flag(_))
+            && self.active_call_context.is_shape_flag_binding_source(v)
     }
 
     /// Implementation of Var subset cases, calling onward to solve non-Var cases.
@@ -4067,33 +4100,33 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         bounds,
                     } => {
                         let q = q.clone();
-                        let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
-                        let is_shape_flag = matches!(q.restriction(), Restriction::Flag(_));
-                        let lower_bound = is_shape_flag
+                        let is_shape_flag_binding_source =
+                            self.is_shape_flag_binding_source(&q, *v2);
+                        // Optimization: compute the lower bound only when it is needed for shape
+                        // flag checks. Computing it unconditionally makes pytorch incremental
+                        // edits 4-5x slower on our LSP benchmarks.
+                        let lower_bound = is_shape_flag_binding_source
                             .then(|| self.solver.get_current_bound(bounds.lower.clone()))
                             .flatten();
+                        let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
                         drop(v2_ref);
                         drop(variables);
-                        let (answer, specialization_error) =
-                            self.is_subset_eq_quantified(t1, &q, upper_bound.as_ref());
+                        let (answer, specialization_error) = self.is_subset_eq_quantified(
+                            t1,
+                            &q,
+                            lower_bound.as_ref(),
+                            upper_bound.as_ref(),
+                            is_shape_flag_binding_source,
+                        );
                         if let Some(specialization_error) = specialization_error {
                             self.solver
                                 .instantiation_errors
                                 .write()
                                 .insert(*v2, specialization_error);
                         }
-                        if is_shape_flag
-                            && !self.active_call_context.is_shape_flag_binding_source(*v2)
-                        {
-                            return self.solver.add_lower_bound(*v2, answer, &mut |got, want| {
-                                self.is_subset_eq(got, want)
-                            });
-                        }
                         if q.kind() == QuantifiedKind::ParamSpec
-                            || matches!(
-                                q.restriction(),
-                                Restriction::Constraints(_) | Restriction::Flag(_)
-                            )
+                            || matches!(q.restriction(), Restriction::Constraints(_))
+                            || is_shape_flag_binding_source
                         {
                             // If the TypeVar has constraints, we write the answer immediately to
                             // enforce that we always match the same constraint.
@@ -4101,31 +4134,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             // TODO(https://github.com/facebook/pyrefly/issues/105): figure out
                             // what to do with ParamSpec.
                             let answer = normalize_answer_for_kind(q.kind(), Cow::Owned(answer));
-                            let lower_mismatch = is_shape_flag
-                                && lower_bound.as_ref().is_some_and(|lower_bound| {
-                                    self.is_subset_eq(lower_bound, &answer).is_err()
-                                });
-                            let upper_mismatch = is_shape_flag
-                                && upper_bound.as_ref().is_some_and(|upper_bound| {
-                                    self.is_subset_eq(&answer, upper_bound).is_err()
-                                });
-                            let conflicting_bound = if lower_mismatch {
-                                lower_bound
-                            } else if upper_mismatch {
-                                upper_bound
-                            } else {
-                                None
-                            };
-                            if let Some(constraint) = conflicting_bound {
-                                self.solver.instantiation_errors.write().insert(
-                                    *v2,
-                                    TypeVarSpecializationError::ConflictingFlagSpecialization {
-                                        name: q.name().clone(),
-                                        selected: answer.clone(),
-                                        constraint,
-                                    },
-                                );
-                            }
                             self.solver
                                 .variables
                                 .lock()
@@ -4141,8 +4149,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         let q = q.clone();
                         drop(v2_ref);
                         drop(variables);
-                        let (answer, specialization_error) =
-                            self.is_subset_eq_quantified(t1, &q, None);
+                        let (answer, specialization_error) = self.is_subset_eq_quantified(
+                            t1,
+                            &q,
+                            None,
+                            None,
+                            self.is_shape_flag_binding_source(&q, *v2),
+                        );
                         let answer = normalize_answer_for_kind(q.kind(), Cow::Owned(answer));
                         if let Some(specialization_error) = specialization_error {
                             self.solver
