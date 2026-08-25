@@ -1756,7 +1756,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         name: &Name,
         thread_state: &ThreadState,
-    ) -> Option<(Class, Arc<TParams>)> {
+    ) -> Option<(Class, Option<Arc<TParams>>)> {
         let module_data = self.get_module(handle);
         if !self
             .lookup_export(module_data)
@@ -1794,10 +1794,8 @@ impl<'a> Transaction<'a> {
         };
         class.map(|class| {
             let tparams = match class.precomputed_tparams() {
-                Some(tparams) => tparams.dupe(),
-                None => self
-                    .lookup_answer(module_data, &KeyTParams(class.index()), thread_state)
-                    .unwrap_or_default(),
+                Some(tparams) => Some(tparams.dupe()),
+                None => self.lookup_answer(module_data, &KeyTParams(class.index()), thread_state),
             };
             (class, tparams)
         })
