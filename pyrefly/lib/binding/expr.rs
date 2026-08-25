@@ -41,6 +41,7 @@ use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
+use crate::binding::binding::ClassBodyUnknownName;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecorator;
@@ -450,12 +451,12 @@ impl<'a> BindingsBuilder<'a> {
                 {
                     self.insert_binding(
                         key,
-                        Binding::ClassBodyUnknownName(Box::new((
-                            cls,
-                            name.clone(),
+                        Binding::ClassBodyUnknownName(Box::new(ClassBodyUnknownName {
+                            class_key: cls,
+                            name: name.clone(),
                             suggestion,
                             allow_class_body_forward_reference,
-                        ))),
+                        })),
                     )
                 } else {
                     // Record a type error and fall back to `Any`.

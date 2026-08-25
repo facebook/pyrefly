@@ -99,6 +99,7 @@ use crate::binding::binding::BindingVariance;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::BranchInfo;
+use crate::binding::binding::ClassBodyUnknownName;
 use crate::binding::binding::EmptyAnswer;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::FirstUse;
@@ -5790,7 +5791,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.binding_to_type_info(binding, errors).into_ty()
             }
             Binding::ClassBodyUnknownName(x) => {
-                self.binding_to_type_class_body_unknown_name(x.0, &x.1, &x.2, x.3, errors)
+                let ClassBodyUnknownName {
+                    class_key,
+                    name,
+                    suggestion,
+                    allow_class_body_forward_reference,
+                } = x.as_ref();
+                self.binding_to_type_class_body_unknown_name(
+                    *class_key,
+                    name,
+                    suggestion,
+                    *allow_class_body_forward_reference,
+                    errors,
+                )
             }
             Binding::Exhaustive(x) => self.binding_to_type_exhaustive(&x.narrow_entries),
             Binding::SuppressedException(x) => {
