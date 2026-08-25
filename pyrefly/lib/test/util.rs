@@ -105,6 +105,8 @@ pub struct TestEnv {
     check_unannotated_defs: bool,
     infer_return_types: InferReturnTypes,
     infer_with_first_use: bool,
+    check_all_matches: bool,
+    recursion_depth_limit: Option<u32>,
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
     explicit_any_error: bool,
@@ -112,15 +114,35 @@ pub struct TestEnv {
     unannotated_return_error: bool,
     implicit_any_parameter_error: bool,
     implicit_any_attribute_error: bool,
+    implicit_bool_error: bool,
+    unknown_attribute_type_error: bool,
     implicit_abstract_class_error: bool,
     open_unpacking_error: bool,
     missing_override_decorator_error: bool,
+    missing_super_call_error: bool,
     not_required_key_access_error: bool,
     pytorch_efficiency_lint_error: bool,
     incompatible_comparison_error: bool,
+    invalid_cast_warning: bool,
+    untyped_class_decorator_error: bool,
+    untyped_function_decorator_error: bool,
+    unused_call_result_error: bool,
     string_as_iterable_warning: bool,
+    unsupported_dynamic_base_error: bool,
     strict_callable_subtyping: bool,
+    strict_partial_subtyping: bool,
     spec_compliant_overloads: bool,
+    legacy_overload_expansion: bool,
+    treat_all_caps_as_final: bool,
+    no_any_return_error: bool,
+    no_any_return_explicit_error: bool,
+    no_any_return_implicit_error: bool,
+    implicit_any_lambda_error: bool,
+    invalid_abstract_method_error: bool,
+    empty_body_error: bool,
+    unknown_argument_type_error: bool,
+    unknown_variable_type_error: bool,
+    implicit_reexport_error: bool,
     default_require_level: Require,
     extra_file_extensions: Vec<String>,
     /// The `Require` level passed to `run()` in `to_state()`. Controls whether
@@ -139,6 +161,8 @@ impl TestEnv {
             check_unannotated_defs: true,
             infer_return_types: InferReturnTypes::Checked,
             infer_with_first_use: true,
+            check_all_matches: false,
+            recursion_depth_limit: None,
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
             explicit_any_error: false,
@@ -146,15 +170,35 @@ impl TestEnv {
             unannotated_return_error: false,
             implicit_any_parameter_error: false,
             implicit_any_attribute_error: false,
+            implicit_bool_error: false,
+            unknown_attribute_type_error: false,
             implicit_abstract_class_error: false,
             open_unpacking_error: false,
             missing_override_decorator_error: false,
+            missing_super_call_error: false,
             not_required_key_access_error: false,
             pytorch_efficiency_lint_error: false,
             incompatible_comparison_error: false,
+            invalid_cast_warning: false,
+            untyped_class_decorator_error: false,
+            untyped_function_decorator_error: false,
+            unused_call_result_error: false,
             string_as_iterable_warning: false,
+            unsupported_dynamic_base_error: false,
             strict_callable_subtyping: false,
+            strict_partial_subtyping: false,
             spec_compliant_overloads: false,
+            legacy_overload_expansion: false,
+            treat_all_caps_as_final: false,
+            no_any_return_error: false,
+            no_any_return_explicit_error: false,
+            no_any_return_implicit_error: false,
+            implicit_any_lambda_error: false,
+            invalid_abstract_method_error: false,
+            empty_body_error: false,
+            unknown_argument_type_error: false,
+            unknown_variable_type_error: false,
+            implicit_reexport_error: false,
             default_require_level: Require::Exports,
             extra_file_extensions: Vec::new(),
             run_require: Require::Everything,
@@ -247,6 +291,11 @@ impl TestEnv {
         res
     }
 
+    pub fn with_recursion_depth_limit(mut self, recursion_depth_limit: u32) -> Self {
+        self.recursion_depth_limit = Some(recursion_depth_limit);
+        self
+    }
+
     pub fn enable_implicitly_defined_attribute_error(mut self) -> Self {
         self.implicitly_defined_attribute_error = true;
         self
@@ -264,6 +313,16 @@ impl TestEnv {
 
     pub fn enable_implicit_any_attribute_error(mut self) -> Self {
         self.implicit_any_attribute_error = true;
+        self
+    }
+
+    pub fn enable_implicit_bool_error(mut self) -> Self {
+        self.implicit_bool_error = true;
+        self
+    }
+
+    pub fn enable_unknown_attribute_type_error(mut self) -> Self {
+        self.unknown_attribute_type_error = true;
         self
     }
 
@@ -292,6 +351,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_missing_super_call_error(mut self) -> Self {
+        self.missing_super_call_error = true;
+        self
+    }
+
     pub fn enable_not_required_key_access_error(mut self) -> Self {
         self.not_required_key_access_error = true;
         self
@@ -307,8 +371,33 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_invalid_cast_warning(mut self) -> Self {
+        self.invalid_cast_warning = true;
+        self
+    }
+
+    pub fn enable_untyped_class_decorator_error(mut self) -> Self {
+        self.untyped_class_decorator_error = true;
+        self
+    }
+
+    pub fn enable_untyped_function_decorator_error(mut self) -> Self {
+        self.untyped_function_decorator_error = true;
+        self
+    }
+
+    pub fn enable_unused_call_result_error(mut self) -> Self {
+        self.unused_call_result_error = true;
+        self
+    }
+
     pub fn enable_string_as_iterable_warning(mut self) -> Self {
         self.string_as_iterable_warning = true;
+        self
+    }
+
+    pub fn enable_unsupported_dynamic_base_error(mut self) -> Self {
+        self.unsupported_dynamic_base_error = true;
         self
     }
 
@@ -317,8 +406,73 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_check_all_matches(mut self) -> Self {
+        self.check_all_matches = true;
+        self
+    }
+
+    pub fn enable_strict_partial_subtyping(mut self) -> Self {
+        self.strict_partial_subtyping = true;
+        self
+    }
+
     pub fn enable_spec_compliant_overloads(mut self) -> Self {
         self.spec_compliant_overloads = true;
+        self
+    }
+
+    pub fn enable_legacy_overload_expansion(mut self) -> Self {
+        self.legacy_overload_expansion = true;
+        self
+    }
+
+    pub fn enable_treat_all_caps_as_final(mut self) -> Self {
+        self.treat_all_caps_as_final = true;
+        self
+    }
+
+    pub fn enable_no_any_return_error(mut self) -> Self {
+        self.no_any_return_error = true;
+        self
+    }
+
+    pub fn enable_no_any_return_explicit_error(mut self) -> Self {
+        self.no_any_return_explicit_error = true;
+        self
+    }
+
+    pub fn enable_no_any_return_implicit_error(mut self) -> Self {
+        self.no_any_return_implicit_error = true;
+        self
+    }
+
+    pub fn enable_implicit_any_lambda_error(mut self) -> Self {
+        self.implicit_any_lambda_error = true;
+        self
+    }
+
+    pub fn enable_invalid_abstract_method_error(mut self) -> Self {
+        self.invalid_abstract_method_error = true;
+        self
+    }
+
+    pub fn enable_empty_body_error(mut self) -> Self {
+        self.empty_body_error = true;
+        self
+    }
+
+    pub fn enable_unknown_argument_type_error(mut self) -> Self {
+        self.unknown_argument_type_error = true;
+        self
+    }
+
+    pub fn enable_unknown_variable_type_error(mut self) -> Self {
+        self.unknown_variable_type_error = true;
+        self
+    }
+
+    pub fn enable_implicit_reexport_error(mut self) -> Self {
+        self.implicit_reexport_error = true;
         self
     }
 
@@ -411,8 +565,13 @@ impl TestEnv {
         config.root.check_unannotated_defs = Some(self.check_unannotated_defs);
         config.root.infer_return_types = Some(self.infer_return_types);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
+        config.root.check_all_matches = Some(self.check_all_matches);
+        config.root.recursion_depth_limit = self.recursion_depth_limit;
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
+        config.root.strict_partial_subtyping = Some(self.strict_partial_subtyping);
         config.root.spec_compliant_overloads = Some(self.spec_compliant_overloads);
+        config.root.legacy_overload_expansion = Some(self.legacy_overload_expansion);
+        config.root.treat_all_caps_as_final = Some(self.treat_all_caps_as_final);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };
@@ -429,6 +588,12 @@ impl TestEnv {
         if self.implicit_any_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitAnyAttribute, Severity::Error);
         }
+        if self.implicit_bool_error {
+            errors.set_error_severity(ErrorKind::ImplicitBool, Severity::Error);
+        }
+        if self.unknown_attribute_type_error {
+            errors.set_error_severity(ErrorKind::UnknownAttributeType, Severity::Error);
+        }
         if self.unannotated_return_error {
             errors.set_error_severity(ErrorKind::UnannotatedReturn, Severity::Error);
         }
@@ -444,17 +609,62 @@ impl TestEnv {
         if self.missing_override_decorator_error {
             errors.set_error_severity(ErrorKind::MissingOverrideDecorator, Severity::Error);
         }
+        if self.missing_super_call_error {
+            errors.set_error_severity(ErrorKind::MissingSuperCall, Severity::Error);
+        }
         if self.not_required_key_access_error {
             errors.set_error_severity(ErrorKind::NotRequiredKeyAccess, Severity::Error);
         }
+        if self.no_any_return_error {
+            errors.set_error_severity(ErrorKind::NoAnyReturn, Severity::Error);
+        }
+        if self.no_any_return_explicit_error {
+            errors.set_error_severity(ErrorKind::NoAnyReturnExplicit, Severity::Error);
+        }
+        if self.no_any_return_implicit_error {
+            errors.set_error_severity(ErrorKind::NoAnyReturnImplicit, Severity::Error);
+        }
+        if self.implicit_reexport_error {
+            errors.set_error_severity(ErrorKind::ImplicitReexport, Severity::Error);
+        }
         if self.pytorch_efficiency_lint_error {
-            config.root.pytorch_efficiency_lints = Some(true);
+            errors.set_error_severity(ErrorKind::PytorchEfficiencyLints, Severity::Error);
         }
         if self.incompatible_comparison_error {
             errors.set_error_severity(ErrorKind::IncompatibleComparison, Severity::Error);
         }
+        if self.invalid_cast_warning {
+            errors.set_error_severity(ErrorKind::InvalidCast, Severity::Warn);
+        }
+        if self.untyped_class_decorator_error {
+            errors.set_error_severity(ErrorKind::UntypedClassDecorator, Severity::Error);
+        }
+        if self.untyped_function_decorator_error {
+            errors.set_error_severity(ErrorKind::UntypedFunctionDecorator, Severity::Error);
+        }
+        if self.unused_call_result_error {
+            errors.set_error_severity(ErrorKind::UnusedCallResult, Severity::Error);
+        }
         if self.string_as_iterable_warning {
             errors.set_error_severity(ErrorKind::StringAsIterable, Severity::Warn);
+        }
+        if self.unsupported_dynamic_base_error {
+            errors.set_error_severity(ErrorKind::UnsupportedDynamicBase, Severity::Error);
+        }
+        if self.unknown_argument_type_error {
+            errors.set_error_severity(ErrorKind::UnknownArgumentType, Severity::Error);
+        }
+        if self.implicit_any_lambda_error {
+            errors.set_error_severity(ErrorKind::ImplicitAnyLambda, Severity::Error);
+        }
+        if self.invalid_abstract_method_error {
+            errors.set_error_severity(ErrorKind::InvalidAbstractMethod, Severity::Error);
+        }
+        if self.empty_body_error {
+            errors.set_error_severity(ErrorKind::EmptyBody, Severity::Error);
+        }
+        if self.unknown_variable_type_error {
+            errors.set_error_severity(ErrorKind::UnknownVariableType, Severity::Error);
         }
         config.extra_file_extensions = self.extra_file_extensions.clone();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
@@ -492,29 +702,13 @@ impl TestEnv {
         transaction.as_mut().run(&handles, self.run_require, None);
         state.commit_transaction(transaction, None);
         subscriber.finish();
-        let project_root = PathBuf::new();
-        print_errors(
-            project_root.as_path(),
-            &state
-                .transaction()
-                .get_errors(handles.iter())
-                .collect_errors()
-                .ordinary,
-        );
         (state, move |module| {
             let name = ModuleName::from_str(module);
             Handle::new(
                 name,
-                find_import(
-                    &config_file,
-                    name,
-                    None,
-                    None,
-                    &DirEntryCache::new(true),
-                    None,
-                )
-                .finding()
-                .unwrap(),
+                find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
+                    .finding()
+                    .unwrap(),
                 config.dupe(),
             )
         })
@@ -603,7 +797,20 @@ pub fn mk_multi_file_state(
     default_require_level: Require,
     assert_zero_errors: bool,
 ) -> (HashMap<&'static str, Handle>, State) {
-    let mut test_env = TestEnv::new();
+    mk_multi_file_state_with_env(
+        TestEnv::new(),
+        files,
+        default_require_level,
+        assert_zero_errors,
+    )
+}
+
+pub fn mk_multi_file_state_with_env(
+    mut test_env: TestEnv,
+    files: &[(&'static str, &str)],
+    default_require_level: Require,
+    assert_zero_errors: bool,
+) -> (HashMap<&'static str, Handle>, State) {
     for (name, code) in files {
         test_env.add(name, code);
     }
@@ -615,19 +822,15 @@ pub fn mk_multi_file_state(
         handles.insert(*name, handle(name));
     }
     if assert_zero_errors {
-        assert_eq!(
-            state
-                .transaction()
-                .get_errors(handles.values())
-                .collect_errors()
-                .ordinary
-                .len(),
-            0
+        let errors = state
+            .transaction()
+            .get_errors(handles.values())
+            .collect_errors()
+            .ordinary;
+        assert!(
+            errors.is_empty(),
+            "Expected no errors, but got: {errors:#?}"
         );
-    }
-    let mut handles = HashMap::new();
-    for (name, _) in files {
-        handles.insert(*name, handle(name));
     }
     (handles, state)
 }
@@ -769,11 +972,19 @@ pub fn testcase_for_macro(
         } else {
             let (state, handle) = env.clone().to_state();
             let t = state.transaction();
+            let project_root = PathBuf::new();
             // First check against main, so we can capture any import order errors.
-            check(t.get_errors(&[handle("main")]))?;
+            let main_errors = t.get_errors(&[handle("main")]);
+            print_errors(
+                project_root.as_path(),
+                &main_errors.collect_display_errors(),
+            );
+            check(main_errors)?;
             // THen check all handles, so we make sure the rest of the TestEnv is valid.
             let handles = env.modules.map(|(x, _, _)| handle(x.as_str()));
-            check(state.transaction().get_errors(handles.iter()))?;
+            let env_errors = state.transaction().get_errors(handles.iter());
+            print_errors(project_root.as_path(), &env_errors.collect_display_errors());
+            check(env_errors)?;
         }
         if start.elapsed().as_secs() <= limit {
             return Ok(());
@@ -792,7 +1003,7 @@ pub fn mk_state(code: &str) -> (Handle, State) {
 pub fn get_class(name: &str, handle: &Handle, state: &State) -> Class {
     let solutions = state.transaction().get_solutions(handle).unwrap();
 
-    match &**solutions.get(&KeyExport(Name::new(name))) {
+    match solutions.get(&KeyExport(Name::new(name))) {
         Type::ClassDef(cls) => cls.dupe(),
         _ => unreachable!(),
     }

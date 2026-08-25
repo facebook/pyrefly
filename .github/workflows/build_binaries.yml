@@ -1,11 +1,11 @@
 name: Build binaries
 
 on:
-  push:
-    paths:
-      - '**/*'
-      - '!.*'
-      - '.github/workflows/build_binaries.yml'
+  # publish_to_pypi.yml calls this workflow to build the release wheels.
+  # The nightly run tests the targets that no other workflow builds: i686,
+  # ppc64le, musl, and the aarch64 variants.
+  schedule:
+    - cron: '0 8 * * *'
   workflow_dispatch:
   workflow_call:
 

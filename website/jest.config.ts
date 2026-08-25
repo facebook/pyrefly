@@ -43,6 +43,7 @@ const config: Config.InitialOptions = {
         '@docusaurus/useDocusaurusContext':
             '<rootDir>/__mocks__/docusaurusContextMock.ts',
         '@docusaurus/BrowserOnly': '<rootDir>/__mocks__/browserOnlyMock.ts',
+        '@docusaurus/Head': '<rootDir>/__mocks__/@docusaurus/Head.tsx',
         '@docusaurus/useBaseUrl':
             '<rootDir>/__mocks__/@docusaurus/useBaseUrl.ts',
         '@theme/ThemedImage': '<rootDir>/__mocks__/@theme/ThemedImage.tsx',
@@ -51,7 +52,6 @@ const config: Config.InitialOptions = {
         '((?!pyrefly_wasm\\.test\\.ts).)*\\/pyrefly_wasm$':
             '<rootDir>/__mocks__/pyreflyWasmMock.ts',
         './configured-monaco': '<rootDir>/__mocks__/configuredMonacoMock.ts',
-        '^lz-string$': '<rootDir>/__mocks__/lzStringMock.ts',
         'monaco-editor': '<rootDir>/__mocks__/monaco-editor.ts',
         './usePythonWorker': '<rootDir>/__mocks__/usePythonWorkerMock.ts',
     },

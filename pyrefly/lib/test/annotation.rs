@@ -23,6 +23,15 @@ assert_type(D.x, int)  # E: assert_type(Unknown, int) failed
 );
 
 testcase!(
+    test_raw_string_type_annotation,
+    r#"
+def f(x: r"int") -> R"str":  # E: Raw string literals are not allowed in type expressions  # E: Raw string literals are not allowed in type expressions
+    y: r"bool" = True  # E: Raw string literals are not allowed in type expressions
+    return ""
+"#,
+);
+
+testcase!(
     test_union_operator_with_bare_string_literal,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"
@@ -203,8 +212,7 @@ class C:
 );
 
 testcase!(
-    bug =
-        "Function annotations routed through legacy tparam lookup still miss unquoted forward refs",
+    bug = "Function annotations routed through legacy tparam lookup miss unquoted forward refs",
     test_unquoted_function_annotation_forward_reference_before_py314,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"
@@ -266,4 +274,29 @@ testcase!(
     test_union_forward_ref_ok_in_stub,
     env_3_13_with_stub(),
     "import foo",
+);
+testcase!(
+    test_call_expressions_in_type_forms,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from typing import TypeVar, assert_type, cast
+
+class Base: ...
+def make_type() -> type[Base]: ...
+
+base = Base()
+class DynamicBase(type(base)): ...
+
+LegacyBound = TypeVar("LegacyBound", bound=make_type())  # E: Function call cannot be used in annotations
+LegacyConstraints = TypeVar("LegacyConstraints", make_type(), Base)  # E: Function call cannot be used in annotations
+LegacyDefault = TypeVar("LegacyDefault", default=make_type())  # E: Function call cannot be used in annotations
+
+def pep_bound[T: make_type()](x: T) -> T: ...  # E: Function call cannot be used in annotations
+def pep_default[T = make_type()](x: T) -> T: ...  # E: Function call cannot be used in annotations
+
+def use(value: Base) -> None:
+    cast(make_type(), object())  # E: Function call cannot be used in annotations
+    cast(list[make_type()], object())  # E: Function call cannot be used in annotations
+    assert_type(value, make_type())  # E: Function call cannot be used in annotations
+"#,
 );

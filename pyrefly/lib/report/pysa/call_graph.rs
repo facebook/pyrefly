@@ -18,7 +18,6 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
@@ -64,7 +63,6 @@ use vec1::Vec1;
 
 use crate::alt::call::CallTarget;
 use crate::alt::call::CallTargetLookup;
-use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
@@ -80,10 +78,11 @@ use crate::report::pysa::captured_variable::CapturedVariableRef;
 use crate::report::pysa::captured_variable::ModuleCapturedVariables;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
-use crate::report::pysa::class::get_super_class_member;
+use crate::report::pysa::class::get_super_class_member_defining_class;
 use crate::report::pysa::collect::CollectNoDuplicateKeys;
 use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::function::DecoratedFunction;
 use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionId;
 use crate::report::pysa::function::FunctionRef;
@@ -1308,7 +1307,7 @@ fn has_implicit_receiver(
 
 fn extract_function_from_bound_method(
     bound_method: &BoundMethod,
-) -> Vec1<&pyrefly_types::callable::Function> {
+) -> Vec1<&pyrefly_types::function::Function> {
     match &bound_method.func {
         BoundMethodType::Function(function) => Vec1::new(function),
         BoundMethodType::Forall(forall) => Vec1::new(&forall.body),
@@ -1342,7 +1341,7 @@ fn find_class_type_for_new_method(new_method_parameters: &Params) -> Option<&Typ
     })
 }
 
-fn method_name_from_function(function: &pyrefly_types::callable::Function) -> Cow<'_, Name> {
+fn method_name_from_function(function: &pyrefly_types::function::Function) -> Cow<'_, Name> {
     function.metadata.kind.function_name()
 }
 
@@ -1628,6 +1627,13 @@ impl<'a> CallGraphVisitor<'a> {
                     // Use the bound of the type var as the base class.
                     self.receiver_class_from_type(bound, is_class_method)
                 }
+                Restriction::Flag(domain) => self.receiver_class_from_type(
+                    &domain.as_type(
+                        &self.module_answers_context.stdlib,
+                        self.module_answers_context.answers.heap(),
+                    ),
+                    is_class_method,
+                ),
                 _ => ReceiverClassResult {
                     class: None,
                     is_class_def: false,
@@ -1676,13 +1682,12 @@ impl<'a> CallGraphVisitor<'a> {
         }
 
         // Fall back to super class member lookup.
-        if let Some(with_defining_class) = get_super_class_member(
+        if let Some(parent_class) = get_super_class_member_defining_class(
             class,
             field_name,
             /* start_lookup_cls */ None,
             self.module_context,
         ) {
-            let parent_class = with_defining_class.defining_class;
             let object = self.module_answers_context.stdlib.object().class_object();
             if exclude_object_methods && parent_class == *object {
                 return Result::Err(UnresolvedReason::ClassFieldOnlyExistInObject);
@@ -1734,7 +1739,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn call_targets_from_callable_type(
         &self,
-        function: &pyrefly_types::callable::Function,
+        function: &pyrefly_types::function::Function,
         callee_type: Option<&Type>,
         callee_expr: Option<AnyNodeRef>,
         return_type: ScalarTypeProperties,
@@ -1764,7 +1769,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn call_targets_from_callable_metadata(
         &self,
-        function: &pyrefly_types::callable::Function,
+        function: &pyrefly_types::function::Function,
         return_type: ScalarTypeProperties,
         callee_expr_suffix: Option<&str>,
     ) -> Option<PysaCallTarget<FunctionRef>> {
@@ -1772,12 +1777,12 @@ impl<'a> CallGraphVisitor<'a> {
         // name-based lookup. This handles module-level function aliases (e.g.,
         // `fromstring = XML` in `xml.etree.ElementTree`) where the type carries the
         // original definition's index.
-        let (module, def_index) = match &function.metadata.kind {
-            FunctionKind::Def(func_id) if func_id.cls.is_none() && func_id.def_index.is_some() => {
-                (&func_id.module, func_id.def_index.unwrap())
-            }
-            _ => return None,
-        };
+        let func_id = function.metadata.kind.as_func_def_id()?;
+        if func_id.cls.is_some() {
+            return None;
+        }
+        let module = func_id.qname.module();
+        let def_index = func_id.def_index;
 
         let function_ref = self
             .module_context
@@ -2003,7 +2008,7 @@ impl<'a> CallGraphVisitor<'a> {
 
     fn call_targets_from_new_method(
         &self,
-        new_method: &pyrefly_types::callable::Function,
+        new_method: &pyrefly_types::function::Function,
         callee_expr: Option<AnyNodeRef>,
         callee_type: Option<&Type>,
         return_type: ScalarTypeProperties,
@@ -2321,7 +2326,7 @@ impl<'a> CallGraphVisitor<'a> {
                 }
                 _ => CallCallees::new_unresolved(UnresolvedReason::UnexpectedPyreflyTarget),
             },
-            Some(CallTargetLookup::Error(targets)) => {
+            Some(CallTargetLookup::Error(_, targets)) => {
                 if targets.is_empty() {
                     debug_println!(
                         self.debug,
@@ -4076,24 +4081,23 @@ impl<'a> CallGraphVisitor<'a> {
             .bindings
             .key_to_idx_hashed_opt(Hashed::new(&key))
             .and_then(|idx| {
-                let decorated_function = DecoratedFunction::from_bindings_answers(
+                let function = DecoratedFunction {
                     idx,
-                    &self.module_answers_context.bindings,
-                    &self.module_answers_context.answers,
-                );
-                if should_export_decorated_function(
-                    &decorated_function,
-                    &self.module_answers_context,
-                ) {
-                    let return_type = decorated_function
-                        .ty
+                    undecorated: self.module_answers_context.undecorated_function(idx),
+                };
+                if should_export_decorated_function(&function, &self.module_answers_context) {
+                    let return_type = self
+                        .module_answers_context
+                        .answers
+                        .get_idx_ref(idx)
+                        .unwrap()
                         .callable_return_type(self.module_answers_context.answers.heap())
                         .map_or(ScalarTypeProperties::none(), |type_| {
                             ScalarTypeProperties::from_type(&type_, self.module_context)
                         });
                     let target = self.call_target_from_function_target(
                         Target::Function(FunctionRef::from_decorated_function(
-                            &decorated_function,
+                            &function,
                             &self.module_answers_context,
                         )),
                         return_type,

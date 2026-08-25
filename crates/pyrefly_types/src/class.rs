@@ -77,6 +77,22 @@ impl Visit<Type> for Class {
     fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
 
+/// `attr.ib`/`attrib` honor a `type=` argument and accept a positional default; `field` neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttrsFieldSpecifierKind {
+    Attrib,
+    Field,
+}
+
+/// Bundling these with the specifier keeps them unrepresentable without one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttrsFieldSpecifier {
+    pub kind: AttrsFieldSpecifierKind,
+    pub default_is_nothing: bool,
+    pub default_decorator_method_range: Option<TextRange>,
+    pub converter_decorator_method_range: Option<TextRange>,
+}
+
 /// Simple properties of class fields that can be attached to the class definition. Note that this
 /// does not include the type of a field, which needs to be computed lazily to avoid a recursive loop.
 #[derive(Debug, Clone)]
@@ -86,7 +102,7 @@ pub struct ClassFieldProperties {
     is_initialized_on_class: bool,
     // The field is defined in the class body (not in a method via self.x = ...)
     is_defined_in_class_body: bool,
-    is_attrs_field_specifier: bool,
+    attrs_field_specifier: Option<AttrsFieldSpecifier>,
     range: TextRange,
     // The range of the docstring following this field, if present
     docstring_range: Option<TextRange>,
@@ -102,7 +118,7 @@ impl ClassFieldProperties {
         is_annotated: bool,
         has_default_value: bool,
         is_defined_in_class_body: bool,
-        is_attrs_field_specifier: bool,
+        attrs_field_specifier: Option<AttrsFieldSpecifier>,
         range: TextRange,
         docstring_range: Option<TextRange>,
     ) -> Self {
@@ -110,7 +126,7 @@ impl ClassFieldProperties {
             is_annotated,
             is_initialized_on_class: has_default_value,
             is_defined_in_class_body,
-            is_attrs_field_specifier,
+            attrs_field_specifier,
             range,
             docstring_range,
         }
@@ -154,6 +170,10 @@ impl ClassFields {
         self.0.contains_key(name)
     }
 
+    pub fn get_index_of(&self, name: &Name) -> Option<usize> {
+        self.0.get_index_of(name)
+    }
+
     pub fn fields(&self) -> impl ExactSizeIterator<Item = &Name> {
         self.0.keys()
     }
@@ -181,7 +201,42 @@ impl ClassFields {
     pub fn is_attrs_field_specifier(&self, name: &Name) -> bool {
         self.0
             .get(name)
-            .is_some_and(|prop| prop.is_attrs_field_specifier)
+            .is_some_and(|prop| prop.attrs_field_specifier.is_some())
+    }
+
+    pub fn default_is_attrs_nothing(&self, name: &Name) -> bool {
+        self.0.get(name).is_some_and(|prop| {
+            prop.attrs_field_specifier
+                .is_some_and(|s| s.default_is_nothing)
+        })
+    }
+
+    pub fn default_is_attrs_decorator(&self, name: &Name) -> bool {
+        self.attrs_default_decorator_method_range(name).is_some()
+    }
+
+    /// The name range of this field's `@<field>.default` method, if any.
+    pub fn attrs_default_decorator_method_range(&self, name: &Name) -> Option<TextRange> {
+        self.0
+            .get(name)
+            .and_then(|prop| prop.attrs_field_specifier)
+            .and_then(|s| s.default_decorator_method_range)
+    }
+
+    /// The name range of this field's first `@<field>.converter` method, if any.
+    pub fn attrs_converter_decorator_method_range(&self, name: &Name) -> Option<TextRange> {
+        self.0
+            .get(name)
+            .and_then(|prop| prop.attrs_field_specifier)
+            .and_then(|s| s.converter_decorator_method_range)
+    }
+
+    /// Whether the field's attrs specifier honors a `type=` argument (`attr.ib`, not `field`).
+    pub fn attrs_specifier_honors_type(&self, name: &Name) -> bool {
+        self.0.get(name).is_some_and(|prop| {
+            prop.attrs_field_specifier
+                .is_some_and(|s| s.kind == AttrsFieldSpecifierKind::Attrib)
+        })
     }
 
     pub fn is_field_initialized_on_class(&self, name: &Name) -> bool {
@@ -209,6 +264,7 @@ impl ClassFields {
 struct ClassInner {
     def_index: ClassDefIndex,
     qname: QName,
+    is_protocol: bool,
     /// The precomputed tparams will be `Some(..)` if we were able to verify that there
     /// are no legacy type variables (at which point there's no chance of producing a cycle
     /// when computing the class tparams). Whenever it is `None`, there will be a corresponding
@@ -221,6 +277,7 @@ impl Debug for ClassInner {
         f.debug_struct("ClassInner")
             .field("index", &self.def_index)
             .field("qname", &self.qname)
+            .field("is_protocol", &self.is_protocol)
             .field("tparams", &self.precomputed_tparams)
             // We don't print `fields` because it's way too long.
             .finish_non_exhaustive()
@@ -285,10 +342,12 @@ impl Class {
         parent: NestingContext,
         module: Module,
         precomputed_tparams: Option<Arc<TParams>>,
+        is_protocol: bool,
     ) -> Self {
         Self(Arc::new(ClassInner {
             def_index,
             qname: QName::new(name, parent, module),
+            is_protocol,
             precomputed_tparams,
         }))
     }
@@ -307,6 +366,10 @@ impl Class {
 
     pub fn kind(&self) -> ClassKind {
         ClassKind::from_qname(self.qname())
+    }
+
+    pub fn is_protocol(&self) -> bool {
+        self.0.is_protocol
     }
 
     pub fn precomputed_tparams(&self) -> &Option<Arc<TParams>> {
