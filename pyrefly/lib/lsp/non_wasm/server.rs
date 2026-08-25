@@ -6320,7 +6320,8 @@ impl Server {
                 let Some(class_def_index) = bindings.class_def_index(class_def) else {
                     continue;
                 };
-                if class_def_index == target.def_index && module_info.path() == &target.module_path
+                if class_def_index == target.def_index
+                    && module_info.path().as_path() == target.module_path.as_path()
                 {
                     continue;
                 }
@@ -6330,8 +6331,13 @@ impl Server {
                     let mro = solutions.get(&KeyClassMro(class_def_index));
                     mro.ancestors_no_object().iter().any(|ancestor| {
                         let ancestor_class = ancestor.class_object();
+                        // Compare the underlying file, not the `ModulePath`. An open file is held
+                        // as `ModulePathDetails::Memory` while a module that merely imports it
+                        // resolves the ancestor to `FileSystem`, so `==` on `ModulePath` is false
+                        // for the same file and every cross-module subtype is silently dropped.
                         ancestor_class.index() == target.def_index
-                            && ancestor_class.module_path() == &target.module_path
+                            && ancestor_class.module_path().as_path()
+                                == target.module_path.as_path()
                     })
                 };
                 if !is_subtype {
