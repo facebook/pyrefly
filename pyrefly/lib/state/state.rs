@@ -2856,6 +2856,16 @@ impl Drop for TransactionHandle<'_> {
     }
 }
 
+/// One step of a walk along a chain of re-exports, as seen from a single module.
+enum ExportStep<T> {
+    /// The chain ends at a definition in this module, carrying the value read
+    /// off its `Export`.
+    Resolved(T),
+    /// The name is re-exported from another module, under the given name if the
+    /// re-export renamed it.
+    Redirect(ModuleName, Option<Name>),
+}
+
 impl<'a> LookupExport for TransactionHandle<'a> {
     fn export_exists(&self, module: ModuleName, name: &Name) -> bool {
         self.with_exports(
@@ -2926,10 +2936,10 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                 module,
                 |exports, lookup| match exports.exports(lookup).get(&name)? {
                     ExportLocation::ThisModule(Export { deprecation, .. }) => {
-                        Some(Err(deprecation.clone()))
+                        Some(ExportStep::Resolved(deprecation.clone()))
                     }
                     ExportLocation::OtherModule(other_module, original_name) => {
-                        Some(Ok((*other_module, original_name.clone())))
+                        Some(ExportStep::Redirect(*other_module, original_name.clone()))
                     }
                 },
                 ModuleDep::GetDeprecated(name.clone()),
@@ -2937,8 +2947,8 @@ impl<'a> LookupExport for TransactionHandle<'a> {
 
             match next {
                 None => return None,
-                Some(Err(deprecation)) => return deprecation,
-                Some(Ok((other_module, original_name))) => {
+                Some(ExportStep::Resolved(deprecation)) => return deprecation,
+                Some(ExportStep::Redirect(other_module, original_name)) => {
                     if let Some(original_name) = original_name {
                         name = original_name;
                     }
@@ -2989,17 +2999,19 @@ impl<'a> LookupExport for TransactionHandle<'a> {
             let next = self.with_exports(
                 module,
                 |exports, lookup| match exports.exports(lookup).get(&name)? {
-                    ExportLocation::ThisModule(export) => Some(Err(export.special_export)),
+                    ExportLocation::ThisModule(export) => {
+                        Some(ExportStep::Resolved(export.special_export))
+                    }
                     ExportLocation::OtherModule(other_module, original_name) => {
-                        Some(Ok((*other_module, original_name.clone())))
+                        Some(ExportStep::Redirect(*other_module, original_name.clone()))
                     }
                 },
                 ModuleDep::IsSpecialExport(name.clone()),
             )??;
 
             match next {
-                Err(special) => return special,
-                Ok((other_module, original_name)) => {
+                ExportStep::Resolved(special) => return special,
+                ExportStep::Redirect(other_module, original_name) => {
                     if let Some(original_name) = original_name {
                         name = original_name.clone();
                     }
@@ -3037,19 +3049,21 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                 .with_exports(
                     module,
                     |exports, lookup| match exports.exports(lookup).get(&name) {
-                        Some(ExportLocation::ThisModule(Export { is_final, .. })) => Err(*is_final),
-                        Some(ExportLocation::OtherModule(other_module, original_name)) => {
-                            Ok((*other_module, original_name.clone()))
+                        Some(ExportLocation::ThisModule(Export { is_final, .. })) => {
+                            ExportStep::Resolved(*is_final)
                         }
-                        None => Err(false),
+                        Some(ExportLocation::OtherModule(other_module, original_name)) => {
+                            ExportStep::Redirect(*other_module, original_name.clone())
+                        }
+                        None => ExportStep::Resolved(false),
                     },
                     ModuleDep::ExportOrigin(name.clone()),
                 )
-                .unwrap_or(Err(false));
+                .unwrap_or(ExportStep::Resolved(false));
 
             match next {
-                Err(is_final) => break is_final,
-                Ok((other_module, original_name)) => {
+                ExportStep::Resolved(is_final) => break is_final,
+                ExportStep::Redirect(other_module, original_name) => {
                     if let Some(original_name) = original_name {
                         name = original_name;
                     }
