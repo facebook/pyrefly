@@ -23,6 +23,13 @@ let statusBarItem: vscode.StatusBarItem;
 export const TYPE_ERROR_DISPLAY_STATUS_VERSION = 'v2' as const;
 
 /**
+ * Method name of the server→client notification saying our cached status may
+ * be stale.
+ */
+export const TYPE_ERROR_DISPLAY_STATUS_CHANGED_METHOD =
+  'pyrefly/typeErrorDisplayStatusChanged' as const;
+
+/**
  * V2 wire shape for `pyrefly/textDocument/typeErrorDisplayStatus`. The
  * client opts into this richer shape via the version handshake above.
  * An older binary that doesn't know V2 returns a bare V1 string when
@@ -40,6 +47,10 @@ type TypeErrorDisplayStatusV2 = {
   // Version string of the language server binary, or null when the
   // server doesn't know it.
   pyreflyVersion: string | null;
+  // The current status of the build system. Typically, if a build system is
+  // configured, here you would see something like `building`, `ready`,
+  // or `error: <error>`.
+  buildSystem: string | null;
 };
 
 /// Update the status bar based on current configuration
@@ -101,6 +112,27 @@ export async function updateStatusBar(client: LanguageClient) {
     statusBarItem.hide();
   }
 }
+
+/**
+ * Trailing-debounced `updateStatusBar`, for server-pushed refreshes.
+ *
+ * A single source-database rebuild pushes at least a `building`/`ready` pair,
+ * and a workspace with several configs pushes more, so coalescing keeps this to
+ * one round-trip per burst. The trailing edge also means a build that finishes
+ * within the window never flashes `building` at all.
+ */
+export function scheduleStatusBarUpdate(client: LanguageClient) {
+  if (pushRefreshTimer != null) {
+    clearTimeout(pushRefreshTimer);
+  }
+  pushRefreshTimer = setTimeout(() => {
+    pushRefreshTimer = undefined;
+    void updateStatusBar(client);
+  }, PUSH_REFRESH_DEBOUNCE_MS);
+}
+
+const PUSH_REFRESH_DEBOUNCE_MS = 150;
+let pushRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 /**
  * V1 renderer: legacy bare-string responses from older binaries. Kept
@@ -172,6 +204,9 @@ function renderV2(status: TypeErrorDisplayStatusV2) {
       // (and copyable) while still clickable.
       sections.push(`Docs: [${status.docsUrl}](${status.docsUrl})`);
     }
+  }
+  if (status.buildSystem) {
+    sections.push(`Build system: ${status.buildSystem}`);
   }
   if (status.pyreflyVersion) {
     sections.push(`Pyrefly version: ${status.pyreflyVersion}`);

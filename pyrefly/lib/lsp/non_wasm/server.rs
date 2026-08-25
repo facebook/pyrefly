@@ -312,13 +312,16 @@ use crate::lsp::non_wasm::queue::QueuedEvent;
 use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::type_error_display_status::BuildSystemStatus;
 use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatus;
+pub use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusChangedNotification;
 pub use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusRequest;
 use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusResponse;
 use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusV2;
 use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusVersion;
 use crate::lsp::non_wasm::type_error_display_status::default_v2_response;
 use crate::lsp::non_wasm::type_error_display_status::derive_v2_response;
+use crate::lsp::non_wasm::type_error_display_status::negotiate_push_type_error_display_status;
 use crate::lsp::non_wasm::type_error_display_status::negotiate_type_error_display_status_version;
 use crate::lsp::non_wasm::type_hierarchy::collect_class_defs;
 use crate::lsp::non_wasm::type_hierarchy::find_class_at_position_in_ast;
@@ -886,6 +889,9 @@ pub struct Server {
     sourcedb_queue: HeavyTaskQueue,
     /// Any configs whose find cache should be invalidated.
     invalidated_source_dbs: Mutex<SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>>>,
+    /// State of the most recent build-system source database query, surfaced in
+    /// the status bar.
+    build_system_status: Mutex<Option<BuildSystemStatus>>,
     /// Custom initialization options are provided via initialize_params.initializationOptions
     /// The type should match `LspConfig`
     initialize_params: InitializeParams,
@@ -967,6 +973,10 @@ pub struct Server {
     /// [`TypeErrorDisplayStatusVersion::LATEST`] (the richest shape this
     /// server knows about) and a missing field to `V1`.
     type_error_display_status_version: TypeErrorDisplayStatusVersion,
+    /// Whether the client declared, via
+    /// `initializationOptions.pyrefly.pushTypeErrorDisplayStatus`, that it
+    /// handles [`TypeErrorDisplayStatusChangedNotification`].
+    push_type_error_display_status: bool,
     /// Testing-only flag to prevent the next recheck from committing.
     /// When set, the recheck queue task will loop without committing the transaction.
     do_not_commit_recheck: AtomicBool,
@@ -2684,6 +2694,9 @@ impl Server {
         let type_error_display_status_version = negotiate_type_error_display_status_version(
             initialize_params.initialization_options.as_ref(),
         );
+        let push_type_error_display_status = negotiate_push_type_error_display_status(
+            initialize_params.initialization_options.as_ref(),
+        );
 
         let should_request_workspace_settings = initialize_params
             .capabilities
@@ -2698,6 +2711,7 @@ impl Server {
             find_reference_queue: HeavyTaskQueue::new(QueueName::FindReferenceQueue),
             sourcedb_queue: HeavyTaskQueue::new(QueueName::SourceDbQueue),
             invalidated_source_dbs: Mutex::new(SmallSet::new()),
+            build_system_status: Mutex::new(None),
             initialize_params,
             indexing_mode,
             workspace_indexing_limit,
@@ -2731,6 +2745,7 @@ impl Server {
             currently_streaming_diagnostics_for_handles: RwLock::new(None),
             diagnostic_markdown_support,
             type_error_display_status_version,
+            push_type_error_display_status,
             do_not_commit_recheck: AtomicBool::new(false),
             // Will be set to true if we send a workspace/configuration request
             awaiting_initial_workspace_config: AtomicBool::new(should_request_workspace_settings),
@@ -3040,6 +3055,10 @@ impl Server {
             workspace_disable_type_errors,
             workspace_type_checking_mode,
             self.server_version.clone(),
+            self.build_system_status
+                .lock()
+                .as_ref()
+                .map(BuildSystemStatus::display),
         )
     }
 
@@ -3593,6 +3612,23 @@ impl Server {
         !self.workspaces.workspace_diagnostic_roots().is_empty()
     }
 
+    /// Records the build system's state and, for clients that opted in, tells
+    /// them their cached status-bar payload is stale.
+    ///
+    /// Called from the source database queue thread, so it must not take any
+    /// lock the query itself holds.
+    fn set_build_system_status(&self, status: BuildSystemStatus) {
+        *self.build_system_status.lock() = Some(status);
+        if self.push_type_error_display_status
+            && self.type_error_display_status_version == TypeErrorDisplayStatusVersion::V2
+        {
+            self.connection
+                .send(Message::Notification(new_notification::<
+                    TypeErrorDisplayStatusChangedNotification,
+                >(())));
+        }
+    }
+
     /// Attempts to requery any open sourced_dbs for open files, and if there are changes,
     /// invalidate find and perform a recheck.
     fn queue_source_db_rebuild_and_recheck(
@@ -3621,12 +3657,29 @@ impl Server {
                     .insert(handle.path().dupe());
             }
             let task_telemetry = SubTaskTelemetry::new(telemetry, telemetry_event);
-            let (new_invalidated_source_dbs, rebuild_stats) =
+            // Mirrors the filter in `ConfigFile::query_source_db` to see if we
+            // will actually kick a build system query off.
+            let queries_build_system = configs_to_paths.keys().any(|config| {
+                config
+                    .source_db
+                    .as_ref()
+                    .is_some_and(|db| db.as_live_source_database().is_some())
+            });
+            if queries_build_system {
+                server.set_build_system_status(BuildSystemStatus::Building);
+            }
+            let outcome =
                 ConfigFile::query_source_db(&configs_to_paths, force, Some(task_telemetry));
-            telemetry_event.set_sourcedb_rebuild_stats(rebuild_stats);
-            if !new_invalidated_source_dbs.is_empty() {
+            if queries_build_system {
+                server.set_build_system_status(match outcome.error {
+                    Some(error) => BuildSystemStatus::Failed(error),
+                    None => BuildSystemStatus::Ready,
+                });
+            }
+            telemetry_event.set_sourcedb_rebuild_stats(outcome.stats);
+            if !outcome.reloaded.is_empty() {
                 let mut lock = server.invalidated_source_dbs.lock();
-                for db in new_invalidated_source_dbs {
+                for db in outcome.reloaded {
                     lock.insert(db);
                 }
                 let _ = server.lsp_queue.send(LspEvent::InvalidateConfigFind);

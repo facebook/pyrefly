@@ -335,7 +335,9 @@ versioned via `initializationOptions.pyrefly.typeErrorDisplayStatusVersion`:
     "version": "v2",
     "label": "Basic" | "Legacy" | "Default" | "Errors Off" | null,
     "tooltip": "markdown string",
-    "docsUrl": "https://pyrefly.org/..."
+    "docsUrl": "https://pyrefly.org/...",
+    "pyreflyVersion": "1.2.3" | null,
+    "buildSystem": "building" | "ready" | "error: <message>" | null
   }
   ```
   `Basic` / `Legacy` / `Default` are emitted when Pyrefly synthesized
@@ -349,6 +351,11 @@ versioned via `initializationOptions.pyrefly.typeErrorDisplayStatusVersion`:
   extension uses V2 to render the status-bar parenthetical (e.g.
   `Pyrefly (Basic)` or `Pyrefly (Errors Off)`).
 
+  `buildSystem` reports the state of the most recent source-database
+  query for projects configured with a `[build-system]`. It is `null`
+  for projects without one, which is why clients should render it only
+  when present rather than assuming a build system exists.
+
 Clients should dispatch on response shape (`typeof resp === 'string'`
 for V1, `resp.version` for V2+) so they can transparently support
 servers older than the version they declared.
@@ -361,6 +368,27 @@ client asked for. A fallback to `v1` would silently strip features
 the client explicitly requested. Clients should still defensively
 dispatch on `resp.version` so they can recognize when the server has
 clamped them down.
+
+### Custom notification: `pyrefly/typeErrorDisplayStatusChanged`
+
+`typeErrorDisplayStatus` is a request, so a client only learns about
+changes when it asks. Most of the response is static for a given file,
+but `buildSystem` changes on its own as the build system runs. To keep
+clients from showing a stale build state, the server can push a
+notification telling them to re-request.
+
+Opt in by setting
+`initializationOptions.pyrefly.pushTypeErrorDisplayStatus` to `true`
+alongside `typeErrorDisplayStatusVersion: "v2"`. The server then sends
+`pyrefly/typeErrorDisplayStatusChanged` whenever the build-system state
+changes. It defaults to `false` so clients that predate the notification
+never receive one they would only log as unhandled.
+
+The notification carries no parameters. The status is derived per
+document and only the client knows which document it is displaying, so
+the correct reaction is to re-issue `typeErrorDisplayStatus` for the
+current file. Clients should debounce: a single rebuild sends at least a
+`building` and a `ready` transition.
 
 ## Issues?
 

@@ -24,8 +24,10 @@ import {
   ServerOptions,
 } from 'vscode-languageclient/node';
 import {
+  TYPE_ERROR_DISPLAY_STATUS_CHANGED_METHOD,
   TYPE_ERROR_DISPLAY_STATUS_VERSION,
   getStatusBarItem,
+  scheduleStatusBarUpdate,
   updateStatusBar,
 } from './status-bar';
 import {runDocstringFoldingCommand} from './docstring';
@@ -168,6 +170,8 @@ export async function activate(context: ExtensionContext) {
       ...((rawInitialisationOptions as any).pyrefly ?? {}),
       typeErrorDisplayStatusVersion: TYPE_ERROR_DISPLAY_STATUS_VERSION,
       customHoverProvider: supportsHoverVerbosity,
+      // We can handle `pyrefly/typeErrorDisplayStatusChanged`
+      pushTypeErrorDisplayStatus: true,
     },
   };
 
@@ -231,6 +235,12 @@ export async function activate(context: ExtensionContext) {
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(async () => {
       await updateStatusBar(client);
+    }),
+  );
+
+  context.subscriptions.push(
+    client.onNotification(TYPE_ERROR_DISPLAY_STATUS_CHANGED_METHOD, () => {
+      scheduleStatusBarUpdate(client);
     }),
   );
 

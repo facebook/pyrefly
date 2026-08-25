@@ -741,6 +741,18 @@ impl Default for ConfigFile {
     }
 }
 
+/// The result of requerying every live source database for a set of configs.
+/// See [`ConfigFile::query_source_db`].
+pub struct SourceDbQueryOutcome {
+    /// The source databases whose contents changed, and whose dependent caches
+    /// therefore need invalidating.
+    pub reloaded: SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>>,
+    pub stats: TelemetrySourceDbRebuildStats,
+    /// The first query failure, rendered for display. `None` when every queried
+    /// source database succeeded.
+    pub error: Option<String>,
+}
+
 impl ConfigFile {
     /// Gets a ConfigFile for a project directory. `fallback` indicates whether this is a guessed
     /// project root that we're falling back to after failing to otherwise find an import.
@@ -1249,12 +1261,10 @@ impl ConfigFile {
         configs_to_files: &SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>>,
         force: bool,
         telemetry: Option<SubTaskTelemetry>,
-    ) -> (
-        SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>>,
-        TelemetrySourceDbRebuildStats,
-    ) {
+    ) -> SourceDbQueryOutcome {
         let mut stats: TelemetrySourceDbRebuildStats = Default::default();
         stats.common.forced = force;
+        let mut first_error = None;
         let mut reloaded_source_dbs = SmallSet::new();
         let mut sourcedb_configs: SmallMap<_, Vec<_>> = SmallMap::new();
         for (config, files) in configs_to_files {
@@ -1306,7 +1316,7 @@ impl ConfigFile {
                 Err(error) => {
                     log_telemetry(&telemetry, start, instance_stats, Some(&error));
                     error!("Error reloading source database for config: {error:?}");
-                    stats.had_error = true;
+                    first_error.get_or_insert_with(|| format!("{error:#}"));
                     continue;
                 }
                 Ok(r) => r,
@@ -1333,7 +1343,12 @@ impl ConfigFile {
             }
             log_telemetry(&telemetry, start, instance_stats, None);
         }
-        (reloaded_source_dbs, stats)
+        stats.had_error = first_error.is_some();
+        SourceDbQueryOutcome {
+            reloaded: reloaded_source_dbs,
+            stats,
+            error: first_error,
+        }
     }
 
     /// Configures values that must be updated *after* overwriting with CLI flag values,
