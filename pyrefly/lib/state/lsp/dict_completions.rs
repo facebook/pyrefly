@@ -132,6 +132,7 @@ impl<'a> Transaction<'a> {
         dict: &ExprDict,
     ) -> Option<Type> {
         self.dict_literal_expected_type(handle, module, dict)
+            .or_else(|| self.get_expected_type_at(handle, dict.range().start()))
             .or_else(|| self.get_type_trace(handle, dict.range()))
     }
 
