@@ -96,6 +96,21 @@ function resolveLspPath(lspPath: string, cwd: vscode.Uri | undefined) {
   return lspPath;
 }
 
+function getPyreflyBinary(extensionUri: vscode.Uri): string {
+  // There may be more than one URI due to multi-root workspaces, so just take the primary root.
+  let globalCwd: vscode.Uri | undefined = vscode.workspace.workspaceFolders?.[0]?.uri;
+
+  const lspPath: string = resolveLspPath(requireSetting('pyrefly.lspPath'), globalCwd);
+  const bundledPyreflyPath = vscode.Uri.joinPath(
+    extensionUri,
+    'bin',
+    // process.platform returns win32 on any windows CPU architecture
+    process.platform === 'win32' ? 'pyrefly.exe' : 'pyrefly',
+  );
+
+  return lspPath === '' ? bundledPyreflyPath.fsPath : lspPath;
+}
+
 export async function activate(context: ExtensionContext) {
   // Initialize the output channel if it doesn't exist
   if (!outputChannel) {
@@ -114,10 +129,8 @@ export async function activate(context: ExtensionContext) {
     inferOutputChannel = vscode.window.createOutputChannel('Pyrefly infer');
   }
 
-  // There may be more than one URI due to multi-root workspaces, so just take the primary root.
-  let globalCwd: vscode.Uri | undefined = vscode.workspace.workspaceFolders?.[0]?.uri;
+  const pyreflyPath: string = getPyreflyBinary(context.extensionUri);
 
-  const lspPath: string = resolveLspPath(requireSetting('pyrefly.lspPath'), globalCwd);
   // `pyrefly.lspArguments` resolves to an empty array in some environments
   // (notably dev containers / remote, where the `machine-overridable` default
   // of `["lsp"]` is not applied). Spawning the binary with no subcommand makes
@@ -126,14 +139,6 @@ export async function activate(context: ExtensionContext) {
   // `lsp` subcommand so the server always starts.
   const configuredArgs: string[] = requireSetting('pyrefly.lspArguments');
   const args: string[] = configuredArgs.length > 0 ? configuredArgs : ['lsp'];
-
-  const bundledPyreflyPath = vscode.Uri.joinPath(
-    context.extensionUri,
-    'bin',
-    // process.platform returns win32 on any windows CPU architecture
-    process.platform === 'win32' ? 'pyrefly.exe' : 'pyrefly',
-  );
-  const pyreflyPath = lspPath === '' ? bundledPyreflyPath.fsPath : lspPath;
 
   const pythonEnv = new PythonEnvironment(context);
 
