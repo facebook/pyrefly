@@ -1535,7 +1535,17 @@ impl LspInteraction {
         let root = self.client.get_root_or_panic();
         let notebook_path = root.join(file_name);
         let notebook_uri = Url::from_file_path(&notebook_path).unwrap().to_string();
+        self.open_notebook_with_uri(&notebook_uri, "jupyter-notebook", file_name, cells_spec);
+    }
 
+    /// Opens a notebook document under an explicit notebook URI and notebook type.
+    pub fn open_notebook_with_uri(
+        &self,
+        notebook_uri: &str,
+        notebook_type: &str,
+        file_name: &str,
+        cells_spec: Vec<(CellKind, &str)>,
+    ) {
         let mut cells = Vec::new();
         let mut cell_text_documents = Vec::new();
         for (i, (kind, text)) in cells_spec.iter().enumerate() {
@@ -1548,7 +1558,7 @@ impl LspInteraction {
             .send_notification::<DidOpenNotebookDocument>(json!({
                 "notebookDocument": {
                     "uri": notebook_uri,
-                    "notebookType": "jupyter-notebook",
+                    "notebookType": notebook_type,
                     "version": 1,
                     "metadata": {
                         "language_info": {

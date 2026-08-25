@@ -184,12 +184,12 @@ export async function activate(context: ExtensionContext) {
       // Support for in-memory documents like the Positron Console
       {scheme: 'inmemory', language: 'python'},
     ],
-    // Support for notebooks
+    // Support for any notebook type
     // @ts-ignore
     notebookDocumentSync: {
       notebookSelector: [
         {
-          notebook: {notebookType: 'jupyter-notebook'},
+          notebook: '*',
           cells: [{language: 'python'}],
         },
       ],
