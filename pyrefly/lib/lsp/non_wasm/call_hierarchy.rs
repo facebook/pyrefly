@@ -436,13 +436,7 @@ impl CancellableTransaction<'_> {
             let mut callers_in_file = Vec::new();
 
             ast.visit(&mut |expr| {
-                collect_calls_from_expr(
-                    expr,
-                    &ref_set,
-                    handle.module(),
-                    &ast,
-                    &mut callers_in_file,
-                )
+                collect_calls_from_expr(expr, &ref_set, handle.module(), &ast, &mut callers_in_file)
             });
 
             if !callers_in_file.is_empty() {
