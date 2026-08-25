@@ -458,6 +458,15 @@ impl ModuleDep {
     }
 }
 
+/// Pre-rebuild data saved for diffing at the Solutions step.
+/// Populated during `clean()`, consumed during `demand()` at Solutions.
+#[derive(Debug, Default)]
+pub(crate) struct OldData {
+    pub exports: Option<Arc<Exports>>,
+    pub answers: Option<Arc<(Bindings, Arc<Answers>)>>,
+    pub solutions: Option<Arc<Solutions>>,
+}
+
 /// `ModuleData` is a snapshot of `ArcId<ModuleDataMut>` in the main state.
 /// The snapshot is readonly most of the times. It will only be overwritten with updated information
 /// from `Transaction` when we decide to commit a `Transaction` into the main state.
@@ -483,6 +492,9 @@ struct ModuleDataMut {
     handle: Handle,
     config: RwLock<ArcId<ConfigFile>>,
     state: ModuleStateMut,
+    /// Pre-rebuild data saved for diffing at the Solutions step.
+    /// Populated during `clean()`, consumed during `demand()` at Solutions.
+    old: Mutex<OldData>,
     /// Import resolution cache: module names from import statements → resolved paths.
     /// Only contains deps that were resolved via `find_import`.
     imports: RwLock<HashMap<ModuleName, FindingOrError<ModulePath>, BuildNoHash>>,
@@ -510,6 +522,7 @@ impl ModuleData {
             handle: self.handle.dupe(),
             config: RwLock::new(self.config.dupe()),
             state: self.state.clone_for_mutation(),
+            old: Default::default(),
             imports: RwLock::new(self.imports.clone()),
             deps: RwLock::new(self.deps.clone()),
             rdeps: Mutex::new(self.rdeps.clone()),
@@ -524,6 +537,7 @@ impl ModuleDataMut {
             handle,
             config: RwLock::new(config),
             state: ModuleStateMut::new(require, now),
+            old: Default::default(),
             imports: Default::default(),
             deps: Default::default(),
             rdeps: Default::default(),
@@ -537,6 +551,7 @@ impl ModuleDataMut {
             handle,
             config,
             state,
+            old: _,
             imports,
             deps,
             rdeps,
@@ -1226,7 +1241,7 @@ impl<'a> Transaction<'a> {
             let mut deps_lock = module_data.deps.write();
             let _imports = mem::take(&mut *imports_lock);
             let deps = mem::take(&mut *deps_lock);
-            guard.rebuild(clear_ast, self.data.now);
+            guard.rebuild(clear_ast, self.data.now, &mut module_data.old.lock());
             for dep_handle in deps.keys() {
                 let removed = self
                     .get_module(dep_handle)
@@ -1517,10 +1532,12 @@ impl<'a> Transaction<'a> {
             // saved during reset_for_rebuild().
             let mut changed = ModuleChanges::default();
             if todo == Step::Solutions {
-                // Take old data saved during reset_for_rebuild (swap clears slot).
-                let old_exports = post.take_old_exports();
-                let old_answers = post.take_old_answers();
-                let old_solutions = post.take_old_solutions();
+                // Take old step data saved during clean/rebuild.
+                let mut old = module_data.old.lock();
+                let old_exports = old.exports.take();
+                let old_answers = old.answers.take();
+                let old_solutions = old.solutions.take();
+                drop(old);
 
                 // Exports diffing: compare old vs new exports.
                 if let Some(old_exp) = old_exports {
