@@ -30,6 +30,10 @@ class dtype[Scalar = Any]:
     def __new__(cls, dtype: Any = ...) -> dtype: ...
     def __init__(self, dtype: Any = ...) -> None: ...
 
+# `ndarray` declares a `dtype` attribute, which shadows the class above throughout
+# its body. Annotations inside the class reach the class through this alias.
+_dtype = dtype
+
 @shape_extensions.shaped_array(shape="Shape")
 class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
     shape: Shape
@@ -38,6 +42,9 @@ class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
     def __len__[N: IntVar](self: ndarray[[N]]) -> Int[N]: ...
     @overload
     def __len__[N: IntVar, M: IntVar](self: ndarray[[N, M]]) -> Int[N]: ...
+    # TODO(stroxler): This overload does not bind: paired integer-array indexing
+    # infers a gradual shape rather than `[I]`, and float indices are not
+    # rejected. `test_indexing.py` covers both cases at runtime only.
     def __getitem__[
         N: IntVar,
         M: IntVar,
@@ -47,8 +54,8 @@ class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
     ](
         self: ndarray[[N, M], DType],
         key: tuple[
-            ndarray[[I], dtype[RowIndexScalar]],
-            ndarray[[I], dtype[ColumnIndexScalar]],
+            ndarray[[I], _dtype[RowIndexScalar]],
+            ndarray[[I], _dtype[ColumnIndexScalar]],
         ],
     ) -> ndarray[[I], DType]: ...
     # Only 2-D transpose is modeled for the NumPy shape-stub MVP.
@@ -227,10 +234,12 @@ def diag[M: IntVar, N: IntVar, DType](
 # instead of degrading to `Any`. The parameter shape is a type variable rather than
 # `_AnyShape`: a gradual parameter shape would also match known-rank arguments whose dtype is
 # gradual, and that ambiguity collapses their precise result to a gradual shape.
+# The result is spelled `IntTuple`, the shape bound itself, rather than `_AnyShape`:
+# an unbounded tuple is not a valid shaped-array carrier. Both infer the same shape.
 @overload
 def diag[S: _Shape, DType](
     v: ndarray[S, DType], k: int = 0
-) -> ndarray[_AnyShape, DType]: ...
+) -> ndarray[IntTuple, DType]: ...
 def arange[N: IntVar](stop: Int[N], /) -> ndarray[[N], dtype[intp]]: ...
 @overload
 def expand_dims[N: IntVar, M: IntVar, DType](

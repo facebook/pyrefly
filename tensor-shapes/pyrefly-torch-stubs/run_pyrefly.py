@@ -61,6 +61,12 @@ def main() -> int:
         package_root=PACKAGE_ROOT,
         suites=selected,
         nocapture=args.nocapture,
+        # TODO(stroxler): Check the Torch stubs too. Most of the errors are in
+        # `_shapes.pyi`, whose V1 `@shape_dsl_function` bodies are not valid
+        # Python -- they do arithmetic on `symint` and build `ShapedArray`
+        # values. Migrating those rules to the type-level DSL, which does check
+        # cleanly, is what makes this flag removable.
+        check_stubs=False,
     )
 
 

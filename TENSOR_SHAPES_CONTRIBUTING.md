@@ -213,6 +213,19 @@ For most contributions, the important validation is the tensor-shape Pyrefly
 runner. It checks the focused tests, negative expectations, jaxtyping examples,
 and the example corpus using the shape-aware stubs.
 
+It also type checks the stub files themselves, reported as a `stubs` suite.
+This matters more than it sounds: Pyrefly reports errors only for the files it
+is asked to check, so a stub reached through `--search-path` is silent. A stub
+that fails to compile does not announce itself, it just stops contributing
+types, and every call site quietly infers `Unknown` -- which looks like a
+missing rule rather than a broken one. Checking the stubs directly turns that
+into an error with a line number.
+
+The Torch package opts out for now, via `check_stubs=False` in its
+`run_pyrefly.py`. Most of its errors are in `torch-stubs/_shapes.pyi`, whose V1
+`@shape_dsl_function` bodies are not valid Python. Type-level DSL files do check
+cleanly, so migrating those rules is what removes the opt-out.
+
 Build Pyrefly first, then run:
 
 ```bash

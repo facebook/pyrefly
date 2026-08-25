@@ -167,25 +167,39 @@ def _resolve_executable(path: Path) -> Path:
     return path.resolve()
 
 
+# The stub files are checked as a suite of their own. Pyrefly reports errors only
+# for the files it is asked to check, so a stub reached through `--search-path`
+# stays silent: a stub that fails to compile does not report anything, it just
+# stops contributing types, and every call site quietly infers `Unknown`. Checking
+# the stubs directly turns that into a located error. `*-stubs` is the PEP 561
+# layout every package here uses.
+STUB_SUITE: Suite = Suite(name="stubs", patterns=("*-stubs/**/*.pyi",))
+
+
 def check_suites(
     *,
     pyrefly: list[str],
     package_root: Path,
     suites: list[Suite],
     nocapture: bool = False,
+    check_stubs: bool = True,
 ) -> int:
-    """Type check every suite, returning the last nonzero exit code.
+    """Type check the stubs and then every suite, returning the last nonzero exit code.
 
     Every suite runs even after one fails. The whole static pass takes seconds,
     so stopping early would only make a developer rediscover the next failure on
     the following run.
+
+    `check_stubs` exists for packages whose stubs do not check cleanly yet. It is
+    a temporary opt-out, not a supported mode: a package that cannot type check
+    its own stubs cannot tell a broken stub from a working one.
     """
 
     if not suites:
         raise ValueError(f"no suites to check under {package_root}")
 
     failed = 0
-    for suite in suites:
+    for suite in [STUB_SUITE, *suites] if check_stubs else suites:
         files = suite.files(package_root)
         command = [
             *pyrefly,
