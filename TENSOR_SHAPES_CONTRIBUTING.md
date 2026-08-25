@@ -139,6 +139,20 @@ including:
 Keep DSL functions simple and algebraic. They are analyzed by Pyrefly; they are
 not normal runtime implementations of PyTorch operations.
 
+The type-level DSL used by the NumPy and JAX stubs is a separate, smaller
+subset, and it is still being built out. Two things about it are worth knowing
+before writing one, because neither is guessable:
+
+- A DSL function that uses an unsupported construct evaluates to `Unknown` at
+  every call site, and the call site itself reports nothing. Type check the stub
+  files to see the real diagnostic; the runner does this for you as the `stubs`
+  suite.
+- A parameter typed `int | tuple[int, ...]` cannot be iterated after narrowing
+  with `is_int_value` alone. Leading with an `is None` check makes the narrowing
+  work, so such parameters are declared `int | tuple[int, ...] | None` with a
+  body that rejects `None`. Both `conv_shape` in the Torch stubs and
+  `reshape_shape` in the JAX stubs do this.
+
 ### Example: `torch.cat`
 
 ```python
