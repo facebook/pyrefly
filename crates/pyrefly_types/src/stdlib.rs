@@ -663,6 +663,7 @@ mod tests {
 
     use super::*;
     use crate::class::ClassDefIndex;
+    use crate::class::PrecomputedTParams;
 
     fn fake_class(module_name: ModuleName, name: &Name) -> Class {
         let module = Module::new(
@@ -675,7 +676,7 @@ mod tests {
             Identifier::new(name.clone(), TextRange::empty(TextSize::new(0))),
             NestingContext::toplevel(),
             module,
-            None,
+            PrecomputedTParams::NotGeneric,
             false,
         )
     }

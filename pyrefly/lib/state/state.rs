@@ -142,6 +142,7 @@ use crate::state::subscriber::Subscriber;
 use crate::types::class::Class;
 use crate::types::class::ClassDefIndex;
 use crate::types::class::ClassFields;
+use crate::types::class::PrecomputedTParams;
 use crate::types::function::Deprecation;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::TParams;
@@ -1794,8 +1795,11 @@ impl<'a> Transaction<'a> {
         };
         class.map(|class| {
             let tparams = match class.precomputed_tparams() {
-                Some(tparams) => Some(tparams.dupe()),
-                None => self.lookup_answer(module_data, &KeyTParams(class.index()), thread_state),
+                PrecomputedTParams::NotGeneric => None,
+                PrecomputedTParams::FromBinding => {
+                    self.lookup_answer(module_data, &KeyTParams(class.index()), thread_state)
+                }
+                PrecomputedTParams::Precomputed(tparams) => Some(tparams.dupe()),
             };
             (class, tparams)
         })

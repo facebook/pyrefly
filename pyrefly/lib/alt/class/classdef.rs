@@ -10,6 +10,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_types::callable::Callable;
+use pyrefly_types::class::PrecomputedTParams;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
 use ruff_python_ast::Identifier;
@@ -71,11 +72,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         tparams_require_binding: bool,
         errors: &ErrorCollector,
     ) -> Class {
-        let name = &x.name;
+        // Legacy type variables can produce a cycle, so their tparams are left to
+        // the class's `KeyTParams` binding. Everything else is computed here, and
+        // a class that turns out to declare nothing records no tparams at all.
         let precomputed_tparams = if tparams_require_binding {
-            None
+            PrecomputedTParams::FromBinding
         } else {
-            Some(self.calculate_class_tparams_no_legacy(name, x.type_params.as_deref(), errors))
+            let tparams =
+                self.calculate_class_tparams_no_legacy(&x.name, x.type_params.as_deref(), errors);
+            if tparams.is_empty() {
+                PrecomputedTParams::NotGeneric
+            } else {
+                PrecomputedTParams::Precomputed(tparams)
+            }
         };
         Class::new(
             def_index,
@@ -98,7 +107,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             name.clone(),
             parent.dupe(),
             self.module().dupe(),
-            Some(Arc::new(TParams::default())),
+            PrecomputedTParams::NotGeneric,
             false,
         )
     }

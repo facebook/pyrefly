@@ -4272,6 +4272,7 @@ mod tests {
     use ruff_text_size::TextSize;
 
     use super::*;
+    use crate::types::class::PrecomputedTParams;
 
     fn solver_with_answer(answer: Type) -> (Solver, Var) {
         let solver = Solver::new(false, false, true, false, false, false, false);
@@ -4428,7 +4429,7 @@ mod tests {
                 Identifier::new(Name::new("Array"), TextRange::empty(TextSize::new(0))),
                 NestingContext::toplevel(),
                 module,
-                None,
+                PrecomputedTParams::NotGeneric,
                 false,
             ),
             targs,

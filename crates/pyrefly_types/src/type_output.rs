@@ -304,6 +304,7 @@ mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::class::PrecomputedTParams;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
     use crate::quantified::AnchorIndex;
@@ -329,7 +330,7 @@ mod tests {
             Identifier::new(Name::new(name), TextRange::empty(TextSize::new(range))),
             NestingContext::toplevel(),
             mi,
-            None,
+            PrecomputedTParams::NotGeneric,
             false,
         )
     }

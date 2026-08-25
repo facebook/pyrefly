@@ -3902,6 +3902,7 @@ mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::class::PrecomputedTParams;
     use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedIdentity;
@@ -3942,7 +3943,7 @@ mod tests {
             Identifier::new(Name::new(name), TextRange::empty(TextSize::new(0))),
             NestingContext::toplevel(),
             module,
-            None,
+            PrecomputedTParams::NotGeneric,
             false,
         )
     }
