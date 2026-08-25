@@ -847,10 +847,15 @@ impl Solver {
         }
         let variables = self.variables.lock();
         let mut errors = self.instantiation_errors.write();
+        // Restore nodes first, so all roots are correct before we write to them with `update`.
+        let mut pending_variables = Vec::with_capacity(snapshot.0.len());
         for (var, state) in snapshot.0 {
             *variables.get_node(var).borrow_mut() = state.node;
-            variables.update(var, state.variable);
-            match state.error {
+            pending_variables.push((var, state.variable, state.error));
+        }
+        for (var, variable, error) in pending_variables {
+            variables.update(var, variable);
+            match error {
                 Some(e) => {
                     errors.insert(var, e);
                 }
@@ -4386,6 +4391,59 @@ mod tests {
             &*variables.get(partial),
             Variable::Answer { frozen: true, .. }
         ));
+    }
+
+    #[test]
+    fn restore_vars_preserves_vars_outside_the_snapshot() {
+        let solver = Solver::new(false, true, false, false, false, false, false);
+        let uniques = UniqueFactory::new();
+        let inner = Var::new(&uniques);
+        let root = Var::new(&uniques);
+        let escapee = Var::new(&uniques);
+        let rank_filler = Var::new(&uniques);
+        {
+            let mut variables = solver.variables.lock();
+            variables.insert_fresh(inner, Variable::answer(Type::None));
+            variables.insert_fresh(root, Variable::answer(Type::None));
+            variables.insert_fresh(escapee, Variable::answer(Type::Any(AnyStyle::Explicit)));
+            variables.insert_fresh(rank_filler, Variable::answer(Type::None));
+            // `inner` becomes `Goto(root)`, and `root` gains rank 1.
+            variables.unify(inner, root);
+            // Raise `escapee`'s rank so the next unification points `root` at it, not the reverse.
+            variables.unify(rank_filler, escapee);
+        }
+
+        let snapshot = solver.snapshot_vars(&[inner, root]);
+
+        {
+            let variables = solver.variables.lock();
+            // `root` becomes `Goto(escapee)`.
+            variables.unify(root, escapee);
+            // Verify that the test is set up correctly: both vars in the snapshot now point to a var
+            // outside the snapshot.
+            assert_eq!(variables.get_root(inner), escapee);
+            assert_eq!(variables.get_root(root), escapee);
+        }
+
+        solver.restore_vars(snapshot);
+
+        let variables = solver.variables.lock();
+        assert!(
+            matches!(&*variables.get(root), Variable::Answer { ty, .. } if *ty == Type::None),
+            "a snapshotted root is restored to its own answer"
+        );
+        assert_eq!(
+            variables.get_root(inner),
+            root,
+            "a `Goto` var's root is correctly restored"
+        );
+        assert!(
+            matches!(
+                &*variables.get(escapee),
+                Variable::Answer { ty, .. } if *ty == Type::Any(AnyStyle::Explicit)
+            ),
+            "a var outside the snapshot keeps its own answer"
+        );
     }
 
     fn quantified(kind: QuantifiedKind, index: u32) -> Quantified {
