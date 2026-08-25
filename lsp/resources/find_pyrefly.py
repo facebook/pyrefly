@@ -44,8 +44,8 @@ def candidates() -> Iterator[Path]:
     yield Path(sys.executable).parent / BINARY_NAME
 
     # As a last resort, attempt a which for "pyrefly"
-    if (pyrefly_which := shutil.which(DISTRIBUTION)):
-        yield pyrefly_which
+    if pyrefly_which := shutil.which(DISTRIBUTION):
+        yield Path(pyrefly_which)
 
 
 def main() -> None:
