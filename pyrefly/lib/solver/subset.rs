@@ -218,6 +218,25 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         result.map_err(|_| SubsetError::Other)
     }
 
+    /// Constrain an unpacked vararg to the valid arities introduced by optional parameters.
+    /// The full parameter tuple remains the fallback solution when no later argument evidence
+    /// selects one of the shorter arities.
+    fn is_subset_optional_prefixes(
+        &mut self,
+        unpack: &Type,
+        mut optional_prefixes: Vec<Type>,
+        full: Type,
+    ) -> Result<(), SubsetError> {
+        optional_prefixes.push(full.clone());
+        let accepted = unions(optional_prefixes, &self.solver.heap);
+        let unpack = canonical_vararg_unpack_inner(unpack, &accepted);
+        self.is_subset_eq(unpack, &accepted)?;
+        for var in unpack.collect_maybe_placeholder_vars() {
+            self.solver.add_upper_bound_fallback(var, full.clone());
+        }
+        Ok(())
+    }
+
     /// Can a function with l_args be called as a function with u_args?
     fn is_subset_param_list(
         &mut self,
@@ -349,36 +368,43 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     Some(Param::Varargs(_, Type::Unpack(u))),
                 ) => {
                     let mut l_types = Vec::new();
+                    let mut l_optional_prefixes = Vec::new();
                     loop {
-                        if let Some(Param::PosOnly(_, l, _) | Param::Pos(_, l, _)) = l_arg {
+                        if let Some(Param::PosOnly(_, l, required) | Param::Pos(_, l, required)) =
+                            l_arg
+                        {
+                            // Each trailing optional positional parameter adds a valid shorter
+                            // sequence; a later required parameter makes earlier prefixes invalid.
+                            match required {
+                                Required::Required => l_optional_prefixes.clear(),
+                                Required::Optional(_) => l_optional_prefixes
+                                    .push(self.solver.heap.mk_concrete_tuple(l_types.clone())),
+                            }
                             l_types.push(l.clone());
                             l_arg = l_args.next();
                         } else if let Some(Param::Varargs(_, Type::Unpack(l))) = l_arg {
-                            self.is_subset_eq(
-                                u,
-                                &self.solver.heap.mk_unpacked_tuple(
-                                    l_types,
-                                    (**l).clone(),
-                                    Vec::new(),
-                                ),
-                            )?;
+                            let full = self.solver.heap.mk_unpacked_tuple(
+                                l_types,
+                                (**l).clone(),
+                                Vec::new(),
+                            );
+                            self.is_subset_optional_prefixes(u, l_optional_prefixes, full)?;
                             l_arg = l_args.next();
                             u_arg = u_args.next();
                             break;
                         } else if let Some(Param::Varargs(_, l)) = l_arg {
-                            self.is_subset_eq(
-                                u,
-                                &self.solver.heap.mk_unpacked_tuple(
-                                    l_types,
-                                    self.solver.heap.mk_unbounded_tuple(l.clone()),
-                                    Vec::new(),
-                                ),
-                            )?;
+                            let full = self.solver.heap.mk_unpacked_tuple(
+                                l_types,
+                                self.solver.heap.mk_unbounded_tuple(l.clone()),
+                                Vec::new(),
+                            );
+                            self.is_subset_optional_prefixes(u, l_optional_prefixes, full)?;
                             l_arg = l_args.next();
                             u_arg = u_args.next();
                             break;
                         } else {
-                            self.is_subset_eq(u, &self.solver.heap.mk_concrete_tuple(l_types))?;
+                            let full = self.solver.heap.mk_concrete_tuple(l_types);
+                            self.is_subset_optional_prefixes(u, l_optional_prefixes, full)?;
                             u_arg = u_args.next();
                             break;
                         }
