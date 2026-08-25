@@ -6549,12 +6549,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ),
             // These are all legal type forms, so we accept them (return `Some`).
             // Only the quantified kinds get a kind check from the validator;
-            // `TypeForm`/`Args`/`Kwargs` pass through unchanged but must be listed
+            // `Args`/`Kwargs` pass through unchanged but must be listed
             // here so they don't fall to the `_ => None` "not a type" default.
             ty @ (Type::TypeVar(_)
             | Type::ParamSpec(_)
             | Type::TypeVarTuple(_)
-            | Type::TypeForm(_)
             | Type::Args(_)
             | Type::Kwargs(_)) => {
                 Some(self.validate_untyped_type_var_context(ty, range, errors, context))

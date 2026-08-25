@@ -210,3 +210,14 @@ Y: TypeForm[Literal["A", "B"]] = Mode
 Z: TypeForm[Literal["C"]] = Mode # E:
     "#,
 );
+
+// Even though a value of type `TypeForm` is a legal type form, we do not allow values to be used
+// as types as a general rule. This matches mypy, pyright, and ty.
+testcase!(
+    test_type_form_value_is_not_type,
+    r#"
+from typing_extensions import TypeForm
+X: TypeForm[int] = int
+x: X = 0  # E: Expected a type form, got instance of `TypeForm[int]`
+    "#,
+);
