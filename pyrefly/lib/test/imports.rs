@@ -1541,6 +1541,38 @@ from b import X  # E: Cannot assign to `X` because it is imported as final
 "#,
 );
 
+/// A re-export chain may pass through the same module more than once under
+/// different names, so walking it terminates on a repeated (module, name) pair
+/// rather than a repeated module. Here `m.name1` resolves via `n.name2` back to
+/// `m.name3`, which is the `Final` definition the reassignment must report.
+fn env_final_reexport_revisits_module() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "m",
+        r#"
+from typing import Final
+from n import name2 as name1
+name3: Final[int] = 1
+"#,
+    );
+    t.add(
+        "n",
+        r#"
+from m import name3 as name2
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_final_through_reexport_revisiting_module,
+    env_final_reexport_revisits_module(),
+    r#"
+from m import name1
+name1 = 2  # E: Cannot assign to `name1` because it is imported as final
+"#,
+);
+
 fn env_all_binop_add() -> TestEnv {
     let mut t = TestEnv::new();
     t.add(

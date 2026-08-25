@@ -2980,8 +2980,10 @@ impl<'a> LookupExport for TransactionHandle<'a> {
                 return Some(special);
             }
 
-            if !seen.insert(module) {
-                return None; // Cycle detected
+            // A chain may pass through a module more than once under different
+            // names, so only a repeated (module, name) pair is a real cycle.
+            if !seen.insert((module, name.clone())) {
+                return None;
             }
 
             let next = self.with_exports(
@@ -3025,8 +3027,10 @@ impl<'a> LookupExport for TransactionHandle<'a> {
         let mut name = name.clone();
 
         let is_final = loop {
-            if !seen.insert(module) {
-                break false; // Cycle detected
+            // A chain may pass through a module more than once under different
+            // names, so only a repeated (module, name) pair is a real cycle.
+            if !seen.insert((module, name.clone())) {
+                break false;
             }
 
             let next = self
