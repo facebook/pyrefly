@@ -521,9 +521,10 @@ fn initial_inference_status(gp: &Quantified) -> InferenceStatus {
     }
 }
 
-fn initial_inference_map(tparams: &[Quantified]) -> InferenceMap {
+fn initial_inference_map(tparams: Option<&TParams>) -> InferenceMap {
     tparams
         .iter()
+        .flat_map(|tparams| tparams.iter())
         .map(|p| (p.name().clone(), initial_inference_status(p)))
         .collect::<InferenceMap>()
 }
@@ -543,13 +544,14 @@ fn initialize_environment_impl<'a>(
     environment: &mut VarianceEnv,
     get_class_bases: &impl Fn(&Class) -> Arc<ClassBases>,
     get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
-    get_tparams: &impl Fn(&Class) -> Arc<TParams>,
+    get_tparams: &impl Fn(&Class) -> Option<Arc<TParams>>,
 ) -> InferenceMap {
     if let Some(params) = environment.get(class) {
         return params.clone();
     }
 
-    let params = initial_inference_map(get_tparams(class).as_vec());
+    let tparams = get_tparams(class);
+    let params = initial_inference_map(tparams.as_deref());
 
     environment.insert(class.dupe(), params.clone());
     let mut on_var = |_name: &Name, _variance: Variance, _inj: bool, _: PreInferenceVariance| {};
@@ -584,7 +586,7 @@ fn initialize_environment<'a>(
     environment: &mut VarianceEnv,
     get_class_bases: &impl Fn(&Class) -> Arc<ClassBases>,
     get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
-    get_tparams: &impl Fn(&Class) -> Arc<TParams>,
+    get_tparams: &impl Fn(&Class) -> Option<Arc<TParams>>,
 ) {
     let mut on_var = |_name: &Name, _variance: Variance, _inj: bool, _: PreInferenceVariance| {};
     let mut on_edge = |c: &Class| {
@@ -609,8 +611,8 @@ fn initialize_environment<'a>(
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn compute_variance_env(&self, class: &Class) -> VarianceEnv {
-        let initial_inference_map_for_class =
-            initial_inference_map(self.get_class_tparams(class).as_vec());
+        let tparams = self.get_class_tparams(class);
+        let initial_inference_map_for_class = initial_inference_map(tparams.as_deref());
         let need_inference = initial_inference_map_for_class
             .iter()
             .any(|(_, status)| status.specified_variance.is_none());
@@ -693,8 +695,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn infer_variance_ignoring_declared(&self, class: &Class) -> VarianceMap {
         let tparams = self.get_class_tparams(class);
         let inference_map = tparams
-            .as_vec()
             .iter()
+            .flat_map(|tparams| tparams.iter())
             .map(|p| {
                 (
                     p.name().clone(),
@@ -759,7 +761,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 |name: &Name, variance: Variance, _inj: bool, declared: PreInferenceVariance| {
                     check_typevar(name, variance, declared, range, &mut violations);
                 };
-            let mut on_edge = |c: &Class| initial_inference_map(self.get_class_tparams(c).as_vec());
+            let mut on_edge = |c: &Class| {
+                let tparams = self.get_class_tparams(c);
+                initial_inference_map(tparams.as_deref())
+            };
             on_type(
                 Variance::Covariant,
                 true,

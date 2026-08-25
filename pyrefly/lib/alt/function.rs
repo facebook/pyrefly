@@ -2249,12 +2249,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             |tparams: Option<&Arc<TParams>>| match (tparams, def.defining_cls.as_ref()) {
                 (None, None) => None,
                 (Some(_), None) => tparams.cloned(),
-                (None, Some(cls)) => Some(self.get_class_tparams(cls)),
-                (Some(tparams), Some(cls)) => {
-                    let mut all_tparams = (**tparams).clone();
-                    all_tparams.extend(&self.get_class_tparams(cls));
-                    Some(Arc::new(all_tparams))
-                }
+                (None, Some(cls)) => self.get_class_tparams(cls),
+                (Some(tparams), Some(cls)) => match self.get_class_tparams(cls) {
+                    Some(class_tparams) => {
+                        let mut all_tparams = (**tparams).clone();
+                        all_tparams.extend(&class_tparams);
+                        Some(Arc::new(all_tparams))
+                    }
+                    None => Some((*tparams).dupe()),
+                },
             };
         let has_self_param = def.defining_cls.is_some() && !def.metadata.flags.is_staticmethod;
         let sig_for_input_check = |sig: &Callable| {
@@ -2512,7 +2515,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // tparams, otherwise those class tparams would be erased to `Unknown` in the resulting callable.
         let skip_instantiation = if let Type::ClassDef(cls) = &m.obj {
             let class_tparams = self.get_class_tparams(cls);
-            let class_tparams = class_tparams.iter().collect::<SmallSet<_>>();
+            let class_tparams = class_tparams
+                .iter()
+                .flat_map(|tparams| tparams.iter())
+                .collect::<SmallSet<_>>();
             let uses_class_tparam =
                 |tparams: &TParams| tparams.iter().any(|tp| class_tparams.contains(tp));
             !class_tparams.is_empty()

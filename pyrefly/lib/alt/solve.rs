@@ -3204,7 +3204,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         // Get type parameters and their declared variances
-        let tparams = self.get_class_tparams(class);
+        let Some(tparams) = self.get_class_tparams(class) else {
+            return;
+        };
 
         // Only check violations when there are covariant/contravariant
         // TypeVars — invariant TypeVars are valid in any position.

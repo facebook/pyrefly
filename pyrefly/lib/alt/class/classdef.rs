@@ -166,7 +166,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn unwrap_class_object_silently(&self, ty: &Type) -> Option<(TParams, Type)> {
         match ty {
             Type::ClassDef(c) if c.is_builtin("tuple") => Some(self.instantiate_unbounded_tuple()),
-            Type::ClassDef(c) => Some(((*self.get_class_tparams(c)).clone(), self.instantiate(c))),
+            Type::ClassDef(c) => Some((
+                self.get_class_tparams(c)
+                    .map_or_else(TParams::default, |tparams| (*tparams).clone()),
+                self.instantiate(c),
+            )),
             Type::TypeAlias(ta) => {
                 self.unwrap_class_object_silently(&self.get_type_alias(ta).as_value(self.stdlib))
             }

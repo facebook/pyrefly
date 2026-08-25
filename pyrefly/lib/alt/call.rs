@@ -2299,10 +2299,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Convert a bare class definition while keeping its type parameters generic.
     pub fn constructor_to_callable_for_class_def(&self, cls: &Class) -> Type {
-        let class_tparams = self.get_class_tparams(cls);
-        if class_tparams.is_empty() {
+        let Some(class_tparams) = self
+            .get_class_tparams(cls)
+            .filter(|tparams| !tparams.is_empty())
+        else {
             return Type::type_of(self.promote_silently(cls));
-        }
+        };
         // `cls` is generic. `constructor_to_callable` converts it to a constructor in which its
         // type parameters are free in the signature.
         let constructor = self.constructor_to_callable(&self.as_class_type_unchecked(cls));

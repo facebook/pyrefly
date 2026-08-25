@@ -4039,6 +4039,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub(crate) fn shaped_array_shape_arg_index(&self, cls: &ClassType) -> Option<usize> {
         let shape_param = self.shaped_array_shape_for_class_type(cls)?;
         self.get_class_tparams(cls.class_object())
+            .as_deref()?
             .iter()
             .position(|param| param == &shape_param)
     }
@@ -4078,6 +4079,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let shape_idx = self
             .get_class_tparams(cls.class_object())
             .iter()
+            .flat_map(|tparams| tparams.iter())
             .position(|param| param == &shape_param)
             .expect("shaped-array metadata should refer to a class type parameter");
         let mut shape_arg = cls
@@ -4532,7 +4534,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let metadata = self.get_metadata_for_class(cls);
         let class_ty = Type::ClassDef(cls.dupe());
-        let allow_dunder_lookup = self.get_class_tparams(cls).is_empty()
+        let allow_dunder_lookup = self
+            .get_class_tparams(cls)
+            .as_ref()
+            .is_none_or(|tparams| tparams.is_empty())
             && !metadata.has_base_any()
             && !metadata.is_new_type();
         let class_getitem_result = if allow_dunder_lookup {
@@ -4585,7 +4590,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Vec<Type> {
         let tparams = self.get_class_tparams(cls);
-        self.parse_type_args_for_tparams(args, tparams.as_vec(), type_form_context, errors)
+        let tparams: &[Quantified] = tparams.as_deref().map_or(&[], |tparams| tparams.as_vec());
+        self.parse_type_args_for_tparams(args, tparams, type_form_context, errors)
     }
 
     fn parse_type_args_for_tparams(
@@ -4842,6 +4848,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tparams = self.get_class_tparams(cls);
         let shape_idx = tparams
             .iter()
+            .flat_map(|tparams| tparams.iter())
             .position(|param| param == &shape_param)
             .expect("shaped-array metadata should refer to a class type parameter");
         match shape_param.kind() {
@@ -4853,7 +4860,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 unreachable!("shaped-array metadata validation rejects ParamSpec shape parameters")
             }
         }
-        let validate_shape_slot = shape_idx < args.len() && args.len() <= tparams.len();
+        let validate_shape_slot = shape_idx < args.len()
+            && args.len() <= tparams.as_ref().map_or(0, |tparams| tparams.len());
         let shape_param_accepts_int_tuple = matches!(
             shape_param.upper_bound(self.stdlib, self.heap),
             Type::IntTuple(_)
@@ -4965,7 +4973,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             })
             .collect();
-        if args.len() <= tparams.len() && shape_arg_failed_to_parse {
+        if args.len() <= tparams.as_ref().map_or(0, |tparams| tparams.len())
+            && shape_arg_failed_to_parse
+        {
             return Type::any_error();
         }
         let mut base_class =

@@ -222,6 +222,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let shape_idx = self
                     .get_class_tparams(base_class.class_object())
                     .iter()
+                    .flat_map(|tparams| tparams.iter())
                     .position(|param| param == &shape_param)
                     // The metadata is produced by `@shaped_array` validation which
                     // verifies the shape param is an actual type parameter of the class.

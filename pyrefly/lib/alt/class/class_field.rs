@@ -754,21 +754,19 @@ impl ClassField {
     fn instantiate_for_class_tparams(
         &self,
         heap: &TypeHeap,
-        cls_tparams: Arc<TParams>,
+        cls_tparams: Option<Arc<TParams>>,
         self_type: Type,
         ambiguous: &mut bool,
     ) -> Self {
         let prepend_class_tparams_if_used = |f: &Function, tparams_opt: Option<&TParams>| {
-            if cls_tparams.is_empty() {
-                return None;
-            }
+            let cls_tparams = cls_tparams.as_ref()?;
             let mut qs = SmallSet::new();
             f.visit(&mut |ty| ty.collect_quantifieds(&mut qs));
             if cls_tparams.iter().any(|tp| qs.contains(tp)) {
                 match tparams_opt {
                     None => Some(cls_tparams.dupe()),
                     Some(tparams) => {
-                        let mut new_tparams = (*cls_tparams).clone();
+                        let mut new_tparams = (**cls_tparams).clone();
                         new_tparams.extend(tparams);
                         Some(Arc::new(new_tparams))
                     }
@@ -817,7 +815,7 @@ impl ClassField {
                     });
                 }
                 ty => {
-                    if !cls_tparams.is_empty() {
+                    if let Some(cls_tparams) = &cls_tparams {
                         let mut qs: SmallSet<&Quantified> = SmallSet::new();
                         ty.collect_quantifieds(&mut qs);
                         *ambiguous = cls_tparams.iter().any(|x| qs.contains(x));
@@ -3294,6 +3292,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         collect_forall_tparams(&ty, &mut forall_bound);
         let allowed: SmallSet<&Quantified> = class_tparams
             .iter()
+            .flat_map(|tparams| tparams.iter())
             .chain(forall_bound.iter().copied())
             .collect();
         let qs_owner = Owner::new();

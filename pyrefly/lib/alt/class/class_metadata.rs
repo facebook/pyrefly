@@ -604,7 +604,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<Quantified> {
         let ShapedArrayMetadata { shape_name, range } = metadata?;
         let tparams = self.get_class_tparams(cls);
-        match tparams.iter().find(|param| param.name() == shape_name) {
+        match tparams
+            .as_deref()
+            .and_then(|tparams| tparams.iter().find(|param| param.name() == shape_name))
+        {
             Some(param) if param.is_type_var() => Some(param.clone()),
             Some(param) => {
                 self.error(
@@ -1038,7 +1041,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if metaclass_is_enum || base_is_enum {
             // NOTE(grievejia): This may create potential cycle if metaclass is generic. Need to look into
             // whether it can be removed or not.
-            if !self.get_class_tparams(cls).is_empty() {
+            if self
+                .get_class_tparams(cls)
+                .is_some_and(|tparams| !tparams.is_empty())
+            {
                 self.error(
                     errors,
                     cls.range(),

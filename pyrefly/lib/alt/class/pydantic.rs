@@ -166,7 +166,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             return None;
         }
-        let tparams = self.get_class_tparams(cls);
+        let tparams = self.get_class_tparams(cls)?;
         // `RootModel` should always have a type parameter unless we're working with a broken copy
         // of Pydantic.
         let tparam = tparams.iter().next()?;
