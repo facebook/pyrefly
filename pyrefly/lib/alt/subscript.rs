@@ -86,10 +86,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         slice: &ExprSlice,
         slice_ty: Option<&Type>,
     ) -> Option<Type> {
+        let slice_targs = slice_ty.and_then(Self::slice_type_args);
         if slice.step.is_some() {
+            let step = self
+                .parse_slice_literal(&slice.step, slice_targs.map(|[_, _, step]| step))
+                .ok()?;
+            if step == Some(-1)
+                && slice.lower.is_none()
+                && slice.upper.is_none()
+                && let Tuple::Concrete(elts) = tuple
+            {
+                return Some(
+                    self.heap
+                        .mk_concrete_tuple(elts.iter().rev().cloned().collect()),
+                );
+            }
             return None;
         }
-        let slice_targs = slice_ty.and_then(Self::slice_type_args);
         match tuple {
             Tuple::Concrete(elts) => {
                 self.infer_concrete_slice(elts, &slice.lower, &slice.upper, slice_targs)
