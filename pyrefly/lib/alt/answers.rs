@@ -384,17 +384,6 @@ impl<T> AnswerSlot<T> {
         // retained by this slot.
         unsafe { &*ptr }
     }
-
-    #[inline]
-    fn get_published_arc(&self) -> Arc<T> {
-        let ptr = self.ptr.load(Ordering::Acquire);
-        assert!(!ptr.is_null(), "solution result is unpublished");
-        assert!(!Self::is_pending(ptr), "solution result is pending");
-        // SAFETY: The checks above prove that `ptr` is published and retains
-        // the strong reference owned by this slot.
-        unsafe { Self::clone_arc(ptr) }
-    }
-
     /// Publish an ordinary, non-SCC result or return the competing winner.
     pub(crate) fn record(&self, value: Arc<T>) -> (&T, bool) {
         let mut candidate = Self::into_raw(value);
@@ -505,11 +494,6 @@ impl<'a, T> SolutionSlot<'a, T> {
     #[inline]
     fn get(&self) -> &'a T {
         self.0.get_published()
-    }
-
-    #[inline]
-    fn get_arc(&self) -> Arc<T> {
-        self.0.get_published_arc()
     }
 }
 
@@ -807,37 +791,6 @@ impl Solutions {
         })
     }
 
-    pub fn get_arc<K: Exported>(&self, key: &K) -> Arc<<K as Keyed>::Answer>
-    where
-        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
-    {
-        self.get_hashed_arc(Hashed::new(key))
-    }
-
-    pub fn get_hashed_arc_opt<K: Exported>(
-        &self,
-        key: Hashed<&K>,
-    ) -> Option<Arc<<K as Keyed>::Answer>>
-    where
-        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
-    {
-        Some(self.solution_slot_hashed(key)?.get_arc())
-    }
-
-    pub fn get_hashed_arc<K: Exported>(&self, key: Hashed<&K>) -> Arc<<K as Keyed>::Answer>
-    where
-        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
-    {
-        self.get_hashed_arc_opt(key).unwrap_or_else(|| {
-            panic!(
-                "Internal error: solution not found, module {}, path {}, key {:?}",
-                self.module_info.name(),
-                self.module_info.path(),
-                key.key(),
-            )
-        })
-    }
-
     /// Helper to create a difference for a key only in rhs.
     #[inline]
     fn make_only_in_rhs<'a, K: Keyed>(k: &'a K, v: &'a K::Answer) -> SolutionsDifference<'a> {
@@ -1027,7 +980,7 @@ impl Solutions {
                     Some(idx) => {
                         // Key existed in old answers — compare values.
                         match old_answers.get_idx::<K>(idx) {
-                            Some(old_val) if !old_val.as_ref().type_eq(new_val, ctx) => {
+                            Some(old_val) if !old_val.type_eq(new_val, ctx) => {
                                 changed.add_key(anykey);
                             }
                             // None means the old answer was never computed, so
@@ -1327,7 +1280,7 @@ impl Answers {
         // Fast path: check if the answer has already been published in its result slot.
         // This avoids constructing a VarRecurser and AnswersSolver when the value is cached.
         if let Some(idx) = bindings.key_to_idx_hashed_opt(key)
-            && let Some(v) = self.get_idx_ref(idx)
+            && let Some(v) = self.get_idx(idx)
         {
             return Some(v);
         }
@@ -1351,16 +1304,8 @@ impl Answers {
         solver.get_hashed_opt(key)
     }
 
-    pub fn get_idx<K: Keyed>(&self, k: Idx<K>) -> Option<Arc<K::Answer>>
-    where
-        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
-        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
-    {
-        self.answer_slot(k).get_arc()
-    }
-
     /// Borrow a published answer retained by this `Answers` instance.
-    pub(crate) fn get_idx_ref<K: Keyed>(&self, k: Idx<K>) -> Option<&K::Answer>
+    pub(crate) fn get_idx<K: Keyed>(&self, k: Idx<K>) -> Option<&K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
@@ -1489,11 +1434,11 @@ impl Answers {
     }
 
     pub fn get_type_at(&self, idx: Idx<Key>) -> Option<Type> {
-        Some(self.force_for_export_boundary(self.get_idx(idx)?.arc_clone_ty()))
+        Some(self.force_for_export_boundary(self.get_idx(idx)?.ty().clone()))
     }
 
     pub fn get_type_at_for_display(&self, idx: Idx<Key>) -> Option<Type> {
-        Some(self.solver.for_display(self.get_idx(idx)?.arc_clone_ty()))
+        Some(self.solver.for_display(self.get_idx(idx)?.ty().clone()))
     }
 
     pub fn get_type_trace(&self, range: TextRange) -> Option<Type> {

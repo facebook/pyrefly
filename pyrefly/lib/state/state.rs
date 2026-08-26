@@ -1904,7 +1904,7 @@ impl<'a> Transaction<'a> {
         // result slot. This avoids constructing
         // a TransactionHandle when the value is cached.
         if let Some(idx) = bindings.key_to_idx_hashed_opt(key)
-            && let Some(v) = answers.get_idx_ref(idx)
+            && let Some(v) = answers.get_idx(idx)
         {
             return Some(v);
         }

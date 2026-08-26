@@ -2576,6 +2576,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         // Already-known SCC member: the node was in the top SCC's
         // iteration state when `push` was called.
@@ -2736,6 +2737,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         // LoopPhi cold-start bypass: during iteration 1, LoopPhi's normal
         // solve path would resolve loop-body branches, hit cycle breaks, and
