@@ -24,6 +24,7 @@ import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
+    from shape_extensions import IntVar
     from torch import Tensor
 
 
@@ -268,7 +269,7 @@ class bodypose_model(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-    def forward[B, H, W](
+    def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, 3, H, W]]
     ) -> tuple[Tensor[[B, 38, H // 8, W // 8]], Tensor[[B, 19, H // 8, W // 8]]]:
         out1 = self.model0(x)
@@ -442,7 +443,7 @@ class handpose_model(nn.Module):
             nn.Conv2d(128, 22, 1, 1, 0),
         )
 
-    def forward[B, H, W](
+    def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, 3, H, W]]
     ) -> Tensor[[B, 22, H // 8, W // 8]]:
         out1_0 = self.model1_0(x)

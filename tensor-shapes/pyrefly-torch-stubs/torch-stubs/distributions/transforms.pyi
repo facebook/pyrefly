@@ -7,7 +7,7 @@
 
 from typing import Any
 
-from shape_extensions import SizeTuple
+from shape_extensions import IntTuple
 from torch import Tensor
 
 class Transform:
@@ -19,7 +19,28 @@ class Transform:
     sign: int
 
     def __init__(self, cache_size: int = 0) -> None: ...
-    def __call__[S: SizeTuple](self, x: Tensor[S]) -> Tensor[S]: ...
-    def _call[S: SizeTuple](self, x: Tensor[S]) -> Tensor[S]: ...
-    def _inverse[S: SizeTuple](self, y: Tensor[S]) -> Tensor[S]: ...
+    def __call__[S: IntTuple](self, x: Tensor[S]) -> Tensor[S]: ...
+    def _call[S: IntTuple](self, x: Tensor[S]) -> Tensor[S]: ...
+    def _inverse[S: IntTuple](self, y: Tensor[S]) -> Tensor[S]: ...
     def log_abs_det_jacobian(self, x: Tensor, y: Tensor) -> Tensor: ...
+
+# TODO: Replace these availability stubs with shape-aware declarations.
+AbsTransform: Any
+AffineTransform: Any
+CatTransform: Any
+ComposeTransform: Any
+CorrCholeskyTransform: Any
+CumulativeDistributionTransform: Any
+ExpTransform: Any
+IndependentTransform: Any
+LowerCholeskyTransform: Any
+PositiveDefiniteTransform: Any
+PowerTransform: Any
+ReshapeTransform: Any
+SigmoidTransform: Any
+SoftmaxTransform: Any
+SoftplusTransform: Any
+StackTransform: Any
+StickBreakingTransform: Any
+TanhTransform: Any
+identity_transform: Any

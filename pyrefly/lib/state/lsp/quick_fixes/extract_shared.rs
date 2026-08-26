@@ -30,6 +30,7 @@ use crate::state::lsp::FindDefinitionItemWithDocstring;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::Transaction;
 use crate::types::stdlib::Stdlib;
+use crate::types::type_output::AnnotationPart;
 use crate::types::types::Type;
 
 pub(crate) fn split_selection<'a>(
@@ -352,8 +353,15 @@ pub(super) fn type_to_annotation(ty: Type, stdlib: &Stdlib) -> Option<String> {
     if ty.is_any() {
         return None;
     }
-    let parts = ty.get_types_with_locations(Some(stdlib));
-    Some(parts.into_iter().map(|(part, _)| part).collect())
+    Some(
+        ty.get_annotation_parts(Some(stdlib))
+            .into_iter()
+            .map(|part| match part {
+                AnnotationPart::Text(text) => text,
+                AnnotationPart::Reference { name, .. } => name,
+            })
+            .collect(),
+    )
 }
 
 pub(super) fn has_existing_from_import(ast: &ModModule, module_name: &str, name: &str) -> bool {

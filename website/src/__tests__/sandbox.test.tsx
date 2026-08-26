@@ -9,7 +9,7 @@
 
 import '@testing-library/jest-dom';
 import { act } from 'react';
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import Sandbox from '../sandbox/Sandbox';
 import { SANDBOX_FILE_NAME } from '../pages/sandbox';
 import { DEFAULT_SANDBOX_PROGRAM } from '../sandbox/DefaultSandboxProgram';
@@ -63,6 +63,21 @@ describe('Sandbox Component', () => {
         // Run test with --update-snapshot to update the snapshot if the test is failing after
         // you made a intentional change to the home page
         expect(container).toMatchSnapshot();
+    });
+
+    test('toggles parameter name hints', async () => {
+        const { getByLabelText } = await act(async () => {
+            const result = render(
+                <Sandbox sampleFilename={SANDBOX_FILE_NAME} />
+            );
+            await Promise.resolve();
+            return result;
+        });
+        const toggle = getByLabelText('Parameter hints');
+
+        expect(toggle).not.toBeChecked();
+        fireEvent.click(toggle);
+        expect(toggle).toBeChecked();
     });
 
     function expectMonacoEditorLoadedWithContent(

@@ -42,6 +42,7 @@ use super::extract_shared::validate_non_empty_selection;
 use super::types::LocalRefactorCodeAction;
 use crate::module::module_info::ModuleInfo;
 use crate::state::lsp::FindPreference;
+use crate::state::lsp::ReferenceOptions;
 use crate::state::lsp::Transaction;
 
 const DEFAULT_PARAMETER_PREFIX: &str = "param";
@@ -512,7 +513,7 @@ fn build_callsite_edits(
             definition.metadata.clone(),
             definition.definition_range,
             &definition.module,
-            true,
+            ReferenceOptions::textual_only(true),
         ) else {
             continue;
         };

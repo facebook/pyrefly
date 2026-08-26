@@ -10,6 +10,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_python::sys_info::SysInfo;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
@@ -20,6 +21,7 @@ use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprSet;
 use ruff_python_ast::ExprTuple;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Pattern;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtAssign;
 use ruff_python_ast::StmtImportFrom;
@@ -48,20 +50,27 @@ use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::RaisedException;
+use crate::binding::binding::SuppressedException;
 use crate::binding::binding::TypeAliasBinding;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
+use crate::binding::narrow::AtomicNarrowOp;
+use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
+use crate::binding::polars::polars_column_mutation;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
 use crate::binding::scope::Scope;
+use crate::binding::scope::TerminationKind;
 use crate::config::error_kind::ErrorKind;
 use crate::export::definitions::MutableCaptureKind;
 use crate::export::special::SpecialExport;
 use crate::state::loader::FindingOrError;
 use crate::types::alias::resolve_typeshed_alias;
+use crate::types::quantified::QuantifiedKind;
 use crate::types::special_form::SpecialForm;
 use crate::types::types::AnyStyle;
 
@@ -80,6 +89,14 @@ pub(crate) fn is_special_import_function(name: &str) -> bool {
     SPECIAL_IMPORT_FUNCTIONS.contains(&name)
 }
 
+fn special_type_var_kind(special: SpecialExport) -> Option<QuantifiedKind> {
+    match special {
+        SpecialExport::TypeVar => Some(QuantifiedKind::TypeVar),
+        SpecialExport::IntVar => Some(QuantifiedKind::IntVar),
+        _ => None,
+    }
+}
+
 /// Returns true if the module name represents a directory import
 /// (`__files__` or `__recursefiles__`).
 fn is_directory_import(module_name: ModuleName) -> bool {
@@ -87,62 +104,80 @@ fn is_directory_import(module_name: ModuleName) -> bool {
     s.ends_with(".__files__") || s.ends_with(".__recursefiles__")
 }
 
-/// Checks if an iterable expression is guaranteed to be non-empty and thus
-/// the for-loop body will definitely execute at least once.
+/// Whether evaluating this expression could raise.
 ///
-/// Returns true for:
-/// - `range(N)` where N is a positive integer literal
-/// - Non-empty list literals like `[1, 2, 3]`
-/// - Non-empty tuple literals like `(1, 2, 3)`
-/// - Non-empty set literals like `{1, 2, 3}`
-fn is_definitely_nonempty_iterable(iter: &Expr) -> bool {
-    match iter {
-        // Check for range(N) where N is a positive integer literal
-        Expr::Call(ExprCall {
-            func, arguments, ..
-        }) => {
-            // Check if the function is `range` with a single argument and no keywords
-            if let Expr::Name(ExprName { id, .. }) = &**func
-                && id.as_str() == "range"
-                && arguments.keywords.is_empty()
-                && let [arg] = &*arguments.args
-            {
-                // range(stop) - positive stop means at least one iteration
-                // range(start, stop) - we only handle range(stop) for simplicity
-                if let Expr::NumberLiteral(ExprNumberLiteral { value, .. }) = arg
-                    && let Some(n) = value.as_int().and_then(|i| i.as_i64())
-                {
-                    return n > 0;
-                }
-                // Also handle negative literals like range(-5) which iterate 0 times
-                if let Expr::UnaryOp(unary) = arg
-                    && matches!(unary.op, ruff_python_ast::UnaryOp::USub)
-                {
-                    // range(-N) always iterates 0 times
-                    return false;
-                }
-            }
-            false
-        }
-        // Check for non-empty list literals
-        Expr::List(ExprList { elts, .. }) => !elts.is_empty(),
-        // Check for non-empty tuple literals
-        Expr::Tuple(ExprTuple { elts, .. }) => !elts.is_empty(),
-        // Check for non-empty set literals
-        Expr::Set(ExprSet { elts, .. }) => !elts.is_empty(),
-        _ => false,
+/// Reading a name or a literal cannot, while a call, attribute access, or subscript can. This is
+/// an approximation in both directions, because settling it needs types that binding does not
+/// have: an unbound name raises `NameError`, and testing the truthiness of any value invokes
+/// `__bool__`. Both of those are answered `false` here, so the approximation is not free — it can
+/// leave a suppressible exception unrecorded, and so report live code as unreachable. It is
+/// nonetheless the answer the surrounding tests pin, because recording every name read would make
+/// a plain `if flag: return` suppressible and cost the narrowing that callers depend on.
+fn expr_may_raise(x: &Expr) -> bool {
+    !matches!(
+        x,
+        Expr::Name(_)
+            | Expr::NumberLiteral(_)
+            | Expr::StringLiteral(_)
+            | Expr::BytesLiteral(_)
+            | Expr::BooleanLiteral(_)
+            | Expr::NoneLiteral(_)
+            | Expr::EllipsisLiteral(_)
+    )
+}
+
+/// Whether matching this pattern could raise.
+///
+/// A capture or wildcard binds without inspecting the subject, and a singleton pattern compares
+/// with `is`. Every other pattern can run user code — `__eq__` for a value, `isinstance` and
+/// attribute reads for a class pattern — and so can raise.
+fn pattern_may_raise(x: &Pattern) -> bool {
+    match x {
+        Pattern::MatchAs(x) => x.pattern.as_deref().is_some_and(pattern_may_raise),
+        Pattern::MatchSingleton(_) => false,
+        Pattern::MatchOr(x) => x.patterns.iter().any(pattern_may_raise),
+        _ => true,
     }
 }
 
 impl<'a> BindingsBuilder<'a> {
+    /// Whether iterating this expression definitely performs at least one iteration.
+    ///
+    /// Both definite-assignment and reachability rely on this, so it must not over-report:
+    /// claiming a loop runs when it may not lets an unbound name through, and marks live
+    /// code after the loop as dead.
+    fn is_definitely_nonempty_iterable(&self, iter: &Expr) -> bool {
+        // At least one element that is not an unpacking, which may contribute nothing.
+        let has_a_definite_element =
+            |elts: &[Expr]| elts.iter().any(|e| !matches!(e, Expr::Starred(_)));
+        match iter {
+            // `range(n)` for a positive integer literal `n`. Resolved through
+            // `as_special_export` rather than by name, so a shadowed `range` does not count.
+            Expr::Call(ExprCall {
+                func, arguments, ..
+            }) if self.as_special_export(func) == Some(SpecialExport::Range)
+                && arguments.keywords.is_empty()
+                && let [Expr::NumberLiteral(ExprNumberLiteral { value, .. })] =
+                    &*arguments.args
+                && let Some(n) = value.as_int().and_then(|i| i.as_i64()) =>
+            {
+                // Only `range(stop)` is handled. A negative literal parses as a unary
+                // operation rather than a number, so it falls through to `false`.
+                n > 0
+            }
+            Expr::List(ExprList { elts, .. })
+            | Expr::Tuple(ExprTuple { elts, .. })
+            | Expr::Set(ExprSet { elts, .. }) => has_a_definite_element(elts),
+            _ => false,
+        }
+    }
+
     fn assert(&mut self, assert_range: TextRange, mut test: Expr, msg: Option<Expr>) {
         let test_range = test.range();
-        self.ensure_expr(&mut test, &mut Usage::Narrowing(None));
+        self.ensure_expr(&mut test, &mut Usage::NonPinningValue(None));
         let narrow_ops = NarrowOps::from_expr(self, Some(&test));
         let static_test = self.sys_info.evaluate_bool(&test);
-        let test_clone = test.clone();
-        self.insert_binding(Key::Anon(test_range), Binding::Expr(None, Box::new(test)));
-        self.insert_binding(KeyExpect::Bool(test_range), BindingExpect::Bool(test_clone));
+        self.insert_binding(KeyExpect::Bool(test_range), BindingExpect::Bool(test));
         if let Some(mut msg_expr) = msg {
             let mut base = self.scopes.clone_current_flow();
             // Negate the narrowing of the test expression when typechecking
@@ -151,7 +186,7 @@ impl<'a> BindingsBuilder<'a> {
             self.bind_narrow_ops(
                 &negated_narrow_ops,
                 NarrowUseLocation::Span(msg_expr.range()),
-                &Usage::Narrowing(None),
+                &Usage::NonPinningValue(None),
             );
             let mut msg = self.declare_current_idx(Key::UsageLink(msg_expr.range()));
             self.ensure_expr(&mut msg_expr, msg.usage());
@@ -165,10 +200,11 @@ impl<'a> BindingsBuilder<'a> {
         self.bind_narrow_ops(
             &narrow_ops,
             NarrowUseLocation::Span(assert_range),
-            &Usage::Narrowing(None),
+            &Usage::NonPinningValue(None),
         );
         if let Some(false) = static_test {
-            self.scopes.mark_flow_termination(true);
+            self.scopes
+                .mark_flow_termination(TerminationKind::StaticTest);
         }
     }
 
@@ -190,12 +226,12 @@ impl<'a> BindingsBuilder<'a> {
         let module_name_str = module_path.replace('/', ".");
         let m = ModuleName::from_string(module_name_str);
 
-        // Determine import style: "*" or absent → wildcard, otherwise aliased.
+        // Determine import style: "*", empty, or absent → wildcard, otherwise aliased.
         let alias = args.get(1).and_then(|arg| match arg {
             Expr::StringLiteral(lit) => Some(lit.value.to_str()),
             _ => None,
         });
-        let is_wildcard = alias.is_none() || alias == Some("*");
+        let is_wildcard = alias.is_none() || matches!(alias, Some(s) if s == "*" || s.is_empty());
 
         if is_wildcard {
             // Equivalent to `from <module> import *`.
@@ -310,7 +346,7 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn assign_type_var(&mut self, name: &ExprName, call: &mut ExprCall) {
+    fn assign_type_var(&mut self, name: &ExprName, call: &mut ExprCall, kind: QuantifiedKind) {
         // Type var declarations are static types only; skip them for first-usage type inference.
         let static_type_usage = &mut Usage::StaticTypeInformation {
             is_annotation: false,
@@ -323,13 +359,32 @@ impl<'a> BindingsBuilder<'a> {
         // The constraints (i.e., any positional arguments after the first)
         // and some keyword arguments are types.
         for arg in iargs {
-            self.ensure_type(arg, &mut None);
+            if self.as_special_export(arg) == Some(SpecialExport::IntVar) {
+                self.error(
+                    arg.range(),
+                    ErrorKind::InvalidTypeVar,
+                    "`IntVar` cannot be used as a TypeVar constraint".to_owned(),
+                );
+                self.ensure_expr(arg, static_type_usage);
+                continue;
+            }
+            self.ensure_type(arg, None);
         }
         for kw in call.arguments.keywords.iter_mut() {
             if let Some(id) = &kw.arg
                 && (id.id == "bound" || id.id == "default")
             {
-                self.ensure_type(&mut kw.value, &mut None);
+                if self.as_special_export(&kw.value) == Some(SpecialExport::IntVar) {
+                    let role = if id.id == "bound" { "bound" } else { "default" };
+                    self.error(
+                        kw.value.range(),
+                        ErrorKind::InvalidTypeVar,
+                        format!("`IntVar` cannot be used as a TypeVar {role}"),
+                    );
+                    self.ensure_expr(&mut kw.value, static_type_usage);
+                    continue;
+                }
+                self.ensure_type(&mut kw.value, None);
             } else {
                 self.ensure_expr(&mut kw.value, static_type_usage);
             }
@@ -339,6 +394,7 @@ impl<'a> BindingsBuilder<'a> {
                 ann,
                 Ast::expr_name_identifier(name.clone()),
                 Box::new(call.clone()),
+                kind,
             )))
         })
     }
@@ -356,7 +412,7 @@ impl<'a> BindingsBuilder<'a> {
             if let Some(id) = &kw.arg
                 && id.id == "default"
             {
-                self.ensure_type(&mut kw.value, &mut None);
+                self.ensure_type(&mut kw.value, None);
             } else {
                 self.ensure_expr(&mut kw.value, static_type_usage);
             }
@@ -414,7 +470,7 @@ impl<'a> BindingsBuilder<'a> {
     fn ensure_type_alias_type_args(
         &mut self,
         call: &mut ExprCall,
-        tparams_builder: &mut Option<LegacyTParamCollector>,
+        tparams_builder: &mut LegacyTParamCollector,
     ) {
         // Type var declarations are static types only; skip them for first-usage type inference.
         let static_type_usage = &mut Usage::StaticTypeInformation {
@@ -428,7 +484,7 @@ impl<'a> BindingsBuilder<'a> {
         }
         // The second argument is the type
         if let Some(expr) = iargs.next() {
-            self.ensure_type_with_usage(expr, tparams_builder, &mut Usage::TypeAliasRhs);
+            self.ensure_type_with_usage(expr, Some(tparams_builder), &mut Usage::TypeAliasRhs);
         }
         // There shouldn't be any other positional arguments
         for arg in iargs {
@@ -440,14 +496,14 @@ impl<'a> BindingsBuilder<'a> {
                 && let Expr::Tuple(type_params) = &mut kw.value
             {
                 for type_param in type_params.elts.iter_mut() {
-                    self.ensure_type(type_param, &mut None);
+                    self.ensure_type(type_param, None);
                 }
             } else if let Some(id) = &kw.arg
                 && id.id == "value"
             {
                 self.ensure_type_with_usage(
                     &mut kw.value,
-                    tparams_builder,
+                    Some(tparams_builder),
                     &mut Usage::TypeAliasRhs,
                 );
             } else {
@@ -464,7 +520,7 @@ impl<'a> BindingsBuilder<'a> {
             if let Expr::StringLiteral(lit) = arg {
                 if lit.value.to_str() != name.as_str() {
                     self.error(
-                        x.range,
+                        x.range(),
                         ErrorKind::InvalidTypeAlias,
                         format!(
                             "TypeAliasType must be assigned to a variable named `{}`",
@@ -551,7 +607,7 @@ impl<'a> BindingsBuilder<'a> {
         }
         if !arg_name {
             self.error(
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeAlias,
                 "Missing `name` argument".to_owned(),
             );
@@ -560,7 +616,7 @@ impl<'a> BindingsBuilder<'a> {
             (Some(value), type_params.unwrap_or_default())
         } else {
             self.error(
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeAlias,
                 "Missing `value` argument".to_owned(),
             );
@@ -569,7 +625,7 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     fn assign_type_alias_type(&mut self, name: &ExprName, call: &mut ExprCall) {
-        let mut collector = Some(LegacyTParamCollector::new(false));
+        let mut collector = LegacyTParamCollector::new(false);
         self.ensure_type_alias_type_args(call, &mut collector);
         let assigned = self.declare_current_idx(Key::Definition(ShortIdentifier::expr_name(name)));
         let ann = self.bind_current(&name.id, &assigned, FlowStyle::Other);
@@ -586,7 +642,7 @@ impl<'a> BindingsBuilder<'a> {
             name: name.id.clone(),
             tparams: TypeAliasParams::TypeAliasType {
                 declared_params: type_params,
-                legacy_params: collector.unwrap().lookup_keys().into_boxed_slice(),
+                legacy_params: collector.lookup_keys().into_boxed_slice(),
             },
             key_type_alias: idx_type_alias,
             range: call.range(),
@@ -603,9 +659,9 @@ impl<'a> BindingsBuilder<'a> {
     ) -> Idx<KeyAnnotation> {
         let ann_key = KeyAnnotation::Annotation(ShortIdentifier::new(name));
         if self.scopes.in_class_body() {
-            self.ensure_class_member_type(annotation, &mut None);
+            self.ensure_class_member_type(annotation, None);
         } else {
-            self.ensure_type(annotation, &mut None);
+            self.ensure_type(annotation, None);
         }
         let ann_val = if let Some(special) = SpecialForm::new(&name.id, annotation) {
             // Special case `_: SpecialForm` declarations (this mainly affects some names declared in `typing.pyi`)
@@ -657,12 +713,51 @@ impl<'a> BindingsBuilder<'a> {
                 "Invalid `return` outside of a function".to_owned(),
             );
         }
-        self.scopes.mark_flow_termination(false);
+        self.scopes.mark_flow_termination(TerminationKind::Jump);
     }
 
     /// Evaluate the statements and update the bindings.
     /// Every statement should end up in the bindings, perhaps with a location that is never used.
     pub fn stmt(&mut self, x: Stmt, parent: &NestingContext) {
+        // A statement header is evaluated before any branch can jump, so it may raise even when
+        // every branch terminates the flow and the postlude below is therefore ignored. A bare
+        // `return`/`break`/`continue` evaluates nothing, which is what keeps it unsuppressible.
+        let header_may_raise = match &x {
+            Stmt::Return(x) => x.value.is_some(),
+            // An `elif` test lives in `elif_else_clauses` rather than in `test`, and each one is
+            // evaluated before its own branch runs.
+            Stmt::If(x) => {
+                expr_may_raise(&x.test)
+                    || x.elif_else_clauses
+                        .iter()
+                        .any(|clause| clause.test.as_ref().is_some_and(expr_may_raise))
+            }
+            Stmt::Match(x) => {
+                expr_may_raise(&x.subject)
+                    || x.cases.iter().any(|case| {
+                        pattern_may_raise(&case.pattern)
+                            || case.guard.as_deref().is_some_and(expr_may_raise)
+                    })
+            }
+            _ => false,
+        };
+        if header_may_raise {
+            self.scopes.record_may_raise_in_with();
+        }
+        let may_raise_if_completed = !matches!(
+            &x,
+            Stmt::Break(_) | Stmt::Continue(_) | Stmt::Pass(_) | Stmt::Return(_)
+        );
+        self.stmt_impl(x, parent);
+        // Recorded here rather than at the end of `stmt_impl`, which returns early on a
+        // dozen paths. `record_may_raise_in_with` ignores a flow that has already
+        // terminated, so a statement that was dead to begin with is not counted.
+        if may_raise_if_completed {
+            self.scopes.record_may_raise_in_with();
+        }
+    }
+
+    fn stmt_impl(&mut self, x: Stmt, parent: &NestingContext) {
         self.with_semantic_checker(|semantic, context| semantic.visit_stmt(&x, context));
 
         // Clear last_stmt_expr at the start - will be set again if this is a StmtExpr
@@ -685,10 +780,15 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         self.ensure_expr(target, delete_idx.usage());
                     }
-                    self.insert_binding_current(
+                    let idx = self.insert_binding_current(
                         delete_idx,
                         Binding::Delete(Box::new(target.clone())),
                     );
+                    if let Expr::Attribute(_) = target
+                        && let Some((identifier, _)) = identifier_and_chain_prefix_for_expr(target)
+                    {
+                        self.narrow_if_name_is_defined(identifier, idx);
+                    }
                 }
             }
             Stmt::Assign(ref x)
@@ -715,11 +815,11 @@ impl<'a> BindingsBuilder<'a> {
                     if let Expr::Call(call) = &mut *x.value
                         && let Some(special) = self.as_special_export(&call.func)
                     {
+                        if let Some(kind) = special_type_var_kind(special) {
+                            self.assign_type_var(name, call, kind);
+                            return;
+                        }
                         match special {
-                            SpecialExport::TypeVar => {
-                                self.assign_type_var(name, call);
-                                return;
-                            }
                             SpecialExport::ParamSpec => {
                                 self.assign_param_spec(name, call);
                                 return;
@@ -848,7 +948,7 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::AnnAssign(mut x) => match *x.target {
                 Expr::Name(name) => {
                     if Ast::is_synthesized_empty_name(&name) {
-                        self.ensure_type(&mut x.annotation, &mut None);
+                        self.ensure_type(&mut x.annotation, None);
                         if let Some(value) = x.value {
                             self.bind_single_name_assign(
                                 &Ast::expr_name_identifier(name),
@@ -866,6 +966,7 @@ impl<'a> BindingsBuilder<'a> {
                     {
                         match special {
                             SpecialExport::TypeVar
+                            | SpecialExport::IntVar
                             | SpecialExport::ParamSpec
                             | SpecialExport::TypeVarTuple => {
                                 let ident = Ast::expr_name_identifier(name.clone());
@@ -874,17 +975,18 @@ impl<'a> BindingsBuilder<'a> {
                                     &mut x.annotation,
                                     AnnAssignHasValue::Yes,
                                 );
-                                match special {
-                                    SpecialExport::TypeVar => {
-                                        self.assign_type_var(&name, call);
+                                if let Some(kind) = special_type_var_kind(special) {
+                                    self.assign_type_var(&name, call, kind);
+                                } else {
+                                    match special {
+                                        SpecialExport::ParamSpec => {
+                                            self.assign_param_spec(&name, call);
+                                        }
+                                        SpecialExport::TypeVarTuple => {
+                                            self.assign_type_var_tuple(&name, call);
+                                        }
+                                        _ => unreachable!("filtered by outer match"),
                                     }
-                                    SpecialExport::ParamSpec => {
-                                        self.assign_param_spec(&name, call);
-                                    }
-                                    SpecialExport::TypeVarTuple => {
-                                        self.assign_type_var_tuple(&name, call);
-                                    }
-                                    _ => unreachable!("filtered by outer match"),
                                 }
                                 return;
                             }
@@ -959,7 +1061,7 @@ impl<'a> BindingsBuilder<'a> {
                 Expr::Attribute(attr) => {
                     let mut attr = attr;
                     let attr_name = attr.attr.id.clone();
-                    self.ensure_type(&mut x.annotation, &mut None);
+                    self.ensure_type(&mut x.annotation, None);
                     let ann_key = self.insert_binding(
                         KeyAnnotation::AttrAnnotation(x.annotation.range()),
                         BindingAnnotation::AnnotateExpr(
@@ -1096,7 +1198,7 @@ impl<'a> BindingsBuilder<'a> {
                     if let Some(params) = &mut x.type_params {
                         self.type_params(params);
                     }
-                    self.ensure_type_with_usage(&mut x.value, &mut None, &mut Usage::TypeAliasRhs);
+                    self.ensure_type_with_usage(&mut x.value, None, &mut Usage::TypeAliasRhs);
                     // Pop the type alias scope before binding the definition
                     self.scopes.pop();
                     let range = x.value.range();
@@ -1129,7 +1231,7 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::For(mut x) => {
                 if x.is_async
                     && !self.scopes.is_in_async_def()
-                    && !self.module_info.path().is_notebook()
+                    && !self.module_info.allows_top_level_await()
                 {
                     self.error(
                         x.range(),
@@ -1143,7 +1245,7 @@ impl<'a> BindingsBuilder<'a> {
                 });
                 // Check if the iterable is definitely non-empty before binding
                 // (must be done before x.iter is moved)
-                let loop_definitely_runs = is_definitely_nonempty_iterable(&x.iter);
+                let loop_definitely_runs = self.is_definitely_nonempty_iterable(&x.iter);
                 self.bind_target_with_expr(&mut x.target, &mut x.iter, &|expr, ann| {
                     Binding::IterableValueLoop(
                         ann,
@@ -1171,22 +1273,45 @@ impl<'a> BindingsBuilder<'a> {
                 // narrowing and type checking are aware that the test might be impacted by changes
                 // made in the loop (e.g. if we reassign the test variable).
                 // Typecheck the test condition during solving.
-                self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
+                self.ensure_expr(&mut x.test, &mut Usage::NonPinningValue(None));
                 // The while condition always evaluates at least once, so walrus
                 // targets are guaranteed to be assigned after the loop.
                 self.scopes.propagate_new_flow_entries_to_loop_base();
-                let is_while_true = self.sys_info.evaluate_bool(&x.test) == Some(true);
+                let static_test = self.sys_info.evaluate_bool(&x.test);
+                let test_is_environment_independent = !SysInfo::depends_on_sys_info(&x.test);
+                let is_while_true = static_test == Some(true);
                 let narrow_ops = NarrowOps::from_expr(self, Some(&x.test));
-                self.bind_narrow_ops(
-                    &narrow_ops,
-                    NarrowUseLocation::Span(x.range),
-                    &Usage::Narrowing(None),
-                );
                 self.insert_binding(
                     KeyExpect::Bool(x.test.range()),
                     BindingExpect::Bool(*x.test),
                 );
-                self.stmts(x.body, parent);
+                // An environment-dependent condition is false only under the configuration
+                // being checked, so its body stays ordinary live code: binding it as dead
+                // would silence real diagnostics in it, such as an undefined name.
+                if static_test == Some(false) && test_is_environment_independent {
+                    // Both termination flags must be restored, not just one:
+                    // `is_unreachable_from_static_test` is defined in terms of the pair, and
+                    // a body ending in `return` leaves `has_terminated` set behind it.
+                    let termination = self.scopes.save_termination();
+                    self.scopes.set_definitely_unreachable(true);
+                    let owns_unreachable_suite = !self.in_unreachable_suite;
+                    if owns_unreachable_suite {
+                        self.report_unreachable_body(&x.body);
+                        self.in_unreachable_suite = true;
+                    }
+                    self.stmts(x.body, parent);
+                    if owns_unreachable_suite {
+                        self.in_unreachable_suite = false;
+                    }
+                    self.scopes.restore_termination(termination);
+                } else {
+                    self.bind_narrow_ops(
+                        &narrow_ops,
+                        NarrowUseLocation::Span(x.range),
+                        &Usage::NonPinningValue(None),
+                    );
+                    self.stmts(x.body, parent);
+                }
                 // For while True: loops, the loop body definitely runs at least once
                 self.teardown_loop(
                     x.range,
@@ -1204,7 +1329,7 @@ impl<'a> BindingsBuilder<'a> {
                 // Process the first `if` test before forking so that walrus-defined names
                 // are in the base flow and visible after the if-statement. This mirrors the
                 // fix for ternary expressions in expr.rs (Expr::If handling).
-                self.ensure_expr(&mut x.test, &mut Usage::Narrowing(None));
+                self.ensure_expr(&mut x.test, &mut Usage::NonPinningValue(None));
                 self.start_fork(if_range);
                 // Type narrowing operations that are carried over from one branch to the next. For example, in:
                 //   if x is None:
@@ -1216,12 +1341,14 @@ impl<'a> BindingsBuilder<'a> {
                 let mut negated_prev_ops = NarrowOps::new();
                 let mut contains_static_test_with_no_else = false;
                 let mut is_first_branch = true;
-                for (range, mut test, body) in Ast::if_branches_owned(x) {
+                let mut following_runtime_only_branch = false;
+                let mut branches = Ast::if_branches_owned(x);
+                while let Some((range, mut test, body)) = branches.next() {
                     self.start_branch();
                     self.bind_narrow_ops(
                         &negated_prev_ops,
                         NarrowUseLocation::Start(range),
-                        &Usage::Narrowing(None),
+                        &Usage::NonPinningValue(None),
                     );
                     // If there is no test, it's an `else` clause and `this_branch_chosen` will be true.
                     let this_branch_chosen = match &test {
@@ -1240,7 +1367,7 @@ impl<'a> BindingsBuilder<'a> {
                     // The first `if` test was already processed before the fork (above).
                     // Only process elif/else tests here, inside the branch.
                     if !is_first_branch {
-                        self.ensure_expr_opt(test.as_mut(), &mut Usage::Narrowing(None));
+                        self.ensure_expr_opt(test.as_mut(), &mut Usage::NonPinningValue(None));
                         // Lift walrus-defined names from the elif condition into the
                         // fork's base flow. The elif condition always executes when
                         // control reaches past the preceding branch, so any walrus
@@ -1250,7 +1377,27 @@ impl<'a> BindingsBuilder<'a> {
                         }
                     }
                     is_first_branch = false;
+                    let later_branches_are_type_checking = test
+                        .as_ref()
+                        .is_some_and(SysInfo::is_not_type_checking_guard);
+                    // A suite is only dead everywhere if its test never consults the runtime
+                    // environment. A `sys.version_info`, `sys.platform`, `os.name`, or
+                    // `TYPE_CHECKING` guard is dead under this configuration alone, and the
+                    // suite is live under another, so reporting it would be a false positive.
+                    // An `else` has no test of its own and inherits the ones above it.
+                    let test_is_environment_independent = test
+                        .as_ref()
+                        .is_none_or(|test| !SysInfo::depends_on_sys_info(test));
+                    let is_type_checking_branch = (test.is_none() && following_runtime_only_branch)
+                        || test.as_ref().is_some_and(SysInfo::is_type_checking_guard);
+                    // Record this before any early `continue`: a `not TYPE_CHECKING` guard
+                    // always evaluates statically to `false`, so its branch is skipped below,
+                    // yet the following `else` branch must still be treated as type-checking-only.
+                    following_runtime_only_branch |= later_branches_are_type_checking;
                     let new_narrow_ops = if this_branch_chosen == Some(false) {
+                        if test_is_environment_independent {
+                            self.report_unreachable_body(&body);
+                        }
                         // Skip the body in this case - it typically means a check (e.g. a sys version,
                         // platform, or TYPE_CHECKING check) where the body is not statically analyzable.
                         // However, we still need to check for `yield`/`yield from` in the skipped
@@ -1274,12 +1421,42 @@ impl<'a> BindingsBuilder<'a> {
                     self.bind_narrow_ops(
                         &new_narrow_ops,
                         NarrowUseLocation::Span(range),
-                        &Usage::Narrowing(None),
+                        &Usage::NonPinningValue(None),
                     );
                     negated_prev_ops.and_all(new_narrow_ops.negate());
-                    self.stmts(body, parent);
+                    if is_type_checking_branch {
+                        self.type_checking_depth += 1;
+                        self.stmts(body, parent);
+                        self.type_checking_depth -= 1;
+                    } else {
+                        self.stmts(body, parent);
+                    }
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {
+                        // Choosing an environment-independent branch kills every later suite
+                        // in every environment. Choosing an environment-dependent one only
+                        // kills those we can rule out without consulting the environment.
+                        let mut report_all_remaining = test_is_environment_independent;
+                        for (_, remaining_test, body) in branches {
+                            // `Some(false)`: this suite is dead everywhere. `Some(true)`: this
+                            // branch is taken wherever it is reached, so every suite after it
+                            // is dead everywhere, even though this one is live where the
+                            // branch is chosen. `None`: the answer depends on the environment.
+                            let unconditional = remaining_test.as_ref().and_then(|test| {
+                                if SysInfo::depends_on_sys_info(test) {
+                                    None
+                                } else {
+                                    self.sys_info.evaluate_bool(test)
+                                }
+                            });
+                            if report_all_remaining || unconditional == Some(false) {
+                                self.report_unreachable_body(&body);
+                            }
+                            report_all_remaining |= unconditional == Some(true);
+                            if Ast::body_contains_yield(&body) {
+                                self.scopes.mark_has_yield_in_dead_code();
+                            }
+                        }
                         exhaustive = true;
                         break; // We definitely picked this branch if we got here, nothing below is reachable.
                     }
@@ -1313,7 +1490,7 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::With(x) => {
                 if x.is_async
                     && !self.scopes.is_in_async_def()
-                    && !self.module_info.path().is_notebook()
+                    && !self.module_info.allows_top_level_await()
                 {
                     self.error(
                         x.range(),
@@ -1322,6 +1499,12 @@ impl<'a> BindingsBuilder<'a> {
                     );
                 }
                 let kind = IsAsync::new(x.is_async);
+                let with_range = x.range();
+                // Whether the `with` itself is reachable, which we must record before
+                // visiting the body: a terminator in the body marks the flow dead, and
+                // we must not resurrect a flow that was already dead beforehand.
+                let reachable = !self.scopes.is_definitely_unreachable();
+                let mut contexts = Vec::with_capacity(x.items.len());
                 for mut item in x.items {
                     let item_range = item.range();
                     let expr_range = item.context_expr.range();
@@ -1331,20 +1514,71 @@ impl<'a> BindingsBuilder<'a> {
                         context,
                         Binding::Expr(None, Box::new(item.context_expr)),
                     );
+                    contexts.push(context_idx);
                     if let Some(mut opts) = item.optional_vars {
                         let make_binding =
                             |ann| Binding::ContextValue(ann, context_idx, expr_range, kind);
                         self.bind_target_no_expr(&mut opts, &make_binding);
                     } else {
                         self.insert_binding(
-                            Key::Anon(item_range),
+                            Key::ContextValue(item_range),
                             Binding::ContextValue(None, context_idx, expr_range, kind),
                         );
                     }
                 }
+                // Evaluating and entering these managers happens inside the extent of any
+                // enclosing `with`, so an exception here is suppressible by those — which is
+                // what makes the code after `with A(): with B(): return` reachable. Recorded
+                // before pushing this statement's own frame, which cannot suppress its own
+                // entry.
+                self.scopes.record_may_raise_in_with();
                 self.scopes.enter_with();
                 self.stmts(x.body, parent);
-                self.scopes.exit_with();
+                let body_may_raise = self.scopes.exit_with();
+                // An exception raised in the body may be suppressed by the context
+                // manager, in which case control flow resumes after the `with`. That
+                // depends on the type of `__exit__`, so defer the decision to solving.
+                // A `return`/`break`/`continue` itself cannot be suppressed, but an
+                // earlier exception may prevent the jump from executing.
+                let terminated = self.scopes.has_terminated();
+                // `has_terminated` also covers an exit taken under a static test, such as a
+                // `sys.version_info` guard, which stays reportable-as-live by design. Only a
+                // definite exit can make the code after this `with` dead, so the diagnostic
+                // below uses the stronger flag. Read it before `resume_after_with` clears it.
+                let definitely_terminated = self.scopes.is_definitely_unreachable();
+                // A body that did not terminate syntactically may still end in a `Never`
+                // expression, e.g. a `NoReturn` call, which raises or diverges.
+                let body = if terminated {
+                    None
+                } else {
+                    self.scopes.last_stmt_expr()
+                };
+                // `with A(), B():` enters B inside A's dynamic extent, so an exception from
+                // evaluating or entering any manager after the first can be suppressed by an
+                // earlier one, leaving the body — and its jump — unexecuted.
+                let entering_may_raise = contexts.len() > 1;
+                let suppressible = if terminated {
+                    self.scopes.terminated_by_raise() || body_may_raise || entering_may_raise
+                } else {
+                    body.is_some()
+                };
+                if reachable && suppressible {
+                    let contexts = contexts.into_boxed_slice();
+                    let key = self.insert_binding(
+                        Key::SuppressedException(with_range),
+                        Binding::SuppressedException(Box::new(SuppressedException {
+                            contexts: contexts.clone(),
+                            kind,
+                            body,
+                        })),
+                    );
+                    self.scopes.resume_after_with(key);
+                    if definitely_terminated {
+                        // The flow is now live again, but only conditionally. Let `stmts()`
+                        // ask the solver whether the code that follows can really run.
+                        self.pending_with_suppression = Some((contexts, kind));
+                    }
+                }
             }
             Stmt::Match(x) => {
                 self.stmt_match(x, parent);
@@ -1370,7 +1604,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     // If there's no exception raised, don't bother checking the cause.
                 }
-                self.scopes.mark_flow_termination(false);
+                self.scopes.mark_flow_termination(TerminationKind::Raise);
             }
             Stmt::Try(x) => {
                 self.start_fork_and_branch(x.range);
@@ -1439,7 +1673,19 @@ impl<'a> BindingsBuilder<'a> {
 
                 self.finish_exhaustive_fork();
                 self.scopes.enter_finally();
+                // A finally suite executes before control leaves a terminating try/except,
+                // so bind it as reachable and put the termination back afterwards. Leave a
+                // flow that did not terminate alone, so that a `finally` which itself
+                // terminates keeps its own termination.
+                let termination = if self.scopes.is_definitely_unreachable() {
+                    Some(self.scopes.take_termination())
+                } else {
+                    None
+                };
                 self.stmts(x.finalbody, parent);
+                if let Some(termination) = termination {
+                    self.scopes.restore_termination(termination);
+                }
                 self.scopes.exit_finally();
             }
             Stmt::Assert(x) => {
@@ -1448,26 +1694,16 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Import(x) => {
                 for x in x.names {
                     let m = ModuleName::from_name(&x.name.id);
-                    // Handle __files__/__recursefiles__ directory imports.
-                    // These import all files from a directory into a namespace object.
-                    // We bind the alias as Module to enable navigation to the parent module,
-                    // passing None for TextRange to suppress missing-module diagnostics.
-                    if is_directory_import(m) {
-                        if let Some(asname) = x.asname {
-                            self.scopes.register_import(&asname);
-                            self.bind_definition(
-                                &asname,
-                                Binding::Module(Box::new((
-                                    m,
-                                    m.components().into_boxed_slice(),
-                                    None,
-                                    None,
-                                ))),
-                                FlowStyle::ImportAs(m),
-                            );
-                        }
-                        continue;
-                    }
+                    // A `__files__`/`__recursefiles__` directory import names a directory
+                    // rather than a module on disk, so it has no missing-module diagnostic
+                    // range. Every import still binds a name, which the static definitions
+                    // pass has already declared; skipping the binding would leave that
+                    // declaration without one.
+                    let diagnostic_range = if is_directory_import(m) {
+                        None
+                    } else {
+                        Some(x.range)
+                    };
 
                     match x.asname {
                         Some(asname) => {
@@ -1484,7 +1720,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     m.components().into_boxed_slice(),
                                     None,
-                                    Some(x.range),
+                                    diagnostic_range,
                                 ))),
                                 FlowStyle::ImportAs(m),
                             );
@@ -1498,7 +1734,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     Box::new([first.clone()]),
                                     module_key,
-                                    Some(x.range),
+                                    diagnostic_range,
                                 ))),
                             );
                             // Register the import using the first component (e.g., "os" from "os.path")
@@ -1580,7 +1816,7 @@ impl<'a> BindingsBuilder<'a> {
                 let Expr::Call(call) = *stmt_expr.value else {
                     unreachable!("guarded by matches! above")
                 };
-                let call_range = call.range;
+                let call_range = call.range();
                 let args = call.arguments.args;
                 let (test, msg) = if args.len() == 1 {
                     (args[0].clone(), None)
@@ -1595,6 +1831,53 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Expr(mut x) => {
                 let mut current = self.declare_current_idx(Key::StmtExpr(x.value.range()));
                 self.ensure_expr(&mut x.value, current.usage());
+                // Rebind bare-name receivers after in-place column mutations.
+                let mutated_receiver = if let Expr::Call(call) = &*x.value
+                    && let Expr::Attribute(func) = &*call.func
+                    && let Expr::Name(receiver) = &*func.value
+                    && let Some(kind) =
+                        polars_column_mutation(func.attr.id.as_str(), &call.arguments)
+                {
+                    Some((receiver.id.clone(), func.attr.range, kind))
+                } else {
+                    None
+                };
+                // PyTorch nn.Module registers buffers and parameters as instance attributes.
+                // Collect literal-name candidates now; solving later verifies nn.Module ancestry.
+                if let Expr::Call(call) = x.value.as_ref()
+                    && let Expr::Attribute(func) = call.func.as_ref()
+                    && let Some(value_keyword) = match func.attr.id.as_str() {
+                        "register_buffer" => Some("tensor"),
+                        "register_parameter" => Some("param"),
+                        _ => None,
+                    }
+                {
+                    let name = call.arguments.args.first().or_else(|| {
+                        call.arguments.keywords.iter().find_map(|keyword| {
+                            (keyword
+                                .arg
+                                .as_ref()
+                                .is_some_and(|arg| arg.as_str() == "name"))
+                            .then_some(&keyword.value)
+                        })
+                    });
+                    let value = call.arguments.args.get(1).or_else(|| {
+                        call.arguments.keywords.iter().find_map(|keyword| {
+                            (keyword
+                                .arg
+                                .as_ref()
+                                .is_some_and(|arg| arg.as_str() == value_keyword))
+                            .then_some(&keyword.value)
+                        })
+                    });
+                    if let (Some(Expr::StringLiteral(name)), Some(value)) = (name, value) {
+                        self.scopes.record_nn_module_registration(
+                            &func.value,
+                            Name::new(name.value.to_str()),
+                            value.clone(),
+                        );
+                    }
+                }
                 let special_export = if let Expr::Call(ExprCall { func, .. }) = &*x.value {
                     self.as_special_export(func)
                 } else {
@@ -1604,6 +1887,21 @@ impl<'a> BindingsBuilder<'a> {
                     .insert_binding_current(current, Binding::StmtExpr(x.value, special_export));
                 // Track this StmtExpr as the trailing statement for type-based termination
                 self.scopes.set_last_stmt_expr(Some(key));
+                if let Some((name, range, kind)) = mutated_receiver {
+                    let mut narrow_ops = NarrowOps::new();
+                    narrow_ops.0.insert(
+                        name,
+                        (
+                            NarrowOp::Atomic(None, AtomicNarrowOp::PolarsColumnMutation(kind)),
+                            range,
+                        ),
+                    );
+                    self.bind_narrow_ops(
+                        &narrow_ops,
+                        NarrowUseLocation::Span(range),
+                        &Usage::NonPinningValue(None),
+                    );
+                }
             }
             Stmt::Pass(_) => { /* no-op */ }
             Stmt::Break(x) => {

@@ -421,6 +421,35 @@ assert_type(BaseBlock().run({}), AsyncGenerator[tuple[str, str], None])
 );
 
 testcase!(
+    test_sync_generator_yield_in_while_false,
+    r#"
+from typing import Generator, assert_type
+
+def gen() -> Generator[int, None, None]:
+    while False:
+        yield 1
+    raise NotImplementedError
+
+assert_type(gen(), Generator[int, None, None])
+"#,
+);
+
+// Only the leading run of `yield`s is exempt; the report starts at the first statement in
+// the suite that is not one.
+testcase!(
+    test_yield_beside_other_dead_code_in_if_false,
+    r#"
+from typing import Generator
+
+def gen() -> Generator[int, None, None]:
+    if False:
+        yield 1
+        print("dead")  # E: This code is unreachable
+    raise NotImplementedError
+"#,
+);
+
+testcase!(
     test_sync_generator_yield_in_if_false,
     r#"
 from typing import Generator, assert_type

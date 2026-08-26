@@ -5,8 +5,17 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::LazyLock;
+
+use itertools::Itertools;
+use pyrefly_config::error_kind::ErrorKind;
+use regex::Regex;
+
 use crate::error::error::Error;
 use crate::module::module_info::ModuleInfo;
+
+static REVEAL_TYPE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)^revealed type: (.*)$").expect("invalid regex"));
 
 #[derive(Clone, Copy, Debug)]
 enum ExpectationKind {
@@ -140,14 +149,56 @@ impl Expectation {
                 errors.len(),
             ))
         } else {
-            for (line_no, msg) in &self.error {
-                if !errors.iter().any(|e| {
-                    e.msg().replace("\n", "\\n").contains(msg)
-                        && e.display_range().start.line_within_file().get() as usize == *line_no
-                }) {
+            'outer: for (line_no, expected_msg) in &self.error {
+                let mut partial_reveal_type_match = None;
+                for e in errors.iter() {
+                    if e.display_range().start.line_within_file().get() as usize != *line_no {
+                        continue;
+                    }
+                    match e.error_kind() {
+                        ErrorKind::RevealType => {
+                            // Collapse a multi-line type to a single line. Expectations test what
+                            // type is obtained, not how it is displayed.
+                            let actual_msg = e.msg_header().lines().map(str::trim).join(" ");
+                            assert!(e.msg_details().is_none());
+                            // For reveal_type, we require the expectation to contain the *entire* serialized type,
+                            // to avoid an easy failure mode: if we use `reveal_type` to test the result of a
+                            // narrowing op, and pyrefly doesn't actually narrow, allowing a partial match would
+                            // let the test spuriously pass.
+                            let full_actual_type = REVEAL_TYPE_RE
+                                .captures(&actual_msg)
+                                .unwrap()
+                                .get(1)
+                                .unwrap();
+                            if actual_msg.contains(expected_msg) {
+                                if expected_msg.contains(full_actual_type.as_str()) {
+                                    continue 'outer; // successful match
+                                } else if partial_reveal_type_match.is_none() {
+                                    partial_reveal_type_match =
+                                        Some(full_actual_type.as_str().to_owned());
+                                }
+                            }
+                        }
+                        _ => {
+                            let actual_msg = e.msg().replace("\n", "\\n");
+                            if actual_msg.contains(expected_msg) {
+                                continue 'outer; // successful match
+                            }
+                        }
+                    }
+                }
+                if let Some(actual_type) = partial_reveal_type_match {
+                    let expected_type = expected_msg
+                        .strip_prefix("revealed type: ")
+                        .unwrap_or(expected_msg);
                     return Err(anyhow::anyhow!(
-                        "Expectations failed for {}: can't find error (line {line_no}): {msg}",
-                        self.module.path()
+                        "Expectations failed for {}: reveal_type expectation (line {line_no}) must contain the full revealed type. Expectation: `{expected_type}`, actual revealed type: `{actual_type}`",
+                        self.module.path(),
+                    ));
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "Expectations failed for {}: can't find error (line {line_no}): {expected_msg}",
+                        self.module.path(),
                     ));
                 }
             }

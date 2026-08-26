@@ -29,6 +29,13 @@ exports[`Sandbox Component render sandbox correctly 1`] = `
           +
         </button>
       </div>
+      <label>
+        <input
+          id="parameter-hints-toggle"
+          type="checkbox"
+        />
+        Parameter hints
+      </label>
     </div>
     <div>
       <div

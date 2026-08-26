@@ -25,9 +25,10 @@ contributing. This file shows how to develop the extension locally.
 ## Installing
 
 - Follow steps in Pre-requisites section.
-- Build the Pyrefly binary with
-  `buck2 build pyrefly @fbcode//mode/opt --show-output` or `cargo build` and
-  either:
+- Build the Pyrefly binary and place it at `lsp/bin/pyrefly(.exe)` by running
+  `node build-pyrefly.js release` in this folder. Alternatively, build it
+  yourself with `buck2 build pyrefly @fbcode//mode/opt --show-output` or
+  `cargo build` and either:
 
 1. Place binary at `lsp/bin/pyrefly(.exe)`
 2. Add the `pyrefly.lspPath` configuration key to point at it after extension

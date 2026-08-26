@@ -3,8 +3,6 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-# pyre-strict
-
 
 import argparse
 import difflib
@@ -203,6 +201,10 @@ def get_pyrefly_command(executable: Path | None) -> list[str]:
         "--python-version",
         "3.13.0",
         "--min-severity=warn",
+        # The conformance suite exercises dataclass descriptor patterns in a way that is
+        # inconsistent with the runtime.
+        # Disable this error until https://github.com/python/typing/pull/2299 is merged
+        "--ignore=bad-dataclass-descriptor",
     ]
 
 
@@ -366,9 +368,10 @@ def main() -> None:
             difference = [d for d in difference if d[0] in prefixes]
             messages.append("\n".join(difference) + "\n")
         if len(messages) > 0:
+            executable = f" --executable {args.executable}" if args.executable else ""
+            regenerate = f"python3 conformance/conformance_output.py {args.directory} --mode update{executable}"
             logger.error(
-                "Conformance output is not up to date. Please cd to fbcode/pyrefly/conformance/\n"
-                + "and re-generate the output with `buck2 run :conformance_output_script -- ./third_party`.\n"
+                f"Conformance output is not up to date. Please re-generate it with `{regenerate}`.\n"
                 + "\n".join(messages)
             )
             sys.exit(1)

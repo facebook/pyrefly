@@ -69,6 +69,12 @@ jobs:
             if (text.includes('pytorch')) {
               labels.push('pytorch');
             }
+            if (text.includes('tensor shape') || text.includes('tensor-shape') || text.includes('tensor_shape')) {
+              labels.push('tensor-shapes');
+            }
+            if (text.includes('dataframe') || text.includes('pandas') || text.includes('polars')) {
+              labels.push('dataframe');
+            }
             if (text.includes('django')) {
               labels.push('django');
             }

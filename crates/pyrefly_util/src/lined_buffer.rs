@@ -346,10 +346,6 @@ impl LinedBuffer {
         )
     }
 
-    pub fn is_ascii(&self) -> bool {
-        self.lines.is_ascii()
-    }
-
     /// Given a one-indexed row in the concatenated source,
     /// return the cell number and the row in the cell.
     fn get_cell_and_line_from_concatenated_line(

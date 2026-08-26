@@ -16,6 +16,8 @@ The Pyrefly extension:
 - Adds language features from Pyrefly's analysis like go-to definition, hover,
   etc. (full list [here](https://github.com/facebook/pyrefly/issues/344)) and
   disables Pylance completely (VSCode's built-in Python extension)
+- Adds a `Pyrefly: Infer Types for Current File` command that writes inferred
+  type annotations to the active Python file.
 
 ## Customization
 

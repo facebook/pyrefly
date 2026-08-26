@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from typing import overload
 
 from typing_extensions import override
@@ -26,7 +26,7 @@ def not_implemented_return(unused_param: int) -> int:
     return NotImplemented
 
 
-class A:
+class A(ABC):
     @abstractmethod
     def method1(self, x: int) -> None:
         _ = 1

@@ -10,9 +10,11 @@ from typing import assert_type
 
 import torch
 from jaxtyping import Float, Shaped
+from shape_extensions import static_jaxtyping
 from torch import Tensor
 
 
+@static_jaxtyping("dim *batch")
 def test_variadic_passthrough(
     x: Shaped[Tensor, "*batch dim"],
 ) -> Shaped[Tensor, "*batch dim"]:
@@ -21,6 +23,7 @@ def test_variadic_passthrough(
     return x
 
 
+@static_jaxtyping("*batch")
 def test_variadic_trailing_fixed(
     x: Shaped[Tensor, "*batch 3"],
 ) -> Shaped[Tensor, "*batch 3"]:
@@ -29,6 +32,7 @@ def test_variadic_trailing_fixed(
     return x
 
 
+@static_jaxtyping("channels *batch")
 def test_variadic_both_ends(
     x: Shaped[Tensor, "channels *batch 3"],
 ) -> Shaped[Tensor, "channels *batch 3"]:
@@ -37,6 +41,7 @@ def test_variadic_both_ends(
     return x
 
 
+@static_jaxtyping("*batch")
 def test_variadic_sin(
     x: Float[Tensor, "*batch 3"],
 ) -> Float[Tensor, "*batch 3"]:
@@ -46,9 +51,13 @@ def test_variadic_sin(
     return result
 
 
+@static_jaxtyping("m n *batch")
 def test_variadic_det(
     x: Shaped[Tensor, "*batch m n"],
 ) -> None:
     """Fixture op (det) transforms shape: [*batch, m, n] -> [*batch]."""
     result = torch.det(x)
     assert_type(result, Shaped[Tensor, "*batch"])
+
+
+assert_type(test_variadic_passthrough(torch.randn(2, 3, 4)), Tensor[[2, 3, 4]])

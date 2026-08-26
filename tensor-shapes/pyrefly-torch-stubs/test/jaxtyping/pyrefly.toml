@@ -6,4 +6,4 @@ search_path = [
 
 python_version = "3.12"
 
-tensor-shapes = true
+jaxtyping = true

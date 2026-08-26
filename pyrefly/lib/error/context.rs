@@ -7,7 +7,7 @@
 
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_types::callable::Callable;
-use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::function::FunctionKind;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 
@@ -167,8 +167,16 @@ pub enum TypeCheckKind {
     CallKwArgs(Option<Name>, Option<Name>, Option<FunctionKind>),
     /// Unpacked keyword argument against named parameter.
     CallUnpackKwArg(Name, Option<FunctionKind>),
+    /// The extra items of an unpacked TypedDict against a parameter they may land on. The bool
+    /// indicates whether the extra items are implied by the TypedDict being open, rather than
+    /// declared with `extra_items`. The name is the parameter's name, or `None` for `**kwargs`.
+    CallExtraItems(bool, Option<Name>, Option<FunctionKind>),
     /// Check of a parameter's default value against its type annotation.
     FunctionParameterDefault(Name),
+    /// Check against the key type of a dict.
+    DictKey,
+    /// Check against the value type of a dict.
+    DictValue,
     /// Check against type of a TypedDict key. The name may be None if the type comes from
     /// `extra_items` or some other non-literal-key source. The bool indicates whether the
     /// TypedDict was inferred (anonymous) rather than explicitly declared.
@@ -202,8 +210,8 @@ pub enum TypeCheckKind {
     UnexpectedBareYield,
     /// Check on the type of the dataclass `__post_init__` method.
     PostInit,
-    /// Consistency check for overload return types.
-    OverloadReturn,
+    /// Consistency check for overload return types, carrying the original overload return type.
+    OverloadReturn(Type),
     /// Consistency check for overload input signature, as (overload_signature, implementation_signature)
     OverloadInput(Callable, Callable),
     /// Consistency check for overload defaults, as (parameter name).
@@ -238,8 +246,10 @@ impl TypeCheckKind {
             Self::CallVarArgs(..) => ErrorKind::BadArgumentType,
             Self::CallKwArgs(..) => ErrorKind::BadArgumentType,
             Self::CallUnpackKwArg(..) => ErrorKind::BadArgumentType,
+            Self::CallExtraItems(true, ..) => ErrorKind::OpenUnpacking,
+            Self::CallExtraItems(false, ..) => ErrorKind::BadArgumentType,
             Self::FunctionParameterDefault(..) => ErrorKind::BadFunctionDefinition,
-            Self::TypedDictKey(_, _) => ErrorKind::BadAssignment,
+            Self::DictKey | Self::DictValue | Self::TypedDictKey(_, _) => ErrorKind::BadAssignment,
             Self::TypedDictUnpacking => ErrorKind::BadUnpacking,
             Self::TypedDictOpenUnpacking => ErrorKind::OpenUnpacking,
             Self::Attribute(..) => ErrorKind::BadAssignment,
@@ -252,7 +262,7 @@ impl TypeCheckKind {
             Self::YieldFrom => ErrorKind::InvalidYield,
             Self::UnexpectedBareYield => ErrorKind::InvalidYield,
             Self::PostInit => ErrorKind::BadFunctionDefinition,
-            Self::OverloadReturn => ErrorKind::InconsistentOverload,
+            Self::OverloadReturn(..) => ErrorKind::InconsistentOverload,
             Self::OverloadInput(..) => ErrorKind::InconsistentOverload,
             Self::OverloadDefault(..) => ErrorKind::InconsistentOverloadDefault,
             Self::TypeVarSpecialization(..) => ErrorKind::BadSpecialization,
