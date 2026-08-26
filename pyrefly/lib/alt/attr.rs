@@ -20,6 +20,7 @@ use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Var;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
@@ -745,7 +746,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         best_suggestion(
             missing,
-            common_candidates.iter().map(|candidate| (candidate, 0)),
+            common_candidates
+                .iter()
+                .map(|candidate| Candidate::measured(candidate, 0)),
         )
     }
 

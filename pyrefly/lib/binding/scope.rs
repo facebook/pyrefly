@@ -19,6 +19,8 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
+use pyrefly_util::suggest::Candidate;
+use pyrefly_util::suggest::Search;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -3191,35 +3193,50 @@ impl Scopes {
         self.scope_views().find_map(visitor)
     }
 
-    /// The names a "did you mean" search should consider, innermost scope
-    /// first, each paired with the depth it was found at so that a nearer name
-    /// wins a tie.
+    /// Fold every name that could be what `search` is looking for into it,
+    /// innermost scope first so that a nearer name wins a tie, and `trailing`
+    /// last -- the builtins are the outermost scope there is, so they are
+    /// searched in the same pass and lose every tie to a name actually in
+    /// scope.
     ///
     /// Every scope kind is treated the same way: take the names it declares,
     /// and where the flow is still being walked, keep only the ones it has
     /// bound. Across a function boundary the order of execution is unknowable,
     /// so everything the scope declares counts.
-    pub fn suggestion_candidates(&self) -> impl Iterator<Item = (&Name, usize)> {
-        // `scope_views` has already applied the language's scoping rules,
-        // including withholding a class body's names from the code blocks
-        // nested inside it, so whatever it yields is in scope.
-        self.scope_views().flat_map(move |view| {
-            let depth = view.lookup_depth;
-            let flow_checked = view.flow_barrier == FlowBarrier::AllowFlowChecked;
-            let flow = &view.scope.flow;
-            view.scope
-                .stat
-                .0
-                .iter_hashed()
-                .filter_map(move |(name, _static_info)| {
-                    // The static map hands back the hash it stored, so this
-                    // costs a probe rather than a rehash of the name.
-                    if flow_checked && flow.get_info_hashed(name).is_none() {
-                        return None;
-                    }
-                    Some((name.into_key(), depth))
-                })
-        })
+    ///
+    /// The search is asked about each candidate before the flow is, because the
+    /// bound it holds has been narrowed by everything already matched and
+    /// dismisses nearly every candidate for the cost of a comparison. A probe
+    /// of the flow map is only worth making for what survives that.
+    pub fn fold_suggestion_candidates<'b>(
+        &self,
+        search: &mut Search,
+        trailing: impl Iterator<Item = Candidate<'b>>,
+    ) {
+        self.visit_scopes(
+            |ScopeView {
+                 lookup_depth,
+                 scope,
+                 flow_barrier,
+                 static_barrier: _,
+             }| {
+                let flow_checked = flow_barrier == FlowBarrier::AllowFlowChecked;
+                for (name, _static_info) in scope.stat.0.iter_hashed() {
+                    // Asking the flow is the expensive part, so it goes behind
+                    // the bound: `offer_if` only consults it for a candidate
+                    // close enough to still be in the running. The static map
+                    // hands back the hash it stored, so it costs a probe rather
+                    // than a rehash of the name.
+                    search.offer_if(Candidate::measured(name.into_key(), lookup_depth), || {
+                        !flow_checked || scope.flow.get_info_hashed(name).is_some()
+                    });
+                }
+                None::<()>
+            },
+        );
+        for candidate in trailing {
+            search.offer(candidate);
+        }
     }
 
     /// Look up the information needed to create a binding for a read of a name

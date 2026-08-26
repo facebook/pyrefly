@@ -12,6 +12,7 @@ use pyrefly_types::simplify::unions_with_literals;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDictInner;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::name::Name;
@@ -150,7 +151,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                             if let Some(suggestion) = best_suggestion(
                                 &key_name,
-                                fields.keys().map(|candidate| (candidate, 0usize)),
+                                fields
+                                    .keys()
+                                    .map(|candidate| Candidate::measured(candidate, 0usize)),
                             ) {
                                 builder =
                                     builder.with_detail(format!("Did you mean `{suggestion}`?"));

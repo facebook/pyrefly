@@ -52,6 +52,7 @@ use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::timer::set_timing_enabled;
@@ -541,8 +542,8 @@ fn search(missing: &Name, scope: &[Name], builtins: &[Name]) -> Option<Name> {
         scope
             .iter()
             .enumerate()
-            .map(|(i, name)| (name, i % 4))
-            .chain(builtins.iter().map(|n| (n, usize::MAX))),
+            .map(|(i, name)| Candidate::measured(name, i % 4))
+            .chain(builtins.iter().map(|n| Candidate::measured(n, usize::MAX))),
     )
 }
 

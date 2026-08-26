@@ -48,6 +48,7 @@ use pyrefly_types::types::Forallable;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
@@ -1433,7 +1434,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 if let Some(suggestion) = best_suggestion(
                     field_name,
-                    mapped_fields.iter().map(|candidate| (candidate, 0usize)),
+                    mapped_fields
+                        .iter()
+                        .map(|candidate| Candidate::measured(candidate, 0usize)),
                 ) {
                     builder = builder.with_detail(format!("Did you mean `{suggestion}`?"));
                 }
@@ -3751,7 +3754,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         let fields = self.typed_dict_fields(&typed_dict);
                                         if let Some(suggestion) = best_suggestion(
                                             &key_name,
-                                            fields.keys().map(|candidate| (candidate, 0usize)),
+                                            fields.keys().map(|candidate| Candidate::measured(candidate, 0usize)),
                                         ) {
                                             builder = builder.with_detail(format!(
                                                 "Did you mean `{suggestion}`?"

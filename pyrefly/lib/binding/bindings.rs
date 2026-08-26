@@ -29,7 +29,8 @@ use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::gas::Gas;
-use pyrefly_util::suggest::best_suggestion;
+use pyrefly_util::suggest::Candidate;
+use pyrefly_util::suggest::Search;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::Identifier;
@@ -1103,8 +1104,11 @@ impl<'a> BindingsBuilder<'a> {
         let builtins = wildcards
             .iter()
             .flat_map(|wildcard| wildcard.iter())
-            .map(|candidate| (candidate, usize::MAX));
-        best_suggestion(missing, self.scopes.suggestion_candidates().chain(builtins))
+            .map(|candidate| Candidate::measured(candidate, usize::MAX));
+        let mut search = Search::new(missing);
+        self.scopes
+            .fold_suggestion_candidates(&mut search, builtins);
+        search.finish()
     }
 
     /// Materialize a lazily-discovered implicit builtin as an entry in the module's static
