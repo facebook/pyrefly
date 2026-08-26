@@ -37,6 +37,7 @@ use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 
+use crate::alt::answers_solver::AnswerScope;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::CalcId;
 use crate::alt::answers_solver::ReservedSlot;
@@ -1050,6 +1051,7 @@ pub trait LookupAnswer: Sized {
         path: Option<&ModulePath>,
         k: &K,
         stack: &ThreadState,
+        answer_scope: &AnswerScope,
     ) -> Option<Arc<K::Answer>>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -1068,7 +1070,12 @@ pub trait LookupAnswer: Sized {
     /// does not support cross-module driving.
     ///
     /// Default implementation returns false (not supported).
-    fn solve_idx_erased(&self, _calc_id: &CalcId, _thread_state: &ThreadState) -> bool {
+    fn solve_idx_erased(
+        &self,
+        _calc_id: &CalcId,
+        _thread_state: &ThreadState,
+        _answer_scope: &AnswerScope,
+    ) -> bool {
         false
     }
 
@@ -1195,11 +1202,13 @@ impl Answers {
                 return;
             }
             for idx in answers.bindings().keys::<K>() {
-                answers.get_idx(idx);
+                let answer_scope = AnswerScope::new();
+                answers.for_answer_scope(&answer_scope).get_idx(idx);
             }
         }
         let recurser = &VarRecurser::new();
         let thread_state = &ThreadState::new(recursion_limit_config);
+        let answer_scope = &AnswerScope::new();
         let jaxtyping_dims = RefCell::default();
         let answers_solver = AnswersSolver::new(
             answers,
@@ -1211,6 +1220,7 @@ impl Answers {
             recurser,
             stdlib,
             thread_state,
+            answer_scope,
             self.heap(),
             &jaxtyping_dims,
         );
@@ -1290,6 +1300,7 @@ impl Answers {
         uniques: &UniqueFactory,
         key: Hashed<&K>,
         thread_state: &ThreadState,
+        answer_scope: &AnswerScope,
     ) -> Option<Arc<K::Answer>>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -1316,6 +1327,7 @@ impl Answers {
             recurser,
             stdlib,
             thread_state,
+            answer_scope,
             self.heap(),
             &jaxtyping_dims,
         );
@@ -1355,6 +1367,7 @@ impl Answers {
         stdlib: &Stdlib,
         uniques: &UniqueFactory,
         thread_state: &ThreadState,
+        answer_scope: &AnswerScope,
     ) {
         let recurser = &VarRecurser::new();
         let jaxtyping_dims = RefCell::default();
@@ -1368,6 +1381,7 @@ impl Answers {
             recurser,
             stdlib,
             thread_state,
+            answer_scope,
             self.heap(),
             &jaxtyping_dims,
         );

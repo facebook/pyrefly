@@ -77,6 +77,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
+use crate::alt::answers_solver::AnswerScope;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::CalcId;
 use crate::alt::answers_solver::ReservedSlot;
@@ -1775,6 +1776,7 @@ impl<'a> Transaction<'a> {
         name: &Name,
         thread_state: &ThreadState,
     ) -> Option<(Class, Option<Arc<TParams>>)> {
+        let answer_scope = AnswerScope::new();
         let module_data = self.get_module(handle);
         if !self
             .lookup_export(module_data)
@@ -1793,7 +1795,12 @@ impl<'a> Transaction<'a> {
             return None;
         }
 
-        let t = self.lookup_answer(module_data, &KeyExport(name.clone()), thread_state);
+        let t = self.lookup_answer(
+            module_data,
+            &KeyExport(name.clone()),
+            thread_state,
+            &answer_scope,
+        );
         let class = match t.as_deref() {
             Some(Type::ClassDef(cls)) => Some(cls.dupe()),
             ty => {
@@ -1813,9 +1820,12 @@ impl<'a> Transaction<'a> {
         class.map(|class| {
             let tparams = match class.precomputed_tparams() {
                 PrecomputedTParams::NotGeneric => None,
-                PrecomputedTParams::FromBinding => {
-                    self.lookup_answer(module_data, &KeyTParams(class.index()), thread_state)
-                }
+                PrecomputedTParams::FromBinding => self.lookup_answer(
+                    module_data,
+                    &KeyTParams(class.index()),
+                    thread_state,
+                    &answer_scope,
+                ),
                 PrecomputedTParams::Precomputed(tparams) => Some(tparams.dupe()),
             };
             (class, tparams)
@@ -1861,6 +1871,7 @@ impl<'a> Transaction<'a> {
         module_data: &'b ArcId<ModuleDataMut>,
         key: &K,
         thread_state: &ThreadState,
+        answer_scope: &AnswerScope,
     ) -> Option<Arc<<K as Keyed>::Answer>>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -1906,6 +1917,7 @@ impl<'a> Transaction<'a> {
             &self.data.state.uniques,
             key,
             thread_state,
+            answer_scope,
         )
     }
 
@@ -2242,6 +2254,7 @@ impl<'a> Transaction<'a> {
         let recurser = VarRecurser::new();
         let config = module_data.config.read();
         let thread_state = ThreadState::new(config.recursion_limit_config());
+        let answer_scope = AnswerScope::new();
         let jaxtyping_dims = RefCell::default();
         let solver = AnswersSolver::new(
             &lookup,
@@ -2253,6 +2266,7 @@ impl<'a> Transaction<'a> {
             &recurser,
             &stdlib,
             &thread_state,
+            &answer_scope,
             answers.1.heap(),
             &jaxtyping_dims,
         );
@@ -3105,6 +3119,7 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         path: Option<&ModulePath>,
         k: &K,
         thread_state: &ThreadState,
+        answer_scope: &AnswerScope,
     ) -> Option<Arc<K::Answer>>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -3123,7 +3138,9 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         let _demand_span =
             self.transaction
                 .enter_demand_answer_span(self.module_data.handle.module(), module, k);
-        let res = self.transaction.lookup_answer(module_data, k, thread_state);
+        let res = self
+            .transaction
+            .lookup_answer(module_data, k, thread_state, answer_scope);
         if res.is_none() {
             let msg = format!(
                 "LookupAnswer::get failed to find key, {module} {k:?} (concurrent changes?)"
@@ -3139,7 +3156,12 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         res
     }
 
-    fn solve_idx_erased(&self, calc_id: &CalcId, thread_state: &ThreadState) -> bool {
+    fn solve_idx_erased(
+        &self,
+        calc_id: &CalcId,
+        thread_state: &ThreadState,
+        answer_scope: &AnswerScope,
+    ) -> bool {
         let CalcId(_, ref any_idx) = *calc_id;
         match self.lookup_target_answers(calc_id) {
             TargetAnswers::ModuleNotFound => false,
@@ -3165,6 +3187,7 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
                     &stdlib,
                     &self.transaction.data.state.uniques,
                     thread_state,
+                    answer_scope,
                 );
                 true
             }
