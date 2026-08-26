@@ -597,10 +597,18 @@ impl<'a> TypeDisplayContext<'a> {
     /// Whether a type has to be parenthesized for display in a sequence of types, such as a union
     /// written with the `|` syntax.
     fn needs_parens_in_sequence(&self, t: &Type) -> bool {
-        matches!(
-            t,
-            Type::Callable(_) | Type::CallableResidual(_) | Type::Function(_) | Type::Intersect(_)
-        )
+        match t {
+            Type::Callable(_)
+            | Type::CallableResidual(_)
+            | Type::Function(_)
+            | Type::Intersect(_) => true,
+            // Overloads are already wrapped in `Overload[...]`, and query mode wraps bound methods in `BoundMethod[...]`.
+            Type::BoundMethod(m) => {
+                !matches!(m.func, BoundMethodType::Overload(_))
+                    && self.lsp_display_mode != LspDisplayMode::Query
+            }
+            _ => false,
+        }
     }
 
     /// Helper function to format a sequence of types with a separator.
@@ -2897,6 +2905,22 @@ pub mod tests {
         assert_eq!(
             ctx.display(&bound_method).to_string(),
             "BoundMethod[builtins.type[my.module.MyClass], (self: typing.Any, x: typing.Any, y: typing.Any) -> None]"
+        );
+    }
+
+    #[test]
+    fn test_display_bound_method_in_union() {
+        let bound_method = fake_bound_method("foo", "MyClass", "my.module");
+        let union = Type::union(vec![bound_method, Type::None]);
+        let mut ctx = TypeDisplayContext::new(&[&union]);
+        assert_eq!(
+            ctx.display(&union).to_string(),
+            "((x: Any, y: Any) -> None) | None"
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Query);
+        assert_eq!(
+            ctx.display(&union).to_string(),
+            "BoundMethod[builtins.type[my.module.MyClass], (self: typing.Any, x: typing.Any, y: typing.Any) -> None] | None"
         );
     }
 
