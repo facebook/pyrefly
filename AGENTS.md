@@ -77,6 +77,37 @@ Coding style: All code must be clean, documented and minimal. That means:
   overhead. Even if a piece of code is logically correct, it is not ready for
   review until it is also clean, elegant, and maintainable.
 
+### Formatting in a GitHub checkout
+
+- **Rust:** `cargo fmt` (enforced by `cargo fmt -- --check` in CI)
+- **Python:** All Python is formatted with **ruff** (both code and import sorting):
+  - `ruff.toml` at repo root — `target-version = py313`, `line-length = 88`, `[lint] select = ["I"]` for isort
+  - Run locally:
+    ```bash
+    ruff format --config ruff.toml .
+    ruff check --fix --select I --config ruff.toml .
+    ruff format --check --config ruff.toml . && ruff check --select I --config ruff.toml .
+    ```
+
+In a Meta-internal checkout with a `BUCK` file, follow the tooling conventions in
+`facebook/AGENTS.md` instead.
+
+## Cross-platform authoring and review
+
+Pyrefly supports Linux, macOS, and Windows. Consider all three when authoring
+and reviewing code, including report generation and LSP tests. A passing Linux
+run alone does not establish cross-platform correctness.
+
+- Check filesystem and text fixtures for OS-specific assumptions: path separators,
+  drive letters and absolute paths, case sensitivity, symlink resolution, line
+  endings, executable permissions, and temporary-file behavior.
+- Use path APIs and the report's file-key normalization rather than assuming a
+  native path string is a portable key. Compare semantic content when separators
+  or line endings are not part of the behavior under test.
+- Treat a concrete non-Linux correctness bug or test failure as a blocking review
+  issue, not a style nit. When platform validation is unavailable, state that gap
+  rather than claiming the change works on every supported OS.
+
 ## Comments and Documentation
 
 - Code should have comments and functions should have docstrings, but both should be
@@ -119,11 +150,22 @@ available tooling differs. **How to detect which one you are in:** check for a
 ## Feature guidelines
 
 - When working on a feature, the first commit should be a failing test if
-  possible
+  possible.
+- Avoid adding configuration flags that do nothing except control what errors
+  are reported. The right way to make an error configurable is to add a
+  dedicated error kind for it, so that reporting can be configured by adjusting
+  the error kind's severity.
+- When a change alters which errors pyrefly reports, interpret its mypy_primer
+  differential and record the result in the pull request summary. See the
+  `interpret-mypy-primer` skill for how to analyze the differential, classify the
+  added/fixed errors as true vs false positives, and write it up.
 
-### Running tests
+### Running tests in a GitHub checkout
 
 - `cargo test <name of test>`
+
+Do not use cargo in a Meta-internal checkout with a `BUCK` file present.
+Follow the tooling conventions in `facebook/AGENTS.md` instead.
 
 ### Running the full test suite
 
@@ -131,13 +173,24 @@ available tooling differs. **How to detect which one you are in:** check for a
   you are confident the feature is complete.
 - For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
-  `./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema`
+  `./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema --no-extension`
+
+### Checking a real codebase
+
+Build a release binary before checking anything large: `cargo build --release`,
+then run `target/release/pyrefly check ...`. A debug binary has much larger stack
+frames and is several times slower, so it can overflow the stack or time out on
+inputs that a release binary handles comfortably. Treat a stack overflow or a
+timeout from a debug binary as an artifact of the build mode rather than a
+finding, and reproduce it under a release binary before investigating it as a
+bug. Use a debug binary only when you need one for debugging. (In a Meta-internal
+checkout, build an optimized binary with Buck instead.)
 
 ### Before committing
 
 **Always run formatting and linting before committing, updating a commit, or
 handing code off to a human for review:**
-`./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema`
+`./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema --no-extension`
 
 This applies whether you are committing autonomously or preparing code for a
 human to commit. Do not skip this step during human-in-the-loop iteration.

@@ -76,7 +76,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-
 JsonObj = Dict[str, Any]
 
 SCRIPT_DIR: Path = Path(__file__).parent

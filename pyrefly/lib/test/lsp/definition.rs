@@ -5,13 +5,26 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fs;
+use std::slice;
+
 use itertools::Itertools as _;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module::TextRangeWithModule;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use tempfile::TempDir;
 
+use crate::config::config::ConfigFile;
+use crate::config::finder::ConfigFinder;
+use crate::state::lsp::FindPreference;
+use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
 use crate::test::util::code_frame_of_source_at_range;
@@ -85,6 +98,25 @@ Definition Result: None
 }
 
 #[test]
+fn operator_does_not_include_binop_lhs_literal() {
+    let code = r#"
+x = 1 + 1
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | x = 1 + 1
+        ^
+Definition Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn no_crash_on_dead_branch_test() {
     let code = r#"
 from typing import TYPE_CHECKING
@@ -142,7 +174,7 @@ Definition Result:
 4 | def f(x: list[int], y: str, z: Literal[42]):
                                     ^
 Definition Result:
-255 | Literal: _SpecialForm
+254 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | yyy = f([1, 2, 3], "test", 42)
@@ -156,6 +188,92 @@ Definition Result:
 Definition Result:
 11 | class A: pass
            ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn typed_dict_key_test() {
+    let code = r#"
+from typing import TypedDict
+
+class Person(TypedDict):
+    name: str
+
+class Employee(Person):
+    employee_id: int
+
+Functional = TypedDict("Functional", {"title": str})
+
+person: Person = {"name": ""}
+employee: Employee = {"name": "", "employee_id": 0}
+functional: Functional = {"title": ""}
+
+person["name"]
+#       ^
+employee["name"]
+#         ^
+functional["title"]
+#           ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+16 | person["name"]
+             ^
+Definition Result:
+5 |     name: str
+        ^^^^
+
+18 | employee["name"]
+               ^
+Definition Result:
+5 |     name: str
+        ^^^^
+
+20 | functional["title"]
+                 ^
+Definition Result:
+10 | Functional = TypedDict("Functional", {"title": str})
+                                           ^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn typed_dict_missing_key_test() {
+    let code = r#"
+from typing import TypedDict
+
+class Person(TypedDict):
+    name: str
+
+Functional = TypedDict("Functional", {"title": str})
+
+person: Person = {"name": ""}
+functional: Functional = {"title": ""}
+
+person["missing"]
+#       ^
+functional["missing"]
+#           ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+12 | person["missing"]
+             ^
+Definition Result: None
+
+14 | functional["missing"]
+                 ^
+Definition Result: None
 "#
         .trim(),
         report.trim(),
@@ -704,6 +822,31 @@ Definition Result:
 }
 
 #[test]
+fn keyword_argument_test_class_field() {
+    let code = r#"
+class Foo:
+    x: int
+
+def test() -> None:
+    Foo(x=1)
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+6 |     Foo(x=1)
+            ^
+Definition Result:
+3 |     x: int
+        ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn keyword_argument_test_multiple_methods() {
     let code = r#"
 class A:
@@ -815,7 +958,7 @@ Definition Result:
 6 | foo: Literal[1] = 1
              ^
 Definition Result:
-255 | Literal: _SpecialForm
+254 | Literal: _SpecialForm
       ^^^^^^^
 
 8 | bar = f([1], "", 42)
@@ -1464,7 +1607,7 @@ Definition Result:
 10 | def f(x: A[B, Path]) -> None:
                    ^
 Definition Result:
-185 | class Path(PurePath):
+184 | class Path(PurePath):
             ^^^^
 "#
         .trim(),
@@ -1478,11 +1621,11 @@ fn multi_definition_test() {
 if True:
     xxxx = 1
 else:
-    xxxx = 2
+    xxxx = 2  # E: This code is unreachable
 xxxx # it's reasonable to only return the first def, but also reasonable to return both defs
 # ^
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
     assert_eq!(
         r#"
 # main.py
@@ -1706,13 +1849,13 @@ Definition Result:
 25 | dict["foo"]
             ^
 Definition Result:
-3744 |     def __getitem__(self, key: _KT, /) -> _VT:
+3756 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 
 27 | dict["bar"]
             ^
 Definition Result:
-3744 |     def __getitem__(self, key: _KT, /) -> _VT:
+3756 |     def __getitem__(self, key: _KT, /) -> _VT:
                ^^^^^^^^^^^
 "#
         .trim(),
@@ -2027,6 +2170,30 @@ Definition Result:
     );
 }
 
+// BUG: A __slots__ entry has no definition target. It should resolve to self.foo (issue #4344).
+#[test]
+fn dunder_slots_entry_definition_test() {
+    let code = r#"
+class C:
+    __slots__ = ("foo",)
+#                  ^
+
+    def __init__(self) -> None:
+        self.foo = 1
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 |     __slots__ = ("foo",)
+                       ^
+Definition Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
 #[test]
 fn string_literal_not_in_dunder_all() {
     let pkg = r#"
@@ -2209,14 +2376,14 @@ fn unreachable_branch() {
     let code = r#"
 x = 5
 if False:
-    print(x)
+    print(x)  # E: This code is unreachable
     #     ^
 "#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
     assert_eq!(
         r#"
 # main.py
-4 |     print(x)
+4 |     print(x)  # E: This code is unreachable
               ^
 Definition Result: None
 
@@ -2495,6 +2662,46 @@ from mymod.submod.deep import Bar
     assert!(
         !report.contains("# mymod/submod/deep/__init__.py"),
         "Go-to-definition should not point to mymod/submod/deep/__init__.py when clicking on 'submod', got: {report}"
+    );
+}
+
+#[test]
+fn goto_def_on_module_components_in_string_literal() {
+    let code = r#"
+def include(path: str): ...
+include("accounts.urls")
+#         ^        ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("accounts", "# accounts/__init__.py"),
+            ("accounts.urls", "# accounts/urls.py"),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | include("accounts.urls")
+              ^
+Definition Result:
+1 | # accounts/__init__.py
+    ^
+
+3 | include("accounts.urls")
+                       ^
+Definition Result:
+1 | # accounts/urls.py
+    ^
+
+
+# accounts.py
+
+# accounts.urls.py
+"#
+        .trim(),
+        report.trim(),
     );
 }
 
@@ -2956,6 +3163,9 @@ class Adder:
     def __call__(self, x: int) -> int:
         return x + 1
 
+    def forward(self, x: int) -> int:
+        return x
+
 adder = Adder()
 adder(5)
 # ^
@@ -2964,8 +3174,8 @@ adder(5)
     assert_eq!(
         r#"
 # main.py
-7 | adder(5)
-      ^
+10 | adder(5)
+       ^
 Definition Result:
 3 |     def __call__(self, x: int) -> int:
             ^^^^^^^^
@@ -2973,6 +3183,92 @@ Definition Result:
         .trim(),
         report.trim(),
     );
+}
+
+// Regression test for https://github.com/facebook/pyrefly/issues/5229.
+#[test]
+fn goto_def_nn_module_call_goes_to_forward() {
+    let module_code = r#"
+class Module:
+    def __call__(self, x: int) -> int: ...
+"#;
+    for module_name in ["torch.nn", "torch.nn.modules.module"] {
+        let code = format!(
+            r#"
+from {module_name} import Module
+
+class Model(Module):
+    def forward(self, x: int) -> int:
+        return x
+
+    def run(self) -> int:
+        return self(1)
+#               ^
+
+class Inherited(Model):
+    pass
+
+class Overridden(Model):
+    def forward(self, x: int) -> int:
+        return x + 1
+
+class Holder:
+    model: Model = Model()
+
+model = Model()
+model(1)
+# ^
+inherited = Inherited()
+inherited(1)
+# ^
+overridden = Overridden()
+overridden(1)
+# ^
+holder = Holder()
+holder.model(1)
+#        ^
+model.__call__(1)
+#       ^
+model
+# ^
+module = Module()
+module(1)
+# ^
+"#
+        );
+        let mut env = TestEnv::one(module_name, module_code);
+        env.add("main", &code);
+        let (state, handles) = env.to_state();
+        let handle = handles("main");
+        let forward = code.find("def forward").unwrap() + 4;
+        let overridden_forward = code.rfind("def forward").unwrap() + 4;
+        let call = module_code.find("__call__").unwrap();
+        let model = code.find("model = Model()").unwrap();
+        let expected = [
+            ("main", forward, "forward"),
+            ("main", forward, "forward"),
+            ("main", forward, "forward"),
+            ("main", overridden_forward, "forward"),
+            ("main", forward, "forward"),
+            (module_name, call, "__call__"),
+            ("main", model, "model"),
+            (module_name, call, "__call__"),
+        ];
+        let positions = extract_cursors_for_test(&code);
+        assert_eq!(positions.len(), expected.len());
+        for (position, (module, start, name)) in positions.into_iter().zip(expected) {
+            let definitions = state
+                .transaction()
+                .goto_definition(&handle, position)
+                .unwrap();
+            assert_eq!(definitions.len(), 1);
+            assert_eq!(definitions[0].module.name(), ModuleName::from_str(module));
+            assert_eq!(
+                definitions[0].range,
+                TextRange::at(TextSize::new(start as u32), TextSize::of(name)),
+            );
+        }
+    }
 }
 
 #[test]
@@ -3057,6 +3353,60 @@ Definition Result:
 Definition Result:
 18 | def qualified_lru_add(a: int, b: int) -> int:
          ^^^^^^^^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_decorated_function_call_goes_to_function() {
+    let task_code = r#"
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+class Task[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def task(*, retries: int = 0) -> Callable[[Callable[P, R]], Task[P, R]]: ...
+"#;
+    let decorated_code = r#"
+from task import task
+
+@task(retries=2)
+def foo(value: int) -> int:
+    return value + 1
+"#;
+    let code = r#"
+from decorated import foo
+
+foo(value=1)
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("decorated", decorated_code),
+            ("task", task_code),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+4 | foo(value=1)
+      ^
+Definition Result:
+5 | def foo(value: int) -> int:
+        ^^^
+
+
+# decorated.py
+
+# task.py
 "#
         .trim(),
         report.trim(),
@@ -3655,5 +4005,172 @@ import foo.bar.__recursefiles__ as files
     assert!(
         defs[0].module.path().to_string().contains("foo/bar"),
         "should navigate to the parent module foo.bar, got: {report}",
+    );
+}
+
+/// Check a `main.py` containing `code` in a project whose interpreter standard library
+/// directory, `<root>/stdlib`, contains `stdlib_files`.
+fn state_with_interpreter_stdlib(
+    stdlib_files: &[(&str, &str)],
+    code: &str,
+) -> (TempDir, State, Handle) {
+    let root = TempDir::new().unwrap();
+    let stdlib = root.path().join("stdlib");
+    for (path, contents) in stdlib_files {
+        let path = stdlib.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
+    let main_path = root.path().join("main.py");
+    fs::write(&main_path, code).unwrap();
+
+    let mut config = ConfigFile::default();
+    config.interpreters.skip_interpreter_query = true;
+    config.python_environment.interpreter_stdlib_path = vec![stdlib];
+    config.configure();
+    let handle = Handle::new(
+        ModuleName::from_str("main"),
+        ModulePath::filesystem(main_path),
+        config.get_sys_info(),
+    );
+    let state = State::new(
+        ConfigFinder::new_constant(ArcId::new(config)),
+        TEST_THREAD_COUNT,
+    );
+    let mut transaction = state.new_committable_transaction(Require::Everything, None);
+    transaction
+        .as_mut()
+        .run(slice::from_ref(&handle), Require::Everything, None);
+    state.commit_transaction(transaction, None);
+    (root, state, handle)
+}
+
+#[test]
+fn definition_in_interpreter_stdlib_goes_to_source() {
+    let code = "from pathlib import Path\nx = Path\n#   ^\nPath.home\n#     ^\n";
+    let (root, state, handle) = state_with_interpreter_stdlib(
+        &[(
+            "pathlib.py",
+            "class Path:\n    @classmethod\n    def home(cls): pass\n",
+        )],
+        code,
+    );
+    let transaction = state.transaction();
+    let positions = extract_cursors_for_test(code);
+
+    for (position, name) in positions.iter().zip(["Path", "home"]) {
+        let definitions = transaction.goto_definition(&handle, *position).unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(
+            definitions[0].module.path().as_path(),
+            root.path().join("stdlib/pathlib.py")
+        );
+        assert_eq!(definitions[0].module.code_at(definitions[0].range), name);
+
+        // Glean prefers source files but must target files inside the project, so a
+        // source-preferring lookup searches the interpreter's standard library only if it
+        // opts in.
+        let definitions = transaction
+            .find_definition(
+                &handle,
+                *position,
+                FindPreference {
+                    prefer_pyi: false,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(definitions[0].module.path().style(), ModuleStyle::Interface);
+        assert_eq!(
+            definitions[0]
+                .module
+                .code_at(definitions[0].definition_range),
+            name
+        );
+    }
+
+    let type_definitions = transaction
+        .goto_type_definition(&handle, positions[0])
+        .unwrap();
+    assert_eq!(type_definitions.len(), 1);
+    assert_eq!(
+        type_definitions[0].module.path().style(),
+        ModuleStyle::Interface,
+    );
+    assert_eq!(
+        type_definitions[0].module.name(),
+        ModuleName::from_str("pathlib")
+    );
+    assert_eq!(
+        type_definitions[0]
+            .module
+            .code_at(type_definitions[0].range),
+        "Path",
+    );
+}
+
+// The runtime `os` module re-exports `getcwd` from `posix` with `from posix import *`, while
+// typeshed's `posix.pyi` re-exports `getcwd` from `os`. Following re-exports from the source
+// therefore leads back to `os.py`.
+#[test]
+fn definition_of_name_reexported_in_cycle_goes_to_stub() {
+    let code = "import os\nfrom os import getcwd\nos.getcwd\n#   ^\ngetcwd\n# ^\n";
+    let (_root, state, handle) =
+        state_with_interpreter_stdlib(&[("os.py", "from posix import *\n")], code);
+    let transaction = state.transaction();
+    for position in extract_cursors_for_test(code) {
+        let definitions = transaction
+            .goto_definition(&handle, position)
+            .unwrap_or_default();
+        assert_eq!(definitions.len(), 1, "got {definitions:?}");
+        assert_eq!(definitions[0].module.name(), ModuleName::from_str("os"));
+        assert_eq!(definitions[0].module.path().style(), ModuleStyle::Interface);
+        assert_eq!(
+            definitions[0].module.code_at(definitions[0].range),
+            "getcwd"
+        );
+    }
+}
+
+// The runtime `datetime` module defines nothing itself: it star-imports `_datetime`, which is a
+// C module without a stub, and lists the imported names in `__all__`.
+#[test]
+fn definition_of_name_only_listed_in_dunder_all_goes_to_stub() {
+    let code = "import datetime\ndatetime.datetime\n#        ^\n";
+    let (_root, state, handle) = state_with_interpreter_stdlib(
+        &[(
+            "datetime.py",
+            "from _datetime import *\n__all__ = (\"datetime\",)\n",
+        )],
+        code,
+    );
+    let position = extract_cursors_for_test(code)[0];
+    let definitions = state
+        .transaction()
+        .goto_definition(&handle, position)
+        .unwrap_or_default();
+    assert_eq!(definitions.len(), 1, "got {definitions:?}");
+    assert_eq!(
+        definitions[0].module.name(),
+        ModuleName::from_str("datetime")
+    );
+    assert_eq!(definitions[0].module.path().style(), ModuleStyle::Interface);
+    assert_eq!(
+        definitions[0].module.code_at(definitions[0].range),
+        "datetime"
+    );
+}
+
+#[test]
+fn attribute_of_object_class() {
+    let code = r#"
+object.__setattr__
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains("def __setattr__"),
+        "missing definition of `object.__setattr__`:\n{report}"
     );
 }

@@ -29,19 +29,17 @@ use crate::callable::Param;
 use crate::callable::ParamOverlay;
 use crate::callable::Params;
 use crate::callable::Required;
-use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
 use crate::data_frame::SchemaCompleteness;
-use crate::function::FuncMetadata;
 use crate::function::Function;
 use crate::function::FunctionKind;
 use crate::heap::TypeHeap;
 use crate::literal::Lit;
 use crate::quantified::Quantified;
 use crate::quantified::QuantifiedIdentity;
+use crate::quantified::QuantifiedKind;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
-use crate::shaped_array::ShapedArraySyntax;
 use crate::shaped_array::ShapedArrayType;
 use crate::shaped_array::is_tuple_carrier_shape_middle;
 use crate::stdlib::Stdlib;
@@ -49,6 +47,7 @@ use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
 use crate::type_alias::TypeAliasRef;
 use crate::type_alias::TypeAliasStyle;
+use crate::type_level_dsl::TypeLevelDslFunction;
 use crate::type_output::AnnotationOutput;
 use crate::type_output::AnnotationPart;
 use crate::type_output::DisplayOutput;
@@ -360,6 +359,20 @@ impl<'a> TypeDisplayContext<'a> {
         arg: &Type,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
+        if let Type::IntTuple(shape) = arg
+            && !shape.is_shapeless()
+            && matches!(
+                param.restriction(),
+                Restriction::Bound(Type::IntTuple(bound)) if bound.is_shapeless()
+            )
+        {
+            return self.fmt_shape_as_tuple_carrier(shape, output);
+        }
+        if param.kind() == QuantifiedKind::IntVar
+            && let Type::Int(dim) = arg
+        {
+            return write!(output, "{}", dim);
+        }
         if !param.is_type_var_tuple() {
             return self.fmt_helper_generic(arg, false, output);
         }
@@ -407,7 +420,7 @@ impl<'a> TypeDisplayContext<'a> {
                     commas_iter(|| tys.iter().map(|ty| self.display_internal(ty)))
                 )?;
             }
-            Restriction::Flag(domain) => write!(f, ": Flag[{domain}]")?,
+            Restriction::ShapeExtension(extension) => write!(f, ": {extension}")?,
             _ => {}
         }
         if let Some(default) = param.default() {
@@ -436,31 +449,20 @@ impl<'a> TypeDisplayContext<'a> {
         shaped_array: &ShapedArrayType,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
-        match shaped_array.syntax {
-            ShapedArraySyntax::Native => {
-                let shape_idx = match shaped_array.tuple_carrier_shape_arg_index() {
-                    Some(index) => index,
-                    None => {
-                        output.write_qname(shaped_array.base_class.qname())?;
-                        let shape = shaped_array.shape();
-                        if !shape.is_shapeless() {
-                            output.write_str("[")?;
-                            output.write_str(&shape.to_string())?;
-                            output.write_str("]")?;
-                        }
-                        return Ok(());
-                    }
-                };
-                self.fmt_shaped_array_as_class(shaped_array, shape_idx, output)
-            }
-            ShapedArraySyntax::Jaxtyping => {
-                output.write_str("Shaped[")?;
+        let shape_idx = match shaped_array.tuple_carrier_shape_arg_index() {
+            Some(index) => index,
+            None => {
                 output.write_qname(shaped_array.base_class.qname())?;
-                output.write_str(", \"")?;
-                output.write_str(&shaped_array.shape().fmt_jaxtyping())?;
-                output.write_str("\"]")
+                let shape = shaped_array.shape();
+                if !shape.is_shapeless() {
+                    output.write_str("[")?;
+                    output.write_str(&shape.to_string())?;
+                    output.write_str("]")?;
+                }
+                return Ok(());
             }
-        }
+        };
+        self.fmt_shaped_array_as_class(shaped_array, shape_idx, output)
     }
 
     fn fmt_shaped_array_as_class(
@@ -529,18 +531,17 @@ impl<'a> TypeDisplayContext<'a> {
                         output.write_str(", ")?;
                     }
                     first = false;
-                    write!(output, "{dim}")?;
+                    write!(output, "{}", dim)?;
                 }
                 if !first {
                     output.write_str(", ")?;
                 }
                 first = false;
+                // Type-variable middles render as bare splats, matching the compact
+                // input spelling; `Elements[...]` is only needed for runtime
+                // evaluation, not for display.
                 if matches!(middle, Type::IntTuple(shape) if shape.is_shapeless()) {
                     output.write_str("*tuple[int, ...]")?;
-                } else if is_tuple_carrier_shape_middle(middle) {
-                    output.write_str("*Elements[")?;
-                    self.fmt_helper_generic(middle, false, output)?;
-                    output.write_str("]")?;
                 } else {
                     self.fmt_helper_generic(
                         &Type::Unpack(Box::new(middle.clone())),
@@ -553,7 +554,7 @@ impl<'a> TypeDisplayContext<'a> {
                         output.write_str(", ")?;
                     }
                     first = false;
-                    write!(output, "{dim}")?;
+                    write!(output, "{}", dim)?;
                 }
                 output.write_str("]")
             }
@@ -594,6 +595,20 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
+    /// Whether a type has to be parenthesized for display in a sequence of types, such as a union
+    /// written with the `|` syntax.
+    fn needs_parens_in_sequence(&self, t: &Type) -> bool {
+        match t {
+            Type::Callable(_) | Type::Function(_) | Type::Intersect(_) => true,
+            // Overloads are already wrapped in `Overload[...]`, and query mode wraps bound methods in `BoundMethod[...]`.
+            Type::BoundMethod(m) => {
+                !matches!(m.func, BoundMethodType::Overload(_))
+                    && self.lsp_display_mode != LspDisplayMode::Query
+            }
+            _ => false,
+        }
+    }
+
     /// Helper function to format a sequence of types with a separator.
     /// Used for unions, intersections, and other type sequences.
     fn fmt_type_sequence<'b>(
@@ -608,14 +623,7 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str(separator)?;
             }
 
-            let needs_parens = wrap_callables_and_intersect
-                && matches!(
-                    t,
-                    Type::Callable(_)
-                        | Type::CallableResidual(_)
-                        | Type::Function(_)
-                        | Type::Intersect(_)
-                );
+            let needs_parens = wrap_callables_and_intersect && self.needs_parens_in_sequence(t);
             if needs_parens {
                 output.write_str("(")?;
             }
@@ -854,18 +862,6 @@ impl<'a> TypeDisplayContext<'a> {
         self.fmt_helper_generic(&value_type, false, output)
     }
 
-    fn function_signature_for_display<'b>(
-        &self,
-        signature: &'b Callable,
-        metadata: &'b FuncMetadata,
-    ) -> &'b Callable {
-        if self.lsp_display_mode == LspDisplayMode::Hover {
-            metadata.display_signature.as_deref().unwrap_or(signature)
-        } else {
-            signature
-        }
-    }
-
     fn fmt_hover_type<O: TypeOutput>(
         &self,
         t: &Type,
@@ -980,6 +976,27 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
+            Type::NamedInts(named) => {
+                output.write_str("NamedInts[")?;
+                for (index, entry) in named.entries().iter().enumerate() {
+                    if index > 0 {
+                        output.write_str(", ")?;
+                    }
+                    output.write_str(entry.name.as_str())?;
+                    if !entry.required {
+                        output.write_str("?")?;
+                    }
+                    output.write_str("=")?;
+                    output.write_type(&Type::Int(entry.value.clone()))?;
+                }
+                if named.is_open() {
+                    if !named.entries().is_empty() {
+                        output.write_str(", ")?;
+                    }
+                    output.write_str("...")?;
+                }
+                output.write_str("]")
+            }
             Type::ShapedArray(shaped_array) => self.fmt_shaped_array(shaped_array, output),
             Type::IntTuple(int_tuple) => {
                 if int_tuple.is_shapeless() {
@@ -1026,7 +1043,11 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_fmt(format_args!("{}", schema.dtype))?;
                 output.write_str("]")
             }
-            Type::Int(dim) => output.write_str(&format!("Int[{dim}]")),
+            Type::Int(dim) => {
+                output.write_str("Int[")?;
+                output.write_fmt(format_args!("{}", dim))?;
+                output.write_str("]")
+            }
             Type::TypeVar(t) => {
                 let type_var_qname = self.stdlib.map(|s| s.type_var().qname());
                 output.write_builtin("TypeVar", type_var_qname)?;
@@ -1079,22 +1100,18 @@ impl<'a> TypeDisplayContext<'a> {
                     c.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
                 }
             }
-            Type::CallableResidual(residual) => match &residual.kind {
-                CallableResidualKind::Generic { quantified } => {
-                    output.write_str("GenericResidual@")?;
-                    write!(output, "{quantified}")
-                }
-                CallableResidualKind::Overload { branches, .. } => {
-                    output.write_str("OverloadResidual@[")?;
-                    for (i, branch) in branches.iter().enumerate() {
-                        if i > 0 {
-                            output.write_str(", ")?;
-                        }
-                        self.fmt_helper_generic(&branch.ty, false, output)?;
-                    }
-                    output.write_str("]")
-                }
-            },
+            Type::TypeLevelDslCall(call)
+                if let TypeLevelDslFunction::MapIntTuples(map) = &call.function =>
+            {
+                let (mapper, _, source) = map.parts();
+                write!(output, "{}[lambda ", call.function_name())?;
+                output.write_str(mapper.parameter().name.as_str())?;
+                output.write_str(": ")?;
+                self.fmt_helper_generic(mapper.body(), false, output)?;
+                output.write_str(", ")?;
+                self.fmt_helper_generic(source, false, output)?;
+                output.write_str("]")
+            }
             Type::TypeLevelDslCall(call) => {
                 output.write_str(call.function_name())?;
                 output.write_str("(")?;
@@ -1111,7 +1128,6 @@ impl<'a> TypeDisplayContext<'a> {
                     signature,
                     metadata,
                 } = &**func;
-                let signature = self.function_signature_for_display(signature, metadata);
                 // A singledispatch dispatcher is modeled as a callback protocol over the fallback
                 // signature, but should still reveal as `_SingleDispatchCallable[T]`.
                 if let FunctionKind::CallbackProtocol(cls) = &metadata.kind
@@ -1203,6 +1219,15 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                 }
             }
+            Type::Overloaded(branches) => {
+                output.write_str("Overloaded[")?;
+                self.fmt_helper_generic(branches.first(), is_toplevel, output)?;
+                for t in branches.iter().skip(1) {
+                    output.write_str(", ")?;
+                    self.fmt_helper_generic(t, is_toplevel, output)?;
+                }
+                output.write_str("]")
+            }
             Type::ParamSpecValue(x) => {
                 output.write_str("[")?;
                 x.fmt_with_type(
@@ -1233,8 +1258,6 @@ impl<'a> TypeDisplayContext<'a> {
                                 metadata,
                             }) => {
                                 let func_name = metadata.kind.function_name();
-                                let signature =
-                                    self.function_signature_for_display(signature, metadata);
                                 output.write_str("def ")?;
                                 self.write_func_fqn(output, &func_name, &metadata.kind)?;
                                 // Strip the `self` parameter only in ProvideType mode;
@@ -1271,8 +1294,6 @@ impl<'a> TypeDisplayContext<'a> {
                                         metadata,
                                     },
                             }) => {
-                                let signature =
-                                    self.function_signature_for_display(signature, metadata);
                                 let func_name = metadata.kind.function_name();
                                 output.write_str("def ")?;
                                 self.write_func_fqn(output, &func_name, &metadata.kind)?;
@@ -1341,7 +1362,7 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::Union(u)
                 if !(self.always_display_expanded_unions || is_toplevel)
-                    && let Some((module, name)) = &u.display_name =>
+                    && let Some((module, name)) = &u.display_name.0 =>
             {
                 if self.always_display_module_name && *module != ModuleName::unknown() {
                     output.write_reference(*module, name.as_ref())
@@ -1372,10 +1393,7 @@ impl<'a> TypeDisplayContext<'a> {
                             }
                             literals.push(&lit.value)
                         }
-                        Type::Callable(_)
-                        | Type::CallableResidual(_)
-                        | Type::Function(_)
-                        | Type::Intersect(_) => {
+                        t if self.needs_parens_in_sequence(t) => {
                             // These types need parentheses in union context
                             let mut temp = String::new();
                             {
@@ -1433,13 +1451,7 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str("]")?;
                         } else {
                             // Regular union member - use helper for just this one
-                            let needs_parens = matches!(
-                                t,
-                                Type::Callable(_)
-                                    | Type::CallableResidual(_)
-                                    | Type::Function(_)
-                                    | Type::Intersect(_)
-                            );
+                            let needs_parens = self.needs_parens_in_sequence(t);
                             if needs_parens {
                                 output.write_str("(")?;
                             }
@@ -1498,8 +1510,6 @@ impl<'a> TypeDisplayContext<'a> {
                         | LspDisplayMode::ProvideType
                             if is_toplevel =>
                         {
-                            let signature =
-                                self.function_signature_for_display(signature, metadata);
                             let func_name = metadata.kind.function_name();
                             output.write_str("def ")?;
                             self.write_func_fqn(output, &func_name, &metadata.kind)?;
@@ -1686,29 +1696,7 @@ impl<'a> TypeDisplayContext<'a> {
             Type::UntypedAlias(ta) if let TypeAliasData::Ref(r) = &**ta => {
                 self.fmt_helper_type_alias_ref(r, output)
             }
-            Type::UntypedAlias(ta) => {
-                let TypeAliasData::Value(alias) = &**ta else {
-                    unreachable!("type alias references are handled above")
-                };
-                if self.always_display_expanded_unions
-                    && let Type::Type(inner) = alias.as_type_ref()
-                    && matches!(&**inner, Type::Union(_))
-                {
-                    return self.fmt_helper_generic(inner, false, output);
-                }
-                output.write_str(alias.name.as_str())?;
-                if let Some(args) = alias.display_args() {
-                    output.write_str("[")?;
-                    for (index, arg) in args.iter().enumerate() {
-                        if index > 0 {
-                            output.write_str(", ")?;
-                        }
-                        self.fmt_helper_generic(arg, false, output)?;
-                    }
-                    output.write_str("]")?;
-                }
-                Ok(())
-            }
+            Type::UntypedAlias(ta) => output.write_str(ta.name().as_str()),
             Type::SuperInstance(s) => {
                 let (cls, obj) = &**s;
                 if self.always_display_builtins_module_name {
@@ -1919,11 +1907,15 @@ pub mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::class::PrecomputedTParams;
     use crate::data_frame::DataFrameKind;
     use crate::data_frame::DataFrameSchema;
+    use crate::data_frame::SchemaRole;
     use crate::dimension::Int;
+    use crate::dimension::canonicalize;
     use crate::function::FuncMetadata;
     use crate::function::Function;
+    use crate::identity::IdentityIgnored;
     use crate::literal::Lit;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
@@ -1961,8 +1953,9 @@ pub mod tests {
             Identifier::new(Name::new(name), TextRange::empty(TextSize::new(range))),
             NestingContext::toplevel(),
             mi,
-            None,
+            PrecomputedTParams::NotGeneric,
             false,
+            None,
         )
     }
 
@@ -2076,9 +2069,259 @@ pub mod tests {
                 Box::new(Int::Symbolic(Box::new(m))),
             ))
             .to_string(),
-            "Int[(N * M)]"
+            "Int[N * M]"
         );
         assert_eq!(Type::Int(Int::Int).to_string(), "Int[int]");
+    }
+
+    #[test]
+    fn test_display_symbolic_int_whiteboard_forms() {
+        let heap = TypeHeap::new();
+        let n = fake_tparam(0, "N", QuantifiedKind::IntVar).to_type(&heap);
+        let m = fake_tparam(1, "M", QuantifiedKind::IntVar).to_type(&heap);
+        let k = fake_tparam(2, "K", QuantifiedKind::IntVar).to_type(&heap);
+        let i = fake_tparam(3, "I", QuantifiedKind::IntVar).to_type(&heap);
+        let lit = |v: i64| Type::Int(Int::Literal(v));
+
+        // Canonical sums read like whiteboard math.
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(n.clone(), lit(1)))).to_string(),
+            "Int[N + 1]"
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(n.clone(), lit(1)))).to_string(),
+            "Int[N - 1]"
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(lit(1), n.clone()))).to_string(),
+            "Int[1 - N]"
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(
+                Type::Int(Int::mul(lit(-1), n.clone())),
+                lit(-8),
+            )))
+            .to_string(),
+            "Int[-N - 8]"
+        );
+        // A multi-factor negative coefficient flips fully.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(
+                lit(-2),
+                Type::Int(Int::add(
+                    k.clone(),
+                    Type::Int(Int::mul(n.clone(), m.clone())),
+                )),
+            )))
+            .to_string(),
+            "Int[-2 * K - 2 * N * M]"
+        );
+        // Negation renders bare.
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(lit(-1), n.clone()))).to_string(),
+            "Int[-N]"
+        );
+        // i64::MIN negates safely: literals render the magnitude, while an
+        // unrepresentable coefficient keeps the explicit `+` form.
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(n.clone(), lit(i64::MIN)))).to_string(),
+            "Int[N - 9223372036854775808]"
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(
+                m.clone(),
+                Type::Int(Int::mul(lit(i64::MIN), n.clone())),
+            )))
+            .to_string(),
+            "Int[M + -9223372036854775808 * N]"
+        );
+        // Bases that render with a leading minus keep their parens, so the
+        // text still parses as written.
+        assert_eq!(
+            Type::Int(Int::pow(Type::Int(Int::mul(lit(-1), n.clone())), lit(2),)).to_string(),
+            "Int[(-N) ** 2]"
+        );
+        assert_eq!(
+            Type::Int(Int::pow(lit(-2), i.clone())).to_string(),
+            "Int[(-2) ** I]"
+        );
+        // The -1 shortcut skips negative literals to avoid `--`.
+        assert_eq!(
+            Type::Int(Int::mul(lit(-1), lit(-2))).to_string(),
+            "Int[-1 * -2]"
+        );
+        // Three-tier sums (literals combine, so these are the maxima).
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(
+                Type::Int(Int::add(m.clone(), lit(5))),
+                n.clone(),
+            )))
+            .to_string(),
+            "Int[M + 5 - N]"
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(
+                Type::Int(Int::sub(m.clone(), n.clone())),
+                lit(8),
+            )))
+            .to_string(),
+            "Int[M - N - 8]"
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(
+                Type::Int(Int::add(
+                    Type::Int(Int::mul(lit(-1), n.clone())),
+                    Type::Int(Int::mul(lit(-1), m.clone())),
+                )),
+                lit(8),
+            )))
+            .to_string(),
+            "Int[-N - M - 8]"
+        );
+        // A trailing -1 flips in sums too.
+        assert_eq!(
+            Type::Int(Int::add(m.clone(), Type::Int(Int::mul(n.clone(), lit(-1))),)).to_string(),
+            "Int[M - N]"
+        );
+        // A trailing -1 takes the same shortcut, without losing `Pow` parens
+        // or emitting `--`.
+        assert_eq!(
+            Type::Int(Int::pow(Type::Int(Int::mul(n.clone(), lit(-1))), lit(2),)).to_string(),
+            "Int[(-N) ** 2]"
+        );
+        assert_eq!(
+            Type::Int(Int::mul(lit(-1), Type::Int(Int::mul(n.clone(), lit(-1))),)).to_string(),
+            "Int[-1 * -N]"
+        );
+        // Elided `* 1` and `// 1` operands participate in the leading-minus
+        // check too.
+        assert_eq!(
+            Type::Int(Int::pow(Type::Int(Int::mul(lit(1), lit(-2))), i.clone(),)).to_string(),
+            "Int[(-2) ** I]"
+        );
+        assert_eq!(
+            Type::Int(Int::pow(
+                Type::Int(Int::floor_div(
+                    Type::Int(Int::mul(lit(-1), n.clone())),
+                    lit(1),
+                )),
+                lit(2),
+            ))
+            .to_string(),
+            "Int[(-N) ** 2]"
+        );
+        // A sign-unknowable division sorts ahead of a negative literal.
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(
+                Type::Int(Int::floor_div(n.clone(), m.clone())),
+                lit(4),
+            )))
+            .to_string(),
+            "Int[N // M - 4]"
+        );
+        // Cross-diff trace: distribution, literal extraction, nested-division
+        // flattening, and subtraction rendering composed.
+        assert_eq!(
+            canonicalize(Type::Int(Int::floor_div(
+                Type::Int(Int::mul(
+                    Type::Int(Int::sub(
+                        lit(4),
+                        Type::Int(Int::floor_div(n.clone(), m.clone())),
+                    )),
+                    lit(-1),
+                )),
+                lit(2),
+            )))
+            .to_string(),
+            "Int[N // (2 * M) - 2]"
+        );
+        // Precedence climbing: nesting that matches Python associativity drops
+        // parens, nesting that fights it keeps them. Raw trees (no
+        // canonicalization) so each rule is exercised exactly.
+        assert_eq!(
+            Type::Int(Int::sub(
+                n.clone(),
+                Type::Int(Int::sub(m.clone(), k.clone())),
+            ))
+            .to_string(),
+            "Int[N - (M - K)]"
+        );
+        assert_eq!(
+            Type::Int(Int::add(
+                n.clone(),
+                Type::Int(Int::add(m.clone(), k.clone())),
+            ))
+            .to_string(),
+            "Int[N + (M + K)]"
+        );
+        assert_eq!(
+            Type::Int(Int::floor_div(
+                Type::Int(Int::mul(lit(2), n.clone())),
+                m.clone(),
+            ))
+            .to_string(),
+            "Int[2 * N // M]"
+        );
+        assert_eq!(
+            Type::Int(Int::mul(
+                Type::Int(Int::add(n.clone(), m.clone())),
+                k.clone(),
+            ))
+            .to_string(),
+            "Int[(N + M) * K]"
+        );
+        assert_eq!(
+            Type::Int(Int::pow(
+                Type::Int(Int::pow(n.clone(), m.clone())),
+                k.clone(),
+            ))
+            .to_string(),
+            "Int[(N ** M) ** K]"
+        );
+        assert_eq!(
+            Type::Int(Int::pow(
+                n.clone(),
+                Type::Int(Int::pow(m.clone(), k.clone())),
+            ))
+            .to_string(),
+            "Int[N ** M ** K]"
+        );
+        assert_eq!(
+            Type::Int(Int::pow(
+                n.clone(),
+                Type::Int(Int::add(m.clone(), k.clone())),
+            ))
+            .to_string(),
+            "Int[N ** (M + K)]"
+        );
+        assert_eq!(
+            Type::Int(Int::pow(lit(2), Type::Int(Int::mul(lit(-1), n.clone())),)).to_string(),
+            "Int[2 ** -N]"
+        );
+        assert_eq!(
+            Type::Int(Int::mul(lit(-1), Type::Int(Int::add(n.clone(), m.clone())),)).to_string(),
+            "Int[-(N + M)]"
+        );
+        assert_eq!(
+            Type::Int(Int::mul(lit(-1), Type::Int(Int::pow(n.clone(), lit(2))),)).to_string(),
+            "Int[-N ** 2]"
+        );
+        assert_eq!(
+            Type::Int(Int::floor_div(
+                n.clone(),
+                Type::Int(Int::floor_div(m.clone(), k.clone())),
+            ))
+            .to_string(),
+            "Int[N // (M // K)]"
+        );
+        assert_eq!(
+            Type::Int(Int::mul(
+                n.clone(),
+                Type::Int(Int::mul(m.clone(), k.clone())),
+            ))
+            .to_string(),
+            "Int[N * (M * K)]"
+        );
     }
 
     #[test]
@@ -2098,7 +2341,7 @@ pub mod tests {
 
         assert_eq!(
             ShapedArrayType::new(array, shape).to_type().to_string(),
-            "Array[3, N, (N * M)]"
+            "Array[3, N, N * M]"
         );
     }
 
@@ -2119,6 +2362,38 @@ pub mod tests {
                 .to_type()
                 .to_string(),
             "Array[[3, N]]"
+        );
+    }
+
+    #[test]
+    fn test_display_unpacked_shape_strips_top_level_parens() {
+        let heap = TypeHeap::new();
+        let shape_param = fake_tparams(vec![fake_tparam(0, "Shape", QuantifiedKind::TypeVar)]);
+        let n = fake_tparam(1, "N", QuantifiedKind::IntVar).to_type(&heap);
+        let m = fake_tparam(2, "M", QuantifiedKind::IntVar).to_type(&heap);
+        let shape = IntTuple::unpacked(
+            vec![Int::Add(
+                Box::new(Int::Symbolic(Box::new(n))),
+                Box::new(Int::Literal(1)),
+            )],
+            Type::IntTuple(Box::new(IntTuple::shapeless())),
+            vec![Int::Mul(
+                Box::new(Int::Literal(2)),
+                Box::new(Int::Symbolic(Box::new(m))),
+            )],
+        );
+        let array = ClassType::new(
+            fake_class("Array", "arrays", 0),
+            TArgs::new(shape_param, vec![shape.to_shape_arg_type()]),
+        );
+        let shaped = ShapedArrayType::new(array, shape).with_tuple_carrier_shape_arg(0);
+        assert_eq!(
+            shaped.to_string(),
+            "Array[[N + 1, *tuple[int, ...], 2 * M]]"
+        );
+        assert_eq!(
+            shaped.to_type().to_string(),
+            "Array[[N + 1, *tuple[int, ...], 2 * M]]"
         );
     }
 
@@ -2312,6 +2587,7 @@ pub mod tests {
             columns,
             completeness,
             kind: DataFrameKind::Polars,
+            role: SchemaRole::Inferred,
         }))
     }
 
@@ -2566,7 +2842,7 @@ pub mod tests {
         assert_eq!(
             Type::type_of(Type::Union(Box::new(Union {
                 members: vec![nonlit1, nonlit2],
-                display_name: Some((ModuleName::unknown(), Name::new("MyUnion")))
+                display_name: IdentityIgnored(Some((ModuleName::unknown(), Name::new("MyUnion"),)))
             })))
             .to_string(),
             "type[MyUnion]"
@@ -2907,6 +3183,22 @@ pub mod tests {
     }
 
     #[test]
+    fn test_display_bound_method_in_union() {
+        let bound_method = fake_bound_method("foo", "MyClass", "my.module");
+        let union = Type::union(vec![bound_method, Type::None]);
+        let mut ctx = TypeDisplayContext::new(&[&union]);
+        assert_eq!(
+            ctx.display(&union).to_string(),
+            "((x: Any, y: Any) -> None) | None"
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Query);
+        assert_eq!(
+            ctx.display(&union).to_string(),
+            "BoundMethod[builtins.type[my.module.MyClass], (self: typing.Any, x: typing.Any, y: typing.Any) -> None] | None"
+        );
+    }
+
+    #[test]
     fn test_display_generic_bound_method() {
         let bound_method = fake_generic_bound_method(
             "foo",
@@ -3098,6 +3390,19 @@ def overloaded_func[T](
     x: Any,
     y: Any
 ) -> None: ..."#
+        );
+    }
+
+    #[test]
+    fn test_display_overloaded() {
+        let tuples = Type::Overloaded(Box::new(vec1![
+            Type::concrete_tuple(vec![Type::None]),
+            Type::concrete_tuple(Vec::new())
+        ]));
+        let ctx = TypeDisplayContext::new(&[&tuples]);
+        assert_eq!(
+            ctx.display(&tuples).to_string(),
+            "Overloaded[tuple[None], tuple[()]]"
         );
     }
 

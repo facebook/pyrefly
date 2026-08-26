@@ -19,6 +19,7 @@ use crate::state::lsp::LocalRefactorCodeAction;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
+use crate::test::util::UNUSED_SUPPRESSION_TEST_CASES;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report_allow_error;
 use crate::test::util::mk_multi_file_state;
@@ -61,6 +62,19 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         report.push('\n');
     }
     report
+}
+
+fn get_test_report_with_error_count(state: &State, handle: &Handle, position: TextSize) -> String {
+    let error_count = state
+        .transaction()
+        .get_errors(vec![handle])
+        .collect_errors()
+        .ordinary
+        .len();
+    format!(
+        "Error count: {error_count}\n{}",
+        get_test_report(state, handle, position)
+    )
 }
 
 fn apply_refactor_edits_for_module(
@@ -701,13 +715,13 @@ class my_export:
     pass
 my_export
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 my_export
 # ^
 ## After:
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 my_export
 # ^
 
@@ -783,13 +797,13 @@ class BytesIO:
     pass
 BytesIO
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 BytesIO
 # ^
 ## After:
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 BytesIO
 # ^
 
@@ -856,13 +870,13 @@ class my_module:
     pass
 my_module
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 my_module
 # ^
 ## After:
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 my_module
 # ^
 "#
@@ -998,7 +1012,7 @@ class my_export:
     pass
 my_export
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 # i am a comment
@@ -1006,7 +1020,7 @@ my_export
 # ^
 ## After:
 # i am a comment
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 my_export
 # ^
 "#
@@ -1027,13 +1041,13 @@ fn quickfix_add_pyrefly_ignore_code() {
 1 | x: int = "hello"
               ^
 Code Actions Results:
-# Title: Add `# pyrefly: ignore [bad-assignment]`
+# Title: Add `# pyrefly: ignore[bad-assignment]`
 
 ## Before:
 x: int = "hello"
 #         ^
 ## After:
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: int = "hello"
 #         ^
 "#
@@ -1072,6 +1086,145 @@ takes_status("active")
 }
 
 #[test]
+fn quickfix_narrow_optional_argument() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"def g(y: int) -> None: ...
+def f(x: int | None) -> None:
+    g(x)
+#     ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("    assert x is not None\n    g(x)"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_optional_attribute_receiver() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"class T:
+    y: int
+
+def f(x: T | None) -> None:
+    x.y
+#   ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("    assert x is not None\n    x.y"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_optional_attribute_value_not_offered() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"class T:
+    y: int | None
+
+def g(y: int) -> None: ...
+def f(x: T) -> None:
+    g(x.y)
+#     ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        !report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_comprehension_variable_not_offered() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"def g(y: int) -> int:
+    return y
+
+def f(xs: list[int | None]) -> list[int]:
+    return [g(x) for x in xs]
+#             ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        !report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_lambda_parameter_not_offered() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"from typing import Callable
+
+def g(y: int) -> int:
+    return y
+
+f: Callable[[int | None], int] = lambda x: g(x)
+#                                              ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        !report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_optional_attribute_augmented_assignment() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"class T:
+    y: int
+
+def f(x: T | None) -> None:
+    x.y += 1
+#   ^
+"#,
+        )],
+        get_test_report_with_error_count,
+    );
+    assert!(report.contains("Error count: 1"), "{report}");
+    assert!(
+        report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("    assert x is not None\n    x.y += 1"),
+        "{report}"
+    );
+}
+
+#[test]
 fn quickfix_add_pyrefly_ignore_code_with_existing_comment() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
@@ -1086,13 +1239,13 @@ fn quickfix_add_pyrefly_ignore_code_with_existing_comment() {
 1 | x: int = "hello" # intentional error
               ^
 Code Actions Results:
-# Title: Add `# pyrefly: ignore [bad-assignment]`
+# Title: Add `# pyrefly: ignore[bad-assignment]`
 
 ## Before:
 x: int = "hello" # intentional error
 #         ^
 ## After:
-# pyrefly: ignore [bad-assignment]
+# pyrefly: ignore[bad-assignment]
 x: int = "hello" # intentional error
 #         ^
 "#
@@ -1106,23 +1259,23 @@ fn quickfix_merge_pyrefly_ignore_codes() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
             "main",
-            "x: int = \"hello\"  # pyrefly: ignore [bad-return]\n#         ^",
+            "x: int = \"hello\"  # pyrefly: ignore[bad-return]\n#         ^",
         )],
         get_test_report,
     );
     assert_eq!(
         r#"
 # main.py
-1 | x: int = "hello"  # pyrefly: ignore [bad-return]
+1 | x: int = "hello"  # pyrefly: ignore[bad-return]
               ^
 Code Actions Results:
-# Title: Add `# pyrefly: ignore [bad-assignment]`
+# Title: Add `# pyrefly: ignore[bad-assignment]`
 
 ## Before:
-x: int = "hello"  # pyrefly: ignore [bad-return]
+x: int = "hello"  # pyrefly: ignore[bad-return]
 #         ^
 ## After:
-x: int = "hello"  # pyrefly: ignore [bad-assignment, bad-return]
+x: int = "hello"  # pyrefly: ignore[bad-assignment, bad-return]
 #         ^
 "#
         .trim(),
@@ -1135,7 +1288,7 @@ fn quickfix_merge_pyrefly_ignore_codes_comment_line_above() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
             "main",
-            "    # pyrefly: ignore [bad-return]\n    x: int = \"hello\"\n#             ^",
+            "    # pyrefly: ignore[bad-return]\n    x: int = \"hello\"\n#             ^",
         )],
         get_test_report,
     );
@@ -1145,20 +1298,143 @@ fn quickfix_merge_pyrefly_ignore_codes_comment_line_above() {
 2 |     x: int = "hello"
                   ^
 Code Actions Results:
-# Title: Add `# pyrefly: ignore [bad-assignment]`
+# Title: Add `# pyrefly: ignore[bad-assignment]`
 
 ## Before:
-    # pyrefly: ignore [bad-return]
+    # pyrefly: ignore[bad-return]
     x: int = "hello"
 #             ^
 ## After:
-    # pyrefly: ignore [bad-assignment, bad-return]
+    # pyrefly: ignore[bad-assignment, bad-return]
     x: int = "hello"
 #             ^
 "#
         .trim(),
         report.trim()
     );
+}
+
+fn remove_unused_ignore_results(
+    mut env: TestEnv,
+    code: &str,
+    position: TextSize,
+) -> Vec<(String, String)> {
+    env.add("main", code);
+    let (state, handle_for_module) = env.enable_unused_ignore_errors().to_state();
+    let handle = handle_for_module("main");
+    let transaction = state.transaction();
+    let module_info = transaction.get_module_info(&handle).unwrap();
+    transaction
+        .local_quickfix_code_actions_sorted(
+            &handle,
+            TextRange::new(position, position),
+            ImportFormat::Absolute,
+            None,
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(title, _)| title.starts_with("Remove"))
+        .map(|(title, edits)| (title, apply_refactor_edits_for_module(&module_info, &edits)))
+        .collect()
+}
+
+fn remove_unused_ignore_quickfix(code: &str, suppression: &str) -> (String, String) {
+    let position = TextSize::try_from(code.find(suppression).unwrap()).unwrap();
+    let mut actions = remove_unused_ignore_results(TestEnv::new(), code, position).into_iter();
+    let action = actions
+        .next()
+        .expect("expected remove-suppression quick fix");
+    assert!(actions.next().is_none(), "expected exactly one removal fix");
+    action
+}
+
+#[test]
+fn quickfix_remove_unused_suppression_shared_cases() {
+    for case in UNUSED_SUPPRESSION_TEST_CASES {
+        let (title, after) = remove_unused_ignore_quickfix(case.code, "# pyrefly: ignore");
+        assert_eq!(title, "Remove suppression comment", "{}", case.name);
+        assert_eq!(after, case.expected, "{}", case.name);
+    }
+}
+
+#[test]
+fn quickfix_remove_unused_type_ignore_line() {
+    let code = "# type: ignore\nx = 1\n";
+    let (title, after) = remove_unused_ignore_quickfix(code, "# type: ignore");
+    assert_eq!(title, "Remove suppression comment");
+    assert_eq!(after, "x = 1\n");
+}
+
+#[test]
+fn quickfix_remove_unused_pyre_suppression() {
+    let code = "x = 1  # pyre-fixme[7]\n";
+    let position = TextSize::try_from(code.find("# pyre-fixme[7]").unwrap()).unwrap();
+    let actions =
+        remove_unused_ignore_results(TestEnv::new().enable_pyre_ignores(), code, position);
+    assert_eq!(
+        actions,
+        vec![(
+            "Remove suppression comment".to_owned(),
+            "x = 1\n".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn quickfix_remove_partially_unused_pyrefly_ignore_codes() {
+    let code = "x: int = \"bad\"  # pyrefly: ignore [bad-assignment, unknown-name]\n";
+    let (title, after) = remove_unused_ignore_quickfix(code, "# pyrefly: ignore");
+    assert_eq!(title, "Remove unused suppression codes");
+    assert_eq!(
+        after,
+        "x: int = \"bad\"  # pyrefly: ignore [bad-assignment]\n"
+    );
+}
+
+#[test]
+fn quickfix_remove_partially_unused_unclosed_codes_preserves_next_comment() {
+    let code = "x: int = \"bad\"  # pyrefly: ignore [bad-assignment, unknown-name  # noqa\n";
+    let (title, after) = remove_unused_ignore_quickfix(code, "# pyrefly: ignore");
+    assert_eq!(title, "Remove unused suppression codes");
+    assert_eq!(
+        after,
+        "x: int = \"bad\"  # pyrefly: ignore [bad-assignment  # noqa\n"
+    );
+}
+
+#[test]
+fn quickfix_remove_each_of_two_unused_suppressions() {
+    let code = "x = 1  # type: ignore  # pyrefly: ignore\n";
+    let (_, after_type) = remove_unused_ignore_quickfix(code, "# type: ignore");
+    assert_eq!(after_type, "x = 1  # pyrefly: ignore\n");
+
+    let (_, after_pyrefly) = remove_unused_ignore_quickfix(code, "# pyrefly: ignore");
+    assert_eq!(after_pyrefly, "x = 1  # type: ignore\n");
+}
+
+#[test]
+fn quickfix_remove_unused_suppression_not_offered_on_next_line() {
+    let code = "# pyrefly: ignore\nx = 1\n";
+    let actions =
+        remove_unused_ignore_results(TestEnv::new(), code, TextSize::of("# pyrefly: ignore\n"));
+    assert!(actions.is_empty());
+}
+
+#[test]
+fn quickfix_remove_unused_suppression_offered_at_line_end() {
+    let code = "x = 1  # pyrefly: ignore";
+    let actions = remove_unused_ignore_results(TestEnv::new(), code, TextSize::of(code));
+    assert_eq!(
+        actions,
+        vec![("Remove suppression comment".to_owned(), "x = 1".to_owned())]
+    );
+}
+
+#[test]
+fn quickfix_remove_unused_suppression_not_offered_in_generated_file() {
+    let code = "# @generated\nx = 1  # pyrefly: ignore\n";
+    let position = TextSize::try_from(code.find("# pyrefly: ignore").unwrap()).unwrap();
+    assert!(remove_unused_ignore_results(TestEnv::new(), code, position).is_empty());
 }
 
 #[test]
@@ -1225,7 +1501,7 @@ class my_export:
     pass
 my_export
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 from typing import List
@@ -1233,7 +1509,7 @@ my_export
 # ^
 ## After:
 from typing import List
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 my_export
 # ^
 "#
@@ -1307,7 +1583,7 @@ class my_export:
     pass
 my_export
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 from a import another_thing
@@ -1315,7 +1591,7 @@ my_export
 # ^
 ## After:
 from a import another_thing
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 my_export
 # ^
 "#
@@ -1374,6 +1650,11 @@ fn unused_import_action_after(code: &str, cursor_offset: usize) -> Option<String
     let (_, edits) = actions
         .into_iter()
         .find(|(title, _)| title.starts_with("Remove unused import: `"))?;
+    assert_eq!(
+        1,
+        edits.len(),
+        "removing an unused import should be a single edit"
+    );
     let (module, range, patch) = edits.into_iter().next()?;
     if module.path() != module_info.path() {
         return None;
@@ -1407,6 +1688,130 @@ fn remove_unused_import_quickfix_removes_last_alias() {
 }
 
 #[test]
+fn remove_unused_import_quickfix_removes_alias_in_type_checking_block() {
+    let code = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\n    import sys\nprint(sys.version)\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import sys\nprint(sys.version)\n",
+        after
+    );
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_emptied_type_checking_block() {
+    let code = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("from typing import TYPE_CHECKING\nx = 1\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_nested_emptied_blocks() {
+    let code = "from typing import TYPE_CHECKING\nx = 1\nif x:\n    if TYPE_CHECKING:\n        import os\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("from typing import TYPE_CHECKING\nx = 1\n", after);
+}
+
+// Removing the whole `if` would drop the `else` branch, so the body keeps a `pass`.
+#[test]
+fn remove_unused_import_quickfix_passes_block_with_else_clause() {
+    let code =
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\nelse:\n    x = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    pass\nelse:\n    x = 1\n",
+        after
+    );
+}
+
+// A loop header runs whatever its body does, so the loop stays with a `pass`.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_loop_body() {
+    let code = "for i in range(3):\n    import os\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("for i in range(3):\n    pass\nx = 1\n", after);
+}
+
+// A `try` body that keeps another statement is edited in place; emptying it
+// leaves a `pass`, which is what the next test pins down.
+#[test]
+fn remove_unused_import_quickfix_removes_alias_in_try_block() {
+    let code =
+        "try:\n    import os\n    import sys\nexcept ImportError:\n    pass\nprint(sys.version)\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    import sys\nexcept ImportError:\n    pass\nprint(sys.version)\n",
+        after
+    );
+}
+
+// Dropping the `try` would take handlers that may do real work with it, so the
+// body keeps a `pass` and the handlers are left for the user to judge.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_statement() {
+    let code = "try:\n    import os\nexcept ImportError:\n    pass\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    pass\nexcept ImportError:\n    pass\nx = 1\n",
+        after
+    );
+}
+
+// The capability probe from the review of D116863962: the handler sets a
+// fallback that the rest of the program reads, so it must survive the fix.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_keeping_capability_probe() {
+    let code = "available = True\ntry:\n    import os\nexcept ImportError:\n    available = False\nprint(available)\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "available = True\ntry:\n    pass\nexcept ImportError:\n    available = False\nprint(available)\n",
+        after
+    );
+}
+
+// A `finally` block runs even when the body is empty, so it must not be dropped.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_with_finally() {
+    let code =
+        "try:\n    import os\nexcept ImportError:\n    pass\nfinally:\n    print('done')\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    pass\nexcept ImportError:\n    pass\nfinally:\n    print('done')\nx = 1\n",
+        after
+    );
+}
+
+// An `else` block runs whenever the body completes, so it must not be dropped.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_with_else() {
+    let code =
+        "try:\n    import os\nexcept ImportError:\n    pass\nelse:\n    print('ok')\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    pass\nexcept ImportError:\n    pass\nelse:\n    print('ok')\nx = 1\n",
+        after
+    );
+}
+
+// Emptying a handler body says nothing about the `try` body, which must survive.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_except_handler() {
+    let code = "try:\n    x = 1\nexcept ImportError:\n    import os\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("try:\n    x = 1\nexcept ImportError:\n    pass\n", after);
+}
+
+#[test]
 fn remove_unused_import_quickfix_keeps_statement_after_semicolon() {
     let code = "import os; x = 1\n";
     let cursor_offset = code.find("os").unwrap();
@@ -1436,6 +1841,37 @@ fn remove_unused_import_quickfix_removes_from_import_alias() {
     let cursor_offset = code.find("Dict").unwrap();
     let after = unused_import_action_after(code, cursor_offset).unwrap();
     assert_eq!("from typing import List\nx: List[int] = []\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_first_parenthesized_alias() {
+    let code = "from typing import (\n    Dict,\n    List,\n)\nx: List[int] = []\n";
+    let cursor_offset = code.find("Dict").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import (\n    List,\n)\nx: List[int] = []\n",
+        after
+    );
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_last_parenthesized_alias() {
+    let code = "from typing import (\n    Dict,\n    List,\n)\nx: Dict[str, int] = {}\n";
+    let cursor_offset = code.find("List").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import (\n    Dict,\n)\nx: Dict[str, int] = {}\n",
+        after
+    );
+}
+
+// A dotted import binds only its first component, so the whole statement goes.
+#[test]
+fn remove_unused_import_quickfix_removes_dotted_import() {
+    let code = "import os.path\nx = 1\n";
+    let cursor_offset = code.find("os.path").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("x = 1\n", after);
 }
 
 #[test]
@@ -1618,13 +2054,13 @@ class TypeVar:
         pass
 TypeVar('T')
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 TypeVar('T')
 # ^
 ## After:
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 TypeVar('T')
 # ^
 "#
@@ -1743,7 +2179,7 @@ class myFunc:
         pass
 myFunc(user)
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 class UserId:
@@ -1759,7 +2195,7 @@ class UserId:
         pass
 
 user: UserId = UserId(1234)
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 myFunc(user)
 # ^
 "#
@@ -1831,7 +2267,7 @@ class myFunc:
         pass
 myFunc(x, y, z)
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 x: int = 1
@@ -1843,7 +2279,7 @@ myFunc(x, y, z)
 x: int = 1
 y: str = "hello"
 z: float = 3.14
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 myFunc(x, y, z)
 # ^
 "#
@@ -1915,7 +2351,7 @@ class myFunc:
         pass
 myFunc(x, *args, key=42, **kwargs)
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 x: int = 1
@@ -1927,7 +2363,7 @@ myFunc(x, *args, key=42, **kwargs)
 x: int = 1
 args: list[str] = ["a", "b"]
 kwargs: dict[str, int] = {"a": 1}
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 myFunc(x, *args, key=42, **kwargs)
 # ^
 "#
@@ -2005,7 +2441,7 @@ class myFunc:
         pass
 myFunc(a.val, b.val)
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 class Obj:
@@ -2019,7 +2455,7 @@ class Obj:
     val: int = 0
 a: Obj = Obj()
 b: Obj = Obj()
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 myFunc(a.val, b.val)
 # ^
 "#
@@ -2073,13 +2509,13 @@ class myFunc:
         pass
 myFunc(42, len("test"), [i for i in range(3)])
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 myFunc(42, len("test"), [i for i in range(3)])
 # ^
 ## After:
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 myFunc(42, len("test"), [i for i in range(3)])
 # ^
 "#
@@ -2145,7 +2581,7 @@ class outer:
         pass
 outer(inner(42))
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 def inner(x: int) -> str:
@@ -2155,7 +2591,7 @@ outer(inner(42))
 ## After:
 def inner(x: int) -> str:
     return str(x)
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 outer(inner(42))
 # ^
 "#
@@ -2218,7 +2654,7 @@ class myFunc:
         pass
 myFunc(x)
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 from typing import Any
@@ -2228,7 +2664,7 @@ myFunc(x)
 ## After:
 from typing import Any
 x: Any = 1
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 myFunc(x)
 # ^
 "#
@@ -2307,13 +2743,13 @@ class my_func:
     pass
 my_func()
 # ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 my_func()
 # ^
 ## After:
-# pyrefly: ignore [unknown-name]
+# pyrefly: ignore[unknown-name]
 my_func()
 # ^
 "#
@@ -2369,7 +2805,7 @@ def foo():
         pass
     print(undef_var)
 #         ^
-# Title: Add `# pyrefly: ignore [unknown-name]`
+# Title: Add `# pyrefly: ignore[unknown-name]`
 
 ## Before:
 def foo():
@@ -2377,7 +2813,7 @@ def foo():
 #         ^
 ## After:
 def foo():
-    # pyrefly: ignore [unknown-name]
+    # pyrefly: ignore[unknown-name]
     print(undef_var)
 #         ^
 "#
@@ -3489,6 +3925,51 @@ def foo():
 "#;
     assert_eq!(expected_a.trim(), updated_a.trim());
     assert_eq!(expected_b.trim(), updated_b.trim());
+}
+
+// Known bug: Unopened sibling files are not offered as move destinations.
+#[test]
+#[should_panic(expected = "expected an action for the unopened sibling")]
+fn move_module_member_to_unopened_sibling() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = "def foo():\n    return 1\n";
+    let target = "existing = 42\n";
+    let source_path = temp.path().join("a.py");
+    let target_path = temp.path().join("b.py");
+    fs::write(&source_path, source).unwrap();
+    fs::write(&target_path, target).unwrap();
+
+    let mut env = TestEnv::new();
+    env.add_real_path("a", source_path);
+    let (state, handle_for_module) = env.to_state();
+    let handle = handle_for_module("a");
+    let transaction = state.transaction();
+    let actions = transaction
+        .move_module_member_code_actions(
+            &handle,
+            TextRange::empty(TextSize::new(4)),
+            ImportFormat::Absolute,
+        )
+        .expect("expected an action for the unopened sibling");
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].title, "Move `foo` to `b`");
+    let target_info = &actions[0]
+        .edits
+        .iter()
+        .find(|(module, _, _)| module.path().as_path() == target_path)
+        .unwrap()
+        .0;
+    assert_eq!(
+        apply_refactor_edits_for_module(target_info, &actions[0].edits),
+        "existing = 42\ndef foo():\n    return 1\n"
+    );
+    assert_eq!(
+        apply_refactor_edits_for_module(
+            &transaction.get_module_info(&handle).unwrap(),
+            &actions[0].edits,
+        ),
+        "from b import foo\n"
+    );
 }
 
 #[test]
@@ -4693,6 +5174,135 @@ def compute():
     let expected = r#"
 def compute():
     result = (1 + 2) * 3
+#            ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_preserves_following_statement_on_same_line() {
+    let code = r#"
+def compute():
+    value = 1; result = value + 1
+#                       ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = 1 + 1
+#                       ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_removes_statement_after_semicolon() {
+    let code = r#"
+def compute():
+    prefix = 1; value = 2
+    result = prefix + value
+#                     ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    prefix = 1
+    result = prefix + 2
+#                     ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+}
+
+#[test]
+fn inline_variable_removes_trailing_semicolon_before_comment() {
+    let code = r#"
+def compute():
+    prefix = 1; value = 2; # keep
+    result = prefix + value
+#                     ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    prefix = 1# keep
+    result = prefix + 2
+#                     ^
+    return result
+"#;
+    assert_eq!(expected, updated);
+    mk_multi_file_state_assert_no_errors(&[("main", &updated)], Require::Everything);
+}
+
+#[test]
+fn inline_variable_removes_line_with_trailing_semicolon_before_comment() {
+    let code = r#"
+value = 2;# keep
+result = value + 1
+#        ^
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+result = 2 + 1
+#        ^
+"#;
+    assert_eq!(expected, updated);
+    mk_multi_file_state_assert_no_errors(&[("main", &updated)], Require::Everything);
+}
+
+#[test]
+fn inline_variable_removes_trailing_semicolon_comment_with_cr_line_endings() {
+    for suffix in [";# keep", ";"] {
+        let code = format!("def compute():\r    value = 2{suffix}\r    return value + 1\r");
+        let (handles, state) =
+            mk_multi_file_state_assert_no_errors(&[("main", &code)], Require::Everything);
+        let handle = handles.get("main").unwrap();
+        let transaction = state.transaction();
+        let module_info = transaction.get_module_info(handle).unwrap();
+        let position = TextSize::try_from(code.rfind("value").unwrap()).unwrap();
+        let actions = transaction
+            .inline_variable_code_actions(handle, TextRange::new(position, position))
+            .expect("expected inline variable action");
+        let updated = apply_refactor_edits_for_module(&module_info, &actions[0].edits);
+
+        assert_eq!("def compute():\r    return 2 + 1\r", updated);
+        mk_multi_file_state_assert_no_errors(&[("main", &updated)], Require::Everything);
+    }
+}
+
+#[test]
+fn inline_variable_rejects_single_line_class_assignment_before_comment() {
+    let code = r#"
+class Constants: value = 2;# keep
+result = Constants.value + 1
+#                  ^
+"#;
+    assert!(apply_first_inline_variable_action(code).is_none());
+}
+
+#[test]
+fn inline_variable_removes_line_with_trailing_semicolon() {
+    let code = r#"
+def compute():
+    value = 1;
+    result = value + 1
+#            ^
+    return result
+"#;
+    let updated =
+        apply_first_inline_variable_action(code).expect("expected inline variable action");
+    let expected = r#"
+def compute():
+    result = 1 + 1
 #            ^
     return result
 "#;

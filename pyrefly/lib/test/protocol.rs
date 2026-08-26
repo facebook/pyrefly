@@ -437,6 +437,62 @@ Base()()  # E: Proxy method `__call__` of class `Base` cannot resolve target met
 );
 
 testcase!(
+    test_proxy_method_callable_attribute_target,
+    proxy_method_env(),
+    r#"
+from typing import Any, Callable, Protocol, assert_type
+from shape_extensions import ProxyMethod
+
+class CallableTarget:
+    __call__: ProxyMethod["forward"]
+    forward: Callable[[int], str]
+
+assert_type(CallableTarget()(1), str)
+CallableTarget()("bad")  # E: `Literal['bad']` is not assignable to parameter with type `int`
+
+class Callback(Protocol):
+    def __call__(self, x: int) -> str: ...
+
+class ProtocolTarget:
+    __call__: ProxyMethod["forward"]
+    forward: Callback
+
+assert_type(ProtocolTarget()(1), str)
+
+class GradualCallableTarget:
+    __call__: ProxyMethod["forward"]
+    forward: Callable[..., Any]
+
+assert_type(GradualCallableTarget()(1, "two", three=3), Any)
+"#,
+);
+
+testcase!(
+    test_proxy_method_callable_attribute_target_strict_override,
+    proxy_method_env().enable_strict_callable_subtyping(),
+    r#"
+from typing import Any, Callable, assert_type
+from shape_extensions import ProxyMethod
+
+class AttributeBase:
+    __call__: ProxyMethod["forward"]
+    forward: Callable[..., Any]
+
+class AttributeChild(AttributeBase):
+    def forward(self, x: int) -> str: ...
+
+assert_type(AttributeChild()(1), str)
+
+class MethodBase:
+    __call__: ProxyMethod["forward"]
+    def forward(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class MethodChild(MethodBase):
+    def forward(self, x: int) -> str: ...  # E: overrides parent class `MethodBase` in an inconsistent manner
+"#,
+);
+
+testcase!(
     test_proxy_method_rejects_proxy_chain_and_self_reference,
     proxy_method_env(),
     r#"
@@ -1125,6 +1181,29 @@ p6 = C5()  # E: `C5` is not assignable to variable `p6` with type `P6`
 );
 
 testcase!(
+    test_protocol_getattr_dunder_method,
+    r#"
+from typing import Any, Awaitable, Iterable, Protocol, Sized
+
+class HasFoo(Protocol):
+    def foo(self) -> int: ...
+
+class HasName(Protocol):
+    __name__: str
+
+class C:
+    def __getattr__(self, name: str) -> Any: ...
+    def __setattr__(self, name: str, value: Any) -> None: ...
+
+a: Awaitable[int] = C()  # E: `C` is not assignable to `Awaitable[int]`
+b: Iterable[int] = C()  # E: `C` is not assignable to `Iterable[int]`
+c: Sized = C()  # E: `C` is not assignable to `Sized`
+d: HasFoo = C()
+e: HasName = C()
+    "#,
+);
+
+testcase!(
     bug = "Metaclass `__getattr__` should satisfy read-only protocol members",
     test_protocol_metaclass_getattr,
     r#"
@@ -1161,9 +1240,10 @@ p: P = C()
     "#,
 );
 
+// Python does not consult `__getattr__` for `+`, so `C` does not implement `HasAdd`. pyright agrees;
+// mypy accepts `f(C())` but rejects `C() + 1`.
 testcase!(
-    bug = "Operator protocol compatibility through `__getattr__` differs from mypy",
-    test_protocol_getattr_operator_mypy_compatibility,
+    test_protocol_getattr_operator,
     r#"
 from collections.abc import Callable
 from typing import Protocol
@@ -1177,7 +1257,7 @@ class C:
 
 def f(p: HasAdd) -> None: ...
 
-f(C())  # E: `C.__add__` is read-only, but `HasAdd.__add__` is read-write
+f(C())  # E: Argument `C` is not assignable to parameter `p` with type `HasAdd` in function `f`
 C() + 1  # E: `+` is not supported between `C` and `Literal[1]`
     "#,
 );
@@ -1256,6 +1336,21 @@ issubclass(ConcreteClass, NonRuntimeProtocol)  # E: Protocol `NonRuntimeProtocol
 # These should work - protocol is decorated with @runtime_checkable
 isinstance(obj, RuntimeProtocol)
 issubclass(ConcreteClass, RuntimeProtocol)
+"#,
+);
+
+testcase!(
+    test_type_of_protocol_is_concrete_runtime_class,
+    r#"
+from typing import Protocol, assert_type
+
+class Worker(Protocol):
+    def work(self) -> None: ...
+
+def same_concrete_type(existing: Worker, candidate: Worker) -> bool:
+    candidate_type = type(candidate)
+    assert_type(candidate_type, type[Worker])
+    return isinstance(existing, candidate_type)
 "#,
 );
 
@@ -1467,6 +1562,18 @@ class A:
 
 cls1: type[CanFly] = CanFly # E: `type[CanFly]` is not assignable to `type[CanFly]`
 cls2: type[CanFly] = A      # OK
+    "#,
+);
+
+testcase!(
+    test_call_classmethod_on_protocol,
+    r#"
+from typing import Protocol
+class P(Protocol):
+    @classmethod
+    def f(cls) -> None:
+        return None
+P.f()
     "#,
 );
 
@@ -2033,4 +2140,58 @@ class A(Protocol):
         def g(x: int = ...):  # E: not assignable
             pass
     "#,
+);
+
+testcase!(
+    test_protocol_declared_as_special_form_outside_typing,
+    r#"
+from typing import TypeVar, _SpecialForm, type_check_only
+
+T = TypeVar("T")
+
+@type_check_only
+class _Generic: ...
+
+Generic: type[_Generic]
+Protocol: _SpecialForm
+
+class G(Generic[T]): ...
+class P(Protocol):
+    def f(self) -> int: ...
+class PT(Protocol[T]):
+    def f(self, x: T) -> T: ...
+class C:
+    def f(self, x: int = 0) -> int: ...
+class D: ...
+
+p: P = C()
+pt: PT[int] = C()
+bad: P = D()  # E: `D` is not assignable to `P`
+"#,
+);
+
+testcase!(
+    test_protocol_declared_as_type_outside_typing,
+    r#"
+from typing import TypeVar, type_check_only
+
+T = TypeVar("T")
+
+@type_check_only
+class _Protocol: ...
+
+Protocol: type[_Protocol]
+
+class P(Protocol):
+    def f(self) -> int: ...
+class PT(Protocol[T]):
+    def f(self, x: T) -> T: ...
+class C:
+    def f(self, x: int = 0) -> int: ...
+class D: ...
+
+p: P = C()
+pt: PT[int] = C()
+bad: P = D()  # E: `D` is not assignable to `P`
+"#,
 );

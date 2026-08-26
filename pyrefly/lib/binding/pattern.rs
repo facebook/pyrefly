@@ -257,7 +257,7 @@ impl<'a> BindingsBuilder<'a> {
             if !is_irrefutable {
                 // Build this slot's coverage probe: narrow the subject to this class
                 // first (so other union members don't pollute the slot), then require
-                // the negated sub-pattern residual to be `Never`. Irrefutable slots are
+                // the type excluded by the subpattern to be `Never`. Irrefutable slots are
                 // already exhausted, so only refutable slots need solve-time probes.
                 let mut coverage_scope = match_subject
                     .subject_narrow_op(NarrowOp::Atomic(None, class_narrow_op.clone()), cls_range)
@@ -356,13 +356,13 @@ impl<'a> BindingsBuilder<'a> {
                 // If every sub-pattern is irrefutable -- i.e., patterns that always match
                 // like wildcards (`_`), bare names (e.g., `x`), or `*rest` -- the structural
                 // `IsSequence + LenEq/LenGte` narrow on the subject fully captures what the
-                // pattern proves. Spurious Placeholders added by `and_all` for empty
-                // sub-pattern narrow ops would otherwise block negative narrowing
-                // (see equivalent fix in MatchClass below).
-                let all_subpatterns_irrefutable = x
-                    .patterns
-                    .iter()
-                    .all(|p| p.is_irrefutable() || p.is_wildcard());
+                // pattern proves. A star is irrefutable only within a sequence, so Ruff does
+                // not classify it as irrefutable on its own. Spurious Placeholders added by
+                // `and_all` for empty sub-pattern narrow ops would otherwise block negative
+                // narrowing (see equivalent fix in MatchClass below).
+                let all_subpatterns_irrefutable = x.patterns.iter().all(|p| {
+                    matches!(p, Pattern::MatchStar(_)) || p.is_irrefutable() || p.is_wildcard()
+                });
                 let sequence_fully_characterized = num_patterns == num_non_star_patterns
                     && x.patterns
                         .iter()
@@ -467,6 +467,7 @@ impl<'a> BindingsBuilder<'a> {
                 // with one it is only a lower bound.
                 let has_star = num_patterns != num_non_star_patterns;
                 let mut seen_star = false;
+                let in_class_body = self.scopes.in_class_body();
                 for (i, x) in x.patterns.into_iter().enumerate() {
                     // Process each sub-pattern in the sequence pattern
                     match x {
@@ -487,6 +488,7 @@ impl<'a> BindingsBuilder<'a> {
                                         range: p.range,
                                         position,
                                         receiver: None,
+                                        in_class_body,
                                     })),
                                     FlowStyle::Other,
                                 );
@@ -512,6 +514,7 @@ impl<'a> BindingsBuilder<'a> {
                                     range: x.range(),
                                     position,
                                     receiver: None,
+                                    in_class_body,
                                 })),
                             );
                             let subject_for_subpattern = match &match_subject {
@@ -1004,7 +1007,7 @@ impl<'a> BindingsBuilder<'a> {
             }
             let has_guard = guard.is_some();
             if let Some(mut guard) = guard {
-                self.ensure_expr(&mut guard, &mut Usage::NonPinningValue(None));
+                let guard_link = self.bind_bool_condition(&mut guard);
                 let guard_narrow_ops = NarrowOps::from_expr(self, Some(guard.as_ref()));
                 self.bind_narrow_ops(
                     &guard_narrow_ops,
@@ -1013,7 +1016,7 @@ impl<'a> BindingsBuilder<'a> {
                 );
                 // Route the guard through `BindingExpect::Bool` (like `if`/`while`) so it
                 // receives the same condition checks, e.g. `implicit-bool`.
-                self.insert_binding(KeyExpect::Bool(guard.range()), BindingExpect::Bool(*guard));
+                self.insert_bool_condition(guard_link, *guard);
                 new_narrow_ops.and_all(PatternNarrowOps::from_scope(guard_narrow_ops))
             }
             if has_guard && match_subject.has_local_subject() {

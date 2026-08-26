@@ -60,6 +60,37 @@ class Child(Base):
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5300
+testcase!(
+    test_slots_attribute_written_through_cls,
+    r#"
+class Foo:
+    __slots__ = ()
+
+    def __init_subclass__(cls) -> None:
+        cls.tag = "x"
+
+Foo.tag = "y"
+foo = Foo()
+foo.tag = "z"  # E: Object of class `Foo` has no attribute `tag` (not declared in `__slots__`)
+"#,
+);
+
+testcase!(
+    test_slots_attribute_written_through_cls_and_self,
+    r#"
+class Foo:
+    __slots__ = ()
+
+    @classmethod
+    def setup(cls) -> None:
+        cls.x = 1  # E: Object of class `Foo` has no attribute `x` (not declared in `__slots__`)
+
+    def method(self) -> None:
+        self.x = 2
+"#,
+);
+
 testcase!(
     test_slots_unslotted_child_allows_dynamic,
     r#"
@@ -72,6 +103,70 @@ class Child(Base):
     def method(self):
         self.x = 1
         self.y = 2  # OK: Child is unslotted
+"#,
+);
+
+// A plain subclass of `@dataclass(slots=True)` declares no `__slots__`, so at runtime it
+// gets an instance `__dict__` and accepts arbitrary attributes.
+testcase!(
+    test_slots_plain_subclass_of_slotted_dataclass_allows_dynamic,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class Foo:
+    x: int
+    y: int
+
+class Bar(Foo):
+    def __init__(self, x: int, y: int) -> None:
+        super().__init__(x, y)
+        self.z = x + y  # OK: Bar is unslotted
+"#,
+);
+
+// The subclass is fully slotted only when it also requests slots, and then enforcement
+// still applies to attributes outside the combined field set.
+testcase!(
+    test_slots_slotted_dataclass_subclass_still_enforced,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class Foo:
+    x: int
+    y: int
+
+@dataclass(slots=True)
+class Sub(Foo):
+    w: int
+
+    def method(self) -> None:
+        self.x = 1
+        self.w = 2
+        self.q = 3  # E: not declared in `__slots__`
+"#,
+);
+
+// An unslotted class anywhere in the MRO gives every subclass an instance `__dict__`,
+// even a lower `@dataclass(slots=True)`.
+testcase!(
+    test_slots_slotted_dataclass_below_unslotted_middle_allows_dynamic,
+    r#"
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class Foo:
+    x: int
+
+class Mid(Foo):
+    pass
+
+@dataclass(slots=True)
+class Grand(Mid):
+    def method(self) -> None:
+        self.x = 1
+        self.z = 2  # OK: Mid is unslotted
 "#,
 );
 
@@ -798,4 +893,14 @@ class Right:
 
 class OK(C, Right): ...  # no conflict
 "#,
+);
+
+testcase!(
+    test_slot_violation_should_not_hide_error,
+    r#"
+class C:
+    __slots__ = ("x",)
+def f(c: C):
+    c.y = 1 + "oops"  # E: no attribute `y`  # E: `+` is not supported
+    "#,
 );

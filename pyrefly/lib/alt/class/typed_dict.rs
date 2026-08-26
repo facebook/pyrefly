@@ -12,6 +12,7 @@ use pyrefly_types::simplify::unions_with_literals;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDictInner;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::name::Name;
@@ -74,7 +75,7 @@ const VALUES_METHOD: Name = Name::new_static("values");
 pub(crate) const REQUIRED_KEYS: Name = Name::new_static("__required_keys__");
 pub(crate) const OPTIONAL_KEYS: Name = Name::new_static("__optional_keys__");
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn check_dict_items_against_typed_dict(
         &self,
         dict_items: &Vec<&DictItem>,
@@ -150,7 +151,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                             if let Some(suggestion) = best_suggestion(
                                 &key_name,
-                                fields.keys().map(|candidate| (candidate, 0usize)),
+                                fields
+                                    .keys()
+                                    .map(|candidate| Candidate::measured(candidate, 0)),
                             ) {
                                 builder =
                                     builder.with_detail(format!("Did you mean `{suggestion}`?"));
@@ -224,16 +227,38 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    /// The extra items of `cls`, expressed in terms of `cls`'s own type parameters. A class
+    /// inherits `extra_items` verbatim from the base that declares it, so the declared type is
+    /// written in terms of that base's type parameters and has to be substituted through the MRO.
     fn typed_dict_extra_items_for_cls(&self, cls: &Class) -> ExtraItems {
-        self.get_metadata_for_class(cls)
+        let mut extra_items = self
+            .get_metadata_for_class(cls)
             .typed_dict_metadata()
-            .map_or(ExtraItems::Default, |m| m.extra_items.clone())
+            .map_or(ExtraItems::Default, |m| m.extra_items.clone());
+        if let ExtraItems::Extra(extra) = &mut extra_items {
+            for ancestor in self.get_mro_for_class(cls).ancestors_no_object() {
+                ancestor.targs().substitute_into_mut(&mut extra.ty);
+            }
+            // If extra_items is generic, a base may bind it to `Never`, closing `cls`.
+            if extra.ty.is_never() {
+                return ExtraItems::Closed;
+            }
+        }
+        extra_items
     }
 
     pub fn typed_dict_extra_items(&self, typed_dict: &TypedDict) -> ExtraItems {
         match typed_dict {
             TypedDict::TypedDict(inner) => {
-                self.typed_dict_extra_items_for_cls(inner.class_object())
+                let mut extra_items = self.typed_dict_extra_items_for_cls(inner.class_object());
+                if let ExtraItems::Extra(extra) = &mut extra_items {
+                    inner.targs().substitute_into_mut(&mut extra.ty);
+                    // If extra_items is generic, `inner` may bind it to `Never`, closing `cls`.
+                    if extra.ty.is_never() {
+                        return ExtraItems::Closed;
+                    }
+                }
+                extra_items
             }
             TypedDict::Anonymous(_) => ExtraItems::Extra(ExtraItem {
                 ty: self.get_typed_dict_value_type(typed_dict),
@@ -249,7 +274,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         is_total: bool,
     ) -> Option<TypedDictField> {
         let member = self.get_non_synthesized_class_member(typed_dict.class_object(), name)?;
-        let instantiated_ty = self.instantiate_typed_dict_field_type(typed_dict, name, &member)?;
+        let instantiated_ty =
+            self.instantiate_typed_dict_field_type(typed_dict, name, member.as_ref())?;
         let mut typed_dict_field = member.as_typed_dict_field_info(is_total)?;
         typed_dict_field.ty = instantiated_ty;
         Some(typed_dict_field)
@@ -498,11 +524,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty: Type,
     ) -> OverloadType {
         // Synthetic `_T` quantified used internally for the default parameter type.
-        // Anchored to the TypedDict class definition range with SyntheticCallableResidual origin.
+        // Anchored to the TypedDict class definition range with Synthetic origin.
         let identity = QuantifiedIdentity::new(
             self.module().name(),
             AnchorIndex::first(cls.range()),
-            QuantifiedOrigin::SyntheticCallableResidual,
+            QuantifiedOrigin::synthetic(),
         );
         let q = Quantified::type_var(
             Name::new("_T"),
@@ -772,7 +798,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             TypedDict::TypedDict(inner) => {
                 let cls = inner.class_object();
                 if let Some(metadata) = self.get_metadata_for_class(cls).typed_dict_metadata() {
-                    self.get_typed_dict_value_type_from_fields(cls, &metadata.fields)
+                    let value_type =
+                        self.get_typed_dict_value_type_from_fields(cls, &metadata.fields);
+                    inner.targs().substitute_into(value_type)
                 } else {
                     self.heap.mk_class_type(self.stdlib.object().clone())
                 }

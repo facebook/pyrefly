@@ -13,6 +13,7 @@ pub mod convert_module_package;
 pub mod document_symbols;
 pub mod external_provider;
 pub mod folding_ranges;
+pub mod initial_configuration;
 pub mod lsp;
 pub mod module_helpers;
 pub mod move_symbol_new_file;

@@ -8,7 +8,7 @@
  */
 
 import * as vscode from 'vscode';
-import {LanguageClient} from 'vscode-languageclient/node';
+import {LanguageClient, State} from 'vscode-languageclient/node';
 
 let statusBarItem: vscode.StatusBarItem;
 
@@ -21,6 +21,13 @@ let statusBarItem: vscode.StatusBarItem;
  * dispatch all change together.
  */
 export const TYPE_ERROR_DISPLAY_STATUS_VERSION = 'v2' as const;
+
+/**
+ * Method name of the server→client notification saying our cached status may
+ * be stale.
+ */
+export const TYPE_ERROR_DISPLAY_STATUS_CHANGED_METHOD =
+  'pyrefly/typeErrorDisplayStatusChanged' as const;
 
 /**
  * V2 wire shape for `pyrefly/textDocument/typeErrorDisplayStatus`. The
@@ -40,6 +47,10 @@ type TypeErrorDisplayStatusV2 = {
   // Version string of the language server binary, or null when the
   // server doesn't know it.
   pyreflyVersion: string | null;
+  // The current status of the build system. Typically, if a build system is
+  // configured, here you would see something like `building`, `ready`,
+  // or `error: <error>`.
+  buildSystem: string | null;
 };
 
 /// Update the status bar based on current configuration
@@ -89,7 +100,10 @@ export async function updateStatusBar(client: LanguageClient) {
   } else if (status != null && typeof status === 'object') {
     const v2 = status as {version?: string};
     if (v2.version === TYPE_ERROR_DISPLAY_STATUS_VERSION) {
-      renderV2(status as TypeErrorDisplayStatusV2);
+      renderV2(
+        status as TypeErrorDisplayStatusV2,
+        client.initializeResult?.serverInfo?.version,
+      );
       rendered = true;
     }
     // Unknown future version: server clamping should prevent this in
@@ -101,6 +115,36 @@ export async function updateStatusBar(client: LanguageClient) {
     statusBarItem.hide();
   }
 }
+
+/**
+ * Trailing-debounced `updateStatusBar`, for server-pushed refreshes.
+ *
+ * A single source-database rebuild pushes at least a `building`/`ready` pair,
+ * and a workspace with several configs pushes more, so coalescing keeps this to
+ * one round-trip per burst. The trailing edge also means a build that finishes
+ * within the window never flashes `building` at all.
+ */
+export function scheduleStatusBarUpdate(client: LanguageClient) {
+  if (pushRefreshTimer != null) {
+    clearTimeout(pushRefreshTimer);
+  }
+  pushRefreshTimer = setTimeout(() => {
+    pushRefreshTimer = undefined;
+    if (client.state !== State.Running) {
+      return;
+    }
+    // A push is server-driven and can land while focus sits on a non-Python
+    // editor. Skip rather than let `updateStatusBar` hide the item, which
+    // nothing would undo until the next editor change.
+    if (vscode.window.activeTextEditor?.document.languageId !== 'python') {
+      return;
+    }
+    void updateStatusBar(client);
+  }, PUSH_REFRESH_DEBOUNCE_MS);
+}
+
+const PUSH_REFRESH_DEBOUNCE_MS = 150;
+let pushRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 /**
  * V1 renderer: legacy bare-string responses from older binaries. Kept
@@ -154,7 +198,10 @@ No errors will be shown even if there is a [\`pyrefly.toml\`](https://pyrefly.or
  * `Pyrefly` plus an optional preset parenthetical; the tooltip is
  * markdown straight from the server.
  */
-function renderV2(status: TypeErrorDisplayStatusV2) {
+function renderV2(
+  status: TypeErrorDisplayStatusV2,
+  initializeVersion: string | undefined,
+) {
   statusBarItem.text =
     status.label == null ? 'Pyrefly' : `Pyrefly (${status.label})`;
   // Sections are joined with a blank line because markdown treats a
@@ -173,8 +220,17 @@ function renderV2(status: TypeErrorDisplayStatusV2) {
       sections.push(`Docs: [${status.docsUrl}](${status.docsUrl})`);
     }
   }
-  if (status.pyreflyVersion) {
-    sections.push(`Pyrefly version: ${status.pyreflyVersion}`);
+  if (status.buildSystem) {
+    sections.push(`Build system: ${status.buildSystem}`);
+  }
+  // A server predating `pyreflyVersion` leaves this field out. Both it and
+  // `serverInfo.version` come from the same value on the server, so the
+  // handshake is a faithful substitute — and it has to be used, because a
+  // configured project sends an empty tooltip and the version is then the only
+  // section. Without it the hover would be empty and VS Code shows nothing.
+  const pyreflyVersion = status.pyreflyVersion ?? initializeVersion;
+  if (pyreflyVersion) {
+    sections.push(`Pyrefly version: ${pyreflyVersion}`);
   }
   if (sections.length === 0) {
     statusBarItem.tooltip = undefined;

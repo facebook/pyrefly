@@ -43,10 +43,7 @@ $ mkdir $TMPDIR/ignores && echo "*" > $TMPDIR/ignores/.gitignore && \
 > touch $TMPDIR/ignores/pyrefly.toml && \
 > $PYREFLY check --python-version 3.13.0 -c $TMPDIR/ignores/pyrefly.toml --output-format=min-text
  INFO Checking project configured at * (glob)
- WARN Skipping include pattern `*` because it is matched by `project-excludes` or an ignore file. (glob)
 `project-excludes`: [*], ignore files [*/.gitignore, */.ignore, */.git/info/exclude] (glob)
- WARN Skipping include pattern `*` because it is matched by `project-excludes` or an ignore file. (glob)
-`project-excludes`: * (glob)
 No Python files matched patterns `*` (glob)
 [1]
 ```
@@ -84,6 +81,29 @@ $ mkdir $TMPDIR/relative_ignore && \
 ```scrut {output_stream: stderr}
 $ mkdir -p $TMPDIR/src_project/src/foo && echo "x: int = 0" > $TMPDIR/src_project/src/foo/bar.py && echo "from foo.bar import x" > $TMPDIR/src_project/src/foo/baz.py && cd $TMPDIR/src_project && $PYREFLY check
  INFO Checking current directory with auto configuration
+ INFO 0 errors
+No `pyrefly.toml` found — using preset `basic`.
+Run `pyrefly init` to continue setting up Pyrefly.
+Docs: * (glob)
+[0]
+```
+
+## Src layout with pytest tests
+
+A synthesized config should use `src/` as the primary import root while
+allowing tests to import sibling test helpers from the project root.
+
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/pytest_project/src/example $TMPDIR/pytest_project/tests && \
+> printf '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n' \
+>     > $TMPDIR/pytest_project/pyproject.toml && \
+> echo "VALUE: int = 1" > $TMPDIR/pytest_project/src/example/__init__.py && \
+> touch $TMPDIR/pytest_project/tests/__init__.py && \
+> echo "HELPER: int = 2" > $TMPDIR/pytest_project/tests/helpers.py && \
+> printf 'from example import VALUE\nfrom tests.helpers import HELPER\nresult: int = VALUE + HELPER\n' \
+>     > $TMPDIR/pytest_project/tests/test_core.py && \
+> cd $TMPDIR/pytest_project && $PYREFLY check
+ INFO Found `*/pyproject.toml` marking project root, checking root directory with auto configuration (glob)
  INFO 0 errors
 No `pyrefly.toml` found — using preset `basic`.
 Run `pyrefly init` to continue setting up Pyrefly.

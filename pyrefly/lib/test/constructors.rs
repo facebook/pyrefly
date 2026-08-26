@@ -193,6 +193,36 @@ assert_type(x, int)
 );
 
 testcase!(
+    test_bounded_type_with_metaclass_call_returns_something_else,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    def __call__(cls, x: int) -> str: ...
+
+class BoundClass(metaclass=Meta):
+    pass
+
+class C[T: BoundClass]:
+    x: type[T]
+    y: type[BoundClass]
+
+    def check(self) -> None:
+        assert_type(self.x(10), str)
+        assert_type(self.y(10), str)
+
+assert_type(BoundClass(10), str)
+
+class OrdinaryBase: ...
+
+def ordinary[T: OrdinaryBase](cls: type[T]) -> T:
+    return cls()
+
+assert_type(ordinary(OrdinaryBase), OrdinaryBase)
+    "#,
+);
+
+testcase!(
     test_metaclass_invalid_generic,
     r#"
 from typing import Any, assert_type
@@ -359,7 +389,7 @@ testcase!(
     r#"
 from typing import assert_type
 class Meta(type):
-    def __call__(cls: 'type[C[str]]', *args, **kwargs): ...  # E: `__call__` method self type `type[C[str]]` is not a superclass of class `Meta`
+    def __call__(cls: 'type[C[str]]', *args, **kwargs): ...  # E: `__call__` method self type `type[C[str]]` refers to class `C[str]`, which is not a superclass of class `Meta`
 class C[T](metaclass=Meta):
     def __init__(self, x: T):
         pass
@@ -887,7 +917,7 @@ from typing import Literal, assert_type, overload, Self, Any
 class A: ...
 class B: ...
 class D:
-    def __new__(cls: type[A]): pass  # E: `__new__` method cls type `type[A]` is not a superclass of class `D`
+    def __new__(cls: type[A]): pass  # E: `__new__` method cls type `type[A]` refers to class `A`, which is not a superclass of class `D`
 class E(A):
     def __new__(cls: type[A]): pass
 class F:
@@ -905,12 +935,68 @@ class K:
 
 class C[T]:
     @overload
-    def __new__(cls: type[A], x: Literal[True]): ...  # E: `__new__` method cls type `type[A]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> Self@C`
+    def __new__(cls: type[A], x: Literal[True]): ...  # E: `__new__` method cls type `type[A]` refers to class `A`, which is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> Self@C`
     @overload
-    def __new__(cls: type[B], x: Literal[False]): ...  # E: `__new__` method cls type `type[B]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> Self@C` accepts
+    def __new__(cls: type[B], x: Literal[False]): ...  # E: `__new__` method cls type `type[B]` refers to class `B`, which is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> Self@C` accepts
     def __new__(cls, x):
         pass
 
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/4701
+testcase!(
+    test_new_overload_subclass_receiver,
+    r#"
+from typing import assert_type, overload
+
+class Path:
+    @overload
+    def __new__(cls: type[AbsPath], path: str) -> AbsPath: ...
+    @overload
+    def __new__(cls: type[RelPath], path: str) -> RelPath: ...
+    @overload
+    def __new__(cls: type[Path], path: str) -> AbsPath | RelPath: ...
+    def __new__(cls: type[Path], path: str) -> Path:
+        raise NotImplementedError
+
+class AbsPath(Path): ...
+class RelPath(Path): ...
+
+assert_type(Path("file"), AbsPath | RelPath)
+assert_type(AbsPath("file"), AbsPath)
+assert_type(RelPath("file"), RelPath)
+    "#,
+);
+
+testcase!(
+    test_init_overload_subclass_receiver,
+    r#"
+from typing import overload
+
+class Base:
+    @overload
+    def __init__(self: Sub, value: int) -> None: ...
+    @overload
+    def __init__(self: Base, value: str) -> None: ...
+    def __init__(self, value: int | str):
+        pass
+
+class Sub(Base): ...
+
+Sub(1)
+Base("x")
+    "#,
+);
+
+testcase!(
+    test_constructor_subclass_receiver_requires_overload,
+    r#"
+class Base:
+    def __new__(cls: type[Sub]) -> Sub: ...  # E: `__new__` method cls type `type[Sub]` refers to class `Sub`, which is not a superclass of class `Base`
+    def __init__(self: Sub) -> None: ...  # E: `__init__` method self type `Sub` is not a superclass of class `Base`
+
+class Sub(Base): ...
     "#,
 );
 
@@ -1358,4 +1444,21 @@ class C(Generic[T]):
     def __new__(cls: type[S], x: T) -> list[S]: ...
 ok: Callable[[int], list[C[int]]] = C
     "#,
+);
+
+// Soft errors, such as the ignored-by-default `unknown-argument-type`, must not make the
+// `__init__` check look redundant.
+testcase!(
+    test_init_errors_reported_with_soft_new_errors,
+    r#"
+def untyped(x):
+    return x
+
+class Foo:
+    def __new__(cls, *args):
+        return super().__new__(cls)
+    def __init__(self, a: int, b: int) -> None: ...
+
+Foo(untyped(1), "bad")  # E: Argument `Literal['bad']` is not assignable to parameter `b` with type `int`
+"#,
 );

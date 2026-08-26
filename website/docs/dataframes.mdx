@@ -14,10 +14,8 @@ description: Pyrefly support for Polars and pandas DataFrames, including column 
 
 :::warning Experimental
 
-DataFrame support is experimental and a work in progress. In particular,
-user-written `DataFrame[Schema]` annotations are a Pyrefly-specific extension
-that other type checkers reject. This feature may change and will not be
-considered stable until Pyrefly 1.3.
+DataFrame support is experimental and a work in progress. Expect breaking
+changes until it stabilizes.
 
 :::
 
@@ -280,31 +278,38 @@ values, so a schema survives a function boundary instead of being erased there.
 
 ```python
 from __future__ import annotations
+from typing import Annotated
 
 class Reading:
     station: pl.String
     temperature_c: pl.Float64
 
-def load_readings() -> pl.DataFrame[Reading]:
+ExactReadingFrame = Annotated[pl.DataFrame, Reading]
+OpenReadingFrame = Annotated[pl.DataFrame, Reading, ...]
+
+def load_readings() -> ExactReadingFrame:
     return pl.DataFrame(
         {"station": ["North"], "temperature_c": [21.5]},
         schema={"station": pl.String, "temperature_c": pl.Float64},
     )
 
-def temperatures(frame: pl.DataFrame[Reading]) -> pl.Series:
+def temperatures(frame: OpenReadingFrame) -> pl.Series:
     return frame["temperature_c"]
 
 reveal_type(load_readings())  # DataFrame[station: String, temperature_c: Float64]
 ```
 
-> **Note:** `DataFrame[Schema]` is a Pyrefly extension, not a standard Polars
-> annotation. Polars does not currently define `DataFrame` as generic over its
-> schema ([pola-rs/polars#22119](https://github.com/pola-rs/polars/issues/22119)),
-> so other type checkers reject the subscript. mypy reports that `DataFrame`
-> expects no type arguments and Pyright reports `Expected no type arguments for
-> class DataFrame`. `pl.DataFrame` is also not generic at runtime, so executable
-> code must quote the annotation or use `from __future__ import annotations`.
-> Runtime construction still takes a schema mapping or a `pl.Schema`.
+The form without `...` is exact: the argument or return value must have the
+same columns, order, and dtypes as the schema class. The form with `...` is
+open: the DataFrame may have additional columns in any position, but it must
+guarantee every declared column and dtype. An opaque `pl.DataFrame`, or a frame
+whose required dtype is unknown, does not satisfy either contract.
+
+`Annotated` is standard Python syntax. Type checkers that do not understand
+Pyrefly's DataFrame metadata still see `pl.DataFrame`, and runtime consumers can
+inspect the schema class and optional ellipsis with
+`get_type_hints(..., include_extras=True)`. Polars itself remains responsible
+for runtime schema validation and construction.
 
 A plain `pl.DataFrame` annotation deliberately erases inferred schema
 information at that boundary. Rich schemas appear in hovers and `reveal_type`
@@ -475,6 +480,10 @@ Pyrefly models common ways to combine complete Polars schemas.
 - `join` supports same-name `on=` keys and the `semi`, `anti`, `inner`, `left`,
   `right`, `full`, and `cross` modes with default suffix and coalesce behavior.
 
+A `join` whose suffixed name collides with a column that already exists is a
+`duplicate-column` error. A selector, wildcard, or regex in `on` names a set of
+columns rather than one, so the join is left unmodeled.
+
 Separate `left_on` and `right_on` keys, custom suffixes, explicit coalesce
 settings, other concat modes, mismatched concat schemas, and `hstack` with a
 list of Series are not modeled.
@@ -582,9 +591,9 @@ configuration.
   the first non-null value.
 - [`column-schema-mismatch`](../error-kinds/#column-schema-mismatch) reports
   statically known data names that do not match declared schema names.
-- [`duplicate-column`](../error-kinds/#duplicate-column) reports a projection
-  that would produce two columns with the same name, which Polars rejects when
-  an eager projection runs or a lazy projection is collected.
+- [`duplicate-column`](../error-kinds/#duplicate-column) reports an operation
+  that would produce two columns with the same name, such as a projection with
+  duplicate output names or a join suffix collision.
 
 ---
 

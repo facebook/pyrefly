@@ -13,19 +13,22 @@ use pyrefly_util::prelude::SliceExt;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::config::config::BaselineFormat;
+use crate::config::config::BaselineMatchingMode;
 use crate::error::error::Error;
 
 pub(crate) fn severity_to_str(severity: Severity) -> String {
     match severity {
         Severity::Ignore => "ignore".to_owned(),
+        Severity::Hint => "hint".to_owned(),
         Severity::Info => "info".to_owned(),
         Severity::Warn => "warn".to_owned(),
         Severity::Error => "error".to_owned(),
     }
 }
 
-fn default_severity() -> String {
-    "error".to_owned()
+fn default_legacy_severity() -> Severity {
+    Severity::Error
 }
 
 /// Legacy error structure in Pyre1. Needs to be consistent with the following file:
@@ -46,8 +49,8 @@ pub struct LegacyError {
     description: String,
     concise_description: String,
     /// This field is not part of Pyre1 error format. But it's useful for Pyrefly clients
-    #[serde(default = "default_severity")]
-    severity: String,
+    #[serde(default = "default_legacy_severity")]
+    severity: Severity,
     /// Whether the error matched a configured baseline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     baselined: Option<bool>,
@@ -75,9 +78,36 @@ impl LegacyError {
             name: error.error_kind().to_name().to_owned(),
             description: error.msg(),
             concise_description: error.msg_header().to_owned(),
-            severity: severity_to_str(error.severity()),
+            severity: error.severity(),
             baselined: error.baseline_status().legacy_baselined_flag(),
         }
+    }
+
+    pub fn severity(&self) -> Severity {
+        self.severity
+    }
+
+    pub(crate) fn display_range(&self) -> String {
+        if self.line == self.stop_line {
+            if self.column == self.stop_column {
+                format!("{}:{}", self.line, self.column)
+            } else {
+                format!("{}:{}-{}", self.line, self.column, self.stop_column)
+            }
+        } else {
+            format!(
+                "{}:{}-{}:{}",
+                self.line, self.column, self.stop_line, self.stop_column
+            )
+        }
+    }
+
+    pub(crate) fn concise_description(&self) -> &str {
+        &self.concise_description
+    }
+
+    pub(crate) fn is_baselined(&self) -> bool {
+        self.baselined == Some(true)
     }
 }
 
@@ -96,13 +126,15 @@ impl LegacyErrors {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct BaselineError {
-    pub column: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
     pub path: String,
     /// The kebab-case name of the error kind.
     pub name: String,
-    concise_description: String,
-    #[serde(default = "default_severity")]
-    severity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concise_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    severity: Option<Severity>,
     /// Optional notebook cell number for errors in notebook files
     #[serde(skip_serializing_if = "Option::is_none")]
     cell: Option<usize>,
@@ -113,29 +145,66 @@ impl BaselineError {
         let error_range = error.display_range();
         let error_path = error.path().as_path();
         Self {
-            column: error_range.start.column().get() as usize,
+            column: Some(error_range.start.column().get() as usize),
             cell: error_range.start.cell().map(|cell| cell.get() as usize),
             path: error_path
                 .relativize_from(relative_to)
                 .to_string_lossy()
                 .replace('\\', "/"), // Normalize Windows backslashes so baseline files are consistent across platforms
             name: error.error_kind().to_name().to_owned(),
-            concise_description: error.msg_header().to_owned(),
-            severity: severity_to_str(error.severity()),
+            concise_description: Some(error.msg_header().to_owned()),
+            severity: Some(error.severity()),
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Default)]
 pub struct BaselineErrors {
+    /// The severity threshold in effect when the baseline was written. A diagnostic below
+    /// it was never recorded, so matching must not let one take part. Recording the
+    /// threshold rather than reading the current run's `--min-severity` keeps that
+    /// decision stable when the flag differs between runs. Absent in baselines written
+    /// before it was tracked, where nothing is held back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_severity: Option<Severity>,
     pub errors: Vec<BaselineError>,
 }
 
 impl BaselineErrors {
-    pub fn from_errors(relative_to: &Path, errors: &[Error]) -> Self {
+    pub fn from_errors(relative_to: &Path, min_severity: Severity, errors: &[Error]) -> Self {
         Self {
+            min_severity: Some(min_severity),
             errors: errors.map(|e| BaselineError::from_error(relative_to, e)),
         }
+    }
+
+    /// Remove fields that are not needed by a minimal baseline.
+    pub fn with_format(
+        mut self,
+        matching_mode: BaselineMatchingMode,
+        format: BaselineFormat,
+    ) -> Self {
+        // Only `column-ordered` consults the threshold, so it is not part of the minimum
+        // the other modes need in order to match.
+        if !matching_mode.is_ordered() {
+            self.min_severity = None;
+        }
+        if format == BaselineFormat::Minimal {
+            for error in &mut self.errors {
+                if !matches!(
+                    matching_mode,
+                    BaselineMatchingMode::Column | BaselineMatchingMode::ColumnOrdered
+                ) {
+                    error.column = None;
+                }
+                if matching_mode != BaselineMatchingMode::ConciseDescription {
+                    error.concise_description = None;
+                }
+                error.severity = None;
+                error.cell = None;
+            }
+        }
+        self
     }
 }
 
@@ -203,5 +272,107 @@ mod tests {
                 .unwrap()["baselined"],
             false
         );
+    }
+
+    #[test]
+    fn test_baseline_formats() {
+        let module = Module::new(
+            ModuleName::from_str("foo"),
+            ModulePath::filesystem(PathBuf::from("/repo/foo.py")),
+            Arc::new("x = 1\n".to_owned()),
+        );
+        let error = Error::new(
+            module,
+            TextRange::new(TextSize::new(0), TextSize::new(1)),
+            "err".to_owned(),
+            Vec::new(),
+            ErrorKind::BadAssignment,
+        );
+
+        let full = BaselineErrors::from_errors(
+            Path::new("/repo"),
+            Severity::Error,
+            std::slice::from_ref(&error),
+        )
+        .with_format(BaselineMatchingMode::Column, BaselineFormat::Full);
+        assert_eq!(
+            serde_json::to_value(full).unwrap(),
+            serde_json::json!({
+                "errors": [{
+                    "column": 1,
+                    "path": "foo.py",
+                    "name": "bad-assignment",
+                    "concise_description": "err",
+                    "severity": "error"
+                }]
+            })
+        );
+
+        let minimal_column = BaselineErrors::from_errors(
+            Path::new("/repo"),
+            Severity::Error,
+            std::slice::from_ref(&error),
+        )
+        .with_format(BaselineMatchingMode::Column, BaselineFormat::Minimal);
+        assert_eq!(
+            serde_json::to_value(minimal_column).unwrap(),
+            serde_json::json!({
+                "errors": [{
+                    "column": 1,
+                    "path": "foo.py",
+                    "name": "bad-assignment"
+                }]
+            })
+        );
+
+        let minimal_description = BaselineErrors::from_errors(
+            Path::new("/repo"),
+            Severity::Error,
+            std::slice::from_ref(&error),
+        )
+        .with_format(
+            BaselineMatchingMode::ConciseDescription,
+            BaselineFormat::Minimal,
+        );
+        assert_eq!(
+            serde_json::to_value(minimal_description).unwrap(),
+            serde_json::json!({
+                "errors": [{
+                    "path": "foo.py",
+                    "name": "bad-assignment",
+                    "concise_description": "err"
+                }]
+            })
+        );
+
+        // `column-ordered` matches on the column, so a minimal baseline must keep it, and
+        // holds back diagnostics below the threshold, so it must record that too.
+        let minimal_ordered = BaselineErrors::from_errors(
+            Path::new("/repo"),
+            Severity::Warn,
+            std::slice::from_ref(&error),
+        )
+        .with_format(BaselineMatchingMode::ColumnOrdered, BaselineFormat::Minimal);
+        assert_eq!(
+            serde_json::to_value(minimal_ordered).unwrap(),
+            serde_json::json!({
+                "min_severity": "warn",
+                "errors": [{
+                    "column": 1,
+                    "path": "foo.py",
+                    "name": "bad-assignment"
+                }]
+            })
+        );
+
+        let without_severity = serde_json::json!({
+            "errors": [{
+                "column": 1,
+                "path": "foo.py",
+                "name": "bad-assignment"
+            }]
+        });
+        let parsed: BaselineErrors = serde_json::from_value(without_severity.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), without_severity);
     }
 }

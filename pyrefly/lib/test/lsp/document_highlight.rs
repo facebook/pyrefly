@@ -24,16 +24,16 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
         .into_iter()
         .map(|range| {
             let kind = match transaction.identifier_at(handle, range.start()) {
-                Some(id) if id.context.is_write() => DocumentHighlightKind::WRITE,
-                Some(_) => DocumentHighlightKind::READ,
-                None => DocumentHighlightKind::TEXT,
+                Some(id) if id.context.is_write() => DocumentHighlightKind::Write,
+                Some(_) => DocumentHighlightKind::Read,
+                None => DocumentHighlightKind::Text,
             };
             format!(
                 "{}:\n{}",
                 match kind {
-                    DocumentHighlightKind::WRITE => "DocumentHighlightKind::WRITE",
-                    DocumentHighlightKind::READ => "DocumentHighlightKind::READ",
-                    _ => "DocumentHighlightKind::TEXT",
+                    DocumentHighlightKind::Write => "DocumentHighlightKind::Write",
+                    DocumentHighlightKind::Read => "DocumentHighlightKind::Read",
+                    _ => "DocumentHighlightKind::Text",
                 },
                 code_frame_of_source_at_range(module_info.contents(), range)
             )
@@ -75,10 +75,10 @@ y = x
 3 | y = x
         ^
 Highlights:
-DocumentHighlightKind::WRITE:
+DocumentHighlightKind::Write:
 2 | x = 1
     ^
-DocumentHighlightKind::READ:
+DocumentHighlightKind::Read:
 3 | y = x
         ^
 "#
@@ -104,13 +104,13 @@ Foo()
 5 | Foo()
       ^
 Highlights:
-DocumentHighlightKind::WRITE:
+DocumentHighlightKind::Write:
 2 | class Foo:
           ^^^
-DocumentHighlightKind::READ:
+DocumentHighlightKind::Read:
 5 | Foo()
     ^^^
-DocumentHighlightKind::READ:
+DocumentHighlightKind::Read:
 7 | Foo()
     ^^^
 "#
@@ -136,10 +136,10 @@ Foo().__init__()
 3 |     def __init__(self) -> None: ...
             ^
 Highlights:
-DocumentHighlightKind::WRITE:
+DocumentHighlightKind::Write:
 3 |     def __init__(self) -> None: ...
             ^^^^^^^^
-DocumentHighlightKind::READ:
+DocumentHighlightKind::Read:
 7 | Foo().__init__()
           ^^^^^^^^
 "#

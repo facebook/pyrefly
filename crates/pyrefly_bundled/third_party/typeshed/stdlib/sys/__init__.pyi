@@ -78,8 +78,8 @@ from builtins import object as _object
 from collections.abc import AsyncGenerator, Callable, Sequence
 from io import TextIOWrapper
 from types import FrameType, ModuleType, SimpleNamespace, TracebackType
-from typing import Any, Final, Literal, NoReturn, Protocol, TextIO, TypeAlias, TypeVar, final, overload, type_check_only
-from typing_extensions import LiteralString, deprecated
+from typing import Any, Final, Literal, Protocol, TextIO, TypeAlias, TypeVar, final, overload, type_check_only
+from typing_extensions import LiteralString, Never, deprecated
 
 _T = TypeVar("_T")
 _LazyImportMode: TypeAlias = Literal["normal", "all", "none"]
@@ -115,6 +115,7 @@ excepthook: Callable[[type[BaseException], BaseException, TracebackType | None],
 exec_prefix: str
 executable: str
 float_repr_style: Literal["short", "legacy"]
+_framework: str  # empty string on non-macOS platforms
 hexversion: int
 last_type: type[BaseException] | None
 last_value: BaseException | None
@@ -520,7 +521,7 @@ if sys.version_info >= (3, 11):
         """
         ...
 
-def exit(status: _ExitCode = None, /) -> NoReturn:
+def exit(status: _ExitCode = None, /) -> Never:
     """
     Exit the interpreter by raising SystemExit(status).
 
@@ -849,7 +850,7 @@ if sys.version_info >= (3, 12):
     if sys.platform == "linux":
         def activate_stack_trampoline(backend: str, /) -> None: ...
     else:
-        def activate_stack_trampoline(backend: str, /) -> NoReturn:
+        def activate_stack_trampoline(backend: str, /) -> Never:
             """Activate stack profiler trampoline *backend*."""
             ...
 

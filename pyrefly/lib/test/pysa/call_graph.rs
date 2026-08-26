@@ -2496,6 +2496,42 @@ def main(x) -> None:
 );
 
 call_graph_testcase!(
+    test_for_loop_with_parenthesized_iterator,
+    TEST_MODULE_NAME,
+    r#"
+def foo(in_scope: list[int], by_file: bool):
+  for path in in_scope or ([] if by_file else [0]):
+    pass
+"#,
+    &|context: &ModuleContext| {
+        let iter_targets = vec![{
+            create_call_target("builtins.list.__iter__", TargetType::Overrides)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("builtins.list", context)
+        }];
+        let next_targets = vec![
+            create_call_target("typing.Iterator.__next__", TargetType::Overrides)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("typing.Iterator", context)
+                .with_return_type(ScalarTypeProperties::int()),
+        ];
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "3:15-3:50|artificial-call|for-iter",
+                    regular_call_callees(iter_targets),
+                ),
+                (
+                    "3:15-3:50|artificial-call|for-next",
+                    regular_call_callees(next_targets),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
     test_list_of_methods_and_functions_called_in_loop,
     TEST_MODULE_NAME,
     r#"
@@ -3348,6 +3384,44 @@ def foo() -> None:
                 ),
                 (
                     "4:47-4:56|artificial-call|generator-next",
+                    regular_call_callees(next_targets),
+                ),
+            ],
+        )]
+    }
+);
+
+call_graph_testcase!(
+    test_generator_comprehension_with_parenthesized_iterator,
+    TEST_MODULE_NAME,
+    r#"
+def foo(values: list[int], defaults: list[int], condition: bool):
+  return (
+      value
+      for value in (values or (defaults if condition else []))
+  )
+"#,
+    &|context: &ModuleContext| {
+        let iter_targets = vec![{
+            create_call_target("builtins.list.__iter__", TargetType::Overrides)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("builtins.list", context)
+        }];
+        let next_targets = vec![
+            create_call_target("typing.Iterator.__next__", TargetType::Overrides)
+                .with_implicit_receiver(ImplicitReceiver::TrueWithObjectReceiver)
+                .with_receiver_class_for_test("typing.Iterator", context)
+                .with_return_type(ScalarTypeProperties::int()),
+        ];
+        vec![(
+            "test.foo",
+            vec![
+                (
+                    "5:21-5:61|artificial-call|generator-iter",
+                    regular_call_callees(iter_targets),
+                ),
+                (
+                    "5:21-5:61|artificial-call|generator-next",
                     regular_call_callees(next_targets),
                 ),
             ],

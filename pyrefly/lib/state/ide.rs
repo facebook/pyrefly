@@ -107,6 +107,13 @@ fn find_definition_key_from<'a>(bindings: &'a Bindings, key: &'a Key) -> Option<
                 current_idx = *k;
             }
             Binding::LoopPhi(phi) => current_idx = phi.0,
+            // A `Key::ModuleAlias` binding's `prev` leads back to the original
+            // `import foo as x`, one link per submodule import. Each link points to an earlier
+            // binding, so the chain can't loop and following it doesn't spend gas.
+            Binding::Module(x) if let (Key::ModuleAlias(..), Some(prev)) = (current_key, x.2) => {
+                gas.restore();
+                current_idx = prev;
+            }
             Binding::Phi(_, branches) if !branches.is_empty() => {
                 current_idx = branches[0].value_key
             }

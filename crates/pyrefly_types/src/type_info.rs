@@ -17,6 +17,7 @@ use pyrefly_derive::VisitMut;
 use pyrefly_util::assert_bytes;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
+use ruff_python_ast::name::Name;
 use starlark_map::small_map::SmallMap;
 use starlark_map::smallmap;
 use vec1::Vec1;
@@ -171,7 +172,7 @@ impl TypeInfo {
         mut branches: Vec<Self>,
         union_types: &impl Fn(Vec<Type>) -> Type,
         is_subset_eq: &impl Fn(&Type, &Type) -> bool,
-        join_style: JoinStyle<Arc<TypeInfo>>,
+        join_style: JoinStyle<&TypeInfo>,
     ) -> Self {
         match branches.len() {
             0 => Self::of_ty(Type::never()),
@@ -347,6 +348,21 @@ impl TypeInfo {
         } else {
             None
         }
+    }
+
+    /// Top-level attribute facets that store a narrowed value.
+    pub fn narrowed_attribute_types(&self) -> Vec<(&Name, &Type)> {
+        let Some(facets) = &self.facets else {
+            return Vec::new();
+        };
+        facets
+            .0
+            .iter()
+            .filter_map(|(kind, _)| match kind {
+                FacetKind::Attribute(name) => self.type_at_facet(kind).map(|ty| (name, ty)),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -923,7 +939,7 @@ fn join_types_impl(
         && types.iter().any(|t| t.is_any())
     {
         base_ty
-    } else if is_narrow {
+    } else if is_narrow && !base_ty.is_any() {
         // Check for the case where `base_ty` is directly in the merge before doing
         // a subset check. We do this to avoid the possibility of pinning a `Var` to
         // itself inside the join (which at one point caused a stack overflow).

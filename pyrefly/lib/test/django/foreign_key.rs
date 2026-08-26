@@ -10,6 +10,78 @@ use crate::test::django::util::django_env;
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+// https://github.com/facebook/pyrefly/issues/5157
+django_testcase!(
+    test_foreign_key_keyword_target,
+    r#"
+from typing import assert_type
+from uuid import UUID
+from django.db import models
+from django.db.models.fields.related_descriptors import RelatedManager
+
+class Author(models.Model):
+    class Meta:
+        app_label = "testapp"
+
+class Book(models.Model):
+    positional = models.ForeignKey("testapp.Author", models.CASCADE, related_name="positional_books")
+    author = models.ForeignKey(on_delete=models.CASCADE, to="testapp.Author", related_name="books")
+    editor = models.ForeignKey(to=Author, on_delete=models.CASCADE, null=True, related_name="edited_books")
+    reviewer = models.ForeignKey(to="Author", on_delete=models.CASCADE, related_name="reviewed_books")
+    sequel = models.ForeignKey(to="self", on_delete=models.CASCADE, null=True)
+
+    class Meta:
+        app_label = "testapp"
+
+book = Book()
+assert_type(book.positional, Author)
+assert_type(book.positional_id, int)
+assert_type(book.author, Author)
+assert_type(book.author_id, int)
+assert_type(book.editor, Author | None)
+assert_type(book.editor_id, int | None)
+assert_type(book.reviewer, Author)
+assert_type(book.reviewer_id, int)
+assert_type(book.sequel, Book | None)
+assert_type(book.sequel_id, int | None)
+assert_type(Author().books, RelatedManager[Book])
+assert_type(Author().edited_books, RelatedManager[Book])
+assert_type(Author().reviewed_books, RelatedManager[Book])
+assert_type(book.book_set, RelatedManager[Book])
+
+class Account(models.Model):
+    id = models.UUIDField(primary_key=True)
+
+class Profile(models.Model):
+    account = models.ForeignKey(to=Account, on_delete=models.CASCADE)
+
+assert_type(Profile().account_id, UUID)
+"#,
+);
+
+django_testcase!(
+    test_one_to_one_keyword_target,
+    r#"
+from typing import assert_type
+from django.db import models
+
+class Author(models.Model): ...
+
+class Profile(models.Model):
+    author = models.OneToOneField(to=Author, on_delete=models.CASCADE)
+
+class Draft(models.Model):
+    author = models.OneToOneField(to="Author", on_delete=models.CASCADE, null=True)
+
+assert_type(Profile().author, Author)
+assert_type(Profile().author_id, int)
+assert_type(Draft().author, Author | None)
+assert_type(Draft().author_id, int | None)
+assert_type(Author().profile, Profile)
+assert_type(Author().draft, Draft)
+"#,
+);
+
 django_testcase!(
     test_foreign_key_basic,
     r#"

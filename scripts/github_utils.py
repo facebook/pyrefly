@@ -31,7 +31,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-
 # ---------------------------------------------------------------------------
 # Bot filtering
 # ---------------------------------------------------------------------------
@@ -446,9 +445,11 @@ def display_contributors(
 
         github_sorted = sorted(
             github_users.items(),
-            key=lambda x: (-x[1]["commit_count"], x[1]["name"].lower())
-            if sort_by == "commits"
-            else (x[1]["name"].lower(), -x[1]["commit_count"]),
+            key=lambda x: (
+                (-x[1]["commit_count"], x[1]["name"].lower())
+                if sort_by == "commits"
+                else (x[1]["name"].lower(), -x[1]["commit_count"])
+            ),
         )
 
         for i, (_contributor_id, info) in enumerate(github_sorted, 1):
@@ -465,9 +466,11 @@ def display_contributors(
 
         name_sorted = sorted(
             name_based.items(),
-            key=lambda x: (-x[1]["commit_count"], x[1]["name"].lower())
-            if sort_by == "commits"
-            else (x[1]["name"].lower(), -x[1]["commit_count"]),
+            key=lambda x: (
+                (-x[1]["commit_count"], x[1]["name"].lower())
+                if sort_by == "commits"
+                else (x[1]["name"].lower(), -x[1]["commit_count"])
+            ),
         )
 
         for i, (_contributor_id, info) in enumerate(name_sorted, 1):
@@ -483,9 +486,11 @@ def display_contributors(
         print("-" * 80)
         github_sorted = sorted(
             github_users.items(),
-            key=lambda x: (-x[1]["commit_count"], x[1]["name"].lower())
-            if sort_by == "commits"
-            else (x[1]["name"].lower(), -x[1]["commit_count"]),
+            key=lambda x: (
+                (-x[1]["commit_count"], x[1]["name"].lower())
+                if sort_by == "commits"
+                else (x[1]["name"].lower(), -x[1]["commit_count"])
+            ),
         )
         handles = [f"@{info['name']}" for _, info in github_sorted]
         print(f"\n  {', '.join(handles)}")

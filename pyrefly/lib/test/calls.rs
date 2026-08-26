@@ -117,6 +117,386 @@ old_function()  # E: `old_function` is deprecated
 );
 
 testcase!(
+    test_deprecated_class,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use NewClass instead")
+class OldClass:
+    def method(self) -> int:
+        return 1
+
+instance = OldClass()  # E: Use NewClass instead
+instance.method()
+alias = OldClass  # E: `OldClass` is deprecated
+alias()  # E: `OldClass` is deprecated
+
+@deprecated("Use NewGeneric instead")
+class OldGeneric[T]: ...
+
+OldGeneric[int]()  # E: `OldGeneric` is deprecated
+
+class Outer:
+    @deprecated("Use NewClass instead")
+    class Inner: ...
+
+Outer.Inner()  # E: `Outer.Inner` is deprecated
+
+class Subclass(OldClass): ...  # E: `OldClass` is deprecated
+Subclass()
+
+class CurrentClass: ...
+CurrentClass()
+    "#,
+);
+
+testcase!(
+    test_deprecated_specialized_class_alias,
+    r#"
+from typing import TypeAlias
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old[T]:
+    def method(self) -> None: ...
+
+    def clone(self) -> "Old[T]":
+        return Old[T]()
+
+Alias = Old[int]  # E: `Old` is deprecated
+Alias()  # E: `Old` is deprecated
+x: Alias  # E: `Old` is deprecated
+class Child(Alias): ...  # E: `Old` is deprecated
+Child()
+
+(alias := Alias)  # E: `Old` is deprecated
+alias()  # E: `Old` is deprecated
+(called_alias := Alias)()  # E: `Old` is deprecated
+
+instance = Alias()  # E: `Old` is deprecated
+instance.method()
+def take(value: Alias) -> Alias: ...  # E: `Old` is deprecated  # E: `Old` is deprecated
+
+Old[int]()  # E: `Old` is deprecated
+ExplicitAlias: TypeAlias = Old[int]  # E: `Old` is deprecated
+ExplicitAlias()  # E: `Old` is deprecated
+explicit: ExplicitAlias  # E: `Old` is deprecated
+type ScopedAlias = Old[int]  # E: `Old` is deprecated
+scoped: ScopedAlias  # E: `Old` is deprecated
+classes = [Alias]  # E: `Old` is deprecated
+classes[0]()  # E: `Old` is deprecated
+
+@deprecated("Use New instead")
+class Plain: ...
+
+PlainAlias: TypeAlias = Plain  # E: `Plain` is deprecated
+PlainAlias()  # E: `Plain` is deprecated
+
+class Current[T]: ...
+CurrentAlias = Current[int]
+CurrentAlias()
+    "#,
+);
+
+testcase!(
+    test_deprecated_generic_class_alias,
+    r#"
+from typing import TypeVar
+from warnings import deprecated
+
+T = TypeVar("T")
+
+@deprecated("Use New instead")
+class Old[S]: ...
+
+GA = Old[T]  # E: `Old` is deprecated
+GA()  # E: `Old` is deprecated
+ga: GA  # E: `Old` is deprecated
+ga_int: GA[int]  # E: `Old` is deprecated
+GA[int]()  # E: `Old` is deprecated
+class Child(GA[int]): ...  # E: `Old` is deprecated
+
+class Current[S]: ...
+CurrentGA = Current[T]
+CurrentGA()
+current: CurrentGA[int]
+    "#,
+);
+
+// A `type[Old]` value may hold a subclass that is not deprecated, so only references to the
+// class itself or to an alias of it warn.
+testcase!(
+    test_deprecated_class_type_values,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old: ...
+
+def f(c: type[Old], o: Old) -> None:  # E: `Old` is deprecated  # E: `Old` is deprecated
+    c()
+    c.__name__
+    type(o)
+    o.__class__
+    classes = [c]
+    classes[0]()
+
+def g(o: Old) -> type[Old]:  # E: `Old` is deprecated  # E: `Old` is deprecated
+    return type(o)
+
+def h(o: Old) -> None:  # E: `Old` is deprecated
+    g(o)
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_header_and_nested,
+    r#"
+from warnings import deprecated
+
+class Base[T]: ...
+
+@deprecated("x")
+class Old(Base["Old"]):
+    class Inner:
+        def f(self) -> "Old": ...
+
+@deprecated("x")
+class Bounded[T: "Bounded"]: ...
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_annotation_forms,
+    r#"
+from warnings import deprecated
+
+@deprecated("x")
+class Old: ...
+
+def f(a: Old | None, b: type[Old], c: object) -> None:  # E: `Old` is deprecated  # E: `Old` is deprecated
+    if isinstance(c, Old):  # E: `Old` is deprecated
+        pass
+    try:
+        pass
+    except Exception as e:
+        pass
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_and_init,
+    r#"
+from warnings import deprecated
+
+@deprecated("class")
+class Old:
+    @deprecated("init")
+    def __init__(self) -> None: ...
+
+Old()  # E: `Old` is deprecated  # E: `Old.__init__` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_qualified_decorator,
+    r#"
+import dataclasses
+import enum
+import typing
+import typing_extensions
+
+@typing_extensions.deprecated("x")
+class A: ...
+
+@typing_extensions.deprecated("x")
+@dataclasses.dataclass
+class D:
+    x: int
+
+@typing_extensions.deprecated("x")
+class E(enum.Enum):
+    X = 1
+
+@typing_extensions.deprecated("x")
+class P(typing.Protocol): ...
+
+A()  # E: `A` is deprecated
+D(1)  # E: `D` is deprecated
+E.X  # E: `E` is deprecated
+def g(p: P) -> None: ...  # E: `P` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_walrus_reference,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old: ...
+
+(alias := Old)  # E: `Old` is deprecated
+alias()  # E: `Old` is deprecated
+(called_alias := Old)()  # E: `Old` is deprecated
+(outer_alias := (inner_alias := Old))  # E: `Old` is deprecated
+(instance := Old())  # E: `Old` is deprecated
+
+@deprecated("Use new_function instead")
+def old_function() -> None: ...
+
+(function_alias := old_function)  # E: `old_function` is deprecated
+function_alias()  # E: `old_function` is deprecated
+(called_function_alias := old_function)()  # E: `old_function` is deprecated
+(outer_function := (inner_function := old_function))()  # E: `old_function` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_returned_instance,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old:
+    def method(self) -> None: ...
+
+class Current:
+    def foo(self) -> Old: ...  # E: `Old` is deprecated
+
+Current().foo()
+instance = Current().foo()
+instance.method()
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_self_reference,
+    r#"
+from __future__ import annotations
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old:
+    def foo(self) -> "Old":
+        return Old()
+
+    def bar(self) -> Old:
+        return self.foo()
+
+    @classmethod
+    def make(cls) -> Old:
+        return Old()
+
+    @staticmethod
+    def make_static() -> Old:
+        return Old()
+
+    def nested(self) -> Old:
+        def make() -> Old:
+            return Old()
+        return make()
+
+def make() -> Old:  # E: `Old` is deprecated
+    return Old()  # E: `Old` is deprecated
+
+class Current:
+    def make(self) -> Old:  # E: `Old` is deprecated
+        return Old()  # E: `Old` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_self_reference_in_bases,
+    r#"
+from warnings import deprecated
+
+class Base[T]: ...
+
+@deprecated("Use New instead")
+class Old(Base["Old"]): ...
+
+class Current(Base[Old]): ...  # E: `Old` is deprecated
+
+Old()  # E: `Old` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_self_reference_in_type_parameters,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Bound[T: "Bound"]: ...
+
+@deprecated("Use New instead")
+class Constraints[T: ("Constraints", int)]: ...
+
+@deprecated("Use New instead")
+class Default[T = "Default"]: ...
+
+class Current[T: Bound]: ...  # E: `Bound` is deprecated
+
+Bound()  # E: `Bound` is deprecated
+Constraints()  # E: `Constraints` is deprecated
+Default()  # E: `Default` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_self_reference_in_decorators,
+    r#"
+from typing import Callable, cast
+from warnings import deprecated
+
+def identity[T](cls: type[T]) -> type[T]:
+    return cls
+
+@cast("Callable[[type[Old]], type[Old]]", identity)
+@deprecated("Use New instead")
+class Old: ...
+
+Old()  # E: `Old` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_generic_class_self_reference,
+    r#"
+from warnings import deprecated
+
+@deprecated("Use New instead")
+class Old[T]:
+    def clone(self) -> "Old[T]":
+        return Old[T]()
+
+    def other(self) -> "Other":  # E: `Other` is deprecated
+        return Other()  # E: `Other` is deprecated
+
+@deprecated("Use New instead")
+class Other:
+    def clone(self) -> "Other":
+        return Other()
+
+Old[int]()  # E: `Old` is deprecated
+    "#,
+);
+
+testcase!(
+    test_deprecated_class_3_12,
+    test_env_3_12(),
+    r#"
+from typing_extensions import deprecated
+
+@deprecated("Use NewClass instead", category=None)
+class OldClass: ...
+
+OldClass()  # E: `OldClass` is deprecated
+    "#,
+);
+
+testcase!(
     test_deprecated_function_reference,
     r#"
 from typing import Callable
@@ -321,6 +701,23 @@ testcase!(
     r#"
 from functools import reduce
 reduce(max, [1,2])
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3265
+// All of these iterators should have element type int without diagnostics.
+testcase!(
+    bug = "iter loses element types for set and dict literals",
+    test_iter_container_literal,
+    r#"
+from typing import Iterator, assert_type
+
+assert_type(iter([0]), Iterator[int])
+assert_type(iter({0}), Iterator[int])  # E: assert_type(Iterator[Any], Iterator[int]) failed
+assert_type(iter({0: 0}), Iterator[int])  # E: assert_type(Iterator[Any], Iterator[int]) failed
+assert_type(iter([x for x in [0]]), Iterator[int])
+assert_type(iter({x for x in [0]}), Iterator[int])
+assert_type(iter({x: x for x in [0]}), Iterator[int])
     "#,
 );
 

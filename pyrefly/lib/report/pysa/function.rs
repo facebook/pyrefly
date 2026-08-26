@@ -8,7 +8,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Not;
-use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_graph::index::Idx;
@@ -393,7 +392,7 @@ pub fn should_export_decorated_function(
     // We only want to export one function when we have an @overload chain.
     // If the function has no successor (function in the same scope with the same name), then we should export it.
     // If the function has successors, but is not an overload, then we should export it. It probably means the successor is a redefinition.
-    let has_successor = context.bindings.get(function.idx).successor.is_some();
+    let has_successor = context.bindings().get(function.idx).successor.is_some();
     !has_successor || !function.is_overload()
 }
 
@@ -408,11 +407,11 @@ pub fn get_exported_decorated_function<'a>(
     // or a property setter when `skip_property_getter` is true.
     let mut last_decorated_function = key_decorated_function;
     let (idx, undecorated) = loop {
-        let binding_decorated_function = context.bindings.get(last_decorated_function);
+        let binding_decorated_function = context.bindings().get(last_decorated_function);
 
         let undecorated_function = context
             .answers
-            .get_idx_ref(binding_decorated_function.undecorated_idx)
+            .get_idx(binding_decorated_function.undecorated_idx)
             .expect("undecorated function must be solved before building Pysa solutions");
         let is_getter_but_should_skip = skip_property_getter
             && undecorated_function
@@ -522,7 +521,7 @@ pub enum FunctionNode<'a> {
     ClassField {
         class: Class,
         name: Name,
-        field: Arc<ClassField>,
+        field: &'a ClassField,
     },
 }
 
@@ -571,8 +570,8 @@ impl<'a> FunctionNode<'a> {
         match self {
             FunctionNode::DecoratedFunction(function) => {
                 let definition_binding = Key::Definition(function.undecorated.identifier);
-                let idx = context.bindings.key_to_idx(&definition_binding);
-                context.answers.get_idx(idx).unwrap().arc_clone_ty()
+                let idx = context.bindings().key_to_idx(&definition_binding);
+                context.answers.get_idx(idx).unwrap().ty().clone()
             }
             FunctionNode::ClassField { field, .. } => field.ty(),
         }
@@ -589,13 +588,17 @@ impl<'a> FunctionNode<'a> {
                     Type::Overload(overload) => export_overload_signatures(&overload, context),
                     _ => {
                         let return_binding = Key::ReturnType(function.undecorated.identifier);
-                        let idx = context.answers_context.bindings.key_to_idx(&return_binding);
+                        let idx = context
+                            .answers_context
+                            .bindings()
+                            .key_to_idx(&return_binding);
                         let undecorated_return_type = context
                             .answers_context
                             .answers
                             .get_idx(idx)
                             .unwrap()
-                            .arc_clone_ty();
+                            .ty()
+                            .clone();
                         vec![FunctionSignature {
                             parameters: FunctionParameters::List(
                                 function
@@ -622,7 +625,7 @@ impl<'a> FunctionNode<'a> {
     pub fn exported_function_from_class_field(
         class: &Class,
         field_name: &Name,
-        class_field: Arc<ClassField>,
+        class_field: &'a ClassField,
         context: &'a ModuleAnswersContext,
     ) -> Option<Self> {
         let function_node = match get_class_field_declaration(class, field_name, context) {
@@ -631,7 +634,7 @@ impl<'a> FunctionNode<'a> {
                 definition: ClassFieldDefinition::MethodLike { definition, .. },
                 ..
             }) => {
-                let binding = context.bindings.get(*definition);
+                let binding = context.bindings().get(*definition);
                 if let Binding::Function { decorated_idx, .. } = binding {
                     let exported_function = get_exported_decorated_function(
                         *decorated_idx,
@@ -647,7 +650,7 @@ impl<'a> FunctionNode<'a> {
             _ => Some(FunctionNode::ClassField {
                 class: class.dupe(),
                 name: field_name.clone(),
-                field: class_field.dupe(),
+                field: class_field,
             }),
         }?;
 
@@ -804,7 +807,7 @@ pub fn get_all_decorated_functions<'a>(
     context: &'a ModuleAnswersContext,
 ) -> impl Iterator<Item = DecoratedFunction<'a>> + 'a {
     context
-        .bindings
+        .bindings()
         .keys::<KeyDecoratedFunction>()
         .map(|idx| DecoratedFunction {
             idx,

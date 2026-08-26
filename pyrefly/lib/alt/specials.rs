@@ -43,7 +43,7 @@ fn is_chained_attribute_access(x: &Expr) -> bool {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Apply a special form that takes exactly one type argument.
     /// Validates arity, evaluates the argument, wraps the result in a type form.
     pub(crate) fn apply_unary_special_form(
@@ -590,11 +590,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 |arg| self.heap.mk_typeform(arg),
             ),
             SpecialForm::Annotated if arguments.len() > 1 => {
-                let inner = self.expr_untype(&arguments[0], type_argument_context, errors);
+                let mut inner = self.expr_untype(&arguments[0], type_argument_context, errors);
                 let metadata: Vec<Type> = arguments[1..]
                     .iter()
                     .map(|e| self.expr_infer(e, &self.error_swallower()))
                     .collect();
+                if let Some(frame) = self.polars_frame_annotated_type(&inner, &metadata) {
+                    inner = frame;
+                }
                 Type::Annotated(Box::new(inner), metadata.into_boxed_slice())
             }
             SpecialForm::Annotated => self.error(

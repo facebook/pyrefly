@@ -9,6 +9,8 @@ BERT from TorchBenchmark with shape annotations.
 Original: pytorch/benchmark/torchbenchmark/models/BERT_pytorch/bert_pytorch/model/
 """
 
+from __future__ import annotations
+
 import math
 from collections.abc import Callable
 from typing import assert_type, TYPE_CHECKING
@@ -41,8 +43,8 @@ class LayerNorm[Features: IntVar](nn.Module):
         self.eps = eps
 
     def forward[Bs: IntTuple](
-        self, x: Tensor[[*Elements[Bs], Features]]
-    ) -> Tensor[[*Elements[Bs], Features]]:
+        self, x: Tensor[[*Bs, Features]]
+    ) -> Tensor[[*Bs, Features]]:
         mean = x.mean(-1, keepdim=True)
         assert_type(mean, Tensor[[*Elements[Bs], 1]])
         std = x.std(-1, keepdim=True)

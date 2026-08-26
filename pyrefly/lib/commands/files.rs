@@ -330,6 +330,11 @@ fn get_globs_and_config_for_files(
 }
 
 impl FilesArgs {
+    /// The file arguments as given on the command line. Empty means project-checking mode.
+    pub fn files(&self) -> &[String] {
+        &self.files
+    }
+
     pub fn resolve(
         self,
         config_override: ConfigOverrideArgs,

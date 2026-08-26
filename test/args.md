@@ -14,6 +14,21 @@ $ mkdir $TMPDIR/typing_extensions_project && \
 [0]
 ```
 
+## A runtime typing_extensions on the search path still exports special forms
+
+<!-- The runtime package defines `Self` depending on the Python version, so its definition is not
+     itself a valid type form. See https://github.com/facebook/pyrefly/issues/698.
+-->
+
+```scrut {output_stream: stdout}
+$ mkdir $TMPDIR/runtime_typing_extensions && \
+> touch $TMPDIR/runtime_typing_extensions/pyrefly.toml && \
+> echo -e 'import typing\nclass _SpecialForm:\n    def __init__(self, getitem): ...\nif hasattr(typing, "Self"):\n    Self = typing.Self\nelse:\n    @_SpecialForm\n    def Self(self, params): ...' > $TMPDIR/runtime_typing_extensions/typing_extensions.py && \
+> echo -e 'from typing import assert_type\nfrom typing_extensions import Self\nclass C:\n    def f(self) -> Self: ...\nassert_type(C().f(), C)' > $TMPDIR/runtime_typing_extensions/foo.py && \
+> $PYREFLY check $TMPDIR/runtime_typing_extensions/foo.py --search-path $TMPDIR/runtime_typing_extensions --python-version 3.12.0 --output-format=min-text
+[0]
+```
+
 ## We don't accidentally override typing_extensions with an installed package
 
 <!-- See https://typing.python.org/en/latest/spec/distributing.html#import-resolution-ordering:
@@ -39,7 +54,7 @@ $ touch $TMPDIR/pyrefly.toml && \
 > echo 'partial' > $TMPDIR/partial_site/lib-stubs/py.typed && \
 > echo 'c: int' > $TMPDIR/partial_site/lib-stubs/b.pyi && \
 > echo -e 'from typing import reveal_type\nfrom lib import a\nfrom lib.b import c\nreveal_type(a)\nreveal_type(c)' > $TMPDIR/partial.py && \
-> $PYREFLY check $TMPDIR/partial.py --python-version 3.13.0 --site-package-path $TMPDIR/partial_site --output-format=min-text
+> $PYREFLY check $TMPDIR/partial.py --python-version 3.13.0 --site-packages-path $TMPDIR/partial_site --output-format=min-text
  INFO * revealed type: str * (glob)
  INFO * revealed type: int * (glob)
 [0]
@@ -52,7 +67,7 @@ $ mkdir $TMPDIR/site_package_missing_source && \
 > mkdir $TMPDIR/site_package_missing_source/pkg-stubs && \
 > echo "class X: ..." > $TMPDIR/site_package_missing_source/pkg-stubs/__init__.py && \
 > echo "from pkg import X" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --error=missing-source --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
+> $PYREFLY check $TMPDIR/foo.py --error=missing-source --site-packages-path $TMPDIR/site_package_missing_source --output-format=min-text
 ERROR * Found stubs for `pkg`, but no source* (glob)
 [1]
 ```
@@ -63,7 +78,7 @@ ERROR * Found stubs for `pkg`, but no source* (glob)
 $ mkdir $TMPDIR/error_missing_source && \
 > echo -e '[errors]\nmissing-source="error"' > $TMPDIR/error_missing_source/pyrefly.toml && \
 > echo "from pkg import X" > $TMPDIR/error_missing_source/foo.py && \
-> $PYREFLY check $TMPDIR/error_missing_source/foo.py --ignore=missing-source --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
+> $PYREFLY check $TMPDIR/error_missing_source/foo.py --ignore=missing-source --site-packages-path $TMPDIR/site_package_missing_source --output-format=min-text
 [0]
 ```
 
@@ -71,7 +86,7 @@ $ mkdir $TMPDIR/error_missing_source && \
 
 ```scrut {output_stream.stdout}
 $ echo -e '[errors]\nmissing-source=true' > $TMPDIR/error_missing_source/pyrefly.toml && \
-> $PYREFLY check $TMPDIR/error_missing_source/foo.py --site-package-path $TMPDIR/site_package_missing_source --output-format=min-text
+> $PYREFLY check $TMPDIR/error_missing_source/foo.py --site-packages-path $TMPDIR/site_package_missing_source --output-format=min-text
 ERROR * [missing-source] (glob)
 [1]
 ```
@@ -90,9 +105,21 @@ $ touch $TMPDIR/pyrefly.toml && \
 > mkdir $TMPDIR/site_package_missing_stubs/django/forms && \
 > touch $TMPDIR/site_package_missing_stubs/django/forms/__init__.py && \
 > echo "from django import forms; from typing import reveal_type; reveal_type(forms)" > $TMPDIR/foo.py && \
-> $PYREFLY check $TMPDIR/foo.py --error untyped-import --ignore missing-module-attribute --site-package-path $TMPDIR/site_package_missing_stubs --output-format=min-text
+> $PYREFLY check $TMPDIR/foo.py --error untyped-import --ignore missing-module-attribute --site-packages-path $TMPDIR/site_package_missing_stubs --output-format=min-text
 ERROR * Cannot find type stubs for module `django` * (glob)
  INFO * revealed type: Module[django.forms] * (glob)
+[1]
+```
+
+## An optional import still reports a module without type stubs
+
+```scrut {output_stream.stdout}
+$ touch $TMPDIR/pyrefly.toml && \
+> mkdir -p $TMPDIR/optional_import_site/django && \
+> touch $TMPDIR/optional_import_site/django/__init__.py && \
+> printf 'try:\n    import django\nexcept ImportError:\n    django = None\n' > $TMPDIR/optional_import.py && \
+> $PYREFLY check $TMPDIR/optional_import.py --error untyped-import --site-packages-path $TMPDIR/optional_import_site --output-format=min-text
+ERROR * Cannot find type stubs for module `django` * (glob)
 [1]
 ```
 
@@ -113,6 +140,15 @@ $ echo -e '[errors]\nimplicit-any = "ignore"' > $TMPDIR/pyrefly.toml && \
 > echo "x = []" > $TMPDIR/foo.py && \
 > $PYREFLY check $TMPDIR/foo.py --preset strict --output-format=min-text
 [0]
+```
+
+## Strict mode rejects assigning to methods
+
+```scrut {output_stream: stdout}
+$ echo -e 'class A:\n    def f(self) -> None: ...\n\ndef replacement(self: A) -> None: ...\n\nA.f = replacement' > $TMPDIR/method_assign.py && \
+> $PYREFLY check $TMPDIR/method_assign.py --preset strict --output-format=min-text --summary=none
+ERROR * Cannot assign to method `f` [method-assign] (glob)
+[1]
 ```
 
 ## Scalar fields in the config file override `--preset`

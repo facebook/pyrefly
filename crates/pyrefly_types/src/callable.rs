@@ -7,12 +7,9 @@
 
 use std::borrow::Cow;
 use std::cmp::Ord;
-use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
 use std::hash::Hash;
-use std::hash::Hasher;
-use std::ops::Deref;
 
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
@@ -33,106 +30,6 @@ use crate::type_output::DisplayOutput;
 use crate::type_output::TypeOutput;
 use crate::types::AnyStyle;
 use crate::types::Type;
-
-/// A wrapper for auxiliary data whose identity should be completely ignored
-/// in equality, hashing, ordering, and type-equality comparisons.
-/// `IdentityIgnored<T>` always compares as equal, hashes as a no-op, and
-/// orders as `Equal` — making it transparent to all identity checks.
-///
-/// This is useful for attaching auxiliary data (e.g. closure caches) to
-/// types that derive `PartialEq`, `Hash`, `Ord`, etc. without affecting
-/// their logical identity.
-#[derive(Debug, Clone)]
-pub struct IdentityIgnored<T>(pub T);
-
-impl<T> PartialEq for IdentityIgnored<T> {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-impl<T> Eq for IdentityIgnored<T> {}
-
-impl<T> Hash for IdentityIgnored<T> {
-    fn hash<H: Hasher>(&self, _state: &mut H) {}
-}
-
-impl<T> PartialOrd for IdentityIgnored<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<T> Ord for IdentityIgnored<T> {
-    fn cmp(&self, _other: &Self) -> Ordering {
-        Ordering::Equal
-    }
-}
-
-impl<T> Visit<Type> for IdentityIgnored<T> {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
-}
-
-impl<T> VisitMut<Type> for IdentityIgnored<T> {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
-}
-
-impl<T> TypeEq for IdentityIgnored<T> {
-    fn type_eq(&self, _other: &Self, _ctx: &mut TypeEqCtx) -> bool {
-        true
-    }
-}
-
-impl<T> Deref for IdentityIgnored<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
-
-/// Auxiliary display data that is ignored by type identity but follows type transformations.
-#[derive(Debug, Clone, Default, Visit, VisitMut)]
-pub struct DisplayOnly<T>(pub T);
-
-impl<T> PartialEq for DisplayOnly<T> {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-impl<T> Eq for DisplayOnly<T> {}
-
-impl<T> Hash for DisplayOnly<T> {
-    fn hash<H: Hasher>(&self, _state: &mut H) {}
-}
-
-impl<T> PartialOrd for DisplayOnly<T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<T> Ord for DisplayOnly<T> {
-    fn cmp(&self, _other: &Self) -> Ordering {
-        Ordering::Equal
-    }
-}
-
-impl<T> TypeEq for DisplayOnly<T> {
-    fn type_eq(&self, _other: &Self, _ctx: &mut TypeEqCtx) -> bool {
-        true
-    }
-}
-
-impl<T> Deref for DisplayOnly<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
@@ -164,27 +61,6 @@ impl Callable {
                     })
             }
             _ => false,
-        }
-    }
-
-    pub fn contains_callable_residual(&self) -> bool {
-        let check = |t: &Type| matches!(t, Type::CallableResidual(_));
-        if self.ret.any(check) {
-            return true;
-        }
-        match &self.params {
-            Params::List(params) | Params::Partial(params) => {
-                params.items().iter().any(|p| p.as_type().any(check))
-            }
-            Params::ParamSpec(prefix, p) => {
-                prefix.iter().any(|pp| {
-                    let ty = match pp {
-                        PrefixParam::PosOnly(_, ty, _) | PrefixParam::Pos(_, ty, _) => ty,
-                    };
-                    ty.any(check)
-                }) || p.any(check)
-            }
-            Params::Ellipsis | Params::Materialization => false,
         }
     }
 
@@ -473,7 +349,7 @@ impl PrefixParam {
 #[derive(Visit, VisitMut, TypeEq)]
 pub enum Params {
     List(ParamList),
-    /// The residual parameter list of a `functools.partial(...)`: behaves like `List` for
+    /// The remaining parameter list of a `functools.partial(...)`: behaves like `List` for
     /// call-checking, but is additionally recognized as assignable to `functools.partial[ret]`
     /// (see the subtyping rule in `subset.rs`). Carries the parameters left after binding a prefix.
     Partial(ParamList),
@@ -762,7 +638,7 @@ impl Callable {
         }
     }
 
-    /// Build a `Callable` carrying a [`Params::Partial`] residual signature, returning `ret`.
+    /// Build a `Callable` carrying a [`Params::Partial`] signature, returning `ret`.
     pub fn partial(params: ParamList, ret: Type) -> Self {
         Self {
             params: Params::Partial(params),

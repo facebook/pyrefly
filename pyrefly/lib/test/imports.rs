@@ -8,8 +8,11 @@
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::fs_anyhow;
 
+use crate::binding::binding::Key;
+use crate::binding::binding::KeyExport;
 use crate::test::util::TestEnv;
 use crate::testcase;
 
@@ -231,12 +234,435 @@ import foo.baz
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/5193
+testcase!(
+    test_import_submodule_after_parent_alias,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+import foo.bar
+assert_type(f.bar.x, int)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5193
+testcase!(
+    test_import_submodule_before_parent_alias,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo.bar
+import foo as f
+assert_type(f.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_flow,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+f.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+
+def g():
+    import foo.bar
+
+f.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+import foo.bar
+assert_type(f.bar.x, int)
+
+def h():
+    import foo as f2
+    import foo as f3
+    import foo.baz
+    assert_type(f2.baz.x, str)
+    assert_type(f3.baz.x, str)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_conditional,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo
+import foo as f
+def cond() -> bool: ...
+if cond():
+    import foo.bar
+assert_type(f.bar.x, int)
+assert_type(foo.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_dotted_alias_after_sibling_submodule,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo.baz
+import foo.bar as fb
+assert_type(fb.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_after_parent_alias_rebound,
+    env_import_different_submodules(),
+    r#"
+from typing import Literal, assert_type
+import foo as f
+f = 1
+import foo.bar
+assert_type(f, Literal[1])
+"#,
+);
+
+fn env_reexport_parent_alias() -> TestEnv {
+    let mut t = env_import_different_submodules();
+    t.add_with_path(
+        "reexp1",
+        "reexp1.pyi",
+        "import foo as foo\nimport foo.bar\n",
+    );
+    t.add_with_path(
+        "reexp2",
+        "reexp2.pyi",
+        "import foo.bar\nimport foo as foo\n",
+    );
+    t
+}
+
+testcase!(
+    test_reexport_parent_alias_with_submodule,
+    env_reexport_parent_alias(),
+    r#"
+from typing import assert_type
+from reexp1 import foo as a
+from reexp2 import foo as b
+assert_type(a.bar.x, int)
+assert_type(b.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_in_function,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+
+def before():
+    assert_type(f.bar.x, int)
+
+import foo.bar
+
+def after():
+    assert_type(f.bar.x, int)
+    f.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+
+class C:
+    def m(self):
+        assert_type(f.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_before_parent_alias_in_function,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo.bar
+
+def before():
+    assert_type(f.bar.x, int)
+
+import foo as f
+
+def after():
+    assert_type(f.bar.x, int)
+    f.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+
+class C:
+    def m(self):
+        assert_type(f.bar.x, int)
+"#,
+);
+
+testcase!(
+    test_import_submodule_parent_alias_in_nested_function,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+def outer():
+    import foo as f
+    def before():
+        assert_type(f.bar.x, int)
+    import foo.bar
+    def after():
+        assert_type(f.bar.x, int)
+    f.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+"#,
+);
+
+testcase!(
+    test_import_submodule_global_alias,
+    env_import_different_submodules(),
+    r#"
+from typing import assert_type
+import foo as f
+
+def g():
+    global f
+    import foo as f
+    import foo.bar
+    assert_type(f.bar.x, int)
+
+def outer():
+    import foo as f2
+
+    def inner():
+        nonlocal f2
+        import foo as f2
+        import foo.bar
+        assert_type(f2.bar.x, int)
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5193
+testcase!(
+    bug = "Each submodule below is available on the alias at runtime",
+    test_import_submodule_parent_alias_unsupported,
+    env_import_different_submodules(),
+    r#"
+import foo as f
+
+def g():
+    import foo.bar
+    f.bar.x  # E: Module `foo.bar` exists, but was not imported explicitly.
+
+import foo.baz as _
+import foo as f2
+f2.baz.x  # E: Module `foo.baz` exists, but was not imported explicitly.
+"#,
+);
+
 testcase!(
     test_bad_import,
     r#"
 from typing import assert_type, Any
 from builtins import not_a_real_value  # E: Could not import `not_a_real_value` from `builtins`
 assert_type(not_a_real_value, Any)
+"#,
+);
+
+// A `finally` after a terminating `try` runs, so it is ordinary reachable code. Binding it
+// as reachable must not leave the flow looking statically dead, which would suppress the
+// import diagnostics that check is meant to silence only for version-gated code.
+testcase!(
+    test_bad_import_in_finally_after_terminating_try,
+    r#"
+def f() -> None:
+    try:
+        raise SystemExit
+    finally:
+        from builtins import not_a_real_value  # E: Could not import `not_a_real_value` from `builtins`
+"#,
+);
+
+// A statically dead `while` whose body terminates must leave both termination flags as it
+// found them; restoring only one leaves the flow matching `is_unreachable_from_static_test`,
+// which suppresses import diagnostics after the loop.
+testcase!(
+    test_bad_import_after_dead_while_that_returns,
+    r#"
+def f() -> None:
+    while False:
+        return  # E: This code is unreachable
+    from builtins import not_a_real_value  # E: Could not import `not_a_real_value` from `builtins`
+"#,
+);
+
+// `chunk` is `3.0-3.12` in typeshed's VERSIONS and has no third-party stub, so 3.13 shows
+// version filtering on its own. `distutils` would not: it is `3.0-3.11`, but the bundled
+// setuptools stubs also ship it, so rejecting the stdlib copy only changes which stub answers.
+testcase!(
+    test_stdlib_module_removed_in_python_version,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+import chunk  # E: Cannot find module `chunk`
+"#,
+);
+
+// The upper boundary of a removed module: still present on the last version that had it.
+testcase!(
+    test_stdlib_module_available_on_final_python_version,
+    TestEnv::new_with_version(PythonVersion::new(3, 11, 0)),
+    r#"
+import distutils
+"#,
+);
+
+// `tomllib` is `3.11-` in typeshed's VERSIONS. https://github.com/facebook/pyrefly/issues/5162
+testcase!(
+    test_optional_import_with_fallback,
+    TestEnv::one("tomli", "").with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+from typing_extensions import reveal_type
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+reveal_type(tomllib)  # E: revealed type: Module[tomli] | Module[tomllib]
+"#,
+);
+
+testcase!(
+    test_optional_import_with_none_fallback,
+    TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+try:
+    import tomllib
+except Exception:
+    tomllib = None
+"#,
+);
+
+testcase!(
+    test_optional_from_import_with_fallback,
+    TestEnv::one("tomli", "def loads(s: str) -> dict[str, object]: ...")
+        .with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+try:
+    from tomllib import loads
+except ModuleNotFoundError:
+    from tomli import loads
+
+try:
+    from tomllib import load, loads  # E: Cannot find module `tomllib`
+except ModuleNotFoundError:
+    from tomli import loads
+"#,
+);
+
+testcase!(
+    test_import_in_try_without_fallback,
+    r#"
+try:
+    import not_a_real_module  # E: Cannot find module `not_a_real_module`
+except ImportError:
+    pass
+"#,
+);
+
+testcase!(
+    test_optional_import_needs_fallback_in_every_handler,
+    r#"
+try:
+    import nomod_x  # E: Cannot find module `nomod_x`
+except ImportError:
+    pass
+except Exception:
+    nomod_x = None
+"#,
+);
+
+testcase!(
+    test_optional_import_with_missing_fallback,
+    r#"
+try:
+    import nomod_x
+except:
+    import nomod_x  # E: Cannot find module `nomod_x`
+
+try:
+    from nomod_x import y
+except:
+    from nomod_z import y  # E: Cannot find module `nomod_z`
+"#,
+);
+
+testcase!(
+    test_optional_import_fallback_in_outer_try,
+    r#"
+try:
+    try:
+        import nomod  # E: Cannot find module `nomod`
+    except ImportError:
+        pass
+except Exception:
+    nomod = None
+"#,
+);
+
+testcase!(
+    test_optional_import_inner_try_finally,
+    r#"
+try:
+    try:
+        import nomod
+    finally:
+        pass
+except ImportError:
+    nomod = None
+"#,
+);
+
+testcase!(
+    test_optional_import_in_def_or_class,
+    r#"
+try:
+    def f():
+        import nomod_def  # E: Cannot find module `nomod_def`
+    class C:
+        import nomod_class  # E: Cannot find module `nomod_class`
+except ImportError:
+    nomod_def = None
+    nomod_class = None
+"#,
+);
+
+testcase!(
+    test_optional_import_chained_fallbacks,
+    r#"
+try:
+    import nomod_a
+except ImportError:
+    try:
+        import nomod_b as nomod_a
+    except ImportError:
+        nomod_a = None
+"#,
+);
+
+testcase!(
+    bug = "A name imported from a module that lacks it at this version should have a fallback",
+    test_optional_from_import_of_missing_name,
+    TestEnv::new_with_version(PythonVersion::new(3, 10, 0)),
+    r#"
+try:
+    from typing import Self  # E: Could not import `Self` from `typing`
+except ImportError:
+    from typing_extensions import Self
+"#,
+);
+
+// On 3.14 `typing.pyi` re-exports `ForwardRef` from `annotationlib`, which is itself `3.14-`.
+// Imports originating inside bundled typeshed are resolved against a config pinned to the
+// default version, so version filtering must not apply to them or that re-export silently
+// resolves to typing's own fallback class instead. Comparing the two spellings is what makes
+// the difference visible: unfiltered they are one class, filtered they are two.
+testcase!(
+    test_typeshed_internal_import_of_version_gated_module,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from annotationlib import ForwardRef as AnnotationlibForwardRef
+from typing import ForwardRef, assert_type
+
+def f(x: ForwardRef) -> None:
+    assert_type(x, AnnotationlibForwardRef)
 "#,
 );
 
@@ -952,7 +1378,7 @@ fn env_class_x_deprecated() -> TestEnv {
 from warnings import deprecated
 @deprecated("Don't use this")
 class X: ...
-x: X = X()
+x: X = X() # E: `X` is deprecated # E: `X` is deprecated
 "#,
     )
 }
@@ -963,18 +1389,27 @@ testcase!(
     r#"
 from foo import X # E: `X` is deprecated
 
-x = X()
+x = X() # E: `foo.X` is deprecated
 "#,
 );
 
 testcase!(
-    bug = "When something is imported via *, we should warn on usage not on import",
     test_import_star_deprecated_class_warn,
     env_class_x_deprecated(),
     r#"
 from foo import *
 
-x = X()
+x = X() # E: `foo.X` is deprecated
+"#,
+);
+
+testcase!(
+    test_import_module_deprecated_class_warn,
+    env_class_x_deprecated(),
+    r#"
+import foo
+
+x = foo.X() # E: `foo.X` is deprecated
 "#,
 );
 
@@ -1016,6 +1451,85 @@ testcase!(
 from foo import *
 
 x()  # E: `foo.x` is deprecated
+"#,
+);
+
+fn env_reexport_deprecated() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "mypkg._private",
+        "mypkg/_private.py",
+        r#"
+from warnings import deprecated
+
+@deprecated("Don't use this class")
+class MyClass: ...
+
+@deprecated("Don't use this function")
+def my_func(): ...
+
+class NonDeprecatedClass: ...
+"#,
+    );
+    t.add_with_path(
+        "mypkg",
+        "mypkg/__init__.py",
+        r#"
+from mypkg._private import MyClass, my_func, NonDeprecatedClass # E: `MyClass` is deprecated # E: `my_func` is deprecated
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_deprecated_reexport_warn,
+    env_reexport_deprecated(),
+    r#"
+from mypkg import MyClass # E: `MyClass` is deprecated
+from mypkg import my_func # E: `my_func` is deprecated
+from mypkg import NonDeprecatedClass
+
+_ = MyClass()  # E: `mypkg._private.MyClass` is deprecated
+my_func()  # E: `mypkg._private.my_func` is deprecated
+"#,
+);
+
+fn env_chained_reexport_deprecated() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "pkg.origin",
+        "pkg/origin.py",
+        r#"
+from warnings import deprecated
+
+@deprecated("Deprecation message")
+class DepClass: ...
+"#,
+    );
+    t.add_with_path(
+        "pkg.middle",
+        "pkg/middle.py",
+        r#"
+from pkg.origin import DepClass as MiddleClass # E: `DepClass` is deprecated
+"#,
+    );
+    t.add_with_path(
+        "pkg.outer",
+        "pkg/outer.py",
+        r#"
+from pkg.middle import MiddleClass # E: `MiddleClass` is deprecated
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_deprecated_chained_reexport_warn,
+    env_chained_reexport_deprecated(),
+    r#"
+from pkg.outer import MiddleClass # E: `MiddleClass` is deprecated
+
+_ = MiddleClass()  # E: `pkg.origin.DepClass` is deprecated
 "#,
 );
 
@@ -1462,6 +1976,38 @@ from b import X  # E: Cannot assign to `X` because it is imported as final
 "#,
 );
 
+/// A re-export chain may pass through the same module more than once under
+/// different names, so walking it terminates on a repeated (module, name) pair
+/// rather than a repeated module. Here `m.name1` resolves via `n.name2` back to
+/// `m.name3`, which is the `Final` definition the reassignment must report.
+fn env_final_reexport_revisits_module() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "m",
+        r#"
+from typing import Final
+from n import name2 as name1
+name3: Final[int] = 1
+"#,
+    );
+    t.add(
+        "n",
+        r#"
+from m import name3 as name2
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_final_through_reexport_revisiting_module,
+    env_final_reexport_revisits_module(),
+    r#"
+from m import name1
+name1 = 2  # E: Cannot assign to `name1` because it is imported as final
+"#,
+);
+
 fn env_all_binop_add() -> TestEnv {
     let mut t = TestEnv::new();
     t.add(
@@ -1623,6 +2169,7 @@ y: str = "hello"
 _name = "x"
 __all__ = ["y"]
 __all__.append(_name)  # E: `__all__` could not be statically analyzed
+__all__.remove("y")
 "#,
     )
 }
@@ -1875,6 +2422,122 @@ fn test_pkgutil_namespace_absorbs_implicit_namespace() {
 }
 
 // ----------------------------------------------------------------------------
+// Search-path ordering regression.
+// ----------------------------------------------------------------------------
+
+#[test]
+fn test_search_path_module_beats_later_package() {
+    // A .py module in search_path[0] must beat a package directory in
+    // search_path[1]. Python's sys.path semantics are first-match-wins
+    // regardless of whether the match is a .py file or a package.
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::write(root.join("widget.py"), "class WidgetHandler: ...\n").unwrap();
+    std::fs::create_dir(root.join("widget_pkg")).unwrap();
+    std::fs::create_dir(root.join("widget_pkg/widget")).unwrap();
+    std::fs::write(root.join("widget_pkg/widget/__init__.py"), "").unwrap();
+
+    let mut env = TestEnv::new().with_site_package_paths(vec![
+        root.to_path_buf(),      // root/widget.py — should win
+        root.join("widget_pkg"), // root/widget_pkg/widget/__init__.py — should lose
+    ]);
+    // No error expected: widget.py from the first search path should be
+    // resolved, making WidgetHandler importable.
+    env.add_with_path("main", "main.py", "from widget import WidgetHandler\n");
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+#[test]
+fn test_missing_source_not_reported_where_import_never_runs() {
+    // The installed `foo` package has no `_types` module; only `foo-stubs` provides it.
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("foo")).unwrap();
+    std::fs::create_dir_all(root.join("foo-stubs")).unwrap();
+    std::fs::write(root.join("foo/__init__.py"), "").unwrap();
+    std::fs::write(root.join("foo-stubs/__init__.pyi"), "").unwrap();
+    std::fs::write(root.join("foo-stubs/_types.pyi"), "X = int\n").unwrap();
+
+    let mut env = TestEnv::new()
+        .with_site_package_paths(vec![root.to_path_buf()])
+        .enable_missing_source_error();
+    env.add_with_path(
+        "main",
+        "main.py",
+        r#"
+from typing import TYPE_CHECKING
+import foo._types  # E: Found stubs for `foo._types`, but no source
+from foo._types import X  # E: Found stubs for `foo._types`, but no source
+import whatthepatch  # E: Stubs for `whatthepatch` are bundled with Pyrefly
+if TYPE_CHECKING:
+    import foo._types
+    from foo._types import X
+    import whatthepatch
+    import nonexistent_xyz  # E: Cannot find module `nonexistent_xyz`
+"#,
+    );
+    env.add_with_path(
+        "stub",
+        "stub.pyi",
+        "import foo._types\nfrom foo._types import X\nimport whatthepatch\n",
+    );
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main"), handle_fn("stub")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+#[test]
+fn test_missing_source_for_submodule_imported_from_package() {
+    // The installed `foo` package has no `_types` module; only `foo-stubs` provides it.
+    // `bar` is not installed at all; only `bar-stubs` provides it and its `sub` module.
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    std::fs::create_dir_all(root.join("foo")).unwrap();
+    std::fs::create_dir_all(root.join("foo-stubs")).unwrap();
+    std::fs::create_dir_all(root.join("bar-stubs")).unwrap();
+    std::fs::write(root.join("foo/__init__.py"), "").unwrap();
+    std::fs::write(root.join("foo-stubs/__init__.pyi"), "").unwrap();
+    std::fs::write(root.join("foo-stubs/_types.pyi"), "X = int\n").unwrap();
+    std::fs::write(root.join("bar-stubs/__init__.pyi"), "").unwrap();
+    std::fs::write(root.join("bar-stubs/sub.pyi"), "").unwrap();
+
+    let mut env = TestEnv::new()
+        .with_site_package_paths(vec![root.to_path_buf()])
+        .enable_missing_source_error();
+    // `bar` itself has no source, so only the statement-level error for `bar` is reported.
+    env.add_with_path(
+        "main",
+        "main.py",
+        r#"
+from typing import TYPE_CHECKING
+from foo import _types  # E: Found stubs for `foo._types`, but no source
+from bar import sub  # E: Found stubs for `bar`, but no source
+try:
+    from foo import _types as optional_types
+except ImportError:
+    optional_types = None
+if TYPE_CHECKING:
+    from foo import _types as checked_types
+"#,
+    );
+    env.add_with_path("stub", "stub.pyi", "from foo import _types\n");
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main"), handle_fn("stub")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+// ----------------------------------------------------------------------------
 // Cross-module class rebind tests: importers should observe whichever class
 // the visible result chose. See `assign.rs` for the same-module regressions.
 // ----------------------------------------------------------------------------
@@ -2122,6 +2785,65 @@ c = types_mod.MyConfig()
 assert_type(c.value, int)
 o = other_mod.OtherConfig()
 assert_type(o.name, str)
+"#,
+);
+
+// Test the symbol-list form: `import_thrift(<module>, [<name>, ...])`.
+fn env_special_import_symbol_list() -> TestEnv {
+    let mut t = TestEnv::new().with_extra_file_extensions(vec!["thrift".to_owned()]);
+    t.add_with_path(
+        "service.types.thrift",
+        "service/types.thrift",
+        r#"
+class MyConfig:
+    value: int
+
+class OtherConfig:
+    name: str
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_special_import_symbol_list,
+    env_special_import_symbol_list(),
+    r#"
+from typing import assert_type
+import_thrift("service/types.thrift", ["MyConfig", "OtherConfig"])
+c = MyConfig()
+assert_type(c.value, int)
+o = OtherConfig()
+assert_type(o.name, str)
+"#,
+);
+
+// Names left out of the list are not imported.
+testcase!(
+    test_special_import_symbol_list_excludes_others,
+    env_special_import_symbol_list(),
+    r#"
+import_thrift("service/types.thrift", ["MyConfig"])
+c = MyConfig()
+o = OtherConfig()  # E: Could not find name `OtherConfig`
+"#,
+);
+
+testcase!(
+    test_special_import_symbol_list_missing_symbol,
+    env_special_import_symbol_list(),
+    r#"
+import_thrift("service/types.thrift", ["NoSuchConfig"])  # E: Could not import `NoSuchConfig` from `service.types.thrift`
+"#,
+);
+
+// An unresolvable module makes the listed names `Any` rather than an error.
+testcase!(
+    test_special_import_symbol_list_unresolvable,
+    env_special_import_symbol_list(),
+    r#"
+import_thrift("nonexistent/types.thrift", ["MyConfig"])
+c = MyConfig()
 "#,
 );
 
@@ -2387,5 +3109,121 @@ from bar import c
 from bar import d
 from bar import e  # E: `e` is not exported from module `bar`
 from bar import f
+"#,
+);
+
+fn env_implicit_reexport_removed_from_all() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+c: int = 3
+"#,
+    );
+    t.add(
+        "bar",
+        r#"
+from foo import c
+__all__ = ["c"]
+__all__.remove("c")
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_implicit_reexport_removed_from_all,
+    env_implicit_reexport_removed_from_all().enable_implicit_reexport_error(),
+    r#"
+from bar import c  # E: `c` is not exported from module `bar`
+"#,
+);
+
+// A directory import without an alias binds its first component, like any other
+// dotted import.
+testcase!(
+    test_import_files_directory_no_alias,
+    r#"
+import myproject.schemas.__files__
+import some.dir.__recursefiles__
+x = myproject
+y = some
+"#,
+);
+
+// An empty name in `__all__` is reported where it is written, and does not
+// become part of the module's export surface: re-exporting it through a
+// wildcard would promise an export no importer can ever resolve.
+fn env_empty_dunder_all_name() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "inner",
+        r#"__all__ = [""]  # E: Name `` is listed in `__all__` but is not defined in the module"#,
+    );
+    t.add("middle", "from inner import *");
+    t
+}
+
+testcase!(
+    test_wildcard_reexport_of_empty_dunder_all_name,
+    env_empty_dunder_all_name(),
+    r#"
+from middle import *
+"#,
+);
+
+#[test]
+fn test_empty_dunder_all_name_has_no_synthetic_binding() {
+    let (state, handle) = TestEnv::one("main", r#"__all__ = ["", "missing"]"#).to_state();
+    let transaction = state.transaction();
+    let answers = transaction.get_answers(&handle("main")).unwrap();
+    let bindings = answers.bindings();
+    assert!(!bindings.keys::<Key>().any(|idx| {
+        matches!(bindings.idx_to_key(idx), Key::Import(import) if import.0.is_empty())
+    }));
+    assert!(
+        bindings
+            .keys::<KeyExport>()
+            .all(|idx| !bindings.idx_to_key(idx).0.is_empty())
+    );
+    assert!(
+        bindings
+            .keys::<KeyExport>()
+            .any(|idx| bindings.idx_to_key(idx).0 == "missing")
+    );
+}
+
+// A runtime `typing_extensions.py` defines most special forms depending on the Python version, so
+// its definition of `Self` is a union of `typing.Self` and a decorated function. The export is
+// still the special form. See https://github.com/facebook/pyrefly/issues/698.
+testcase!(
+    test_runtime_typing_extensions_special_form,
+    TestEnv::one_with_path(
+        "typing_extensions",
+        "typing_extensions.py",
+        r#"
+import typing
+
+class _SpecialForm:
+    def __init__(self, getitem): ...
+
+if hasattr(typing, "Self"):
+    Self = typing.Self
+else:
+    @_SpecialForm
+    def Self(self, params): ...
+"#,
+    ),
+    r#"
+from typing import assert_type
+import typing_extensions
+from typing_extensions import Self
+
+class Node:
+    def clone(self) -> Self: ...
+    def copy(self) -> typing_extensions.Self: ...
+
+assert_type(Node().clone(), Node)
+assert_type(Node().copy(), Node)
 "#,
 );

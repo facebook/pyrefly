@@ -7,13 +7,12 @@
 
 //! Extracts stub declarations from a type-checked module.
 //!
-//! Walks the module's AST in source order and uses the binding/answer
-//! system to resolve types for each declaration.
+//! Walks the module's AST in source order and uses solved answers to resolve
+//! types for each declaration.
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use pyrefly_build::handle::Handle;
 use pyrefly_graph::index::Idx;
@@ -71,6 +70,7 @@ pub enum StubItem {
 
 pub struct StubImport {
     pub text: String,
+    pub is_future: bool,
 }
 
 pub struct StubFunction {
@@ -122,8 +122,8 @@ pub fn extract_module_stub(
     handle: &Handle,
     config: &ExtractConfig,
 ) -> Option<ModuleStub> {
-    let bindings = transaction.get_bindings(handle)?;
     let answers = transaction.get_answers(handle)?;
+    let bindings = answers.bindings();
     let ast = transaction.get_ast(handle)?;
     let module_info = transaction.get_module_info(handle)?;
 
@@ -135,7 +135,6 @@ pub fn extract_module_stub(
     let dunder_all = resolve_dunder_all(&ast.body, &module_info);
 
     let mut ctx = ExtractionContext {
-        bindings: &bindings,
         answers: &answers,
         module_info: &module_info,
         config,
@@ -155,8 +154,7 @@ pub fn extract_module_stub(
 }
 
 struct ExtractionContext<'a> {
-    bindings: &'a Bindings,
-    answers: &'a Arc<Answers>,
+    answers: &'a Answers,
     module_info: &'a Module,
     config: &'a ExtractConfig,
     uses_incomplete: bool,
@@ -165,6 +163,12 @@ struct ExtractionContext<'a> {
     /// When `__all__` is explicitly defined, only these names are exported
     /// at module level. `None` means no explicit `__all__` — use convention.
     dunder_all: &'a Option<HashSet<Name>>,
+}
+
+impl ExtractionContext<'_> {
+    fn bindings(&self) -> &Bindings {
+        self.answers.bindings()
+    }
 }
 
 fn extract_stmts(
@@ -194,11 +198,19 @@ fn extract_stmts(
             }
             Stmt::Import(import) => {
                 let text = source_text(ctx.module_info, import.range()).to_owned();
-                items.push(StubItem::Import(StubImport { text }));
+                items.push(StubItem::Import(StubImport {
+                    text,
+                    is_future: false,
+                }));
             }
             Stmt::ImportFrom(import) => {
                 let text = source_text(ctx.module_info, import.range()).to_owned();
-                items.push(StubItem::Import(StubImport { text }));
+                let is_future = import.level == 0
+                    && import
+                        .module
+                        .as_ref()
+                        .is_some_and(|module| module.id == "__future__");
+                items.push(StubItem::Import(StubImport { text, is_future }));
             }
             Stmt::AnnAssign(ann_assign) => {
                 if let Some(item) = extract_ann_assign(ann_assign, ctx, in_class) {
@@ -315,13 +327,12 @@ fn extract_params(
     let mut result = Vec::new();
 
     let undecorated = decorated.map(|idx| {
-        let idx = ctx.bindings.get(idx).undecorated_idx;
+        let idx = ctx.bindings().get(idx).undecorated_idx;
         ctx.answers
             .get_idx(idx)
             .expect("decorated function must have an undecorated answer")
     });
     let resolved_map: HashMap<&str, &Param> = undecorated
-        .as_ref()
         .map(|d| {
             d.params
                 .iter()
@@ -495,7 +506,7 @@ fn extract_return_type(
         let short_id = ShortIdentifier::new(&func_def.name);
         let ret_key = Key::ReturnType(short_id);
         if let Some(idx) = ctx
-            .bindings
+            .bindings()
             .key_to_idx_hashed_opt(starlark_map::Hashed::new(&ret_key))
             && let Some(ty) = ctx.answers.get_type_at(idx)
         {
@@ -526,11 +537,13 @@ fn extract_instance_attr_stubs_from_class_fields(
     class_body: &[StubItem],
     ctx: &mut ExtractionContext,
 ) -> Vec<StubVariable> {
-    let Some(def_index) = ctx.bindings.class_def_index(class_def) else {
+    let answers = ctx.answers;
+    let bindings = answers.bindings();
+    let Some(def_index) = bindings.class_def_index(class_def) else {
         return Vec::new();
     };
     let already = stub_class_level_variable_names(class_body);
-    let class_fields = match ctx.bindings.get_class_fields(def_index) {
+    let class_fields = match bindings.get_class_fields(def_index) {
         Some(f) => f,
         None => return Vec::new(),
     };
@@ -544,10 +557,10 @@ fn extract_instance_attr_stubs_from_class_fields(
             continue;
         }
         let key = KeyClassField(def_index, name.clone());
-        let Some(field_idx) = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+        let Some(field_idx) = bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
             continue;
         };
-        let Some(field) = ctx.answers.get_idx(field_idx) else {
+        let Some(field) = answers.get_idx(field_idx) else {
             continue;
         };
         if !field.is_simple_instance_attribute() {
@@ -595,11 +608,11 @@ fn merge_instance_field_stubs(
 /// the resolved `ClassMetadata` from the type checker rather than fragile
 /// AST pattern matching on decorator/base-class names.
 fn is_dataclass_or_pydantic_model(class_def: &StmtClassDef, ctx: &ExtractionContext) -> bool {
-    let Some(def_index) = ctx.bindings.class_def_index(class_def) else {
+    let Some(def_index) = ctx.bindings().class_def_index(class_def) else {
         return false;
     };
     let key = KeyClassMetadata(def_index);
-    let Some(idx) = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+    let Some(idx) = ctx.bindings().key_to_idx_hashed_opt(Hashed::new(&key)) else {
         return false;
     };
     let Some(metadata) = ctx.answers.get_idx(idx) else {
@@ -613,11 +626,11 @@ fn is_dataclass_or_pydantic_model(class_def: &StmtClassDef, ctx: &ExtractionCont
 /// enum body are enum members, not class variables, so they must not have
 /// inferred annotations or be wrapped in `ClassVar[...]`.
 fn is_enum_class(class_def: &StmtClassDef, ctx: &ExtractionContext) -> bool {
-    let Some(def_index) = ctx.bindings.class_def_index(class_def) else {
+    let Some(def_index) = ctx.bindings().class_def_index(class_def) else {
         return false;
     };
     let key = KeyClassMetadata(def_index);
-    let Some(idx) = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key)) else {
+    let Some(idx) = ctx.bindings().key_to_idx_hashed_opt(Hashed::new(&key)) else {
         return false;
     };
     let Some(metadata) = ctx.answers.get_idx(idx) else {
@@ -633,9 +646,9 @@ fn extract_synthesized_init_stub(
     class_def: &StmtClassDef,
     ctx: &mut ExtractionContext,
 ) -> Option<StubFunction> {
-    let def_index = ctx.bindings.class_def_index(class_def)?;
+    let def_index = ctx.bindings().class_def_index(class_def)?;
     let key = KeyClassSynthesizedFields(def_index);
-    let idx = ctx.bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+    let idx = ctx.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
     let synth_fields = ctx.answers.get_idx(idx)?;
     let init_field = synth_fields.get(&Name::new("__init__"))?;
     let init_ty = init_field.inner.ty();
@@ -841,9 +854,9 @@ fn extract_ann_assign(
 
     let def_key = Key::Definition(ShortIdentifier::expr_name(name_expr));
     let is_type_alias = ctx
-        .bindings
+        .bindings()
         .key_to_idx_hashed_opt(Hashed::new(&def_key))
-        .is_some_and(|idx| matches!(ctx.bindings.get(idx), Binding::TypeAlias(_)));
+        .is_some_and(|idx| matches!(ctx.bindings().get(idx), Binding::TypeAlias(_)));
     let value = ann_assign.value.as_deref().and_then(|value| {
         if is_type_alias {
             Some(expr_source_text(ctx.module_info, value.range()))
@@ -939,7 +952,7 @@ fn extract_assign_name(
     let value = assigned_value.and_then(|value| simple_value_text(value, ctx.module_info));
     let def_key = Key::Definition(ShortIdentifier::expr_name(name_expr));
     let mut annotation = ctx
-        .bindings
+        .bindings()
         .key_to_idx_hashed_opt(Hashed::new(&def_key))
         .and_then(|idx| ctx.answers.get_type_at(idx))
         .and_then(|ty| format_type(&ty, ctx));

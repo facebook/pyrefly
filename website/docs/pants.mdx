@@ -27,6 +27,15 @@ from your Pants source roots and points Pyrefly at a venv built from each
 target's resolved third-party requirements, so imports resolve the same way they
 do at runtime.
 
+:::info Community-maintained
+
+Pants support is not built into Pyrefly itself, and Meta does not publish an
+official `pants.backend.pyrefly`. The plugin is maintained by the community, so
+its release cadence and Pants version support are set there rather than by
+Pyrefly.
+
+:::
+
 ## When to use it
 
 - Your Python code is already built with Pants and you want `pants check` to
@@ -382,3 +391,11 @@ Common causes of resolution problems:
 
 For implementation details and the plugin's compatibility promise, see the
 [`pants-pyrefly` README](https://github.com/tague/pants-pyrefly).
+
+## Feedback
+
+File Pants-integration issues — plugin behavior, goals, search paths, version
+pinning — in
+[tague/pants-pyrefly/issues](https://github.com/tague/pants-pyrefly/issues), and
+Pyrefly type-checking issues in
+[facebook/pyrefly/issues](https://github.com/facebook/pyrefly/issues).

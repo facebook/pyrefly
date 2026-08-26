@@ -30,6 +30,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassFields;
+use pyrefly_types::class::PrecomputedTParams;
 use pyrefly_types::function::FuncMetadata;
 use pyrefly_types::function::Function;
 use pyrefly_types::function::FunctionKind;
@@ -72,6 +73,7 @@ use ruff_text_size::TextSize;
 use serde::Serialize;
 use starlark_map::Hashed;
 use starlark_map::small_set::SmallSet;
+use thiserror::Error;
 use vec1::Vec1;
 
 use crate::alt::answers::Answers;
@@ -179,6 +181,17 @@ pub struct Callee {
     pub target: String,
     /// If this is a method, what class is it defined on?
     pub class_name: Option<String>,
+}
+
+/// Diagnostics from invalid input or an unavailable name-query state.
+#[derive(Debug, Error)]
+pub enum ResolveTargetError {
+    #[error("{0}")]
+    InvalidExpression(String),
+    #[error("name query AST is unavailable")]
+    AstUnavailable,
+    #[error("name query answers are unavailable")]
+    AnswersUnavailable,
 }
 
 pub struct Attribute {
@@ -306,19 +319,24 @@ struct TypeShapeContext<'a> {
 
 impl TypeShapeContext<'_> {
     fn declared_type_param_arity_for_class(&self, class: &Class) -> Option<usize> {
-        if let Some(tparams) = class.precomputed_tparams() {
-            return nonzero_arity(tparams.len());
+        match class.precomputed_tparams() {
+            PrecomputedTParams::NotGeneric => None,
+            PrecomputedTParams::Precomputed(tparams) => nonzero_arity(tparams.len()),
+            // Legacy type variables, so the arity is only known once the
+            // `KeyTParams` binding has been solved.
+            PrecomputedTParams::FromBinding => {
+                let handle = Handle::new(
+                    class.module_name(),
+                    class.module_path().dupe(),
+                    self.source_handle.sys_info().dupe(),
+                );
+                let answers = self.transaction.get_answers(&handle)?;
+                let bindings = answers.bindings();
+                let idx =
+                    bindings.key_to_idx_hashed_opt(Hashed::new(&KeyTParams(class.index())))?;
+                nonzero_arity(answers.get_idx(idx)?.len())
+            }
         }
-
-        let handle = Handle::new(
-            class.module_name(),
-            class.module_path().dupe(),
-            self.source_handle.sys_info().dupe(),
-        );
-        let bindings = self.transaction.get_bindings(&handle)?;
-        let answers = self.transaction.get_answers(&handle)?;
-        let idx = bindings.key_to_idx_hashed_opt(Hashed::new(&KeyTParams(class.index())))?;
-        nonzero_arity(answers.get_idx(idx)?.len())
     }
 }
 
@@ -362,7 +380,6 @@ struct CalleesWithLocation<'a> {
     handle: Handle,
     module_info: Module,
     ast: Arc<ModModule>,
-    bindings: Bindings,
     answers: Arc<Answers>,
 }
 
@@ -373,7 +390,6 @@ impl<'a> CalleesWithLocation<'a> {
         handle: Handle,
     ) -> Option<CalleesWithLocation<'a>> {
         let module_info = transaction.get_module_info(&handle)?;
-        let bindings = transaction.get_bindings(&handle)?;
         let answers = transaction.get_answers(&handle)?;
         let ast: Arc<ModModule> = transaction.get_ast(&handle)?;
         Some(Self {
@@ -382,7 +398,6 @@ impl<'a> CalleesWithLocation<'a> {
             handle,
             module_info,
             ast,
-            bindings,
             answers,
         })
     }
@@ -392,15 +407,16 @@ impl<'a> CalleesWithLocation<'a> {
             let Expr::Name(name) = func else {
                 return None;
             };
+            let bindings = self.answers.bindings();
             let bound = Key::BoundName(ShortIdentifier::expr_name(name));
-            let key = if self.bindings.is_valid_key(&bound) {
+            let key = if bindings.is_valid_key(&bound) {
                 bound
             } else {
                 Key::Definition(ShortIdentifier::expr_name(name))
             };
-            self.bindings
+            bindings
                 .is_valid_key(&key)
-                .then(|| self.answers.get_type_at(self.bindings.key_to_idx(&key)))
+                .then(|| self.answers.get_type_at(bindings.key_to_idx(&key)))
                 .flatten()
                 .filter(|ty| matches!(ty, Type::ClassDef(_)))
         })
@@ -436,8 +452,8 @@ impl<'a> CalleesWithLocation<'a> {
                 .query
                 .make_handle(def.module.name(), def.module.path().clone());
             let module = self.transaction.get_module_info(&h)?;
-            let bindings = self.transaction.get_bindings(&h)?;
             let answers = self.transaction.get_answers(&h)?;
+            let bindings = answers.bindings();
 
             let name = module.code_at(def.definition_range);
             let id = Identifier::new(name, def.definition_range);
@@ -779,8 +795,8 @@ impl<'a> CalleesWithLocation<'a> {
                     .iter()
                     .flat_map(Self::class_info_from_bound_obj)
                     .collect_vec(),
-                Restriction::Flag(domain) => domain
-                    .class_names()
+                Restriction::ShapeExtension(extension) => extension
+                    .upper_bound_class_names()
                     .into_iter()
                     .map(|name| (name.to_owned(), false))
                     .collect(),
@@ -913,8 +929,8 @@ impl<'a> CalleesWithLocation<'a> {
             Type::Quantified(q) => match &q.restriction {
                 Restriction::Bound(Type::ClassType(c)) => self.find_init_or_new(c.class_object()),
                 Restriction::Constraints(tys) => self.init_or_new_from_union(tys, callee_range),
-                Restriction::Flag(domain) => self.init_or_new_from_union(
-                    &domain.types(&self.transaction.get_stdlib(&self.handle)),
+                Restriction::ShapeExtension(extension) => self.init_or_new_from_union(
+                    &extension.upper_bound_members(&self.transaction.get_stdlib(&self.handle)),
                     callee_range,
                 ),
                 x => panic!(
@@ -948,8 +964,8 @@ impl<'a> CalleesWithLocation<'a> {
                 Restriction::Bound(b) => {
                     self.callee_from_type(b, call_target, callee_range, call_arguments)
                 }
-                Restriction::Flag(domain) => domain
-                    .types(&self.transaction.get_stdlib(&self.handle))
+                Restriction::ShapeExtension(extension) => extension
+                    .upper_bound_members(&self.transaction.get_stdlib(&self.handle))
                     .iter()
                     .flat_map(|ty| {
                         self.callee_from_type(ty, call_target, callee_range, call_arguments)
@@ -1165,8 +1181,8 @@ impl Query {
                 _ => (None, ty),
             }
         }
-        let bindings = transaction.get_bindings(&handle)?;
         let answers = transaction.get_answers(&handle)?;
+        let bindings = answers.bindings();
 
         if let Some(Type::ClassDef(cd)) = &class_ty {
             let class_fields = bindings
@@ -1233,7 +1249,6 @@ impl Query {
                         _ => answers.get_idx(class_field_idx).map(|cf| cf.ty()),
                     };
                     let field_ty = field_ty?;
-                    let field_ty = answers.solver().for_export_boundary(field_ty);
                     let (kind, field_ty) = get_kind_and_field_type(&field_ty);
 
                     Some(Attribute {
@@ -1364,7 +1379,6 @@ impl Query {
         let ast = transaction.get_ast(&handle)?;
         let module_info = transaction.get_module_info(&handle)?;
         let answers = transaction.get_answers(&handle)?;
-        let bindings = transaction.get_bindings(&handle)?;
         let type_shape_context = TypeShapeContext {
             transaction: &transaction,
             source_handle: &handle,
@@ -1418,7 +1432,6 @@ impl Query {
             parent: Option<&Expr>,
             module_info: &ModuleInfo,
             answers: &Answers,
-            bindings: &Bindings,
             res: &mut Vec<(PythonASTRange, T)>,
             transform: &F,
             type_shape_context: &TypeShapeContext,
@@ -1427,6 +1440,7 @@ impl Query {
         where
             F: Fn(&TypeShapeContext, &Type) -> T,
         {
+            let bindings = answers.bindings();
             let range = x.range();
             if let Expr::Name(name) = x
                 && let Some(key) = try_find_key_for_name(name, bindings)
@@ -1469,7 +1483,6 @@ impl Query {
                 parent,
                 &module_info,
                 &answers,
-                &bindings,
                 &mut res,
                 &transform,
                 &type_shape_context,
@@ -1599,12 +1612,8 @@ impl Query {
         Ok(())
     }
 
-    fn find_types(
-        ast: &ModModule,
-        bindings: Bindings,
-        answers: &Answers,
-        return_first: bool,
-    ) -> (Type, Option<Type>) {
+    fn find_types(ast: &ModModule, answers: &Answers, return_first: bool) -> (Type, Option<Type>) {
+        let bindings = answers.bindings();
         let mut first: Option<Type> = None;
         for p in &ast.body {
             if let Stmt::AnnAssign(assign) = p
@@ -1683,13 +1692,12 @@ impl Query {
 
         let ast = t.get_ast(&h).ok_or("No ast")?;
         let answers = t.get_answers(&h).ok_or("No answers")?;
-        let bindings = t.get_bindings(&h).ok_or("No bindings")?;
 
         // Extract and cache the computed types
         let (sub_ty, super_ty_opt) = match (need_lt, need_gt) {
             (true, true) => {
                 // Computed both: X is lt, Y is gt
-                let (lt_type, gt_type_opt) = Query::find_types(&ast, bindings, &answers, false);
+                let (lt_type, gt_type_opt) = Query::find_types(&ast, &answers, false);
                 let gt_type = gt_type_opt.unwrap();
                 self.type_cache.insert(lt.to_owned(), lt_type.clone());
                 self.type_cache.insert(gt.to_owned(), gt_type.clone());
@@ -1697,13 +1705,13 @@ impl Query {
             }
             (true, false) => {
                 // Computed only lt: X is lt, use cached gt
-                let (lt_type, _) = Query::find_types(&ast, bindings, &answers, true);
+                let (lt_type, _) = Query::find_types(&ast, &answers, true);
                 self.type_cache.insert(lt.to_owned(), lt_type.clone());
                 (lt_type, cached_gt)
             }
             (false, true) => {
                 // Computed only gt: Y is gt, use cached lt
-                let (gt_type, _) = Query::find_types(&ast, bindings, &answers, true);
+                let (gt_type, _) = Query::find_types(&ast, &answers, true);
                 self.type_cache.insert(gt.to_owned(), gt_type.clone());
                 (cached_lt.unwrap(), Some(gt_type))
             }
@@ -1723,18 +1731,19 @@ impl Query {
         Ok(result)
     }
 
+    /// Resolve a qualified callable name, returning diagnostics for invalid expressions.
     pub fn resolve_target_from_qualified_name(
         &self,
         name: ModuleName,
         path: PathBuf,
         qualified_name: &str,
-    ) -> Option<Vec<Callee>> {
+    ) -> Result<Vec<Callee>, ResolveTargetError> {
         let mut t = self.state.transaction();
         let h = self.make_handle(name, ModulePath::memory(path.clone()));
         let snippet = format!("x = {qualified_name}");
-        // Check and type-check the snippet
-        self.check_snippet(&mut t, &h, path, &snippet).unwrap();
-        let ast = t.get_ast(&h).unwrap();
+        self.check_snippet(&mut t, &h, path, &snippet)
+            .map_err(ResolveTargetError::InvalidExpression)?;
+        let ast = t.get_ast(&h).ok_or(ResolveTargetError::AstUnavailable)?;
         fn find_expr(ast: &ModModule) -> Option<&Expr> {
             for stmt in &ast.body {
                 if let Stmt::Assign(assign) = stmt {
@@ -1743,13 +1752,14 @@ impl Query {
             }
             None
         }
-        let find_callees = CalleesWithLocation::new(self, t, h)?;
+        let find_callees =
+            CalleesWithLocation::new(self, t, h).ok_or(ResolveTargetError::AnswersUnavailable)?;
         let mut res = Vec::new();
         if let Some(expr) = find_expr(&ast) {
             find_callees.callee_from_text_range(expr.range(), Some(expr), |c| {
                 res.push(c);
             });
         }
-        Some(res)
+        Ok(res)
     }
 }

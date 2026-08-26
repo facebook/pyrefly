@@ -5,26 +5,27 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_build::handle::Handle;
 
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::KeyClassMro;
 use crate::state::state::State;
+use crate::state::state::StateReader;
 use crate::test::util::get_class;
 use crate::test::util::mk_state;
 use crate::testcase;
 
-pub fn get_class_mro(name: &str, handle: &Handle, state: &State) -> Arc<ClassMro> {
-    let solutions = state.transaction().get_solutions(handle).unwrap();
-
-    let cls = get_class(name, handle, state);
-    solutions.get_arc(&KeyClassMro(cls.index()))
+pub fn get_class_mro<'a>(name: &str, handle: &Handle, reader: &'a StateReader<'_>) -> &'a ClassMro {
+    let cls = get_class(name, handle, reader);
+    reader
+        .get_solutions(handle)
+        .unwrap()
+        .get(&KeyClassMro(cls.index()))
 }
 
 fn get_mro_names(name: &str, handle: &Handle, state: &State) -> Vec<String> {
-    get_class_mro(name, handle, state)
+    let reader = state.reader();
+    get_class_mro(name, handle, &reader)
         .ancestors_no_object()
         .iter()
         .map(|cls| cls.name().as_str().to_owned())
@@ -373,5 +374,34 @@ testcase!(
 from typing import Protocol
 
 class P(Protocol, Protocol): ...  # E: Duplicate base class `Protocol`
+"#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5219
+testcase!(
+    test_explicit_object_base_constructor,
+    r#"
+class Base:
+    def __init__(self, x: int = 0) -> None:
+        self.x = x
+
+class Mixin(object):
+    pass
+
+class C(Mixin, Base):
+    pass
+
+C(x=1)
+"#,
+);
+
+// Both classes raise `TypeError` at runtime: a duplicate base, and no consistent MRO.
+testcase!(
+    bug = "An explicit `object` before another base should be an inconsistent MRO",
+    test_explicit_object_before_another_base,
+    r#"
+class Base: ...
+class A(object, object): ...
+class C(object, Base): ...
 "#,
 );

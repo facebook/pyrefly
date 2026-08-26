@@ -315,3 +315,14 @@ reveal_type(X)  # E: MyAwesomeSentinel
 reveal_type(Y)  # E: JustAsAwesomeSentinel
     "#,
 );
+
+testcase!(
+    test_sentinel_extra_positional_arg,
+    r#"
+from typing import Literal, assert_type
+from typing_extensions import Sentinel
+
+MISSING = Sentinel("MISSING", z := 1)  # E: Sentinel only takes one positional argument
+assert_type(z, Literal[1])
+"#,
+);

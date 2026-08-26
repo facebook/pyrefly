@@ -88,11 +88,11 @@ from typing import assert_type
 if True:
     X = str
 else:
-    X = int
+    X = int  # E: This code is unreachable
 assert_type(X(), str)
 
 if False:
-    Y = str
+    Y = str  # E: This code is unreachable
 else:
     Y = int
 assert_type(Y(), int)
@@ -100,11 +100,11 @@ assert_type(Y(), int)
 if not(False):
     X = str
 else:
-    X = int
+    X = int  # E: This code is unreachable
 assert_type(X(), str)
 
 if not(True):
-    Y = str
+    Y = str  # E: This code is unreachable
 else:
     Y = int
 assert_type(Y(), int)
@@ -222,6 +222,28 @@ inverted: int = "not windows" if sys.platform != "win32" else subprocess.CREATE_
 );
 
 testcase!(
+    test_platform_ternary_walrus,
+    TestEnv::new_with_platform(PythonPlatform::linux()),
+    r#"
+from typing import Literal, assert_type
+import sys
+
+(skipped_body := 1) if sys.platform == "win32" else (live_else := 2)
+(live_body := 3) if sys.platform == "linux" else (skipped_else := 4)
+assert_type(live_else, Literal[2])
+assert_type(live_body, Literal[3])
+
+(outer := ((nested_skipped := 1) if sys.platform == "win32" else (nested_live := 2)))
+assert_type(outer, Literal[2])
+assert_type(nested_live, Literal[2])
+
+[(comp_skipped_body := 1) if sys.platform == "win32" else (comp_live_else := 2) for _ in [0]]
+[(comp_live_body := 3) if sys.platform == "linux" else (comp_skipped_else := 4) for _ in [0]]
+[(comp_outer := ((comp_nested_skipped := 1) if sys.platform == "win32" else 2)) for _ in [0]]
+"#,
+);
+
+testcase!(
     test_platform_ternary_yield_in_skipped_orelse,
     TestEnv::new_with_platform(PythonPlatform::windows()),
     r#"
@@ -298,6 +320,26 @@ if os.name != "posix":
 else:
     Z = int
 assert_type(Z(), int)
+"#,
+);
+
+testcase!(
+    test_sys_version_release_level,
+    TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+    r#"
+from typing import assert_type
+import sys
+if sys.version_info >= (3, 14, 0, "beta"):
+    X = str
+else:
+    X = int
+assert_type(X(), str)
+
+if sys.version_info < (3, 14, 0, "candidate", 1):
+    Y = str
+else:
+    Y = int
+assert_type(Y(), int)
 "#,
 );
 
@@ -386,30 +428,30 @@ testcase!(
     test_version_guard_and_short_circuit,
     r#"
 if False:
-    A = 3
+    A = 3  # E: This code is unreachable
 
 if False:
-    B = 3
+    B = 3  # E: This code is unreachable
 
 if False:
-    C = 3
+    C = 3  # E: This code is unreachable
 
 
 def test_and_basic() -> None:
     # `and` short-circuits on False: A in the condition and body are unreachable.
     if False and A:
-        _ = A
+        _ = A  # E: This code is unreachable
 
 def test_and_longer_chain() -> None:
     # Both B and C are gated: the guard short-circuits before reaching them.
     if False and B and C:
-        _ = B
+        _ = B  # E: This code is unreachable
         _ = C
 
 def test_and_three_guards() -> None:
     # Three consecutive False guards in a single and-chain.
     if False and A and B and C:
-        _ = A
+        _ = A  # E: This code is unreachable
         _ = B
         _ = C
 
@@ -432,7 +474,7 @@ def test_or_longer_chain() -> None:
 def test_and_body_unreachable() -> None:
     # An `if False` body is also unreachable; accessing A inside it is fine.
     if False:
-        _ = A
+        _ = A  # E: This code is unreachable
 
 def test_no_guard_produces_error() -> None:
     # Baseline: without any guard, accessing A must produce an error.
@@ -615,5 +657,29 @@ testcase!(
     TestEnv::one_with_path("foo", "foo.pyi", "TYPE_CHECKING = 1"),
     r#"
 import foo
+"#,
+);
+
+// A line continuation joins the walrus to the `if`, so the parser recovers a ternary
+// whose test `SysInfo` decides is false, and `q` is defined in the skipped branch.
+testcase!(
+    test_walrus_continued_into_statically_false_if,
+    r#"
+import sys
+
+# E: Invalid annotated assignment target
+(q := 1) \
+if sys.version_info >= (3, 99):  # E: Expected `else`, found `:` # E: Expected an expression
+    pass  # E: Unexpected indentation
+"#,
+);
+
+testcase!(
+    test_walrus_in_statically_decided_ternary,
+    r#"
+import sys
+y = (q := 1) if sys.version_info >= (3, 99) else 2
+z = 3 if sys.version_info >= (3, 0) else (r := 4)
+w = [(s := 5) if sys.version_info >= (3, 99) else 6 for _ in range(1)]
 "#,
 );

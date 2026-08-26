@@ -25,6 +25,7 @@ use which::which_in;
 
 use crate::environment::active_environment::ActiveEnvironment;
 use crate::environment::conda;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::environment::environment::PythonEnvironment;
 use crate::environment::venv;
 use crate::util::ConfigOrigin;
@@ -234,7 +235,7 @@ impl Interpreters {
         }
 
         Err(anyhow::anyhow!(
-            "Python environment (version, platform, or site-package-path) has value unset, \
+            "Python environment (version, platform, or site-packages-path) has value unset, \
                 but no Python interpreter could be found to query for values. Falling back to \
                 Pyrefly defaults for missing values."
         ))
@@ -343,13 +344,13 @@ mod test {
 
     use super::*;
 
-    fn test_venv_interpreter_name() -> &'static str {
-        if cfg!(windows) {
-            "python.exe"
-        } else {
-            "python3"
-        }
-    }
+    /// The interpreter location a real virtual environment provides on this platform.
+    const INTERPRETER_DIR: &str = if cfg!(windows) { "Scripts" } else { "bin" };
+    const INTERPRETER_NAME: &str = if cfg!(windows) {
+        "python.exe"
+    } else {
+        "python"
+    };
 
     fn setup_test_dir() -> TempDir {
         let tempdir = tempdir().unwrap();
@@ -359,7 +360,7 @@ mod test {
             vec![TestPath::dir(
                 "venv",
                 vec![
-                    TestPath::file(test_venv_interpreter_name()),
+                    TestPath::dir(INTERPRETER_DIR, vec![TestPath::file(INTERPRETER_NAME)]),
                     TestPath::file("pyvenv.cfg"),
                 ],
             )],
@@ -506,7 +507,8 @@ mod test {
                 tempdir
                     .path()
                     .join("venv")
-                    .join(test_venv_interpreter_name())
+                    .join(INTERPRETER_DIR)
+                    .join(INTERPRETER_NAME)
             )
         );
     }

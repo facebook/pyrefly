@@ -2,10 +2,11 @@ from collections.abc import Sequence
 from typing import ClassVar, Generic, Literal, TypeVar
 
 from django.db.models import Model
+from rest_framework.fields import CharField as CharField, Field as Field
 
 _MT = TypeVar("_MT", bound=Model)
 
-class Serializer(Generic[_MT]): ...
+class Serializer(Field, Generic[_MT]): ...
 
 class ModelSerializer(Serializer[_MT]):
     class Meta:

@@ -17,12 +17,12 @@ Port notes:
   merges batch and window-count dims via view(-1, ...) which is not shape-
   trackable. window_size=0 means global attention (no partition).
 - Relative positional embeddings (get_rel_pos, add_decomposed_rel_pos) included.
-  get_rel_pos is fully typed: F.interpolate, torch.arange, fancy indexing all
-  tracked. add_decomposed_rel_pos takes independent dims first (bare Int params)
-  so the checker binds QH/QW/KH/KW before processing derived expressions in
-  tensor types. ImageAttention/ViTBlock use IS (class param) for square spatial
-  dims — same type var for both rel_pos (construction) and forward (usage).
-  torch.einsum results are shapeless (not tracked).
+  get_rel_pos is fully typed: F.interpolate, torch.arange, fancy indexing, and
+  torch.einsum are tracked. add_decomposed_rel_pos takes independent dims first
+  (bare Int params) so the checker binds QH/QW/KH/KW before processing derived
+  expressions in tensor types. ImageAttention/ViTBlock use IS (class param) for
+  square spatial dims — same type var for both rel_pos (construction) and forward
+  (usage).
 - The image encoder's Attention uses a combined QKV projection (Linear(D, 3*D))
   followed by reshape+permute+reshape+unbind. This entire chain is fully
   shape-tracked through all 4 steps, producing typed q/k/v tensors.
@@ -53,13 +53,15 @@ Key patterns exercised:
 - ConvTranspose2d upscaling in mask decoder
 """
 
+from __future__ import annotations
+
 import math
 from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from shape_extensions import Elements, IntTuple, IntVar
+from shape_extensions import IntTuple, IntVar
 
 if TYPE_CHECKING:
     from shape_extensions import Int
@@ -255,9 +257,11 @@ def add_decomposed_rel_pos[
 
     b, _, dim = q.shape
     r_q = q.reshape(b, q_h, q_w, dim)
-    # einsum: shapeless (not tracked), but inputs are typed
+    # The einsum stub computes both output shapes from the equations.
     rel_h = torch.einsum("bhwc,hkc->bhwk", r_q, rh)
+    assert_type(rel_h, Tensor[[B, QH, QW, KH]])
     rel_w = torch.einsum("bhwc,wkc->bhwk", r_q, rw)
+    assert_type(rel_w, Tensor[[B, QH, QW, KW]])
 
     attn = (
         attn.view(b, q_h, q_w, k_h, k_w)
@@ -543,7 +547,7 @@ class ImageEncoderViT[EmbDim: IntVar, OutC: IntVar](nn.Module):
         # erasing IS to Any. Re-annotate after the loop.
         for blk in self.blocks:
             h = blk(h)
-        h_blocked: Tensor[[B, (S - 16) // 16 + 1, (S - 16) // 16 + 1, EmbDim]] = h  # type: ignore[bad-assignment]
+        h_blocked: Tensor[[B, (S - 16) // 16 + 1, (S - 16) // 16 + 1, EmbDim]] = h  # type: ignore[pyrefly:bad-assignment]
         # Neck: permute to BCHW
         h_bchw = h_blocked.permute(0, 3, 1, 2)
         assert_type(h_bchw, Tensor[[B, EmbDim, (S - 16) // 16 + 1, (S - 16) // 16 + 1]])
@@ -617,7 +621,7 @@ class CrossAttention[D: IntVar, IntDim: IntVar, NHead: IntVar](nn.Module):
         # → reshape → (B, NQ, IntDim)
         out_t = out.transpose(1, 2).contiguous()
         # reshape merges last two dims; NHead * (IntDim // NHead) = IntDim can't be proven
-        out_flat: Tensor[[B, NQ, IntDim]] = out_t.reshape(  # type: ignore[bad-assignment]
+        out_flat: Tensor[[B, NQ, IntDim]] = out_t.reshape(  # type: ignore[pyrefly:bad-assignment]
             b, nq, self.num_heads * self.head_dim
         )
         return self.out_proj(out_flat)
@@ -787,8 +791,8 @@ class PositionalEmbeddingRandom[D: IntVar](nn.Module):
         )
 
     def _pe_encoding[Batch: IntTuple](
-        self, coords: Tensor[[*Elements[Batch], 2]]
-    ) -> Tensor[[*Elements[Batch], 2 * D]]:
+        self, coords: Tensor[[*Batch, 2]]
+    ) -> Tensor[[*Batch, 2 * D]]:
         """Encode coordinates to positional features.
 
         coords: (*Batch, 2) normalized to [0, 1]

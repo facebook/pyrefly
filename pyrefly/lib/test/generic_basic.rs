@@ -61,6 +61,106 @@ def f(c: C[int]):
 );
 
 testcase!(
+    test_type_of_type_var_in_base_class_type_argument,
+    r#"
+from typing import Generic, TypeVar, assert_type
+
+class Box[T]:
+    def __init__(self, x: T) -> None: ...
+    def get(self) -> T: ...
+
+class A[R](Box[type[R]]): ...
+class B[R](Box[list[type[R]]]): ...
+class C[R](Box[type[C[R]]]): ...
+
+R = TypeVar("R")
+class D(Box[type[R]], Generic[R]): ...
+
+def f(a: A[int], b: B[int], c: C[int], d: D[int]) -> None:
+    assert_type(a.get(), type[int])
+    assert_type(b.get(), list[type[int]])
+    assert_type(c.get(), type[C[int]])
+    assert_type(d.get(), type[int])
+
+assert_type(A(str), A[str])
+    "#,
+);
+
+// `type[...]` in a base class type argument is parsed by the full annotation path, which
+// validates bounds and may need the MRO of the class being defined.
+testcase!(
+    test_type_in_base_class_type_argument_referencing_class,
+    r#"
+from typing import Any, assert_type
+
+class Box[T]:
+    def get(self) -> T: ...
+
+class Base: ...
+class C[T: Base](Base, Box[type[C[C[Any]]]]): ...
+
+class P[T: Q](Box[type[P[Q]]]): ...
+class Q(P[Any]): ...
+
+class D[T](Box[type[list[D[T]]]]): ...
+
+def f(c: C[Any], p: P[Q], d: D[int]) -> None:
+    assert_type(c.get(), type[C[C[Any]]])
+    assert_type(p.get(), type[P[Q]])
+    assert_type(d.get(), type[list[D[int]]])
+
+def g(c: C[Any]) -> Base:
+    return c
+
+class Bad(Box[type[C[int]]]): ...  # E: `int` is not assignable to upper bound `Base` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_type_in_direct_base_class,
+    r#"
+from typing import assert_type
+
+class Meta(type[int]):
+    def m(cls) -> int: ...
+class C(metaclass=Meta): ...
+
+assert_type(C.m(), int)
+    "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5303
+testcase!(
+    test_descriptor_with_type_of_type_var_in_base_class,
+    r#"
+from collections.abc import Callable
+from typing import Any, Concatenate, assert_type, overload
+
+class ClassAndInstanceMethod[T, **ClsParams, ClsResult, **SelfParams, SelfResult]:
+    @overload
+    def __get__(self, instance: T, owner: type[T]) -> Callable[SelfParams, SelfResult]: ...
+    @overload
+    def __get__(self, instance: None, owner: type[T]) -> Callable[ClsParams, ClsResult]: ...
+    def __get__(self, instance: T | None, owner: type[T]) -> Any: ...
+
+class A[T, **P, ClsResult, InstanceResult](
+    ClassAndInstanceMethod[T, P, ClsResult, P, InstanceResult]
+):
+    def __init__(self, class_method: Callable[Concatenate[type[T], P], ClsResult]) -> None: ...
+
+class B[T, **P, R](A[T, P, type[R], R]): ...
+
+class Foo:
+    @B
+    @classmethod
+    def fn(cls) -> type[str]: ...
+
+assert_type(Foo().fn(), str)
+assert_type(Foo.fn(), type[str])
+    "#,
+);
+
+testcase!(
     test_redundant_generic_base,
     r#"
 from typing import Generic
@@ -293,6 +393,28 @@ Qs = TypeVarTuple('Qs', default=Unpack[Ps])
 class A[*Ps, *Qs = *Ps]: # E: may not have more than one TypeVarTuple
     pass
     "#,
+);
+
+testcase!(
+    test_any_base_generic_type_arguments,
+    r#"
+from typing import Any, reveal_type
+
+class Box[T](Any):
+    value: T
+
+def unbox[T](box: Box[T]) -> T:
+    return box.value
+
+def wrong_return(box: Box[int]) -> Box[str]:
+    reveal_type(unbox(box))  # E: revealed type: int
+    return box  # E: Returned type `Box[int]` is not assignable
+
+def gradual_control(unknown: Box[Any], precise: Box[int]) -> str:
+    unknown = precise
+    precise = unknown
+    return precise
+"#,
 );
 
 testcase!(
@@ -657,6 +779,30 @@ class I(G, H): ...  # E: Class `I` has inconsistent type arguments for base clas
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/4876
+testcase!(
+    test_indirect_diamond_union_member_order,
+    r#"
+class Field[I, M]:
+    pass
+
+class Base[I](Field[list[I] | I, I]):
+    pass
+
+class Mid[MidI](Base[MidI]):
+    pass
+
+class Left(Mid[int]):
+    pass
+
+class Mixin[I](Mid[I]):
+    pass
+
+class Combined(Mixin[int], Left):
+    pass
+"#,
+);
+
 testcase!(
     test_typevar_union_with_type_of_typevar,
     r#"
@@ -888,4 +1034,43 @@ def test2(cls: T2) -> str:
     # this should error because `name` is instance-only
     return cls.name  # E:
     "#,
+);
+
+testcase!(
+    test_instantiate_type_of,
+    r#"
+from typing import assert_type
+class A[T]: ...
+def f(a: A[int]):
+    assert_type(type(a)(), A[int])
+"#,
+);
+
+testcase!(
+    bug = "Ordinary generics widen index literals",
+    test_generic_index_inference_widens_literals,
+    r#"
+from typing import assert_type
+
+class TypeVarCapture:
+    def __getitem__[I](self, index: I) -> I: ...
+
+class TypeVarTupleCapture:
+    def __getitem__[*Is](self, index: tuple[*Is]) -> tuple[*Is]: ...
+
+def f(by_type: TypeVarCapture, by_elements: TypeVarTupleCapture) -> None:
+    assert_type(by_type[0], int)
+    assert_type(by_type[1:5:2], slice[int, int, int])
+    assert_type(by_type[0, :, None], tuple[int, slice[None, None, None], None])
+    assert_type(by_elements[0, :, None], tuple[int, slice[None, None, None], None])
+"#,
+);
+
+// Parse recovery turns `[* *]` into two nameless type parameters, and the broken return
+// annotation makes the binder look up the empty name.
+testcase!(
+    test_nameless_type_params_with_broken_return_annotation,
+    r#"
+def f[* *]() -  # E: Expected an identifier # E: duplicate type parameter # E: Expected an identifier # E: Expected `:`, found `-` # E: Expected an expression
+"#,
 );

@@ -10,6 +10,7 @@
 use pretty_assertions::assert_eq;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_types::literal::Lit;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
@@ -20,6 +21,7 @@ use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
 use crate::config::finder::ConfigFinder;
 use crate::query::Query;
+use crate::query::ResolveTargetError;
 use crate::query::SerializedTypeTableEntry;
 use crate::test::util::init_test;
 
@@ -31,6 +33,39 @@ fn create_query() -> Query {
     config.configure();
     let config = ArcId::new(config);
     Query::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT)
+}
+
+#[test]
+fn test_resolve_target_rejects_invalid_names_without_panicking() {
+    let query = create_query();
+    let module = ModuleName::from_str("scratchpad");
+    let path = TempDir::new().unwrap();
+    let file = path.path().join("scratchpad.py");
+    for name in ["Missing.method", "builtins.missing_method", "builtins.len("] {
+        let error = query
+            .resolve_target_from_qualified_name(module, file.clone(), name)
+            .expect_err("Invalid names must return diagnostics");
+        assert!(matches!(error, ResolveTargetError::InvalidExpression(_)));
+        let targets = query
+            .resolve_target_from_qualified_name(module, file.clone(), "builtins.len")
+            .expect("The same query engine must remain usable after an invalid name");
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].target, "len");
+    }
+}
+
+#[test]
+fn test_resolve_target_accepts_non_callable_expressions() {
+    let query = create_query();
+    let directory = TempDir::new().unwrap();
+    let targets = query
+        .resolve_target_from_qualified_name(
+            ModuleName::from_str("scratchpad"),
+            directory.path().join("scratchpad.py"),
+            "42",
+        )
+        .expect("A valid expression without callees is not a query error");
+    assert!(targets.is_empty());
 }
 
 fn indexed_shape_values(type_table: &[SerializedTypeTableEntry]) -> Vec<Value> {
@@ -57,6 +92,78 @@ fn is_indexed_named_shape(shape: &Value, name: &str, args: &[usize]) -> bool {
 fn is_named_shape(shape: &Value, name: &str) -> bool {
     shape.get("kind").and_then(Value::as_str) == Some("named")
         && shape.get("name").and_then(Value::as_str) == Some(name)
+}
+
+#[test]
+fn test_type_table_preserves_shaped_alias_metadata() {
+    let tdir = TempDir::new().unwrap();
+    let shape_extensions = tdir.path().join("shape_extensions.py");
+    fs_anyhow::write(
+        &shape_extensions,
+        "from typing import Annotated as Shaped, Any\n\ndef shape_vars(declaration: str) -> Any: ...\n",
+    )
+    .unwrap();
+    let file_path = tdir.path().join("main.py");
+    fs_anyhow::write(
+        &file_path,
+        r#"from typing import TypeAlias
+from shape_extensions import Shaped, shape_vars
+
+@shape_vars("N")
+class Base: ...
+
+@shape_vars("")
+def check() -> None:
+    Alias: TypeAlias = Shaped[Base, "3"]
+    value = Alias
+"#,
+    )
+    .unwrap();
+
+    init_test();
+    let mut config = ConfigFile::default();
+    config.search_path_from_args.push(tdir.path().to_path_buf());
+    config.python_environment.set_empty_to_default();
+    config.configure();
+    let query = Query::new(
+        ConfigFinder::new_constant(ArcId::new(config)),
+        TEST_THREAD_COUNT,
+    );
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path);
+    let errors = query.add_files(vec![
+        (
+            ModuleName::from_str("shape_extensions"),
+            ModulePath::filesystem(shape_extensions),
+        ),
+        (module_name, path.clone()),
+    ]);
+    assert!(errors.is_empty(), "Unexpected errors: {errors:?}");
+
+    let response = query
+        .get_type_table_in_file_with_timing(module_name, path)
+        .unwrap()
+        .0;
+    let table = indexed_shape_values(&response.type_table);
+    let metadata_name = crate::query::literal_value_shape_name(&Lit::Str("3".into()));
+    let metadata = table
+        .iter()
+        .position(|shape| is_named_shape(shape, &metadata_name))
+        .expect("the alias should retain its original shape string");
+    let literal = table
+        .iter()
+        .position(|shape| is_indexed_named_shape(shape, "typing.Literal", &[metadata]))
+        .expect("shape metadata should be a literal string");
+    assert!(
+        table.iter().any(|shape| {
+            is_named_shape(shape, "typing.Annotated")
+                && shape
+                    .get("args")
+                    .and_then(Value::as_array)
+                    .is_some_and(|args| args.len() == 2 && args[1].as_u64() == Some(literal as u64))
+        }),
+        "Expected the shape string in Annotated alias metadata:\n{table:#?}",
+    );
 }
 
 #[test]

@@ -1,9 +1,9 @@
 {
-  "total": 144,
-  "pass": 139,
+  "total": 145,
+  "pass": 140,
   "fail": 5,
   "pass_rate": 0.97,
-  "differences": 42,
+  "differences": 23,
   "passing": [
     "aliases_explicit.py",
     "aliases_implicit.py",
@@ -67,6 +67,7 @@
     "generics_defaults.py",
     "generics_defaults_referential.py",
     "generics_defaults_specialization.py",
+    "generics_mixed_variance_inference.py",
     "generics_paramspec_basic.py",
     "generics_paramspec_components.py",
     "generics_paramspec_semantics.py",
@@ -147,9 +148,9 @@
   ],
   "failing": {
     "annotations_forward_refs.py": 2,
-    "generics_mixed_variance_inference.py": 3,
-    "generics_paramspec_variance.py": 20,
-    "generics_typevartuple_variance.py": 16,
+    "annotations_future_import.py": 2,
+    "generics_paramspec_variance.py": 9,
+    "generics_typevartuple_variance.py": 9,
     "protocols_variance.py": 1
   },
   "comment": "@generated"

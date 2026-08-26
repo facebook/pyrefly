@@ -308,7 +308,7 @@ fn visit_statement<V: AstScopedVisitor>(
             let key = KeyDecoratedFunction(ShortIdentifier::new(&function_def.name));
             let function_scope = if let Some(idx) = module_context
                 .answers_context
-                .bindings
+                .bindings()
                 .key_to_idx_hashed_opt(Hashed::new(&key))
             {
                 let function = DecoratedFunction {
@@ -422,7 +422,7 @@ fn visit_statement<V: AstScopedVisitor>(
             let key = KeyClass(ShortIdentifier::new(&class_def.name));
             let class_scope = if let Some(idx) = module_context
                 .answers_context
-                .bindings
+                .bindings()
                 .key_to_idx_hashed_opt(Hashed::new(&key))
             {
                 let class = module_context

@@ -751,6 +751,35 @@ reveal_type(f(0))  # E: revealed type: int
 );
 
 testcase!(
+    test_regex_checks,
+    r#"
+import re
+from re import X as verbose
+
+re.compile("(")  # E: missing ), unterminated subpattern
+re.search("(", "")  # E: missing ), unterminated subpattern
+re.sub("(", "", "")  # E: missing ), unterminated subpattern
+re.compile(pattern="(")  # E: missing ), unterminated subpattern
+re.compile("a(b(c)")  # E: missing ), unterminated subpattern
+re.compile(b"(")  # E: missing ), unterminated subpattern
+re.compile("(?# comment)")
+re.compile("(\n# ignored )\na)", re.VERBOSE)
+re.search("(\n# ignored )\na)", "", flags=re.X)
+re.compile("(\n# ignored )\na)", re.I | re.X)
+re.compile("(\n# ignored )\na)", verbose)
+re.compile("(?i:x)(?P<n>a)#(b)")
+re.compile("(?=x)(?P<n>a)#(b)")
+
+def unknown_flags(flags: int) -> None:
+    # Unknown flags may enable verbose mode, so checking this pattern would be unsafe.
+    re.compile("(", flags)
+
+def match_and(value: str) -> int | None:
+    return re.match("x", value) and 1
+"#,
+);
+
+testcase!(
     test_forward_refs_in_bases,
     r#"
 from typing import assert_type, Any
@@ -803,6 +832,174 @@ c = f"{arr['foo']}"  # E: Cannot index into `list[int]`
 );
 
 testcase!(
+    test_checked_fstrings,
+    r#"
+from datetime import date
+
+f"{None:0>2}"  # E: doesn't support format specifiers
+f"{date(1, 1, 1):%}"
+f"{date(2024, 3, 5):%-d/%-m}"
+f"{'s':.2f}"  # E: Incompatible types in string interpolation
+f"{'s':c}"  # E: Incompatible types in string interpolation
+
+i = 1
+f"{i:1}"
+f"{i:.1f}"
+f"{i:c}"
+x = -0.0
+f"{x:z.1f}"
+s = "s"
+f"{s:1}"
+f"{s:.2}"
+dynamic_spec = ""
+f"{s:{dynamic_spec}}"
+f"{None!s:0>2}"
+
+class CustomFormat:
+    def __format__(self, format_spec: str) -> str:
+        return ""
+
+f"{CustomFormat():whatever}"
+"#,
+);
+
+testcase!(
+    test_checked_fstrings_custom_builtin_subclasses,
+    r#"
+class CustomInt(int):
+    def __format__(self, format_spec: str) -> str:
+        return "custom"
+
+class InheritedCustomInt(CustomInt):
+    pass
+
+class CustomStr(str):
+    def __format__(self, format_spec: str) -> str:
+        return "custom"
+
+class PlainInt(int):
+    pass
+
+class PlainStr(str):
+    pass
+
+class FormatMixin:
+    def __format__(self, format_spec: str) -> str:
+        return "custom"
+
+class ShadowedInt(int, FormatMixin):
+    pass
+
+class CustomBytes(bytes):
+    def __format__(self, format_spec: str) -> str:
+        return "custom"
+
+f"{CustomInt():custom}"
+f"{InheritedCustomInt():custom}"
+f"{CustomStr():.2f}"
+f"{CustomStr():c}"
+f"{PlainInt():custom}"  # E: Unrecognized format specification
+f"{PlainStr():.2f}"  # E: Incompatible types in string interpolation
+f"{CustomStr()!s:.2f}"  # E: Incompatible types in string interpolation
+f"{CustomInt()!r:custom}"  # E: Unrecognized format specification
+f"{ShadowedInt():custom}"  # E: Unrecognized format specification
+f"{CustomBytes():>10}"
+"#,
+);
+
+testcase!(
+    test_checked_fstrings_builtin_options,
+    r#"
+s = "s"
+f"{b'xy':>10}"  # E: doesn't support format specifiers
+f"{b'xy':s}"  # E: doesn't support format specifiers
+f"{b'xy'}"
+f"{b'xy':}"
+f"{b'xy'!s:>10}"
+f"{b'xy'!r:s}"
+f"{1:s}"  # E: Incompatible types in string interpolation
+f"{1.0:s}"  # E: Incompatible types in string interpolation
+f"{1j:s}"  # E: Incompatible types in string interpolation
+f"{s:+}"  # E: Numeric format flags are not allowed for strings
+f"{s:,}"  # E: Numeric format flags are not allowed for strings
+f"{s:_}"  # E: Numeric format flags are not allowed for strings
+f"{s:#}"  # E: Numeric format flags are not allowed for strings
+f"{s:z}"  # E: Numeric format flags are not allowed for strings
+f"{s:=10}"  # E: Numeric format flags are not allowed for strings
+f"{s:.2_}"  # E: Numeric format flags are not allowed for strings
+f"{1:z}"  # E: Negative zero coercion is not allowed for integer presentations
+f"{1:zd}"  # E: Negative zero coercion is not allowed for integer presentations
+f"{1:.2}"  # E: Precision is not allowed for integer presentations
+f"{1:.2d}"  # E: Precision is not allowed for integer presentations
+f"{1:._d}"  # E: Precision is not allowed for integer presentations
+f"{1:+c}"  # E: Sign and alternate form are not allowed
+f"{1:#c}"  # E: Sign and alternate form are not allowed
+f"{1:,c}"  # E: Grouping is not allowed
+f"{1:,n}"  # E: Grouping is not allowed
+f"{1.0:_n}"  # E: Grouping is not allowed
+f"{1:,x}"  # E: Comma grouping is not allowed
+f"{1j:%}"  # E: Incompatible types in string interpolation
+f"{1j:010}"  # E: Zero padding and `=` alignment are not allowed
+f"{1j:0>10}"  # E: Zero padding and `=` alignment are not allowed
+f"{1j:=10}"  # E: Zero padding and `=` alignment are not allowed
+f"{1:.f}"  # E: Unrecognized format specification
+f"{s:!r}"  # E: Unrecognized format specification
+
+f"{s:s}"
+f"{s:010}"
+f"{s:>10.2s}"
+f"{s:+>10}"
+f"{s:z>10}"
+f"{1:0=+#10_x}"
+f"{1:010c}"
+f"{1:z.2f}"
+f"{1:+.2%}"
+f"{1.0:0=+z#10,.2f}"
+f"{1.0:.2n}"
+f"{1.0:,.2_f}"
+f"{1.0:._f}"
+f"{1j:>+z#10,.2f}"
+f"{1j:x>010}"
+"#,
+);
+
+testcase!(
+    test_checked_fstrings_unknown_inheritance,
+    r#"
+from typing import Any
+
+def check(base: Any):
+    class Foo(base):
+        pass
+
+    class Child(Foo):
+        pass
+
+    class UnknownInt(int, base):
+        pass
+
+    f"{Foo():>10}"
+    f"{Child():>10}"
+    f"{UnknownInt():custom}"
+
+class A:
+    pass
+
+class B(A):
+    pass
+
+class C(A, B):  # E: nonlinearizable inheritance chain
+    pass
+
+class D(C):
+    pass
+
+f"{C():>10}"
+f"{D():>10}"
+"#,
+);
+
+testcase!(
     test_ternary_expression,
     r#"
 from typing import assert_type, Literal
@@ -821,7 +1018,7 @@ testcase!(
     r#"
 def test_raise(exception_or_none: BaseException | None) -> None:
     raise
-    raise None  # E: expected `BaseException`
+    raise None  # E: This code is unreachable # E: expected `BaseException`
     raise BaseException
     raise BaseException()
     raise 42  # E: expected `BaseException`
@@ -935,6 +1132,65 @@ def test(m: Mapping[str, int]) -> None:
     x1: dict[str, int] = {**m}
     x2: dict[int, int] = {**m} # E: `dict[str, int]` is not assignable to `dict[int, int]`
     assert_type({"foo": 1, **m}, dict[str, int])
+"#,
+);
+
+testcase!(
+    test_dict_unpack_duck_mapping,
+    r#"
+from collections.abc import Iterable
+from typing import Any, assert_type
+
+class DuckMapping:
+    def keys(self) -> Iterable[str]:
+        return ["a", "b"]
+
+    def __getitem__(self, key: str) -> Any:
+        return {"a": 1, "b": 2}[key]
+
+assert_type({**DuckMapping()}, dict[str, Any])
+assert_type({"x": 1, **DuckMapping()}, dict[str, int | Any])
+
+class GenericMapping[K, V]:
+    def keys(self) -> Iterable[K]: ...
+    def __getitem__(self, key: K) -> V: ...
+
+def test(mapping: GenericMapping[str, int], union: GenericMapping[str, int] | dict[str, str]):
+    assert_type({**mapping}, dict[str, int])
+    assert_type({"x": 1, **mapping}, dict[str, int])
+    assert_type({**union}, dict[str, int | str])
+    widened: dict[str, int | str] = {**mapping}
+    wrong_key: dict[int, int] = {**mapping}  # E: `dict[str, int]` is not assignable to `dict[int, int]`
+    wrong_value: dict[str, str] = {**mapping}  # E: `dict[str, int]` is not assignable to `dict[str, str]`
+
+def test_non_string_keys(mapping: GenericMapping[int, str]):
+    assert_type({**mapping}, dict[int, str])
+"#,
+);
+
+testcase!(
+    test_dict_unpack_invalid_duck_mapping,
+    r#"
+from collections.abc import Iterable
+
+class MissingKeys:
+    def __getitem__(self, key: str) -> int: ...
+
+class MissingGetItem:
+    def keys(self) -> Iterable[str]: ...
+
+class NonIterableKeys:
+    def keys(self) -> int: ...
+    def __getitem__(self, key: str) -> int: ...
+
+class IncompatibleKey:
+    def keys(self) -> Iterable[str]: ...
+    def __getitem__(self, key: int) -> int: ...
+
+{**MissingKeys()}  # E: Expected a mapping, got MissingKeys
+{**MissingGetItem()}  # E: Expected a mapping, got MissingGetItem
+{**NonIterableKeys()}  # E: Expected a mapping, got NonIterableKeys
+{**IncompatibleKey()}  # E: Expected a mapping, got IncompatibleKey
 "#,
 );
 
@@ -1494,10 +1750,20 @@ a = True if # E: Parse
 );
 
 testcase!(
-    test_syntax_error_resulting_in_empty_defintion,
+    test_syntax_error_resulting_in_empty_definition,
     r#"
 @:a=1 # E: Parse
     "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/5311
+testcase!(
+    test_syntax_error_walrus_in_pruned_branch,
+    r#"
+[)  # E: Parse # E: Parse # E: Parse
+f:=  # E: Parse
+if sys.platform == "w":  # E: Parse # E: Parse # E: Parse # E: Could not find name `sys`
+"#,
 );
 
 testcase!(
@@ -1580,6 +1846,20 @@ f("test")
 );
 
 testcase!(
+    test_pyrereadonly_in_base_class_type_argument,
+    TestEnv::one("pyre_extensions", "class PyreReadOnly[T]: pass"),
+    r#"
+from pyre_extensions import PyreReadOnly
+from typing import assert_type
+class Box[T]:
+    def get(self) -> T: ...
+class C[R](Box[PyreReadOnly[R]]): ...
+def f(c: C[int]):
+    assert_type(c.get(), int)
+    "#,
+);
+
+testcase!(
     test_resolving_any_correctly,
     r#"
 import typing
@@ -1647,11 +1927,65 @@ cast(1, 1)  # E: First argument to `typing.cast` must be a type
 );
 
 testcase!(
+    test_cast_string_in_augassign,
+    r#"
+from typing import cast
+
+lst = [1]
+lst[cast("int", 0)] += 1
+
+class C:
+    x: int = 0
+
+lst = [C()]
+lst[cast("int", 0)].x += 1
+    "#,
+);
+
+testcase!(
     test_special_calls_unexpected_keyword,
     r#"
 from typing import assert_type, reveal_type, Literal
 assert_type(0, Literal[0], oops=1)  # E: `assert_type` got an unexpected keyword argument `oops`
 reveal_type(0, oops=1)  # E: revealed type: Literal[0]  # E: `reveal_type` got an unexpected keyword argument `oops`
+    "#,
+);
+
+// An `assert-type-unspellable-subtype` error is suppressed by its own ignore comment, while an
+// `assert-type` error is not.
+testcase!(
+    test_assert_type_unspellable_subtype,
+    r#"
+from typing import Any, Callable, assert_type, overload
+
+class A: ...
+class B: ...
+
+def f(x: A, y: tuple[Any]):
+    if isinstance(x, B):
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type(x, B)
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type((x,), tuple[B])
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type(x, int)  # E: assert_type(A & B, int) failed
+        assert_type(x, A)  # E: `A & B` is a subtype of `A`, but they are not equivalent
+    if isinstance(y, B):
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type(y, tuple[object])
+        # Some materializations of `tuple[Any]` are not subtypes of `tuple[int]`.
+        # pyrefly: ignore[assert-type-unspellable-subtype]
+        assert_type(y, tuple[int])  # E: assert_type(B & tuple[Any], tuple[int]) failed
+
+@overload
+def g(x: int) -> int: ...
+@overload
+def g(x: str) -> str: ...
+def g(x: int | str) -> int | str: ...
+
+# A callback protocol can express an overloaded type.
+# pyrefly: ignore[assert-type-unspellable-subtype]
+assert_type(g, Callable[[int], int])  # E: (int) -> int) failed
     "#,
 );
 
@@ -2009,6 +2343,35 @@ def test(o: C):
 );
 
 testcase!(
+    test_dunder_bool_returning_never,
+    r#"
+from typing import Never
+
+class Foo:
+    def __bool__(self) -> Never:
+        raise TypeError
+
+if Foo(): ...  # E: The `__bool__` method of `Foo` returns `Never`, so it cannot be used as a boolean
+"#,
+);
+
+testcase!(
+    test_dunder_bool_returning_never_subclass_override,
+    r#"
+class Foo:
+    def __bool__(self):
+        raise TypeError
+
+class Bar(Foo):
+    def __bool__(self) -> bool:  # pyrefly: ignore[bad-override]
+        return True
+
+bar: Foo = Bar()
+if bar: ...
+"#,
+);
+
+testcase!(
     test_union_dunder_bool,
     r#"
 from typing import Literal
@@ -2162,7 +2525,7 @@ testcase!(
     test_crash_on_decorator_assign,
     r#"
 from typing import TypeVar
-@T=TypeVar()  # E: Expected newline, found `=` # E: TypeVar must be assigned to a variable # E: Missing argument `name`
+@T=TypeVar()  # E: Could not find name `T` # E: Expected newline, found `=` # E: TypeVar must be assigned to a variable # E: Missing argument `name`
 "#,
 );
 
@@ -2223,6 +2586,35 @@ async def run(engine: Engine) -> None:
 );
 
 testcase!(
+    bug = "`C` extends `Coroutine`, so each use of `make_c()` should report `unused-coroutine`",
+    test_unused_coroutine_extends_any,
+    r#"
+from typing import Any, Callable, Coroutine
+class C(Any, Coroutine[Any, Any, int]): ...
+class D(Any): ...
+async def f(make_c: Callable[[], C], make_d: Callable[[], D]) -> None:
+    make_c()
+    make_d()
+    if make_c():
+        pass
+    if make_d():
+        pass
+"#,
+);
+
+testcase!(
+    test_unused_coroutine_ignores_structural_match,
+    r#"
+import argparse
+async def f() -> int:
+    return 1
+async def main() -> None:
+    f()  # E: Result of async function call is unused. Did you forget to `await`?
+    argparse.Namespace()
+"#,
+);
+
+testcase!(
     test_loop_forever,
     r#"
 # Used to loop forever, https://github.com/facebook/pyrefly/issues/519
@@ -2232,7 +2624,7 @@ while True:
     z = "" if True else ""
     break
 else:
-    exit(1)
+    exit(1)  # E: This code is unreachable
 
 def func() -> int:
     return 1
@@ -2676,17 +3068,16 @@ def f(fi: Any, buffering1: int, buffering2: Any):
     with open(fi, "rb", buffering1) as f:
         assert_type(f, BinaryIO)
     with open(fi, "rb", buffering2) as f:
-        assert_type(f, IO[Any])
+        assert_type(f, Any)
     "#,
 );
 
 testcase!(
     test_index_into_sequence_of_str,
     r#"
-from typing import assert_type, Sequence
+from typing import Any, Sequence, assert_type
 def f(x: Sequence[str], idx):
-    # idx may be a slice
-    assert_type(x[idx], Sequence[str])
+    assert_type(x[idx], Any)
     "#,
 );
 

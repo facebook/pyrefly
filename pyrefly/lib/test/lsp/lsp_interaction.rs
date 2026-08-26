@@ -10,10 +10,12 @@
 // can share it; the modules below import it directly from there.
 
 mod basic;
+mod build_system_status;
 mod call_hierarchy;
 mod code_action_markdown_diagnostic;
 mod code_lens;
 mod completion;
+mod config_watch_status_bar_refresh;
 mod configuration;
 mod convert_module_package;
 mod cross_file_invalidation_project_mode;
@@ -55,6 +57,7 @@ mod rename;
 mod safe_delete_file;
 mod selection_range;
 mod semantic_tokens;
+mod special_import;
 mod type_definition;
 mod type_hierarchy;
 mod unsaved_file;

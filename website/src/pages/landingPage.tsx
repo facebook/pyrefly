@@ -15,8 +15,8 @@ import PyreflyVideo from '../components/landing-page/PyreflyVideo';
 import LandingPageSection from '../components/landing-page/landingPageSection';
 import LandingPageHeader from '../components/landing-page/landingPageHeader';
 import Banner from '../components/Banner';
-import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import { log, LoggingEvent } from '../utils/LoggingUtils';
+import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 
 export default function LandingPage(): React.ReactElement {
     const { siteConfig } = useDocusaurusContext();
@@ -28,15 +28,15 @@ export default function LandingPage(): React.ReactElement {
             description={siteConfig.description}
         >
             <Banner
-                text="🐍 The Python Type System & Tooling Survey 2026 is live!"
+                text="📝 Help shape Pyrefly by taking our user survey!"
                 dismissible={true}
                 cta={{
-                    text: 'Take the survey (5 min)',
-                    href: 'https://www.surveymonkey.com/r/python_typing',
+                    text: 'Take the survey',
+                    href: 'https://forms.gle/dx6GrzHX83sMjT6L9',
                     external: true,
                     onClick: () =>
                         log(LoggingEvent.CLICK, {
-                            button_id: 'banner_typing_survey_2026',
+                            button_id: 'banner_user_survey',
                         }),
                 }}
             />

@@ -7,11 +7,12 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env::current_dir;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use lsp_types::WorkspaceFoldersChangeEvent;
 use pyrefly_build::source_db::SourceDatabase;
 use pyrefly_config::config::FallbackSearchPath;
@@ -42,33 +43,13 @@ use crate::state::lsp::ImportFormat;
 use crate::state::lsp::InlayHintConfig;
 use crate::state::lsp::TypeCheckingMode;
 
-/// Information about the Python environment provided by this workspace.
-#[derive(Debug, Clone)]
-pub struct PythonInfo {
-    /// The path to the interpreter used to query this `PythonInfo`'s [`PythonEnvironment`].
-    interpreter: PathBuf,
-    /// The [`PythonEnvironment`] values all [`ConfigFile`]s in a given workspace should
-    /// use if no explicit [`ConfigFile::python_interpreter`] is provided, or any
-    /// `PythonEnvironment` values in that `ConfigFile` are unfiled. If the `interpreter
-    /// provided fails to execute or is invalid, this `PythonEnvironment` might instead
-    /// be a system interpreter or [`PythonEnvironment::pyrefly_default()`].
-    env: PythonEnvironment,
-}
-
-impl PythonInfo {
-    pub fn new(interpreter: PathBuf) -> Self {
-        let (env, query_error) = PythonEnvironment::get_interpreter_env(&interpreter);
-        if let Some(error) = query_error {
-            error!("{error}");
-        }
-        Self { interpreter, env }
-    }
-}
-
 /// LSP workspace settings: this is all that is necessary to run an LSP at a given root.
 #[derive(Debug, Clone, Default)]
 pub struct Workspace {
-    python_info: Option<PythonInfo>,
+    /// A Python interpreter path provided by the client (e.g. via `pythonPath`).
+    /// Only applied to configs that don't pick their own interpreter and haven't
+    /// opted out of interpreter queries (`skip-interpreter-query`).
+    client_interpreter: Option<PathBuf>,
     search_path: Option<Vec<PathBuf>>,
     /// Extra `project_excludes` globs contributed by the client, already
     /// rewritten relative to this workspace's root. Appended to (never
@@ -172,17 +153,24 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
                     config.fallback_search_path =
                         FallbackSearchPath::Explicit(Arc::new(new_fallback_search_path));
                 }
-                if let Some(PythonInfo {
-                    interpreter,
-                    mut env,
-                }) = w.python_info.clone()
+                // Use the client-provided interpreter (e.g. `pythonPath`) only when the
+                // config doesn't already specify an interpreter and hasn't opted out of
+                // interpreter queries entirely (`skip-interpreter-query`). The query is
+                // deferred until here so an opt-out config never pays for it.
+                if let Some(interpreter) = w.client_interpreter.clone()
                     && config.interpreters.is_empty()
+                    && !config.interpreters.skip_interpreter_query
                 {
-                    let site_package_path: Option<Vec<PathBuf>> =
-                        config.python_environment.site_package_path.take();
-                    env.site_package_path = site_package_path;
+                    let (env, query_error) = PythonEnvironment::get_interpreter_env(&interpreter);
+                    if let Some(error) = query_error {
+                        error!("{error}");
+                    }
                     config.interpreters.set_lsp_python_interpreter(interpreter);
-                    config.python_environment = env;
+                    // The interpreter fills in what the config left unset, and nothing
+                    // more: an explicit `python-version`, `python-platform` or
+                    // `site-packages-path` outranks it, exactly as it does when
+                    // `configure_at` queries an interpreter on the CLI path.
+                    config.python_environment.override_empty(env);
                     // skip interpreter query because we already have the interpreter from the workspace
                     config.interpreters.skip_interpreter_query = true;
                 }
@@ -525,6 +513,20 @@ impl Workspaces {
         self.workspaces.read().keys().cloned().collect::<Vec<_>>()
     }
 
+    /// Return explicit config paths from all workspaces and the default workspace.
+    pub fn explicit_config_paths(&self) -> SmallSet<PathBuf> {
+        let mut paths = self
+            .workspaces
+            .read()
+            .values()
+            .filter_map(|workspace| workspace.workspace_config.clone())
+            .collect::<SmallSet<_>>();
+        if let Some(path) = self.default.read().workspace_config.clone() {
+            paths.insert(path);
+        }
+        paths
+    }
+
     pub fn changed(&self, event: WorkspaceFoldersChangeEvent) {
         let mut workspaces = self.workspaces.write();
         for x in event.removed {
@@ -553,7 +555,7 @@ impl Workspaces {
     pub fn apply_client_configuration(
         &self,
         modified: &mut bool,
-        scope_uri: &Option<Url>,
+        scope_uri: &Option<Uri>,
         config: Value,
         mode: ServerMode,
     ) {
@@ -634,7 +636,7 @@ impl Workspaces {
     /// Update disableLanguageServices setting for scope_uri, None if default workspace
     fn update_disable_language_services(
         &self,
-        scope_uri: &Option<Url>,
+        scope_uri: &Option<Uri>,
         disable_language_services: bool,
     ) {
         let mut workspaces = self.workspaces.write();
@@ -653,7 +655,7 @@ impl Workspaces {
     /// Update disabledLanguageServices setting for scope_uri, None if default workspace
     fn update_disabled_language_services(
         &self,
-        scope_uri: &Option<Url>,
+        scope_uri: &Option<Uri>,
         disabled_language_services: DisabledLanguageServices,
     ) {
         let mut workspaces = self.workspaces.write();
@@ -671,7 +673,7 @@ impl Workspaces {
         }
     }
 
-    fn update_runnable_code_lens(&self, scope_uri: &Option<Url>, runnable_code_lens: bool) {
+    fn update_runnable_code_lens(&self, scope_uri: &Option<Uri>, runnable_code_lens: bool) {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
@@ -686,7 +688,7 @@ impl Workspaces {
     }
 
     /// Update streamDiagnostics setting for scope_uri, None if default workspace
-    fn update_stream_diagnostics(&self, scope_uri: &Option<Url>, stream_diagnostics: bool) {
+    fn update_stream_diagnostics(&self, scope_uri: &Option<Uri>, stream_diagnostics: bool) {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
@@ -701,7 +703,7 @@ impl Workspaces {
     }
 
     /// Update diagnosticMode setting for scope_uri, None if default workspace
-    fn update_diagnostic_mode(&self, scope_uri: &Option<Url>, diagnostic_mode: DiagnosticMode) {
+    fn update_diagnostic_mode(&self, scope_uri: &Option<Uri>, diagnostic_mode: DiagnosticMode) {
         let mut workspaces = self.workspaces.write();
         match scope_uri {
             Some(scope_uri) => {
@@ -719,7 +721,7 @@ impl Workspaces {
     fn update_display_type_errors(
         &self,
         modified: &mut bool,
-        scope_uri: &Option<Url>,
+        scope_uri: &Option<Uri>,
         display_type_errors: Option<DisplayTypeErrors>,
     ) {
         let mut workspaces = self.workspaces.write();
@@ -746,7 +748,7 @@ impl Workspaces {
     fn update_type_checking_mode(
         &self,
         modified: &mut bool,
-        scope_uri: &Option<Url>,
+        scope_uri: &Option<Uri>,
         mode: Option<TypeCheckingMode>,
     ) {
         let mut workspaces = self.workspaces.write();
@@ -773,7 +775,7 @@ impl Workspaces {
     fn update_disable_type_errors(
         &self,
         modified: &mut bool,
-        scope_uri: &Option<Url>,
+        scope_uri: &Option<Uri>,
         disable: bool,
     ) {
         let mut workspaces = self.workspaces.write();
@@ -800,7 +802,7 @@ impl Workspaces {
     fn update_ide_settings(
         &self,
         modified: &mut bool,
-        scope_uri: &Option<Url>,
+        scope_uri: &Option<Uri>,
         lsp_analysis_config: LspAnalysisConfig,
     ) {
         let mut workspaces = self.workspaces.write();
@@ -822,22 +824,21 @@ impl Workspaces {
 
     /// Updates pythonpath with specified python path
     /// scope_uri = None for default workspace
-    fn update_pythonpath(&self, modified: &mut bool, scope_uri: &Option<Url>, python_path: &str) {
+    fn update_pythonpath(&self, modified: &mut bool, scope_uri: &Option<Uri>, python_path: &str) {
         let mut workspaces = self.workspaces.write();
         let interpreter = PathBuf::from(python_path);
-        let python_info = Some(PythonInfo::new(interpreter));
         match scope_uri {
             Some(scope_uri) => {
                 if let Ok(workspace_path) = scope_uri.to_file_path()
                     && let Some(workspace) = workspaces.get_mut(&workspace_path)
                 {
                     *modified = true;
-                    workspace.python_info = python_info;
+                    workspace.client_interpreter = Some(interpreter);
                 }
             }
             None => {
                 *modified = true;
-                self.default.write().python_info = python_info;
+                self.default.write().client_interpreter = Some(interpreter);
             }
         }
     }
@@ -846,7 +847,7 @@ impl Workspaces {
     fn update_search_paths(
         &self,
         modified: &mut bool,
-        scope_uri: &Option<Url>,
+        scope_uri: &Option<Uri>,
         search_paths: Vec<PathBuf>,
     ) {
         let mut workspaces = self.workspaces.write();
@@ -876,7 +877,7 @@ impl Workspaces {
     fn update_project_excludes(
         &self,
         modified: &mut bool,
-        scope_uri: &Option<Url>,
+        scope_uri: &Option<Uri>,
         project_excludes: Option<Globs>,
     ) {
         let mut workspaces = self.workspaces.write();
@@ -908,25 +909,41 @@ impl Workspaces {
     fn update_workspace_config(
         &self,
         modified: &mut bool,
-        scope_uri: &Option<Url>,
+        scope_uri: &Option<Uri>,
         config_path: PathBuf,
     ) {
-        let workspace_config = if config_path.as_os_str().is_empty() {
-            None
-        } else {
-            Some(config_path)
-        };
-        let mut workspaces = self.workspaces.write();
+        let workspace_config = (!config_path.as_os_str().is_empty()).then_some(config_path);
         match scope_uri {
             Some(scope_uri) => {
-                if let Ok(workspace_path) = scope_uri.to_file_path()
-                    && let Some(workspace) = workspaces.get_mut(&workspace_path)
-                {
-                    *modified = true;
-                    workspace.workspace_config = workspace_config;
+                if let Ok(workspace_path) = scope_uri.to_file_path() {
+                    let workspace_config = workspace_config.map(|path| {
+                        if path.is_absolute() {
+                            path
+                        } else {
+                            workspace_path.join(path)
+                        }
+                    });
+                    let mut workspaces = self.workspaces.write();
+                    if let Some(workspace) = workspaces.get_mut(&workspace_path) {
+                        *modified = true;
+                        workspace.workspace_config = workspace_config;
+                    }
                 }
             }
             None => {
+                let workspace_config = workspace_config.map(|path| {
+                    if path.is_absolute() {
+                        path
+                    } else {
+                        match current_dir().map(|cwd| cwd.join(&path)) {
+                            Ok(path) => path,
+                            Err(error) => {
+                                warn!("Could not make the config path absolute: {error}");
+                                path
+                            }
+                        }
+                    }
+                });
                 *modified = true;
                 self.default.write().workspace_config = workspace_config;
             }
@@ -1021,8 +1038,55 @@ impl Workspaces {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn test_scoped_config_path_is_absolute_and_preserves_relative_suffix() {
+        let root = TempDir::new().unwrap();
+        let root_path = root.path().to_path_buf();
+        let workspaces = Workspaces::new(Workspace::new(), std::slice::from_ref(&root_path));
+        let mut modified = false;
+        workspaces.apply_client_configuration(
+            &mut modified,
+            &Some(Uri::from_directory_path(&root_path).unwrap()),
+            json!({"pyrefly": {"configPath": "nested/../project.settings"}}),
+            ServerMode::LanguageServer,
+        );
+
+        assert!(modified);
+        let paths = workspaces.explicit_config_paths();
+        let path = paths
+            .iter()
+            .next()
+            .expect("the workspace should have an explicit config path");
+        assert_eq!(paths.len(), 1);
+        assert!(path.is_absolute());
+        assert!(path.ends_with(Path::new("nested/../project.settings")));
+    }
+
+    #[test]
+    fn test_default_config_path_is_absolute_and_preserves_relative_suffix() {
+        let workspaces = Workspaces::new(Workspace::new(), &[]);
+        let mut modified = false;
+        workspaces.apply_client_configuration(
+            &mut modified,
+            &None,
+            json!({"pyrefly": {"configPath": "nested/../project.settings"}}),
+            ServerMode::LanguageServer,
+        );
+
+        assert!(modified);
+        let paths = workspaces.explicit_config_paths();
+        let path = paths
+            .iter()
+            .next()
+            .expect("the default workspace should have an explicit config path");
+        assert_eq!(paths.len(), 1);
+        assert!(path.is_absolute());
+        assert!(path.ends_with(Path::new("nested/../project.settings")));
+    }
 
     #[test]
     fn test_get_with_selects_longest_match() {
@@ -1459,7 +1523,7 @@ mod tests {
             let mut modified = false;
             workspaces.apply_client_configuration(
                 &mut modified,
-                &Some(Url::from_directory_path(&root).unwrap()),
+                &Some(Uri::from_directory_path(&root).unwrap()),
                 json!({ "pyrefly": { "extraProjectExcludes": ["generated", "/abs/vendor"] } }),
                 ServerMode::LanguageServer,
             );
@@ -1527,5 +1591,38 @@ mod tests {
             );
             assert!(!modified);
         }
+    }
+
+    /// A client-supplied `pythonPath` must not be applied to a config that opted
+    /// out of interpreter queries (`skip-interpreter-query = true`), and it must
+    /// only be applied to a config that hasn't already picked an interpreter. This
+    /// pins the workspace side of the `skip-interpreter-query` contract: a config
+    /// that opts out should never pay for — or even perform — an interpreter query.
+    /// Regression test for facebook/pyrefly#4445.
+    #[test]
+    fn test_skip_interpreter_query_blocks_client_pythonpath() {
+        let workspaces = Workspaces::new(Workspace::new(), &[]);
+        workspaces.default.write().client_interpreter = Some(PathBuf::from("/fake/python"));
+        let configurer = WorkspaceConfigConfigurer(Arc::new(workspaces));
+
+        // A config with `skip-interpreter-query = true`: the client interpreter is
+        // ignored entirely (neither queried nor applied as an interpreter path).
+        let mut skip_config = ConfigFile::parse_config("skip-interpreter-query = true").unwrap();
+        // Mark it as file-loaded so the unconfigured resolver (which would otherwise
+        // rebuild the config) doesn't drop the opt-out flag.
+        skip_config.source = ConfigSource::File(PathBuf::from("/fake/root/pyrefly.toml"));
+        let (applied, _) = configurer.configure(Some(Path::new("/fake/root")), skip_config, vec![]);
+        assert!(
+            applied.interpreters.is_empty(),
+            "client pythonPath must be ignored when skip-interpreter-query is set"
+        );
+
+        // A config that is silent about interpreters: the client interpreter is applied.
+        let (applied, _) =
+            configurer.configure(Some(Path::new("/fake/root")), ConfigFile::default(), vec![]);
+        assert!(
+            !applied.interpreters.is_empty(),
+            "client pythonPath is applied when the config is silent about interpreters"
+        );
     }
 }

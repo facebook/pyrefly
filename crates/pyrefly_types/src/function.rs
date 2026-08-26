@@ -27,11 +27,10 @@ use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 
 use crate::callable::Callable;
-use crate::callable::DisplayOnly;
-use crate::callable::IdentityIgnored;
 use crate::class::Class;
 use crate::class::ClassType;
 use crate::equality::TypeEq;
+use crate::identity::IdentityIgnored;
 use crate::keywords::DataclassTransformMetadata;
 use crate::meta_shape_dsl::ShapeDslFunction;
 use crate::meta_shape_dsl::ShapeTransform;
@@ -50,28 +49,18 @@ pub struct Function {
 pub struct FuncMetadata {
     pub kind: FunctionKind,
     pub flags: FuncFlags,
-    /// The source annotation spelling used only when rendering function hover.
-    pub display_signature: DisplayOnly<Option<Box<Callable>>>,
 }
 
 impl FuncMetadata {
-    pub fn new(kind: FunctionKind, flags: FuncFlags) -> Self {
-        Self {
-            kind,
-            flags,
-            display_signature: DisplayOnly(None),
-        }
-    }
-
     pub fn synthesized(module: &Module, cls: Option<&Class>, name: Name) -> Self {
-        Self::new(
-            FunctionKind::Synthesized(Arc::new(FuncSymbol {
+        Self {
+            kind: FunctionKind::Synthesized(Arc::new(FuncSymbol {
                 module: module.dupe(),
                 cls: cls.map(Dupe::dupe),
                 name,
             })),
-            FuncFlags::default(),
-        )
+            flags: FuncFlags::default(),
+        }
     }
 
     pub fn method(cls: &Class, name: Name) -> Self {
@@ -204,6 +193,9 @@ pub struct FuncFlags {
     pub is_overload: bool,
     pub is_staticmethod: bool,
     pub is_classmethod: bool,
+    /// Parameter indices whose annotations directly name a type parameter of the defining class.
+    /// This is used when a subclass binds that parameter to a shape `Flag`.
+    pub shape_flag_constructor_sources: Option<Box<Vec<usize>>>,
     /// A function decorated with `@deprecated`
     pub deprecation: Option<Deprecation>,
     /// Metadata for `@property`, `@foo.setter`, and `@foo.deleter`.
@@ -678,12 +670,14 @@ impl FunctionKind {
 
     pub fn format(&self, current_module: ModuleName) -> String {
         let func_module = self.module_name();
-        let module_prefix =
-            if func_module == current_module || func_module == ModuleName::builtins() {
-                "".to_owned()
-            } else {
-                format!("{}.", func_module)
-            };
+        let module_prefix = if func_module.as_str().is_empty()
+            || func_module == current_module
+            || func_module == ModuleName::builtins()
+        {
+            "".to_owned()
+        } else {
+            format!("{}.", func_module)
+        };
         let class_prefix = match &self.class() {
             Some(cls) => {
                 format!("{}.", cls.name())

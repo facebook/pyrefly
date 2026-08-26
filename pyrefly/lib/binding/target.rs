@@ -98,6 +98,7 @@ impl<'a> BindingsBuilder<'a> {
         let len = elts.len();
         let has_star = elts.iter().any(|e| matches!(e, Expr::Starred(_)));
         let num_targets = if has_star { len - 1 } else { len };
+        let in_class_body = self.scopes.in_class_body();
         for (i, e) in elts.iter_mut().enumerate() {
             match e {
                 Expr::Starred(e) => {
@@ -111,6 +112,7 @@ impl<'a> BindingsBuilder<'a> {
                             range,
                             position: UnpackedPosition::Slice(i, j),
                             receiver: None,
+                            in_class_body,
                         }))
                     };
                     self.bind_target_no_expr(&mut e.value, &make_nested_binding);
@@ -132,6 +134,7 @@ impl<'a> BindingsBuilder<'a> {
                             range,
                             position: unpacked_position,
                             receiver: None,
+                            in_class_body,
                         }))
                     };
                     self.bind_target_no_expr(e, &make_nested_binding);
@@ -184,7 +187,11 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         mut attr: ExprAttribute,
         mut assigned: Option<&mut Expr>,
-        make_assigned_value: impl FnOnce(Option<&Expr>, Option<Idx<KeyAnnotation>>) -> ExprOrBinding,
+        make_assigned_value: impl FnOnce(
+            &ExprAttribute,
+            Option<&Expr>,
+            Option<Idx<KeyAnnotation>>,
+        ) -> ExprOrBinding,
         ensure_assigned: bool,
     ) -> ExprOrBinding {
         let narrowing_identifier =
@@ -206,7 +213,7 @@ impl<'a> BindingsBuilder<'a> {
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
-        let value = make_assigned_value(assigned.as_deref(), None);
+        let value = make_assigned_value(&attr, assigned.as_deref(), None);
         let idx = self.insert_binding_current(
             user,
             Binding::AssignToAttribute(Box::new(AssignToAttribute {
@@ -225,12 +232,16 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         attr: ExprAttribute,
         assigned: &mut Expr,
-        make_assigned_value: impl FnOnce(&Expr, Option<Idx<KeyAnnotation>>) -> ExprOrBinding,
+        make_assigned_value: impl FnOnce(
+            &ExprAttribute,
+            &Expr,
+            Option<Idx<KeyAnnotation>>,
+        ) -> ExprOrBinding,
     ) -> ExprOrBinding {
         self.bind_attr_assign_impl(
             attr,
             Some(assigned),
-            |expr, ann| make_assigned_value(expr.unwrap(), ann),
+            |attr, value, ann| make_assigned_value(attr, value.unwrap(), ann),
             true,
         )
     }
@@ -241,7 +252,11 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         mut subscript: ExprSubscript,
         mut assigned: Option<&mut Expr>,
-        make_assigned_value: impl FnOnce(Option<&Expr>, Option<Idx<KeyAnnotation>>) -> ExprOrBinding,
+        make_assigned_value: impl FnOnce(
+            &ExprSubscript,
+            Option<&Expr>,
+            Option<Idx<KeyAnnotation>>,
+        ) -> ExprOrBinding,
         ensure_assigned: bool,
     ) {
         let narrowing_identifier =
@@ -257,7 +272,7 @@ impl<'a> BindingsBuilder<'a> {
         if ensure_assigned && let Some(assigned) = &mut assigned {
             self.ensure_expr(assigned, user.usage());
         }
-        let value = make_assigned_value(assigned.as_deref(), None);
+        let value = make_assigned_value(&subscript, assigned.as_deref(), None);
         let idx = self.insert_binding_current(
             user,
             Binding::AssignToSubscript(Box::new((subscript, Box::new(value)))),
@@ -271,12 +286,16 @@ impl<'a> BindingsBuilder<'a> {
         &mut self,
         subscript: ExprSubscript,
         assigned: &mut Expr,
-        make_assigned_value: impl FnOnce(&Expr, Option<Idx<KeyAnnotation>>) -> ExprOrBinding,
+        make_assigned_value: impl FnOnce(
+            &ExprSubscript,
+            &Expr,
+            Option<Idx<KeyAnnotation>>,
+        ) -> ExprOrBinding,
     ) {
         self.bind_subscript_assign_impl(
             subscript,
             Some(assigned),
-            |expr, ann| make_assigned_value(expr.unwrap(), ann),
+            |subscr, value, ann| make_assigned_value(subscr, value.unwrap(), ann),
             true,
         )
     }
@@ -321,18 +340,19 @@ impl<'a> BindingsBuilder<'a> {
                 let attr_value = self.bind_attr_assign_impl(
                     x.clone(),
                     assigned,
-                    make_assigned_value,
+                    |_attr, value, ann| make_assigned_value(value, ann),
                     ensure_assigned,
                 );
                 // If this is a self-assignment, record it because we may use it to infer
                 // the existence of an instance-only attribute.
                 self.scopes.record_self_attr_assign(x, attr_value, None);
+                self.scopes.record_new_instance_attr_assign(x);
             }
             Expr::Subscript(x) => {
                 self.bind_subscript_assign_impl(
                     x.clone(),
                     assigned,
-                    make_assigned_value,
+                    |_subscr, value, ann| make_assigned_value(value, ann),
                     ensure_assigned,
                 );
             }
@@ -656,10 +676,14 @@ impl<'a> BindingsBuilder<'a> {
         ensure_assigned: bool,
     ) -> Option<Idx<KeyAnnotation>> {
         if Ast::is_synthesized_empty_identifier(name) {
-            let range = value.range();
-            let mut user = self.declare_current_idx(Key::Anon(range));
-            self.ensure_expr(&mut value, user.usage());
-            self.insert_binding_current(user, Binding::Expr(None, Box::new(*value)));
+            // An empty name from parse-error recovery binds nothing, so only its
+            // value is resolved.
+            if ensure_assigned {
+                let range = value.range();
+                let mut user = self.declare_current_idx(Key::Anon(range));
+                self.ensure_expr(&mut value, user.usage());
+                self.insert_binding_current(user, Binding::Expr(None, Box::new(*value)));
+            }
             return None;
         }
         let identifier = ShortIdentifier::new(name);
@@ -735,21 +759,11 @@ impl<'a> BindingsBuilder<'a> {
             FlowStyle::Other
         };
         // Must check before bind_name updates the flow.
-        let was_uninitialized = matches!(
-            self.scopes.flow_style_for_name(&name.id),
-            Some(FlowStyle::Uninitialized)
-        );
+        let last_value_or_narrow = self.scopes.last_value_or_narrow_for(&name.id);
         let canonical_ann = self.bind_name(&name.id, scope_idx, style);
         let ann = match direct_ann {
             Some((_, idx)) => Some((AnnotationStyle::Direct, idx)),
-            None => canonical_ann.map(|idx| {
-                let forwarded_style = if was_uninitialized {
-                    AnnotationStyle::ForwardedInitial
-                } else {
-                    AnnotationStyle::Forwarded
-                };
-                (forwarded_style, idx)
-            }),
+            None => canonical_ann.map(|idx| (AnnotationStyle::Forwarded, idx)),
         };
         // Compute def_idx before building the binding, since the NameAssign needs
         // its own idx for partial type inference support.
@@ -791,11 +805,12 @@ impl<'a> BindingsBuilder<'a> {
                 expr: value,
                 legacy_tparams: tparams,
                 is_in_function_scope: self.scopes.in_function_scope(),
-                is_class_body_assignment: self.scopes.in_class_body(),
+                class_key: self.scopes.current_class_key(),
                 first_use: FirstUse::Undetermined,
                 def_idx: if uses_first_use { Some(def_idx) } else { None },
                 receiver_idx,
                 attrs_field_specifier,
+                last_value_or_narrow,
             }))
         };
         self.insert_binding_idx(def_idx, binding);
@@ -812,6 +827,7 @@ impl<'a> BindingsBuilder<'a> {
                     SpecialExport::Union
                         | SpecialExport::Optional
                         | SpecialExport::Annotated
+                        | SpecialExport::Shaped
                         | SpecialExport::Callable
                         | SpecialExport::BuiltinsDict
                         | SpecialExport::TypingDict

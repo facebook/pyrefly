@@ -39,7 +39,7 @@ let docsSidebar = [
         description:
             'Never used a type system before or just new to Pyrefly? Start here!',
         collapsed: false,
-        items: ['installation', 'configuration'],
+        items: ['installation', 'shell-completion', 'configuration', 'wasm'],
     },
     {
         type: 'doc' as const,
@@ -78,6 +78,7 @@ let docsSidebar = [
                     'migrate/pyright/diagnostics-reference',
                 ],
             },
+            'migrate/pylint',
         ],
     },
     {
@@ -152,14 +153,21 @@ let docsSidebar = [
         label: 'Import Resolution',
     },
     {
-        type: 'doc' as const,
-        id: 'bazel',
-        label: 'Bazel Integration',
-    },
-    {
-        type: 'doc' as const,
-        id: 'pants',
-        label: 'Pants Integration',
+        type: 'category' as const,
+        label: 'Build System Integration',
+        collapsed: false,
+        items: [
+            {
+                type: 'doc' as const,
+                id: 'bazel',
+                label: 'Bazel',
+            },
+            {
+                type: 'doc' as const,
+                id: 'pants',
+                label: 'Pants',
+            },
+        ],
     },
     {
         type: 'category' as const,
@@ -201,6 +209,32 @@ let docsSidebar = [
                 label: 'Getting Started',
             },
             {
+                type: 'doc' as const,
+                id: 'tensor-shapes-ai-porting',
+                label: 'Agent Skill',
+            },
+            {
+                type: 'category' as const,
+                label: 'Reference',
+                items: [
+                    {
+                        type: 'doc' as const,
+                        id: 'tensor-shapes-reference',
+                        label: 'Shape Types',
+                    },
+                    {
+                        type: 'doc' as const,
+                        id: 'tensor-shapes-library-authors',
+                        label: 'Shape Transformation DSL',
+                    },
+                    {
+                        type: 'doc' as const,
+                        id: 'tensor-shapes-jaxtyping',
+                        label: 'Jaxtyping Support',
+                    },
+                ],
+            },
+            {
                 type: 'category' as const,
                 label: 'Tutorials',
                 items: [
@@ -228,13 +262,8 @@ let docsSidebar = [
             },
             {
                 type: 'doc' as const,
-                id: 'tensor-shapes-ai-porting',
-                label: 'Agent Skill',
-            },
-            {
-                type: 'doc' as const,
-                id: 'tensor-shapes-reference',
-                label: 'API Reference',
+                id: 'tensor-shapes-related-work',
+                label: 'Related Work',
             },
             {
                 type: 'doc' as const,

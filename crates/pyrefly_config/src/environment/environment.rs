@@ -9,11 +9,8 @@ use std::fmt;
 use std::fmt::Display;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::LazyLock;
 
-use anyhow::Context;
-use anyhow::anyhow;
 use itertools::Itertools;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
@@ -23,8 +20,9 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_with::skip_serializing_none;
 use starlark_map::small_map::SmallMap;
-use tracing::warn;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::environment::interpreter_query;
 use crate::environment::interpreters::Interpreters;
 
 static INTERPRETER_ENV_REGISTRY: LazyLock<
@@ -61,6 +59,8 @@ pub struct PythonEnvironment {
     /// Directories containing third-party package imports, searched
     /// after first checking `search_path` and `typeshed`.
     #[serde(
+        rename = "site-packages-path",
+        alias = "site-package-path",
         // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
         // alias while we migrate existing fields from snake case to kebab case.
         alias = "site_package_path"
@@ -70,11 +70,30 @@ pub struct PythonEnvironment {
     #[serde(skip)]
     pub interpreter_site_package_path: Vec<PathBuf>,
 
+    /// The subset of `interpreter_site_package_path` that the interpreter
+    /// reports as editable (PEP 610) installs, so callers can exempt those
+    /// paths from Pyrefly's default project-source exclusion.
+    #[serde(skip)]
+    pub interpreter_editable_path: Vec<PathBuf>,
+
     #[serde(alias = "stdlib_paths", default, skip_serializing)]
     pub interpreter_stdlib_path: Vec<PathBuf>,
 }
 
 impl PythonEnvironment {
+    /// Clear cached interpreter queries that report any of `site_packages`, after path
+    /// configuration files in those directories change. Failed queries are also cleared, since
+    /// a changing environment (e.g. a venv being rebuilt) may be why they failed.
+    pub fn clear_interpreter_cache_for_site_packages(site_packages: &[&Path]) {
+        INTERPRETER_ENV_REGISTRY.lock().retain(|_, env| {
+            env.as_ref().is_ok_and(|env| {
+                !env.interpreter_site_package_path
+                    .iter()
+                    .any(|path| site_packages.contains(&path.as_path()))
+            })
+        });
+    }
+
     fn pyrefly_default() -> Self {
         let mut env = Self::default();
         env.set_empty_to_default();
@@ -111,74 +130,25 @@ impl PythonEnvironment {
             self.site_package_path = other.site_package_path;
         }
         self.interpreter_site_package_path = other.interpreter_site_package_path.clone();
+        self.interpreter_editable_path = other.interpreter_editable_path.clone();
         self.interpreter_stdlib_path = other.interpreter_stdlib_path.clone();
     }
 
     /// Given a path to a Python interpreter executable, query that interpreter for its
     /// version, platform, and site package path. Return an error in the case of failure during
     /// execution, parsing, or deserializing.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn get_env_from_interpreter(interpreter: &Path) -> anyhow::Result<PythonEnvironment> {
-        if let Ok(pythonpath) = std::env::var("PYTHONPATH") {
-            warn!(
-                "PYTHONPATH environment variable is set to `{}`. Checks in other environments may not include these paths.",
-                pythonpath
-            );
-        }
+        let env = interpreter_query::query(interpreter)?;
+        Self::cache_interpreter_stdlib_path(env.interpreter_stdlib_path.clone());
+        Ok(env)
+    }
 
-        let script = "\
-import json, sys, sysconfig
-platform = sys.platform
-v = sys.version_info
-version = '{}.{}.{}'.format(v.major, v.minor, v.micro)
-stdlib_paths = [p for p in [sysconfig.get_path('stdlib')] if p is not None]
-site_package_path = [p for p in sys.path if p != '' and '.zip' not in p and not p.endswith('/lib-dynload') and p not in stdlib_paths]
-print(json.dumps({'python_platform': platform, 'python_version': version, 'site_package_path': site_package_path, 'stdlib_paths': stdlib_paths}))
-";
-
-        let mut command = Command::new(interpreter);
-        command.arg("-c");
-        command.arg(script);
-
-        let python_info = command.output()?;
-
-        let stdout = String::from_utf8(python_info.stdout).with_context(|| {
-            format!(
-                "while parsing Python interpreter (`{}`) stdout for environment configuration",
-                interpreter.display()
-            )
-        })?;
-        if !python_info.status.success() {
-            let stderr = String::from_utf8(python_info.stderr)
-                .unwrap_or("<Failed to parse STDOUT from UTF-8 string>".to_owned());
-            return Err(anyhow::anyhow!(
-                "Unable to query interpreter {} for environment info:\nSTDOUT: {}\nSTDERR: {}",
-                interpreter.display(),
-                stdout,
-                stderr
-            ));
-        }
-
-        let mut deserialized: PythonEnvironment = serde_json::from_str(&stdout)?;
-
-        deserialized.python_platform.as_ref().ok_or_else(|| {
-            anyhow!("Expected `python_platform` from Python interpreter query to be non-empty")
-        })?;
-        deserialized.python_version.as_ref().ok_or_else(|| {
-            anyhow!("Expected `python_version` from Python interpreter query to be non-empty")
-        })?;
-        let site_package_path = deserialized
-            .site_package_path
-            .replace(Vec::new())
-            .ok_or_else(|| {
-                anyhow!(
-                    "Expected `site_package_path` from Python interpreter query to be non-empty"
-                )
-            })?;
-        deserialized.interpreter_site_package_path = site_package_path;
-
-        Self::cache_interpreter_stdlib_path(deserialized.interpreter_stdlib_path.clone());
-
-        Ok(deserialized)
+    #[cfg(target_arch = "wasm32")]
+    pub fn get_env_from_interpreter(_interpreter: &Path) -> anyhow::Result<PythonEnvironment> {
+        Err(anyhow::anyhow!(
+            "Python interpreter queries are not supported on WebAssembly"
+        ))
     }
 
     /// Given a path to an interpreter, query the interpreter with
@@ -249,12 +219,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_clear_interpreter_cache_for_site_packages() {
+        let interpreter_env = |site_packages: &str| {
+            Ok(PythonEnvironment {
+                interpreter_site_package_path: vec![PathBuf::from(site_packages)],
+                ..Default::default()
+            })
+        };
+        // The registry is process-global, so use interpreter paths no other test touches.
+        let changed = PathBuf::from("/test_clear_cache/changed/bin/python");
+        let unchanged = PathBuf::from("/test_clear_cache/unchanged/bin/python");
+        let failed = PathBuf::from("/test_clear_cache/failed/bin/python");
+        {
+            let mut registry = INTERPRETER_ENV_REGISTRY.lock();
+            registry.insert(
+                changed.clone(),
+                interpreter_env("/test_clear_cache/changed/site-packages"),
+            );
+            registry.insert(
+                unchanged.clone(),
+                interpreter_env("/test_clear_cache/unchanged/site-packages"),
+            );
+            registry.insert(failed.clone(), Err("query failed".to_owned()));
+        }
+
+        PythonEnvironment::clear_interpreter_cache_for_site_packages(&[Path::new(
+            "/test_clear_cache/changed/site-packages",
+        )]);
+
+        let registry = INTERPRETER_ENV_REGISTRY.lock();
+        assert!(!registry.contains_key(&changed));
+        assert!(registry.contains_key(&unchanged));
+        assert!(!registry.contains_key(&failed));
+    }
+
+    #[test]
     fn test_display_includes_stdlib_path() {
         let env = PythonEnvironment {
             python_platform: Some(PythonPlatform::mac()),
             python_version: Some(PythonVersion::new(3, 10, 5)),
             site_package_path: Some(vec![PathBuf::from("/path/to/site-packages")]),
             interpreter_site_package_path: vec![PathBuf::from("/path/to/site-packages")],
+            interpreter_editable_path: Vec::new(),
             interpreter_stdlib_path: vec![
                 PathBuf::from("/usr/lib/python3.10"),
                 PathBuf::from("/usr/lib/python3.10/lib-dynload"),
@@ -267,12 +273,13 @@ mod tests {
     }
 
     #[test]
-    fn test_override_empty_propagates_stdlib_path() {
+    fn test_override_empty_propagates_interpreter_paths() {
         let mut env1 = PythonEnvironment {
             python_platform: None,
             python_version: None,
             site_package_path: None,
             interpreter_site_package_path: Vec::new(),
+            interpreter_editable_path: Vec::new(),
             interpreter_stdlib_path: Vec::new(),
         };
 
@@ -281,6 +288,7 @@ mod tests {
             python_version: Some(PythonVersion::new(3, 10, 0)),
             site_package_path: Some(vec![PathBuf::from("/path/to/site-packages")]),
             interpreter_site_package_path: vec![PathBuf::from("/path/to/site-packages")],
+            interpreter_editable_path: vec![PathBuf::from("/path/to/editable")],
             interpreter_stdlib_path: vec![
                 PathBuf::from("/usr/lib/python3.10"),
                 PathBuf::from("/usr/lib/python3.10/lib-dynload"),
@@ -289,11 +297,14 @@ mod tests {
 
         env1.override_empty(env2.clone());
 
-        // Verify interpreter_stdlib_path is correctly propagated
         assert_eq!(env1.interpreter_stdlib_path, env2.interpreter_stdlib_path);
         assert_eq!(
             env1.interpreter_site_package_path,
             env2.interpreter_site_package_path
+        );
+        assert_eq!(
+            env1.interpreter_editable_path,
+            env2.interpreter_editable_path
         );
     }
 }

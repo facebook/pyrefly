@@ -16,6 +16,17 @@ Invalid --search-path: `*/does_not_exist` does not exist (glob)
 [1]
 ```
 
+## We do not report errors from imported modules by default
+
+```scrut
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 12" > $TMPDIR/shown1.py && \
+> echo "import shown1; y: int = shown1.x" > $TMPDIR/shown2.py && \
+> $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --output-format=min-text --min-severity=warn
+ERROR */shown2.py:1:* (glob)
+[1]
+```
+
 ## We do report from nested with --check-all
 
 ```scrut
@@ -23,10 +34,22 @@ $ touch $TMPDIR/pyrefly.toml && \
 > echo "x: str = 12" > $TMPDIR/shown1.py && \
 > echo "import shown1; y: int = shown1.x" > $TMPDIR/shown2.py && \
 > $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all --output-format=min-text --min-severity=warn
- WARN importlib/abc.pyi:147:9-41: `ResourceReader` is deprecated [deprecated]
+ WARN ast.pyi:1230:16-21: `slice` is deprecated [deprecated]
+ WARN ast.pyi:1234:13-18: `slice` is deprecated [deprecated]
+ WARN ast.pyi:2176:36-44: `ExtSlice` is deprecated [deprecated]
+ WARN ast.pyi:2177:33-38: `Index` is deprecated [deprecated]
+ WARN ast.pyi:2178:33-38: `Suite` is deprecated [deprecated]
+ WARN ast.pyi:2179:35-42: `AugLoad` is deprecated [deprecated]
+ WARN ast.pyi:2180:36-44: `AugStore` is deprecated [deprecated]
+ WARN ast.pyi:2181:33-38: `Param` is deprecated [deprecated]
+ WARN importlib/abc.pyi:96:50-64: `ResourceLoader` is deprecated [deprecated]
+ WARN importlib/abc.pyi:162:9-41: `ResourceReader` is deprecated [deprecated]
+ WARN importlib/machinery.pyi:14:5-51: `WindowsRegistryFinder` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:49:9-29: `contents` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:79:41-73: `ResourceReader` is deprecated [deprecated]
  WARN importlib/resources/_common.pyi:8:41-55: `ResourceReader` is deprecated [deprecated]
+ WARN importlib/resources/_common.pyi:36:59-73: `importlib.resources.abc.ResourceReader` is deprecated [deprecated]
+ WARN importlib/resources/abc.pyi:58:32-46: `ResourceReader` is deprecated [deprecated]
 */shown*.py:1:* (glob)
 */shown*.py:1:* (glob)
 [1]
@@ -36,7 +59,6 @@ $ touch $TMPDIR/pyrefly.toml && \
 
 ```scrut {output_stream: stderr}
 $ $PYREFLY check --python-version 3.13.0 "$TMPDIR/*" --project-excludes="$TMPDIR/*"
- WARN Skipping include pattern `*` because it is matched by `project-excludes` or an ignore file. (glob)
 `project-excludes`: * (glob)
 No Python files matched pattern `*` (glob)
 [1]
@@ -56,7 +78,6 @@ ERROR `+` is not supported * (glob)
   | |   |
   | |   has type `Literal['2']`
   | has type `Literal[1]`
-  |
   Argument * is not assignable * (glob)
 [1]
 ```
@@ -102,7 +123,6 @@ ERROR `Literal[0]` is not assignable to `str` [bad-assignment]
   |    ---   ^
   |    |
   |    declared type
-  |
 ::error file=*/bad_combined.py,line=1,col=10,endLine=1,endColumn=11,title=Pyrefly bad-assignment::`Literal[0]` is not assignable to `str` (glob)
 [1]
 ```
@@ -118,7 +138,6 @@ ERROR Argument `float` is not assignable * (glob)
   |
 2 | f(0.0)
   |   ^^^
-  |
 [1]
 ```
 
@@ -133,7 +152,6 @@ ERROR Argument `Literal[0]` is not assignable * (glob)
   |
 3 | f(λ)
   |   ^
-  |
 [1]
 ```
 
@@ -169,6 +187,37 @@ $ touch $TMPDIR/pyrefly.toml && \
 > $PYREFLY check $TMPDIR/test.py --min-severity=info --output-format=min-text
  INFO */test.py:2:12-15: revealed type: Literal[1] [reveal-type] (glob)
 [1]
+```
+
+## A `hint` is not shown or counted by default
+
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/hint && \
+> printf '[errors]\nbad-assignment = "hint"\n' > $TMPDIR/hint/pyrefly.toml && \
+> echo "x: str = 0" > $TMPDIR/hint/test.py && \
+> $PYREFLY check $TMPDIR/hint/test.py --output-format=min-text
+ INFO 0 errors
+```
+
+## `--min-severity hint` shows hints and causes nonzero exit
+
+```scrut
+$ mkdir -p $TMPDIR/hint && \
+> printf '[errors]\nbad-assignment = "hint"\n' > $TMPDIR/hint/pyrefly.toml && \
+> echo "x: str = 0" > $TMPDIR/hint/test.py && \
+> $PYREFLY check $TMPDIR/hint/test.py --min-severity=hint --output-format=min-text
+ HINT */hint/test.py:1:10-11: `Literal[0]` is not assignable to `str` [bad-assignment] (glob)
+[1]
+```
+
+## A suppressed `hint` is not counted in the summary
+
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/hint && \
+> printf '[errors]\nbad-assignment = "hint"\n' > $TMPDIR/hint/pyrefly.toml && \
+> echo "x: str = 0  # pyrefly: ignore" > $TMPDIR/hint/test.py && \
+> $PYREFLY check $TMPDIR/hint/test.py --output-format=min-text
+ INFO 0 errors
 ```
 
 ## `--output-format junit-xml` emits well-formed XML

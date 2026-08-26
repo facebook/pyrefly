@@ -8,7 +8,7 @@
 //! Integration tests for the `typeServer/resolveImport` TSP request.
 
 use lsp_server::RequestId;
-use lsp_types::Url;
+use lsp_types::Uri;
 use tempfile::TempDir;
 
 use crate::lsp::non_wasm::protocol::Response;
@@ -34,7 +34,7 @@ fn test_resolve_import_absolute_stdlib() {
 
     let snapshot = get_current_snapshot(&mut tsp, 2);
 
-    let source_uri = Url::from_file_path(&test_file).unwrap().to_string();
+    let source_uri = Uri::from_file_path(&test_file).unwrap().to_string();
     tsp.server
         .resolve_import(&source_uri, vec!["os"], 0, snapshot);
 
@@ -79,7 +79,7 @@ fn test_resolve_import_local_module() {
 
     let snapshot = get_current_snapshot(&mut tsp, 2);
 
-    let source_uri = Url::from_file_path(&main_path).unwrap().to_string();
+    let source_uri = Uri::from_file_path(&main_path).unwrap().to_string();
     tsp.server
         .resolve_import(&source_uri, vec!["mymodule"], 0, snapshot);
 
@@ -118,7 +118,7 @@ fn test_resolve_import_nonexistent_module() {
 
     let snapshot = get_current_snapshot(&mut tsp, 2);
 
-    let source_uri = Url::from_file_path(&main_path).unwrap().to_string();
+    let source_uri = Uri::from_file_path(&main_path).unwrap().to_string();
     tsp.server
         .resolve_import(&source_uri, vec!["nonexistent_module_xyz"], 0, snapshot);
 
@@ -153,7 +153,7 @@ fn test_resolve_import_stale_snapshot() {
     tsp.server.did_open("main.py");
     tsp.client.expect_any_message();
 
-    let source_uri = Url::from_file_path(&main_path).unwrap().to_string();
+    let source_uri = Uri::from_file_path(&main_path).unwrap().to_string();
     // Use snapshot=9999 which is definitely stale.
     tsp.server.resolve_import(&source_uri, vec!["os"], 0, 9999);
 

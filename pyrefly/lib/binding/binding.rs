@@ -22,6 +22,7 @@ use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_types::function::BodyKind;
+use pyrefly_types::function::Deprecation;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::special_form::SpecialForm;
@@ -42,6 +43,7 @@ use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprYield;
 use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Keyword;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::StmtAugAssign;
 use ruff_python_ast::StmtClassDef;
@@ -50,6 +52,8 @@ use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use ruff_text_size::TextSize;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
@@ -89,6 +93,7 @@ use crate::types::class::ClassDefIndex;
 use crate::types::equality::TypeEq;
 use crate::types::function::FuncDefIndex;
 use crate::types::globals::ImplicitGlobal;
+use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedIdentity;
 use crate::types::quantified::QuantifiedKind;
 use crate::types::stdlib::Stdlib;
@@ -123,10 +128,10 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 4);
-assert_words!(BindingExpect, 14);
+assert_words!(BindingExpect, 12);
 assert_words!(BindingTypeAlias, 6);
-assert_words!(BindingAnnotation, 13);
-assert_words!(BindingClass, 10);
+assert_words!(BindingAnnotation, 11);
+assert_words!(BindingClass, 11);
 assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
 assert_words!(BindingClassMetadata, 14);
@@ -137,12 +142,12 @@ assert_bytes!(BindingClassDisjointBase, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_bytes!(BindingClassSubscriptSymmetry, 4);
 assert_words!(BindingClassField, 11);
-assert_bytes!(BindingClassSynthesizedFields, 4);
+assert_words!(BindingClassSynthesizedFields, 2);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
-assert_words!(BindingDecorator, 11);
-assert_bytes!(BindingDecoratedFunction, 20);
+assert_words!(BindingDecorator, 9);
+assert_bytes!(BindingDecoratedFunction, 24);
 assert_words!(BindingUndecoratedFunction, 18);
 
 #[derive(Clone, Dupe, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -500,7 +505,7 @@ impl Keyed for KeyClass {
 impl Keyed for KeyTParams {
     const EXPORTED: bool = true;
     type Value = BindingTParams;
-    type Answer = TParams;
+    type Answer = Arc<TParams>;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyTParams(idx)
     }
@@ -574,7 +579,7 @@ impl Keyed for KeyClassSynthesizedFields {
     where
         BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
     {
-        bindings.idx_to_key(bindings.get(idx).0).range()
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
     }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         Some(AnyExportedKey::KeyClassSynthesizedFields(self.clone()))
@@ -913,6 +918,9 @@ pub enum Key {
     /// Used for `import foo.x` (the `foo` might not be literally present with `.` modules),
     /// and `from foo import *` (the names are injected from the exports)
     Import(Box<(Name, TextRange)>),
+    /// I am `x` from `import foo as x`, rebound by the `import foo.bar` at this location,
+    /// which makes `x.bar` available.
+    ModuleAlias(Box<(Name, TextRange)>),
     /// I am an implicit module-level global variable like `__file__` or `__doc__`.
     ImplicitGlobal(Box<Name>),
     /// I am defined in this module at this location.
@@ -981,12 +989,18 @@ pub enum Key {
     Exhaustive(ExhaustivenessKind, TextRange),
     /// A `with` statement whose body terminated, which needs type-based reachability checking
     SuppressedException(TextRange),
+    /// A suppression-only query for a narrow view, separate from normal with completion.
+    SuppressionNarrow(TextRange),
+    /// One syntactic exception-class expression from an `except` clause. A clause
+    /// listing a tuple of classes has one of these per element.
+    ExceptionClass(TextRange),
 }
 
 impl Ranged for Key {
     fn range(&self) -> TextRange {
         match self {
             Self::Import(x) => x.1,
+            Self::ModuleAlias(x) => x.1,
             // ImplicitGlobals (e.g. __file__, __name__) are synthesized and have no
             // source text. TextRange::default() (0..0) points to the start of the
             // file, which is a valid byte position and can be targeted by suppression
@@ -1017,7 +1031,8 @@ impl Ranged for Key {
             Self::PossibleLegacyTParam(r) => *r,
             Self::PatternNarrow(r) => *r,
             Self::Exhaustive(_, r) => *r,
-            Self::SuppressedException(r) => *r,
+            Self::SuppressedException(r) | Self::SuppressionNarrow(r) => *r,
+            Self::ExceptionClass(r) => *r,
         }
     }
 }
@@ -1028,6 +1043,7 @@ impl DisplayWith<ModuleInfo> for Key {
 
         match self {
             Self::Import(x) => write!(f, "Key::Import({} {})", x.0, ctx.display(&x.1)),
+            Self::ModuleAlias(x) => write!(f, "Key::ModuleAlias({} {})", x.0, ctx.display(&x.1)),
             Self::ImplicitGlobal(n) => write!(f, "Key::Global({n})"),
             Self::Definition(x) => write!(f, "Key::Definition({})", short(x)),
             Self::MutableCapture(x) => write!(f, "Key::MutableCapture({})", short(x)),
@@ -1068,6 +1084,8 @@ impl DisplayWith<ModuleInfo> for Key {
             Self::SuppressedException(r) => {
                 write!(f, "Key::SuppressedException({})", ctx.display(r))
             }
+            Self::SuppressionNarrow(r) => write!(f, "Key::SuppressionNarrow({})", ctx.display(r)),
+            Self::ExceptionClass(r) => write!(f, "Key::ExceptionClass({})", ctx.display(r)),
         }
     }
 }
@@ -1100,6 +1118,8 @@ pub enum KeyExpect {
     MatchExhaustiveness(TextRange),
     /// Match case reachability check.
     MatchCaseReachability(TextRange),
+    /// `except` clause reachability check.
+    ExceptClauseReachability(TextRange),
     /// Private attribute access validation.
     PrivateAttributeAccess(TextRange),
     /// Deferred uninitialized variable check.
@@ -1110,6 +1130,10 @@ pub enum KeyExpect {
     ImplicitAliasCheck(TextRange),
     /// Validate an implementation's implicit return against its annotation.
     ValidateImplicitReturn(TextRange),
+    /// Reachability of the code following a `with` whose body ended in a jump.
+    GatedSuiteReachability(TextRange),
+    /// Reachability of all suites in an `if`/`elif`/`else` chain.
+    BranchSuiteReachability(TextRange),
 }
 
 impl Ranged for KeyExpect {
@@ -1123,11 +1147,14 @@ impl Ranged for KeyExpect {
             | KeyExpect::Bool(range)
             | KeyExpect::MatchExhaustiveness(range)
             | KeyExpect::MatchCaseReachability(range)
+            | KeyExpect::ExceptClauseReachability(range)
             | KeyExpect::PrivateAttributeAccess(range)
             | KeyExpect::UninitializedCheck(range)
             | KeyExpect::ForwardRefUnion(range)
             | KeyExpect::ImplicitAliasCheck(range)
-            | KeyExpect::ValidateImplicitReturn(range) => *range,
+            | KeyExpect::ValidateImplicitReturn(range)
+            | KeyExpect::GatedSuiteReachability(range)
+            | KeyExpect::BranchSuiteReachability(range) => *range,
         }
     }
 }
@@ -1143,11 +1170,14 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
             KeyExpect::Bool(r) => ("Bool", r),
             KeyExpect::MatchExhaustiveness(r) => ("MatchExhaustiveness", r),
             KeyExpect::MatchCaseReachability(r) => ("MatchCaseReachability", r),
+            KeyExpect::ExceptClauseReachability(r) => ("ExceptClauseReachability", r),
             KeyExpect::PrivateAttributeAccess(r) => ("PrivateAttributeAccess", r),
             KeyExpect::UninitializedCheck(r) => ("UninitializedCheck", r),
             KeyExpect::ForwardRefUnion(r) => ("ForwardRefUnion", r),
             KeyExpect::ImplicitAliasCheck(r) => ("ImplicitAliasCheck", r),
             KeyExpect::ValidateImplicitReturn(r) => ("ValidateImplicitReturn", r),
+            KeyExpect::GatedSuiteReachability(r) => ("GatedSuiteReachability", r),
+            KeyExpect::BranchSuiteReachability(r) => ("BranchSuiteReachability", r),
         };
         write!(f, "KeyExpect::{}({})", name, ctx.display(range))
     }
@@ -1175,6 +1205,17 @@ pub struct PrivateAttributeAccessCheck {
     pub class_idx: Option<Idx<KeyClass>>,
 }
 
+#[derive(Clone, Debug)]
+pub struct BranchSuite {
+    /// This suite's test. An `else` has none.
+    pub test: Option<Expr>,
+    /// The suite's reportable body, if it has one.
+    pub range: Option<TextRange>,
+    /// Whether the test's value holds in every environment, so that a false test kills this
+    /// suite and a true one kills the suites below it.
+    pub test_is_environment_independent: bool,
+}
+
 impl DisplayWith<Bindings> for ExprOrBinding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         match self {
@@ -1182,6 +1223,17 @@ impl DisplayWith<Bindings> for ExprOrBinding {
             Self::Binding(x) => write!(f, "{}", x.display_with(ctx)),
         }
     }
+}
+
+/// What an `except` clause catches, distinguishing the two ways of catching nothing:
+/// `except ()`, which lists no classes, and a bare `except`, which lists none but
+/// catches everything.
+#[derive(Clone, Debug)]
+pub enum ExceptClauseCatches {
+    /// The clause's [`Binding::ExceptionClass`] keys, in source order.
+    Classes(Box<[Idx<Key>]>),
+    /// A bare `except`, which catches `BaseException`.
+    Everything,
 }
 
 #[derive(Clone, Debug)]
@@ -1213,10 +1265,7 @@ pub enum BindingExpect {
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
     Bool(Expr),
     /// A match statement that may be non-exhaustive at runtime.
-    /// Due to gaps in our type algebra, we only check exhaustiveness for enums & unions
-    /// of enum literals.
-    /// Since this makes use of narrowing, not every match subject will be
-    /// checked for exhaustiveness, only variables and chained subscripts/attributes of variables
+    /// The solver checks closed subject types by default and all representable subjects when configured.
     MatchExhaustiveness {
         subject_idx: Idx<Key>,
         narrowing_subject: Option<NarrowingSubject>,
@@ -1231,6 +1280,35 @@ pub enum BindingExpect {
         narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_case: (Box<NarrowOp>, TextRange),
         case_range: TextRange,
+    },
+    /// Code following one or more points in a suite that control passes only conditionally, such
+    /// as a `with` whose body ended in a jump or a call that may never return. Each condition is
+    /// a solve-time question, so binding leaves the flow reachable and defers the reachability
+    /// diagnostic to here.
+    GatedSuiteReachability {
+        /// The gates the code sits behind, in source order.
+        gates: Box<[SuiteGate]>,
+        /// End of the region. Any definitely-dead tail is excluded, being reported on its own.
+        end: TextSize,
+    },
+    /// Suites in one `if`/`elif`/`else` chain. A suite runs only when every earlier
+    /// environment-independent test is false and its own test is true. The tests' types can
+    /// settle either half, but only once solved, so binding leaves the flow reachable and defers
+    /// the diagnostics here.
+    ///
+    /// Only the tests' own values are consulted, never the narrowing they perform. `if x is None:`
+    /// on a `str` narrows to `Never` too, but reporting that would condemn a defensive check that
+    /// a wrong annotation makes real, and such checks are everywhere.
+    BranchSuiteReachability(Box<[BranchSuite]>),
+    /// An `except` clause that earlier clauses in the same `try` statement may already
+    /// catch everything for. Only emitted when there is at least one earlier clause.
+    ExceptClauseReachability {
+        catches: ExceptClauseCatches,
+        /// The [`Binding::ExceptionClass`] keys of every earlier clause, in source order.
+        preceding: Box<[Idx<Key>]>,
+        is_star: bool,
+        /// The clause's exception-class expression, or its `except` keyword if it is bare.
+        range: TextRange,
     },
     /// Track private attribute accesses that need semantic validation.
     PrivateAttributeAccess(PrivateAttributeAccessCheck),
@@ -1364,6 +1442,46 @@ impl DisplayWith<Bindings> for BindingExpect {
                     "MatchCaseReachability({}, {})",
                     ctx.display(*subject_idx),
                     ctx.module().display(case_range)
+                )
+            }
+            Self::GatedSuiteReachability { gates, end } => {
+                write!(
+                    f,
+                    "GatedSuiteReachability({}, {})",
+                    gates.len(),
+                    ctx.module().display(&TextRange::new(
+                        gates.first().map_or(*end, |gate| gate.start),
+                        *end
+                    ))
+                )
+            }
+            Self::BranchSuiteReachability(branches) => {
+                write!(f, "BranchSuiteReachability({})", branches.len())
+            }
+            Self::ExceptClauseReachability {
+                catches,
+                preceding,
+                is_star,
+                range,
+            } => {
+                match catches {
+                    ExceptClauseCatches::Everything => write!(f, "ExceptClauseReachability(bare")?,
+                    ExceptClauseCatches::Classes(classes) => {
+                        write!(f, "ExceptClauseReachability([")?;
+                        for (i, idx) in classes.iter().enumerate() {
+                            if i > 0 {
+                                write!(f, ", ")?;
+                            }
+                            write!(f, "{}", ctx.display(*idx))?;
+                        }
+                        write!(f, "]")?;
+                    }
+                }
+                write!(
+                    f,
+                    ", {} preceding, {is_star:?}, {})",
+                    preceding.len(),
+                    ctx.module().display(range)
                 )
             }
             Self::UninitializedCheck {
@@ -1939,6 +2057,10 @@ pub struct BindingDecoratedFunction {
     pub undecorated_idx: Idx<KeyUndecoratedFunction>,
     pub successor: Option<Idx<KeyDecoratedFunction>>,
     pub docstring_range: Option<TextRange>,
+    /// Whether this function definition is contiguous with its predecessor.
+    /// Used to enforce that `@overload` signatures are immediately followed by
+    /// another `@overload` or the implementation.
+    pub is_contiguous: bool,
 }
 
 impl DisplayWith<Bindings> for BindingDecoratedFunction {
@@ -1989,6 +2111,7 @@ pub struct ClassBinding {
     pub def_index: ClassDefIndex,
     pub parent: NestingContext,
     pub is_protocol: bool,
+    pub deprecation: Option<Box<Deprecation>>,
     /// Were we able to determine, using only syntactic analysis at bindings time,
     /// that there can be no legacy tparams? If no, we need a `BindingTParams`, if yes
     /// we can directly compute the `TParams` from the class def.
@@ -2096,10 +2219,8 @@ pub enum SuperStyle {
 pub enum AnnotationStyle {
     /// Annotated assignment: `x: MyType = my_value`
     Direct,
-    /// First assignment after a bare annotation: `x: MyType` then `x = value`.
-    /// Annotation takes precedence (the variable had no prior value).
-    ForwardedInitial,
-    /// Reassignment of an already-initialized annotated variable.
+    /// Assignment or reassignment of an already-declared annotated variable:
+    /// for example, `x: MyType` then `x = value`.
     /// Expression type takes precedence; annotation is an upper-bound hint.
     Forwarded,
 }
@@ -2178,8 +2299,8 @@ pub struct NameAssign {
     pub expr: Box<Expr>,
     pub legacy_tparams: Option<Box<[Idx<KeyLegacyTypeParam>]>>,
     pub is_in_function_scope: bool,
-    /// True if this assignment is directly in a class body.
-    pub is_class_body_assignment: bool,
+    /// The class whose body directly contains this assignment, if any.
+    pub class_key: Option<Idx<KeyClass>>,
     pub first_use: FirstUse,
     /// The Definition idx for this NameAssign, if infer_with_first_use is enabled.
     /// Used at solve time for inline first-use pinning and partial answer storage.
@@ -2198,6 +2319,8 @@ pub struct NameAssign {
     pub receiver_idx: Option<Idx<Key>>,
     /// `Some` if the RHS is an attrs field specifier call (`field()` / `attr.ib()`).
     pub attrs_field_specifier: Option<AttrsSpecifier>,
+    /// If this name was redefined or narrowed prior to this assignment, the previous definition or narrow.
+    pub last_value_or_narrow: Option<Idx<Key>>,
 }
 
 impl NameAssign {
@@ -2230,6 +2353,8 @@ pub struct UnpackedValue {
     pub range: TextRange,
     pub position: UnpackedPosition,
     pub receiver: Option<Box<MultiTargetReceiver>>,
+    /// Whether the unpacking is in a class body, where the target defines a class attribute.
+    pub in_class_body: bool,
 }
 
 /// Data for a type alias binding.
@@ -2269,8 +2394,41 @@ pub struct ExhaustiveBinding {
     pub narrow_entries: Vec<(Idx<Key>, Box<NarrowOp>, TextRange)>,
 }
 
+/// A point in a suite that control passes only under a condition binding cannot settle.
+///
+/// Consecutive gates chain: a statement runs only if *every* gate before it was passed, which
+/// makes the suite dead from the first gate that cannot be.
+#[derive(Clone, Debug)]
+pub struct SuiteGate {
+    pub condition: GateCondition,
+    /// Where this gate's dead region would begin, i.e. the statement following it.
+    pub start: TextSize,
+}
+
+/// What must hold for control to pass a [`SuiteGate`].
+#[derive(Clone, Debug)]
+pub enum GateCondition {
+    /// A `with` whose body ended in a jump. Control continues past it only if one of these
+    /// managers suppresses the exception that reached it, so the code after is dead when every
+    /// one of them is known not to.
+    ManagerSuppresses {
+        contexts: Box<[Idx<Key>]>,
+        kind: IsAsync,
+    },
+    /// An expression statement. Control continues past it only if evaluating it returned, so
+    /// the code after is dead when its type is `Never`.
+    ExpressionReturns { result: Idx<Key> },
+    /// A compound statement, every path through which ends in one of these expressions. Control
+    /// continues past it only if one of them returns, so the code after is dead when they all
+    /// diverge. This is the same judgement `Binding::ReturnImplicit` makes for a whole function
+    /// body, applied to a single statement.
+    SomePathReturns {
+        last_exprs: Box<[(LastStmt, Idx<Key>)]>,
+    },
+}
+
 /// Data for the reachability of the code following a `with` statement whose body
-/// terminated with a `raise`
+/// raised, or may have raised before executing a terminating jump.
 #[derive(Clone, Debug)]
 pub struct SuppressedException {
     /// The context expressions of the `with` items, outermost first. Any one of them
@@ -2285,6 +2443,23 @@ pub struct SuppressedException {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct LambdaParamId(pub u32);
+
+/// Which rule a lambda's parameters follow, decided while its enclosing expression is bound.
+#[derive(Copy, Clone, Debug)]
+pub enum LambdaKind {
+    Ordinary,
+    /// A lambda whose parameter denotes a type rather than a runtime value.
+    TypeLevel,
+}
+
+/// Binding data for a parameter introduced by a type-level lambda.
+#[derive(Clone, Debug)]
+pub struct TypeLevelLambdaParameter {
+    /// Retained because the lambda expression can still pass through ordinary callable inference.
+    pub id: LambdaParamId,
+    /// Determines the synthetic type binder independently of solve order.
+    pub identifier: Identifier,
+}
 
 /// Data for `Binding::Import`. Carries the `(module, name)` of an imported
 /// symbol, plus metadata for downstream consumers.
@@ -2319,16 +2494,38 @@ pub struct ImportBinding {
 /// [`ImportBinding::fallback`].
 #[derive(Clone, Debug)]
 pub struct ImportFallback {
-    /// Per-name range (the `Alias` range, e.g. just `Y` or `Y as Z`).
-    /// Used to anchor a `MissingModuleAttribute` error if the imported
-    /// name can't be resolved inside an existing module. The
-    /// missing-module error itself is handled by a separate
+    /// Diagnostic context for the imported name. Its range is the per-name
+    /// range (the `Alias` range, e.g. just `Y` or `Y as Z`), which anchors a
+    /// `MissingModuleAttribute` error if the name can't be resolved inside an
+    /// existing module, or a find error for the submodule the name refers to.
+    /// The missing-module error for the module itself is handled by a separate
     /// per-statement `Binding::Module`.
-    pub stmt_range: TextRange,
+    pub diagnostic: ModuleDiagnostic,
     /// If true, the import site is dead code (statically unreachable).
     /// Suppress the missing-attribute error in that case — the bind-time
     /// logic did the same via `is_unreachable_from_static_test`.
     pub is_unreachable: bool,
+}
+
+/// Data for a name in a class body that wasn't found in the static scope.
+#[derive(Clone, Debug)]
+pub struct ClassBodyUnknownName {
+    pub class_key: Idx<KeyClass>,
+    pub name: Identifier,
+    pub suggestion: Option<Name>,
+    pub allow_class_body_forward_reference: bool,
+}
+
+/// Where and how to report a `FindError` for the module of a `Binding::Module`.
+#[derive(Clone, Debug)]
+pub struct ModuleDiagnostic {
+    pub range: TextRange,
+    /// The names bound by the import have a fallback in an `except` clause, so only a module
+    /// found without type information is reported.
+    pub is_optional_import: bool,
+    /// The import is inside an `if TYPE_CHECKING:` block and never runs, so a module found
+    /// without its source is not reported.
+    pub is_in_type_checking_block: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2375,11 +2572,21 @@ pub enum Binding {
     IterableValueComprehension(Box<Expr>, IsAsync, TextRange),
     /// A value in an iterable expression from a for-loop,
     /// e.g. `for x in items`. Keeps the optional annotation from the loop target.
-    IterableValueLoop(Option<Idx<KeyAnnotation>>, Box<Expr>, IsAsync),
+    /// The last argument is whether the loop is in a class body, where the target defines a
+    /// class attribute.
+    IterableValueLoop(Option<Idx<KeyAnnotation>>, Box<Expr>, IsAsync, bool),
     /// A value produced by entering a context manager.
     /// The second argument is the expression of the context manager and its range.
     /// The fourth argument indicates whether the context manager is async or not.
-    ContextValue(Option<Idx<KeyAnnotation>>, Idx<Key>, TextRange, IsAsync),
+    /// The last argument is whether the `with` is in a class body, where the target defines a
+    /// class attribute.
+    ContextValue(
+        Option<Idx<KeyAnnotation>>,
+        Idx<Key>,
+        TextRange,
+        IsAsync,
+        bool,
+    ),
     /// A value at a specific position in an unpacked iterable expression.
     /// Example: UnpackedValue(('a', 'b')), 1) represents 'b'.
     /// The optional `MultiTargetReceiver` carries the canonical class identity
@@ -2401,6 +2608,9 @@ pub enum Binding {
     Global(ImplicitGlobal),
     /// A type parameter.
     TypeParameter(Box<TypeParameter>),
+    /// A type variable whose identity is fixed while binding, such as a name
+    /// declared by `@shape_vars` and referenced inside a `Shaped` shape string.
+    Quantified(Box<Quantified>),
     /// A reference in an inner scope to a type parameter from an outer class scope. A class
     /// scope is "outer" if there is another intervening class scope in between. Example:
     ///   class A[T]:
@@ -2445,14 +2655,21 @@ pub enum Binding {
     /// An import of a module.
     /// Also contains the path along the module to bind, optionally a key
     /// with the previous import to this binding (in which case merge the
-    /// modules), and optionally a `TextRange` at which to emit a
-    /// missing-module diagnostic if `module_exists` returns a `FindError`
-    /// at solve time. The range is `Some` for top-level `import X`
+    /// modules), and optionally a `ModuleDiagnostic` describing where and
+    /// whether to emit a missing-module diagnostic if `module_exists` returns
+    /// a `FindError` at solve time. It is `Some` for top-level `import X`
     /// statements and `None` when the binding is constructed
     /// internally — for example by `solve_import`'s submodule fallback,
     /// where the cascade is responsible for any missing-module
     /// diagnostic.
-    Module(Box<(ModuleName, Box<[Name]>, Option<Idx<Key>>, Option<TextRange>)>),
+    Module(
+        Box<(
+            ModuleName,
+            Box<[Name]>,
+            Option<Idx<Key>>,
+            Option<ModuleDiagnostic>,
+        )>,
+    ),
     /// A name that might be a legacy type parameter. Solving this gives the Quantified type if so.
     /// - The first `bool` flag records that this function / class has scoped type parameters, in
     ///   which case the use of legacy type parameters is invalid; the error is reported at the
@@ -2477,13 +2694,30 @@ pub enum Binding {
     /// Positional patterns index into __match_args__, and keyword patterns match an attribute name.
     PatternMatchClassPositional(Box<(Box<Expr>, usize, Idx<Key>, TextRange)>),
     PatternMatchClassKeyword(Box<(Box<Expr>, Identifier, Idx<Key>)>),
-    /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean flag is true) clause
-    ExceptionHandler(Box<Expr>, bool),
-    /// Binding for a lambda parameter.
-    /// The optional owner is the binding whose expression contains this lambda.
-    /// If the parameter is solved before that owner has established thread-local
-    /// lambda vars, we can force the owner to solve first.
-    LambdaParameter(LambdaParamId, Option<Idx<Key>>),
+    /// Binding for one exception-class expression in an `except` clause, producing the
+    /// instance type it catches. A single expression can still yield a union, because a
+    /// non-literal tuple (`except errors:`) is only decomposed at solve time.
+    /// The boolean flag distinguishes `except*` from `except`.
+    ExceptionClass(Box<Expr>, bool),
+    /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean
+    /// flag is true) clause, producing the type of the name it binds. The keys are its
+    /// [`Binding::ExceptionClass`] elements, in source order; the list is empty only for
+    /// `except ()`, which catches nothing. The range covers the clause's exception-class
+    /// expression, and is where clause-level (as opposed to class-level) errors go.
+    ExceptionHandler(Box<[Idx<Key>]>, bool, TextRange),
+    /// Binding for an ordinary lambda parameter.
+    /// The owner is the binding whose expression contains this lambda. Solving the owner installs
+    /// the parameter's contextual type in thread-local state, so the parameter forces the owner
+    /// to solve first, which makes its type independent of solve order.
+    LambdaParameter(LambdaParamId, Idx<Key>),
+    /// Parameter of a lambda without an owner binding: one in static type information, such as
+    /// `Annotated` metadata, which is not type-checked, or in a decorator of a definition dropped
+    /// by parse-error recovery. The parameter is always an implicit `Any`.
+    StaticLambdaParameter(LambdaParamId),
+    /// Parameter of a type-level lambda. It denotes a deterministic synthetic type binder rather
+    /// than a contextual value type. The experimental `shape_extensions.MapIntTuples` operation
+    /// is currently the only syntax that creates this binding.
+    TypeLevelLambdaParameter(Box<TypeLevelLambdaParameter>),
     /// Binding for a function parameter. We either have an annotation, or we will determine the
     /// parameter type when solving the function type.
     FunctionParameter(Box<FunctionParameter>),
@@ -2502,8 +2736,9 @@ pub enum Binding {
     Delete(Box<Expr>),
     /// A name in the class body that wasn't found in the static scope
     /// It could either be an unbound name or a reference to an inherited attribute
-    /// We'll find out which when we solve the class
-    ClassBodyUnknownName(Box<(Idx<KeyClass>, Identifier, Option<Name>)>),
+    /// We'll find out which when we solve the class. The boolean records whether a postponed or
+    /// quoted annotation may also resolve an attribute declared later in the same class body.
+    ClassBodyUnknownName(Box<ClassBodyUnknownName>),
     /// A match statement or if/elif chain that may be type-exhaustive.
     /// Resolves to Never if ANY narrow entry narrows to Never, None otherwise.
     Exhaustive(Box<ExhaustiveBinding>),
@@ -2531,6 +2766,7 @@ impl DisplayWith<Bindings> for Binding {
         };
         match self {
             Self::Expr(a, x) => write!(f, "Expr({}, {})", ann(a), m.display(x)),
+            Self::Quantified(q) => write!(f, "Quantified({})", q.name()),
             Self::StmtExpr(x, _) => write!(f, "StmtExpr({})", m.display(x)),
             Self::MultiTargetAssign(a, idx, range, receiver) => {
                 write!(
@@ -2585,7 +2821,7 @@ impl DisplayWith<Bindings> for Binding {
             Self::IterableValueComprehension(x, sync, _) => {
                 write!(f, "IterableValueComprehension({}, {sync:?})", m.display(x))
             }
-            Self::IterableValueLoop(a, x, sync) => {
+            Self::IterableValueLoop(a, x, sync, _) => {
                 write!(
                     f,
                     "IterableValueLoop({}, {}, {sync:?})",
@@ -2593,8 +2829,18 @@ impl DisplayWith<Bindings> for Binding {
                     m.display(x)
                 )
             }
-            Self::ExceptionHandler(x, b) => write!(f, "ExceptionHandler({}, {b:?})", m.display(x)),
-            Self::ContextValue(a, x, _, kind) => {
+            Self::ExceptionClass(x, b) => write!(f, "ExceptionClass({}, {b:?})", m.display(x)),
+            Self::ExceptionHandler(xs, b, r) => {
+                write!(f, "ExceptionHandler([")?;
+                for (i, idx) in xs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", ctx.display(*idx))?;
+                }
+                write!(f, "], {b:?}, {})", m.display(r))
+            }
+            Self::ContextValue(a, x, _, kind, _) => {
                 write!(f, "ContextValue({}, {}, {kind:?})", ann(a), ctx.display(*x))
             }
             Self::UnpackedValue(value) => {
@@ -2754,6 +3000,10 @@ impl DisplayWith<Bindings> for Binding {
             Self::LambdaParameter(id, owner) => {
                 write!(f, "LambdaParameter(id={id:?}, owner={owner:?})")
             }
+            Self::StaticLambdaParameter(id) => write!(f, "StaticLambdaParameter(id={id:?})"),
+            Self::TypeLevelLambdaParameter(parameter) => {
+                write!(f, "TypeLevelLambdaParameter({parameter:?})")
+            }
             Self::FunctionParameter(x) => write!(
                 f,
                 "FunctionParameter({})",
@@ -2807,12 +3057,18 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::Delete(x) => write!(f, "Delete({})", m.display(x)),
             Self::ClassBodyUnknownName(x) => {
-                let (class_key, name, suggestion) = x.as_ref();
+                let ClassBodyUnknownName {
+                    class_key,
+                    name,
+                    suggestion,
+                    allow_class_body_forward_reference,
+                } = x.as_ref();
                 write!(
                     f,
-                    "ClassBodyUnknownName({}, {}",
+                    "ClassBodyUnknownName({}, {}, allow_class_body_forward_reference={}",
                     m.display(ctx.idx_to_key(*class_key)),
                     name,
+                    allow_class_body_forward_reference,
                 )?;
                 if let Some(suggestion) = suggestion {
                     write!(f, ", {suggestion}")?;
@@ -2862,6 +3118,7 @@ impl Binding {
             | Binding::ParamSpec(_)
             | Binding::TypeVarTuple(_)
             | Binding::TypeParameter(_)
+            | Binding::Quantified(_)
             | Binding::OuterClassTypeParameter(..)
             | Binding::PossibleLegacyTParam(..) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
@@ -2900,14 +3157,14 @@ impl Binding {
                     Some(SymbolKind::Variable)
                 }
             }
-            Binding::LambdaParameter(..) | Binding::FunctionParameter(_) => {
-                Some(SymbolKind::Parameter)
-            }
+            Binding::LambdaParameter(..)
+            | Binding::StaticLambdaParameter(_)
+            | Binding::TypeLevelLambdaParameter(_)
+            | Binding::FunctionParameter(_) => Some(SymbolKind::Parameter),
             Binding::PatternCapture(_) => Some(SymbolKind::Variable),
-            Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
-                Some(SymbolKind::Variable)
-            }
-            Binding::ContextValue(_, _, _, _) | Binding::ExceptionHandler(_, _) => {
+            Binding::IterableValueComprehension(_, _, _)
+            | Binding::IterableValueLoop(_, _, _, _) => Some(SymbolKind::Variable),
+            Binding::ContextValue(_, _, _, _, _) | Binding::ExceptionHandler(_, _, _) => {
                 Some(SymbolKind::Variable)
             }
             // Receiver-constrained multi-target / unpacked rebinds are
@@ -2915,14 +3172,14 @@ impl Binding {
             Binding::MultiTargetAssign(_, _, _, Some(_)) => Some(SymbolKind::Class),
             Binding::UnpackedValue(value) if value.receiver.is_some() => Some(SymbolKind::Class),
             Binding::UnpackedValue(_) => Some(SymbolKind::Variable),
-            Binding::AugAssign(_, _) => Some(SymbolKind::Variable),
-            Binding::Expr(_, _)
-            | Binding::StmtExpr(_, _)
+            Binding::AugAssign(_, _)
+            | Binding::Expr(_, _)
             | Binding::MultiTargetAssign(_, _, _, None)
+            | Binding::AnnotatedType(_, _) => Some(SymbolKind::Variable),
+            Binding::StmtExpr(_, _)
             | Binding::ReturnExplicit(_)
             | Binding::ReturnImplicit(_)
             | Binding::ReturnType(_)
-            | Binding::AnnotatedType(_, _)
             | Binding::None
             | Binding::Any(_)
             | Binding::Forward(_)
@@ -2941,18 +3198,22 @@ impl Binding {
             | Binding::Delete(_)
             | Binding::ClassBodyUnknownName(_)
             | Binding::Exhaustive(_)
+            | Binding::ExceptionClass(_, _)
             | Binding::SuppressedException(_) => None,
         }
     }
 }
 
 /// An export binding. Every export is a forward reference to a `Key`, optionally
-/// with an annotation.
+/// with an annotation, except for a special form exported by `typing_extensions`.
 #[derive(Clone, Debug)]
 pub enum BindingExport {
     Forward(Idx<Key>),
     PromoteForward(Idx<Key>),
     AnnotatedForward(Idx<KeyAnnotation>, Idx<Key>),
+    /// A special form exported by `typing_extensions`, whose type comes from its name
+    /// rather than from its definition at the `Key`.
+    SpecialForm(SpecialForm, Idx<Key>),
 }
 
 impl BindingExport {
@@ -2967,7 +3228,10 @@ impl BindingExport {
     /// The forwarded key index that this export points to.
     pub fn key_idx(&self) -> Idx<Key> {
         match self {
-            Self::Forward(idx) | Self::PromoteForward(idx) | Self::AnnotatedForward(_, idx) => *idx,
+            Self::Forward(idx)
+            | Self::PromoteForward(idx)
+            | Self::AnnotatedForward(_, idx)
+            | Self::SpecialForm(_, idx) => *idx,
         }
     }
 }
@@ -2984,6 +3248,13 @@ impl DisplayWith<Bindings> for BindingExport {
                     f,
                     "BindingExport::AnnotatedForward({}, {})",
                     ctx.display(*ann),
+                    ctx.display(*idx)
+                )
+            }
+            Self::SpecialForm(special, idx) => {
+                write!(
+                    f,
+                    "BindingExport::SpecialForm({special}, {})",
                     ctx.display(*idx)
                 )
             }
@@ -3174,9 +3445,12 @@ pub enum ClassFieldDefinition {
     /// `initialized_in_recognized_method` is true if the field is assigned in a recognized
     /// instance attribute-defining method (e.g., `__init__`), meaning a Final field
     /// declared here is legally initialized even without a class-body value.
+    /// `initialized_on_new_instance` is true if `__new__` assigns the field on the instance
+    /// it creates. Only the `uninitialized-instance-variable` check reads it.
     DeclaredByAnnotation {
         annotation: Idx<KeyAnnotation>,
         initialized_in_recognized_method: bool,
+        initialized_on_new_instance: bool,
     },
     /// Declared with no annotation or assignment (this is impossible
     /// in a normal class, but can happen with some synthesized classes).
@@ -3215,6 +3489,10 @@ pub enum ClassFieldDefinition {
         // assigns to it via `cls.`). We track this separately from `method` to avoid mutating
         // the method descriptor's own metadata (e.g. keeping `__init__` as an instance method).
         receiver_kind: MethodSelfKind,
+        // Whether any method assigns this attribute through an instance receiver (`self.x = ...`).
+        // `__slots__` only limits instance attributes, so a field written only through `cls`
+        // is not checked against it.
+        has_instance_write: bool,
     },
 }
 
@@ -3224,12 +3502,14 @@ impl DisplayWith<Bindings> for ClassFieldDefinition {
             Self::DeclaredByAnnotation {
                 annotation,
                 initialized_in_recognized_method,
+                initialized_on_new_instance,
             } => {
                 write!(
                     f,
-                    "ClassFieldDefinition::DeclaredByAnnotation({}, initialized_in_recognized_method={})",
+                    "ClassFieldDefinition::DeclaredByAnnotation({}, initialized_in_recognized_method={}, initialized_on_new_instance={})",
                     ctx.display(*annotation),
                     initialized_in_recognized_method,
+                    initialized_on_new_instance,
                 )
             }
             Self::DeclaredWithoutAnnotation => {
@@ -3318,15 +3598,60 @@ pub enum MethodSelfKind {
     Class,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum NNModuleRegistrationKind {
+    Buffer,
+    Parameter,
+}
+
+impl NNModuleRegistrationKind {
+    const ALL: [Self; 2] = [Self::Buffer, Self::Parameter];
+
+    pub fn from_method_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.method_name() == name)
+    }
+
+    pub fn method_name(self) -> &'static str {
+        match self {
+            Self::Buffer => "register_buffer",
+            Self::Parameter => "register_parameter",
+        }
+    }
+
+    pub fn value_parameter_name(self) -> &'static str {
+        match self {
+            Self::Buffer => "tensor",
+            Self::Parameter => "param",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct NNModuleRegistration {
+    pub kind: NNModuleRegistrationKind,
+    pub value: Expr,
+}
+
+pub type NNModuleRegistrations = SmallMap<Name, Vec<NNModuleRegistration>>;
+
 /// Bindings for fields synthesized by a class, such as a dataclass's `__init__` method. This
 /// has to be its own key/binding type because of the dependencies between the various pieces of
 /// information about a class: ClassDef -> ClassMetadata -> ClassField -> ClassSynthesizedFields.
 #[derive(Clone, Debug)]
-pub struct BindingClassSynthesizedFields(pub Idx<KeyClass>);
+pub struct BindingClassSynthesizedFields {
+    pub class_idx: Idx<KeyClass>,
+    pub nn_module_registrations: Option<Box<NNModuleRegistrations>>,
+}
 
 impl DisplayWith<Bindings> for BindingClassSynthesizedFields {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        write!(f, "BindingClassSynthesizedFields({})", ctx.display(self.0))
+        write!(
+            f,
+            "BindingClassSynthesizedFields({})",
+            ctx.display(self.class_idx)
+        )
     }
 }
 
@@ -3360,6 +3685,7 @@ impl DisplayWith<Bindings> for BindingClassChecks {
 pub struct ShapedArrayMetadata {
     pub shape_name: Name,
     pub range: TextRange,
+    pub builtin_indexing: bool,
 }
 
 /// Binding for the class's metadata (anything obtained directly from base classes,
@@ -3372,7 +3698,7 @@ pub struct BindingClassMetadata {
     /// The class keywords (these are keyword args that appear in the base class list, the
     /// Python runtime will dispatch most of them to the metaclass, but the metaclass
     /// itself can also potentially be one of these).
-    pub keywords: Box<[(Identifier, Expr)]>,
+    pub keywords: Box<[Keyword]>,
     /// The class decorators.
     pub decorators: Box<[Idx<KeyDecorator>]>,
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.

@@ -15,6 +15,7 @@ use crossbeam_channel::RecvError;
 use crossbeam_channel::Select;
 use crossbeam_channel::SendError;
 use crossbeam_channel::Sender;
+use crossbeam_channel::TryRecvError;
 use lsp_server::RequestId;
 use lsp_types::DidChangeConfigurationParams;
 use lsp_types::DidChangeTextDocumentParams;
@@ -30,6 +31,7 @@ use pyrefly_util::telemetry::TelemetryEventKind;
 use tracing::debug;
 use tracing::info;
 
+use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::Server;
@@ -47,6 +49,10 @@ pub enum LspEvent {
     /// Inform the server that a request is cancelled.
     /// Server should know about this ASAP to avoid wasting time on cancelled requests.
     CancelRequest(RequestId),
+    /// Confirm that initial configuration-derived state has committed.
+    InitialWorkspaceConfigurationApplied,
+    /// Report that every event held for the initial settings has been processed.
+    InitialWorkspaceConfigurationDrained,
     // Part 2: Events that can be queued in FIFO order and handled at a later time.
     DidOpenTextDocument(DidOpenTextDocumentParams),
     DidChangeTextDocument(DidChangeTextDocumentParams),
@@ -64,6 +70,13 @@ pub enum LspEvent {
     InvalidateConfigFind,
     LspResponse(Response),
     LspRequest(Request),
+    /// A request from an extra TSP connection. It shares the main connection's
+    /// queue so every TSP request is served by one loop, and carries the
+    /// channel its response goes back on.
+    TspExtraRequest {
+        request: Request,
+        response_sender: Sender<Message>,
+    },
     Exit,
 }
 
@@ -91,6 +104,11 @@ impl QueuedEvent {
         &self.event
     }
 
+    /// Return whether the event changes state observed by later queries.
+    pub fn is_mutation(&self) -> bool {
+        self.event.kind() == LspEventKind::Mutation
+    }
+
     pub fn enqueued_at(&self) -> Instant {
         self.enqueued_at
     }
@@ -109,6 +127,12 @@ impl LspEvent {
         match self {
             Self::RecheckFinished => "RecheckFinished".to_owned(),
             Self::CancelRequest(_) => "CancelRequest".to_owned(),
+            Self::InitialWorkspaceConfigurationApplied => {
+                "InitialWorkspaceConfigurationApplied".to_owned()
+            }
+            Self::InitialWorkspaceConfigurationDrained => {
+                "InitialWorkspaceConfigurationDrained".to_owned()
+            }
             Self::InvalidateConfigFind => "InvalidateConfigFind".to_owned(),
             Self::DidOpenTextDocument(_) => "DidOpenTextDocument".to_owned(),
             Self::DidChangeTextDocument(_) => "DidChangeTextDocument".to_owned(),
@@ -123,6 +147,9 @@ impl LspEvent {
             Self::DidSaveNotebookDocument(_) => "DidSaveNotebookDocument".to_owned(),
             Self::LspResponse(_) => "LspResponse".to_owned(),
             Self::LspRequest(request) => format!("LspRequest({})", request.method,),
+            Self::TspExtraRequest { request, .. } => {
+                format!("TspExtraRequest({})", request.method)
+            }
             Self::Exit => "Exit".to_owned(),
         }
     }
@@ -153,7 +180,10 @@ impl LspEvent {
 
     fn kind(&self) -> LspEventKind {
         match self {
-            Self::RecheckFinished | Self::CancelRequest(_) => LspEventKind::Priority,
+            Self::RecheckFinished
+            | Self::CancelRequest(_)
+            | Self::InitialWorkspaceConfigurationApplied
+            | Self::InitialWorkspaceConfigurationDrained => LspEventKind::Priority,
             Self::DidOpenTextDocument(_)
             | Self::DidChangeTextDocument(_)
             | Self::DidCloseTextDocument(_)
@@ -167,7 +197,9 @@ impl LspEvent {
             | Self::DidChangeNotebookDocument(_)
             | Self::InvalidateConfigFind
             | Self::Exit => LspEventKind::Mutation,
-            Self::LspResponse(_) | Self::LspRequest(_) => LspEventKind::Query,
+            Self::LspResponse(_) | Self::LspRequest(_) | Self::TspExtraRequest { .. } => {
+                LspEventKind::Query
+            }
         }
     }
 }
@@ -240,11 +272,23 @@ impl LspQueue {
 
     /// Return the next event with its original queue metadata.
     pub fn recv(&self) -> Result<QueuedEvent, RecvError> {
+        Ok(self
+            .recv_until(None)?
+            .expect("a receive without a deadline waits until an event arrives"))
+    }
+
+    /// Like [`LspQueue::recv`], but return `None` if no event arrives before
+    /// `deadline`.
+    pub fn recv_until(&self, deadline: Option<Instant>) -> Result<Option<QueuedEvent>, RecvError> {
         // If a delayed request is held, wake once its window expires so we can
         // deliver it. The slot is only written by the same thread that calls
         // `recv` (via `send_delayed` during event processing), so it can't change
         // while we block here.
-        let deadline = self.delayed.lock().as_ref().map(|(_, ready_at)| *ready_at);
+        let delayed_deadline = self.delayed.lock().as_ref().map(|(_, ready_at)| *ready_at);
+        let wake_at = match (delayed_deadline, deadline) {
+            (Some(delayed), Some(deadline)) => Some(delayed.min(deadline)),
+            (delayed, deadline) => delayed.or(deadline),
+        };
 
         let mut event_receiver_selector = Select::new_biased();
         // Biased selector will pick the receiver with lower index over higher ones,
@@ -252,17 +296,18 @@ impl LspQueue {
         let priority_receiver_index = event_receiver_selector.recv(&self.priority.1);
         let queued_events_receiver_index = event_receiver_selector.recv(&self.normal.1);
 
-        let selected = match deadline {
-            Some(deadline) => match event_receiver_selector.select_deadline(deadline) {
+        let selected = match wake_at {
+            Some(wake_at) => match event_receiver_selector.select_deadline(wake_at) {
                 Ok(selected) => selected,
-                Err(_) => {
+                Err(_) if delayed_deadline == Some(wake_at) => {
                     let (event, _ready_at) = self
                         .delayed
                         .lock()
                         .take()
                         .expect("a deadline is only set while a delayed request is held");
-                    return Ok(event);
+                    return Ok(Some(event));
                 }
+                Err(_) => return Ok(None),
             },
             None => event_receiver_selector.select(),
         };
@@ -275,7 +320,7 @@ impl LspQueue {
         if id == last_mutation {
             self.last_mutation.store(0, Ordering::Relaxed);
         }
-        Ok(QueuedEvent::from_parts(id, x, queue_time))
+        Ok(Some(QueuedEvent::from_parts(id, x, queue_time)))
     }
 
     /// Return whether an observed mutation follows `event` in the live queue.
@@ -283,6 +328,12 @@ impl LspQueue {
     pub fn has_subsequent_mutation(&self, event: &QueuedEvent) -> bool {
         let last_mutation = self.last_mutation.load(Ordering::Relaxed);
         last_mutation > event.id
+    }
+
+    /// Return the next priority event without waiting.
+    pub fn try_recv_priority(&self) -> Result<QueuedEvent, TryRecvError> {
+        let (id, event, enqueued_at) = self.priority.1.try_recv()?;
+        Ok(QueuedEvent::from_parts(id, event, enqueued_at))
     }
 
     /// Hold `event` until `ready_at`, after which `recv` delivers it. This
@@ -401,8 +452,10 @@ impl HeavyTaskQueue {
 #[cfg(test)]
 mod tests {
     use lsp_server::RequestId;
+    use lsp_types::LanguageKind;
+    use lsp_types::TextDocumentIdentifier;
     use lsp_types::TextDocumentItem;
-    use lsp_types::Url;
+    use lsp_types::Uri;
     use lsp_types::VersionedTextDocumentIdentifier;
 
     use super::*;
@@ -410,7 +463,9 @@ mod tests {
     fn edit() -> LspEvent {
         LspEvent::DidChangeTextDocument(DidChangeTextDocumentParams {
             text_document: VersionedTextDocumentIdentifier {
-                uri: Url::parse("file:///test.py").unwrap(),
+                text_document_identifier: TextDocumentIdentifier {
+                    uri: Uri::parse("file:///test.py").unwrap(),
+                },
                 version: 1,
             },
             content_changes: Vec::new(),
@@ -450,6 +505,72 @@ mod tests {
         let delivered_enqueue_time = queue.recv().unwrap().enqueued_at();
 
         assert_eq!(delivered_enqueue_time, enqueued_at);
+    }
+
+    #[test]
+    fn test_recv_until_returns_none_at_deadline() {
+        let queue = LspQueue::new();
+        assert!(queue.recv_until(Some(Instant::now())).unwrap().is_none());
+
+        queue.send(request()).unwrap();
+        assert!(
+            queue.recv_until(Some(Instant::now())).unwrap().is_some(),
+            "a queued event should be returned before the deadline is checked"
+        );
+    }
+
+    #[test]
+    fn test_recv_until_delivers_delayed_request_before_deadline() {
+        let queue = LspQueue::new();
+        queue.send(request()).unwrap();
+        let queued = queue.recv().unwrap();
+        queue.send_delayed(queued, Instant::now());
+
+        assert!(matches!(
+            queue
+                .recv_until(Some(Instant::now() + Duration::from_secs(60)))
+                .unwrap()
+                .map(QueuedEvent::into_parts),
+            Some((_, LspEvent::LspRequest(_), _))
+        ));
+    }
+
+    #[test]
+    fn test_later_mutation_is_observed_until_consumed() {
+        let queue = LspQueue::new();
+        queue.send(request()).unwrap();
+        queue.send(non_edit()).unwrap();
+
+        let request = queue.recv().unwrap();
+        assert!(
+            queue.has_subsequent_mutation(&request),
+            "a later mutation in the live queue must be observed"
+        );
+
+        queue.recv().unwrap();
+        assert!(
+            !queue.has_subsequent_mutation(&request),
+            "a consumed mutation must not cancel a deferred request"
+        );
+    }
+
+    #[test]
+    fn test_priority_poll_bypasses_normal_queue() {
+        let queue = LspQueue::new();
+        queue.send(request()).unwrap();
+        queue
+            .send(LspEvent::CancelRequest(RequestId::from(1)))
+            .unwrap();
+
+        let priority = queue.try_recv_priority().unwrap();
+        assert!(
+            matches!(priority.event(), LspEvent::CancelRequest(_)),
+            "the priority poll must return cancellation before normal work"
+        );
+        assert!(
+            matches!(queue.recv().unwrap().event(), LspEvent::LspRequest(_)),
+            "priority polling must leave the normal event queued"
+        );
     }
 
     #[test]
@@ -495,8 +616,8 @@ mod tests {
         queue
             .send(LspEvent::DidOpenTextDocument(DidOpenTextDocumentParams {
                 text_document: TextDocumentItem {
-                    uri: Url::parse("file:///test.py").unwrap(),
-                    language_id: "python".to_owned(),
+                    uri: Uri::parse("file:///test.py").unwrap(),
+                    language_id: LanguageKind::Python,
                     version: 1,
                     text: "x: int = 'not an int'".to_owned(),
                 },

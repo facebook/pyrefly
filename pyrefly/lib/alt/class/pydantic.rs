@@ -5,12 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_graph::index::Idx;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::annotation::Annotation;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Required;
@@ -23,7 +23,9 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -39,7 +41,10 @@ use crate::alt::types::pydantic::PydanticConfig;
 use crate::alt::types::pydantic::PydanticModelKind;
 use crate::alt::types::pydantic::PydanticModelKind::RootModel;
 use crate::alt::types::pydantic::PydanticValidationFlags;
+use crate::binding::binding::Binding;
 use crate::binding::binding::BindingAnnotation;
+use crate::binding::binding::BindingTypeAlias;
+use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::pydantic::EXTRA;
 use crate::binding::pydantic::FROZEN;
@@ -49,6 +54,7 @@ use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::pydantic::ROOT;
 use crate::binding::pydantic::STRICT;
 use crate::binding::pydantic::STRICT_DEFAULT;
+use crate::binding::pydantic::STRICT_TYPES;
 use crate::binding::pydantic::VALIDATE_BY_ALIAS;
 use crate::binding::pydantic::VALIDATE_BY_NAME;
 use crate::error::collector::ErrorCollector;
@@ -101,7 +107,7 @@ enum PydanticParamKey {
     Name(Name),
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn get_pydantic_root_model_type_via_mro(
         &self,
         class: &Class,
@@ -166,7 +172,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             return None;
         }
-        let tparams = self.get_class_tparams(cls);
+        let tparams = self.get_class_tparams(cls)?;
         // `RootModel` should always have a type parameter unless we're working with a broken copy
         // of Pydantic.
         let tparam = tparams.iter().next()?;
@@ -185,12 +191,76 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
+    fn pydantic_strict_from_annotation(
+        &self,
+        annotation: &Expr,
+        errors: &ErrorCollector,
+    ) -> Option<bool> {
+        self.pydantic_strict_from_annotation_inner(annotation, errors, &mut SmallSet::new())
+    }
+
+    fn pydantic_strict_from_annotation_inner(
+        &self,
+        annotation: &Expr,
+        errors: &ErrorCollector,
+        seen: &mut SmallSet<Idx<Key>>,
+    ) -> Option<bool> {
+        let metadata =
+            self.get_annotated_metadata(annotation, TypeFormContext::ClassVarAnnotation, errors);
+        if !metadata.is_empty() {
+            // Limitation: `Strict(...)` metadata is unsupported because we cannot evaluate its
+            // boolean argument here; only strict type aliases are recognized.
+            let Expr::Subscript(subscript) = annotation else {
+                unreachable!("get_annotated_metadata only returns items for a subscript")
+            };
+            return Ast::unpack_slice(&subscript.slice)
+                .first()
+                .and_then(|inner| self.pydantic_strict_from_annotation_inner(inner, errors, seen));
+        }
+
+        let Expr::Name(name) = annotation else {
+            return None;
+        };
+        let key = Key::BoundName(ShortIdentifier::expr_name(name));
+        let mut idx = self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))?;
+        loop {
+            if !seen.insert(idx) {
+                return None;
+            }
+            match self.bindings().get(idx) {
+                Binding::Forward(inner)
+                | Binding::PromoteForward(inner)
+                | Binding::ForwardToFirstUse(inner) => idx = *inner,
+                Binding::NameAssign(assign) => {
+                    return self.pydantic_strict_from_annotation_inner(&assign.expr, errors, seen);
+                }
+                Binding::TypeAlias(alias) => {
+                    let expr = match self.bindings().get(alias.key_type_alias) {
+                        BindingTypeAlias::Legacy { expr, .. }
+                        | BindingTypeAlias::Scoped { expr, .. } => Some(expr.as_ref()),
+                        BindingTypeAlias::TypeAliasType { expr, .. } => expr.as_deref(),
+                    };
+                    return expr.and_then(|expr| {
+                        self.pydantic_strict_from_annotation_inner(expr, errors, seen)
+                    });
+                }
+                Binding::Import(import) => {
+                    return ((import.module == ModuleName::pydantic_package()
+                        || import.module == ModuleName::pydantic_types())
+                        && STRICT_TYPES.contains(&import.name))
+                    .then_some(true);
+                }
+                _ => return None,
+            }
+        }
+    }
+
     /// Helper function to find inherited keyword values from parent pydantic model metadata.
     /// Only inherits from parents that are themselves pydantic models, not from arbitrary
     /// dataclass parents whose config values (e.g. strict) may have different defaults.
     fn find_inherited_keyword_value<T>(
         &self,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         extractor: impl Fn(&DataclassMetadata) -> T,
     ) -> Option<T> {
         bases_with_metadata
@@ -234,7 +304,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let metadata = self.get_metadata_for_class(cls.class_object());
                 if matches!(metadata.pydantic_model_kind(), Some(RootModel))
                     && let Some((root_type, _)) =
-                        self.get_pydantic_root_model_type_via_mro(cls.class_object(), &metadata)
+                        self.get_pydantic_root_model_type_via_mro(cls.class_object(), metadata)
                 {
                     // Recursively expand if the inner type is also a RootModel
                     // Return union of immediate inner type AND recursive expansion
@@ -252,10 +322,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn pydantic_config(
         &self,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         pydantic_config_dict: &PydanticConfigDict,
         keywords: &[(Name, Annotation)],
-        decorators: &[(Arc<Decorator>, TextRange)],
+        decorators: &[(&Decorator, TextRange)],
         errors: &ErrorCollector,
         range: TextRange,
     ) -> Option<PydanticConfig> {
@@ -269,7 +339,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let is_pydantic_dataclass = decorators.iter().any(|(decorator, _)| {
             decorator
                 .ty
-                .visit_toplevel_func_metadata(&is_pydantic_dataclass_metadata)
+                .toplevel_func_metadata()
+                .is_some_and(is_pydantic_dataclass_metadata)
                 || matches!(&decorator.ty, Type::KwCall(call)
                     if is_pydantic_dataclass_metadata(&call.func_metadata))
         });
@@ -490,7 +561,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         keywords: &[(Name, Annotation)],
         value_from_config_dict: Option<bool>,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         extract_from_metadata: impl Fn(&DataclassMetadata) -> bool,
         default: bool,
     ) -> bool {
@@ -510,7 +581,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         keywords: &[(Name, Annotation)],
         value_from_config_dict: Option<bool>,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         extract_from_metadata: impl Fn(&DataclassMetadata) -> Option<bool>,
     ) -> Option<bool> {
         self.extract_bool_flag(keywords, name)
@@ -637,6 +708,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         }
         if let BindingAnnotation::AnnotateExpr(_, annotation_expr, _) = self.bindings().get(annot) {
+            let mut keywords = None;
             let metadata_items = self.get_annotated_metadata(
                 annotation_expr,
                 TypeFormContext::ClassVarAnnotation,
@@ -645,12 +717,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Look through metadata items and find a Field(...) call, then extract its keywords
             for metadata_item in &metadata_items {
                 if let Expr::Call(call) = metadata_item
-                    && let Some(keywords) =
+                    && let Some(field_keywords) =
                         self.compute_dataclass_field_initialization(call, field_name, None, dm)
                 {
-                    return Some(keywords);
+                    keywords = Some(field_keywords);
+                    break;
                 }
             }
+            let strict =
+                self.pydantic_strict_from_annotation(annotation_expr, &self.error_swallower());
+            if let Some(strict) = strict
+                && keywords
+                    .as_ref()
+                    .is_none_or(|keywords| keywords.strict.is_none())
+            {
+                keywords
+                    .get_or_insert_with(DataclassFieldKeywords::new)
+                    .strict = Some(strict);
+            }
+            return keywords;
         }
         None
     }

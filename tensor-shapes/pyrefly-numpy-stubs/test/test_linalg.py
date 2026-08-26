@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import assert_type
+from typing import Any, assert_type, TYPE_CHECKING
 
 import numpy as np
 from shape_extensions import assert_shape, Int, IntTuple, IntVar
@@ -60,11 +60,10 @@ def generic_matmul[
     unrelated_inner: np.ndarray[[K, P]],
     gradual_inner: np.ndarray[[int, P]],
 ) -> None:
-    # Symbolic inner dimensions cannot prove a mismatch, so the DSL preserves
-    # the known outer dimensions in both the shared and unrelated cases.
     assert_type(np.matmul(left, same_inner), np.ndarray[[N, P]])
     assert_type(left @ same_inner, np.ndarray[[N, P], DType])
-    assert_type(np.matmul(left, unrelated_inner), np.ndarray[[N, P]])
+    # E: gufunc: core dimension 'n' has conflicting extents M and K
+    np.matmul(left, unrelated_inner)
     left @ unrelated_inner  # E: `@` is not supported
     assert_type(np.matmul(left, gradual_inner), np.ndarray[[N, P]])
     assert_type(left @ gradual_inner, np.ndarray[[N, P], DType])
@@ -77,9 +76,9 @@ def concrete_inner_matmul[N: IntVar, P: IntVar, DType](
 ) -> None:
     assert_type(np.matmul(left, same_inner), np.ndarray[[N, P]])
     assert_type(left @ same_inner, np.ndarray[[N, P], DType])
-    # E: Cannot evaluate type-level shape DSL call: matmul inner dimensions must match
+    # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 4 and 5
     np.matmul(left, different_inner)
-    left @ different_inner  # E: Shape dimension mismatch
+    left @ different_inner  # E: `@` is not supported
 
 
 def symbolic_concrete_inner_matmul[N: IntVar, M: IntVar, P: IntVar](
@@ -88,19 +87,21 @@ def symbolic_concrete_inner_matmul[N: IntVar, M: IntVar, P: IntVar](
     concrete_left: np.ndarray[[N, 4]],
     symbolic_right: np.ndarray[[M, P]],
 ) -> None:
-    assert_type(np.matmul(symbolic_left, concrete_right), np.ndarray[[N, P]])
-    assert_type(np.matmul(concrete_left, symbolic_right), np.ndarray[[N, P]])
+    # E: gufunc: core dimension 'n' has conflicting extents M and 4
+    np.matmul(symbolic_left, concrete_right)
+    # E: gufunc: core dimension 'n' has conflicting extents 4 and M
+    np.matmul(concrete_left, symbolic_right)
 
 
 def gradual_matmul[DType](
     left: np.ndarray[IntTuple, DType], right: np.ndarray[IntTuple]
 ) -> None:
-    assert_type(np.matmul(left, right), np.ndarray[IntTuple])
-    assert_type(left @ right, np.ndarray[[int, int], DType])
+    assert_type(np.matmul(left, right), Any)
+    assert_type(left @ right, np.ndarray[IntTuple, DType])
 
 
 def bare_matmul(left: np.ndarray, right: np.ndarray) -> None:
-    assert_type(np.matmul(left, right), np.ndarray)
+    assert_type(np.matmul(left, right), Any)
 
 
 def same_dtype_matmul(
@@ -118,83 +119,129 @@ def mixed_dtype_matmul(
     assert_type(np.matmul(left, right), np.ndarray[[3, 5]])
 
 
-def known_limitation_matmul_rejects_valid_non_2d_inputs(
-    batched: np.ndarray[[2, 3, 4]],
+def gufunc_matmul_shapes[
+    M: IntVar,
+    N: IntVar,
+    P: IntVar,
+    B: IntVar,
+    DType,
+](
+    left_vector: np.ndarray[[M], DType],
+    right_vector: np.ndarray[[P]],
+    matrix: np.ndarray[[M, P]],
+    batched: np.ndarray[[B, N, M], DType],
+    broadcasted: np.ndarray[[1, M, P]],
 ) -> None:
-    # NumPy supports vector and batched matmul, but the shape-stub MVP models
-    # only the 2-D contract.
-    vector = np.ones(4)
-    matrix = np.ones((4, 5))
-    vector @ matrix  # E: `@` is not supported
-    matrix @ vector  # E: `@` is not supported
-    # E: Cannot evaluate type-level shape DSL call: matmul expects 2-D arrays
-    np.matmul(vector, matrix)
-    # E: Cannot evaluate type-level shape DSL call: matmul expects 2-D arrays
-    np.matmul(matrix, vector)
-    # E: Cannot evaluate type-level shape DSL call: matmul expects 2-D arrays
-    np.matmul(batched, matrix)
+    assert_type(np.matmul(left_vector, matrix), np.ndarray[[P]])
+    assert_type(left_vector @ matrix, np.ndarray[[P], DType])
+    assert_type(np.matmul(left_vector, broadcasted), np.ndarray[[1, P]])
+    assert_type(left_vector @ broadcasted, np.ndarray[[1, P], DType])
+    assert_type(np.matmul(matrix, right_vector), np.ndarray[[M]])
+    assert_type(matrix @ right_vector, np.ndarray[[M]])
+    assert_type(np.matmul(batched, left_vector), np.ndarray[[B, N]])
+    assert_type(batched @ left_vector, np.ndarray[[B, N], DType])
+    assert_type(np.matmul(left_vector, left_vector), np.ndarray[[]])
+    assert_type(left_vector @ left_vector, np.ndarray[[], DType])
+    assert_type(np.matmul(batched, broadcasted), np.ndarray[[B, N, P]])
+    assert_type(batched @ broadcasted, np.ndarray[[B, N, P], DType])
 
 
-def reject_invalid_rank_with_gradual_other(
-    gradual: np.ndarray[IntTuple], batched: np.ndarray[[2, 3, 4]]
+def reject_invalid_gufunc_matmul_shapes[DType](
+    left: np.ndarray[[2, 3, 4], DType],
+    bad_core: np.ndarray[[2, 5, 6]],
+    bad_batch: np.ndarray[[3, 4, 6]],
 ) -> None:
-    # E: Cannot evaluate type-level shape DSL call: matmul expects 2-D arrays
-    np.matmul(gradual, batched)
-    # E: Cannot evaluate type-level shape DSL call: matmul expects 2-D arrays
-    np.matmul(batched, gradual)
+    # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 4 and 5
+    np.matmul(left, bad_core)
+    left @ bad_core  # E: `@` is not supported
+    # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[3] at position 0
+    np.matmul(left, bad_batch)
+    left @ bad_batch  # E: `@` is not supported
+
+
+def reject_scalar_matmul[M: IntVar, DType](
+    scalar: np.ndarray[[], DType], vector: np.ndarray[[M]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: matmul expects at least 1-D arrays
+    np.matmul(scalar, vector)
+    scalar @ vector  # E: `@` is not supported
 
 
 def test_matmul_function_2d() -> None:
     a = np.ones((3, 4))
     b = np.ones((4, 5))
 
-    assert_shape(np.matmul(a, b), (3, 5))
+    assert_shape(np.matmul(a, b).shape, (3, 5))
 
 
 def test_matmul_operator_2d() -> None:
     a = np.ones((3, 4))
     b = np.ones((4, 5))
 
-    assert_shape(a @ b, (3, 5))
+    assert_shape((a @ b).shape, (3, 5))
+
+
+def test_matmul_vector_operands() -> None:
+    vec4 = np.ones(4)
+    mat34 = np.ones((3, 4))
+    mat45 = np.ones((4, 5))
+
+    assert_shape(np.matmul(vec4, vec4).shape, ())
+    assert_shape((vec4 @ vec4).shape, ())
+    assert_shape(np.matmul(vec4, mat45).shape, (5,))
+    assert_shape((vec4 @ mat45).shape, (5,))
+    assert_shape(np.matmul(mat34, vec4).shape, (3,))
+    assert_shape((mat34 @ vec4).shape, (3,))
+
+
+def test_matmul_batched_vector_operands() -> None:
+    vec4 = np.ones(4)
+    batch_234 = np.ones((2, 4))[:, None, :] + np.ones((3, 4))[None, :, :]
+    batch_245 = np.ones((2, 5))[:, None, :] + np.ones((4, 5))[None, :, :]
+
+    assert_shape(np.matmul(vec4, batch_245).shape, (2, 5))
+    assert_shape((vec4 @ batch_245).shape, (2, 5))
+    assert_shape(np.matmul(batch_234, vec4).shape, (2, 3))
+    assert_shape((batch_234 @ vec4).shape, (2, 3))
 
 
 def test_transpose_property_2d() -> None:
     x = np.ones((3, 4))
     y = np.ones((3, 1))
 
-    assert_shape(x.T, (4, 3))
-    assert_shape(x.T.T, (3, 4))
-    assert_shape(x.T @ x, (4, 4))
-    assert_shape(x.T @ y, (4, 1))
+    assert_shape(x.T.shape, (4, 3))
+    assert_shape(x.T.T.shape, (3, 4))
+    assert_shape((x.T @ x).shape, (4, 4))
+    assert_shape((x.T @ y).shape, (4, 1))
 
 
 def test_solve_vector_rhs() -> None:
     a = np.eye(3)
     b = np.ones(3)
 
-    assert_shape(np.linalg.solve(a, b), (3,))
+    assert_shape(np.linalg.solve(a, b).shape, (3,))
 
 
 def test_solve_matrix_rhs() -> None:
     a = np.eye(3)
     b = np.ones((3, 2))
 
-    assert_shape(np.linalg.solve(a, b), (3, 2))
+    assert_shape(np.linalg.solve(a, b).shape, (3, 2))
 
 
 def test_solve_column_rhs_regression_composition() -> None:
     x = np.random.randn(5, 3)
     y = np.random.randn(5, 1)
 
-    assert_shape(np.linalg.solve(x.T @ x, x.T @ y), (3, 1))
+    assert_shape(np.linalg.solve(x.T @ x, x.T @ y).shape, (3, 1))
 
 
 def test_eigh_square_matrix() -> None:
     hamiltonian = np.eye(5)
     eigenvalues, eigenvectors = np.linalg.eigh(hamiltonian)
 
-    assert_shape(eigenvalues, (5,))
-    assert_shape(eigenvectors, (5, 5))
+    assert_shape(eigenvalues.shape, (5,))
+    assert_shape(eigenvectors.shape, (5, 5))
 
 
 def particle_in_box_shape_path(
@@ -212,15 +259,43 @@ def particle_in_box_shape_path(
 def test_particle_in_box_shape_path() -> None:
     energies, wavefunctions = particle_in_box_shape_path(5)
 
-    assert_shape(energies, (5,))
-    assert_shape(wavefunctions, (5, 5))
+    assert_shape(energies.shape, (5,))
+    assert_shape(wavefunctions.shape, (5, 5))
 
 
 def test_norm_3d_axis_keepdims_for_nbody() -> None:
     positions = np.ones((5, 3))
     pairwise_deltas = positions[:, None, :] - positions[None, :, :]
 
-    assert_shape(np.linalg.norm(pairwise_deltas, axis=-1, keepdims=True), (5, 5, 1))
+    assert_shape(
+        np.linalg.norm(pairwise_deltas, axis=-1, keepdims=True).shape, (5, 5, 1)
+    )
+    assert_shape(np.linalg.norm(pairwise_deltas, None, -1, True).shape, (5, 5, 1))
+    assert_shape(
+        np.linalg.norm(pairwise_deltas, ord=None, axis=-1, keepdims=True).shape,
+        (5, 5, 1),
+    )
+
+
+def test_norm_without_axis_returns_numpy_scalar() -> None:
+    result = np.linalg.norm(np.ones((2, 3)))
+
+    assert_type(result, np.floating)
+    result.astype(np.float32)
+    assert_shape(np.asarray(result).shape, ())
+
+
+def test_norm_axis_shapes_and_errors() -> None:
+    array = np.ones((2, 3, 4))
+
+    assert_shape(np.linalg.norm(array, axis=(0, 2)).shape, (3,))
+    assert_shape(np.linalg.norm(array, axis=1, keepdims=True).shape, (2, 1, 4))
+    assert_type(np.linalg.norm([3.0, 4.0]), np.floating)
+
+    if TYPE_CHECKING:
+        np.linalg.norm(array, axis=3)  # E: axis out of bounds
+        np.linalg.norm(array, axis=(1, 1))  # E: duplicate axis
+        np.linalg.norm(array, axis="bad")  # E: No matching overload
 
 
 def gravitational_force_shape_path(
@@ -238,7 +313,7 @@ def test_nbody_force_shape_path() -> None:
     pos = np.ones((5, 3))
     mass = np.ones(5)
 
-    assert_shape(gravitational_force_shape_path(pos, mass), (5, 3))
+    assert_shape(gravitational_force_shape_path(pos, mass).shape, (5, 3))
 
 
 def test_svd_reduced_wide_matrix() -> None:
@@ -246,9 +321,9 @@ def test_svd_reduced_wide_matrix() -> None:
 
     u, s, vt = np.linalg.svd(x, full_matrices=False)
 
-    assert_shape(u, (3, 3))
-    assert_shape(s, (3,))
-    assert_shape(vt, (3, 5))
+    assert_shape(u.shape, (3, 3))
+    assert_shape(s.shape, (3,))
+    assert_shape(vt.shape, (3, 5))
 
 
 def test_svd_reduced_tall_matrix() -> None:
@@ -256,9 +331,9 @@ def test_svd_reduced_tall_matrix() -> None:
 
     u, s, vt = np.linalg.svd(x, full_matrices=False)
 
-    assert_shape(u, (5, 3))
-    assert_shape(s, (3,))
-    assert_shape(vt, (3, 3))
+    assert_shape(u.shape, (5, 3))
+    assert_shape(s.shape, (3,))
+    assert_shape(vt.shape, (3, 3))
 
 
 def test_svd_reduced_square_matrix() -> None:
@@ -266,10 +341,10 @@ def test_svd_reduced_square_matrix() -> None:
 
     u, s, vt = np.linalg.svd(x, full_matrices=False)
 
-    assert_shape(u, (4, 4))
-    assert_shape(s, (4,))
-    assert_shape(vt, (4, 4))
-    assert_shape(square_svd_components(x), (4, 4))
+    assert_shape(u.shape, (4, 4))
+    assert_shape(s.shape, (4,))
+    assert_shape(vt.shape, (4, 4))
+    assert_shape(square_svd_components(x).shape, (4, 4))
 
 
 def test_svd_reduced_dtype_preserved() -> None:
@@ -277,9 +352,9 @@ def test_svd_reduced_dtype_preserved() -> None:
 
     u, s, vt = np.linalg.svd(x, full_matrices=False)
 
-    assert_shape(u, (5, 3))
-    assert_shape(s, (3,))
-    assert_shape(vt, (3, 3))
+    assert_shape(u.shape, (5, 3))
+    assert_shape(s.shape, (3,))
+    assert_shape(vt.shape, (3, 3))
     assert_type(u.dtype, np.dtype[np.float32])
     assert_type(s.dtype, np.dtype[np.float32])
     assert_type(vt.dtype, np.dtype[np.float32])
@@ -291,10 +366,10 @@ def test_svd_all_component_pca_projection() -> None:
     u, s, vt = np.linalg.svd(x_centered, full_matrices=False)
     projection = x_centered @ vt.T
 
-    assert_shape(u, (5, 3))
-    assert_shape(s, (3,))
-    assert_shape(vt, (3, 3))
-    assert_shape(projection, (5, 3))
+    assert_shape(u.shape, (5, 3))
+    assert_shape(s.shape, (3,))
+    assert_shape(vt.shape, (3, 3))
+    assert_shape(projection.shape, (5, 3))
 
 
 def test_matmul_operator_rejects_mismatched_inner_dimension() -> None:
@@ -304,7 +379,7 @@ def test_matmul_operator_rejects_mismatched_inner_dimension() -> None:
     # The mismatched matmul below raises before assert_shape runs, so anchor the
     # well-formed shape here to satisfy run_runtime_tests' "every test asserts a
     # shape" invariant.
-    assert_shape(np.ones((3, 4)) @ np.ones((4, 5)), (3, 5))
+    assert_shape((np.ones((3, 4)) @ np.ones((4, 5))).shape, (3, 5))
     try:
         # `a @ b` is rejected statically (mismatched inner dims) and raises at
         # runtime; the well-formed anchor above satisfies the shape-assertion
@@ -323,9 +398,9 @@ def test_matmul_rejects_mismatched_inner_dimension() -> None:
     # The mismatched matmul below raises before assert_shape runs, so anchor the
     # well-formed shape here to satisfy run_runtime_tests' "every test asserts a
     # shape" invariant.
-    assert_shape(np.matmul(np.ones((3, 4)), np.ones((4, 5))), (3, 5))
+    assert_shape(np.matmul(np.ones((3, 4)), np.ones((4, 5))).shape, (3, 5))
     try:
-        # E: Cannot evaluate type-level shape DSL call: matmul inner dimensions must match
+        # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 4 and 6
         np.matmul(a, b)
     except ValueError:
         pass

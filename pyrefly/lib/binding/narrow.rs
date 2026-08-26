@@ -9,6 +9,7 @@ use std::fmt;
 
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
@@ -22,6 +23,7 @@ use ruff_python_ast::ExprBoolOp;
 use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprCompare;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::ExprNamed;
 use ruff_python_ast::ExprNumberLiteral;
 use ruff_python_ast::ExprStringLiteral;
@@ -32,7 +34,6 @@ use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::Hashed;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
@@ -41,17 +42,15 @@ use vec1::Vec1;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::bindings::BindingsBuilder;
-use crate::binding::expr::Usage;
 use crate::binding::polars::PolarsMutationKind;
-use crate::binding::scope::NameReadInfo;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
 use crate::types::facet::UnresolvedFacetChain;
 use crate::types::facet::UnresolvedFacetKind;
 use crate::types::types::Type;
 
-assert_words!(AtomicNarrowOp, 10);
-assert_words!(NarrowOp, 12);
+assert_words!(AtomicNarrowOp, 9);
+assert_words!(NarrowOp, 11);
 
 /// Indicates where an isinstance-style narrow operation originated from.
 /// This determines whether validation needs to happen during narrowing.
@@ -135,6 +134,34 @@ pub enum NarrowOp {
     Atomic(Option<FacetSubject>, AtomicNarrowOp),
     And(Vec<NarrowOp>),
     Or(Vec<NarrowOp>),
+}
+
+impl NarrowOp {
+    /// Narrows of the name itself, without facet subjects or mutation operations.
+    pub(super) fn is_plain_root(&self) -> bool {
+        match self {
+            Self::Atomic(None, op) => matches!(
+                op,
+                AtomicNarrowOp::Is(_)
+                    | AtomicNarrowOp::IsNot(_)
+                    | AtomicNarrowOp::Eq(_)
+                    | AtomicNarrowOp::NotEq(_)
+                    | AtomicNarrowOp::IsInstance(_, _)
+                    | AtomicNarrowOp::IsNotInstance(_, _)
+                    | AtomicNarrowOp::IsSubclass(_)
+                    | AtomicNarrowOp::IsNotSubclass(_)
+                    | AtomicNarrowOp::TypeEq(_)
+                    | AtomicNarrowOp::TypeNotEq(_)
+                    | AtomicNarrowOp::Call(_, _)
+                    | AtomicNarrowOp::NotCall(_, _)
+                    | AtomicNarrowOp::IsTruthy
+                    | AtomicNarrowOp::IsFalsy
+                    | AtomicNarrowOp::Placeholder
+            ),
+            Self::And(ops) | Self::Or(ops) => ops.iter().all(Self::is_plain_root),
+            _ => false,
+        }
+    }
 }
 
 impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
@@ -540,6 +567,17 @@ impl NarrowOp {
         }
     }
 
+    /// Whether this operation imposes no narrowing constraint (for example, an `Or`
+    /// where at least one branch is an unconstrained `Placeholder`).
+    pub fn is_placeholder(&self) -> bool {
+        match self {
+            Self::Atomic(_, AtomicNarrowOp::Placeholder) => true,
+            Self::Atomic(..) => false,
+            Self::And(ops) => ops.iter().all(Self::is_placeholder),
+            Self::Or(ops) => ops.iter().any(Self::is_placeholder),
+        }
+    }
+
     fn and(&mut self, other: Self) {
         match self {
             Self::And(ops) => ops.push(other),
@@ -898,12 +936,11 @@ impl NarrowOps {
             Expr::Compare(ExprCompare {
                 node_index: _,
                 range: _,
-                left,
                 ops: cmp_ops,
-                comparators,
+                operands,
             }) => {
                 // If the left expression is a call to `len()` or `getattr()`, we're narrowing the first argument
-                let mut left = &**left;
+                let mut left = &operands[0];
                 // If the left expression is a call to `getattr()` we store attribute name and default
                 let mut getattr_name = None;
                 let mut special_export = None;
@@ -946,7 +983,7 @@ impl NarrowOps {
                 let mut rhs_narrows = Vec::new();
                 let mut ops = cmp_ops
                     .iter()
-                    .zip(comparators)
+                    .zip(&operands[1..])
                     .filter_map(|(cmp_op, right)| {
                         let range = right.range();
                         let op = match (cmp_op, special_export) {
@@ -1086,23 +1123,31 @@ impl NarrowOps {
                 op: UnaryOp::Not,
                 operand: e,
             }) => Self::from_expr_helper(builder, Some(e), seen).negate(),
-            Expr::Call(ExprCall {
-                node_index: _,
-                range,
-                func,
-                arguments,
-            }) if builder.as_special_export(func) == Some(SpecialExport::Bool)
+            Expr::Call(
+                test @ ExprCall {
+                    node_index: _,
+                    range_start: _,
+                    func,
+                    arguments,
+                },
+            ) if builder.as_special_export(func) == Some(SpecialExport::Bool)
                 && arguments.args.len() == 1
                 && arguments.keywords.is_empty() =>
             {
-                Self::from_single_narrow_op(&arguments.args[0], AtomicNarrowOp::IsTruthy, *range)
+                Self::from_single_narrow_op(
+                    &arguments.args[0],
+                    AtomicNarrowOp::IsTruthy,
+                    test.range(),
+                )
             }
-            Expr::Call(ExprCall {
-                node_index: _,
-                range,
-                func,
-                arguments,
-            }) if builder.as_special_export(func) == Some(SpecialExport::HasAttr)
+            Expr::Call(
+                test @ ExprCall {
+                    node_index: _,
+                    range_start: _,
+                    func,
+                    arguments,
+                },
+            ) if builder.as_special_export(func) == Some(SpecialExport::HasAttr)
                 && arguments.args.len() == 2
                 && arguments.keywords.is_empty()
                 && let Expr::StringLiteral(ExprStringLiteral { value, .. }) =
@@ -1111,15 +1156,17 @@ impl NarrowOps {
                 Self::from_single_narrow_op(
                     &arguments.args[0],
                     AtomicNarrowOp::HasAttr(Name::new(value.to_string())),
-                    *range,
+                    test.range(),
                 )
             }
-            Expr::Call(ExprCall {
-                node_index: _,
-                range,
-                func,
-                arguments,
-            }) if builder.as_special_export(func) == Some(SpecialExport::GetAttr)
+            Expr::Call(
+                test @ ExprCall {
+                    node_index: _,
+                    range_start: _,
+                    func,
+                    arguments,
+                },
+            ) if builder.as_special_export(func) == Some(SpecialExport::GetAttr)
                 && (arguments.args.len() == 2 || arguments.args.len() == 3)
                 && arguments.keywords.is_empty()
                 && let Expr::StringLiteral(ExprStringLiteral { value, .. }) =
@@ -1135,7 +1182,7 @@ impl NarrowOps {
                             Some(Box::new(arguments.args[2].clone()))
                         },
                     ),
-                    *range,
+                    test.range(),
                 )
             }
             e @ Expr::Call(call) if dict_get_subject_for_call_expr(call).is_some() => {
@@ -1144,18 +1191,20 @@ impl NarrowOps {
                 // This cannot be a TypeGuard/TypeIs function call, since the first argument is a string literal
                 Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range())
             }
-            Expr::Call(ExprCall {
-                node_index: _,
-                range,
-                func,
-                arguments: args @ Arguments { args: posargs, .. },
-            }) if !posargs.is_empty() => {
+            Expr::Call(
+                test @ ExprCall {
+                    node_index: _,
+                    range_start: _,
+                    func,
+                    arguments: args @ Arguments { args: posargs, .. },
+                },
+            ) if !posargs.is_empty() => {
                 // This may be a function call that narrows the type of its first argument. Record
                 // it as a possible narrowing operation that we'll resolve in the answers phase.
                 Self::from_single_narrow_op(
                     &posargs[0],
                     AtomicNarrowOp::Call(Box::new((**func).clone()), args.clone()),
-                    *range,
+                    test.range(),
                 )
             }
             Expr::Named(named) => {
@@ -1188,7 +1237,7 @@ impl NarrowOps {
                     Self::new()
                 } else {
                     // Look up the definition of `name`.
-                    let original_expr = match Self::get_original_binding(builder, &name.id) {
+                    let original_expr = match Self::get_original_binding(builder, name) {
                         Some((_, Some(Binding::NameAssign(name_assign)))) => {
                             Some(&*name_assign.expr)
                         }
@@ -1212,19 +1261,10 @@ impl NarrowOps {
 
     fn get_original_binding<'a>(
         builder: &'a BindingsBuilder,
-        name: &Name,
+        name: &ExprName,
     ) -> Option<(Idx<Key>, Option<&'a Binding>)> {
-        let name_read_info =
-            builder.look_up_name_for_read(Hashed::new(name), &Usage::NonPinningValue(None));
-        match name_read_info {
-            NameReadInfo::Flow { idx, .. } => builder.get_original_binding(idx),
-            // Only flow values have a narrowable original binding; anywhere-static entries,
-            // implicit builtins, and missing names do not.
-            NameReadInfo::Anywhere { .. }
-            | NameReadInfo::ImplicitBuiltin { .. }
-            | NameReadInfo::OuterClassTypeParameter { .. }
-            | NameReadInfo::NotFound => None,
-        }
+        let name = ShortIdentifier::expr_name(name);
+        builder.get_original_binding(builder.value_idx_at_name_read(&name)?)
     }
 
     fn op_is_still_valid(

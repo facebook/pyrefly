@@ -46,7 +46,6 @@ use crate::state::lsp::ReferenceOptions;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
-use crate::types::callable::Params;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
 
@@ -209,24 +208,6 @@ impl<'param> ParamNameMatch<'param> {
     }
 }
 
-// Re-export normalize_singleton_function_type_into_params which is shared with signature help
-pub fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<Param>> {
-    let callable = type_.to_callable()?;
-    // We will drop the self parameter for signature help
-    if let Params::List(params_list) = callable.params {
-        if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
-            params_list.items().first()
-            && (name.as_str() == "self" || name.as_str() == "cls" || name.as_str() == "_cls")
-        {
-            let mut params = params_list.into_items();
-            params.remove(0);
-            return Some(params);
-        }
-        return Some(params_list.into_items());
-    }
-    None
-}
-
 impl<'a> Transaction<'a> {
     /// NewType values are callable aliases, not class objects, so `type[N]` is
     /// not a valid annotation. If `ty` is a NewType, returns its constructor
@@ -296,7 +277,8 @@ impl<'a> Transaction<'a> {
                     _ => !Ast::is_literal(e),
                 }
         };
-        let bindings = self.get_bindings(handle)?;
+        let answers = self.get_answers(handle)?;
+        let bindings = answers.bindings();
         let stdlib = self.get_stdlib(handle);
         let renderer = self.get_ast(handle).map(|ast| TypeHintRenderer {
             transaction: self,
@@ -331,11 +313,11 @@ impl<'a> Transaction<'a> {
         let mut res = Vec::new();
         for idx in bindings.keys::<Key>() {
             match bindings.idx_to_key(idx) {
-                key @ Key::ReturnType(id) if inlay_hint_config.function_return_types => {
+                Key::ReturnType(id) if inlay_hint_config.function_return_types => {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
                         Binding::Function { decorated_idx, .. } => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
-                                && let Some(mut ty) = self.get_type_for_display(handle, key)
+                                && let Some(mut ty) = answers.get_type_at(idx)
                                 && !ty.is_any()
                             {
                                 let fun =
@@ -362,7 +344,7 @@ impl<'a> Transaction<'a> {
                 }
                 key @ Key::Definition(_)
                     if inlay_hint_config.variable_types
-                        && let Some(mut ty) = self.get_type_for_display(handle, key) =>
+                        && let Some(mut ty) = answers.get_type_at(idx) =>
                 {
                     let mut insertable = true;
                     if let Some(constructor) = self.new_type_constructor_signature(handle, &ty) {
@@ -393,7 +375,7 @@ impl<'a> Transaction<'a> {
                         {
                             // Try to get the element expression from the unpacked source
                             let element_expr = Self::get_unpacked_element_expr(
-                                &bindings,
+                                bindings,
                                 value.source,
                                 value.position,
                             );
@@ -435,9 +417,7 @@ impl<'a> Transaction<'a> {
         }
 
         // Inlay hints for unannotated class attributes defined in methods (e.g. self.x = value in __init__)
-        if inlay_hint_config.variable_types
-            && let Some(answers) = self.get_answers(handle)
-        {
+        if inlay_hint_config.variable_types {
             for field_idx in bindings.keys::<KeyClassField>() {
                 let field = bindings.get(field_idx);
                 if let ClassFieldDefinition::DefinedInMethod {
@@ -449,7 +429,7 @@ impl<'a> Transaction<'a> {
                     let Some(class_field) = answers.get_idx::<KeyClassField>(field_idx) else {
                         continue;
                     };
-                    let mut ty = answers.solver().for_display(class_field.ty());
+                    let mut ty = class_field.ty();
                     let mut insertable = true;
                     if let Some(constructor) = self.new_type_constructor_signature(handle, &ty) {
                         ty = constructor;
@@ -580,7 +560,7 @@ impl<'a> Transaction<'a> {
 
                     if let Some(params) = callee_type
                         .map(|ty| self.coerce_type_to_callable(handle, ty))
-                        .and_then(normalize_singleton_function_type_into_params)
+                        .and_then(Self::normalize_singleton_function_type_into_params)
                     {
                         for (arg_idx, arg) in call.arguments.args.iter().enumerate() {
                             // Account for keyword arguments omitted from `args`, including
@@ -606,6 +586,7 @@ impl<'a> Transaction<'a> {
                                 )
                                 && !param_match.is_vararg_repeat
                                 && param_match.name.as_str() != "self"
+                                && param_match.name.as_str() != "__self"
                                 && param_match.name.as_str() != "cls"
                                 && param_match.name.as_str() != "_cls"
                             {
@@ -730,7 +711,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         idx: pyrefly_graph::index::Idx<Key>,
-        bindings: Bindings,
+        bindings: &Bindings,
         transaction: &mut CancellableTransaction,
     ) -> Vec<(pyrefly_python::module::Module, Vec<TextRange>)> {
         if let Key::Definition(id) = bindings.idx_to_key(idx)
@@ -754,7 +735,8 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         cancellable_transaction: &mut CancellableTransaction,
     ) -> Vec<ParameterAnnotation> {
-        if let Some(bindings) = self.get_bindings(handle) {
+        if let Some(answers) = self.get_answers(handle) {
+            let bindings = answers.bindings();
             let transaction = cancellable_transaction;
             fn transpose<T: Clone>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
                 if v.is_empty() {
@@ -829,7 +811,7 @@ impl<'a> Transaction<'a> {
                             return vec![];
                         }
                         let references =
-                            self.collect_references(handle, idx, bindings.clone(), transaction);
+                            self.collect_references(handle, idx, bindings, transaction);
                         let ranges: Vec<&TextRange> =
                             references.iter().flat_map(|(_, range)| range).collect();
                         let inferred_types = ranges
@@ -854,16 +836,17 @@ impl<'a> Transaction<'a> {
     ) -> Option<Vec<(TextSize, Type, AnnotationKind)>> {
         let is_interesting_type = |x: &Type| !x.is_any();
         let is_interesting_expr = |x: &Expr| !Ast::is_literal(x);
-        let bindings = self.get_bindings(handle)?;
+        let answers = self.get_answers(handle)?;
+        let bindings = answers.bindings();
         let mut res = Vec::new();
         for idx in bindings.keys::<Key>() {
             match bindings.idx_to_key(idx) {
                 // Return Annotation
-                key @ Key::ReturnType(id) if return_types => {
+                Key::ReturnType(id) if return_types => {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
                         Binding::Function { decorated_idx, .. } => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
-                                && let Some(ty) = self.get_type_for_display(handle, key)
+                                && let Some(ty) = answers.get_type_at(idx)
                                 && is_interesting_type(&ty)
                             {
                                 let fun =
@@ -880,7 +863,7 @@ impl<'a> Transaction<'a> {
                 }
                 // Only annotate empty containers for now
                 key @ Key::Definition(_) if containers => {
-                    if let Some(ty) = self.get_type_for_display(handle, key) {
+                    if let Some(ty) = answers.get_type_at(idx) {
                         let e = match bindings.get(idx) {
                             Binding::NameAssign(x) if !x.is_pinned() => match &*x.expr {
                                 Expr::List(ExprList { elts, .. }) => {

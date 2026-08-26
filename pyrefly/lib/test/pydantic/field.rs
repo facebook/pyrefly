@@ -357,6 +357,17 @@ fn pydantic_env_3_10() -> TestEnv {
 }
 
 testcase!(
+    test_default_keywords_3_9,
+    pydantic_env().with_version(PythonVersion::new(3, 9, 0)),
+    r#"
+from pydantic import BaseModel, Field
+class A(BaseModel):
+    x: int = Field(default='oops')  # E: `str` is not assignable to `int`
+    y: int = Field(...)
+    "#,
+);
+
+testcase!(
     test_model_3_10,
     pydantic_env_3_10(),
     r#"
@@ -551,4 +562,19 @@ class Model(BaseModel):
 
 reveal_type(Model.__init__)  # E: revealed type: (self: Model, *, x: LaxInt = ..., **Unknown) -> None
 "#,
+);
+
+pydantic_testcase!(
+    test_private_attr_is_not_frozen,
+    r#"
+from pydantic import BaseModel, ConfigDict
+
+class Model(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    _private: int = 0
+
+model = Model()
+# A private attribute is not frozen even when the model is.
+model._private = 1
+    "#,
 );

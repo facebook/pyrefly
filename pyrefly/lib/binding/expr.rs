@@ -41,12 +41,14 @@ use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
+use crate::binding::binding::ClassBodyUnknownName;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::binding::binding::LambdaKind;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::PrivateAttributeAccessCheck;
@@ -116,6 +118,12 @@ pub enum Usage {
     /// alias bindings should produce Binding::TypeAliasRef instead of
     /// Binding::Forward.
     TypeAliasRhs,
+    /// Metadata of an `Annotated[...]` type form. Like `StaticTypeInformation`, but names may
+    /// refer to fields declared later in the enclosing class body when the annotation is not
+    /// evaluated where it appears.
+    AnnotatedMetadata {
+        allow_class_body_forward_reference: bool,
+    },
 }
 
 impl Usage {
@@ -124,7 +132,9 @@ impl Usage {
         match other {
             Self::CurrentIdx(idx) => Self::NonPinningValue(Some(*idx)),
             Self::NonPinningValue(idx) => Self::NonPinningValue(*idx),
-            Self::StaticTypeInformation { .. } | Self::TypeAliasRhs => Self::NonPinningValue(None),
+            Self::StaticTypeInformation { .. }
+            | Self::TypeAliasRhs
+            | Self::AnnotatedMetadata { .. } => Self::NonPinningValue(None),
         }
     }
 
@@ -133,7 +143,9 @@ impl Usage {
         match self {
             Usage::CurrentIdx(idx) => Some(*idx),
             Usage::NonPinningValue(idx) => *idx,
-            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs => None,
+            Usage::StaticTypeInformation { .. }
+            | Usage::TypeAliasRhs
+            | Usage::AnnotatedMetadata { .. } => None,
         }
     }
 
@@ -146,7 +158,9 @@ impl Usage {
     pub fn is_static(&self) -> bool {
         matches!(
             self,
-            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
+            Usage::StaticTypeInformation { .. }
+                | Usage::TypeAliasRhs
+                | Usage::AnnotatedMetadata { .. }
         )
     }
 }
@@ -294,7 +308,19 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_builder: Option<&mut LegacyTParamCollector>,
     ) -> Idx<Key> {
-        self.ensure_name_in_type(name, usage, tparams_builder, false)
+        let allow_class_body_forward_reference = matches!(
+            usage,
+            Usage::AnnotatedMetadata {
+                allow_class_body_forward_reference: true
+            }
+        );
+        self.ensure_name_in_type(
+            name,
+            usage,
+            tparams_builder,
+            false,
+            allow_class_body_forward_reference,
+        )
     }
 
     fn ensure_name_in_type(
@@ -303,6 +329,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_builder: Option<&mut LegacyTParamCollector>,
         is_runtime_evaluated_annotation: bool,
+        allow_class_body_forward_reference: bool,
     ) -> Idx<Key> {
         self.ensure_name_impl(
             name,
@@ -310,6 +337,7 @@ impl<'a> BindingsBuilder<'a> {
             tparams_builder
                 .map(|tparams_builder| (tparams_builder, LegacyTParamId::Name(name.clone()))),
             is_runtime_evaluated_annotation,
+            allow_class_body_forward_reference,
         )
     }
 
@@ -326,6 +354,7 @@ impl<'a> BindingsBuilder<'a> {
             tparams_builder.map(|tparams_builder| {
                 (tparams_builder, LegacyTParamId::Attr(value.clone(), attrs))
             }),
+            false,
             false,
         )
     }
@@ -357,8 +386,10 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_lookup: Option<(&mut LegacyTParamCollector, LegacyTParamId)>,
         is_runtime_evaluated_annotation: bool,
+        allow_class_body_forward_reference: bool,
     ) -> Idx<Key> {
-        let key = Key::BoundName(ShortIdentifier::new(name));
+        let short_name = ShortIdentifier::new(name);
+        let key = Key::BoundName(short_name);
         if name.is_empty() {
             // We only get empty identifiers if Ruff has done error correction,
             // so there must be a parse error.
@@ -370,6 +401,10 @@ impl<'a> BindingsBuilder<'a> {
             // in an IDE setting if we don't ensure this is the case.
             return self.insert_binding_overwrite(key, Binding::Any(AnyStyle::Error));
         }
+        // Names declared by `@shape_vars` are in scope only inside `Shaped` strings.
+        if let Some(shape_var) = self.shape_var(&name.id) {
+            return self.insert_binding(key, Binding::Quantified(Box::new(shape_var)));
+        }
         let lookup_result = if usage.is_static()
             && let Some((tparams_collector, tparam_id)) = tparams_lookup
         {
@@ -380,6 +415,7 @@ impl<'a> BindingsBuilder<'a> {
         match lookup_result {
             NameLookupResult::Found {
                 idx: lookup_result_idx,
+                value_idx,
                 initialized: is_initialized,
                 is_module_scope,
                 is_outer_class_type_parameter,
@@ -435,13 +471,12 @@ impl<'a> BindingsBuilder<'a> {
                 if promote {
                     self.promote_ranges.insert(name.range);
                 }
-                self.defer_bound_name(key, lookup_result_idx, usage, promote)
+                self.defer_bound_name(short_name, lookup_result_idx, value_idx, usage, promote)
             }
             NameLookupResult::NotFound => {
                 if self.scopes.is_definitely_unreachable() {
                     return self.insert_binding(key, Binding::Any(AnyStyle::Implicit));
                 }
-                let suggestion = self.suggest_similar_name(&name.id, name.range.start());
                 if is_special_name(name.id.as_str()) {
                     self.error(
                         name.range,
@@ -455,23 +490,30 @@ impl<'a> BindingsBuilder<'a> {
                 } else if self.scopes.in_class_body()
                     && let Some(cls) = self.scopes.current_class_key()
                 {
+                    let suggestion = self.suggest_similar_name(&name.id);
                     self.insert_binding(
                         key,
-                        Binding::ClassBodyUnknownName(Box::new((cls, name.clone(), suggestion))),
+                        Binding::ClassBodyUnknownName(Box::new(ClassBodyUnknownName {
+                            class_key: cls,
+                            name: name.clone(),
+                            suggestion,
+                            allow_class_body_forward_reference,
+                        })),
                     )
                 } else {
-                    // Record a type error and fall back to `Any`.
-                    let header = format!("Could not find name `{name}`");
-                    if let Some(suggestion) = suggestion {
-                        self.error_with_detail(
-                            name.range,
-                            ErrorKind::UnknownName,
-                            header,
-                            format!("Did you mean `{suggestion}`?"),
-                        );
-                    } else {
-                        self.error(name.range, ErrorKind::UnknownName, header);
-                    }
+                    // Record a type error and fall back to `Any`. Searching the
+                    // scope for a near-miss is the expensive part of reporting
+                    // this, and it is worth nothing unless the error is kept, so
+                    // it waits until the builder knows that.
+                    self.error_with_detail_from(
+                        name.range,
+                        ErrorKind::UnknownName,
+                        format!("Could not find name `{name}`"),
+                        || {
+                            self.suggest_similar_name(&name.id)
+                                .map(|suggestion| format!("Did you mean `{suggestion}`?"))
+                        },
+                    );
                     self.insert_binding(key, Binding::Any(AnyStyle::Error))
                 }
             }
@@ -526,7 +568,7 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn bind_lambda(&mut self, lambda: &mut ExprLambda, usage: &mut Usage) {
+    pub fn bind_lambda(&mut self, lambda: &mut ExprLambda, usage: &mut Usage, kind: LambdaKind) {
         // Process default values in the enclosing scope before pushing the lambda scope,
         // because default values are evaluated at function definition time.
         if let Some(parameters) = &mut lambda.parameters {
@@ -546,10 +588,9 @@ impl<'a> BindingsBuilder<'a> {
             Identifier::new("<lambda>", lambda.range),
             false,
         ));
-        let owner = usage.current_idx();
         if let Some(parameters) = &lambda.parameters {
             for x in parameters {
-                self.bind_lambda_param(x.name(), owner);
+                self.bind_lambda_param(x.name(), kind, usage);
             }
         }
         self.ensure_expr(&mut lambda.body, usage);
@@ -659,13 +700,25 @@ impl<'a> BindingsBuilder<'a> {
                 members,
                 false,
                 None,
+                &mut call.arguments.keywords,
             ),
             _ => unreachable!("caller only passes CollectionsNamedTuple or TypingNamedTuple"),
         };
         Some(self.insert_binding(
-            Key::Anon(call.range),
+            Key::Anon(call.range()),
             Binding::ClassDef(class_idx, Box::new([])),
         ))
+    }
+
+    /// Bind `narrow_ops` for evaluating `branch`, an operand of a conditional or boolean
+    /// expression that runs only when the narrows hold. A missing expression from
+    /// parse-error recovery reads no names, so it needs no narrows, and two of them can
+    /// share one empty range, which would give their narrows the same key.
+    fn bind_narrow_ops_for_branch(&mut self, narrow_ops: &NarrowOps, branch: &Expr, usage: &Usage) {
+        if matches!(branch, Expr::Name(name) if Ast::is_synthesized_empty_name(name)) {
+            return;
+        }
+        self.bind_narrow_ops(narrow_ops, NarrowUseLocation::Span(branch.range()), usage);
     }
 
     fn record_yield(&mut self, mut x: ExprYield) {
@@ -695,6 +748,33 @@ impl<'a> BindingsBuilder<'a> {
             yield_from_link,
             Binding::UsageLink(LinkedKey::YieldFrom(idx)),
         );
+    }
+
+    /// Bind the metadata items of an `Annotated[...]` type form. Names in them still resolve, but
+    /// the metadata is not type-checked, so their ranges are recorded and bindings created inside
+    /// them only report name resolution errors.
+    fn bind_annotated_metadata(
+        &mut self,
+        metadata: &mut [Expr],
+        allow_class_body_forward_reference: bool,
+    ) {
+        for e in metadata {
+            self.ensure_expr(
+                e,
+                &mut Usage::AnnotatedMetadata {
+                    allow_class_body_forward_reference,
+                },
+            );
+            self.annotated_metadata_ranges.push(e.range());
+        }
+    }
+
+    /// Whether names in a type may refer to fields declared later in the enclosing class body,
+    /// which is the case when the type is not evaluated where it appears.
+    fn allow_class_body_forward_reference_in_type(&self, in_string_literal: bool) -> bool {
+        in_string_literal
+            || self.scopes.has_future_annotations()
+            || self.sys_info.version().at_least(3, 14)
     }
 
     /// Execute through the expr, ensuring every name has a binding.
@@ -728,15 +808,27 @@ impl<'a> BindingsBuilder<'a> {
                     _ => None,
                 };
 
-                if let Some(special_export) = special_export
+                if self.is_map_int_tuples_with_provenance(value, special_export) {
+                    self.ensure_expr(&mut *value, usage);
+                    self.bind_map_int_tuples_arguments(
+                        &mut *slice,
+                        None,
+                        false,
+                        &mut Usage::StaticTypeInformation {
+                            is_annotation: false,
+                        },
+                    );
+                } else if let Some(special_export) = special_export
                     && special_export.is_static_type_subscript()
                 {
                     self.ensure_expr(&mut *value, usage);
                     let mut type_usage = Usage::StaticTypeInformation {
                         is_annotation: false,
                     };
-                    if special_export == SpecialExport::Annotated
-                        && let Expr::Tuple(tup) = &mut **slice
+                    if matches!(
+                        special_export,
+                        SpecialExport::Annotated | SpecialExport::Shaped
+                    ) && let Expr::Tuple(tup) = &mut **slice
                         && !tup.is_empty()
                     {
                         // Only the first argument to Annotated[...] is a type; the rest are metadata.
@@ -748,14 +840,7 @@ impl<'a> BindingsBuilder<'a> {
                             &mut type_usage,
                             false,
                         );
-                        for elt in tup.elts[1..].iter_mut() {
-                            self.ensure_expr(
-                                elt,
-                                &mut Usage::StaticTypeInformation {
-                                    is_annotation: false,
-                                },
-                            );
-                        }
+                        self.bind_annotated_metadata(&mut tup.elts[1..], false);
                     } else {
                         self.ensure_type_impl(
                             &mut *slice,
@@ -813,11 +898,7 @@ impl<'a> BindingsBuilder<'a> {
                         if Ast::expr_contains_yield(&x.orelse) {
                             self.scopes.mark_has_yield_in_dead_code();
                         }
-                        self.bind_narrow_ops(
-                            &narrow_ops,
-                            NarrowUseLocation::Span(x.body.range()),
-                            usage,
-                        );
+                        self.bind_narrow_ops_for_branch(&narrow_ops, &x.body, usage);
                         self.ensure_expr(&mut x.body, usage);
                         self.finish_branch();
                     }
@@ -827,29 +908,17 @@ impl<'a> BindingsBuilder<'a> {
                         }
                         self.abandon_branch();
                         self.start_branch();
-                        self.bind_narrow_ops(
-                            &narrow_ops.negate(),
-                            NarrowUseLocation::Span(x.range),
-                            usage,
-                        );
+                        self.bind_narrow_ops_for_branch(&narrow_ops.negate(), &x.orelse, usage);
                         self.ensure_expr(&mut x.orelse, usage);
                         self.finish_branch();
                     }
                     None => {
-                        self.bind_narrow_ops(
-                            &narrow_ops,
-                            NarrowUseLocation::Span(x.body.range()),
-                            usage,
-                        );
+                        self.bind_narrow_ops_for_branch(&narrow_ops, &x.body, usage);
                         self.ensure_expr(&mut x.body, usage);
                         // Negate the narrow ops for the `orelse`, then merge the Flows.
                         // TODO(stroxler): We eventually want to drop all narrows but merge values.
                         self.next_branch();
-                        self.bind_narrow_ops(
-                            &narrow_ops.negate(),
-                            NarrowUseLocation::Span(x.range),
-                            usage,
-                        );
+                        self.bind_narrow_ops_for_branch(&narrow_ops.negate(), &x.orelse, usage);
                         self.ensure_expr(&mut x.orelse, usage);
                         self.finish_branch();
                     }
@@ -891,11 +960,7 @@ impl<'a> BindingsBuilder<'a> {
                         self.scopes.set_definitely_unreachable(true);
                     }
                     for value in values {
-                        self.bind_narrow_ops(
-                            &narrow_ops,
-                            NarrowUseLocation::Span(value.range()),
-                            usage,
-                        );
+                        self.bind_narrow_ops_for_branch(&narrow_ops, value, usage);
                         self.ensure_expr(value, &mut Usage::non_pinning_value_from(usage));
                         let new_narrow_ops = get_narrow_ops(self, value, *op);
                         narrow_ops.and_all(new_narrow_ops);
@@ -921,7 +986,7 @@ impl<'a> BindingsBuilder<'a> {
                 // binding-variant choice — it drives a demand edge to
                 // `target::Exports`.
                 let special = self.as_special_export(&call.func);
-                let call_range = call.range;
+                let call_range = call.range();
                 match special {
                     Some(
                         SpecialExport::CollectionsNamedTuple | SpecialExport::TypingNamedTuple,
@@ -1119,15 +1184,11 @@ impl<'a> BindingsBuilder<'a> {
                     && let Expr::Name(name) = &*x.target
                     && let Some(idx) = self.scopes.get_current_flow_idx(&name.id)
                 {
-                    self.scopes.define_in_enclosing_non_comprehension_scope(
-                        Hashed::new(&name.id),
-                        idx,
-                        FlowStyle::Other,
-                    );
+                    self.bind_name_in_enclosing_non_comprehension_scope(&name.id, idx);
                 }
             }
             Expr::Lambda(x) => {
-                self.bind_lambda(x, usage);
+                self.bind_lambda(x, usage, LambdaKind::Ordinary);
             }
             Expr::ListComp(x) => {
                 self.with_await_context(AwaitContext::General, |this| {
@@ -1233,18 +1294,21 @@ impl<'a> BindingsBuilder<'a> {
     pub fn ensure_class_member_type(
         &mut self,
         x: &mut Expr,
-        tparams_builder: Option<&mut LegacyTParamCollector>,
+        mut tparams_builder: Option<&mut LegacyTParamCollector>,
     ) {
+        let written_range = x.range();
+        let mut usage = Usage::StaticTypeInformation {
+            is_annotation: true,
+        };
         self.ensure_type_impl(
             x,
-            tparams_builder,
+            tparams_builder.as_deref_mut(),
             false,
             false,
-            &mut Usage::StaticTypeInformation {
-                is_annotation: true,
-            },
+            &mut usage,
             true,
         );
+        self.bind_shape_comment(x, written_range, tparams_builder, &mut usage);
     }
 
     /// Like `ensure_type`, but with a specific usage context. Used by type alias
@@ -1252,13 +1316,22 @@ impl<'a> BindingsBuilder<'a> {
     pub fn ensure_type_with_usage(
         &mut self,
         x: &mut Expr,
-        tparams_builder: Option<&mut LegacyTParamCollector>,
+        mut tparams_builder: Option<&mut LegacyTParamCollector>,
         usage: &mut Usage,
     ) {
-        self.ensure_type_impl(x, tparams_builder, false, false, usage, false);
+        let written_range = x.range();
+        self.ensure_type_impl(
+            x,
+            tparams_builder.as_deref_mut(),
+            false,
+            false,
+            usage,
+            false,
+        );
+        self.bind_shape_comment(x, written_range, tparams_builder, usage);
     }
 
-    fn ensure_type_impl(
+    pub(super) fn ensure_type_impl(
         &mut self,
         x: &mut Expr,
         mut tparams_builder: Option<&mut LegacyTParamCollector>,
@@ -1297,6 +1370,7 @@ impl<'a> BindingsBuilder<'a> {
                     usage,
                     tparams_builder,
                     check_runtime_name && !in_string_literal,
+                    self.allow_class_body_forward_reference_in_type(in_string_literal),
                 );
             }
             Expr::Subscript(ExprSubscript { value, .. })
@@ -1328,11 +1402,18 @@ impl<'a> BindingsBuilder<'a> {
                     },
                 );
             }
-            Expr::Subscript(ExprSubscript { value, slice, .. })
-                if self.as_special_export(value) == Some(SpecialExport::Annotated)
-                    && matches!(&**slice, Expr::Tuple(tup) if !tup.is_empty()) =>
+            Expr::Subscript(ExprSubscript {
+                value,
+                slice,
+                range,
+                ..
+            }) if let Some(special @ (SpecialExport::Annotated | SpecialExport::Shaped)) =
+                self.as_special_export(value)
+                && matches!(&**slice, Expr::Tuple(tup) if !tup.is_empty()) =>
             {
-                // Only go inside the first argument to Annotated, the rest are non-type metadata.
+                // Only go inside the first argument to `Annotated`. The rest are
+                // non-type metadata, except the string of a `Shaped`, which Pyrefly
+                // reads as a shape.
                 self.ensure_type_impl(
                     &mut *value,
                     tparams_builder.as_deref_mut(),
@@ -1345,20 +1426,40 @@ impl<'a> BindingsBuilder<'a> {
                 let tup = slice.as_tuple_expr_mut().unwrap();
                 self.ensure_type_impl(
                     &mut tup.elts[0],
-                    tparams_builder,
+                    tparams_builder.as_deref_mut(),
                     in_string_literal,
                     check_runtime_name,
                     usage,
                     allow_proxy_method,
                 );
-                for e in tup.elts[1..].iter_mut() {
-                    self.ensure_expr(
-                        e,
-                        &mut Usage::StaticTypeInformation {
-                            is_annotation: false,
-                        },
+                let bound_as_shape = special == SpecialExport::Shaped
+                    && self.bind_shape_string(*range, tup, tparams_builder, usage);
+                if !bound_as_shape {
+                    let allow_class_body_forward_reference =
+                        self.allow_class_body_forward_reference_in_type(in_string_literal);
+                    self.bind_annotated_metadata(
+                        &mut tup.elts[1..],
+                        allow_class_body_forward_reference,
                     );
                 }
+            }
+            Expr::Subscript(ExprSubscript { value, slice, .. })
+                if self.is_map_int_tuples(value) =>
+            {
+                self.ensure_type_impl(
+                    &mut *value,
+                    tparams_builder.as_deref_mut(),
+                    in_string_literal,
+                    true,
+                    usage,
+                    allow_proxy_method,
+                );
+                self.bind_map_int_tuples_arguments(
+                    &mut *slice,
+                    tparams_builder,
+                    in_string_literal,
+                    usage,
+                );
             }
             Expr::Subscript(ExprSubscript { value, slice, .. }) => {
                 self.ensure_type_impl(

@@ -3,19 +3,21 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Test that mixing native and jaxtyping tensor syntax in the same function is an error."""
+"""Test shape checking across native and jaxtyping tensor syntax."""
 
 from typing import TYPE_CHECKING
+
+from shape_extensions import static_jaxtyping
 
 if TYPE_CHECKING:
     from jaxtyping import Float
     from torch import Tensor
 
 
-# E: Cannot mix native tensor syntax
+@static_jaxtyping("batch")
 def mixed_syntax(
     x: Float[Tensor, "batch 3"],
 ) -> Tensor[[3]]:
-    # E: Returned type `Shaped[Tensor, "batch 3"]` is not assignable
+    # E: Returned type `Tensor[[batch, 3]]` is not assignable
     #    to declared return type `Tensor[[3]]`
     return x

@@ -83,13 +83,13 @@ the fix for each:
 
 ### `nn.Sequential(*list_var)`
 
-When modules are constructed in a loop and passed as `*list_var`, the
-Sequential loses all type information:
+When modules are constructed in a loop and passed as `*list_var`, calling the
+`Sequential` loses the output shape:
 
 ```python
-# Bad: Sequential erases module types
+# Bad: calling the Sequential returns a bare Tensor
 layers = [nn.Linear(dim, dim) for _ in range(n)]
-self.net = nn.Sequential(*layers)  # returns bare Tensor
+self.net = nn.Sequential(*layers)
 ```
 
 Fix: extract shape-changing modules as individual attributes and chain them
@@ -107,7 +107,7 @@ def forward[B: IntVar](self, x: Tensor[[B, D]]) -> Tensor[[B, D]]:
 ```
 
 Note: `nn.Sequential(M1(), M2(), M3())` with direct arguments **is**
-tracked — only the `*list_var` form loses types.
+tracked — only the `*list_var` form loses the output shape.
 
 ### Factory functions returning `nn.Sequential`
 
@@ -160,7 +160,7 @@ class Config[K: IntVar, MlpOut: IntVar]:
 
 When none of the above restructurings can recover shape tracking, the last
 resort is a **typed interface**: the module's `forward` signature provides
-the shape contract, and `type: ignore` narrows the internal result:
+the shape contract, and `pyrefly: ignore` narrows the internal result:
 
 ```python
 class DynamicMLP[InDim: IntVar, OutDim: IntVar](nn.Module):
@@ -179,12 +179,12 @@ class DynamicMLP[InDim: IntVar, OutDim: IntVar](nn.Module):
         h = x
         for layer in self.layers:
             h = layer(h)
-        result: Tensor[[B, OutDim]] = h  # type: ignore[bad-assignment]
+        result: Tensor[[B, OutDim]] = h  # pyrefly: ignore[bad-assignment]
         return result
 ```
 
 The caller sees a clean `Tensor[[B, InDim]] -> Tensor[[B, OutDim]]` contract.
-The `type: ignore` is localized to the module's internals.
+The `pyrefly: ignore` is localized to the module's internals.
 
 Use typed interfaces only after exhausting all restructuring options —
 they're the fallback, not the first move.

@@ -90,7 +90,7 @@ fn test_notebook_hover_import() {
         .hover_cell("notebook.ipynb", "cell1", 0, 20)
         .expect_response_with(|response| {
             if let Some(hover) = response
-                && let lsp_types::HoverContents::Markup(content) = &hover.contents
+                && let lsp_types::Contents::MarkupContent(content) = &hover.contents
             {
                 let value = &content.value;
                 return value.contains("(class) List:")
