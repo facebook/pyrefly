@@ -446,7 +446,6 @@ impl<'a> BindingsBuilder<'a> {
                 if self.scopes.is_definitely_unreachable() {
                     return self.insert_binding(key, Binding::Any(AnyStyle::Implicit));
                 }
-                let suggestion = self.suggest_similar_name(&name.id, name.range.start());
                 if is_special_name(name.id.as_str()) {
                     self.error(
                         name.range,
@@ -460,6 +459,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else if self.scopes.in_class_body()
                     && let Some(cls) = self.scopes.current_class_key()
                 {
+                    let suggestion = self.suggest_similar_name(&name.id, name.range.start());
                     self.insert_binding(
                         key,
                         Binding::ClassBodyUnknownName(Box::new(ClassBodyUnknownName {
@@ -470,18 +470,19 @@ impl<'a> BindingsBuilder<'a> {
                         })),
                     )
                 } else {
-                    // Record a type error and fall back to `Any`.
-                    let header = format!("Could not find name `{name}`");
-                    if let Some(suggestion) = suggestion {
-                        self.error_with_detail(
-                            name.range,
-                            ErrorKind::UnknownName,
-                            header,
-                            format!("Did you mean `{suggestion}`?"),
-                        );
-                    } else {
-                        self.error(name.range, ErrorKind::UnknownName, header);
-                    }
+                    // Record a type error and fall back to `Any`. Searching the
+                    // scope for a near-miss is the expensive part of reporting
+                    // this, and it is worth nothing unless the error is kept, so
+                    // it waits until the builder knows that.
+                    self.error_with_detail_from(
+                        name.range,
+                        ErrorKind::UnknownName,
+                        format!("Could not find name `{name}`"),
+                        || {
+                            self.suggest_similar_name(&name.id, name.range.start())
+                                .map(|suggestion| format!("Did you mean `{suggestion}`?"))
+                        },
+                    );
                     self.insert_binding(key, Binding::Any(AnyStyle::Error))
                 }
             }

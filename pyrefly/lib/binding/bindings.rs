@@ -1453,6 +1453,22 @@ impl<'a> BindingsBuilder<'a> {
             .emit();
     }
 
+    /// Like [`Self::error_with_detail`], but for a detail that costs something
+    /// to work out. Modules loaded below `Require::Errors` discard everything
+    /// they collect, so for them the detail is never computed at all.
+    pub fn error_with_detail_from(
+        &self,
+        range: TextRange,
+        kind: ErrorKind,
+        header: String,
+        detail: impl FnOnce() -> Option<String>,
+    ) {
+        self.errors
+            .error_builder(range, kind, header)
+            .with_detail_from(detail)
+            .emit();
+    }
+
     pub fn declare_mutable_capture(&mut self, name: &Identifier, kind: MutableCaptureKind) {
         // Record any errors finding the identity of the mutable capture, and get a binding
         // that provides the type coming from the parent scope.
