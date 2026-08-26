@@ -306,13 +306,55 @@ def movedim_ir(
         shape=move_dims(self.shape, source, destination, len(self.shape))
     )
 
-@shape_dsl_function
-def unfold_ir(
-    self: ShapedArray, dimension: int, size: int | symint, step: int = 1
-) -> ShapedArray:
-    d = normalize_dim(len(self.shape), dimension)
-    new_dim = (self.shape[d] - size) // step + 1
-    return ShapedArray(shape=replace_dim(self.shape, d, new_dim) + [size])
+@type_shape_dsl_function
+def unfold_checked_shape(
+    shape: IntTuple,
+    dimension_size: Int,
+    normalized: int,
+    window_size: Int,
+    step: int,
+) -> IntTuple:
+    # A symbolic extent cannot prove this ordering invalid, so preserve its formula.
+    if dsl.is_concrete_int(dimension_size):
+        if dsl.is_concrete_int(window_size):
+            if dimension_size < window_size:
+                return dsl.Invalid("unfold size must not exceed the selected dimension")
+    window_count = (dimension_size - window_size) // step + 1
+    replaced = dsl.IntTuple(
+        (
+            window_count if index == normalized else shape[index]
+            for index in range(len(shape))
+        )
+    )
+    return dsl.concat(replaced, dsl.IntTuple((window_size,)))
+
+@type_shape_dsl_function
+def unfold_shape(shape: IntTuple, dimension: int, size: int, step: int) -> IntTuple:
+    # Binding the rank lets both branches assign the normalized Flag value consistently.
+    rank = len(shape)
+    if rank == 0:
+        if dimension != 0 and dimension != -1:
+            return dsl.Invalid("unfold dimension out of range")
+        if size < 0:
+            return dsl.Invalid("unfold size must be non-negative")
+        if size > 1:
+            return dsl.Invalid("unfold size must not exceed the selected dimension")
+        if step < 1:
+            return dsl.Invalid("unfold step must be greater than zero")
+        return dsl.IntTuple((size + 0,))
+    if dimension < 0:
+        normalized = dimension + rank
+    else:
+        normalized = dimension + 0
+    if normalized < 0 or normalized >= rank:
+        return dsl.Invalid("unfold dimension out of range")
+    if size < 0:
+        return dsl.Invalid("unfold size must be non-negative")
+    if step < 1:
+        return dsl.Invalid("unfold step must be greater than zero")
+    window_size = size + 0
+    dimension_size = shape[normalized]
+    return unfold_checked_shape(shape, dimension_size, normalized, window_size, step)
 
 @shape_dsl_function
 def cat_ir(tensors: list[ShapedArray], dim: int = 0) -> ShapedArray:
@@ -546,21 +588,31 @@ def randn_ir(size: list[int | symint]) -> ShapedArray:
 def randint_ir(low: int, high: int, size: list[int | symint]) -> ShapedArray:
     return ShapedArray(shape=size)
 
-@shape_dsl_function
-def arange_ir(
-    start: int | symint | None = None,
-    end: int | symint | None = None,
-    step: int | symint | None = None,
-) -> ShapedArray:
-    if start != None and end != None and step != None:
-        return ShapedArray(shape=[(end - start) // step])
-    if start != None and end != None:
-        return ShapedArray(shape=[end - start])
-    if end != None:
-        return ShapedArray(shape=[end])
-    if start != None:
-        return ShapedArray(shape=[start])
-    return Unknown
+@type_shape_dsl_function
+def arange_extent(end: Int) -> Int:
+    # Construct zero in the `Int` domain so it can be passed as the starting dimension.
+    origin = end - end
+    unit_step = 1
+    return arange_step_extent(origin, end, unit_step)
+
+@type_shape_dsl_function
+def arange_step_extent(start: Int, end: Int, step: int) -> Int:
+    # `step` is a Flag value because its sign determines the rounding direction. Symbolic bounds
+    # use the truncating expression, which is exact when the step divides the range.
+    if step == 0:
+        return dsl.Invalid("arange step must be nonzero")
+    difference = end - start
+    if dsl.is_concrete_int(start):
+        if dsl.is_concrete_int(end):
+            if step > 0:
+                if end < start:
+                    return dsl.Invalid("arange bounds are inconsistent with step")
+                return (difference + step - 1) // step
+            if start < end:
+                return dsl.Invalid("arange bounds are inconsistent with step")
+            negative_step = 0 - step
+            return ((0 - difference) + negative_step - 1) // negative_step
+    return difference // step
 
 @shape_dsl_function
 def normal_ir(
@@ -576,10 +628,44 @@ def normal_ir(
         return ShapedArray(shape=std.shape)
     return Unknown
 
-@shape_dsl_function
-def diag_embed_ir(self: ShapedArray, offset: int = 0) -> ShapedArray:
-    new_dim = self.shape[-1] + (offset if offset >= 0 else -offset)
-    return ShapedArray(shape=self.shape[:-1] + [new_dim, new_dim])
+@type_shape_dsl_function
+def diag_embed_shape(shape: IntTuple, offset: int, dim1: int, dim2: int) -> IntTuple:
+    if len(shape) == 0:
+        return dsl.Invalid("diag_embed input must have at least one dimension")
+    output_rank = len(shape) + 1
+    if dim1 < 0:
+        normalized_dim1 = dim1 + output_rank
+    else:
+        normalized_dim1 = dim1 + 0
+    if dim2 < 0:
+        normalized_dim2 = dim2 + output_rank
+    else:
+        normalized_dim2 = dim2 + 0
+    if (
+        normalized_dim1 < 0
+        or normalized_dim1 >= output_rank
+        or normalized_dim2 < 0
+        or normalized_dim2 >= output_rank
+    ):
+        return dsl.Invalid("diag_embed dimension out of range")
+    if normalized_dim1 == normalized_dim2:
+        return dsl.Invalid("diag_embed dimensions must be different")
+    if offset < 0:
+        extent = shape[-1] - offset
+    else:
+        extent = shape[-1] + offset
+    return dsl.IntTuple(
+        (
+            extent
+            if index == normalized_dim1 or index == normalized_dim2
+            else shape[
+                index
+                - (1 if normalized_dim1 < index else 0)
+                - (1 if normalized_dim2 < index else 0)
+            ]
+            for index in range(output_rank)
+        )
+    )
 
 @shape_dsl_function
 def matmul_ir(self: ShapedArray, other: ShapedArray) -> ShapedArray:

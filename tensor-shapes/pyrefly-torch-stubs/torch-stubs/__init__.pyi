@@ -18,11 +18,12 @@ from typing import Any, overload, Self, TYPE_CHECKING
 import shape_extensions
 from shape_extensions import broadcast, Elements, Flag, IntTuple, IntVar, uses_shape_dsl
 from torch._shapes import (
-    arange_ir,
+    arange_extent,
+    arange_step_extent,
     broadcast_to_ir,
     cat_ir,
     chunk_ir,
-    diag_embed_ir,
+    diag_embed_shape,
     dim_ir,
     eig_shape,
     einsum_ir,
@@ -56,7 +57,7 @@ from torch._shapes import (
     topk_shape,
     transpose_shape,
     unbind_shape,
-    unfold_ir,
+    unfold_shape,
     unsqueeze_shape,
 )
 
@@ -572,8 +573,14 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Alias for movedim. Shape inference via meta-shape: torch.Tensor.moveaxis"""
         ...
 
-    @uses_shape_dsl(unfold_ir)
-    def unfold(self: Tensor, dimension: int, size: int, step: int) -> Tensor:
+    def unfold[
+        Shape: IntTuple,
+        Dimension: Flag[builtins.int],
+        Size: Flag[builtins.int],
+        Step: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], dimension: Dimension, size: Size, step: Step
+    ) -> Tensor[unfold_shape(Shape, Dimension, Size, Step)]:
         """Returns sliding window view. Shape inference via meta-shape: torch.Tensor.unfold"""
         ...
 
@@ -819,10 +826,14 @@ class Tensor[Shape: _Shape = _AnyShape]:
 
     # ==== Phase 1.3: Tensor Creation Operations (Methods) ====
 
-    @uses_shape_dsl(diag_embed_ir)
-    def diag_embed(
-        self: Tensor, offset: int = 0, dim1: int = -2, dim2: int = -1
-    ) -> Tensor:
+    def diag_embed[
+        Shape: IntTuple,
+        Offset: Flag[builtins.int],
+        Dim1: Flag[builtins.int],
+        Dim2: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], offset: Offset = 0, dim1: Dim1 = -2, dim2: Dim2 = -1
+    ) -> Tensor[diag_embed_shape(Shape, Offset, Dim1, Dim2)]:
         """Create diagonal tensor. Shape inference via meta-shape: torch.Tensor.diag_embed"""
         ...
 
@@ -1626,21 +1637,28 @@ def full(size: tuple[int, ...], fill_value: float) -> Tensor:
     """Create tensor filled with value. Shape inference via meta-shape: torch.full"""
     ...
 
-# arange overloads - Int is compatible with int, so meta-shape handles both
-@uses_shape_dsl(arange_ir)
 @overload
-def arange(end: int) -> Tensor:
+def arange[End: IntVar](
+    end: _Int[End], *, dtype: int | None = None, device: Any = None
+) -> Tensor[[arange_extent(End)]]:
     """Create 1D tensor with range [0, end). Shape inference via meta-shape: torch.arange"""
     ...
 
 @overload
-def arange(end: int, *, dtype: int | None = None, device: Any = None) -> Tensor:
-    """Create 1D tensor with range [0, end). Shape inference via meta-shape: torch.arange"""
-    ...
-
-@overload
-def arange(start: int, end: int, step: int = 1) -> Tensor:
+def arange[Start: IntVar, End: IntVar, Step: Flag[builtins.int]](
+    start: _Int[Start],
+    end: _Int[End],
+    step: Step = 1,
+    *,
+    dtype: int | None = None,
+    device: Any = None,
+) -> Tensor[[arange_step_extent(Start, End, Step)]]:
     """Create 1D tensor with range [start, end) with step. Shape inference via meta-shape: torch.arange"""
+    ...
+
+@overload
+def arange(end: int, *, dtype: int | None = None, device: Any = None) -> Tensor[[int]]:
+    """Create 1D tensor with a gradual bound."""
     ...
 
 @overload
@@ -1651,8 +1669,8 @@ def arange(
     *,
     dtype: int | None = None,
     device: Any = None,
-) -> Tensor:
-    """Create 1D tensor with range [start, end) with step. Shape inference via meta-shape: torch.arange"""
+) -> Tensor[[int]]:
+    """Create 1D tensor with gradual bounds or step."""
     ...
 
 def linspace[Steps: IntVar](
@@ -1766,8 +1784,14 @@ def moveaxis(
     """Alias for movedim. Shape inference via meta-shape: torch.moveaxis"""
     ...
 
-@uses_shape_dsl(unfold_ir)
-def unfold(self: Tensor, dimension: int, size: int, step: int) -> Tensor:
+def unfold[
+    Shape: IntTuple,
+    Dimension: Flag[builtins.int],
+    Size: Flag[builtins.int],
+    Step: Flag[builtins.int],
+](
+    self: Tensor[Shape], dimension: Dimension, size: Size, step: Step
+) -> Tensor[unfold_shape(Shape, Dimension, Size, Step)]:
     """Returns sliding window view. Shape inference via meta-shape: torch.unfold"""
     ...
 
@@ -2000,8 +2024,14 @@ def randn_like[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Create random normal tensor with same shape. Shape inference via generic fixture signature."""
     ...
 
-@uses_shape_dsl(diag_embed_ir)
-def diag_embed(self: Tensor, offset: int = 0, dim1: int = -2, dim2: int = -1) -> Tensor:
+def diag_embed[
+    Shape: IntTuple,
+    Offset: Flag[builtins.int],
+    Dim1: Flag[builtins.int],
+    Dim2: Flag[builtins.int],
+](
+    self: Tensor[Shape], offset: Offset = 0, dim1: Dim1 = -2, dim2: Dim2 = -1
+) -> Tensor[diag_embed_shape(Shape, Offset, Dim1, Dim2)]:
     """Create diagonal tensor. Shape inference via meta-shape: torch.diag_embed"""
     ...
 

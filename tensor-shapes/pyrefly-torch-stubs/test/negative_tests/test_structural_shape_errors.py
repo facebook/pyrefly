@@ -67,6 +67,26 @@ def check_invalid_structural_controls(
     scalar.size(0)
     # E: Cannot evaluate type-level shape DSL call: size dimension out of range
     scalar.size(-1)
+    # E: Cannot evaluate type-level shape DSL call: unfold dimension out of range
+    torch.unfold(x, 2, 1, 1)
+    # E: Cannot evaluate type-level shape DSL call: unfold dimension out of range
+    x.unfold(-3, 1, 1)
+    # E: Cannot evaluate type-level shape DSL call: unfold dimension out of range
+    torch.unfold(scalar, 1, 0, 1)
+    # E: Cannot evaluate type-level shape DSL call: unfold size must not exceed the selected dimension
+    x.unfold(0, 3, 1)
+    # E: Cannot evaluate type-level shape DSL call: unfold size must not exceed the selected dimension
+    scalar.unfold(0, 2, 1)
+    # E: Cannot evaluate type-level shape DSL call: unfold size must be non-negative
+    x.unfold(0, -1, 1)
+    # E: Cannot evaluate type-level shape DSL call: unfold step must be greater than zero
+    x.unfold(0, 1, 0)
+    # E: Cannot evaluate type-level shape DSL call: diag_embed input must have at least one dimension
+    torch.diag_embed(scalar)
+    # E: Cannot evaluate type-level shape DSL call: diag_embed dimensions must be different
+    torch.diag_embed(x, dim1=1, dim2=-2)
+    # E: Cannot evaluate type-level shape DSL call: diag_embed dimension out of range
+    torch.diag_embed(x, dim1=-4)
 
 
 def check_invalid_cosine_similarity_controls(
