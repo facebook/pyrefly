@@ -4281,10 +4281,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 })
             };
-            let attr_check =
-                self.is_class_attribute_subset(got_attribute, &want_attribute, &mut |got, want| {
-                    self.is_subset_eq_with_reason(got, want)
-                });
+            let attr_check = self.is_class_attribute_subset(
+                got_attribute,
+                &want_attribute,
+                true,
+                &mut |got, want| self.is_subset_eq_with_reason(got, want),
+            );
             let error = match attr_check {
                 Err(ref e)
                     if let (Some((child, parent)), Some(got), Some(want)) = (
@@ -5565,6 +5567,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         got: &ClassAttribute,
         want: &ClassAttribute,
+        allow_property_override: bool,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> Result<(), Box<AttrSubsetError>> {
         // Both ClassVar and ClassObjectInitializedOnBody represent class-level read-only
@@ -5595,11 +5598,53 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             (ClassAttribute::DescriptorRead { .. }, _) => {
                 let got = (*got).clone().into_declared();
-                self.is_class_attribute_subset(&got, want, is_subset)
+                self.is_class_attribute_subset(&got, want, allow_property_override, is_subset)
             }
             (_, ClassAttribute::DescriptorRead { .. }) => {
                 let want = (*want).clone().into_declared();
-                self.is_class_attribute_subset(got, &want, is_subset)
+                self.is_class_attribute_subset(got, &want, allow_property_override, is_subset)
+            }
+            (
+                ClassAttribute::Property(got_getter, Some(got_setter), _),
+                ClassAttribute::ReadWrite(want),
+            ) if allow_property_override => {
+                is_subset(
+                    got_getter,
+                    // Synthesize the getter for a plain attribute.
+                    &self.heap.mk_callable_ellipsis(want.clone()),
+                )
+                .map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got: got_getter.clone(),
+                        want: want.clone(),
+                        got_is_property: true,
+                        want_is_property: false,
+                        subset_error,
+                    })
+                })?;
+                let setter_sigs = got_setter.callable_signatures();
+                let Some(setter_value_type) = setter_sigs
+                    .first()
+                    .and_then(|setter| setter.strip_first_param())
+                    .and_then(|setter| setter.get_first_param().cloned())
+                else {
+                    return Err(Box::new(AttrSubsetError::Contravariant {
+                        got: got_setter.clone(),
+                        want: want.clone(),
+                        got_is_property: true,
+                        want_is_property: false,
+                        subset_error: SubsetError::Other,
+                    }));
+                };
+                is_subset(want, &setter_value_type).map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Contravariant {
+                        got: got_setter.clone(),
+                        want: want.clone(),
+                        got_is_property: true,
+                        want_is_property: false,
+                        subset_error,
+                    })
+                })
             }
             (
                 ClassAttribute::Property(_, _, _),

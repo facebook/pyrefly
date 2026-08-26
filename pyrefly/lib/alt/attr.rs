@@ -1470,14 +1470,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Result<(), Box<AttrSubsetError>> {
         match got {
             Attribute::ClassAttribute(got_class_attr) => {
-                self.is_class_attribute_subset(got_class_attr, want, is_subset)
+                self.is_class_attribute_subset(got_class_attr, want, false, is_subset)
             }
             Attribute::Simple(got_ty) => {
                 // Treat Simple attributes (which come up for cases like attribute access
                 // on modules, Any, and Never) as if they were read-write class attributes
                 // for the purpose of protocol subtyping.
                 let synthetic_got = ClassAttribute::read_write(got_ty.clone());
-                self.is_class_attribute_subset(&synthetic_got, want, is_subset)
+                self.is_class_attribute_subset(&synthetic_got, want, false, is_subset)
             }
             Attribute::GetAttr(not_found, got_attr, name) => {
                 let NotFoundOn::ClassInstance(cls, _) = not_found else {
@@ -1502,7 +1502,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     ClassAttribute::read_only(got_ty, ReadOnlyReason::Getattr)
                 };
-                self.is_class_attribute_subset(&synthetic_got, want, is_subset)
+                self.is_class_attribute_subset(&synthetic_got, want, false, is_subset)
             }
             Attribute::ModuleFallback(..) => Err(Box::new(AttrSubsetError::ModuleFallback)),
         }

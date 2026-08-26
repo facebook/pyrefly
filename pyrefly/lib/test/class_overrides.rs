@@ -1995,6 +1995,72 @@ class B(A):
 );
 
 testcase!(
+    test_override_mutable_attribute_with_property,
+    r#"
+class ExprNode: ...
+
+class Expr:
+    def __init__(self, *nodes: ExprNode) -> None:
+        self._nodes = nodes
+
+class Then(Expr):
+    _cached_nodes: tuple[ExprNode, ...] | None = None
+
+    @property
+    def _nodes(self) -> tuple[ExprNode, ...]:
+        return self._cached_nodes or ()
+
+    @_nodes.setter
+    def _nodes(self, nodes: tuple[ExprNode, ...]) -> None:
+        self._cached_nodes = nodes
+
+class Value:
+    value: int
+
+class WideGetter(Value):
+    @property
+    def value(self) -> object:  # E: Class member `WideGetter.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+    @value.setter
+    def value(self, value: int) -> None:
+        pass
+
+class NarrowSetter(Value):
+    @property
+    def value(self) -> int:  # E: Class member `NarrowSetter.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+    @value.setter
+    def value(self, value: bool) -> None:
+        pass
+
+class Compatible(Value):
+    @property
+    def value(self) -> bool:
+        return True
+
+    @value.setter
+    def value(self, value: object) -> None:
+        pass
+
+class ReadOnly(Value):
+    @property
+    def value(self) -> int:  # E: Class member `ReadOnly.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+class MissingSetterValue(Value):
+    @property
+    def value(self) -> int:  # E: Class member `MissingSetterValue.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+    @value.setter
+    def value(self) -> None:
+        pass
+ "#,
+);
+
+testcase!(
     test_override_mutable_attribute_suppressed_by_parent_kind,
     r#"
 class A:
