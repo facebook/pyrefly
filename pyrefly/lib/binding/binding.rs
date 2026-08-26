@@ -501,7 +501,7 @@ impl Keyed for KeyClass {
 impl Keyed for KeyTParams {
     const EXPORTED: bool = true;
     type Value = BindingTParams;
-    type Answer = TParams;
+    type Answer = Arc<TParams>;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyTParams(idx)
     }

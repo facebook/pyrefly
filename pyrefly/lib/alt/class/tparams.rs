@@ -164,9 +164,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn get_class_tparams(&self, class: &Class) -> Option<Arc<TParams>> {
         match class.precomputed_tparams() {
             PrecomputedTParams::NotGeneric => None,
-            PrecomputedTParams::FromBinding => {
-                self.get_from_class(class, &KeyTParams(class.index()))
-            }
+            PrecomputedTParams::FromBinding => self
+                .get_from_class(class, &KeyTParams(class.index()))
+                .map(|tparams| tparams.as_ref().dupe()),
             PrecomputedTParams::Precomputed(tparams) => Some(tparams.dupe()),
         }
     }

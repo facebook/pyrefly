@@ -1821,12 +1821,14 @@ impl<'a> Transaction<'a> {
         class.map(|class| {
             let tparams = match class.precomputed_tparams() {
                 PrecomputedTParams::NotGeneric => None,
-                PrecomputedTParams::FromBinding => self.lookup_answer(
-                    module_data,
-                    &KeyTParams(class.index()),
-                    thread_state,
-                    &answer_scope,
-                ),
+                PrecomputedTParams::FromBinding => self
+                    .lookup_answer(
+                        module_data,
+                        &KeyTParams(class.index()),
+                        thread_state,
+                        &answer_scope,
+                    )
+                    .map(|tparams| tparams.as_ref().dupe()),
                 PrecomputedTParams::Precomputed(tparams) => Some(tparams.dupe()),
             };
             (class, tparams)

@@ -345,12 +345,12 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyTParams {
         binding: &BindingTParams,
         _range: TextRange,
         errors: &ErrorCollector,
-    ) -> Arc<TParams> {
-        answers.solve_tparams(binding, errors)
+    ) -> Arc<Arc<TParams>> {
+        Arc::new(answers.solve_tparams(binding, errors))
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        TParams::default()
+        Arc::new(TParams::default())
     }
 }
 
