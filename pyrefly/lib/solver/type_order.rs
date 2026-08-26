@@ -94,8 +94,8 @@ impl<'solver, Ans: LookupAnswer> TypeOrder<'solver, Ans> {
         cls.is_protocol()
     }
 
-    pub fn is_final(self, cls: &Class) -> bool {
-        self.0.get_metadata_for_class(cls).is_final()
+    pub fn is_subclassable(self, cls: &Class) -> bool {
+        self.0.is_subclassable(cls)
     }
 
     pub fn is_new_type(self, cls: &Class) -> bool {
