@@ -83,21 +83,49 @@ def broadcast_int(
         return expr
     return [expr for _ in range(n)]
 
-@shape_dsl_function
+@type_shape_dsl_function
 def reduce_shape(
-    dims: list[int | symint], dim: int | list[int] | None, keepdim: bool
-) -> list[int | symint]:
-    if dim == None:
-        if keepdim:
-            return [1 for _ in range(len(dims))]
-        return []
-    dim_list = dim if isinstance(dim, list) else [dim]
-    norm = [normalize_dim(len(dims), d) for d in dim_list]
-    return [
-        1 if i in norm else elem
-        for i, elem in enumerate(dims)
-        if not (i in norm) or keepdim
-    ]
+    shape: IntTuple,
+    dim: int | tuple[int, ...] | None,
+    keepdim: bool,
+) -> IntTuple:
+    if dim is None:
+        dims = range(len(shape))
+    elif dsl.is_int_value(dim):
+        dims = (dim,)
+    elif len(dim) == 0:
+        dims = range(len(shape))
+    else:
+        dims = dim
+    if len(shape) == 0:
+        # PyTorch lets either 0 or -1 name the scalar reduction axis. After
+        # normalization, using both is therefore a duplicate dimension.
+        if any(item != 0 and item != -1 for item in dims):
+            return dsl.Invalid("dimension out of range")
+    elif any(item < 0 - len(shape) or item >= len(shape) for item in dims):
+        return dsl.Invalid("dimension out of range")
+    normalized = tuple(
+        (
+            0 if len(shape) == 0 else (item + len(shape) if item < 0 else item)
+            for item in dims
+        )
+    )
+    if any(normalized.count(item) > 1 for item in normalized):
+        return dsl.Invalid("duplicate dimension")
+    if keepdim:
+        return dsl.IntTuple(
+            (1 if index in normalized else shape[index] for index in range(len(shape)))
+        )
+    return dsl.IntTuple(
+        (shape[index] for index in range(len(shape)) if index not in normalized)
+    )
+
+@type_shape_dsl_function
+def reduce_shape_no_keep(
+    shape: IntTuple, dim: int | tuple[int, ...] | None
+) -> IntTuple:
+    keepdim = False
+    return reduce_shape(shape, dim, keepdim)
 
 @shape_dsl_function
 def contains(lst: list[int], val: int) -> bool:
@@ -346,53 +374,6 @@ def index_select_ir(self: ShapedArray, dim: int, index: ShapedArray) -> ShapedAr
     )
 
 @shape_dsl_function
-def reduce_ir(
-    self: ShapedArray, dim: int | list[int] | None = None, keepdim: bool = False
-) -> ShapedArray:
-    if dim == None:
-        return ShapedArray(shape=reduce_shape(self.shape, dim, keepdim))
-    if isinstance(dim, list):
-        return ShapedArray(shape=reduce_shape(self.shape, dim, keepdim))
-    return ShapedArray(shape=reduce_single(self.shape, dim, keepdim))
-
-@shape_dsl_function
-def reduce_single(
-    dims: list[int | symint], dim: int, keepdim: bool
-) -> list[int | symint]:
-    before = dims[:dim]
-    if dim == -1:
-        if keepdim:
-            return before + [1]
-        return before
-    after = dims[dim + 1 :]
-    if keepdim:
-        return before + [1] + after
-    return before + after
-
-@shape_dsl_function
-def min_max_median_ir(
-    self: ShapedArray, dim: int | None = None, keepdim: bool = False
-) -> ShapedArray:
-    if dim == None:
-        return ShapedArray(shape=[])
-    s = reduce_shape(self.shape, dim, keepdim)
-    return [ShapedArray(shape=s), ShapedArray(shape=s)]
-
-@shape_dsl_function
-def aminmax_ir(
-    self: ShapedArray, dim: int | list[int] | None = None, keepdim: bool = False
-) -> [ShapedArray, ShapedArray]:
-    s = reduce_shape(self.shape, dim, keepdim)
-    return [ShapedArray(shape=s), ShapedArray(shape=s)]
-
-@shape_dsl_function
-def tuple_reduce_ir(
-    self: ShapedArray, dim: int = -1, keepdim: bool = False
-) -> [ShapedArray, ShapedArray]:
-    s = reduce_shape(self.shape, dim, keepdim)
-    return [ShapedArray(shape=s), ShapedArray(shape=s)]
-
-@shape_dsl_function
 def topk_ir(
     self: ShapedArray, k: int | symint, dim: int = -1
 ) -> [ShapedArray, ShapedArray]:
@@ -430,7 +411,8 @@ def repeat_interleave_input_ir(
 @shape_dsl_function
 def cosine_similarity_ir(x1: ShapedArray, x2: ShapedArray, dim: int = 1) -> ShapedArray:
     s = broadcast(x1.shape, x2.shape)
-    return ShapedArray(shape=reduce_single(s, normalize_dim(len(s), dim), False))
+    d = normalize_dim(len(s), dim)
+    return ShapedArray(shape=s[:d] + s[d + 1 :])
 
 @shape_dsl_function
 def randn_ir(size: list[int | symint]) -> ShapedArray:

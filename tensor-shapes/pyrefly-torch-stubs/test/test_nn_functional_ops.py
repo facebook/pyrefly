@@ -64,3 +64,11 @@ def test_dropout_functions() -> None:
     assert_type(F.dropout(x), Tensor[[3, 4, 5]])
     assert_type(F.alpha_dropout(x), Tensor[[3, 4, 5]])
     assert_type(F.feature_alpha_dropout(x), Tensor[[3, 4, 5]])
+
+
+def test_cosine_similarity_reduction() -> None:
+    x = cast(Tensor[[2, 3]], ...)
+    scalar = cast(Tensor[[]], ...)
+
+    assert_type(F.cosine_similarity(x, x, dim=-1), Tensor[[2]])
+    assert_type(F.cosine_similarity(scalar, scalar, dim=-1), Tensor[[]])

@@ -13,12 +13,11 @@ in `torch/_shapes.pyi` and evaluated by the DSL interpreter in
 """
 
 import builtins
-from typing import Any, overload, Self, TYPE_CHECKING
+from typing import Any, Literal, overload, Self, TYPE_CHECKING
 
 import shape_extensions
-from shape_extensions import broadcast, Elements, IntTuple, IntVar, uses_shape_dsl
+from shape_extensions import broadcast, Elements, Flag, IntTuple, IntVar, uses_shape_dsl
 from torch._shapes import (
-    aminmax_ir,
     arange_ir,
     broadcast_to_ir,
     cat_ir,
@@ -34,7 +33,6 @@ from torch._shapes import (
     item_ir,
     linspace_ir,
     matmul_ir,
-    min_max_median_ir,
     movedim_ir,
     multinomial_ir,
     mv_ir,
@@ -45,7 +43,8 @@ from torch._shapes import (
     permute_ir,
     randint_ir,
     randn_ir,
-    reduce_ir,
+    reduce_shape,
+    reduce_shape_no_keep,
     repeat_interleave_input_ir,
     repeat_interleave_ir,
     repeat_ir,
@@ -62,7 +61,6 @@ from torch._shapes import (
     topk_ir,
     transpose_ir,
     tri_indices_ir,
-    tuple_reduce_ir,
     unbind_ir,
     unfold_ir,
     unsqueeze_ir,
@@ -581,108 +579,191 @@ class Tensor[Shape: _Shape = _AnyShape]:
     # ==== Reduction Operations ====
     # Handled by meta-shape functions - simplified signatures
 
-    @uses_shape_dsl(reduce_ir)
-    @overload
-    def sum(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+    def sum[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+        Keepdim: Flag[builtins.bool],
+    ](
+        self: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+    ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
         """Sum along dimension(s). Shape inference via meta-shape: torch.Tensor.sum"""
         ...
 
+    # TODO(stroxler): Remove the narrow mean/std overloads once V2 can reduce a
+    # known suffix of a symbolic-rank IntTuple.
     @overload
-    def sum(self: Tensor, dim: tuple[int, ...], keepdim: bool = False) -> Tensor:
-        """Sum along multiple dimensions. Shape inference via meta-shape: torch.Tensor.sum"""
-        ...
-
-    @uses_shape_dsl(reduce_ir)
-    def mean(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+    def mean[Batch: IntTuple, N: IntVar](
+        self: Tensor[[*Elements[Batch], N]],
+        dim: Literal[-1],
+        keepdim: Literal[True],
+    ) -> Tensor[[*Elements[Batch], 1]]: ...
+    @overload
+    def mean[Batch: IntTuple, N: IntVar](
+        self: Tensor[[*Elements[Batch], N]],
+        dim: Literal[-1],
+        keepdim: Literal[False] = False,
+    ) -> Tensor[Batch]: ...
+    @overload
+    def mean[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+        Keepdim: Flag[builtins.bool],
+    ](
+        self: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+    ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
         """Mean along dimension(s). Shape inference via meta-shape: torch.mean"""
         ...
 
-    @uses_shape_dsl(min_max_median_ir)
     @overload
-    def max(self: Tensor) -> Tensor:
+    def max[Shape: IntTuple](self: Tensor[Shape]) -> Tensor[[]]:
         """Max of all elements (scalar). Shape inference via meta-shape: torch.Tensor.max"""
         ...
 
     @overload
-    def max(self: Tensor, dim: int, keepdim: bool = False) -> tuple[Tensor, Tensor]:
+    def max[Shape: IntTuple, Dim: Flag[builtins.int], Keepdim: Flag[builtins.bool]](
+        self: Tensor[Shape], dim: Dim, keepdim: Keepdim = False
+    ) -> tuple[
+        Tensor[reduce_shape(Shape, Dim, Keepdim)],
+        Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    ]:
         """Max along dimension. Returns (values, indices). Shape inference via meta-shape: torch.Tensor.max"""
         ...
 
-    @uses_shape_dsl(min_max_median_ir)
     @overload
-    def min(self: Tensor) -> Tensor:
+    def min[Shape: IntTuple](self: Tensor[Shape]) -> Tensor[[]]:
         """Min of all elements (scalar). Shape inference via meta-shape: torch.Tensor.min"""
         ...
 
     @overload
-    def min(self: Tensor, dim: int, keepdim: bool = False) -> tuple[Tensor, Tensor]:
+    def min[Shape: IntTuple, Dim: Flag[builtins.int], Keepdim: Flag[builtins.bool]](
+        self: Tensor[Shape], dim: Dim, keepdim: Keepdim = False
+    ) -> tuple[
+        Tensor[reduce_shape(Shape, Dim, Keepdim)],
+        Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    ]:
         """Min along dimension. Returns (values, indices). Shape inference via meta-shape: torch.Tensor.min"""
         ...
 
-    @uses_shape_dsl(reduce_ir)
-    def prod(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+    def prod[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int | None],
+        Keepdim: Flag[builtins.bool],
+    ](
+        self: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+    ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
         """Product along dimension(s). Shape inference via meta-shape: torch.prod"""
         ...
 
-    @uses_shape_dsl(reduce_ir)
-    def std(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+    @overload
+    def std[Batch: IntTuple, N: IntVar](
+        self: Tensor[[*Elements[Batch], N]],
+        dim: Literal[-1],
+        keepdim: Literal[True],
+    ) -> Tensor[[*Elements[Batch], 1]]: ...
+    @overload
+    def std[Batch: IntTuple, N: IntVar](
+        self: Tensor[[*Elements[Batch], N]],
+        dim: Literal[-1],
+        keepdim: Literal[False] = False,
+    ) -> Tensor[Batch]: ...
+    @overload
+    def std[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+        Keepdim: Flag[builtins.bool],
+    ](
+        self: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+    ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
         """Standard deviation along dimension(s). Shape inference via meta-shape: torch.std"""
         ...
 
-    @uses_shape_dsl(reduce_ir)
-    def var(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+    def var[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+        Keepdim: Flag[builtins.bool],
+    ](
+        self: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+    ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
         """Variance along dimension(s). Shape inference via meta-shape: torch.var"""
         ...
 
-    @uses_shape_dsl(reduce_ir)
-    def argmax(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+    def argmax[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int | None],
+        Keepdim: Flag[builtins.bool],
+    ](
+        self: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+    ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
         """Argmax along dimension(s). Shape inference via meta-shape: torch.argmax"""
         ...
 
-    @uses_shape_dsl(reduce_ir)
-    def argmin(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+    def argmin[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int | None],
+        Keepdim: Flag[builtins.bool],
+    ](
+        self: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+    ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
         """Argmin along dimension(s). Shape inference via meta-shape: torch.argmin"""
         ...
 
     # ==== Phase 1.2: Missing Reduction Operations (Methods) ====
 
-    @uses_shape_dsl(min_max_median_ir)
     @overload
-    def median(self: Tensor) -> Tensor:
+    def median[Shape: IntTuple](self: Tensor[Shape]) -> Tensor[[]]:
         """Median of all elements (scalar). Shape inference via meta-shape: torch.Tensor.median"""
         ...
 
     @overload
-    def median(self: Tensor, dim: int, keepdim: bool = False) -> tuple[Tensor, Tensor]:
+    def median[Shape: IntTuple, Dim: Flag[builtins.int], Keepdim: Flag[builtins.bool]](
+        self: Tensor[Shape], dim: Dim, keepdim: Keepdim = False
+    ) -> tuple[
+        Tensor[reduce_shape(Shape, Dim, Keepdim)],
+        Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    ]:
         """Median along dimension. Returns (values, indices). Shape inference via meta-shape: torch.Tensor.median"""
         ...
 
-    @uses_shape_dsl(reduce_ir)
-    def logsumexp(
-        self: Tensor, dim: int | None = None, keepdim: bool = False
-    ) -> Tensor:
+    def logsumexp[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int | tuple[builtins.int, ...]],
+        Keepdim: Flag[builtins.bool],
+    ](
+        self: Tensor[Shape], dim: Dim, keepdim: Keepdim = False
+    ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
         """Log-sum-exp along dimension(s). Shape inference via meta-shape: torch.Tensor.logsumexp"""
         ...
 
-    @uses_shape_dsl(reduce_ir)
-    def count_nonzero(self: Tensor, dim: int | None = None) -> Tensor:
+    def count_nonzero[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+    ](self: Tensor[Shape], dim: Dim = None) -> Tensor[reduce_shape_no_keep(Shape, Dim)]:
         """Count non-zero elements. Shape inference via meta-shape: torch.Tensor.count_nonzero"""
         ...
 
-    @uses_shape_dsl(aminmax_ir)
-    def aminmax(
-        self: Tensor, dim: int | None = None, keepdim: bool = False
-    ) -> tuple[Tensor, Tensor]:
+    def aminmax[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int | None],
+        Keepdim: Flag[builtins.bool],
+    ](
+        self: Tensor[Shape], *, dim: Dim = None, keepdim: Keepdim = False
+    ) -> tuple[
+        Tensor[reduce_shape(Shape, Dim, Keepdim)],
+        Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    ]:
         """Min and max along dimension(s). Shape inference via meta-shape: torch.Tensor.aminmax"""
         ...
 
-    @uses_shape_dsl(reduce_ir)
-    def norm(
-        self: Tensor,
+    def norm[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+        Keepdim: Flag[builtins.bool],
+    ](
+        self: Tensor[Shape],
         p: int | float = 2,
-        dim: int | tuple[int, ...] | None = None,
-        keepdim: bool = False,
-    ) -> Tensor:
+        dim: Dim = None,
+        keepdim: Keepdim = False,
+    ) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
         """Compute norm. Shape inference via meta-shape: torch.Tensor.norm"""
         ...
 
@@ -712,10 +793,12 @@ class Tensor[Shape: _Shape = _AnyShape]:
 
     # ==== Tier 2: Additional Reduction Methods ====
 
-    @uses_shape_dsl(tuple_reduce_ir)
-    def mode(
-        self: Tensor, dim: int = -1, keepdim: bool = False
-    ) -> tuple[Tensor, Tensor]:
+    def mode[Shape: IntTuple, Dim: Flag[builtins.int], Keepdim: Flag[builtins.bool]](
+        self: Tensor[Shape], dim: Dim = -1, keepdim: Keepdim = False
+    ) -> tuple[
+        Tensor[reduce_shape(Shape, Dim, Keepdim)],
+        Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    ]:
         """Mode along dimension. Returns (values, indices). Shape inference via meta-shape: torch.Tensor.mode"""
         ...
 
@@ -735,10 +818,16 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Sort tensor. Returns (values, indices). Shape-preserving operation."""
         ...
 
-    @uses_shape_dsl(tuple_reduce_ir)
-    def kthvalue(
-        self: Tensor, k: int, dim: int = -1, keepdim: bool = False
-    ) -> tuple[Tensor, Tensor]:
+    def kthvalue[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int],
+        Keepdim: Flag[builtins.bool],
+    ](
+        self: Tensor[Shape], k: int, dim: Dim = -1, keepdim: Keepdim = False
+    ) -> tuple[
+        Tensor[reduce_shape(Shape, Dim, Keepdim)],
+        Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    ]:
         """Kth smallest value. Returns (values, indices). Shape inference via meta-shape: torch.Tensor.kthvalue"""
         ...
 
@@ -1369,65 +1458,113 @@ def permute(self: Tensor, dims: tuple[int, ...]) -> Tensor:
     """Permute dimensions. Shape inference via meta-shape: torch.permute"""
     ...
 
-@uses_shape_dsl(reduce_ir)
-def sum(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+def sum[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Sum along dimension(s). Shape inference via meta-shape: torch.sum"""
     ...
 
-@uses_shape_dsl(reduce_ir)
-def mean(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+def mean[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Mean along dimension(s). Shape inference via meta-shape: torch.mean"""
     ...
 
-@uses_shape_dsl(min_max_median_ir)
 @overload
-def max(self: Tensor) -> Tensor:
+def max[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[[]]:
     """Max of all elements (scalar). Shape inference via meta-shape: torch.max"""
     ...
 
 @overload
-def max(self: Tensor, dim: int, keepdim: bool = False) -> tuple[Tensor, Tensor]:
+def max[Shape: IntTuple, OtherShape: IntTuple](
+    input: Tensor[Shape], other: Tensor[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
+    """Element-wise maximum of two tensors."""
+    ...
+
+@overload
+def max[Shape: IntTuple, Dim: Flag[builtins.int], Keepdim: Flag[builtins.bool]](
+    input: Tensor[Shape], dim: Dim, keepdim: Keepdim = False
+) -> tuple[
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+]:
     """Max along dimension. Returns (values, indices). Shape inference via meta-shape: torch.max"""
     ...
 
-@uses_shape_dsl(min_max_median_ir)
 @overload
-def min(self: Tensor) -> Tensor:
+def min[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[[]]:
     """Min of all elements (scalar). Shape inference via meta-shape: torch.min"""
     ...
 
 @overload
-def min[S: IntTuple](input: Tensor[S], other: Tensor) -> Tensor[S]:
+def min[Shape: IntTuple, OtherShape: IntTuple](
+    input: Tensor[Shape], other: Tensor[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise minimum of two tensors."""
     ...
 
 @overload
-def min(self: Tensor, dim: int, keepdim: bool = False) -> tuple[Tensor, Tensor]:
+def min[Shape: IntTuple, Dim: Flag[builtins.int], Keepdim: Flag[builtins.bool]](
+    input: Tensor[Shape], dim: Dim, keepdim: Keepdim = False
+) -> tuple[
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+]:
     """Min along dimension. Returns (values, indices). Shape inference via meta-shape: torch.min"""
     ...
 
-@uses_shape_dsl(reduce_ir)
-def prod(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+def prod[Shape: IntTuple, Dim: Flag[builtins.int | None], Keepdim: Flag[builtins.bool]](
+    input: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Product along dimension(s). Shape inference via meta-shape: torch.prod"""
     ...
 
-@uses_shape_dsl(reduce_ir)
-def std(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+def std[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Standard deviation. Shape inference via meta-shape: torch.std"""
     ...
 
-@uses_shape_dsl(reduce_ir)
-def var(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+def var[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Variance. Shape inference via meta-shape: torch.var"""
     ...
 
-@uses_shape_dsl(reduce_ir)
-def argmax(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+def argmax[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Argmax. Shape inference via meta-shape: torch.argmax"""
     ...
 
-@uses_shape_dsl(reduce_ir)
-def argmin(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+def argmin[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Argmin. Shape inference via meta-shape: torch.argmin"""
     ...
 
@@ -1634,53 +1771,83 @@ def unfold(self: Tensor, dimension: int, size: int, step: int) -> Tensor:
 
 # ==== Additional Reduction Functions ====
 
-@uses_shape_dsl(reduce_ir)
-def all(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+def all[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Check if all elements are True. Shape inference via meta-shape: torch.all"""
     ...
 
-@uses_shape_dsl(reduce_ir)
-def any(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+def any[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape], dim: Dim = None, keepdim: Keepdim = False
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Check if any element is True. Shape inference via meta-shape: torch.any"""
     ...
 
 # ==== Phase 1.2: Missing Reduction Operations ====
 
-@uses_shape_dsl(min_max_median_ir)
 @overload
-def median(self: Tensor) -> Tensor:
+def median[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[[]]:
     """Median of all elements (scalar). Shape inference via meta-shape: torch.median"""
     ...
 
 @overload
-def median(self: Tensor, dim: int, keepdim: bool = False) -> tuple[Tensor, Tensor]:
+def median[Shape: IntTuple, Dim: Flag[builtins.int], Keepdim: Flag[builtins.bool]](
+    input: Tensor[Shape], dim: Dim, keepdim: Keepdim = False
+) -> tuple[
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+]:
     """Median along dimension. Returns (values, indices). Shape inference via meta-shape: torch.median"""
     ...
 
-@uses_shape_dsl(reduce_ir)
-def logsumexp(self: Tensor, dim: int | None = None, keepdim: bool = False) -> Tensor:
+def logsumexp[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | tuple[builtins.int, ...]],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape], dim: Dim, keepdim: Keepdim = False
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Log-sum-exp along dimension(s). Shape inference via meta-shape: torch.logsumexp"""
     ...
 
-@uses_shape_dsl(reduce_ir)
-def count_nonzero(self: Tensor, dim: int | None = None) -> Tensor:
+def count_nonzero[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+](input: Tensor[Shape], dim: Dim = None) -> Tensor[reduce_shape_no_keep(Shape, Dim)]:
     """Count non-zero elements. Shape inference via meta-shape: torch.count_nonzero"""
     ...
 
-@uses_shape_dsl(aminmax_ir)
-def aminmax(
-    self: Tensor, dim: int | None = None, keepdim: bool = False
-) -> tuple[Tensor, Tensor]:
+def aminmax[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape], *, dim: Dim = None, keepdim: Keepdim = False
+) -> tuple[
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+]:
     """Min and max along dimension(s). Shape inference via meta-shape: torch.aminmax"""
     ...
 
-@uses_shape_dsl(reduce_ir)
-def norm(
-    self: Tensor,
+def norm[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape],
     p: int | float = 2,
-    dim: int | tuple[int, ...] | None = None,
-    keepdim: bool = False,
-) -> Tensor:
+    dim: Dim = None,
+    keepdim: Keepdim = False,
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]:
     """Compute norm. Shape inference via meta-shape: torch.norm"""
     ...
 
@@ -1709,8 +1876,12 @@ def cummin[Shape: IntTuple](
     ...
 
 # Tier 2: Additional reduction operations (always return tuples)
-@uses_shape_dsl(tuple_reduce_ir)
-def mode(self: Tensor, dim: int = -1, keepdim: bool = False) -> tuple[Tensor, Tensor]:
+def mode[Shape: IntTuple, Dim: Flag[builtins.int], Keepdim: Flag[builtins.bool]](
+    input: Tensor[Shape], dim: Dim = -1, keepdim: Keepdim = False
+) -> tuple[
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+]:
     """Mode along dimension. Returns (values, indices). Shape inference via meta-shape: torch.mode"""
     ...
 
@@ -1727,31 +1898,61 @@ def sort[Shape: IntTuple](
     """Sort tensor. Returns (values, indices). Shape-preserving operation."""
     ...
 
-@uses_shape_dsl(tuple_reduce_ir)
-def kthvalue(
-    self: Tensor, k: int, dim: int = -1, keepdim: bool = False
-) -> tuple[Tensor, Tensor]:
+def kthvalue[Shape: IntTuple, Dim: Flag[builtins.int], Keepdim: Flag[builtins.bool]](
+    input: Tensor[Shape], k: int, dim: Dim = -1, keepdim: Keepdim = False
+) -> tuple[
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+]:
     """Kth smallest value. Returns (values, indices). Shape inference via meta-shape: torch.kthvalue"""
     ...
 
 # Tier 3: Statistical operations returning tuples
-@uses_shape_dsl(aminmax_ir)
-def var_mean(
-    self: Tensor,
-    dim: int | tuple[int, ...] | None = None,
-    unbiased: bool = True,
-    keepdim: bool = False,
-) -> tuple[Tensor, Tensor]:
+@overload
+def var_mean[Shape: IntTuple](
+    input: Tensor[Shape], unbiased: builtins.bool = True
+) -> tuple[Tensor[[]], Tensor[[]]]:
+    """Variance and mean over all dimensions."""
+    ...
+
+@overload
+def var_mean[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape],
+    dim: Dim,
+    unbiased: builtins.bool = True,
+    keepdim: Keepdim = False,
+) -> tuple[
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+]:
     """Variance and mean. Returns (var, mean). Shape inference via meta-shape: torch.var_mean"""
     ...
 
-@uses_shape_dsl(aminmax_ir)
-def std_mean(
-    self: Tensor,
-    dim: int | tuple[int, ...] | None = None,
-    unbiased: bool = True,
-    keepdim: bool = False,
-) -> tuple[Tensor, Tensor]:
+@overload
+def std_mean[Shape: IntTuple](
+    input: Tensor[Shape], unbiased: builtins.bool = True
+) -> tuple[Tensor[[]], Tensor[[]]]:
+    """Standard deviation and mean over all dimensions."""
+    ...
+
+@overload
+def std_mean[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
+    Keepdim: Flag[builtins.bool],
+](
+    input: Tensor[Shape],
+    dim: Dim,
+    unbiased: builtins.bool = True,
+    keepdim: Keepdim = False,
+) -> tuple[
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+    Tensor[reduce_shape(Shape, Dim, Keepdim)],
+]:
     """Standard deviation and mean. Returns (std, mean). Shape inference via meta-shape: torch.std_mean"""
     ...
 
