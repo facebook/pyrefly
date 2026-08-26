@@ -721,7 +721,13 @@ impl ClassField {
 
     fn instantiate_for(&self, heap: &TypeHeap, instance: &Instance) -> Self {
         self.instantiate_helper(&mut |ty| {
-            ty.subst_self_type_mut(&instance.to_type(heap));
+            let self_type = match &instance.kind {
+                InstanceKind::Protocol {
+                    self_substitution, ..
+                } => self_substitution.clone(),
+                _ => instance.to_type(heap),
+            };
+            ty.subst_self_type_mut(&self_type);
             instance.instantiate_member(ty)
         })
     }
