@@ -253,7 +253,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     dsl.parameter_annotation_range(index),
                     ErrorKind::InvalidArgument,
                     format!(
-                        "`@type_shape_dsl_function` parameter `{}` must be annotated as `Int`, `IntTuple`, `int`, `bool`, or `str`",
+                        "`@type_shape_dsl_function` parameter `{}` must be annotated as `Int`, `IntTuple`, or a supported Flag value type (`int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these)",
                         dsl.parameter_name(index)
                     ),
                 );

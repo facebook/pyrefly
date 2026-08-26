@@ -5,6 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+//! Type-level shape DSL definitions move through four phases. Binding retains the parsed function
+//! AST; `DslValidator` checks the restricted syntax and records semantic metadata; the solver
+//! validates that metadata against resolved parameter domains and links helper functions into a
+//! bounded program; evaluation interprets that program to produce an `Int` or `IntTuple`.
+
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
@@ -69,6 +74,10 @@ impl TypeShapeDslDomain {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
+/// The type-system domain accepted by one DSL parameter.
+///
+/// `Value` represents a shape dimension or shape tuple. `Flag` represents literal-preserving
+/// configuration values supplied by ordinary Python calls.
 pub enum TypeShapeDslInputDomain {
     Value(TypeShapeDslDomain),
     Flag(FlagDomain),
@@ -79,6 +88,7 @@ pub enum TypeShapeDslInputDomain {
 /// DSL validation records the callee AST and each argument's shape-domain source. The solver then
 /// resolves imports and aliases through normal function identity before attaching the resulting
 /// helper program at the narrow boundary between Pyrefly's function model and the shape DSL.
+/// Helper calls are valid only as return values, so evaluation follows a bounded chain of calls.
 #[derive(Debug, Clone)]
 pub struct TypeShapeDslHelperCall {
     callee: Expr,
@@ -246,6 +256,9 @@ pub struct ResolvedTypeShapeDslFunction {
 }
 
 impl ResolvedTypeShapeDslFunction {
+    /// Builds the resolved helper program after the caller has validated all retained metadata
+    /// that depends on resolved parameter domains. Evaluation relies on that cross-crate boundary
+    /// and on parameter lowering mapping unsupported runtime values to `DslValue::Unknown`.
     pub fn try_new(
         id: Arc<FuncDefId>,
         definition: Arc<ValidatedTypeShapeDslFunction>,
@@ -376,6 +389,8 @@ impl ResolvedTypeShapeDslProgramBuilder {
         source: &ResolvedTypeShapeDslProgram,
         source_id: ResolvedTypeShapeDslNodeId,
     ) -> Result<ResolvedTypeShapeDslNodeId, TypeShapeDslProgramError> {
+        // Imported programs are already bounded, while this builder enforces the aggregate node
+        // and edge limits. `finish` separately rejects cycles and excessive combined depth.
         let source_node = source.node(source_id);
         if let Some(&target_id) = self.visited.get(&source_node.id) {
             let target = &self.nodes[target_id.index()];
@@ -2102,7 +2117,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         let Expr::Compare(compare) = condition else {
             return Err(TypeShapeDslDefinitionError {
                 range: condition.range(),
-                message: "condition supports only `is_concrete_int`, `and`, `==`, `!=`, and `<`, plus `is_int_value` and validated Flag boolean/comparison/membership forms",
+                message: "condition may use only boolean Flag values, `and`, `or`, `not`, `any(...)`, `is None`, `is_concrete_int(...)`, `is_int_value(...)`, integer comparisons, and Flag sequence membership",
             });
         };
         if compare.ops.len() != 1 || compare.comparators.len() != 1 {
@@ -2613,41 +2628,29 @@ impl Ord for ValidatedTypeShapeDslFunction {
             .then_with(|| {
                 self.returns
                     .iter()
-                    .map(|x| {
-                        (
-                            offsets(x.statement_range),
-                            offsets(x.value_range),
-                            x.kind.clone(),
-                        )
-                    })
-                    .cmp(other.returns.iter().map(|x| {
-                        (
-                            offsets(x.statement_range),
-                            offsets(x.value_range),
-                            x.kind.clone(),
-                        )
-                    }))
+                    .map(|x| (offsets(x.statement_range), offsets(x.value_range), &x.kind))
+                    .cmp(
+                        other
+                            .returns
+                            .iter()
+                            .map(|x| (offsets(x.statement_range), offsets(x.value_range), &x.kind)),
+                    )
             })
             .then_with(|| {
                 self.conditions
                     .iter()
-                    .map(|x| (offsets(x.range), x.kind.clone()))
-                    .cmp(
-                        other
-                            .conditions
-                            .iter()
-                            .map(|x| (offsets(x.range), x.kind.clone())),
-                    )
+                    .map(|x| (offsets(x.range), &x.kind))
+                    .cmp(other.conditions.iter().map(|x| (offsets(x.range), &x.kind)))
             })
             .then_with(|| {
                 self.expressions
                     .iter()
-                    .map(|x| (offsets(x.range), x.kind.clone()))
+                    .map(|x| (offsets(x.range), &x.kind))
                     .cmp(
                         other
                             .expressions
                             .iter()
-                            .map(|x| (offsets(x.range), x.kind.clone())),
+                            .map(|x| (offsets(x.range), &x.kind)),
                     )
             })
             .then_with(|| {
@@ -4124,6 +4127,8 @@ fn lower_parameter(ty: &Type, domain: TypeShapeDslInputDomain) -> DslValue {
     match domain {
         TypeShapeDslInputDomain::Value(domain) => DslValue::from_type(ty, domain),
         TypeShapeDslInputDomain::Flag(domain) => {
+            // Tuple expressions used as Flag defaults are represented as `Type::Type`; evaluation
+            // consumes the value described by the expression rather than the class object wrapper.
             let ty = match ty {
                 Type::Type(inner) => inner.as_ref(),
                 _ => ty,

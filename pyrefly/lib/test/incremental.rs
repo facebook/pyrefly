@@ -307,6 +307,60 @@ def leaf(first: Int, second: Int) -> Int:
 }
 
 #[test]
+fn test_type_shape_dsl_cross_module_helper_cycle_is_rejected() {
+    let mut i = Incremental::with_files(vec![
+        "left".to_owned(),
+        "right".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "left",
+        r#"
+from right import right
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def left(x: Int) -> Int:
+    return right(x)
+"#,
+    );
+    i.set(
+        "right",
+        r#"
+from left import left
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def right(x: Int) -> Int:
+    return left(x)
+"#,
+    );
+
+    let result = i.unchecked(&["left"]);
+    let errors = result.errors.collect_display_errors();
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one cycle diagnostic, got {errors:?}"
+    );
+    // Neither side of a helper cycle can become a validated DSL function, so cycles surface at
+    // the ordinary helper-validation boundary rather than through an evaluator-specific error.
+    assert!(
+        errors[0]
+            .msg()
+            .contains("DSL helper callee must be a validated"),
+        "expected the cross-module helper cycle to be rejected, got {errors:?}"
+    );
+}
+
+#[test]
 fn test_type_shape_dsl_gradual_reexport_target_invalidates_importer() {
     let mut i = Incremental::with_files(vec![
         "main".to_owned(),

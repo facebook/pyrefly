@@ -149,11 +149,13 @@ class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
     def __rpow__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
     ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    # TODO(stroxler): Share the DSL-backed `np.matmul` rule once operator methods can invoke it.
     def __matmul__[N: IntVar, M: IntVar, P: IntVar](
         self: ndarray[[N, M], DType],
         other: ndarray[[M, P]],
     ) -> ndarray[[N, P], DType]: ...
-    # Narrow method bridge for PCA demos; the free `np.mean` covers general reductions.
+    # TODO(stroxler): Share the DSL-backed free-function reduction rules with bound methods.
+    # These narrow method bridges currently cover the shapes used by the example corpus.
     @overload
     def mean[N: IntVar, M: IntVar](
         self: ndarray[[N, M], DType],

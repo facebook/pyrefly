@@ -674,7 +674,7 @@ testcase!(
 from shape_extensions import Int, IntTuple, type_shape_dsl_function
 
 @type_shape_dsl_function
-def missing_parameter(x) -> Int:  # E: `@type_shape_dsl_function` parameter `x` must be annotated as `Int`, `IntTuple`, `int`, `bool`, or `str`
+def missing_parameter(x) -> Int:  # E: parameter `x` must be annotated as `Int`, `IntTuple`, or a supported Flag value type
     return x
 
 @type_shape_dsl_function
@@ -690,7 +690,7 @@ def cross_domain(x: Int) -> IntTuple:
     return x  # E: `@type_shape_dsl_function` return annotation must match returned parameter `x`  # E: Returned type `Int[int]` is not assignable to declared return type `IntTuple`
 
 @type_shape_dsl_function
-def missing_second(x: Int, y) -> Int:  # E: `@type_shape_dsl_function` parameter `y` must be annotated as `Int`, `IntTuple`, `int`, `bool`, or `str`
+def missing_second(x: Int, y) -> Int:  # E: parameter `y` must be annotated as `Int`, `IntTuple`, or a supported Flag value type
     return x
 
 @type_shape_dsl_function
@@ -2379,25 +2379,25 @@ def wrong_domain(x: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def builtin_isinstance(x: Int) -> Int:
-    if isinstance(x, int):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, `!=`, and `<`
+    if isinstance(x, int):  # E: @type_shape_dsl_function condition may use only boolean Flag values
         return x
     return x
 
 @type_shape_dsl_function
 def imported_lookalike(x: Int) -> Int:
-    if lookalike(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, `!=`, and `<`
+    if lookalike(x):  # E: @type_shape_dsl_function condition may use only boolean Flag values
         return x
     return x
 
 @type_shape_dsl_function
 def spoof(x: Int) -> Int:
-    if Spoof.is_concrete_int(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, `!=`, and `<`
+    if Spoof.is_concrete_int(x):  # E: @type_shape_dsl_function condition may use only boolean Flag values
         return x
     return x
 
 @type_shape_dsl_function
 def shadowed(is_concrete_int: Int, x: Int) -> Int:
-    if is_concrete_int(x):  # E: @type_shape_dsl_function condition supports only `is_concrete_int`, `and`, `==`, `!=`, and `<`  # E: Expected a callable
+    if is_concrete_int(x):  # E: @type_shape_dsl_function condition may use only boolean Flag values  # E: Expected a callable
         return x
     return x
 
