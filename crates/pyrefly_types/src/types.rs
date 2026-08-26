@@ -1351,35 +1351,55 @@ impl Type {
         )
     }
 
+    fn recurse_type_variable_positions<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        let mut recurse_targs = |targs: &'a TArgs| {
+            for targ in targs.as_slice().iter() {
+                f(targ);
+            }
+        };
+        // IMPORTANT: keep this match in sync with `recurse_type_variable_positions_mut`
+        match self {
+            // In `A[X]`, we only check `X` for a couple reasons:
+            // * If we were to blindly visit the entire ClassType, we would find Quantifieds in
+            //   the definition of the class, which is almost never what we want: we want to
+            //   know if `X` contains any references to Quantifieds, not whether `A` is generic.
+            //   See https://github.com/facebook/pyrefly/issues/1962.
+            // * Not checking the rest of the ClassType is a critical performance optimization
+            //   when visiting Vars. See https://github.com/facebook/pyrefly/issues/2016.
+            Type::ClassType(cls) => recurse_targs(cls.targs()),
+            Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs()),
+            // `Self` is a keyword, not a user-written type variable reference, so we don't
+            // recurse into it when looking for type variable references.
+            Type::SelfType(_) => {}
+            // Enum literals contain `ClassType`s that we shouldn't visit.
+            Type::Literal(_) => {}
+            _ => self.recurse(f),
+        }
+    }
+
+    /// The mutable form of [`Type::recurse_type_variable_positions`], visiting the same positions.
+    fn recurse_type_variable_positions_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        let mut recurse_targs = |targs: &mut TArgs| {
+            for targ in targs.as_mut().iter_mut() {
+                f(targ);
+            }
+        };
+        // IMPORTANT: keep this match in sync with `recurse_type_variable_positions`
+        match self {
+            Type::ClassType(cls) => recurse_targs(cls.targs_mut()),
+            Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs_mut()),
+            Type::SelfType(_) | Type::Literal(_) => {}
+            _ => self.recurse_mut(f),
+        }
+    }
+
     fn visit_type_variables<'a>(&'a self, f: &mut dyn FnMut(TypeVariable<'a>)) {
         fn visit<'a>(ty: &'a Type, f: &mut dyn FnMut(TypeVariable<'a>)) {
             if let Some(tv) = TypeVariable::new(ty) {
                 f(tv);
                 return;
             }
-            let mut recurse_targs = |targs: &'a TArgs| {
-                for targ in targs.as_slice().iter() {
-                    visit(targ, f);
-                }
-            };
-            // IMPORTANT: keep this match in sync with `transform_types_in_type_variable_positions`
-            match ty {
-                // In `A[X]`, we only check `X` for a couple reasons:
-                // * If we were to blindly visit the entire ClassType, we would find Quantifieds in
-                //   the definition of the class, which is almost never what we want: we want to
-                //   know if `X` contains any references to Quantifieds, not whether `A` is generic.
-                //   See https://github.com/facebook/pyrefly/issues/1962.
-                // * Not checking the rest of the ClassType is a critical performance optimization
-                //   when visiting Vars. See https://github.com/facebook/pyrefly/issues/2016.
-                Type::ClassType(cls) => recurse_targs(cls.targs()),
-                Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs()),
-                // `Self` is a keyword, not a user-written type variable reference, so we don't
-                // recurse into it when looking for type variable references.
-                Type::SelfType(_) => {}
-                // Enum literals contain `ClassType`s that we shouldn't visit.
-                Type::Literal(_) => {}
-                _ => ty.recurse(&mut |ty| visit(ty, f)),
-            }
+            ty.recurse_type_variable_positions(&mut |inside| visit(inside, f));
         }
         visit(self, f)
     }
@@ -1432,37 +1452,12 @@ impl Type {
         self.visit_type_variables(&mut f)
     }
 
-    fn transform_types_in_type_variable_positions(&mut self, f: &mut dyn FnMut(&mut Type)) {
+    pub fn transform_types_in_type_variable_positions(&mut self, f: &mut dyn FnMut(&mut Type)) {
         fn visit(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
             f(ty);
-            let mut recurse_targs = |targs: &mut TArgs| {
-                for targ in targs.as_mut().iter_mut() {
-                    visit(targ, f);
-                }
-            };
-            // IMPORTANT: keep this match in sync with `visit_type_variables`
-            match ty {
-                Type::ClassType(cls) => recurse_targs(cls.targs_mut()),
-                Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs_mut()),
-                // `Self` is a keyword, not a user-written type variable reference.
-                Type::SelfType(_) => {}
-                // Enum literals contain `ClassType`s that we shouldn't visit.
-                Type::Literal(_) => {}
-                _ => ty.recurse_mut(&mut |ty| visit(ty, f)),
-            }
+            ty.recurse_type_variable_positions_mut(&mut |inside| visit(inside, f));
         }
         visit(self, f)
-    }
-
-    /// Transform unreplaced references to legacy type variables. Note that references to in-scope
-    /// legacy type variables in functions and classes are replaced with Quantified, so unreplaced
-    /// references only appear in cases like a TypeVar definition or an out-of-scope type variable.
-    pub fn transform_raw_legacy_type_variables(&mut self, f: &mut dyn FnMut(&mut Type)) {
-        self.transform_types_in_type_variable_positions(&mut |ty| {
-            if ty.is_raw_legacy_type_variable() {
-                f(ty);
-            }
-        })
     }
 
     /// Check if the type contains a placeholder var. See `collect_maybe_placeholder_vars`.

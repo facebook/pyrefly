@@ -2235,14 +2235,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             if let Some(default) = &mut tparam.default {
                 let mut out_of_scope_names = Vec::new();
-                default.transform_raw_legacy_type_variables(&mut |ty| {
+                default.transform_types_in_type_variable_positions(&mut |ty| {
                     let (name, kind) = match &*ty {
                         Type::TypeVar(t) => (t.qname().id(), QuantifiedKind::TypeVar),
                         Type::TypeVarTuple(t) => (t.qname().id(), QuantifiedKind::TypeVarTuple),
                         Type::ParamSpec(p) => (p.qname().id(), QuantifiedKind::ParamSpec),
-                        _ => unreachable!(
-                            "transform_raw_legacy_type_variables only visits legacy type variables"
-                        ),
+                        _ => return,
                     };
                     *ty = match seen.get(name) {
                         Some(q) => (**q).clone().to_type(self.heap),
@@ -5703,7 +5701,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let heap = self.heap;
         let module = self.module().name();
         callable.visit_mut(&mut |ty| {
-            ty.transform_raw_legacy_type_variables(&mut |ty| {
+            ty.transform_types_in_type_variable_positions(&mut |ty| {
                 if let Type::TypeVar(tv) = ty {
                     let q = seen_type_vars
                         .entry(tv.dupe())
@@ -5753,7 +5751,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         *ty = wrapped;
-        ty.transform_raw_legacy_type_variables(&mut |t| *t = self.heap.mk_any_error());
+        ty.transform_types_in_type_variable_positions(&mut |t| {
+            if t.is_raw_legacy_type_variable() {
+                *t = self.heap.mk_any_error()
+            }
+        });
     }
 
     fn check_implicit_return_against_annotation(
