@@ -459,7 +459,7 @@ impl<'a> BindingsBuilder<'a> {
                 } else if self.scopes.in_class_body()
                     && let Some(cls) = self.scopes.current_class_key()
                 {
-                    let suggestion = self.suggest_similar_name(&name.id, name.range.start());
+                    let suggestion = self.suggest_similar_name(&name.id);
                     self.insert_binding(
                         key,
                         Binding::ClassBodyUnknownName(Box::new(ClassBodyUnknownName {
@@ -479,7 +479,7 @@ impl<'a> BindingsBuilder<'a> {
                         ErrorKind::UnknownName,
                         format!("Could not find name `{name}`"),
                         || {
-                            self.suggest_similar_name(&name.id, name.range.start())
+                            self.suggest_similar_name(&name.id)
                                 .map(|suggestion| format!("Did you mean `{suggestion}`?"))
                         },
                     );

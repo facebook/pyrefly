@@ -3192,7 +3192,17 @@ impl Scopes {
         self.scope_views().find_map(visitor)
     }
 
-    pub fn suggest_similar_name(&self, missing: &Name, position: TextSize) -> Option<Name> {
+    pub fn suggest_similar_name(&self, missing: &Name) -> Option<Name> {
+        // Every scope kind is treated the same way: take the names it declares,
+        // and where the flow is still being walked, keep only the ones it has
+        // bound. Class bodies needed a rule of their own while the flow and the
+        // static map were searched separately, because only the flow described
+        // them; searching them together makes that distinction disappear.
+        //
+        // Whether the flow has to be consulted at all depends on the barrier.
+        // Across a function boundary the order of execution is unknowable, so
+        // everything the scope declares counts -- which is what makes a helper
+        // defined further down the file a legitimate suggestion.
         let mut candidates: Vec<(&Name, usize)> = Vec::new();
 
         self.visit_scopes(
@@ -3202,25 +3212,14 @@ impl Scopes {
                  flow_barrier,
                  static_barrier: _,
              }| {
-                let is_class = matches!(scope.kind, ScopeKind::Class(_));
-
-                if flow_barrier < FlowBarrier::BlockFlow {
-                    for candidate in scope.flow.info.keys() {
-                        if let Some(static_info) = scope.stat.0.get(candidate)
-                            && static_info.range.start() >= position
-                        {
-                            continue;
-                        }
-                        candidates.push((candidate, lookup_depth));
+                let flow_checked = flow_barrier == FlowBarrier::AllowFlowChecked;
+                for (candidate, _static_info) in scope.stat.0.iter_hashed() {
+                    // The static map hands back the hash it stored, so this
+                    // costs a probe rather than a rehash of the name.
+                    if flow_checked && scope.flow.get_info_hashed(candidate).is_none() {
+                        continue;
                     }
-                }
-
-                if !is_class {
-                    for (candidate, static_info) in scope.stat.0.iter() {
-                        if static_info.range.start() < position {
-                            candidates.push((candidate, lookup_depth));
-                        }
-                    }
+                    candidates.push((candidate.into_key(), lookup_depth));
                 }
                 None::<()>
             },

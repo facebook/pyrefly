@@ -1105,8 +1105,8 @@ impl<'a> BindingsBuilder<'a> {
         )
     }
 
-    pub fn suggest_similar_name(&self, missing: &Name, position: TextSize) -> Option<Name> {
-        let scope_suggestion = self.scopes.suggest_similar_name(missing, position);
+    pub fn suggest_similar_name(&self, missing: &Name) -> Option<Name> {
+        let scope_suggestion = self.scopes.suggest_similar_name(missing);
         let builtin_suggestion = self.suggest_builtin_name(missing);
         let mut candidates = Vec::new();
         if let Some(scope_suggestion) = &scope_suggestion {
