@@ -732,14 +732,15 @@ class PlainArray[*Shape]: ...
     );
     let (state, handle) = env.to_state();
     let main = handle("main");
+    let reader = state.reader();
     for class_name in ["ImportedArray", "ImportAliasArray", "ModuleAliasArray"] {
-        let metadata = get_class_metadata(class_name, &main, &state);
+        let metadata = get_class_metadata(class_name, &main, &reader);
         let shape = metadata
             .shaped_array_shape()
             .expect("shaped array shape should be present");
         assert_shaped_array_shape(shape, "Shape", QuantifiedKind::TypeVar);
     }
-    assert!(!get_class_metadata("PlainArray", &main, &state).is_shaped_array());
+    assert!(!get_class_metadata("PlainArray", &main, &reader).is_shaped_array());
 }
 
 #[test]
@@ -756,7 +757,8 @@ class TupleCarrierArray[Shape, DType]: ...
     );
     let (state, handle) = env.to_state();
     let main = handle("main");
-    let metadata = get_class_metadata("TupleCarrierArray", &main, &state);
+    let reader = state.reader();
+    let metadata = get_class_metadata("TupleCarrierArray", &main, &reader);
     let shape = metadata
         .shaped_array_shape()
         .expect("shaped array shape should be present");
@@ -828,8 +830,9 @@ class Box(Generic[N]): ...
     );
     let (state, handle) = env.to_state();
     let main = handle("main");
-    let cls = get_class("Box", &main, &state);
-    let solutions = state.transaction().get_solutions(&main).unwrap();
+    let reader = state.reader();
+    let cls = get_class("Box", &main, &reader);
+    let solutions = reader.get_solutions(&main).unwrap();
     let tparams = solutions.get(&KeyTParams(cls.index()));
     assert_eq!(tparams.len(), 1);
     let param = tparams
@@ -888,8 +891,9 @@ class Box[N: IntVar](Generic[N]): ...
     );
     let (state, handle) = env.to_state();
     let main = handle("main");
-    let cls = get_class("Box", &main, &state);
-    let solutions = state.transaction().get_solutions(&main).unwrap();
+    let reader = state.reader();
+    let cls = get_class("Box", &main, &reader);
+    let solutions = reader.get_solutions(&main).unwrap();
     let tparams = solutions.get(&KeyTParams(cls.index()));
     let param = tparams
         .iter()

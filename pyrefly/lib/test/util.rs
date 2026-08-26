@@ -51,6 +51,7 @@ use crate::state::errors::Errors;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::state::State;
+use crate::state::state::StateReader;
 use crate::state::subscriber::TestSubscriber;
 use crate::types::class::Class;
 use crate::types::types::Type;
@@ -1000,8 +1001,8 @@ pub fn mk_state(code: &str) -> (Handle, State) {
     (handle("main"), state)
 }
 
-pub fn get_class(name: &str, handle: &Handle, state: &State) -> Class {
-    let solutions = state.transaction().get_solutions(handle).unwrap();
+pub fn get_class(name: &str, handle: &Handle, reader: &StateReader) -> Class {
+    let solutions = reader.get_solutions(handle).unwrap();
 
     match solutions.get(&KeyExport(Name::new(name))) {
         Type::ClassDef(cls) => cls.dupe(),

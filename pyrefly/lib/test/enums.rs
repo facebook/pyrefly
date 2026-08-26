@@ -23,7 +23,7 @@ class E(enum.Enum):
     Y = 2
         "#,
     );
-    let cls = get_class("E", &handle, &state);
+    let cls = get_class("E", &handle, &state.reader());
     let bindings = state.transaction().get_bindings(&handle).unwrap();
     let class_fields = bindings.get_class_fields(cls.index()).unwrap();
     let fields = class_fields

@@ -5,13 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_build::handle::Handle;
 
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::binding::binding::KeyClassMetadata;
 use crate::state::state::State;
+use crate::state::state::StateReader;
 use crate::test::util::get_class;
 use crate::test::util::mk_state;
 use crate::testcase;
@@ -19,11 +18,16 @@ use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
 
-pub fn get_class_metadata(name: &str, handle: &Handle, state: &State) -> Arc<ClassMetadata> {
-    let solutions = state.transaction().get_solutions(handle).unwrap();
-
-    let cls = get_class(name, handle, state);
-    solutions.get_arc(&KeyClassMetadata(cls.index()))
+pub fn get_class_metadata<'a>(
+    name: &str,
+    handle: &Handle,
+    reader: &'a StateReader<'_>,
+) -> &'a ClassMetadata {
+    let cls = get_class(name, handle, reader);
+    reader
+        .get_solutions(handle)
+        .unwrap()
+        .get(&KeyClassMetadata(cls.index()))
 }
 
 fn get_class_keywords(
@@ -32,7 +36,8 @@ fn get_class_keywords(
     handle: &Handle,
     state: &State,
 ) -> Vec<Type> {
-    get_class_metadata(class_name, handle, state)
+    let reader = state.reader();
+    get_class_metadata(class_name, handle, &reader)
         .keywords()
         .iter()
         .filter(|(name, _type)| name.as_str() == keyword_name)
@@ -41,7 +46,8 @@ fn get_class_keywords(
 }
 
 fn get_metaclass(class_name: &str, handle: &Handle, state: &State) -> Option<ClassType> {
-    get_class_metadata(class_name, handle, state)
+    let reader = state.reader();
+    get_class_metadata(class_name, handle, &reader)
         .custom_metaclass()
         .cloned()
 }

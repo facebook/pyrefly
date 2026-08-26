@@ -3351,6 +3351,30 @@ pub struct State {
     committing_transaction_lock: Mutex<()>,
 }
 
+/// A stable read view of committed state.
+///
+/// The reader holds the state read lock for its whole lifetime, so everything
+/// it returns comes from one snapshot and can be borrowed rather than cloned.
+/// For the same reason, a caller must not take another lock on the state, such
+/// as by opening a `Transaction`, while a reader is alive.
+pub struct StateReader<'a> {
+    readable: RwLockReadGuard<'a, StateData>,
+}
+
+impl StateReader<'_> {
+    /// The solutions for a module, or `None` if the state has no such module or
+    /// has not solved it.
+    pub fn get_solutions(&self, handle: &Handle) -> Option<&Solutions> {
+        self.readable
+            .modules
+            .get(handle)?
+            .state
+            .steps
+            .solutions
+            .as_deref()
+    }
+}
+
 impl State {
     pub fn new(config_finder: ConfigFinder, thread_count: ThreadCount) -> Self {
         Self {
@@ -3365,6 +3389,14 @@ impl State {
 
     pub fn config_finder(&self) -> &ConfigFinder {
         &self.config_finder
+    }
+
+    /// Open a read view of the committed state. See `StateReader` for the
+    /// locking this implies.
+    pub fn reader(&self) -> StateReader<'_> {
+        StateReader {
+            readable: self.state.read(),
+        }
     }
 
     /// Run `op` on the state's thread pool, which has an increased stack size.
