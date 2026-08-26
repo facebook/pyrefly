@@ -97,6 +97,7 @@ use crate::binding::binding::BindingVariance;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
 use crate::binding::binding::BranchInfo;
+use crate::binding::binding::ClassBodyUnknownName;
 use crate::binding::binding::EmptyAnswer;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::binding::FirstUse;
@@ -4656,6 +4657,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         class_key: Idx<KeyClass>,
         name: &Identifier,
         suggestion: &Option<Name>,
+        allow_class_body_forward_reference: bool,
         errors: &ErrorCollector,
     ) -> Type {
         let add_unknown_name_error = |errors: &ErrorCollector| {
@@ -4670,11 +4672,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             builder.emit();
             self.heap.mk_any_error()
         };
-        // We're specifically looking for attributes that are inherited from the parent class
+        // Runtime class-body lookups can only see inherited fields. Postponed annotations and
+        // explicit forward references may also resolve fields declared later in this class.
         if let Some(cls) = &self.get_idx(class_key).as_ref().0
-            && !self
-                .get_class_fields(cls)
-                .is_some_and(|f| f.contains(&name.id))
+            && !self.get_class_fields(cls).is_some_and(|fields| {
+                fields.contains(&name.id)
+                    && (!allow_class_body_forward_reference
+                        || !fields.is_field_initialized_on_class(&name.id))
+            })
         {
             // If the attribute lookup fails here, we'll emit an `unknown-name` error, since this
             // is a deferred lookup that can't be calculated at the bindings step
@@ -5907,7 +5912,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.binding_to_type_info(binding, errors).into_ty()
             }
             Binding::ClassBodyUnknownName(x) => {
-                self.binding_to_type_class_body_unknown_name(x.0, &x.1, &x.2, errors)
+                let ClassBodyUnknownName {
+                    class_key,
+                    name,
+                    suggestion,
+                    allow_class_body_forward_reference,
+                } = x.as_ref();
+                self.binding_to_type_class_body_unknown_name(
+                    *class_key,
+                    name,
+                    suggestion,
+                    *allow_class_body_forward_reference,
+                    errors,
+                )
             }
             Binding::Exhaustive(x) => self.binding_to_type_exhaustive(&x.narrow_entries),
             Binding::SuppressedException(x) => {
