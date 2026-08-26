@@ -75,7 +75,7 @@ const VALUES_METHOD: Name = Name::new_static("values");
 pub(crate) const REQUIRED_KEYS: Name = Name::new_static("__required_keys__");
 pub(crate) const OPTIONAL_KEYS: Name = Name::new_static("__optional_keys__");
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn check_dict_items_against_typed_dict(
         &self,
         dict_items: &Vec<&DictItem>,

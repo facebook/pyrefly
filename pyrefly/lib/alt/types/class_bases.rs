@@ -110,7 +110,7 @@ impl fmt::Display for ClassBases {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // This is a version of `subscript_infer_for_type` with very restricted capability, in order to avoid cyclic dependencies
     fn base_class_subscript_infer(
         &self,

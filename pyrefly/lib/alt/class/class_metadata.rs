@@ -142,7 +142,7 @@ pub(crate) struct TransformDataclass {
     attrs_hash: Option<bool>,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn extend_unpacked_class_keywords(
         &self,
         keyword: &Keyword,

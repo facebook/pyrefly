@@ -134,7 +134,7 @@ pub(crate) enum AttrsInitName {
     Unchanged,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn attrs_init_param_name(
         &self,
         cls: &Class,

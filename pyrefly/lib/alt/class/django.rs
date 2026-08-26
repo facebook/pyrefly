@@ -110,7 +110,7 @@ enum DjangoRelationKind {
     ManyToMany,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn is_one_to_one_field(&self, field: &Class) -> bool {
         field.has_toplevel_qname(
             ModuleName::django_models_fields_related().as_str(),

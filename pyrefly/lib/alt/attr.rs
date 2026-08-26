@@ -582,7 +582,7 @@ impl ClassBase {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Compute the get (i.e. read) type of an attribute. If the attribute cannot be found or read,
     /// error and return `Any`. Use this to infer the type of a direct attribute fetch.
     pub fn type_of_attr_get(
@@ -2954,8 +2954,8 @@ pub struct AttrInfo {
     pub is_reexport: bool,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    fn completions_mro<T>(
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    fn completions_mro<'a, T>(
         &self,
         mro: T,
         expected_attribute_name: Option<&Name>,

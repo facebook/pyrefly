@@ -1462,7 +1462,7 @@ struct OverrideError {
     diff_lines: Vec<String>,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn validate_dataclass_transform_defaults(
         &self,
         call: &ExprCall,
@@ -4630,7 +4630,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn get_field_from_ancestors(
+    fn get_field_from_ancestors<'a>(
         &self,
         cls: &Class,
         mut ancestors: impl Iterator<Item = &'a ClassType>,

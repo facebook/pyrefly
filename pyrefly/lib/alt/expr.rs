@@ -395,7 +395,7 @@ fn classify_shaped_array_index_type(ty: &Type) -> Option<IndexOp> {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn synthesized_functional_class_type(&self, call: &ExprCall) -> Option<Type> {
         let anon_key = Key::Anon(call.range);
         let idx = self

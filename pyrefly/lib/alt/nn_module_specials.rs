@@ -47,7 +47,7 @@ pub fn is_nn_sequential(cls: &ClassType) -> bool {
         .has_toplevel_qname("torch.nn", "Sequential")
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Chain input through each module in an `nn.Sequential`.
     ///
     /// When `Sequential[M1, M2, M3]` is called with input `x`, threads `x` through

@@ -928,7 +928,7 @@ impl PolarsExprMethod {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn polars_method_call(
         &self,
         base: &Type,

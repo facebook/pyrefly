@@ -264,7 +264,7 @@ impl DecoratorParamHints {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn decorator_param_hints(
         &self,
         decorators: &[(Type, TextRange)],
@@ -979,7 +979,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Arc::new(ty)
     }
 
-    pub fn get_special_decorator(
+    pub fn get_special_decorator<'a>(
         &'a self,
         decorator: &'a Decorator,
     ) -> Option<SpecialDecorator<'a>> {

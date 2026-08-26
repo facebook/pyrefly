@@ -46,7 +46,7 @@ pub(crate) fn shape_flag_vars(tparams: &TParams, vars: &[Var]) -> Option<Arc<Sma
     (!vars.is_empty()).then(|| Arc::new(vars))
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
     pub(crate) fn reject_legacy_shape_flag_bound(
         &self,
         bound: &Type,

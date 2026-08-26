@@ -119,7 +119,7 @@ enum IntersectFallback {
     Right,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // Get the union of all members of an enum, minus the specified member
     fn subtract_enum_member(&self, instance: Instance, name: &Name) -> Type {
         if self
@@ -875,8 +875,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// with the type. We allow negative narrowing as long as it is not definitely unsafe - that
     /// is, if we're unsure, we allow it.
     fn expr_as_class_info(&self, e: &Expr, errors: &ErrorCollector) -> Vec<(Type, bool)> {
-        fn f<'a, Ans: LookupAnswer>(
-            me: &AnswersSolver<'a, Ans>,
+        fn f<Ans: LookupAnswer>(
+            me: &AnswersSolver<'_, '_, Ans>,
             e: &Expr,
             res: &mut Vec<(Type, bool)>,
             errors: &ErrorCollector,

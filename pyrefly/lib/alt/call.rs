@@ -222,7 +222,7 @@ impl ConstructedInstance {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn error_call_target(
         &self,
         errors: &ErrorCollector,

@@ -80,7 +80,7 @@ impl ReplaceKind {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Gets dataclass fields for an `@dataclass`-decorated class. attrs with
     /// `auto_attribs=False` collects only `attr.ib()`/`field()` assignments;
     /// every other kind is annotation-driven.

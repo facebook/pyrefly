@@ -43,7 +43,7 @@ use crate::types::class::ClassType;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // Given a constructor (__new__ or metaclass __call__) that returns `ty`, return true if the type is:
     // - SelfType or ClassType representing some subclass of `class`
     // - union only containing the aforementioned types

@@ -321,7 +321,7 @@ pub enum Iterable {
     OfTypeVarTuple(Quantified),
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn int_tuple_unpacked_element_type(
         &self,
         prefix: &[Type],

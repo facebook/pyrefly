@@ -46,10 +46,10 @@ use crate::types::types::Type;
 /// the `Type` object itself does not contain enough information to determine
 /// subset relations.
 #[derive(Clone_, Copy_, Dupe_)]
-pub struct TypeOrder<'solver, Ans: LookupAnswer>(&'solver AnswersSolver<'solver, Ans>);
+pub struct TypeOrder<'solver, Ans: LookupAnswer>(&'solver AnswersSolver<'solver, 'solver, Ans>);
 
 impl<'solver, Ans: LookupAnswer> TypeOrder<'solver, Ans> {
-    pub fn new(solver: &'solver AnswersSolver<'solver, Ans>) -> Self {
+    pub fn new(solver: &'solver AnswersSolver<'solver, 'solver, Ans>) -> Self {
         Self(solver)
     }
 

@@ -101,7 +101,7 @@ enum PydanticParamKey {
     Name(Name),
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn get_pydantic_root_model_type_via_mro(
         &self,
         class: &Class,

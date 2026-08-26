@@ -1095,7 +1095,7 @@ pub trait LookupAnswer: Sized {
     /// Publish a cross-module result slot previously reserved by this SCC.
     ///
     /// Default implementation returns false (not supported).
-    fn publish_reserved_in_module(&self, _reserved: &mut ReservedSlot<'_, '_, Self>) -> bool {
+    fn publish_reserved_in_module(&self, _reserved: &mut ReservedSlot<'_, '_, '_, Self>) -> bool {
         false
     }
 
@@ -1400,7 +1400,7 @@ impl Answers {
     /// Publish a slot previously reserved by an SCC batch.
     pub fn publish_reserved_preliminary<Ans: LookupAnswer>(
         &self,
-        reserved: &mut ReservedSlot<'_, '_, Ans>,
+        reserved: &mut ReservedSlot<'_, '_, '_, Ans>,
     ) -> bool {
         let CalcId(_, any_idx) = reserved.calc_id().dupe();
         // SAFETY: `reserved` proves that this SCC owns the pending slot.
@@ -1410,7 +1410,7 @@ impl Answers {
     /// Roll back a slot reserved by an SCC batch if it is still pending.
     pub fn rollback_reserved_if_pending_preliminary<Ans: LookupAnswer>(
         &self,
-        reserved: &mut ReservedSlot<'_, '_, Ans>,
+        reserved: &mut ReservedSlot<'_, '_, '_, Ans>,
     ) -> bool {
         let CalcId(_, any_idx) = reserved.calc_id().dupe();
         // SAFETY: `reserved` proves that this SCC owns the pending slot.
@@ -1587,7 +1587,7 @@ impl Answers {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn get_answer_slot<K: Solve<Ans>>(&self, idx: Idx<K>) -> &AnswerSlot<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,

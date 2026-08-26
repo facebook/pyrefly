@@ -307,10 +307,10 @@ impl AnswerScope {
         })
     }
 
-    fn retain_answer<'scope>(
-        &'scope self,
+    fn retain_answer<'answer>(
+        &'answer self,
         answer: GenerationAnswer<'_>,
-    ) -> &'scope Arc<dyn Any + Send + Sync> {
+    ) -> &'answer Arc<dyn Any + Send + Sync> {
         let generation_id = Rc::as_ptr(answer.generation) as usize;
         let generation_index = match self.generation_indices.borrow_mut().entry(generation_id) {
             Entry::Occupied(entry) => *entry.get(),
@@ -492,14 +492,14 @@ pub struct CalcStack {
 /// discards any completed SCC during unwinding; normal completion returns the
 /// completed SCC for publication.
 #[must_use = "call finish() to commit the completed SCC"]
-struct CalcStackGuard<'stack, 'scope> {
+struct CalcStackGuard<'stack, 'answer> {
     stack: &'stack CalcStack,
     finished: bool,
-    action: BindingAction<'scope>,
+    action: BindingAction<'answer>,
 }
 
-impl<'scope> CalcStackGuard<'_, 'scope> {
-    fn action(&self) -> &BindingAction<'scope> {
+impl<'answer> CalcStackGuard<'_, 'answer> {
+    fn action(&self) -> &BindingAction<'answer> {
         &self.action
     }
 
@@ -550,11 +550,11 @@ impl CalcStack {
 
     /// Push a calculation and return its binding action with a guard that pops
     /// it during unwinding.
-    fn push<'scope>(
+    fn push<'answer>(
         &self,
-        answer_scope: &'scope AnswerScope,
+        answer_scope: &'answer AnswerScope,
         current: &CalcId,
-    ) -> CalcStackGuard<'_, 'scope> {
+    ) -> CalcStackGuard<'_, 'answer> {
         let position = {
             let mut stack = self.stack.borrow_mut();
             let pos = stack.len();
@@ -978,11 +978,11 @@ impl CalcStack {
     ///
     /// Ensures nonmember re-entry merge runs first, then dispatches using the
     /// current iteration node state.
-    fn binding_action_for_top_scc_member<'scope>(
+    fn binding_action_for_top_scc_member<'answer>(
         &self,
-        answer_scope: &'scope AnswerScope,
+        answer_scope: &'answer AnswerScope,
         current: &CalcId,
-    ) -> BindingAction<'scope> {
+    ) -> BindingAction<'answer> {
         self.merge_top_scc_on_nonmember_reentry();
         if let Some(kind) = self.get_iteration_node_state(current) {
             return self.binding_action_for_node_state(answer_scope, current, kind);
@@ -1032,12 +1032,12 @@ impl CalcStack {
     /// - InProgressWithPlaceholder → return the SCC-local placeholder answer
     /// - InProgressCold → NeedsColdPlaceholder (caller allocates)
     /// - Done → return the SCC-local answer
-    fn binding_action_for_node_state<'scope>(
+    fn binding_action_for_node_state<'answer>(
         &self,
-        answer_scope: &'scope AnswerScope,
+        answer_scope: &'answer AnswerScope,
         current: &CalcId,
         kind: SccNodeStateKind,
-    ) -> BindingAction<'scope> {
+    ) -> BindingAction<'answer> {
         match kind {
             SccNodeStateKind::Fresh => {
                 self.set_iteration_node_in_progress(current);
@@ -1212,11 +1212,11 @@ impl CalcStack {
     ///
     /// Returns `None` if there is no top SCC or there is no previous answer
     /// for the target (e.g., during cold-start iteration 1).
-    fn get_previous_answer<'scope>(
+    fn get_previous_answer<'answer>(
         &self,
-        answer_scope: &'scope AnswerScope,
+        answer_scope: &'answer AnswerScope,
         target: &CalcId,
-    ) -> Option<&'scope Arc<dyn Any + Send + Sync>> {
+    ) -> Option<&'answer Arc<dyn Any + Send + Sync>> {
         let scc_stack = self.scc_stack.borrow();
         let top_scc = scc_stack.last()?;
         let answer = top_scc.iterative.answers.find_previous(target)?;
@@ -1224,11 +1224,11 @@ impl CalcStack {
     }
 
     /// Retrieve the current type-erased answer for a node in the top SCC.
-    fn get_iteration_answer<'scope>(
+    fn get_iteration_answer<'answer>(
         &self,
-        answer_scope: &'scope AnswerScope,
+        answer_scope: &'answer AnswerScope,
         target: &CalcId,
-    ) -> Option<&'scope Arc<dyn Any + Send + Sync>> {
+    ) -> Option<&'answer Arc<dyn Any + Send + Sync>> {
         let scc_stack = self.scc_stack.borrow();
         let top_scc = scc_stack.last()?;
         let state = top_scc.node_state.get(target)?;
@@ -1368,14 +1368,14 @@ impl SccNodeState {
 /// union. `CalcStack::push` performs all state checks and SCC mutations before
 /// returning the action that `get_idx` should take. This is purely thread-local
 /// and never touches shared result slots.
-enum BindingAction<'scope> {
+enum BindingAction<'answer> {
     /// Calculate the binding and record the answer.
     /// Action: call `calculate_and_record_answer`
     Calculate,
     /// An answer is available in the top SCC.
     /// Borrowed and type-erased; will be downcast to `Arc<K::Answer>` in `get_idx`.
     /// Action: downcast and return
-    SccLocalAnswer(&'scope Arc<dyn Any + Send + Sync>),
+    SccLocalAnswer(&'answer Arc<dyn Any + Send + Sync>),
     /// A cycle break point where a placeholder is needed. The caller (`get_idx`)
     /// calls `attempt_to_unwind_cycle_from_here` to check if another thread
     /// already committed an answer, and if not, allocates a placeholder via
@@ -1957,32 +1957,44 @@ fn check_demotion_limit(demotions: u32, scc_identity: &CalcId) {
     }
 }
 
-pub struct AnswersSolver<'a, Ans: LookupAnswer> {
-    answers: &'a Ans,
-    current: &'a Answers,
-    thread_state: &'a ThreadState,
-    answer_scope: &'a AnswerScope,
+/// `'ctx` covers the context a solver runs against: the standard library, the
+/// type heap, the unique factory, the recursion guard, the cross-module export
+/// and answer lookups, and the error collector and caches belonging to this
+/// solve. A caller assembles all of it and hands it to `new`. The lifetime is
+/// here because the solver holds that context by reference.
+///
+/// `'answer` is the lifetime the solver's API is built around. It bounds how
+/// long an answer reference stays usable, which is not the same as how long the
+/// answer lives: the `current` `Answers` table normally lasts for the whole
+/// transaction epoch and is shortened to `'answer`, while provisional answers
+/// retained by the `AnswerScope` last exactly this long. Taking the shorter of
+/// the two lets one lifetime describe a borrow of either.
+pub struct AnswersSolver<'ctx, 'answer, Ans: LookupAnswer> {
+    answers: &'ctx Ans,
+    current: &'answer Answers,
+    thread_state: &'answer ThreadState,
+    answer_scope: &'answer AnswerScope,
     // The base solver is only used to reset the error collector at binding
     // boundaries. Answers code should generally use the error collector passed
     // along the call stack instead.
-    base_errors: &'a ErrorCollector,
-    bindings: &'a Bindings,
-    pub exports: &'a dyn LookupExport,
-    pub uniques: &'a UniqueFactory,
-    pub recurser: &'a VarRecurser,
-    pub stdlib: &'a Stdlib,
-    pub heap: &'a TypeHeap,
+    base_errors: &'ctx ErrorCollector,
+    bindings: &'answer Bindings,
+    pub exports: &'ctx dyn LookupExport,
+    pub uniques: &'ctx UniqueFactory,
+    pub recurser: &'ctx VarRecurser,
+    pub stdlib: &'ctx Stdlib,
+    pub heap: &'ctx TypeHeap,
     /// Cache for jaxtyping synthetic quantifieds.
     /// Module-scoped: the same dimension key always maps to the same Quantified,
     /// which is correct because each function independently wraps its signature
     /// in a Forall (just like legacy TypeVars defined at module scope).
-    jaxtyping_dims: &'a RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
+    jaxtyping_dims: &'ctx RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
 }
 
 /// Proof that this SCC owns the pending result slot for this calculation.
 /// Dropping the proof rolls back the reservation if it is still pending.
-pub struct ReservedSlot<'a, 'b, Ans: LookupAnswer> {
-    solver: &'a AnswersSolver<'b, Ans>,
+pub struct ReservedSlot<'a, 'ctx, 'answer, Ans: LookupAnswer> {
+    solver: &'a AnswersSolver<'ctx, 'answer, Ans>,
     calc_id: CalcId,
     /// Retains cross-module Answers if the module transitions to Solutions and
     /// evicts them. Drop must still reach the pending slot to roll it back;
@@ -1992,7 +2004,7 @@ pub struct ReservedSlot<'a, 'b, Ans: LookupAnswer> {
     traces: Option<TraceSideEffects>,
 }
 
-impl<Ans: LookupAnswer> ReservedSlot<'_, '_, Ans> {
+impl<Ans: LookupAnswer> ReservedSlot<'_, '_, '_, Ans> {
     pub(crate) fn calc_id(&self) -> &CalcId {
         &self.calc_id
     }
@@ -2008,7 +2020,7 @@ impl<Ans: LookupAnswer> ReservedSlot<'_, '_, Ans> {
     }
 }
 
-impl<Ans: LookupAnswer> Drop for ReservedSlot<'_, '_, Ans> {
+impl<Ans: LookupAnswer> Drop for ReservedSlot<'_, '_, '_, Ans> {
     fn drop(&mut self) {
         self.solver.rollback_reserved_if_pending_single(self);
     }
@@ -2018,12 +2030,12 @@ impl<Ans: LookupAnswer> Drop for ReservedSlot<'_, '_, Ans> {
 /// Once publication starts, unwinding publishes the remainder because published
 /// results and their side effects cannot be rolled back. Before then, each
 /// `ReservedSlot` rolls itself back when dropped.
-struct SccReservationGuard<'a, 'b, Ans: LookupAnswer> {
-    reserved: Vec<ReservedSlot<'a, 'b, Ans>>,
+struct SccReservationGuard<'a, 'ctx, 'answer, Ans: LookupAnswer> {
+    reserved: Vec<ReservedSlot<'a, 'ctx, 'answer, Ans>>,
     committing: bool,
 }
 
-impl<Ans: LookupAnswer> Drop for SccReservationGuard<'_, '_, Ans> {
+impl<Ans: LookupAnswer> Drop for SccReservationGuard<'_, '_, '_, Ans> {
     fn drop(&mut self) {
         if self.committing {
             for reserved in self.reserved.iter_mut().rev() {
@@ -2036,7 +2048,7 @@ impl<Ans: LookupAnswer> Drop for SccReservationGuard<'_, '_, Ans> {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn fixpoint_details_enabled() -> bool {
         static ENABLED: OnceLock<bool> = OnceLock::new();
         *ENABLED.get_or_init(|| {
@@ -2046,19 +2058,19 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub(crate) fn new(
-        answers: &'a Ans,
-        current: &'a Answers,
-        base_errors: &'a ErrorCollector,
-        bindings: &'a Bindings,
-        exports: &'a dyn LookupExport,
-        uniques: &'a UniqueFactory,
-        recurser: &'a VarRecurser,
-        stdlib: &'a Stdlib,
-        thread_state: &'a ThreadState,
-        answer_scope: &'a AnswerScope,
-        heap: &'a TypeHeap,
-        jaxtyping_dims: &'a RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
-    ) -> AnswersSolver<'a, Ans> {
+        answers: &'ctx Ans,
+        current: &'answer Answers,
+        base_errors: &'ctx ErrorCollector,
+        bindings: &'answer Bindings,
+        exports: &'ctx dyn LookupExport,
+        uniques: &'ctx UniqueFactory,
+        recurser: &'ctx VarRecurser,
+        stdlib: &'ctx Stdlib,
+        thread_state: &'answer ThreadState,
+        answer_scope: &'answer AnswerScope,
+        heap: &'ctx TypeHeap,
+        jaxtyping_dims: &'ctx RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
+    ) -> AnswersSolver<'ctx, 'answer, Ans> {
         AnswersSolver {
             stdlib,
             uniques,
@@ -2079,7 +2091,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub(crate) fn for_answer_scope<'b>(
         &'b self,
         answer_scope: &'b AnswerScope,
-    ) -> AnswersSolver<'b, Ans> {
+    ) -> AnswersSolver<'ctx, 'b, Ans> {
         AnswersSolver {
             answers: self.answers,
             current: self.current,
@@ -2797,7 +2809,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         answer: Arc<dyn Any + Send + Sync>,
         errors: Option<Arc<ErrorCollector>>,
         traces: Option<TraceSideEffects>,
-    ) -> Option<ReservedSlot<'_, 'a, Ans>> {
+    ) -> Option<ReservedSlot<'_, 'ctx, 'answer, Ans>> {
         let CalcId(_, ref any_idx) = calc_id;
         let cross_module_answers = if self.is_same_module(&calc_id) {
             if !dispatch_anyidx!(any_idx, self, reserve_same_module, answer) {
@@ -2835,7 +2847,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// Publish a result slot previously reserved by this SCC.
-    fn publish_reserved_single(&self, reserved: &mut ReservedSlot<'_, '_, Ans>) -> bool {
+    fn publish_reserved_single(&self, reserved: &mut ReservedSlot<'_, '_, '_, Ans>) -> bool {
         let calc_id = reserved.calc_id().dupe();
         let CalcId(_, ref any_idx) = calc_id;
         if self.is_same_module(&calc_id) {
@@ -2875,7 +2887,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Roll back a reservation if it is still pending.
     fn rollback_reserved_if_pending_single(
         &self,
-        reserved: &mut ReservedSlot<'_, '_, Ans>,
+        reserved: &mut ReservedSlot<'_, '_, '_, Ans>,
     ) -> bool {
         let calc_id = reserved.calc_id().dupe();
         let CalcId(_, ref any_idx) = calc_id;
@@ -3434,7 +3446,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.solver().fresh_recursive(self.uniques)
     }
 
-    pub fn recurse(&'a self, var: Var) -> Option<Guard<'a, Var>> {
+    pub fn recurse<'a>(&'a self, var: Var) -> Option<Guard<'a, Var>> {
         self.solver().recurse(var, self.recurser)
     }
 
@@ -3685,9 +3697,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     pub fn map_over_union(&self, ty: &Type, f: impl FnMut(&Type)) {
-        struct Data<'a, 'b, Ans: LookupAnswer, F: FnMut(&Type)> {
+        struct Data<'ctx, 'answer, 'solver, Ans: LookupAnswer, F: FnMut(&Type)> {
             /// The `self` of `AnswersSolver`
-            me: &'b AnswersSolver<'a, Ans>,
+            me: &'solver AnswersSolver<'ctx, 'answer, Ans>,
             /// The function to apply on each call
             f: F,
             /// Arguments we have already used for the function.
@@ -3699,7 +3711,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             seen_union: bool,
         }
 
-        impl<Ans: LookupAnswer, F: FnMut(&Type)> Data<'_, '_, Ans, F> {
+        impl<Ans: LookupAnswer, F: FnMut(&Type)> Data<'_, '_, '_, Ans, F> {
             fn go(&mut self, ty: &Type, in_type: bool) {
                 match ty {
                     Type::Never(_) if !in_type => (),

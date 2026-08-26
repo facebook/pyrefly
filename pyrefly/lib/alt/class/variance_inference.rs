@@ -609,7 +609,7 @@ fn initialize_environment<'a>(
     );
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn compute_variance_env(&self, class: &Class) -> VarianceEnv {
         let tparams = self.get_class_tparams(class);
         let initial_inference_map_for_class = initial_inference_map(tparams.as_deref());

@@ -62,7 +62,7 @@ fn format_generic_entity(noun: &str, name: &Name, tparams: &TParams) -> String {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Silently promotes a Class to a ClassType, using default type arguments. It is up to the
     /// caller to ensure they are not calling this method on a TypedDict class, which should be
     /// promoted to TypedDict instead of ClassType.

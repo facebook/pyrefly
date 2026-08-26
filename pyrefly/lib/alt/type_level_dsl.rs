@@ -105,7 +105,7 @@ fn type_shape_dsl_slot_comparison_domain(
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Resolves the shape-specific helper calls retained during syntax validation.
     ///
     /// `FunctionKind` is the narrow boundary with Pyrefly's ordinary function model. Resolving

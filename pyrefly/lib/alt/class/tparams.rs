@@ -31,7 +31,7 @@ use crate::types::types::TParams;
 use crate::types::types::TParamsSource;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Calculate class type parameters in the case where we were able to predetermine
     /// syntactically (from looking at the base class expressions) that there are no legacy type variables.
     pub fn calculate_class_tparams_no_legacy(
