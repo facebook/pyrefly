@@ -3148,3 +3148,105 @@ del f.real_method.test  # E: has no attribute `test`
 name: str = f.real_method.__name__
 "#,
 );
+
+// `instance-var-assign` (issue #3750): assigning to a class-body-declared
+// instance variable (annotated, not `ClassVar`) via the class object is flagged
+// when the kind is enabled. Inherited fields and fields annotated with a default
+// are still instance variables, so they are flagged too. The existing
+// bad-assignment check still runs (both fire on separate paths).
+testcase!(
+    test_instance_var_assign_diagnostic,
+    TestEnv::new().enable_instance_var_assign_error(),
+    r#"
+from typing import ClassVar
+
+class C:
+    instance_var: int
+C.instance_var = 3  # E: Cannot set instance variable `instance_var` from the class
+
+# Annotated with a default: still an instance variable per the typing spec.
+class WithDefault:
+    x: int = 3
+WithDefault.x = 4  # E: Cannot set instance variable `x` from the class
+
+# Inherited fields keep their provenance through the MRO lookup.
+class Sub(C):
+    pass
+Sub.instance_var = 5  # E: Cannot set instance variable `instance_var` from the class
+
+# A type-incompatible value yields BOTH instance-var-assign and bad-assignment.
+C.instance_var = "oops"  # E: Cannot set instance variable `instance_var` from the class  # E: `Literal['oops']` is not assignable to attribute `instance_var` with type `int`
+
+# Suppressible via the standard directive.
+C.instance_var = 7  # pyrefly: ignore[instance-var-assign]
+    "#,
+);
+
+// Non-instance-variable fields must NOT trigger the new kind even when it is
+// enabled: unannotated assignments and ClassVars are class variables,
+// staticmethods become unannotated ClassAttributes, instance-only attributes
+// keep their existing no-access error, and instance writes are unaffected.
+testcase!(
+    test_instance_var_assign_non_instance_fields_not_flagged,
+    TestEnv::new().enable_instance_var_assign_error(),
+    r#"
+from typing import ClassVar, Generic, TypeVar
+
+class C:
+    unannotated = 1
+    cv: ClassVar[int] = 2
+
+    @staticmethod
+    def stat() -> int:
+        return 3
+
+def f() -> int:
+    return 4
+
+T = TypeVar("T")
+
+
+class G(Generic[T]):
+    item: T
+
+
+C.unannotated = 5
+C.cv = 6
+C.stat = f
+
+# Writing a ClassVar via an instance keeps firing the pre-existing mirror rule.
+C().cv = 7  # E: Cannot set field `cv`
+
+# Generic-class attribute access already has its own error; our rule must not
+# stack another one on top.
+
+# Instance-only attributes keep their pre-existing error on class access.
+class D:
+    def __init__(self) -> None:
+        self.only = 1
+D.only = 56  # E: Instance-only attribute `only` of class `D` is not visible on the class
+D().only = 57
+
+# Generic fields are unreachable via the class object (pre-existing no-access).
+G.item = 6  # E: Generic attribute `item` of class `G` is not visible on the class
+
+# Reads are never flagged, and writes via an INSTANCE are unaffected even when
+# the kind is enabled (the flag is set but emission requires a class base).
+class E:
+    read_only_use: int = 1
+print(E.read_only_use)
+print(E().read_only_use)
+E().read_only_use = 2
+    "#,
+);
+
+// `instance-var-assign` is off by default: assignments that WOULD be flagged in
+// strict mode emit nothing under the default configuration.
+testcase!(
+    test_instance_var_assign_off_by_default,
+    r#"
+class C:
+    instance_var: int
+C.instance_var = 3
+    "#,
+);

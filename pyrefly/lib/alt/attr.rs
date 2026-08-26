@@ -1350,7 +1350,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         };
         let ty = match class_attr {
-            ClassAttribute::ReadWrite(ty) | ClassAttribute::ReadOnly(ty, _) => ty,
+            ClassAttribute::ReadWrite(ty, _) | ClassAttribute::ReadOnly(ty, _) => ty,
             _ => return None,
         };
         let Type::BoundMethod(bound_method) = ty else {
@@ -1373,7 +1373,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         new_bound_method.func = BoundMethodType::Overload(filtered_overload);
         let new_method = self.heap.mk_bound_method(new_bound_method);
         Some(Attribute::ClassAttribute(match class_attr {
-            ClassAttribute::ReadWrite(_) => ClassAttribute::ReadWrite(new_method),
+            ClassAttribute::ReadWrite(_, is_instance_var) => {
+                ClassAttribute::ReadWrite(new_method, *is_instance_var)
+            }
             ClassAttribute::ReadOnly(_, reason) => {
                 ClassAttribute::ReadOnly(new_method, reason.clone())
             }
@@ -3122,7 +3124,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .into_iter()
                     .filter_map(|(attr, _)| {
                         match &attr {
-                            Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty))
+                            Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty, _))
                             | Attribute::ClassAttribute(ClassAttribute::ReadOnly(ty, _))
                             | Attribute::Simple(ty)
                             | Attribute::ClassAttribute(ClassAttribute::Property(ty, _, _))

@@ -56,6 +56,7 @@
     "inconsistent-inheritance": ["legacy", "default", "strict", "all"],
     "inconsistent-overload": ["legacy", "default", "strict", "all"],
     "inconsistent-overload-default": ["legacy", "default", "strict", "all"],
+    "instance-var-assign": ["strict", "all"],
     "internal-error": ["legacy", "default", "strict", "all"],
     "invalid-abstract-method": ["all"],
     "invalid-annotation": ["basic", "legacy", "default", "strict", "all"],

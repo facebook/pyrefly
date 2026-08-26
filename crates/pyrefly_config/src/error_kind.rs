@@ -228,6 +228,8 @@ pub enum ErrorKind {
     /// An inconsistency between a function parameter's type in an overload signature and its
     /// default value in the implementation.
     InconsistentOverloadDefault,
+    /// Cannot assign to a class-body-declared instance variable via the class (e.g. `C.instance_var = ...`).
+    InstanceVarAssign,
     /// Internal Pyrefly error.
     InternalError,
     /// An `@abstractmethod` is defined in a class that is not abstract.
@@ -563,6 +565,7 @@ impl ErrorKind {
             ErrorKind::ImplicitReexport => Severity::Ignore,
             ErrorKind::ImplicitlyDefinedAttribute => Severity::Ignore,
             ErrorKind::IncompatibleComparison => Severity::Ignore,
+            ErrorKind::InstanceVarAssign => Severity::Ignore,
             ErrorKind::InvalidAbstractMethod => Severity::Ignore,
             ErrorKind::InvalidCast => Severity::Ignore,
             ErrorKind::InvalidDecorator => Severity::Warn,

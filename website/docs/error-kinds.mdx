@@ -901,6 +901,26 @@ def f(x: bool = False) -> int | None:
     return 0 if x else None
 ```
 
+## instance-var-assign
+
+Default severity: `ignore`
+
+Assigning to an instance variable via the class object — e.g. `C.instance_var = ...`
+where the class body declares `instance_var: int` without `ClassVar` — misuses the
+declaration: instance variables should be assigned on instances. Pyrefly flags such
+assignments when this kind is enabled (it is on in strict mode).
+
+```python
+class C:
+    instance_var: int
+C.instance_var = 3  # Cannot set instance variable `instance_var` from the class [instance-var-assign]
+```
+
+Only class-body-declared, annotated, non-`ClassVar` attributes are flagged.
+Unannotated assignments and `ClassVar` declarations are class variables and may be
+assigned via the class; inherited fields are also covered. Assignments via `setattr`
+and `del` are out of scope.
+
 ## internal-error
 
 Ideally you'll never see this one. If you do, please consider [filing a bug](https://github.com/facebook/pyrefly/issues).

@@ -179,6 +179,7 @@ impl Preset {
                 let errors = HashMap::from([
                     (ErrorKind::DirectAbstractBaseInstantiation, Severity::Error),
                     (ErrorKind::ImplicitAny, Severity::Error),
+                    (ErrorKind::InstanceVarAssign, Severity::Error),
                     (ErrorKind::MissingOverrideDecorator, Severity::Error),
                     (ErrorKind::OpenUnpacking, Severity::Error),
                     (ErrorKind::PotentialBadKeywordArgument, Severity::Error),
