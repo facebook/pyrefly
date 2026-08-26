@@ -298,6 +298,12 @@ def test_normal_tensor_tensor():
     assert_type(result, Tensor[[3, 4]])
 
 
+def test_normal_tensor_tensor_mean_shape():
+    mean: Tensor[[2, 3]] = torch.randn(2, 3)
+    std: Tensor[[6]] = torch.randn(6)
+    assert_type(torch.normal(mean, std), Tensor[[2, 3]])
+
+
 def test_normal_tensor_scalar():
     """Normal with tensor mean, scalar std"""
     mean: Tensor[[2, 5]] = torch.randn(2, 5)
@@ -316,3 +322,8 @@ def test_normal_scalar_scalar_size():
     """Normal with scalar mean/std and size parameter"""
     result = torch.normal(0.0, 1.0, size=(3, 4))
     assert_type(result, Tensor[[3, 4]])
+
+
+def test_normal_scalar_scalar_shape[N: IntVar](n: Int[N], plain: int):
+    assert_type(torch.normal(0.0, 1.0, size=()), Tensor[[]])
+    assert_type(torch.normal(0.0, 1.0, size=(n, plain)), Tensor[[N, int]])

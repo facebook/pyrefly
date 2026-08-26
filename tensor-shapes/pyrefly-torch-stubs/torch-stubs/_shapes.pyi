@@ -374,10 +374,6 @@ def stack_ir(tensors: list[ShapedArray], dim: int = 0) -> ShapedArray:
     return ShapedArray(shape=insert_dim(first.shape, d, len(tensors)))
 
 @shape_dsl_function
-def broadcast_to_ir(self: ShapedArray, shape: list[int | symint]) -> ShapedArray:
-    return ShapedArray(shape=shape)
-
-@shape_dsl_function
 def tile_ir(self: ShapedArray, dims: list[int]) -> ShapedArray:
     rank = len(self.shape)
     if len(dims) > rank:
@@ -580,14 +576,6 @@ def repeat_interleave_input_ir(
 ) -> ShapedArray:
     return repeat_interleave_ir(input, repeats, dim, output_size)
 
-@shape_dsl_function
-def randn_ir(size: list[int | symint]) -> ShapedArray:
-    return ShapedArray(shape=size)
-
-@shape_dsl_function
-def randint_ir(low: int, high: int, size: list[int | symint]) -> ShapedArray:
-    return ShapedArray(shape=size)
-
 @type_shape_dsl_function
 def arange_extent(end: Int) -> Int:
     # Construct zero in the `Int` domain so it can be passed as the starting dimension.
@@ -613,20 +601,6 @@ def arange_step_extent(start: Int, end: Int, step: int) -> Int:
             negative_step = 0 - step
             return ((0 - difference) + negative_step - 1) // negative_step
     return difference // step
-
-@shape_dsl_function
-def normal_ir(
-    mean: ShapedArray | None = None,
-    std: ShapedArray | None = None,
-    size: list[int] | None = None,
-) -> ShapedArray:
-    if size != None:
-        return ShapedArray(shape=[s for s in size])
-    if mean != None:
-        return ShapedArray(shape=mean.shape)
-    if std != None:
-        return ShapedArray(shape=std.shape)
-    return Unknown
 
 @type_shape_dsl_function
 def diag_embed_shape(shape: IntTuple, offset: int, dim1: int, dim2: int) -> IntTuple:

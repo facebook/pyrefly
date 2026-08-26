@@ -20,7 +20,6 @@ from shape_extensions import broadcast, Elements, Flag, IntTuple, IntVar, uses_s
 from torch._shapes import (
     arange_extent,
     arange_step_extent,
-    broadcast_to_ir,
     cat_ir,
     chunk_ir,
     diag_embed_shape,
@@ -34,11 +33,8 @@ from torch._shapes import (
     matmul_shape,
     movedim_ir,
     multinomial_shape,
-    normal_ir,
     numel_shape,
     permute_ir,
-    randint_ir,
-    randn_ir,
     reduce_shape,
     reduce_shape_no_keep,
     repeat_interleave_input_ir,
@@ -1580,64 +1576,78 @@ def flatten(self: Tensor, start_dim: int = 0, end_dim: int = -1) -> Tensor:
 
 # ==== Tensor Creation Functions ====
 
-@uses_shape_dsl(randn_ir)
 @overload
-def randn(*size: int, dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor with random values. Shape inference via meta-shape: torch.randn"""
+def randn[Shape: IntTuple](
+    *size: *Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor with random values. Shape is inferred from `size`."""
     ...
 
 @overload
-def randn(size: tuple[int, ...], dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor with random values (tuple size). Shape inference via meta-shape: torch.randn"""
-    ...
-
-@uses_shape_dsl(randn_ir)
-@overload
-def rand(*size: int, dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor with random values [0, 1). Shape inference via meta-shape: torch.rand"""
+def randn[Shape: IntTuple](
+    size: Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor with random values. Shape is inferred from `size`."""
     ...
 
 @overload
-def rand(size: tuple[int, ...], dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor with random values (tuple size). Shape inference via meta-shape: torch.rand"""
-    ...
-
-@uses_shape_dsl(randn_ir)
-@overload
-def zeros(*size: int, dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor filled with zeros. Shape inference via meta-shape: torch.zeros"""
+def rand[Shape: IntTuple](
+    *size: *Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor with random values [0, 1). Shape is inferred from `size`."""
     ...
 
 @overload
-def zeros(size: tuple[int, ...], dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor filled with zeros (tuple size). Shape inference via meta-shape: torch.zeros"""
-    ...
-
-@uses_shape_dsl(randn_ir)
-@overload
-def ones(*size: int, dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor filled with ones. Shape inference via meta-shape: torch.ones"""
+def rand[Shape: IntTuple](
+    size: Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor with random values [0, 1). Shape is inferred from `size`."""
     ...
 
 @overload
-def ones(size: tuple[int, ...], dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor filled with ones (tuple size). Shape inference via meta-shape: torch.ones"""
-    ...
-
-@uses_shape_dsl(randn_ir)
-@overload
-def empty(*size: int, dtype: Any = None, device: Any = None) -> Tensor:
-    """Create uninitialized tensor. Shape inference via meta-shape: torch.empty"""
+def zeros[Shape: IntTuple](
+    *size: *Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor filled with zeros. Shape is inferred from `size`."""
     ...
 
 @overload
-def empty(size: tuple[int, ...], dtype: Any = None, device: Any = None) -> Tensor:
-    """Create uninitialized tensor (tuple size). Shape inference via meta-shape: torch.empty"""
+def zeros[Shape: IntTuple](
+    size: Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor filled with zeros. Shape is inferred from `size`."""
     ...
 
-@uses_shape_dsl(randn_ir)
-def full(size: tuple[int, ...], fill_value: float) -> Tensor:
-    """Create tensor filled with value. Shape inference via meta-shape: torch.full"""
+@overload
+def ones[Shape: IntTuple](
+    *size: *Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor filled with ones. Shape is inferred from `size`."""
+    ...
+
+@overload
+def ones[Shape: IntTuple](
+    size: Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor filled with ones. Shape is inferred from `size`."""
+    ...
+
+@overload
+def empty[Shape: IntTuple](
+    *size: *Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create uninitialized tensor. Shape is inferred from `size`."""
+    ...
+
+@overload
+def empty[Shape: IntTuple](
+    size: Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create uninitialized tensor. Shape is inferred from `size`."""
+    ...
+
+def full[Shape: IntTuple](size: Shape, fill_value: float) -> Tensor[Shape]:
+    """Create tensor filled with a value. Shape is inferred from `size`."""
     ...
 
 @overload
@@ -1693,9 +1703,8 @@ def eye[N: IntVar](n: _Int[N]) -> Tensor[[N, N]]:
 
 # ==== Shape Manipulation Functions ====
 
-@uses_shape_dsl(broadcast_to_ir)
-def broadcast_to(self: Tensor, shape: tuple[int, ...]) -> Tensor:
-    """Broadcast tensor to shape. Shape inference via meta-shape: torch.broadcast_to"""
+def broadcast_to[Shape: IntTuple](self: Tensor, shape: Shape) -> Tensor[Shape]:
+    """Broadcast a tensor to `shape`."""
     ...
 
 @uses_shape_dsl(tile_ir)
@@ -2564,25 +2573,26 @@ def multinomial[Shape: IntTuple, NumSamples: IntVar](
     """Sample from multinomial distribution. Shape inference via meta-shape: torch.multinomial"""
     ...
 
-@uses_shape_dsl(normal_ir)
 @overload
-def normal(mean: Tensor, std: Tensor) -> Tensor:
-    """Sample from normal distribution (tensor mean, tensor std). Shape inference via meta-shape: torch.normal"""
+def normal[MeanShape: IntTuple](
+    mean: Tensor[MeanShape], std: Tensor
+) -> Tensor[MeanShape]:
+    """Sample from a normal distribution. The output has the mean tensor's shape."""
     ...
 
 @overload
-def normal(mean: Tensor, std: float) -> Tensor:
-    """Sample from normal distribution (tensor mean, scalar std). Shape inference via meta-shape: torch.normal"""
+def normal[Shape: IntTuple](mean: Tensor[Shape], std: float) -> Tensor[Shape]:
+    """Sample from a normal distribution. The output has the mean tensor's shape."""
     ...
 
 @overload
-def normal(mean: float, std: Tensor) -> Tensor:
-    """Sample from normal distribution (scalar mean, tensor std). Shape inference via meta-shape: torch.normal"""
+def normal[Shape: IntTuple](mean: float, std: Tensor[Shape]) -> Tensor[Shape]:
+    """Sample from a normal distribution. The output has the standard-deviation tensor's shape."""
     ...
 
 @overload
-def normal(mean: float, std: float, size: tuple[int, ...]) -> Tensor:
-    """Sample from normal distribution (scalar mean/std, explicit size). Shape inference via meta-shape: torch.normal"""
+def normal[Shape: IntTuple](mean: float, std: float, size: Shape) -> Tensor[Shape]:
+    """Sample from a normal distribution. Shape is inferred from `size`."""
     ...
 
 def poisson[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
@@ -2625,17 +2635,16 @@ def tensor(
     """Create tensor from data. Returns shapeless tensor (shape depends on input data)."""
     ...
 
-@uses_shape_dsl(randint_ir)
-def randint(
+def randint[Shape: IntTuple](
     low: int,
     high: int,
-    size: tuple[int, ...],
+    size: Shape,
     *,
     dtype: Any = None,
     device: Any = None,
     requires_grad: bool = False,
-) -> Tensor:
-    """Create tensor of random integers. Returns shapeless tensor (shape depends on size arg)."""
+) -> Tensor[Shape]:
+    """Create a tensor of random integers. Shape is inferred from `size`."""
     ...
 
 # ==============================================================================
