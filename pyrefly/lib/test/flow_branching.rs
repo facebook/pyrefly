@@ -1313,13 +1313,30 @@ def test(
 );
 
 testcase!(
-    test_redundant_condition_not_redundant_for_nonfinal_class,
+    test_redundant_condition_nonfinal_class,
     r#"
 class A:
     pass
 def f(a: A):
-    # This condition is not redundant because `a` could be a falsy instance of a subclass of `A`
-    if a:
+    if a:  # E: Instance of `A` used as condition
+        pass
+    "#,
+);
+
+testcase!(
+    test_redundant_condition_repro_issue_4665,
+    r#"
+class AlwaysTruthy:
+    pass
+
+def predicate() -> bool:
+    return True
+
+def check(value: AlwaysTruthy) -> None:
+    if value:  # E: Instance of `AlwaysTruthy` used as condition
+        pass
+
+    if predicate:  # E: Function object `predicate` used as condition
         pass
     "#,
 );
