@@ -920,6 +920,15 @@ class Update:
     def values(self, **kwargs: object) -> Update: ...
     "#,
     );
+    env.add(
+        "sqlalchemy.sql.selectable",
+        r#"
+class Select:
+    def where(self, *criteria: object) -> Select: ...
+    def filter_by(self, **kwargs: object) -> Select: ...
+    def join(self, target: object) -> Select: ...
+    "#,
+    );
     env.add_with_path(
         "sqlalchemy.orm.decl_api",
         "sqlalchemy/orm/decl_api.py",
@@ -939,6 +948,8 @@ from .decl_api import DeclarativeBase as DeclarativeBase
         r#"
 from .sql.dml import Update as Update
 from .sql.elements import ColumnElement as ColumnElement
+from .sql.selectable import Select as Select
+def select(*entities: object) -> Select: ...
 def update(table: object) -> Update: ...
     "#,
     );
@@ -1015,6 +1026,47 @@ def update(table: object) -> CustomUpdate: ...
 
 # A same-named function outside SQLAlchemy must not trigger the special-case check.
 update(User).values(nam="alice")
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1072
+testcase!(
+    test_sqlalchemy_select_filter_by_checks_mapped_fields,
+    sqlalchemy_mapped_env(),
+    r#"
+import sqlalchemy as sa
+from sqlalchemy import select
+from sqlalchemy.orm import DeclarativeBase, Mapped
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    id: Mapped[int]
+    name: Mapped[str]
+
+select(User).filter_by(name="alice", id=1)
+sa.select(User).where(User.id == 1).filter_by(name=0)  # E: `Literal[0]` is not assignable to field `name` with type `str`
+select(User).filter_by(nam="alice")  # E: Unexpected SQLAlchemy filter_by field `nam`
+select(User).filter_by(id=1).filter_by(name="alice")
+
+# SQLAlchemy accepts a SQL expression wherever a column value is expected.
+def sql_expr() -> sa.ColumnElement[int]: ...
+select(User).filter_by(name=sql_expr())
+
+class Address(Base):
+    email: Mapped[str]
+
+# A join changes the namespace that filter_by uses, so defer to SQLAlchemy's typing.
+select(User).join(Address).filter_by(email="alice@example.com")
+
+class CustomSelect:
+    def filter_by(self, **kwargs: object) -> CustomSelect: ...
+
+def select_custom(entity: object) -> CustomSelect: ...
+
+# A same-named method outside SQLAlchemy must not trigger the special-case check.
+select_custom(User).filter_by(nam="alice")
     "#,
 );
 

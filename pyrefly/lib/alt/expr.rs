@@ -1055,7 +1055,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.check_pytorch_tensor_cuda_call(x, &callee_ty, errors);
         self.check_pytorch_print_tensor(x, &callee_ty, errors);
         self.check_pytorch_redundant_to_call(x, &callee_ty, errors);
-        self.check_sqlalchemy_update_values_call(x, errors);
+        self.check_sqlalchemy_keyword_call(x, errors);
         if let Some(d) = self.call_to_dict(&callee_ty, &x.arguments) {
             self.dict_infer(&d, hint, x.range, errors)
         } else if let Some(ty) = self
@@ -1387,18 +1387,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .emit();
     }
 
-    /// Validate `sqlalchemy.update(Model).values(field=...)` keyword arguments against the
-    /// `Mapped[...]` fields declared on `Model`.
-    fn check_sqlalchemy_update_values_call(&self, x: &ExprCall, errors: &ErrorCollector) {
+    /// Validate SQLAlchemy keyword filters and updates against the `Mapped[...]` fields on the
+    /// model that the statement targets.
+    fn check_sqlalchemy_keyword_call(&self, x: &ExprCall, errors: &ErrorCollector) {
         let Expr::Attribute(attr_expr) = &*x.func else {
             return;
         };
-        if attr_expr.attr.id.as_str() != "values" {
-            return;
-        }
-        let Some(model) = self.sqlalchemy_update_model_from_chain(&attr_expr.value) else {
-            return;
+        let (model, statement_name) = match attr_expr.attr.id.as_str() {
+            "values" => (
+                self.sqlalchemy_update_model_from_chain(&attr_expr.value),
+                "update",
+            ),
+            "filter_by" => (
+                self.sqlalchemy_select_model_from_chain(&attr_expr.value),
+                "filter_by",
+            ),
+            _ => return,
         };
+        let Some(model) = model else { return };
         let mapped_fields = self.sqlalchemy_mapped_model_fields(&model);
         if mapped_fields.is_empty() {
             return;
@@ -1429,7 +1435,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let mut builder = errors.error_builder(
                     field_identifier.range(),
                     ErrorKind::UnexpectedKeyword,
-                    format!("Unexpected SQLAlchemy update field `{field_name}`"),
+                    format!("Unexpected SQLAlchemy {statement_name} field `{field_name}`"),
                 );
                 if let Some(suggestion) = best_suggestion(
                     field_name,
@@ -1446,8 +1452,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let Expr::Call(call) = expr else {
             return None;
         };
-        if self.is_sqlalchemy_update_call(call) {
-            return self.sqlalchemy_update_model_from_call(call);
+        if let Some(model) = self.sqlalchemy_model_from_call(call, "update") {
+            return Some(model);
         }
         let Expr::Attribute(attr_expr) = &*call.func else {
             return None;
@@ -1455,14 +1461,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.sqlalchemy_update_model_from_chain(&attr_expr.value)
     }
 
-    fn is_sqlalchemy_update_call(&self, call: &ExprCall) -> bool {
+    fn sqlalchemy_select_model_from_chain(&self, expr: &Expr) -> Option<Class> {
+        let Expr::Call(call) = expr else {
+            return None;
+        };
+        if let Some(model) = self.sqlalchemy_model_from_call(call, "select") {
+            return Some(model);
+        }
+        let Expr::Attribute(attr_expr) = &*call.func else {
+            return None;
+        };
+        // Joins and explicit FROM clauses can change the namespace used by `filter_by`.
+        if matches!(
+            attr_expr.attr.id.as_str(),
+            "join" | "outerjoin" | "join_from" | "outerjoin_from" | "select_from"
+        ) {
+            return None;
+        }
+        self.sqlalchemy_select_model_from_chain(&attr_expr.value)
+    }
+
+    fn sqlalchemy_model_from_call(&self, call: &ExprCall, function_name: &str) -> Option<Class> {
         let errors = self.error_swallower();
         let func_ty = self.expr_infer(&call.func, &errors);
         let Some(FunctionKind::Def(func_id)) = func_ty.to_func_kind() else {
-            return false;
+            return None;
         };
-        func_id.qname.id().as_str() == "update"
-            && Self::is_sqlalchemy_module(func_id.qname.module_name())
+        if func_id.qname.id().as_str() != function_name
+            || !Self::is_sqlalchemy_module(func_id.qname.module_name())
+        {
+            return None;
+        }
+        let model_expr = call.arguments.args.first()?;
+        match self.expr_infer(model_expr, &errors) {
+            Type::ClassDef(cls) => Some(cls),
+            Type::Type(boxed) => match *boxed {
+                Type::ClassType(cls) => Some(cls.into_class_object()),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     fn is_sqlalchemy_module(module: ModuleName) -> bool {
@@ -1479,19 +1517,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Type::Annotated(inner, _) => Self::is_sqlalchemy_owned_type(inner),
             Type::Union(union) => union.members.iter().any(Self::is_sqlalchemy_owned_type),
             _ => false,
-        }
-    }
-
-    fn sqlalchemy_update_model_from_call(&self, call: &ExprCall) -> Option<Class> {
-        let model_expr = call.arguments.args.first()?;
-        let errors = self.error_swallower();
-        match self.expr_infer(model_expr, &errors) {
-            Type::ClassDef(cls) => Some(cls),
-            Type::Type(boxed) => match *boxed {
-                Type::ClassType(cls) => Some(cls.into_class_object()),
-                _ => None,
-            },
-            _ => None,
         }
     }
 
