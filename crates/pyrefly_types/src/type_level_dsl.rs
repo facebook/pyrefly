@@ -3830,18 +3830,42 @@ impl ValidatedTypeShapeDslFunction {
                         unreachable!("validated IntTuple index parameter evaluates to a shape")
                     }
                 };
-                let IntTupleView::Concrete(shape) = shape.view() else {
-                    return DslOutcome::Value(DslValue::Unknown);
-                };
-                let length = shape.len() as i128;
                 let index = i128::from(index);
-                let index = if index < 0 { index + length } else { index };
-                if index < 0 || index >= length {
-                    return DslOutcome::Invalid(ShapeError::ShapeComputation {
-                        message: "IntTuple index out of bounds".to_owned(),
-                    });
+                match shape.view() {
+                    IntTupleView::Concrete(shape) => {
+                        let length = shape.len() as i128;
+                        let index = if index < 0 { index + length } else { index };
+                        if index < 0 || index >= length {
+                            return DslOutcome::Invalid(ShapeError::ShapeComputation {
+                                message: "IntTuple index out of bounds".to_owned(),
+                            });
+                        }
+                        DslOutcome::Value(DslValue::Dimension(shape[index as usize].clone()))
+                    }
+                    IntTupleView::Unpacked { prefix, .. }
+                        if index >= 0
+                            && usize::try_from(index).is_ok_and(|index| index < prefix.len()) =>
+                    {
+                        let index =
+                            usize::try_from(index).expect("validated prefix index fits in usize");
+                        DslOutcome::Value(DslValue::Dimension(prefix[index].clone()))
+                    }
+                    // A symbolic-rank shape has no known total length, but indexes within its
+                    // fixed prefix or counting back within its fixed suffix are still known.
+                    IntTupleView::Unpacked { suffix, .. }
+                        if index < 0
+                            && usize::try_from(index.unsigned_abs())
+                                .is_ok_and(|offset| offset <= suffix.len()) =>
+                    {
+                        let offset = usize::try_from(index.unsigned_abs())
+                            .expect("validated suffix index fits in usize");
+                        let offset = suffix.len() - offset;
+                        DslOutcome::Value(DslValue::Dimension(suffix[offset].clone()))
+                    }
+                    IntTupleView::Unpacked { .. } | IntTupleView::Gradual => {
+                        DslOutcome::Value(DslValue::Unknown)
+                    }
                 }
-                DslOutcome::Value(DslValue::Dimension(shape[index as usize].clone()))
             }
             TypeShapeDslExpressionKind::DimensionTuple => {
                 let Expr::Tuple(tuple) = expression else {

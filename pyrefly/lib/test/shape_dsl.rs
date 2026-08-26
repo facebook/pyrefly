@@ -6949,7 +6949,7 @@ def test[N: IntVar, S: IntTuple](concrete: Tensor[[2, 3, 4]], symbolic: Tensor[[
     assert_type(apply_rank_two_prefix(gradual), Tensor[IntTuple])
     assert_type(apply_first_dimension(gradual), Tensor[IntTuple])
     assert_type(apply_rank_two_prefix(unpacked), Tensor[IntTuple])
-    assert_type(apply_first_dimension(unpacked), Tensor[IntTuple])
+    assert_type(apply_first_dimension(unpacked), Tensor[[2]])
     assert_type(apply_unknown(concrete), Tensor[IntTuple])
     apply_oob(concrete)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
     apply_negative_oob(concrete)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
@@ -8166,7 +8166,7 @@ def index_results[N: IntVar, Tail: IntTuple](
     reveal_type(apply_reverse(symbolic))  # E: revealed type: Tensor[[4, 3, N]]
     reveal_type(apply_select(symbolic, broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
     reveal_type(apply_select(gradual, 0))  # E: revealed type: Tensor[tuple[Unknown, ...]]
-    reveal_type(apply_select(unpacked, 0))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_select(unpacked, 0))  # E: revealed type: Tensor[[2]]
     reveal_type(apply_huge(symbolic))  # E: revealed type: Tensor[tuple[Unknown, ...]]
     reveal_type(apply_lazy(symbolic, False))  # E: revealed type: Tensor[[N, 3, 4]]
     reveal_type(apply_narrowed_comparison(symbolic, 0))  # E: revealed type: Tensor[[1]]
@@ -8406,6 +8406,27 @@ def test[S: IntTuple, T: IntTuple, N: IntVar](
     reveal_type(apply_qualified(gradual, right))  # E: revealed type: Tensor[[*tuple[int, ...], 5]]
     reveal_type(apply_qualified(left, gradual))  # E: revealed type: Tensor[[2, 3, *tuple[int, ...]]]
     apply_invalid_before_unknown(left, gradual)  # E: IntTuple index out of bounds
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_symbolic_suffix_index,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Elements, Int, IntTuple, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def last(shape: IntTuple) -> Int:
+    result = shape[-1]
+    return result
+
+def apply[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[[last(Shape)]]: ...
+
+def test[Batch: IntTuple, N: IntVar](x: Tensor[[*Elements[Batch], N]]) -> None:
+    assert_type(apply(x), Tensor[[N]])
 "#,
 );
 
