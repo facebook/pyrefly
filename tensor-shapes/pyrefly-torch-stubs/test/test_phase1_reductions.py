@@ -495,13 +495,19 @@ def test_all_any_tuple_dims() -> None:
 
 def check_unknown_rank_reduction(x: Tensor) -> None:
     assert_type(torch.sum(input=x, dim=0), Tensor[IntTuple])
+    assert_type(torch.sum(input=x, dim=-1), Tensor[IntTuple])
 
 
 def check_symbolic_rank_last_dim_reduction[Bs: IntTuple, N: IntVar](
     x: Tensor[[*Elements[Bs], N]],
+    keepdim: bool,
 ) -> None:
+    assert_type(torch.sum(x, dim=-1), Tensor[Bs])
     assert_type(x.mean(dim=-1, keepdim=True), Tensor[[*Elements[Bs], 1]])
+    assert_type(x.mean(dim=-1), Tensor[Bs])
+    assert_type(x.std(dim=-1, keepdim=True), Tensor[[*Elements[Bs], 1]])
     assert_type(x.std(dim=-1), Tensor[Bs])
+    assert_type(x.mean(dim=-1, keepdim=keepdim), Tensor[IntTuple])
 
 
 def check_symbolic_and_gradual_reductions[N: IntVar](

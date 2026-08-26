@@ -8,14 +8,16 @@ Type stubs for torch.nn.functional module.
 Functional neural network operations including convolution, pooling, activation, and normalization.
 """
 
+import builtins
 from typing import Literal, overload
 
-from shape_extensions import Elements, IntTuple, IntVar, uses_shape_dsl
+import shape_extensions
+from shape_extensions import Elements, Flag, IntTuple, IntVar, uses_shape_dsl
 from torch._shapes import (
     adaptive_pool_ir,
     conv_ir,
     conv_transpose_ir,
-    cosine_similarity_ir,
+    cosine_similarity_shape,
     interpolate_ir,
     loss_ir,
     pad_ir,
@@ -901,15 +903,10 @@ def scaled_dot_product_attention[
     """Scaled dot product attention. Shape inference via meta-shape: torch.nn.functional.scaled_dot_product_attention"""
     ...
 
-@uses_shape_dsl(cosine_similarity_ir)
-def cosine_similarity(
-    x1: Tensor, x2: Tensor, dim: int = 1, eps: float = 1e-8
-) -> Tensor:
-    """Cosine similarity: dot product along dim, normalized.
-
-    Shape inference via DSL (cosine_similarity_ir):
-    Output = broadcast(x1, x2) with dimension `dim` removed.
-    """
+def cosine_similarity[S1: IntTuple, S2: IntTuple, Dim: Flag[builtins.int]](
+    x1: Tensor[S1], x2: Tensor[S2], dim: Dim = 1, eps: float = 1e-8
+) -> Tensor[cosine_similarity_shape(shape_extensions.broadcast(S1, S2), Dim)]:
+    """Cosine similarity: dot product along dim, normalized."""
     ...
 
 def grid_sample[B: IntVar, C: IntVar, Hout: IntVar, Wout: IntVar](

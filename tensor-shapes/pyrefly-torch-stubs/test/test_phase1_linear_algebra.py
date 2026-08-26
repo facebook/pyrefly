@@ -7,6 +7,7 @@
 from typing import assert_type
 
 import torch
+from shape_extensions import IntVar
 from torch import Tensor
 
 # ==== torch.matmul ====
@@ -139,6 +140,31 @@ def test_mv_method():
     vec: Tensor[[4]] = torch.randn(4)
     result = mat.mv(vec)
     assert_type(result, Tensor[[3]])
+
+
+def test_mv_symbolic[M: IntVar, K: IntVar](
+    mat: Tensor[[M, K]], vec: Tensor[[K]]
+) -> None:
+    assert_type(torch.mv(mat, vec), Tensor[[M]])
+    assert_type(mat.mv(vec), Tensor[[M]])
+
+
+def test_outer():
+    left: Tensor[[3]] = torch.randn(3)
+    right: Tensor[[5]] = torch.randn(5)
+    assert_type(torch.outer(left, right), Tensor[[3, 5]])
+
+
+def test_outer_symbolic[M: IntVar, N: IntVar](
+    left: Tensor[[M]], right: Tensor[[N]]
+) -> None:
+    assert_type(torch.outer(left, right), Tensor[[M, N]])
+
+
+def test_mv_outer_bare_tensors(left: Tensor, right: Tensor) -> None:
+    assert_type(torch.mv(left, right), Tensor[[int]])
+    assert_type(left.mv(right), Tensor[[int]])
+    assert_type(torch.outer(left, right), Tensor[[int, int]])
 
 
 # ==== torch.dot (dot product) ====

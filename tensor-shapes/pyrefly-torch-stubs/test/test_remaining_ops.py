@@ -162,6 +162,10 @@ def test_empty_like_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     assert_type(y, Tensor[[N, M]])
 
 
+def test_tolist_is_gradual(x: Tensor[[2, 3]]) -> None:
+    assert_type(x.tolist(), Any)
+
+
 # Test creation operations
 _t35 = torch.randn(3, 5)
 test_zeros_like_symbolic(_t35)

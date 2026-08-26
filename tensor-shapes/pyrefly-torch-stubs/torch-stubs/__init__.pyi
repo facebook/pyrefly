@@ -13,7 +13,7 @@ in `torch/_shapes.pyi` and evaluated by the DSL interpreter in
 """
 
 import builtins
-from typing import Any, Literal, overload, Self, TYPE_CHECKING
+from typing import Any, overload, Self, TYPE_CHECKING
 
 import shape_extensions
 from shape_extensions import broadcast, Elements, Flag, IntTuple, IntVar, uses_shape_dsl
@@ -27,19 +27,14 @@ from torch._shapes import (
     eig_shape,
     einsum_ir,
     expand_ir,
-    eye_ir,
     flatten_ir,
-    index_select_ir,
+    index_select_shape,
     item_ir,
-    linspace_ir,
     matmul_ir,
     movedim_ir,
-    multinomial_ir,
-    mv_ir,
-    narrow_ir,
+    multinomial_shape,
     normal_ir,
     numel_ir,
-    outer_ir,
     permute_ir,
     randint_ir,
     randn_ir,
@@ -48,22 +43,21 @@ from torch._shapes import (
     repeat_interleave_input_ir,
     repeat_interleave_ir,
     repeat_ir,
+    replace_axis_extent,
     reshape_ir,
-    select_ir,
-    size_ir,
+    select_shape,
+    size_dim_shape,
     slogdet_shape,
     split_ir,
-    squeeze_ir,
+    squeeze_shape,
     stack_ir,
     tensordot_ir,
     tile_ir,
-    tolist_ir,
-    topk_ir,
-    transpose_ir,
-    tri_indices_ir,
-    unbind_ir,
+    topk_shape,
+    transpose_shape,
+    unbind_shape,
     unfold_ir,
-    unsqueeze_ir,
+    unsqueeze_shape,
 )
 
 if TYPE_CHECKING:
@@ -271,8 +265,13 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Flatten dimensions. Shape inference via meta-shape: torch.flatten"""
         ...
 
-    @uses_shape_dsl(transpose_ir)
-    def transpose(self: Tensor, dim0: int, dim1: int) -> Tensor:
+    def transpose[
+        Shape: IntTuple,
+        Dim0: Flag[builtins.int],
+        Dim1: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], dim0: Dim0, dim1: Dim1
+    ) -> Tensor[transpose_shape(Shape, Dim0, Dim1)]:
         """Transpose two dimensions. Shape inference via meta-shape: torch.transpose"""
         ...
 
@@ -287,13 +286,15 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Permute dimensions. Shape inference via meta-shape: torch.Tensor.permute"""
         ...
 
-    @uses_shape_dsl(squeeze_ir)
-    def squeeze(self: Tensor, dim: int | None = None) -> Tensor:
+    def squeeze[Shape: IntTuple, Dim: Flag[builtins.int | None]](
+        self: Tensor[Shape], dim: Dim = None
+    ) -> Tensor[squeeze_shape(Shape, Dim)]:
         """Remove dimensions of size 1. Shape inference via meta-shape: torch.squeeze"""
         ...
 
-    @uses_shape_dsl(unsqueeze_ir)
-    def unsqueeze(self: Tensor, dim: int) -> Tensor:
+    def unsqueeze[Shape: IntTuple, Dim: Flag[builtins.int]](
+        self: Tensor[Shape], dim: Dim
+    ) -> Tensor[unsqueeze_shape(Shape, Dim)]:
         """Add dimension of size 1. Shape inference via meta-shape: torch.unsqueeze"""
         ...
 
@@ -466,9 +467,8 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Returns Python scalar from 0-dimensional tensor. Shape inference via meta-shape: torch.Tensor.item"""
         ...
 
-    @uses_shape_dsl(tolist_ir)
     def tolist(self: Tensor) -> Any:
-        """Returns tensor as nested Python list. Shape inference via meta-shape: torch.Tensor.tolist"""
+        """Returns tensor as a nested Python list."""
         ...
 
     @uses_shape_dsl(tile_ir)
@@ -476,13 +476,19 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Tile tensor. Shape inference via meta-shape: torch.Tensor.tile"""
         ...
 
-    @uses_shape_dsl(select_ir)
-    def select(self: Tensor, dim: int, index: int) -> Tensor:
+    def select[Shape: IntTuple, Dim: Flag[builtins.int]](
+        self: Tensor[Shape], dim: Dim, index: int
+    ) -> Tensor[select_shape(Shape, Dim)]:
         """Select along dimension. Shape inference via meta-shape: torch.Tensor.select"""
         ...
 
-    @uses_shape_dsl(narrow_ir)
-    def narrow(self: Tensor, dim: int, start: int, length: int) -> Tensor:
+    def narrow[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int],
+        Length: IntVar,
+    ](
+        self: Tensor[Shape], dim: Dim, start: int, length: _Int[Length]
+    ) -> Tensor[replace_axis_extent(Shape, Dim, Length)]:
         """Narrow tensor along dimension. Shape inference via meta-shape: torch.Tensor.narrow"""
         ...
 
@@ -506,8 +512,13 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Split tensor into chunks. Shape inference via meta-shape: torch.Tensor.chunk"""
         ...
 
-    @uses_shape_dsl(index_select_ir)
-    def index_select(self: Tensor, dim: int, index: Tensor) -> Tensor:
+    def index_select[
+        Shape: IntTuple,
+        Dim: Flag[builtins.int],
+        IndexShape: IntTuple,
+    ](
+        self: Tensor[Shape], dim: Dim, index: Tensor[IndexShape]
+    ) -> Tensor[index_select_shape(Shape, Dim, IndexShape)]:
         """Select elements along dimension. Shape inference via meta-shape: torch.Tensor.index_select"""
         ...
 
@@ -529,8 +540,9 @@ class Tensor[Shape: _Shape = _AnyShape]:
 
     # ==== Phase 1.1: Missing Shape Operations (Methods) ====
 
-    @uses_shape_dsl(unbind_ir)
-    def unbind(self: Tensor, dim: int = 0) -> tuple[Tensor, ...]:
+    def unbind[Shape: IntTuple, Dim: Flag[builtins.int]](
+        self: Tensor[Shape], dim: Dim = 0
+    ) -> tuple[Tensor[unbind_shape(Shape, Dim)], ...]:
         """Remove dimension by slicing along it. Shape inference via meta-shape: torch.Tensor.unbind"""
         ...
 
@@ -565,16 +577,12 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Returns sliding window view. Shape inference via meta-shape: torch.Tensor.unfold"""
         ...
 
-    @uses_shape_dsl(size_ir)
     @overload
-    def size(self: Tensor) -> tuple[builtins.int, ...]:
-        """Returns the size of the tensor as a tuple. Shape inference via meta-shape: torch.Tensor.size"""
-        ...
-
+    def size[Shape: IntTuple](self: Tensor[Shape]) -> Shape: ...
     @overload
-    def size(self: Tensor, dim: builtins.int) -> builtins.int:
-        """Returns the size of a specific dimension. Shape inference via meta-shape: torch.Tensor.size"""
-        ...
+    def size[Shape: IntTuple, Dim: Flag[builtins.int]](
+        self: Tensor[Shape], dim: Dim
+    ) -> _Int[size_dim_shape(Shape, Dim)]: ...
 
     # ==== Reduction Operations ====
     # Handled by meta-shape functions - simplified signatures
@@ -589,21 +597,6 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Sum along dimension(s). Shape inference via meta-shape: torch.Tensor.sum"""
         ...
 
-    # TODO(stroxler): Remove the narrow mean/std overloads once V2 can reduce a
-    # known suffix of a symbolic-rank IntTuple.
-    @overload
-    def mean[Batch: IntTuple, N: IntVar](
-        self: Tensor[[*Elements[Batch], N]],
-        dim: Literal[-1],
-        keepdim: Literal[True],
-    ) -> Tensor[[*Elements[Batch], 1]]: ...
-    @overload
-    def mean[Batch: IntTuple, N: IntVar](
-        self: Tensor[[*Elements[Batch], N]],
-        dim: Literal[-1],
-        keepdim: Literal[False] = False,
-    ) -> Tensor[Batch]: ...
-    @overload
     def mean[
         Shape: IntTuple,
         Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
@@ -654,19 +647,6 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Product along dimension(s). Shape inference via meta-shape: torch.prod"""
         ...
 
-    @overload
-    def std[Batch: IntTuple, N: IntVar](
-        self: Tensor[[*Elements[Batch], N]],
-        dim: Literal[-1],
-        keepdim: Literal[True],
-    ) -> Tensor[[*Elements[Batch], 1]]: ...
-    @overload
-    def std[Batch: IntTuple, N: IntVar](
-        self: Tensor[[*Elements[Batch], N]],
-        dim: Literal[-1],
-        keepdim: Literal[False] = False,
-    ) -> Tensor[Batch]: ...
-    @overload
     def std[
         Shape: IntTuple,
         Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],
@@ -802,10 +782,16 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Mode along dimension. Returns (values, indices). Shape inference via meta-shape: torch.Tensor.mode"""
         ...
 
-    @uses_shape_dsl(topk_ir)
-    def topk(
-        self: Tensor, k: int, dim: int = -1, largest: bool = True, sorted: bool = True
-    ) -> tuple[Tensor, Tensor]:
+    def topk[Shape: IntTuple, K: IntVar, Dim: Flag[builtins.int]](
+        self: Tensor[Shape],
+        k: _Int[K],
+        dim: Dim = -1,
+        largest: bool = True,
+        sorted: bool = True,
+    ) -> tuple[
+        Tensor[topk_shape(Shape, Dim, K)],
+        Tensor[topk_shape(Shape, Dim, K)],
+    ]:
         """Top k elements. Returns (values, indices). Shape inference via meta-shape: torch.Tensor.topk"""
         ...
 
@@ -867,9 +853,8 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Batch matrix multiplication (3D @ 3D). Output: [B, N, M]."""
         ...
 
-    @uses_shape_dsl(mv_ir)
-    def mv(self: Tensor, vec: Tensor) -> Tensor:
-        """Matrix-vector multiplication. Shape inference via meta-shape: torch.Tensor.mv"""
+    def mv[M: IntVar, K: IntVar](self: Tensor[[M, K]], vec: Tensor[[K]]) -> Tensor[[M]]:
+        """Matrix-vector multiplication (2D @ 1D). Output: [M]."""
         ...
 
     def dot(self: Tensor, other: Tensor) -> Tensor[[]]:
@@ -1344,10 +1329,11 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Sample from Bernoulli distribution in-place. Shape inference via generic fixture signature."""
         ...
 
-    @uses_shape_dsl(multinomial_ir)
-    def multinomial(
-        self: Tensor, num_samples: int, replacement: bool = False
-    ) -> Tensor:
+    def multinomial[Shape: IntTuple, NumSamples: IntVar](
+        self: Tensor[Shape],
+        num_samples: _Int[NumSamples],
+        replacement: bool = False,
+    ) -> Tensor[multinomial_shape(Shape, NumSamples)]:
         """Sample from multinomial distribution. Shape inference via meta-shape: torch.Tensor.multinomial"""
         ...
 
@@ -1402,8 +1388,13 @@ def stack(tensors: list[Tensor] | tuple[Tensor, ...], dim: int = 0) -> Tensor:
     """Stack tensors (adds new dimension)."""
     ...
 
-@uses_shape_dsl(transpose_ir)
-def transpose(self: Tensor, dim0: int, dim1: int) -> Tensor:
+def transpose[
+    Shape: IntTuple,
+    Dim0: Flag[builtins.int],
+    Dim1: Flag[builtins.int],
+](
+    self: Tensor[Shape], dim0: Dim0, dim1: Dim1
+) -> Tensor[transpose_shape(Shape, Dim0, Dim1)]:
     """Transpose two dimensions. Shape inference via meta-shape: torch.transpose"""
     ...
 
@@ -1418,13 +1409,15 @@ def reshape(self: Tensor, shape: tuple[int, ...]) -> Tensor:
     """Reshape tensor. Shape inference via meta-shape: torch.reshape"""
     ...
 
-@uses_shape_dsl(squeeze_ir)
-def squeeze(self: Tensor, dim: int | None = None) -> Tensor:
+def squeeze[Shape: IntTuple, Dim: Flag[builtins.int | None]](
+    self: Tensor[Shape], dim: Dim = None
+) -> Tensor[squeeze_shape(Shape, Dim)]:
     """Remove dimensions of size 1. Shape inference via meta-shape: torch.squeeze"""
     ...
 
-@uses_shape_dsl(unsqueeze_ir)
-def unsqueeze(self: Tensor, dim: int) -> Tensor:
+def unsqueeze[Shape: IntTuple, Dim: Flag[builtins.int]](
+    self: Tensor[Shape], dim: Dim
+) -> Tensor[unsqueeze_shape(Shape, Dim)]:
     """Add dimension of size 1. Shape inference via meta-shape: torch.unsqueeze"""
     ...
 
@@ -1664,16 +1657,19 @@ def arange(
     """Create 1D tensor with range [start, end) with step. Shape inference via meta-shape: torch.arange"""
     ...
 
-@uses_shape_dsl(linspace_ir)
-def linspace(
-    start: float, end: float, steps: int, *, dtype: Any = None, device: Any = None
-) -> Tensor:
-    """Create 1D tensor with linearly spaced values. Shape inference via meta-shape: torch.linspace"""
+def linspace[Steps: IntVar](
+    start: float,
+    end: float,
+    steps: _Int[Steps],
+    *,
+    dtype: Any = None,
+    device: Any = None,
+) -> Tensor[[Steps]]:
+    """Create a 1D tensor with one linearly spaced value per step."""
     ...
 
-@uses_shape_dsl(eye_ir)
-def eye(n: int) -> Tensor:
-    """Create 2D identity matrix. Shape inference via meta-shape: torch.eye"""
+def eye[N: IntVar](n: _Int[N]) -> Tensor[[N, N]]:
+    """Create a square 2D identity matrix."""
     ...
 
 # ==== Shape Manipulation Functions ====
@@ -1688,13 +1684,15 @@ def tile(self: Tensor, dims: tuple[int, ...]) -> Tensor:
     """Tile tensor by repeating. Shape inference via meta-shape: torch.tile"""
     ...
 
-@uses_shape_dsl(select_ir)
-def select(self: Tensor, dim: int, index: int) -> Tensor:
+def select[Shape: IntTuple, Dim: Flag[builtins.int]](
+    self: Tensor[Shape], dim: Dim, index: int
+) -> Tensor[select_shape(Shape, Dim)]:
     """Select along dimension. Shape inference via meta-shape: torch.select"""
     ...
 
-@uses_shape_dsl(narrow_ir)
-def narrow(self: Tensor, dim: int, start: int, length: int) -> Tensor:
+def narrow[Shape: IntTuple, Dim: Flag[builtins.int], Length: IntVar](
+    self: Tensor[Shape], dim: Dim, start: int, length: _Int[Length]
+) -> Tensor[replace_axis_extent(Shape, Dim, Length)]:
     """Narrow tensor along dimension. Shape inference via meta-shape: torch.narrow"""
     ...
 
@@ -1710,8 +1708,13 @@ def chunk(self: Tensor, chunks: int, dim: int = 0) -> tuple[Tensor, ...]:
     """Split tensor into chunks. Shape inference via meta-shape: torch.chunk"""
     ...
 
-@uses_shape_dsl(index_select_ir)
-def index_select(self: Tensor, dim: int, index: Tensor) -> Tensor:
+def index_select[
+    Shape: IntTuple,
+    Dim: Flag[builtins.int],
+    IndexShape: IntTuple,
+](
+    self: Tensor[Shape], dim: Dim, index: Tensor[IndexShape]
+) -> Tensor[index_select_shape(Shape, Dim, IndexShape)]:
     """Select elements along dimension. Shape inference via meta-shape: torch.index_select"""
     ...
 
@@ -1733,8 +1736,9 @@ def masked_select(self: Tensor, mask: Tensor) -> Tensor[[Any]]:
 
 # ==== Phase 1.1: Missing Shape Operations ====
 
-@uses_shape_dsl(unbind_ir)
-def unbind(self: Tensor, dim: int = 0) -> tuple[Tensor, ...]:
+def unbind[Shape: IntTuple, Dim: Flag[builtins.int]](
+    self: Tensor[Shape], dim: Dim = 0
+) -> tuple[Tensor[unbind_shape(Shape, Dim)], ...]:
     """Remove dimension by slicing along it. Shape inference via meta-shape: torch.unbind"""
     ...
 
@@ -1885,10 +1889,16 @@ def mode[Shape: IntTuple, Dim: Flag[builtins.int], Keepdim: Flag[builtins.bool]]
     """Mode along dimension. Returns (values, indices). Shape inference via meta-shape: torch.mode"""
     ...
 
-@uses_shape_dsl(topk_ir)
-def topk(
-    self: Tensor, k: int, dim: int = -1, largest: bool = True, sorted: bool = True
-) -> tuple[Tensor, Tensor]:
+def topk[Shape: IntTuple, K: IntVar, Dim: Flag[builtins.int]](
+    self: Tensor[Shape],
+    k: _Int[K],
+    dim: Dim = -1,
+    largest: bool = True,
+    sorted: bool = True,
+) -> tuple[
+    Tensor[topk_shape(Shape, Dim, K)],
+    Tensor[topk_shape(Shape, Dim, K)],
+]:
     """Top k elements. Returns (values, indices). Shape inference via meta-shape: torch.topk"""
     ...
 
@@ -2005,14 +2015,16 @@ def triu[Shape: IntTuple](input: Tensor[Shape], diagonal: int = 0) -> Tensor[Sha
     """Upper triangular part. Shape inference via generic fixture signature."""
     ...
 
-@uses_shape_dsl(tri_indices_ir)
-def tril_indices(row: int, col: int, offset: int = 0) -> Tensor:
-    """Indices of lower triangular part. Shape inference via meta-shape: torch.tril_indices"""
+def tril_indices(
+    row: builtins.int, col: builtins.int, offset: builtins.int = 0
+) -> Tensor[[2, Any]]:
+    """Indices of the lower triangular part. The count depends on the argument values."""
     ...
 
-@uses_shape_dsl(tri_indices_ir)
-def triu_indices(row: int, col: int, offset: int = 0) -> Tensor:
-    """Indices of upper triangular part. Shape inference via meta-shape: torch.triu_indices"""
+def triu_indices(
+    row: builtins.int, col: builtins.int, offset: builtins.int = 0
+) -> Tensor[[2, Any]]:
+    """Indices of the upper triangular part. The count depends on the argument values."""
     ...
 
 # ==== Phase 1.4: Basic Linear Algebra Operations ====
@@ -2032,9 +2044,8 @@ def bmm[B: IntVar, N: IntVar, K: IntVar, M: IntVar](
     """Batch matrix multiplication (3D @ 3D). Output: [B, N, M]."""
     ...
 
-@uses_shape_dsl(mv_ir)
-def mv(self: Tensor, vec: Tensor) -> Tensor:
-    """Matrix-vector multiplication (2D @ 1D). Shape inference via meta-shape: torch.mv"""
+def mv[M: IntVar, K: IntVar](input: Tensor[[M, K]], vec: Tensor[[K]]) -> Tensor[[M]]:
+    """Matrix-vector multiplication (2D @ 1D). Output: [M]."""
     ...
 
 def dot(input: Tensor, other: Tensor) -> Tensor[[]]:
@@ -2509,8 +2520,11 @@ def bernoulli[Shape: IntTuple](input: Tensor[Shape], p: float = 0.5) -> Tensor[S
     """Sample from Bernoulli distribution. Shape inference via generic fixture signature."""
     ...
 
-@uses_shape_dsl(multinomial_ir)
-def multinomial(self: Tensor, num_samples: int, replacement: bool = False) -> Tensor:
+def multinomial[Shape: IntTuple, NumSamples: IntVar](
+    input: Tensor[Shape],
+    num_samples: _Int[NumSamples],
+    replacement: bool = False,
+) -> Tensor[multinomial_shape(Shape, NumSamples)]:
     """Sample from multinomial distribution. Shape inference via meta-shape: torch.multinomial"""
     ...
 
@@ -2597,9 +2611,10 @@ def rsqrt[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Reciprocal square root (1/sqrt(x)). Shape-preserving element-wise operation."""
     ...
 
-@uses_shape_dsl(outer_ir)
-def outer(self: Tensor, vec2: Tensor) -> Tensor:
-    """Outer product of two 1D tensors. Shape inference via meta-shape: torch.outer"""
+def outer[M: IntVar, N: IntVar](
+    input: Tensor[[M]], vec2: Tensor[[N]]
+) -> Tensor[[M, N]]:
+    """Outer product of two 1D tensors. Output: [M, N]."""
     ...
 
 def polar[Shape: IntTuple](abs: Tensor[Shape], angle: Tensor[Shape]) -> Tensor[Shape]:
