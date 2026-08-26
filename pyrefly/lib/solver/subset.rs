@@ -2899,7 +2899,19 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     }
                 }
             } else {
-                match variances.get(param.name()) {
+                let variance = variances.get(param.name());
+                // Inferring a Concatenate pattern needs to decompose the concrete parameter list.
+                // Its subtype relation is already contravariant, so do not reverse that inference
+                // again when the class's ParamSpec is contravariant.
+                let variance = if param.kind() == QuantifiedKind::ParamSpec
+                    && matches!(want_arg, Type::Concatenate(..))
+                    && !want_arg.collect_maybe_placeholder_vars().is_empty()
+                {
+                    variance.inv()
+                } else {
+                    variance
+                };
+                match variance {
                     Variance::Covariant => self.is_subset_eq(got_arg, want_arg)?,
                     Variance::Contravariant => self.is_subset_eq(want_arg, got_arg)?,
                     // Technically, the right thing to do for bivariance would be to skip the
