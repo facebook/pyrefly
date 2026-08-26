@@ -22,3 +22,4 @@ def test_size_on_bare_tensor(x: Tensor):
     assert_type(sn, Int[int])
     assert_type(x.size(), tuple[Any, ...])
     assert_type(cast(Tensor[IntTuple], x).size(), IntTuple)
+    assert_type(x.numel(), Int[int])

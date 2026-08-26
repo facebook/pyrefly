@@ -34,7 +34,7 @@ from torch._shapes import (
     movedim_ir,
     multinomial_shape,
     normal_ir,
-    numel_ir,
+    numel_shape,
     permute_ir,
     randint_ir,
     randn_ir,
@@ -1349,9 +1349,8 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Fill with uniform distribution in-place. Shape inference via generic fixture signature."""
         ...
 
-    @uses_shape_dsl(numel_ir)
-    def numel(self: Tensor) -> int:
-        """Number of elements. Shape inference via meta-shape: torch.Tensor.numel"""
+    def numel(self: Tensor[Shape]) -> _Int[numel_shape(Shape)]:
+        """Return the number of elements."""
         ...
 
     @uses_shape_dsl(dim_ir)
@@ -1359,9 +1358,8 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Number of dimensions. Shape inference via meta-shape: torch.Tensor.dim"""
         ...
 
-    @uses_shape_dsl(numel_ir)
-    def nelement(self: Tensor) -> int:
-        """Number of elements. Shape inference via meta-shape: torch.Tensor.nelement"""
+    def nelement(self: Tensor[Shape]) -> _Int[numel_shape(Shape)]:
+        """Return the number of elements."""
         ...
 
 # ============================================================================
@@ -2554,9 +2552,8 @@ def poisson[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     ...
 
 # Tensor property functions
-@uses_shape_dsl(numel_ir)
-def numel[Dims: IntTuple](self: Tensor[Dims]) -> int:
-    """Number of elements. Shape inference via meta-shape: torch.numel"""
+def numel[Shape: IntTuple](input: Tensor[Shape]) -> _Int[numel_shape(Shape)]:
+    """Return the number of elements."""
     ...
 
 # ==============================================================================

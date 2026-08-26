@@ -5,9 +5,10 @@
 
 # Tests for literal int support in meta-shapes
 # Demonstrates: size() literal tracking, numel() literals, dim() literals
-from typing import assert_type, Literal
+from typing import assert_type, cast, Literal
 
 import torch
+from shape_extensions import Elements, Int, IntTuple
 from torch import Tensor
 
 # ==== tensor.size() -> tuple[Literal[...], ...] ====
@@ -89,6 +90,19 @@ def test_numel_enables_comparisons():
     # Type system knows n is Literal[24]
     # This pattern enables size-based logic
     assert_type(n, Literal[24])
+
+
+def check_numel_scalar_and_gradual[Shape: IntTuple](
+    gradual_element: Tensor[[int, 3]],
+    gradual_rank: Tensor[IntTuple],
+    unpacked_rank: Tensor[[*Elements[Shape]]],
+) -> None:
+    assert_type(cast(Tensor[[]], ...).numel(), Literal[1])
+    assert_type(torch.empty(0).numel(), Literal[0])
+    assert_type(torch.numel(input=cast(Tensor[[2, 3]], ...)), Literal[6])
+    assert_type(gradual_element.numel(), Int[int])
+    assert_type(gradual_rank.numel(), Int[int])
+    assert_type(unpacked_rank.numel(), Int[int])
 
 
 # ==== tensor.dim() / tensor.ndim() -> Literal[n] ====

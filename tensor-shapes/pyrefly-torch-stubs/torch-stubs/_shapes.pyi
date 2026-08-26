@@ -785,9 +785,9 @@ def size_dim_shape(shape: IntTuple, dim: int) -> Int:
     result = shape[dim]
     return result
 
-@shape_dsl_function
-def numel_ir(self: ShapedArray) -> int | symint:
-    return prod(self.shape)
+@type_shape_dsl_function
+def numel_shape(shape: IntTuple) -> Int:
+    return dsl.prod(shape)
 
 @shape_dsl_function
 def dim_ir(self: ShapedArray) -> int:
