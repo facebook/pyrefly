@@ -460,8 +460,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             .map(|ty| {
                                 let cls = match ty {
                                     Type::ClassType(cls) => cls,
+                                    Type::Tuple(tuple) => self.erase_tuple_type(tuple),
                                     ty => unreachable!(
-                                        "Flag domain members materialize to builtin class types, got `{ty}`"
+                                        "Flag domain members materialize to builtin types, got `{ty}`"
                                     ),
                                 };
                                 CallTarget::Class(

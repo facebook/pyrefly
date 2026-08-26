@@ -8433,6 +8433,12 @@ def axis_helper(shape: IntTuple, axis: int) -> IntTuple:
     return shape
 
 @type_shape_dsl_function
+def axes_helper(shape: IntTuple, axes: tuple[int, ...]) -> IntTuple:
+    if 0 in axes:
+        return leaf(shape)
+    return shape
+
+@type_shape_dsl_function
 def unknown(shape: IntTuple) -> IntTuple:
     return dsl.IntTuple.gradual()
 
@@ -8446,8 +8452,8 @@ def invalid(shape: IntTuple) -> IntTuple:
     r#"
 import dsl_helpers as qualified
 import shape_extensions.dsl as dsl
-from dsl_helpers import axis_helper, identity, int_leaf, invalid, leaf as imported_leaf, unknown
-from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from dsl_helpers import axes_helper, axis_helper, identity, int_leaf, invalid, leaf as imported_leaf, unknown
+from shape_extensions import Flag, Int, IntTuple, type_shape_dsl_function
 from torch import Tensor
 from typing import assert_type, reveal_type
 
@@ -8478,6 +8484,10 @@ def parameter_flag(shape: IntTuple, axis: int) -> IntTuple:
 def local_flag(shape: IntTuple) -> IntTuple:
     axis = 0
     return axis_helper(shape, axis)
+
+@type_shape_dsl_function
+def fixed_tuple_flag(shape: IntTuple, axes: tuple[int, int]) -> IntTuple:
+    return axes_helper(shape, axes)
 
 @type_shape_dsl_function
 def axis_without_none(shape: IntTuple, axis: int | tuple[int, ...]) -> IntTuple:
@@ -8519,6 +8529,7 @@ def apply_nested(x: Tensor[[2, 3]]) -> Tensor[helper_of_helper(IntTuple[2, 3])]:
 def apply_local(x: Tensor[[2, 3]]) -> Tensor[[local_argument(IntTuple[2, 3])]]: ...
 def apply_parameter_flag(x: Tensor[[2, 3]]) -> Tensor[parameter_flag(IntTuple[2, 3], 0)]: ...
 def apply_local_flag(x: Tensor[[2, 3]]) -> Tensor[local_flag(IntTuple[2, 3])]: ...
+def apply_fixed_tuple_flag[Axes: Flag[tuple[int, int]]](axes: Axes) -> Tensor[fixed_tuple_flag(IntTuple[2, 3], Axes)]: ...
 def apply_narrowed_union(x: Tensor[[2, 3]]) -> Tensor[narrowed_union(IntTuple[2, 3], 0)]: ...
 def apply_diamond(x: Tensor[[2, 3]]) -> Tensor[diamond(IntTuple[2, 3], 0)]: ...
 def apply_joined_first(x: Tensor[[2, 3]]) -> Tensor[joined_argument(IntTuple[2, 3], IntTuple[4, 5], 0)]: ...
@@ -8526,13 +8537,16 @@ def apply_joined_second(x: Tensor[[2, 3]]) -> Tensor[joined_argument(IntTuple[2,
 def apply_unknown(x: Tensor[[2, 3]]) -> Tensor[propagate_gradual(IntTuple[2, 3])]: ...
 def apply_invalid(x: Tensor[[2, 3]]) -> Tensor[propagate_invalid(IntTuple[2, 3])]: ...
 
-def test(x: Tensor[[2, 3]]) -> None:
+def test(x: Tensor[[2, 3]], broad_axes: tuple[int, int]) -> None:
     assert_type(apply_imported(x), Tensor[[2]])
     reveal_type(apply_gradual_argument())  # E: revealed type: Tensor[tuple[Unknown, ...]]
     assert_type(apply_nested(x), Tensor[[2]])
     assert_type(apply_local(x), Tensor[[2]])
     assert_type(apply_parameter_flag(x), Tensor[[2]])
     assert_type(apply_local_flag(x), Tensor[[2]])
+    assert_type(apply_fixed_tuple_flag((0, 1)), Tensor[[2]])
+    reveal_type(apply_fixed_tuple_flag(broad_axes))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    apply_fixed_tuple_flag((0,))  # E: not a valid `Flag[tuple[int, int]]` value
     assert_type(apply_narrowed_union(x), Tensor[[2]])
     assert_type(apply_diamond(x), Tensor[[2]])
     assert_type(apply_joined_first(x), Tensor[[2]])
@@ -8557,6 +8571,10 @@ def int_helper(dimension: Int) -> Int:
     return dimension
 
 @type_shape_dsl_function
+def fixed_tuple_helper(shape: IntTuple, axes: tuple[int, int]) -> IntTuple:
+    return shape
+
+@type_shape_dsl_function
 def wrong_argument(shape: IntTuple) -> IntTuple:
     return shape_helper(shape, shape)  # E: DSL helper argument domains must exactly match  # E: Expected 1 positional
 
@@ -8567,6 +8585,10 @@ def wrong_domain(shape: IntTuple) -> IntTuple:
 @type_shape_dsl_function
 def wrong_result(dimension: Int) -> IntTuple:
     return int_helper(dimension)  # E: DSL helper result domain must match  # E: Returned type
+
+@type_shape_dsl_function
+def unbounded_tuple_argument(shape: IntTuple, axes: tuple[int, ...]) -> IntTuple:
+    return fixed_tuple_helper(shape, axes)  # E: DSL helper argument domains must exactly match  # E: is not assignable to parameter
 
 def ordinary(shape: IntTuple) -> IntTuple: ...
 

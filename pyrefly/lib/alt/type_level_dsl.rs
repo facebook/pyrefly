@@ -444,7 +444,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                     domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
                                 }
                                 TypeShapeDslInputDomain::Flag(domain) => {
-                                    domain == FlagDomain::of(FlagMember::Tuple)
+                                    domain.is_subset_of(FlagDomain::of(FlagMember::Tuple))
                                 }
                                 _ => false,
                             }
@@ -469,7 +469,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         domain == FlagDomain::of(FlagMember::Int)
                                     }
                                     TypeShapeDslFlagValueKind::Sequence => {
-                                        domain == FlagDomain::of(FlagMember::Tuple)
+                                        domain.is_subset_of(FlagDomain::of(FlagMember::Tuple))
                                     }
                                 },
                                 _ => false,

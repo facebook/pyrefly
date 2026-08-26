@@ -2559,13 +2559,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Restriction::Flag(domain) => {
-                    // Every domain member is a builtin `ClassType`, so it always has an
-                    // attribute base. Neither the generic `object` fallback nor an empty
-                    // result would be correct here, so assert the invariant instead.
+                    // Every materialized Flag domain member has an attribute base. Neither the
+                    // generic `object` fallback nor an empty result would be correct here.
                     for ty in domain.types(self.stdlib) {
                         let base = self
                             .as_attribute_base(ty)
-                            .expect("Flag domain members are builtin class types");
+                            .expect("Flag domain members have attribute bases");
                         for base1 in base.0 {
                             acc.push(
                                 self.attribute_base_for_bounded_quantified(
@@ -2721,13 +2720,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Restriction::Flag(domain) => {
-                    // Every domain member is a builtin `ClassType`, so it always has a
-                    // class-instance base. Neither the generic `object` fallback nor an
-                    // empty result would be correct here, so assert the invariant instead.
+                    // Every materialized Flag domain member has a class-instance base. Neither
+                    // the generic `object` fallback nor an empty result would be correct here.
                     for ty in domain.types(self.stdlib) {
                         let base = self
                             .as_attribute_base(ty)
-                            .expect("Flag domain members are builtin class types");
+                            .expect("Flag domain members have attribute bases");
                         for base1 in base.0 {
                             let cls = self
                                 .quantified_bound_class(base1)

@@ -148,12 +148,18 @@ impl TypeShapeDslHelperCall {
         if self.arguments.len() != expected_domains.len() {
             return None;
         }
+        let compatible = |actual, expected| match (actual, expected) {
+            (TypeShapeDslInputDomain::Flag(actual), TypeShapeDslInputDomain::Flag(expected)) => {
+                actual.is_subset_of(expected)
+            }
+            _ => actual == expected,
+        };
         self.arguments
             .iter()
             .zip(expected_domains)
             .map(|(argument, expected)| match &argument.provenance {
                 TypeShapeDslHelperArgumentProvenance::Exact(domain) => {
-                    (domain == expected).then_some(*domain)
+                    compatible(*domain, *expected).then_some(*domain)
                 }
                 TypeShapeDslHelperArgumentProvenance::ParametersWithRequiredDomain {
                     parameters,
@@ -162,7 +168,7 @@ impl TypeShapeDslHelperCall {
                     .iter()
                     .all(|parameter| caller_domains[*parameter] == *domain)
                     .then_some(*domain)
-                    .filter(|domain| domain == expected),
+                    .filter(|domain| compatible(*domain, *expected)),
                 TypeShapeDslHelperArgumentProvenance::Parameters(parameters) => {
                     let mut domains = parameters
                         .iter()
@@ -170,7 +176,8 @@ impl TypeShapeDslHelperCall {
                     let first = domains
                         .next()
                         .expect("validated helper argument provenance is nonempty");
-                    (domains.all(|domain| domain == first) && first == *expected).then_some(first)
+                    (domains.all(|domain| domain == first) && compatible(first, *expected))
+                        .then_some(first)
                 }
                 TypeShapeDslHelperArgumentProvenance::DeferredInteger {
                     index,

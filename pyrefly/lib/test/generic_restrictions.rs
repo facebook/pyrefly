@@ -207,9 +207,75 @@ def bare_direct[K: ShapeFlag](k: K) -> K: ...  # E: `shape_extensions.Flag` requ
 Legacy = TypeVar("Legacy", bound=ShapeFlag[int])  # E: `shape_extensions.Flag` is supported only as a direct PEP 695 type parameter bound
 
 def union_domain[K: ShapeFlag[int | str]](k: K) -> K: ...
-def noncore_domain[K: ShapeFlag[bytes]](k: K) -> K: ...  # E: `Flag` domain must resolve to `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
-def float_domain[K: ShapeFlag[float]](k: K) -> K: ...  # E: `Flag` domain must resolve to `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
-def fixed_tuple_domain[K: ShapeFlag[tuple[int, int]]](k: K) -> K: ...  # E: `Flag` domain must resolve to `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
+def noncore_domain[K: ShapeFlag[bytes]](k: K) -> K: ...  # E: `Flag` domain must resolve to a nonempty union
+def float_domain[K: ShapeFlag[float]](k: K) -> K: ...  # E: `Flag` domain must resolve to a nonempty union
+def fixed_tuple_domain[K: ShapeFlag[tuple[int, int]]](k: K) -> K: ...
+def heterogeneous_tuple_domain[K: ShapeFlag[tuple[int, str]]](k: K) -> K: ...  # E: `Flag` domain must resolve to a nonempty union
+def narrow_then_wide[K: ShapeFlag[tuple[int] | tuple[int, int]]](k: K) -> K: ...  # E: `Flag` domain must resolve to a nonempty union
+def wide_then_narrow[K: ShapeFlag[tuple[int, int] | tuple[int]]](k: K) -> K: ...  # E: `Flag` domain must resolve to a nonempty union
+def fixed_then_unbounded[K: ShapeFlag[tuple[int] | tuple[int, int] | tuple[int, ...]]](k: K) -> K: ...
+def unbounded_then_fixed[K: ShapeFlag[tuple[int, ...] | tuple[int] | tuple[int, int]]](k: K) -> K: ...
+def invalid_then_unbounded[K: ShapeFlag[bytes | tuple[int, ...]]](k: K) -> K: ...  # E: `Flag` domain must resolve to a nonempty union
+def unbounded_then_invalid[K: ShapeFlag[tuple[int, ...] | bytes]](k: K) -> K: ...  # E: `Flag` domain must resolve to a nonempty union
+"#,
+);
+
+testcase!(
+    test_flag_fixed_tuple_domains,
+    flag_env(),
+    r#"
+from typing import Any, Literal, assert_type
+from shape_extensions import Flag
+
+type Pair = tuple[int, int]
+
+def empty[A: Flag[tuple[()]]](value: A) -> A: ...
+def single[A: Flag[tuple[int]]](value: A) -> A: ...
+def pair[A: Flag[Pair]](value: A) -> A: ...
+def triple[A: Flag[tuple[int, int, int]]](value: A) -> A: ...
+def scalar_pair[A: Flag[int | Pair | None]](value: A) -> A: ...
+def widened[A: Flag[Pair | tuple[int, ...]]](value: A) -> A: ...
+
+assert_type(empty(()), tuple[()])
+assert_type(single((1,)), tuple[Literal[1]])
+assert_type(pair((1, 2)), tuple[Literal[1], Literal[2]])
+assert_type(triple((1, 2, 3)), tuple[Literal[1], Literal[2], Literal[3]])
+assert_type(scalar_pair(1), Literal[1])
+assert_type(scalar_pair((1, 2)), tuple[Literal[1], Literal[2]])
+assert_type(scalar_pair(None), None)
+assert_type(widened((1,)), tuple[Literal[1]])
+
+broad_pair: tuple[int, int] = (1, 2)
+broad_tuple: tuple[int, ...] = (1, 2)
+compatible_unpacked: tuple[int, *tuple[int, ...]] = (1, 2)
+too_long_unpacked: tuple[int, int, int, *tuple[int, ...]] = (1, 2, 3)
+dynamic: Any = (1, 2)
+assert_type(pair(broad_pair), tuple[int, int])
+assert_type(pair(broad_tuple), tuple[int, ...])
+assert_type(pair(compatible_unpacked), tuple[int, *tuple[int, ...]])
+assert_type(pair(dynamic), Any)
+
+pair(())  # E: not a valid `Flag[tuple[int, int]]` value
+pair((1,))  # E: not a valid `Flag[tuple[int, int]]` value
+pair((1, 2, 3))  # E: not a valid `Flag[tuple[int, int]]` value
+pair((1, "x"))  # E: not a valid `Flag[tuple[int, int]]` value
+pair(too_long_unpacked)  # E: not a valid `Flag[tuple[int, int]]` value
+scalar_pair((1,))  # E: not a valid `Flag[int | tuple[int, int] | None]` value
+
+def default_pair[A: Flag[Pair]](value: A = (1, 2)) -> A: ...
+def wrong_default_pair[A: Flag[Pair]](value: A = (1,)) -> A: ...  # E: Default for parameter binding `Flag[tuple[int, int]]`
+assert_type(default_pair(), tuple[Literal[1], Literal[2]])
+
+def accepts_unbounded[A: Flag[tuple[int, ...]]](value: A) -> A: ...
+def forwards_pair[A: Flag[Pair]](value: A) -> A:
+    return accepts_unbounded(value)
+def rejects_unbounded[A: Flag[tuple[int, ...]]](value: A) -> None:
+    pair(value)  # E: not a valid `Flag[tuple[int, int]]` value
+
+def construct_pair[A: Flag[Pair]](value: A, kind: type[A]) -> None:
+    kind()
+def construct_scalar_pair[A: Flag[int | Pair | None]](value: A, kind: type[A]) -> None:
+    kind()
 "#,
 );
 
