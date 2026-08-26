@@ -4,21 +4,45 @@
 # LICENSE file in the root directory of this source tree.
 
 # Type stubs for torch.linalg module (Phase 4: Advanced Linear Algebra)
-from shape_extensions import Elements, IntTuple, IntVar, uses_shape_dsl
+from typing import overload
+
+from shape_extensions import Elements, IntTuple, IntVar
 from torch import Tensor
-from torch._shapes import eig_ir, eigvals_ir, slogdet_ir, solve_ir, solve_reversed_ir
+from torch._shapes import eig_shape, eigvals_shape, slogdet_shape
 
 # Eigenvalue decomposition
-@uses_shape_dsl(eig_ir)
-def eig(self: Tensor) -> tuple[Tensor, Tensor]: ...
-@uses_shape_dsl(eig_ir)
-def eigh(self: Tensor, UPLO: str = "L") -> tuple[Tensor, Tensor]: ...
+@overload
+def eig[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Elements[Batch], M, N]],
+) -> tuple[Tensor[[*Elements[Batch], M]], Tensor[[*Elements[Batch], M, N]]]: ...
+@overload
+def eig[Shape: IntTuple](
+    self: Tensor[Shape],
+) -> tuple[Tensor[eig_shape(Shape)], Tensor[Shape]]: ...
+@overload
+def eigh[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Elements[Batch], M, N]], UPLO: str = "L"
+) -> tuple[Tensor[[*Elements[Batch], M]], Tensor[[*Elements[Batch], M, N]]]: ...
+@overload
+def eigh[Shape: IntTuple](
+    self: Tensor[Shape], UPLO: str = "L"
+) -> tuple[Tensor[eig_shape(Shape)], Tensor[Shape]]: ...
 
 # Tier 3: Eigenvalues only (no eigenvectors)
-@uses_shape_dsl(eigvals_ir)
-def eigvals(self: Tensor) -> Tensor: ...
-@uses_shape_dsl(eigvals_ir)
-def eigvalsh(self: Tensor, UPLO: str = "L") -> Tensor: ...
+@overload
+def eigvals[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Elements[Batch], M, N]],
+) -> Tensor[[*Elements[Batch], M]]: ...
+@overload
+def eigvals[Shape: IntTuple](self: Tensor[Shape]) -> Tensor[eigvals_shape(Shape)]: ...
+@overload
+def eigvalsh[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Elements[Batch], M, N]], UPLO: str = "L"
+) -> Tensor[[*Elements[Batch], M]]: ...
+@overload
+def eigvalsh[Shape: IntTuple](
+    self: Tensor[Shape], UPLO: str = "L"
+) -> Tensor[eigvals_shape(Shape)]: ...
 
 # Cholesky decomposition
 def cholesky[Shape: IntTuple](
@@ -26,12 +50,15 @@ def cholesky[Shape: IntTuple](
 ) -> Tensor[Shape]: ...
 
 # Linear system solvers
-@uses_shape_dsl(solve_ir)
-def solve(self: Tensor, other: Tensor) -> Tensor: ...
-@uses_shape_dsl(solve_ir)
-def solve_triangular(self: Tensor, other: Tensor, upper: bool = False) -> Tensor: ...
-@uses_shape_dsl(solve_reversed_ir)
-def cholesky_solve(self: Tensor, other: Tensor, upper: bool = False) -> Tensor: ...
+def solve[Shape: IntTuple, OtherShape: IntTuple](
+    self: Tensor[Shape], other: Tensor[OtherShape]
+) -> Tensor[OtherShape]: ...
+def solve_triangular[Shape: IntTuple, OtherShape: IntTuple](
+    self: Tensor[Shape], other: Tensor[OtherShape], upper: bool = False
+) -> Tensor[OtherShape]: ...
+def cholesky_solve[Shape: IntTuple, OtherShape: IntTuple](
+    self: Tensor[Shape], other: Tensor[OtherShape], upper: bool = False
+) -> Tensor[Shape]: ...
 
 # Matrix inverse
 def inv[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
@@ -42,8 +69,14 @@ def det[Batch: IntTuple, M: IntVar, N: IntVar](
 ) -> Tensor[Batch]: ...
 
 # Sign and log determinant
-@uses_shape_dsl(slogdet_ir)
-def slogdet(self: Tensor) -> tuple[Tensor, Tensor]: ...
+@overload
+def slogdet[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Elements[Batch], M, N]],
+) -> tuple[Tensor[Batch], Tensor[Batch]]: ...
+@overload
+def slogdet[Shape: IntTuple](
+    self: Tensor[Shape],
+) -> tuple[Tensor[slogdet_shape(Shape)], Tensor[slogdet_shape(Shape)]]: ...
 
 # Matrix power
 def matrix_power[Shape: IntTuple](input: Tensor[Shape], n: int) -> Tensor[Shape]: ...

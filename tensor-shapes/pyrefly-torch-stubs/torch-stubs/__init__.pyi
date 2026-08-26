@@ -25,7 +25,7 @@ from torch._shapes import (
     chunk_ir,
     diag_embed_ir,
     dim_ir,
-    eig_ir,
+    eig_shape,
     einsum_ir,
     expand_ir,
     eye_ir,
@@ -52,13 +52,10 @@ from torch._shapes import (
     reshape_ir,
     select_ir,
     size_ir,
-    slogdet_ir,
-    solve_ir,
-    solve_reversed_ir,
+    slogdet_shape,
     split_ir,
     squeeze_ir,
     stack_ir,
-    take_along_dim_ir,
     tensordot_ir,
     tile_ir,
     tolist_ir,
@@ -69,7 +66,6 @@ from torch._shapes import (
     unbind_ir,
     unfold_ir,
     unsqueeze_ir,
-    where_ir,
 )
 
 if TYPE_CHECKING:
@@ -1150,11 +1146,14 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Log determinant. Returns batch dimensions only (drops last 2 dims)."""
         ...
 
-    @uses_shape_dsl(slogdet_ir)
-    def slogdet(self: Tensor) -> tuple[Tensor, Tensor]:
-        """Sign and log determinant. Shape inference via meta-shape: torch.Tensor.slogdet"""
-        ...
-
+    @overload
+    def slogdet[Batch: IntTuple, M: IntVar, N: IntVar](
+        self: Tensor[[*Elements[Batch], M, N]],
+    ) -> tuple[Tensor[Batch], Tensor[Batch]]: ...
+    @overload
+    def slogdet[Shape: IntTuple](
+        self: Tensor[Shape],
+    ) -> tuple[Tensor[slogdet_shape(Shape)], Tensor[slogdet_shape(Shape)]]: ...
     def matrix_power(self, n: int) -> Self:
         """Matrix power. Shape inference via generic fixture signature."""
         ...
@@ -1235,11 +1234,9 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Take elements at indices. Output shape matches index shape."""
         ...
 
-    @uses_shape_dsl(take_along_dim_ir)
-    def take_along_dim(self: Tensor, indices: Tensor, dim: int) -> Tensor:
-        """Take along dimension. Shape inference via meta-shape: torch.Tensor.take_along_dim"""
-        ...
-
+    def take_along_dim[Shape: IntTuple, IndexShape: IntTuple](
+        self: Tensor[Shape], indices: Tensor[IndexShape], dim: int
+    ) -> Tensor[IndexShape]: ...
     def put(self, index: Tensor, source: Tensor, accumulate: bool = False) -> Self:
         """Put values at indices. Shape inference via generic fixture signature."""
         ...
@@ -2148,15 +2145,22 @@ def einsum(spec: str, *operands: Tensor) -> Tensor:
     ...
 
 # Eigenvalue decomposition
-@uses_shape_dsl(eig_ir)
-def eig(self: Tensor, eigenvectors: bool = False) -> tuple[Tensor, Tensor]:
-    """Eigenvalue decomposition. Shape inference via meta-shape: torch.eig"""
-    ...
-
-@uses_shape_dsl(eig_ir)
-def eigh(self: Tensor, UPLO: str = "L") -> tuple[Tensor, Tensor]:
-    """Hermitian eigenvalue decomposition. Shape inference via meta-shape: torch.eigh"""
-    ...
+@overload
+def eig[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Elements[Batch], M, N]], eigenvectors: bool = False
+) -> tuple[Tensor[[*Elements[Batch], M]], Tensor[[*Elements[Batch], M, N]]]: ...
+@overload
+def eig[Shape: IntTuple](
+    self: Tensor[Shape], eigenvectors: bool = False
+) -> tuple[Tensor[eig_shape(Shape)], Tensor[Shape]]: ...
+@overload
+def eigh[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Elements[Batch], M, N]], UPLO: str = "L"
+) -> tuple[Tensor[[*Elements[Batch], M]], Tensor[[*Elements[Batch], M, N]]]: ...
+@overload
+def eigh[Shape: IntTuple](
+    self: Tensor[Shape], UPLO: str = "L"
+) -> tuple[Tensor[eig_shape(Shape)], Tensor[Shape]]: ...
 
 # Cholesky decomposition
 def cholesky[Shape: IntTuple](
@@ -2166,25 +2170,20 @@ def cholesky[Shape: IntTuple](
     ...
 
 # Linear system solvers
-@uses_shape_dsl(solve_ir)
-def solve(self: Tensor, other: Tensor) -> Tensor:
-    """Solve linear system. Shape inference via meta-shape: torch.solve"""
-    ...
-
-@uses_shape_dsl(solve_reversed_ir)
-def triangular_solve(self: Tensor, other: Tensor, upper: bool = True) -> Tensor:
-    """Solve triangular system. Shape inference via meta-shape: torch.triangular_solve"""
-    ...
-
-@uses_shape_dsl(solve_reversed_ir)
-def cholesky_solve(self: Tensor, other: Tensor, upper: bool = False) -> Tensor:
-    """Solve using Cholesky. Shape inference via meta-shape: torch.cholesky_solve"""
-    ...
-
-@uses_shape_dsl(solve_ir)
-def lu_solve(self: Tensor, other: Tensor, LU_pivots: Tensor) -> Tensor:
-    """Solve using LU decomposition. Shape inference via meta-shape: torch.lu_solve"""
-    ...
+def solve[Shape: IntTuple, OtherShape: IntTuple](
+    self: Tensor[Shape], other: Tensor[OtherShape]
+) -> Tensor[Shape]: ...
+def triangular_solve[Shape: IntTuple, OtherShape: IntTuple](
+    self: Tensor[Shape], other: Tensor[OtherShape], upper: bool = True
+) -> Tensor[Shape]: ...
+def cholesky_solve[Shape: IntTuple, OtherShape: IntTuple](
+    self: Tensor[Shape], other: Tensor[OtherShape], upper: bool = False
+) -> Tensor[Shape]: ...
+def lu_solve[Shape: IntTuple, OtherShape: IntTuple, PivotShape: IntTuple](
+    self: Tensor[Shape],
+    other: Tensor[OtherShape],
+    LU_pivots: Tensor[PivotShape],
+) -> Tensor[Shape]: ...
 
 # Matrix inverse
 def inverse[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
@@ -2204,10 +2203,14 @@ def logdet[Batch: IntTuple, M: IntVar, N: IntVar](
     """Log determinant. Returns batch dimensions only (drops last 2 dims)."""
     ...
 
-@uses_shape_dsl(slogdet_ir)
-def slogdet(self: Tensor) -> tuple[Tensor, Tensor]:
-    """Sign and log determinant. Shape inference via meta-shape: torch.slogdet"""
-    ...
+@overload
+def slogdet[Batch: IntTuple, M: IntVar, N: IntVar](
+    self: Tensor[[*Elements[Batch], M, N]],
+) -> tuple[Tensor[Batch], Tensor[Batch]]: ...
+@overload
+def slogdet[Shape: IntTuple](
+    self: Tensor[Shape],
+) -> tuple[Tensor[slogdet_shape(Shape)], Tensor[slogdet_shape(Shape)]]: ...
 
 # Matrix power and exponential
 def matrix_power[Shape: IntTuple](input: Tensor[Shape], n: int) -> Tensor[Shape]:
@@ -2237,11 +2240,9 @@ def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
 # ==============================================================================
 
 # Conditional operations
-@uses_shape_dsl(where_ir)
-def where(condition: Tensor, x: Tensor, y: Tensor) -> Tensor:
-    """Conditional element-wise selection. Shape inference via meta-shape: torch.where"""
-    ...
-
+def where[ConditionShape: IntTuple, XShape: IntTuple, YShape: IntTuple](
+    condition: Tensor[ConditionShape], x: Tensor[XShape], y: Tensor[YShape]
+) -> Tensor[XShape]: ...
 def masked_fill[Shape: IntTuple](
     input: Tensor[Shape], mask: Tensor, value: float
 ) -> Tensor[Shape]:
@@ -2289,11 +2290,9 @@ def take[IndexShape: IntTuple](
     """Take elements at indices. Output shape matches index shape."""
     ...
 
-@uses_shape_dsl(take_along_dim_ir)
-def take_along_dim(self: Tensor, indices: Tensor, dim: int) -> Tensor:
-    """Take along dimension. Shape inference via meta-shape: torch.take_along_dim"""
-    ...
-
+def take_along_dim[Shape: IntTuple, IndexShape: IntTuple](
+    self: Tensor[Shape], indices: Tensor[IndexShape], dim: int
+) -> Tensor[IndexShape]: ...
 def put[Shape: IntTuple](
     input: Tensor[Shape], index: Tensor, source: Tensor, accumulate: bool = False
 ) -> Tensor[Shape]:

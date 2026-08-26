@@ -8,6 +8,7 @@ from typing import assert_type
 
 import torch
 import torch.linalg
+from shape_extensions import Elements, IntTuple, IntVar
 from torch import Tensor
 
 # ==== torch.linalg.eig ====
@@ -38,6 +39,39 @@ def test_eigh_symmetric():
     # Same shape as eig
     assert_type(eigenvalues, Tensor[[4]])
     assert_type(eigenvectors, Tensor[[4, 4]])
+
+
+def test_eigen_fixed_rank_gradual(A: Tensor[[int, int]]):
+    eigenvalues, eigenvectors = torch.linalg.eig(A)
+    assert_type(eigenvalues, Tensor[[int]])
+    assert_type(eigenvectors, Tensor[[int, int]])
+    assert_type(torch.linalg.eigvals(A), Tensor[[int]])
+
+    sign, logabsdet = torch.linalg.slogdet(A)
+    assert_type(sign, Tensor[[]])
+    assert_type(logabsdet, Tensor[[]])
+
+
+def test_eigen_generic_batch[Batch: IntTuple, M: IntVar, N: IntVar](
+    A: Tensor[[*Elements[Batch], M, N]],
+):
+    eigenvalues, eigenvectors = torch.linalg.eig(A)
+    assert_type(eigenvalues, Tensor[[*Elements[Batch], M]])
+    assert_type(eigenvectors, Tensor[[*Elements[Batch], M, N]])
+    assert_type(torch.linalg.eigvals(A), Tensor[[*Elements[Batch], M]])
+    assert_type(torch.linalg.eigvalsh(A), Tensor[[*Elements[Batch], M]])
+
+    eigenvalues, eigenvectors = torch.eigh(A)
+    assert_type(eigenvalues, Tensor[[*Elements[Batch], M]])
+    assert_type(eigenvectors, Tensor[[*Elements[Batch], M, N]])
+
+    eigenvalues, eigenvectors = torch.eig(A)
+    assert_type(eigenvalues, Tensor[[*Elements[Batch], M]])
+    assert_type(eigenvectors, Tensor[[*Elements[Batch], M, N]])
+
+    eigenvalues, eigenvectors = torch.linalg.eigh(A)
+    assert_type(eigenvalues, Tensor[[*Elements[Batch], M]])
+    assert_type(eigenvectors, Tensor[[*Elements[Batch], M, N]])
 
 
 # ==== torch.linalg.cholesky ====
@@ -97,6 +131,35 @@ def test_solve_batched():
     assert_type(x, Tensor[[2, 3, 4, 1]])
 
 
+def test_solver_argument_projections[SelfShape: IntTuple, OtherShape: IntTuple](
+    self: Tensor[SelfShape], other: Tensor[OtherShape], pivots: Tensor
+):
+    assert_type(torch.linalg.solve(self, other), Tensor[OtherShape])
+    assert_type(torch.linalg.solve_triangular(self, other), Tensor[OtherShape])
+
+    # The deprecated `torch.solve`/`torch.lu_solve` take the right-hand side
+    # first, so their result tracks the first operand rather than the second.
+    assert_type(
+        torch.solve(self, other),  # noqa: CITRINE(torchfix_removed_symbol_call)
+        Tensor[SelfShape],
+    )
+    assert_type(
+        torch.lu_solve(  # noqa: CITRINE(torchfix_deprecated_symbol_call)
+            self, other, pivots
+        ),
+        Tensor[SelfShape],
+    )
+
+    assert_type(
+        torch.triangular_solve(  # noqa: CITRINE(torchfix_deprecated_symbol_call)
+            self, other
+        ),
+        Tensor[SelfShape],
+    )
+    assert_type(torch.cholesky_solve(self, other), Tensor[SelfShape])
+    assert_type(torch.linalg.cholesky_solve(self, other), Tensor[SelfShape])
+
+
 # ==== torch.triangular_solve ====
 
 
@@ -104,7 +167,9 @@ def test_triangular_solve():
     """Triangular system solver"""
     A: Tensor[[5, 5]] = torch.randn(5, 5)
     b: Tensor[[5, 3]] = torch.randn(5, 3)
-    x = torch.triangular_solve(b, A)
+    x = torch.triangular_solve(  # noqa: CITRINE(torchfix_deprecated_symbol_call)
+        b, A
+    )
     # Output has same shape as b: (5, 3)
     assert_type(x, Tensor[[5, 3]])
 
@@ -222,6 +287,91 @@ def test_slogdet_method():
     # Both return scalars: ()
     assert_type(sign, Tensor[[]])
     assert_type(logabsdet, Tensor[[]])
+
+
+def test_slogdet_symbolic_batch[B: IntVar, M: IntVar, N: IntVar](
+    A: Tensor[[B, M, N]],
+):
+    sign, logabsdet = torch.linalg.slogdet(A)
+    assert_type(sign, Tensor[[B]])
+    assert_type(logabsdet, Tensor[[B]])
+
+    sign, logabsdet = torch.slogdet(A)
+    assert_type(sign, Tensor[[B]])
+    assert_type(logabsdet, Tensor[[B]])
+
+    sign, logabsdet = A.slogdet()
+    assert_type(sign, Tensor[[B]])
+    assert_type(logabsdet, Tensor[[B]])
+
+
+def test_linalg_bare_tensor_projection(A: Tensor, other: Tensor, pivots: Tensor):
+    eigenvalues, eigenvectors = torch.linalg.eig(A)
+    assert_type(eigenvalues, Tensor[[*Elements[IntTuple], int]])
+    assert_type(eigenvectors, Tensor[[*Elements[IntTuple], int, int]])
+
+    eigenvalues, eigenvectors = torch.linalg.eigh(A)
+    assert_type(eigenvalues, Tensor[[*Elements[IntTuple], int]])
+    assert_type(eigenvectors, Tensor[[*Elements[IntTuple], int, int]])
+
+    assert_type(torch.linalg.eigvals(A), Tensor[[*Elements[IntTuple], int]])
+    assert_type(torch.linalg.eigvalsh(A), Tensor[[*Elements[IntTuple], int]])
+
+    eigenvalues, eigenvectors = torch.eig(A)
+    assert_type(eigenvalues, Tensor[[*Elements[IntTuple], int]])
+    assert_type(eigenvectors, Tensor[[*Elements[IntTuple], int, int]])
+
+    eigenvalues, eigenvectors = torch.eigh(A)
+    assert_type(eigenvalues, Tensor[[*Elements[IntTuple], int]])
+    assert_type(eigenvectors, Tensor[[*Elements[IntTuple], int, int]])
+
+    sign, logabsdet = torch.linalg.slogdet(A)
+    assert_type(sign, Tensor)
+    assert_type(logabsdet, Tensor)
+
+    sign, logabsdet = torch.slogdet(A)
+    assert_type(sign, Tensor)
+    assert_type(logabsdet, Tensor)
+
+    sign, logabsdet = A.slogdet()
+    assert_type(sign, Tensor)
+    assert_type(logabsdet, Tensor)
+
+    assert_type(torch.linalg.solve(A, other), Tensor)
+    assert_type(torch.linalg.solve_triangular(A, other), Tensor)
+    assert_type(
+        torch.solve(A, other),  # noqa: CITRINE(torchfix_removed_symbol_call)
+        Tensor,
+    )
+    assert_type(
+        torch.triangular_solve(  # noqa: CITRINE(torchfix_deprecated_symbol_call)
+            A, other
+        ),
+        Tensor,
+    )
+    assert_type(torch.cholesky_solve(A, other), Tensor)
+    assert_type(torch.linalg.cholesky_solve(A, other), Tensor)
+    assert_type(
+        torch.lu_solve(  # noqa: CITRINE(torchfix_deprecated_symbol_call)
+            A, other, pivots
+        ),
+        Tensor,
+    )
+
+
+def test_linalg_opaque_shape_fallback[S: IntTuple](A: Tensor[S]):
+    # An opaque shape variable cannot match the rank-structured overload, so
+    # these calls reach the V2 shape functions with a shape they cannot
+    # inspect, and the rank check degrades to a gradual result.
+    eigenvalues, eigenvectors = torch.linalg.eig(A)
+    assert_type(eigenvalues, Tensor[IntTuple])
+    assert_type(eigenvectors, Tensor[S])
+
+    assert_type(torch.linalg.eigvals(A), Tensor[IntTuple])
+
+    sign, logabsdet = torch.linalg.slogdet(A)
+    assert_type(sign, Tensor[IntTuple])
+    assert_type(logabsdet, Tensor[IntTuple])
 
 
 # ==== torch.linalg.matrix_power ====

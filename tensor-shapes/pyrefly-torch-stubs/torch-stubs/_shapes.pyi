@@ -3,6 +3,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, type_shape_dsl_function
 from shape_extensions.dsl import (
     Error,
     parse_einsum_equation,
@@ -13,6 +15,30 @@ from shape_extensions.dsl import (
     symint,
     Unknown,
 )
+
+@type_shape_dsl_function
+def eig_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) < 2:
+        if len(shape) == 0:
+            return dsl.Invalid("eig requires at least 2D input, got 0D tensor")
+        return dsl.Invalid("eig requires at least 2D input, got 1D tensor")
+    return dsl.IntTuple((shape[i] for i in range(len(shape) - 1)))
+
+@type_shape_dsl_function
+def eigvals_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) < 2:
+        if len(shape) == 0:
+            return dsl.Invalid("eigvals requires at least 2D input, got 0D tensor")
+        return dsl.Invalid("eigvals requires at least 2D input, got 1D tensor")
+    return dsl.IntTuple((shape[i] for i in range(len(shape) - 1)))
+
+@type_shape_dsl_function
+def slogdet_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) < 2:
+        if len(shape) == 0:
+            return dsl.Invalid("slogdet requires at least 2D input, got 0D tensor")
+        return dsl.Invalid("slogdet requires at least 2D input, got 1D tensor")
+    return dsl.IntTuple((shape[i] for i in range(len(shape) - 2)))
 
 @shape_dsl_function
 def normalize_dim(rank: int, dim: int) -> int:
@@ -536,46 +562,6 @@ def einsum_ir(spec: str, operands: list[ShapedArray] | None = None) -> ShapedArr
     return Unknown
 
 @shape_dsl_function
-def eigvals_ir(self: ShapedArray) -> ShapedArray:
-    if len(self.shape) < 2:
-        raise Error(
-            "eigvals requires at least 2D input, got "
-            + str(len(self.shape))
-            + "D tensor"
-        )
-    return ShapedArray(shape=self.shape[:-2] + [self.shape[-2]])
-
-@shape_dsl_function
-def eig_ir(self: ShapedArray) -> [ShapedArray, ShapedArray]:
-    if len(self.shape) < 2:
-        raise Error(
-            "eig requires at least 2D input, got " + str(len(self.shape)) + "D tensor"
-        )
-    batch = self.shape[:-2]
-    return [
-        ShapedArray(shape=batch + [self.shape[-2]]),
-        ShapedArray(shape=batch + self.shape[-2:]),
-    ]
-
-@shape_dsl_function
-def slogdet_ir(self: ShapedArray) -> [ShapedArray, ShapedArray]:
-    if len(self.shape) < 2:
-        raise Error(
-            "slogdet requires at least 2D input, got "
-            + str(len(self.shape))
-            + "D tensor"
-        )
-    return [ShapedArray(shape=self.shape[:-2]), ShapedArray(shape=self.shape[:-2])]
-
-@shape_dsl_function
-def solve_ir(self: ShapedArray, other: ShapedArray) -> ShapedArray:
-    return ShapedArray(shape=other.shape)
-
-@shape_dsl_function
-def solve_reversed_ir(self: ShapedArray, other: ShapedArray) -> ShapedArray:
-    return ShapedArray(shape=self.shape)
-
-@shape_dsl_function
 def conv_ir(
     self: ShapedArray,
     weight: ShapedArray,
@@ -746,14 +732,6 @@ def tolist_ir(self: ShapedArray) -> ShapedArray:
 @shape_dsl_function
 def multinomial_ir(self: ShapedArray, num_samples: int | symint) -> ShapedArray:
     return ShapedArray(shape=self.shape[:-1] + [num_samples])
-
-@shape_dsl_function
-def where_ir(condition: ShapedArray, x: ShapedArray, y: ShapedArray) -> ShapedArray:
-    return ShapedArray(shape=x.shape)
-
-@shape_dsl_function
-def take_along_dim_ir(self: ShapedArray, indices: ShapedArray) -> ShapedArray:
-    return ShapedArray(shape=indices.shape)
 
 @shape_dsl_function
 def nn_flatten_forward_ir(
