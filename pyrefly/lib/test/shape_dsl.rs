@@ -6963,6 +6963,31 @@ def test[N: IntVar, S: IntTuple](concrete: Tensor[[2, 3, 4]], symbolic: Tensor[[
 );
 
 testcase!(
+    test_type_shape_dsl_lowers_tuple_carrier_parameters,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Elements, IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def identity(shape: IntTuple) -> IntTuple:
+    return shape
+
+def echo[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[Shape]: ...
+def dsl_echo[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[identity(Shape)]: ...
+
+def test[Batch: IntTuple](
+    x: Tensor[IntTuple[2, *Elements[Batch], 3]],
+    concrete: Tensor[[4, 5]],
+) -> None:
+    assert_type(echo(x), Tensor[[2, *Elements[Batch], 3]])
+    assert_type(dsl_echo(x), Tensor[[2, *Elements[Batch], 3]])
+    assert_type(dsl_echo(concrete), Tensor[[4, 5]])
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_invalid_int_tuple_values,
     shape_dsl_tensor_env(),
     r#"

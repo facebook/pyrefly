@@ -156,8 +156,7 @@ impl ShapedArrayType {
                     .as_slice()
                     .get(*index)
                     .expect("shape argument index should point to a class type argument");
-                IntTuple::from_shape_arg_type(shape_arg)
-                    .or_else(|| tuple_carrier_to_shape(shape_arg))
+                IntTuple::from_shape_arg_or_tuple_carrier(shape_arg)
                     .expect("registered shaped-array shape argument should project to IntTuple")
             }
         }
@@ -413,6 +412,12 @@ impl IntTuple {
             Type::IntTuple(shape) => Some(shape.normalize()),
             _ => None,
         }
+    }
+
+    /// Recover a whole shape from either an `IntTuple` shape argument or a tuple
+    /// carrier that has already passed annotation validation.
+    pub fn from_shape_arg_or_tuple_carrier(arg: &Type) -> Option<Self> {
+        Self::from_shape_arg_type(arg).or_else(|| tuple_carrier_to_shape(arg))
     }
 
     /// Create and canonicalize a variadic shape with fixed dimensions around its middle.

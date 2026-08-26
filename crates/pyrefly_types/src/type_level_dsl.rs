@@ -52,7 +52,6 @@ use crate::literal::Lit;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
 use crate::shaped_array::broadcast_shapes;
-use crate::shaped_array::tuple_carrier_to_shape;
 use crate::tuple::Tuple;
 use crate::type_var::FlagDomain;
 use crate::type_var::FlagMember;
@@ -4436,9 +4435,7 @@ impl DslValue {
     }
 
     fn from_shape_type(ty: &Type) -> Self {
-        IntTuple::from_shape_arg_type(ty)
-            .or_else(|| tuple_carrier_to_shape(ty))
-            .map_or(Self::Unknown, Self::Shape)
+        IntTuple::from_shape_arg_or_tuple_carrier(ty).map_or(Self::Unknown, Self::Shape)
     }
 
     fn into_type(self) -> Type {
