@@ -13,8 +13,6 @@
 //! `converters.optional`/`converters.pipe` handling, `@x.default` decorator return-type checks, `@x.converter`
 //! decorator input types, and the `assoc`/`fields`/`fields_dict` runtime helpers.
 
-use std::sync::Arc;
-
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -169,7 +167,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn is_attrs_class(
         &self,
         dataclass_from_dataclass_transform: &Option<TransformDataclass>,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
     ) -> bool {
         let has_attrs_field_specifiers = dataclass_from_dataclass_transform
             .as_ref()
@@ -248,7 +246,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .get(&Key::ReturnType(ShortIdentifier::from_text_range(
                     method_range,
                 )))
-                .arc_clone_ty();
+                .ty()
+                .clone();
             let field_ty = field.value.ty();
             if !self.is_subset_eq(&return_ty, &field_ty) {
                 let range = fields
@@ -478,9 +477,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn attrs_attribute_class(&self) -> Option<Class> {
         let name = Name::new_static("Attribute");
         for module in [ModuleName::attr(), ModuleName::attrs()] {
-            if let Some(Type::ClassDef(cls)) =
-                self.try_get_from_export(module, name.clone()).as_deref()
-            {
+            if let Some(Type::ClassDef(cls)) = self.try_get_from_export(module, name.clone()) {
                 return Some(cls.clone());
             }
         }

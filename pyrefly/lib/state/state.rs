@@ -1802,7 +1802,7 @@ impl<'a> Transaction<'a> {
             thread_state,
             &answer_scope,
         );
-        let class = match t.as_deref() {
+        let class = match t {
             Some(Type::ClassDef(cls)) => Some(cls.dupe()),
             ty => {
                 self.add_error(
@@ -1828,7 +1828,7 @@ impl<'a> Transaction<'a> {
                         thread_state,
                         &answer_scope,
                     )
-                    .map(|tparams| tparams.as_ref().dupe()),
+                    .map(Dupe::dupe),
                 PrecomputedTParams::Precomputed(tparams) => Some(tparams.dupe()),
             };
             (class, tparams)
@@ -1869,13 +1869,13 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn lookup_answer<'b, K: Solve<TransactionHandle<'b>> + Exported>(
+    fn lookup_answer<'answer, 'b, K: Solve<TransactionHandle<'b>> + Exported>(
         &'b self,
         module_data: &'b ArcId<ModuleDataMut>,
         key: &K,
-        thread_state: &ThreadState,
-        answer_scope: &AnswerScope,
-    ) -> Option<Arc<<K as Keyed>::Answer>>
+        thread_state: &'answer ThreadState,
+        answer_scope: &'answer AnswerScope,
+    ) -> Option<&'answer <K as Keyed>::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
@@ -1885,7 +1885,6 @@ impl<'a> Transaction<'a> {
 
         // Ensure answers (or solutions) are computed. Cheap if already done.
         self.demand(module_data, Step::Answers);
-
         let provider =
             answer_scope.retain_module(module_data, || match module_data.state.get_answers() {
                 Some(answers) => AnswerProvider::Answers(answers),
@@ -1898,14 +1897,14 @@ impl<'a> Transaction<'a> {
             });
         let (bindings, answers) = match provider {
             AnswerProvider::Answers(answers) => (&answers.0, answers.1.as_ref()),
-            AnswerProvider::Solutions(solutions) => return solutions.get_hashed_arc_opt(key),
+            AnswerProvider::Solutions(solutions) => return solutions.get_hashed_opt(key),
         };
 
         // Fast path: check if the answer is already computed in the
         // result slot. This avoids constructing
         // a TransactionHandle when the value is cached.
         if let Some(idx) = bindings.key_to_idx_hashed_opt(key)
-            && let Some(v) = answers.get_idx(idx)
+            && let Some(v) = answers.get_idx_ref(idx)
         {
             return Some(v);
         }
@@ -3119,14 +3118,14 @@ impl<'a> LookupExport for TransactionHandle<'a> {
 }
 
 impl<'a> LookupAnswer for TransactionHandle<'a> {
-    fn get<K: Solve<Self> + Exported>(
+    fn get<'answer, K: Solve<Self> + Exported>(
         &self,
         module: ModuleName,
         path: Option<&ModulePath>,
         k: &K,
-        thread_state: &ThreadState,
-        answer_scope: &AnswerScope,
-    ) -> Option<Arc<K::Answer>>
+        thread_state: &'answer ThreadState,
+        answer_scope: &'answer AnswerScope,
+    ) -> Option<&'answer K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,

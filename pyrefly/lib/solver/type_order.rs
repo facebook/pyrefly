@@ -166,10 +166,10 @@ impl<'solver, Ans: LookupAnswer> TypeOrder<'solver, Ans> {
             .get_typed_dict_value_type_as_builtins_dict(typed_dict)
     }
 
-    pub fn get_variance_from_class(self, cls: &Class) -> Arc<VarianceMap> {
+    pub fn get_variance_from_class(self, cls: &Class) -> &'solver VarianceMap {
         self.0
             .get_from_class(cls, &KeyVariance(cls.index()))
-            .unwrap_or_default()
+            .unwrap_or(VarianceMap::empty())
     }
 
     pub fn constructor_to_callable(self, cls: &ClassType) -> Type {

@@ -6,6 +6,7 @@
  */
 
 use std::fmt;
+use std::sync::LazyLock;
 
 use dupe::Dupe;
 use pyrefly_derive::Visit;
@@ -62,6 +63,13 @@ pub struct ClassBases {
     pub has_pydantic_strict_metadata: bool,
 }
 
+static RECURSIVE_CLASS_BASES: LazyLock<ClassBases> = LazyLock::new(|| ClassBases {
+    base_types: Box::new([]),
+    base_ranges: Box::new([]),
+    tuple_ancestor: None,
+    has_pydantic_strict_metadata: false,
+});
+
 /// Manual TypeEq implementation that ignores base_ranges.
 /// TextRange contains source positions which shouldn't affect interface equality.
 impl TypeEq for ClassBases {
@@ -73,13 +81,8 @@ impl TypeEq for ClassBases {
 }
 
 impl ClassBases {
-    pub fn recursive() -> Self {
-        Self {
-            base_types: Box::new([]),
-            base_ranges: Box::new([]),
-            tuple_ancestor: None,
-            has_pydantic_strict_metadata: false,
-        }
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_CLASS_BASES
     }
 
     pub fn tuple_ancestor(&self) -> Option<&Tuple> {
@@ -182,7 +185,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         match expr {
             BaseClassExpr::Name(x) => (
                 self.get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                    .arc_clone(),
+                    .clone(),
                 false,
             ),
             BaseClassExpr::Attribute { value, attr, range } => {
@@ -280,7 +283,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     x.range(),
                 )),
                 BaseClass::SynthesizedBase(class_idx, _) => {
-                    self.get_idx(*class_idx).as_ref().0.as_ref().map(|cls| {
+                    self.get_idx(*class_idx).0.as_ref().map(|cls| {
                         let ct = self.promote_nontypeddict_silently_to_classtype(cls);
                         (self.heap.mk_class_type(ct), x.range())
                     })

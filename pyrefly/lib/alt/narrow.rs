@@ -2315,7 +2315,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
-        let subject_info = self.with_type_for_exhaustiveness_check(&self.get_idx(*subject_idx));
+        let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
         if !self.solver().check_all_matches
             && !self.should_check_exhaustiveness_by_default(subject_info.ty())
         {
@@ -2380,7 +2380,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if !Self::is_match_case_reachability_op(op) {
             return;
         }
-        let subject_info = self.with_type_for_exhaustiveness_check(&self.get_idx(*subject_idx));
+        let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
         let subject_ty = subject_info.ty().clone();
         if subject_ty.is_any()
             || matches!(&subject_ty, Type::ClassType(cls) if cls.is_builtin("object"))

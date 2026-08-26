@@ -396,7 +396,7 @@ impl<T> AnswerSlot<T> {
     }
 
     /// Publish an ordinary, non-SCC result or return the competing winner.
-    pub(crate) fn record(&self, value: Arc<T>) -> (Arc<T>, bool) {
+    pub(crate) fn record(&self, value: Arc<T>) -> (&T, bool) {
         let mut candidate = Self::into_raw(value);
         loop {
             match self.ptr.compare_exchange(
@@ -406,16 +406,18 @@ impl<T> AnswerSlot<T> {
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
-                    // SAFETY: This slot now owns `candidate`'s strong reference.
-                    return (unsafe { Self::clone_arc(candidate) }, true);
+                    // SAFETY: This slot now owns `candidate`'s strong reference
+                    // for at least the lifetime of the returned reference.
+                    return (unsafe { &*candidate }, true);
                 }
                 Err(actual) => {
                     // SAFETY: The failed CAS left the candidate strong reference with us.
                     let value = unsafe { Arc::from_raw(candidate) };
                     match self.handle_failed_cas(value, actual) {
                         ControlFlow::Break(actual) => {
-                            // SAFETY: `actual` is a published pointer owned by this slot.
-                            return (unsafe { Self::clone_arc(actual) }, false);
+                            // SAFETY: `actual` is a published pointer owned by this slot
+                            // for at least the lifetime of the returned reference.
+                            return (unsafe { &*actual }, false);
                         }
                         ControlFlow::Continue(value) => {
                             candidate = Self::into_raw(value);
@@ -1059,14 +1061,14 @@ pub trait LookupAnswer: Sized {
     /// Look up the value. If present, the `path` is a hint which can optimize certain cases.
     ///
     /// Return None if the file is undergoing concurrent modification.
-    fn get<K: Solve<Self> + Exported>(
+    fn get<'answer, K: Solve<Self> + Exported>(
         &self,
         module: ModuleName,
         path: Option<&ModulePath>,
         k: &K,
-        stack: &ThreadState,
-        answer_scope: &AnswerScope,
-    ) -> Option<Arc<K::Answer>>
+        stack: &'answer ThreadState,
+        answer_scope: &'answer AnswerScope,
+    ) -> Option<&'answer K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
@@ -1305,18 +1307,18 @@ impl Answers {
         }
     }
 
-    pub fn solve_exported_key<Ans: LookupAnswer, K: Solve<Ans> + Exported>(
-        &self,
-        exports: &dyn LookupExport,
-        answers: &Ans,
-        bindings: &Bindings,
-        errors: &ErrorCollector,
-        stdlib: &Stdlib,
-        uniques: &UniqueFactory,
+    pub fn solve_exported_key<'ctx, 'answer, Ans: LookupAnswer, K: Solve<Ans> + Exported>(
+        &'answer self,
+        exports: &'ctx dyn LookupExport,
+        answers: &'ctx Ans,
+        bindings: &'answer Bindings,
+        errors: &'ctx ErrorCollector,
+        stdlib: &'ctx Stdlib,
+        uniques: &'ctx UniqueFactory,
         key: Hashed<&K>,
-        thread_state: &ThreadState,
-        answer_scope: &AnswerScope,
-    ) -> Option<Arc<K::Answer>>
+        thread_state: &'answer ThreadState,
+        answer_scope: &'answer AnswerScope,
+    ) -> Option<&'answer K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
@@ -1325,7 +1327,7 @@ impl Answers {
         // Fast path: check if the answer has already been published in its result slot.
         // This avoids constructing a VarRecurser and AnswersSolver when the value is cached.
         if let Some(idx) = bindings.key_to_idx_hashed_opt(key)
-            && let Some(v) = self.get_idx(idx)
+            && let Some(v) = self.get_idx_ref(idx)
         {
             return Some(v);
         }
@@ -1593,7 +1595,10 @@ impl Answers {
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
-    pub(crate) fn get_answer_slot<K: Solve<Ans>>(&self, idx: Idx<K>) -> &AnswerSlot<K::Answer>
+    pub(crate) fn get_answer_slot<K: Solve<Ans>>(
+        &self,
+        idx: Idx<K>,
+    ) -> &'answer AnswerSlot<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
@@ -1788,19 +1793,14 @@ mod tests {
         let slot = AnswerSlot::default();
         let (answer, did_write) = slot.record(value);
         assert!(did_write);
+        assert_eq!(*answer, 1);
         assert_eq!(
-            Arc::strong_count(&answer),
-            2,
-            "slot and returned answer own references"
+            weak.strong_count(),
+            1,
+            "only the slot should retain the published answer"
         );
 
         drop(slot);
-        assert_eq!(
-            Arc::strong_count(&answer),
-            1,
-            "dropping the slot releases its reference"
-        );
-        drop(answer);
         assert!(weak.upgrade().is_none());
     }
 

@@ -1662,7 +1662,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // Normal class instance attribute lookup
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let attr_lookup_result =
-                    self.get_enum_or_instance_attribute(class, &metadata, attr_name);
+                    self.get_enum_or_instance_attribute(class, metadata, attr_name);
                 match attr_lookup_result {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
@@ -1682,7 +1682,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             AttributeBase1::EnumLiteral(lit @ LitEnum { class, .. }) => {
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let attr_lookup_result =
-                    self.get_enum_literal_or_instance_attribute(lit, &metadata, attr_name);
+                    self.get_enum_literal_or_instance_attribute(lit, metadata, attr_name);
                 match attr_lookup_result {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
@@ -2220,7 +2220,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
 
         if let Some(attr) = self.try_get_from_export(module_name, attr_name.clone()) {
-            Some(Attribute::simple(attr.arc_clone()))
+            Some(Attribute::simple(attr.clone()))
         } else if self
             .exports
             .is_submodule_imported_implicitly(module_name, attr_name)

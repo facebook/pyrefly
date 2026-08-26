@@ -2310,7 +2310,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // type parameters are free in the signature.
         let constructor = self.constructor_to_callable(&self.as_class_type_unchecked(cls));
         // Quantify the free type parameters to make the resulting callable generic.
-        self.normalize_class_constructor_tparams(constructor, class_tparams.as_ref())
+        self.normalize_class_constructor_tparams(constructor, class_tparams)
     }
 
     /// Normalize class type parameters for each callable branch in `ty`.
@@ -2431,29 +2431,29 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.get_hashed_opt(Hashed::new(&Key::SuperInstance(x.range)))
                 .map_or_else(
                     || self.heap.mk_any_implicit(),
-                    |type_info| type_info.arc_clone_ty(),
+                    |type_info| type_info.ty().clone(),
                 )
         } else {
             self.expand_mut(&mut callee_ty);
             self.check_unittest_mock_patch_target(&callee_ty, &x.arguments, errors);
 
-            let args;
-            let kws;
             let call = CallWithTypes::new();
-            if callee_ty.is_union() {
+            let (args, kws) = if callee_ty.is_union() {
                 // If we have a union we will distribute over it, and end up duplicating each function call.
-                args = x
-                    .arguments
-                    .args
-                    .map(|x| call.call_arg(&CallArg::expr_maybe_starred(x), self, errors));
-                kws = x
-                    .arguments
-                    .keywords
-                    .map(|x| call.call_keyword(&CallKeyword::new(x), self, errors));
+                (
+                    x.arguments
+                        .args
+                        .map(|x| call.call_arg(&CallArg::expr_maybe_starred(x), self, errors)),
+                    x.arguments
+                        .keywords
+                        .map(|x| call.call_keyword(&CallKeyword::new(x), self, errors)),
+                )
             } else {
-                args = x.arguments.args.map(CallArg::expr_maybe_starred);
-                kws = x.arguments.keywords.map(CallKeyword::new);
-            }
+                (
+                    x.arguments.args.map(CallArg::expr_maybe_starred),
+                    x.arguments.keywords.map(CallKeyword::new),
+                )
+            };
 
             let result = self.distribute_over_union(&callee_ty, |ty| {
                 // NotImplemented is a singleton constant, not a callable class.

@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use dupe::Dupe;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_types::callable::Callable;
@@ -112,9 +110,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         )
     }
 
-    pub fn get_metadata_for_class(&self, cls: &Class) -> Arc<ClassMetadata> {
+    pub fn get_metadata_for_class(&self, cls: &Class) -> &ClassMetadata {
         self.get_from_class(cls, &KeyClassMetadata(cls.index()))
-            .unwrap_or_else(|| Arc::new(ClassMetadata::recursive()))
+            .unwrap_or(ClassMetadata::recursive())
     }
 
     pub fn shaped_array_shape_for_class(&self, cls: &Class) -> Option<Quantified> {
@@ -128,32 +126,33 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.shaped_array_shape_for_class(cls.class_object())
     }
 
-    pub fn get_abstract_members_for_class(&self, cls: &Class) -> Arc<AbstractClassMembers> {
+    pub fn get_abstract_members_for_class(&self, cls: &Class) -> &AbstractClassMembers {
         self.get_from_class(cls, &KeyAbstractClassCheck(cls.index()))
-            .unwrap_or_else(|| Arc::new(AbstractClassMembers::recursive()))
+            .unwrap_or(AbstractClassMembers::recursive())
     }
 
-    pub fn get_subscript_symmetry_for_class(&self, cls: &Class) -> Arc<bool> {
+    pub fn get_subscript_symmetry_for_class(&self, cls: &Class) -> bool {
         self.get_from_class(cls, &KeyClassSubscriptSymmetry(cls.index()))
-            .unwrap_or_else(|| Arc::new(true))
+            .copied()
+            .unwrap_or(true)
     }
 
-    pub fn get_base_types_for_class(&self, cls: &Class) -> Arc<ClassBases> {
+    pub fn get_base_types_for_class(&self, cls: &Class) -> &ClassBases {
         self.get_from_class(cls, &KeyClassBaseType(cls.index()))
-            .unwrap_or_else(|| Arc::new(ClassBases::recursive()))
+            .unwrap_or(ClassBases::recursive())
     }
 
-    pub fn get_mro_for_class(&self, cls: &Class) -> Arc<ClassMro> {
+    pub fn get_mro_for_class(&self, cls: &Class) -> &ClassMro {
         self.get_from_class(cls, &KeyClassMro(cls.index()))
-            .unwrap_or_else(|| Arc::new(ClassMro::recursive()))
+            .unwrap_or(ClassMro::recursive())
     }
 
-    pub fn get_disjoint_base_for_class(&self, cls: &Class) -> Arc<ClassDisjointBase> {
+    pub fn get_disjoint_base_for_class(&self, cls: &Class) -> &ClassDisjointBase {
         self.get_from_class(cls, &KeyClassDisjointBase(cls.index()))
-            .unwrap_or_else(|| Arc::new(ClassDisjointBase::recursive()))
+            .unwrap_or(ClassDisjointBase::recursive())
     }
 
-    pub fn get_class_field_map(&self, cls: &Class) -> SmallMap<Name, Arc<ClassField>> {
+    pub fn get_class_field_map(&self, cls: &Class) -> SmallMap<Name, &ClassField> {
         let Some(class_fields) = self.get_class_fields(cls) else {
             return SmallMap::new();
         };
@@ -177,7 +176,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::ClassDef(c) if c.is_builtin("tuple") => Some(self.instantiate_unbounded_tuple()),
             Type::ClassDef(c) => Some((
                 self.get_class_tparams(c)
-                    .map_or_else(TParams::default, |tparams| (*tparams).clone()),
+                    .map_or_else(TParams::default, |tparams| (**tparams).clone()),
                 self.instantiate(c),
             )),
             Type::TypeAlias(ta) => {

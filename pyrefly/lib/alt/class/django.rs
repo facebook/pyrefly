@@ -44,7 +44,7 @@ use crate::types::simplify::unions;
 /// Django stubs use this attribute to specify the Python type that a field should infer to
 const DJANGO_PRIVATE_GET_TYPE: Name = Name::new_static("_pyi_private_get_type");
 
-pub fn is_django_choices_subclass(bases_with_metadata: &[(Class, Arc<ClassMetadata>)]) -> bool {
+pub fn is_django_choices_subclass(bases_with_metadata: &[(Class, &ClassMetadata)]) -> bool {
     bases_with_metadata.iter().any(|(base, base_meta)| {
         base.has_toplevel_qname(ModuleName::django_models_enums().as_str(), "Choices")
             || base_meta
@@ -239,7 +239,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     fn get_manager_type(&self, target_model_type: Type) -> Option<Type> {
         let model_class = self.try_get_from_export(ModuleName::django_models(), MODEL)?;
-        let model_instance_type = self.class_def_to_instance_type(&model_class);
+        let model_instance_type = self.class_def_to_instance_type(model_class);
         self.specialize_manager_type(
             MANYRELATEDMANAGER,
             vec![target_model_type, model_instance_type],
@@ -253,7 +253,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn specialize_manager_type(&self, name: Name, type_args: Vec<Type>) -> Option<Type> {
         let manager_class_type =
             self.try_get_from_export(ModuleName::django_models_fields_related_descriptors(), name)?;
-        let Type::ClassDef(manager_class) = manager_class_type.as_ref() else {
+        let Type::ClassDef(manager_class) = manager_class_type else {
             return None;
         };
         Some(self.specialize(
@@ -286,7 +286,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let module_name = class.module_name();
 
                     self.try_get_from_export(module_name, class_name)
-                        .map(|model_type| self.class_def_to_instance_type(&model_type))
+                        .map(|model_type| self.class_def_to_instance_type(model_type))
                 }
             }
             // we may have to extend this function to handle different kinds of fields in the future
@@ -363,7 +363,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
         let base_value_attr = self.get_enum_or_instance_attribute(
             &self.as_class_type_unchecked(cls),
-            &metadata,
+            metadata,
             &VALUE_PROP,
         );
         let base_value_type = base_value_attr
@@ -454,7 +454,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // No custom pk, use default AutoField type
             let auto_field_type =
                 self.try_get_from_export(ModuleName::django_models_fields(), AUTO_FIELD)?;
-            self.get_django_field_type(&auto_field_type, model, None, None)
+            self.get_django_field_type(auto_field_type, model, None, None)
                 .map(|ty| (ty, false))
         }
     }

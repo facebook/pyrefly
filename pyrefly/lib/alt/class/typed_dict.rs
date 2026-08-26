@@ -252,7 +252,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         is_total: bool,
     ) -> Option<TypedDictField> {
         let member = self.get_non_synthesized_class_member(typed_dict.class_object(), name)?;
-        let instantiated_ty = self.instantiate_typed_dict_field_type(typed_dict, name, &member)?;
+        let instantiated_ty =
+            self.instantiate_typed_dict_field_type(typed_dict, name, member.as_ref())?;
         let mut typed_dict_field = member.as_typed_dict_field_info(is_total)?;
         typed_dict_field.ty = instantiated_ty;
         Some(typed_dict_field)

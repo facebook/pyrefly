@@ -6,7 +6,6 @@
  */
 
 use std::iter;
-use std::sync::Arc;
 
 use dupe::Dupe;
 use dupe::IterDupedExt;
@@ -96,16 +95,16 @@ use crate::types::types::CalleeKind;
 use crate::types::types::Type;
 
 #[derive(Debug, Clone)]
-struct ParsedBaseClass {
+struct ParsedBaseClass<'a> {
     class_object: Class,
     range: TextRange,
-    metadata: Arc<ClassMetadata>,
+    metadata: &'a ClassMetadata,
 }
 
 #[derive(Debug, Clone)]
-enum BaseClassParseResult {
+enum BaseClassParseResult<'a> {
     /// We can successfully extract the class object and metadata from the base class
-    Parsed(ParsedBaseClass),
+    Parsed(ParsedBaseClass<'a>),
     /// We can't parse the base class because its corresponding `BaseClass` is not valid (e.g. base is a `TypedDict`
     /// when is_new_type is true)
     InvalidBase(TextRange),
@@ -120,7 +119,7 @@ enum BaseClassParseResult {
     Ignored,
 }
 
-impl BaseClassParseResult {
+impl BaseClassParseResult<'_> {
     fn is_any(&self) -> bool {
         match self {
             BaseClassParseResult::InvalidBase(..)
@@ -652,10 +651,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) -> Option<Quantified> {
         let ShapedArrayMetadata { shape_name, range } = metadata?;
         let tparams = self.get_class_tparams(cls);
-        match tparams
-            .as_deref()
-            .and_then(|tparams| tparams.iter().find(|param| param.name() == shape_name))
-        {
+        match tparams.and_then(|tparams| tparams.iter().find(|param| param.name() == shape_name)) {
             Some(param) if param.is_type_var() => Some(param.clone()),
             Some(param) => {
                 self.error(
@@ -688,7 +684,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn check_init_subclass_keywords(
         &self,
         cls: &Class,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         metaclass: Option<&ClassType>,
         keywords: &[Keyword],
         errors: &ErrorCollector,
@@ -831,8 +827,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn final_protocol_metadata(
         &self,
         mut protocol_metadata: Option<ProtocolMetadata>,
-        decorators: &[(Arc<Decorator>, TextRange)],
-        parsed_results: &[BaseClassParseResult],
+        decorators: &[(&Decorator, TextRange)],
+        parsed_results: &[BaseClassParseResult<'_>],
         errors: &ErrorCollector,
     ) -> Option<ProtocolMetadata> {
         if let Some(proto) = &mut protocol_metadata {
@@ -882,7 +878,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         cls: &Class,
         bases: &[BaseClass],
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         errors: &ErrorCollector,
     ) -> Option<NamedTupleMetadata> {
         // Check if any base is a NamedTuple with dynamic fields
@@ -917,7 +913,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn typed_dict_metadata(
         &self,
         cls: &Class,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         keywords: &[(Name, Annotation)],
         is_typed_dict: bool,
         errors: &ErrorCollector,
@@ -1006,7 +1002,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn calculate_typed_dict_extra_items(
         &self,
         cur_extra_items: Option<ExtraItems>,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         range: TextRange,
         errors: &ErrorCollector,
     ) -> ExtraItems {
@@ -1075,7 +1071,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         cls: &Class,
         metaclass: Option<&ClassType>,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         errors: &ErrorCollector,
     ) -> Option<EnumMetadata> {
         let is_django = is_django_choices_subclass(bases_with_metadata);
@@ -1117,7 +1113,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn dataclass_transform_metadata(
         &self,
         keywords: &[(Name, Annotation)],
-        decorators: &[(Arc<Decorator>, TextRange)],
+        decorators: &[(&Decorator, TextRange)],
         metaclass: Option<&ClassType>,
         dataclass_defaults_from_base_class: Option<DataclassTransformMetadata>,
     ) -> Option<DataclassTransformMetadata> {
@@ -1164,7 +1160,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         cls: &Class,
         keywords: &[(Name, Annotation)],
-        decorators: &[(Arc<Decorator>, TextRange)],
+        decorators: &[(&Decorator, TextRange)],
         dataclass_defaults_from_base_class: Option<DataclassTransformMetadata>,
         pydantic_config: Option<&PydanticConfig>,
         errors: &ErrorCollector,
@@ -1333,7 +1329,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn get_dataclass_pseudo_field_names(
         &self,
         cls: &Class,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         pydantic_config: Option<&PydanticConfig>,
     ) -> SmallSet<Name> {
         let (local_instance, local_pseudo_overrides, local_pydantic_privates) =
@@ -1411,8 +1407,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn dataclass_metadata(
         &self,
         cls: &Class,
-        decorators: &[(Arc<Decorator>, TextRange)],
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        decorators: &[(&Decorator, TextRange)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         dataclass_from_dataclass_transform: Option<TransformDataclass>,
         pydantic_config: Option<&PydanticConfig>,
         pydantic_before_validator_fields: &[Name],
@@ -1585,7 +1581,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         match expr {
             BaseClassExpr::Name(x) => self
                 .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                .arc_clone_ty(),
+                .ty()
+                .clone(),
             BaseClassExpr::Attribute { value, attr, range } => {
                 let base = self.base_class_expr_infer_for_metadata(value, errors);
                 self.attr_infer_for_type(&base, &attr.id, *range, errors, None)
@@ -1637,7 +1634,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    fn parse_base_class(&self, base: &BaseClass, is_new_type: bool) -> BaseClassParseResult {
+    fn parse_base_class<'s>(
+        &'s self,
+        base: &BaseClass,
+        is_new_type: bool,
+    ) -> BaseClassParseResult<'s> {
         let range = base.range();
         let parse_base_class_type = |ty| match ty {
             Type::ClassType(c) => {
@@ -1737,7 +1738,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .mk_class_type(self.stdlib.named_tuple_fallback().clone()),
             ),
             BaseClass::SynthesizedBase(class_idx, _) => {
-                match &self.get_idx(*class_idx).as_ref().0 {
+                match &self.get_idx(*class_idx).0 {
                     Some(cls) => {
                         // At the moment we never synthesize a typed dict, so this is safe
                         let ct = self.promote_nontypeddict_silently_to_classtype(cls);
@@ -1795,12 +1796,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    fn bases_with_metadata(
+    fn bases_with_metadata<'s>(
         &self,
-        parsed_results: Vec<BaseClassParseResult>,
+        parsed_results: Vec<BaseClassParseResult<'s>>,
         is_new_type: bool,
         errors: &ErrorCollector,
-    ) -> Vec<(Class, Arc<ClassMetadata>)> {
+    ) -> Vec<(Class, &'s ClassMetadata)> {
         parsed_results
             .into_iter()
             .filter_map(|x| match x {
@@ -1902,7 +1903,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn calculate_typed_dict_metadata_fields(
         &self,
         cls: &Class,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         is_total: bool,
     ) -> SmallMap<Name, bool> {
         let mut all_fields = SmallMap::new();
@@ -2054,7 +2055,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut survivors: Vec<Class> = Vec::new();
         for base in bases.iter() {
             let mro = self.get_mro_for_class(base.class_object());
-            if matches!(&*mro, ClassMro::Cyclic) {
+            if matches!(mro, ClassMro::Cyclic) {
                 continue;
             }
             let base_disjoint = self.get_disjoint_base_for_class(base.class_object());
@@ -2095,7 +2096,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let metadata = self.get_metadata_for_class(cls);
         let mro = self.get_mro_for_class(cls);
         let has_nonempty_generated_slots =
-            self.has_nonempty_generated_slots_from_complete_mro(&metadata, &mro);
+            self.has_nonempty_generated_slots_from_complete_mro(metadata, mro);
 
         // Skip `object` so narrowing's fallback to `object` stays meaningful.
         let local = !cls.is_builtin("object")
@@ -2297,7 +2298,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     fn extends_abc(
         &self,
-        bases_with_metadata: &Vec<(Class, Arc<ClassMetadata>)>,
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         metaclass: Option<&ClassType>,
     ) -> bool {
         for (base, base_metadata) in bases_with_metadata {

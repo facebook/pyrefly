@@ -1551,7 +1551,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let metadata = self.get_metadata_for_class(class);
         if metadata.is_typed_dict() {
             return self.calculate_typed_dict_field(
-                &metadata,
+                metadata,
                 name,
                 range,
                 field_definition,
@@ -1629,7 +1629,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 {
                     ClassFieldInitialization::Magic
                 } else if let Some(flags) =
-                    self.extract_pydantic_field_from_annotation(*annot, name, &metadata)
+                    self.extract_pydantic_field_from_annotation(*annot, name, metadata)
                 {
                     ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
                 } else {
@@ -1997,7 +1997,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if let Some(annotation) = direct_annotation.as_ref() {
             self.validate_direct_annotation(
                 annotation,
-                &metadata,
+                metadata,
                 &initialization,
                 name,
                 range,
@@ -2008,7 +2008,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let read_only_reason = self.determine_read_only_reason(
             name,
             annotation.as_ref(),
-            &metadata,
+            metadata,
             field_definition,
             &initialization,
         );
@@ -3646,7 +3646,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let field = match cls.targs() {
             Some(targs) => field.instantiate_for_class_targs(targs, self_type, &mut ambiguous),
             None => {
-                let tparams = self.get_class_tparams(cls.class_object());
+                let tparams = self.get_class_tparams(cls.class_object()).map(Dupe::dupe);
                 field.instantiate_for_class_tparams(self.heap, tparams, self_type, &mut ambiguous)
             }
         };
@@ -3909,7 +3909,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn should_check_field_for_override_consistency(
         &self,
         field_name: &Name,
-        class_metadata: &Arc<ClassMetadata>,
+        class_metadata: &ClassMetadata,
         is_explicit_override: bool,
     ) -> bool {
         // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate
@@ -4041,7 +4041,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         if !self.should_check_field_for_override_consistency(
             field_name,
-            &metadata,
+            metadata,
             is_explicit_override,
         ) {
             return;
@@ -4053,7 +4053,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut parent_attr_requires_override = false;
         let mut parent_attr_is_from_object = false;
         let mut parent_has_any = false;
-        let is_typed_dict_field = self.is_typed_dict_field(metadata.as_ref(), field_name);
+        let is_typed_dict_field = self.is_typed_dict_field(metadata, field_name);
         let is_named_tuple_element = metadata
             .named_tuple_metadata()
             .is_some_and(|named_tuple| named_tuple.elements.contains(field_name));
@@ -4156,7 +4156,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     continue;
                 }
             }
-            if is_typed_dict_field != self.is_typed_dict_field(&parent_metadata, field_name) {
+            if is_typed_dict_field != self.is_typed_dict_field(parent_metadata, field_name) {
                 // TypedDict fields are actually dict keys, so we want to check them against other
                 // keys but not regular fields.
                 continue;
@@ -4164,9 +4164,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if is_typed_dict_field
                 && !self.validate_typed_dict_field_override(
                     cls,
-                    metadata.as_ref(),
+                    metadata,
                     parent_cls,
-                    parent_metadata.as_ref(),
+                    parent_metadata,
                     field_name,
                     class_field,
                     &want_class_field,
@@ -4458,9 +4458,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     /// For classes with multiple inheritance, check that fields inherited from multiple base classes are consistent.
     pub fn check_consistent_multiple_inheritance(&self, cls: &Class, errors: &ErrorCollector) {
-        struct InheritedFieldInfo {
+        struct InheritedFieldInfo<'a> {
             class: Class,
-            metadata: Arc<ClassMetadata>,
+            metadata: &'a ClassMetadata,
             field: ClassField,
             ty: Type,
             read_only: bool,
@@ -4470,7 +4470,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let current_class_metadata = self.get_metadata_for_class(cls);
         let current_class_bases = self.get_base_types_for_class(cls);
         let swallow_access_errors = self.error_swallower();
-        let mut inherited_fields: SmallMap<Name, Vec<InheritedFieldInfo>> = SmallMap::new();
+        let mut inherited_fields: SmallMap<Name, Vec<InheritedFieldInfo<'_>>> = SmallMap::new();
 
         for parent_class in current_class_bases.iter() {
             let parent_class_object = parent_class.class_object();
@@ -4481,7 +4481,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             for parent_field_name in parent_class_fields.names() {
                 if !self.should_check_field_for_override_consistency(
                     parent_field_name,
-                    &current_class_metadata,
+                    current_class_metadata,
                     false,
                 ) {
                     continue;
@@ -4519,7 +4519,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .or_default()
                         .push(InheritedFieldInfo {
                             class: parent_class_object.dupe(),
-                            metadata: parent_metadata.clone(),
+                            metadata: parent_metadata,
                             field: parent_field,
                             ty,
                             read_only,
@@ -4580,26 +4580,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if let Some(child_field_arc) = self.get_class_member(cls, field_name) {
                     let child_field = Arc::unwrap_or_clone(child_field_arc.clone());
                     if self
-                        .typed_dict_field_info(
-                            current_class_metadata.as_ref(),
-                            field_name,
-                            &child_field,
-                        )
+                        .typed_dict_field_info(current_class_metadata, field_name, &child_field)
                         .is_some()
                     {
                         for info in inherited_field_infos_by_ancestor {
                             if self
-                                .typed_dict_field_info(
-                                    info.metadata.as_ref(),
-                                    field_name,
-                                    &info.field,
-                                )
+                                .typed_dict_field_info(info.metadata, field_name, &info.field)
                                 .is_some()
                                 && !self.validate_typed_dict_field_override(
                                     cls,
-                                    current_class_metadata.as_ref(),
+                                    current_class_metadata,
                                     &info.class,
-                                    info.metadata.as_ref(),
+                                    info.metadata,
                                     field_name,
                                     &child_field,
                                     &info.field,
@@ -4624,7 +4616,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if self.get_class_fields(cls).is_some_and(|f| f.contains(name))
             && let Some(field) = self.get_from_class(cls, &KeyClassField(cls.index(), name.clone()))
         {
-            Some(field)
+            Some(Arc::new(field.clone()))
         } else {
             None
         }

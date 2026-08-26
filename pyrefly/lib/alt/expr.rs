@@ -491,7 +491,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 } else {
                     let result = self
                         .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                        .arc_clone();
+                        .clone();
                     // Complements PromoteForward for seeded captures.
                     if self.bindings().should_promote_at_range(x.range) {
                         result.map_ty(|ty| ty.promote_shallow_implicit_literals(self.stdlib))
@@ -524,7 +524,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Expr::Named(x) => match &*x.target {
                 Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => self
                     .get(&Key::Definition(ShortIdentifier::expr_name(name)))
-                    .arc_clone(),
+                    .clone(),
                 _ => self.expr_infer_impl(&x.value, hint, errors, type_form_context),
             },
             // All other expressions operate at the `Type` level only, so we avoid the overhead of
@@ -4043,8 +4043,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     pub(crate) fn shaped_array_shape_arg_index(&self, cls: &ClassType) -> Option<usize> {
         let shape_param = self.shaped_array_shape_for_class_type(cls)?;
-        self.get_class_tparams(cls.class_object())
-            .as_deref()?
+        self.get_class_tparams(cls.class_object())?
             .iter()
             .position(|param| param == &shape_param)
     }
@@ -4595,7 +4594,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> Vec<Type> {
         let tparams = self.get_class_tparams(cls);
-        let tparams: &[Quantified] = tparams.as_deref().map_or(&[], |tparams| tparams.as_vec());
+        let tparams: &[Quantified] = tparams.map_or(&[], |tparams| tparams.as_vec());
         self.parse_type_args_for_tparams(args, tparams, type_form_context, errors)
     }
 
