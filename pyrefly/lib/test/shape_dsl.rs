@@ -8513,3 +8513,184 @@ def shadowed(left: IntTuple, right: IntTuple) -> IntTuple:
     return concat(left, right)  # E: DSL helper callee must be a validated
 "#,
 );
+
+testcase!(
+    test_type_shape_dsl_prod,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl
+import shape_extensions.dsl as qualified_dsl
+from shape_extensions import Elements, Int, IntTuple, IntVar, type_shape_dsl_function
+from shape_extensions.dsl import IntTuple as DslIntTuple
+from shape_extensions.dsl import prod as imported_prod
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+prod_alias = imported_prod
+
+@type_shape_dsl_function
+def qualified(shape: IntTuple) -> Int:
+    return qualified_dsl.prod(shape)
+
+@type_shape_dsl_function
+def module_qualified(shape: IntTuple) -> Int:
+    return shape_extensions.dsl.prod(shape)
+
+@type_shape_dsl_function
+def imported(shape: IntTuple) -> Int:
+    return imported_prod(shape)
+
+@type_shape_dsl_function
+def aliased(shape: IntTuple) -> Int:
+    return prod_alias(shape)
+
+@type_shape_dsl_function
+def local(shape: IntTuple) -> Int:
+    result = imported_prod(shape)
+    return result
+
+@type_shape_dsl_function
+def prefix(shape: IntTuple) -> Int:
+    shape_alias = shape
+    return imported_prod(shape_alias[:2])
+
+@type_shape_dsl_function
+def empty(shape: IntTuple) -> Int:
+    return imported_prod(DslIntTuple(()))
+
+@type_shape_dsl_function
+def wrapped(shape: IntTuple) -> IntTuple:
+    return DslIntTuple((prod_alias(shape),))
+
+@type_shape_dsl_function
+def zero_prefix(shape: IntTuple) -> Int:
+    return imported_prod(qualified_dsl.concat(DslIntTuple((0,)), shape))
+
+@type_shape_dsl_function
+def zero_suffix(shape: IntTuple) -> Int:
+    return imported_prod(qualified_dsl.concat(shape, DslIntTuple((0,))))
+
+@type_shape_dsl_function
+def zero_gradual_dimension(dimension: Int) -> Int:
+    return imported_prod(DslIntTuple((0, dimension)))
+
+@type_shape_dsl_function
+def identity_padded(shape: IntTuple) -> Int:
+    return imported_prod(DslIntTuple((1, shape[0], 1)))
+
+@type_shape_dsl_function
+def all_ones(shape: IntTuple) -> Int:
+    return imported_prod(DslIntTuple((1, 1, 1)))
+
+@type_shape_dsl_function
+def zero_overflow(shape: IntTuple) -> Int:
+    return imported_prod(DslIntTuple((0, 9223372036854775807, 2)))
+
+def apply_qualified[S: IntTuple](x: Tensor[S]) -> Tensor[[qualified(S)]]: ...
+def apply_module[S: IntTuple](x: Tensor[S]) -> Tensor[[module_qualified(S)]]: ...
+def apply_imported[S: IntTuple](x: Tensor[S]) -> Tensor[[imported(S)]]: ...
+def apply_aliased[S: IntTuple](x: Tensor[S]) -> Tensor[[aliased(S)]]: ...
+def apply_local[S: IntTuple](x: Tensor[S]) -> Tensor[[local(S)]]: ...
+def apply_prefix[S: IntTuple](x: Tensor[S]) -> Tensor[[prefix(S)]]: ...
+def apply_empty[S: IntTuple](x: Tensor[S]) -> Tensor[[empty(S)]]: ...
+def apply_wrapped[S: IntTuple](x: Tensor[S]) -> Tensor[wrapped(S)]: ...
+def apply_zero_prefix[S: IntTuple](x: Tensor[S]) -> Tensor[[zero_prefix(S)]]: ...
+def apply_zero_suffix[S: IntTuple](x: Tensor[S]) -> Tensor[[zero_suffix(S)]]: ...
+def apply_identity_padded[S: IntTuple](x: Tensor[S]) -> Tensor[[identity_padded(S)]]: ...
+def gradual_dimension_zero() -> Tensor[[zero_gradual_dimension(Int[int])]]: ...
+def all_ones_result() -> Tensor[[all_ones(IntTuple[7])]]: ...
+def zero_overflow_result() -> Tensor[[zero_overflow(IntTuple[7])]]: ...
+def literal_overflow() -> Tensor[[qualified(IntTuple[9223372036854775807, 2])]]: ...
+def symbolic_overflow[N: IntVar](n: Int[N]) -> Tensor[[qualified(IntTuple[9223372036854775807, N, 2])]]: ...
+
+def test[S: IntTuple, N: IntVar, M: IntVar](
+    concrete: Tensor[[2, 3]],
+    symbolic: Tensor[[2, N, 3]],
+    triple: Tensor[[2, 3, 5]],
+    gradual: Tensor[IntTuple],
+    unpacked: Tensor[[2, *Elements[S], 3]],
+    add: Tensor[[(N + 1)]],
+    subtract: Tensor[[(N - 1)]],
+    floor_divide: Tensor[[(N // 2)]],
+    power: Tensor[[(N ** 2)]],
+    multi_factor_computed_awaits_checked_canonicalization: Tensor[[(N + 1), M]],
+    computed_and_literal_await_checked_canonicalization: Tensor[[(N + 1), 2]],
+    subtract_fallback: Tensor[[(N - 1), M]],
+    floor_divide_fallback: Tensor[[(N // 2), M]],
+    power_fallback: Tensor[[(N ** 2), M]],
+    n: Int[N],
+) -> None:
+    assert_type(apply_qualified(concrete), Tensor[[6]])
+    assert_type(apply_module(concrete), Tensor[[6]])
+    reveal_type(apply_imported(symbolic))  # E: revealed type: Tensor[[(6 * N)]]
+    assert_type(apply_aliased(concrete), Tensor[[6]])
+    assert_type(apply_local(concrete), Tensor[[6]])
+    assert_type(apply_prefix(triple), Tensor[[6]])
+    assert_type(apply_empty(concrete), Tensor[[1]])
+    assert_type(apply_wrapped(concrete), Tensor[[6]])
+    reveal_type(apply_qualified(gradual))  # E: revealed type: Tensor[[int]]
+    reveal_type(apply_zero_prefix(unpacked))  # E: revealed type: Tensor[[0]]
+    reveal_type(apply_zero_suffix(unpacked))  # E: revealed type: Tensor[[0]]
+    reveal_type(gradual_dimension_zero())  # E: revealed type: Tensor[[0]]
+    reveal_type(zero_overflow_result())  # E: revealed type: Tensor[[0]]
+    reveal_type(apply_qualified(add))  # E: revealed type: Tensor[[(1 + N)]]
+    reveal_type(apply_qualified(subtract))  # E: revealed type: Tensor[[(-1 + N)]]
+    reveal_type(apply_qualified(floor_divide))  # E: revealed type: Tensor[[(N // 2)]]
+    reveal_type(apply_qualified(power))  # E: revealed type: Tensor[[(N ** 2)]]
+    reveal_type(apply_identity_padded(add))  # E: revealed type: Tensor[[(1 + N)]]
+    reveal_type(apply_identity_padded(floor_divide))  # E: revealed type: Tensor[[(N // 2)]]
+    reveal_type(apply_identity_padded(power))  # E: revealed type: Tensor[[(N ** 2)]]
+    reveal_type(all_ones_result())  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_qualified(unpacked))  # E: revealed type: Tensor[[int]]
+    reveal_type(apply_qualified(multi_factor_computed_awaits_checked_canonicalization))  # E: revealed type: Tensor[[int]]
+    reveal_type(apply_qualified(computed_and_literal_await_checked_canonicalization))  # E: revealed type: Tensor[[int]]
+    reveal_type(apply_qualified(subtract_fallback))  # E: revealed type: Tensor[[int]]
+    reveal_type(apply_qualified(floor_divide_fallback))  # E: revealed type: Tensor[[int]]
+    reveal_type(apply_qualified(power_fallback))  # E: revealed type: Tensor[[int]]
+    reveal_type(literal_overflow())  # E: revealed type: Tensor[[int]]
+    reveal_type(symbolic_overflow(n))  # E: revealed type: Tensor[[int]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_prod,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions.dsl import prod as official_prod
+
+@type_shape_dsl_function
+def missing(shape: IntTuple) -> Int:
+    return official_prod()  # E: `dsl.prod` requires exactly one positional IntTuple argument  # E: No matching overload found
+
+@type_shape_dsl_function
+def extra(shape: IntTuple) -> Int:
+    return official_prod(shape, shape)  # E: `dsl.prod` requires exactly one positional IntTuple argument  # E: No matching overload found
+
+@type_shape_dsl_function
+def keyword(shape: IntTuple) -> Int:
+    return official_prod(x=shape)  # E: `dsl.prod` requires exactly one positional IntTuple argument  # E: Missing argument `xs`  # E: Unexpected keyword argument `x`
+
+@type_shape_dsl_function
+def starred(shape: IntTuple) -> Int:
+    return official_prod(*(shape,))  # E: `dsl.prod` requires exactly one positional IntTuple argument
+
+@type_shape_dsl_function
+def wrong_domain(dimension: Int) -> Int:
+    return official_prod(dimension)  # E: shape expression operands must be annotated as `IntTuple`  # E: No matching overload found
+
+@type_shape_dsl_function
+def wrong_result(shape: IntTuple) -> IntTuple:
+    return official_prod(shape)  # E: returned `IntTuple` product requires an `Int` result  # E: Returned type
+
+def ordinary_prod(shape: IntTuple) -> Int: ...
+
+@type_shape_dsl_function
+def ordinary_shadow(shape: IntTuple) -> Int:
+    return ordinary_prod(shape)  # E: DSL helper callee must be a validated
+
+@type_shape_dsl_function
+def parameter_shadow(official_prod: IntTuple, shape: IntTuple) -> Int:
+    return official_prod(shape)  # E: DSL helper callee must be a validated  # E: Expected a callable
+"#,
+);

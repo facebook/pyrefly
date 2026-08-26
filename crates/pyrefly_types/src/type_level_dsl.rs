@@ -815,6 +815,8 @@ pub enum TypeShapeDslReturnKind {
     },
     /// Evaluate a validated `IntTuple` expression from the retained AST.
     IntTupleExpression,
+    /// Evaluate a validated `IntTuple` product from the retained AST.
+    IntTupleProduct,
     /// Return an invalid shape computation with a source-provided message.
     Invalid,
     /// Return the gradual value for the function's declared result domain.
@@ -889,6 +891,7 @@ pub enum TypeShapeDslIntrinsic {
     IsConcreteInt,
     IsIntValue,
     IntTuple,
+    Prod,
     Invalid,
     Len,
     Range,
@@ -918,6 +921,7 @@ pub enum TypeShapeDslExpressionKind {
     },
     DimensionTuple,
     IntTupleConstructor,
+    IntTupleProduct,
     IntTupleLength {
         shape: usize,
         parameter_origins: Option<Box<[usize]>>,
@@ -1455,6 +1459,10 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     parameter_origins,
                 }
             }
+            Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Prod) => {
+                self.validate_int_tuple_product(call, flow)?;
+                TypeShapeDslExpressionKind::IntTupleProduct
+            }
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: expression.range(),
@@ -1898,6 +1906,24 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok(())
     }
 
+    fn validate_int_tuple_product(
+        &mut self,
+        call: &ExprCall,
+        flow: &DslValidationFlow,
+    ) -> Result<(), TypeShapeDslDefinitionError> {
+        if call.arguments.args.len() != 1
+            || !call.arguments.keywords.is_empty()
+            || matches!(call.arguments.args.first(), Some(Expr::Starred(_)))
+        {
+            return Err(TypeShapeDslDefinitionError {
+                range: call.arguments.range,
+                message: "`dsl.prod` requires exactly one positional IntTuple argument",
+            });
+        }
+        self.validate_int_tuple_expression(&call.arguments.args[0], flow)?;
+        Ok(())
+    }
+
     fn validate_int_tuple_expression(
         &mut self,
         expression: &Expr,
@@ -2082,6 +2108,14 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     origins: None,
                     kinds: FLAG_SEQUENCE,
                 })
+            }
+            Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Prod) => {
+                self.validate_int_tuple_product(call, flow)?;
+                self.expressions.push(TypeShapeDslExpression {
+                    range: call.range,
+                    kind: TypeShapeDslExpressionKind::IntTupleProduct,
+                });
+                Ok(DslStaticKind::Dimension)
             }
             Expr::Call(call)
                 if matches!(
@@ -2656,6 +2690,14 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 Some(TypeShapeDslIntrinsic::IntTuple | TypeShapeDslIntrinsic::Concat) => {
                     self.validate_int_tuple_expression(returned, flow)?;
                     TypeShapeDslReturnKind::IntTupleExpression
+                }
+                Some(TypeShapeDslIntrinsic::Prod) => {
+                    self.validate_int_tuple_product(call, flow)?;
+                    self.expressions.push(TypeShapeDslExpression {
+                        range: call.range,
+                        kind: TypeShapeDslExpressionKind::IntTupleProduct,
+                    });
+                    TypeShapeDslReturnKind::IntTupleProduct
                 }
                 Some(TypeShapeDslIntrinsic::Invalid) => {
                     if call.arguments.args.len() != 1
@@ -3518,7 +3560,8 @@ impl ResolvedTypeShapeDslProgram {
                             environment.value(left_slot),
                             environment.value(right_slot),
                         ),
-                        TypeShapeDslReturnKind::IntTupleExpression => {
+                        TypeShapeDslReturnKind::IntTupleExpression
+                        | TypeShapeDslReturnKind::IntTupleProduct => {
                             let expression = return_stmt
                                 .value
                                 .as_deref()
@@ -3909,6 +3952,25 @@ impl ValidatedTypeShapeDslFunction {
                     invalid @ DslOutcome::Invalid(_) => invalid,
                     DslOutcome::Value(_) => {
                         unreachable!("validated IntTuple constructor receives dimensions")
+                    }
+                }
+            }
+            TypeShapeDslExpressionKind::IntTupleProduct => {
+                let Expr::Call(call) = expression else {
+                    unreachable!("validated IntTuple product expression is a call")
+                };
+                match self.evaluate_expression(&call.arguments.args[0], environment, budget) {
+                    DslOutcome::Value(DslValue::Shape(shape)) => match shape.product() {
+                        Int::Int => DslOutcome::Value(DslValue::Unknown),
+                        product => DslOutcome::Value(DslValue::Dimension(product)),
+                    },
+                    DslOutcome::Value(DslValue::Unknown) => DslOutcome::Value(DslValue::Unknown),
+                    DslOutcome::ExplicitGradual => {
+                        unreachable!("validated IntTuple product operand cannot return gradual")
+                    }
+                    invalid @ DslOutcome::Invalid(_) => invalid,
+                    DslOutcome::Value(_) => {
+                        unreachable!("validated IntTuple product receives a shape")
                     }
                 }
             }

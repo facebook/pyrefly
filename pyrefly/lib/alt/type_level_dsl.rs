@@ -455,6 +455,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | TypeShapeDslExpressionKind::IntTupleSlice { .. }
                     | TypeShapeDslExpressionKind::IntTupleConcat
                     | TypeShapeDslExpressionKind::IntTupleConstructor
+                    | TypeShapeDslExpressionKind::IntTupleProduct
                     | TypeShapeDslExpressionKind::DimensionSlot { .. }
                     | TypeShapeDslExpressionKind::IntTupleIndex { .. }
                     | TypeShapeDslExpressionKind::IntTupleLength { .. }
@@ -609,12 +610,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                         valid_body = false;
                     }
+                    TypeShapeDslReturnKind::IntTupleProduct
+                        if result != TypeShapeDslDomain::Int =>
+                    {
+                        self.error(
+                            errors,
+                            return_.range(),
+                            ErrorKind::InvalidArgument,
+                            "`@type_shape_dsl_function` returned `IntTuple` product requires an `Int` result"
+                                .to_owned(),
+                        );
+                        valid_body = false;
+                    }
                     TypeShapeDslReturnKind::Parameter(_)
                     | TypeShapeDslReturnKind::Local { .. }
                     | TypeShapeDslReturnKind::AliasedParameter { .. }
                     | TypeShapeDslReturnKind::Broadcast { .. }
                     | TypeShapeDslReturnKind::IntFlagArithmetic { .. }
                     | TypeShapeDslReturnKind::IntTupleExpression
+                    | TypeShapeDslReturnKind::IntTupleProduct
                     | TypeShapeDslReturnKind::Invalid
                     | TypeShapeDslReturnKind::HelperCall(_)
                     | TypeShapeDslReturnKind::Gradual(_) => {}
@@ -698,6 +712,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if id.has_toplevel_qname("shape_extensions.dsl", "concat") {
             return Some(TypeShapeDslIntrinsic::Concat);
+        }
+        if id.has_toplevel_qname("shape_extensions.dsl", "prod") {
+            return Some(TypeShapeDslIntrinsic::Prod);
         }
         let class = id.cls.as_ref()?;
         if id.qname.id().as_str() != "gradual" {

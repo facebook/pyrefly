@@ -459,6 +459,62 @@ impl IntTuple {
         }
     }
 
+    /// Multiply all dimensions, returning a gradual dimension when a symbolic-rank shape or
+    /// overflowing concrete factors prevent an exact result. A definite zero factor wins even
+    /// when other dimensions are unknown.
+    pub(crate) fn product(&self) -> Int {
+        let dimensions = match self.view() {
+            IntTupleView::Concrete(dimensions) => dimensions,
+            IntTupleView::Unpacked { prefix, suffix, .. } => {
+                return if prefix
+                    .iter()
+                    .chain(suffix)
+                    .any(product_factor_is_definitely_zero)
+                {
+                    Int::Literal(0)
+                } else {
+                    Int::Int
+                };
+            }
+            IntTupleView::Gradual => return Int::Int,
+        };
+        if dimensions.iter().any(product_factor_is_definitely_zero) {
+            return Int::Literal(0);
+        }
+
+        // Substitution can expose factors that were not canonical when the shape was built.
+        let factors = dimensions
+            .iter()
+            .map(|dimension| canonicalize_int_dim(dimension.clone()))
+            .filter(|dimension| !matches!(dimension, Int::Literal(1)))
+            .collect::<Vec<_>>();
+        match factors.as_slice() {
+            [] => Int::Literal(1),
+            [factor] => factor.clone(),
+            factors => {
+                if factors
+                    .iter()
+                    .try_fold(1_i64, |product, factor| {
+                        checked_product_factor(factor, product)
+                    })
+                    .is_none()
+                {
+                    return Int::Int;
+                }
+                let product = factors
+                    .iter()
+                    .cloned()
+                    .fold(Int::Literal(1), |left, right| {
+                        Int::mul(Type::Int(left), Type::Int(right))
+                    });
+                match canonicalize(Type::Int(product)) {
+                    Type::Int(product) => product,
+                    _ => unreachable!("canonicalized IntTuple product must remain an Int"),
+                }
+            }
+        }
+    }
+
     /// Project this shape to the ordinary tuple type it denotes.
     pub fn to_tuple_type(&self) -> Type {
         match &self.0 {
@@ -874,6 +930,43 @@ fn canonicalize_int_dim(dim: Int) -> Int {
     match canonicalize(Type::Int(dim)) {
         Type::Int(dim) => dim,
         _ => unreachable!("canonicalizing a Int dimension should produce a Int"),
+    }
+}
+
+fn product_factor_is_definitely_zero(dimension: &Int) -> bool {
+    match dimension {
+        Int::Literal(value) => *value == 0,
+        Int::Mul(left, right) => {
+            product_factor_is_definitely_zero(left) || product_factor_is_definitely_zero(right)
+        }
+        Int::Symbolic(ty) => match ty.as_ref() {
+            Type::Int(dimension) => product_factor_is_definitely_zero(dimension),
+            Type::Literal(literal) => {
+                matches!(&literal.value, Lit::Int(value) if value.as_i64() == Some(0))
+            }
+            _ => false,
+        },
+        Int::Int | Int::Add(_, _) | Int::Sub(_, _) | Int::FloorDiv(_, _) | Int::Pow(_, _) => false,
+    }
+}
+
+/// Accumulate concrete literal factors, rejecting unsupported forms and overflow. Symbolic
+/// variables do not change the concrete accumulator.
+fn checked_product_factor(dimension: &Int, product: i64) -> Option<i64> {
+    match dimension {
+        Int::Literal(value) => product.checked_mul(*value),
+        Int::Mul(left, right) => checked_product_factor(left, product)
+            .and_then(|product| checked_product_factor(right, product)),
+        Int::Symbolic(ty) => match ty.as_ref() {
+            Type::Int(dimension) => checked_product_factor(dimension, product),
+            Type::Literal(literal) => match &literal.value {
+                Lit::Int(value) => value.as_i64().and_then(|value| product.checked_mul(value)),
+                _ => unreachable!("validated Int dimension cannot contain a non-integer literal"),
+            },
+            _ => Some(product),
+        },
+        Int::Int => Some(product),
+        Int::Add(_, _) | Int::Sub(_, _) | Int::FloorDiv(_, _) | Int::Pow(_, _) => None,
     }
 }
 
@@ -1902,7 +1995,9 @@ mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::nesting_context::NestingContext;
+    use pyrefly_util::visit::VisitMut;
     use ruff_python_ast::Identifier;
+    use ruff_python_ast::Int as AstInt;
     use ruff_python_ast::name::Name;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
@@ -1930,6 +2025,7 @@ mod tests {
     use crate::shaped_array::ShapedArrayType;
     use crate::shaped_array::broadcast_dim;
     use crate::shaped_array::broadcast_shapes;
+    use crate::shaped_array::checked_product_factor;
     use crate::shaped_array::gradual_shape_middle;
     use crate::shaped_array::index_shape_multi;
     use crate::shaped_array::is_tuple_carrier_shape_middle;
@@ -3673,6 +3769,76 @@ mod tests {
             tuple_carrier_to_shape(&concrete_carrier(vec![invalid_int.clone()])),
             None
         );
+    }
+
+    #[test]
+    fn int_tuple_product_checks_literals_inside_symbolic_wrappers() {
+        let wrapped_max = Int::Symbolic(Box::new(Type::Int(Int::Literal(i64::MAX))));
+        let literal_product = checked_product_factor(&wrapped_max, 1)
+            .expect("the maximum i64 literal is representable");
+
+        assert_eq!(literal_product, i64::MAX);
+        assert_eq!(
+            checked_product_factor(&Int::Literal(2), literal_product),
+            None
+        );
+
+        let too_large = Int::Symbolic(Box::new(
+            Lit::Int(LitInt::from_ast(&AstInt::from(i64::MAX as u64 + 1))).to_implicit_type(),
+        ));
+        assert_eq!(checked_product_factor(&too_large, 1), None);
+    }
+
+    #[test]
+    fn int_tuple_product_preserves_zero_exposed_after_construction() {
+        let symbolic = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+        let mut shape = IntTuple::new(vec![symbolic(), symbolic()]);
+        let mut replacement = 0;
+        shape.visit_mut(&mut |ty: &mut Type| {
+            *ty = if replacement == 0 {
+                Type::Int(Int::Literal(0))
+            } else {
+                Type::Int(Int::Add(
+                    Box::new(Int::Literal(1)),
+                    Box::new(Int::Literal(1)),
+                ))
+            };
+            replacement += 1;
+        });
+
+        assert_eq!(replacement, 2);
+        assert_eq!(shape.product(), Int::Literal(0));
+    }
+
+    #[test]
+    fn int_tuple_product_drops_symbolic_identity_exposed_after_construction() {
+        let symbolic = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+        let mut shape = IntTuple::new(vec![symbolic(), symbolic()]);
+        let mut replacement = 0;
+        shape.visit_mut(&mut |ty: &mut Type| {
+            *ty = if replacement == 0 {
+                Type::Int(Int::Literal(1))
+            } else {
+                Type::Int(Int::Literal(4))
+            };
+            replacement += 1;
+        });
+
+        assert_eq!(replacement, 2);
+        assert_eq!(shape.product(), Int::Literal(4));
+    }
+
+    #[test]
+    fn int_tuple_product_normalizes_a_lone_symbolic_literal() {
+        let mut shape = IntTuple::new(vec![Int::Symbolic(Box::new(Type::Var(Var::ZERO)))]);
+        let mut replacement = 0;
+        shape.visit_mut(&mut |ty: &mut Type| {
+            *ty = LitInt::new(4).to_implicit_type();
+            replacement += 1;
+        });
+
+        assert_eq!(replacement, 1);
+        assert_eq!(shape.product(), Int::Literal(4));
     }
 
     fn bool_literal() -> Type {

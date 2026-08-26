@@ -3334,10 +3334,10 @@ fn val_to_type(
 
         // Int and Bool synthesize Literal[n] / Literal[bool] from the DSL's
         // traced runtime value, just like Int does via `val_to_scalar_type`.
-        // This is intentionally load-bearing: functions like `dim_ir`,
-        // `numel_ir`, and `size_ir(dim=N)` trace exact integer results, and
-        // downstream consumers (assert_type, reshape validation, shape
-        // inference) rely on the literal precision. Returning
+        // This is intentionally load-bearing: functions like `dim_ir` and
+        // `size_ir(dim=N)` trace exact integer results, and downstream
+        // consumers (assert_type, reshape validation, shape inference) rely on
+        // the literal precision. Returning
         // `expected_return_type` here would discard the traced value and
         // produce `int` instead of e.g. `Literal[3]`.
         //

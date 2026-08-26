@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import typing
 
-from . import IntTuple as _IntTupleSchema
+from . import Int as _IntSchema, IntTuple as _IntTupleSchema
 
 
 def shape_dsl_function(fn: typing.Callable) -> typing.Callable:
@@ -100,7 +100,15 @@ def concat(
     return _IntTupleSchema((*left, *right))
 
 
-def prod(xs: list[int]) -> int:
+@typing.overload
+def prod(xs: _IntTupleSchema, /) -> _IntSchema: ...
+
+
+@typing.overload
+def prod(xs: list[int]) -> int: ...
+
+
+def prod(xs: _IntTupleSchema | list[int]) -> _IntSchema | int:
     """Compute the product of a list of dimension sizes."""
     ...
 
