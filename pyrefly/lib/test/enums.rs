@@ -394,6 +394,26 @@ def foo(f: MyFlag) -> None:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4657
+testcase!(
+    test_flag_union_return_self,
+    r#"
+import enum
+from typing import Self
+
+class MyFlag(enum.Flag):
+    a = enum.auto()
+    b = enum.auto()
+
+    @classmethod
+    def all_flags(cls) -> Self:
+        return cls.a | cls.b
+
+    def foo(self) -> Self:
+        return self.a | self.b
+"#,
+);
+
 testcase!(
     test_recursive_enum_class,
     r#"
