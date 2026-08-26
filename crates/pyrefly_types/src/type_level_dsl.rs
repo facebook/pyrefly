@@ -28,6 +28,7 @@ use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprGenerator;
+use ruff_python_ast::ExprName;
 use ruff_python_ast::Number;
 use ruff_python_ast::Operator;
 use ruff_python_ast::Parameters;
@@ -927,6 +928,7 @@ pub enum TypeShapeDslIntrinsic {
     Len,
     Range,
     Tuple,
+    Zip,
 }
 
 /// What a validated DSL value expression computes. Like `TypeShapeDslReturnKind` this depends on
@@ -967,6 +969,9 @@ pub enum TypeShapeDslExpressionKind {
     },
     GeneratorElementAsDimension(usize),
     GeneratorElementAsFlagInt(usize),
+    GeneratorZip {
+        sources: usize,
+    },
     Slot(usize),
     FlagValueSlot {
         slot: usize,
@@ -986,10 +991,19 @@ pub enum TypeShapeDslExpressionKind {
     Conditional,
     DimensionGenerator {
         binder: usize,
+        binders: usize,
     },
     FlagGenerator {
         binder: usize,
+        binders: usize,
     },
+}
+
+/// Whether a validated generator source binds one name or one name per `zip` lane.
+#[derive(Debug, Clone, Copy)]
+enum TypeShapeDslGeneratorSource {
+    Single,
+    Zip(usize),
 }
 
 /// The Flag value domain a validated operation requires of its operand. Reached through
@@ -2093,11 +2107,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         message: "`tuple` argument must be a bounded generator",
                     });
                 };
-                let binder =
+                let (binder, binders) =
                     self.validate_generator(generator, flow, GeneratorValidationKind::FlagValue)?;
                 self.expressions.push(TypeShapeDslExpression {
                     range: call.range,
-                    kind: TypeShapeDslExpressionKind::FlagGenerator { binder },
+                    kind: TypeShapeDslExpressionKind::FlagGenerator { binder, binders },
                 });
                 Ok(())
             }
@@ -2112,11 +2126,13 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         &mut self,
         source: &Expr,
         flow: &DslValidationFlow,
-    ) -> Result<(), TypeShapeDslDefinitionError> {
+        allow_zip: bool,
+    ) -> Result<TypeShapeDslGeneratorSource, TypeShapeDslDefinitionError> {
         if let Expr::Name(_) = source {
             let slot = self.slot(source, flow)?;
             let (parameter_origins, narrowed) = match &flow.kinds[slot] {
                 DslStaticKind::UnknownParameters(parameters) => (Some(parameters.clone()), false),
+                DslStaticKind::IntTuple { parameter_origins } => (parameter_origins.clone(), false),
                 DslStaticKind::Flag { origins, kinds } if *kinds == FLAG_SEQUENCE => {
                     origins.as_ref().map_or((None, false), |origins| {
                         let (parameters, narrowed) = origins.clone_parameters_with_narrowing();
@@ -2138,22 +2154,61 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     narrowed,
                 },
             });
-            return Ok(());
-        }
-        if let Expr::Call(call) = source
-            && self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Tuple)
-            && matches!(call.arguments.args.first(), Some(Expr::Generator(_)))
-        {
-            return Err(TypeShapeDslDefinitionError {
-                range: source.range(),
-                message: "nested generators are not supported",
-            });
+            return Ok(TypeShapeDslGeneratorSource::Single);
         }
         match source {
-            Expr::Tuple(_) | Expr::Call(_) => self.validate_flag_sequence(source, flow),
+            Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Zip) => {
+                if !allow_zip {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: source.range(),
+                        message: "`zip` sources are only supported in constructor generators",
+                    });
+                }
+                if !call.arguments.keywords.is_empty() {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: call.arguments.range,
+                        message: "generator `zip` does not support keyword arguments",
+                    });
+                }
+                for argument in &call.arguments.args {
+                    self.validate_generator_source(argument, flow, false)?;
+                }
+                self.expressions.push(TypeShapeDslExpression {
+                    range: call.range,
+                    kind: TypeShapeDslExpressionKind::GeneratorZip {
+                        sources: call.arguments.args.len(),
+                    },
+                });
+                Ok(TypeShapeDslGeneratorSource::Zip(call.arguments.args.len()))
+            }
+            Expr::Call(call)
+                if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::IntTuple) =>
+            {
+                if matches!(call.arguments.args.first(), Some(Expr::Generator(_))) {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: source.range(),
+                        message: "nested generators are not supported",
+                    });
+                }
+                self.validate_int_tuple_constructor(call, flow)?;
+                Ok(TypeShapeDslGeneratorSource::Single)
+            }
+            Expr::Call(call)
+                if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Tuple)
+                    && matches!(call.arguments.args.first(), Some(Expr::Generator(_))) =>
+            {
+                Err(TypeShapeDslDefinitionError {
+                    range: source.range(),
+                    message: "nested generators are not supported",
+                })
+            }
+            Expr::Tuple(_) | Expr::Call(_) => {
+                self.validate_flag_sequence(source, flow)?;
+                Ok(TypeShapeDslGeneratorSource::Single)
+            }
             _ => Err(TypeShapeDslDefinitionError {
                 range: source.range(),
-                message: "generator source must be an IntTuple, tuple display, or `range(...)`",
+                message: "generator source must be an IntTuple, Flag sequence, or `zip(...)`",
             }),
         }
     }
@@ -2163,7 +2218,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         generator: &ExprGenerator,
         flow: &DslValidationFlow,
         kind: GeneratorValidationKind,
-    ) -> Result<usize, TypeShapeDslDefinitionError> {
+    ) -> Result<(usize, usize), TypeShapeDslDefinitionError> {
         let [comprehension] = generator.generators.as_slice() else {
             return Err(TypeShapeDslDefinitionError {
                 range: generator.range,
@@ -2183,12 +2238,6 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 message: "async generators are not supported",
             });
         }
-        let Expr::Name(target) = &comprehension.target else {
-            return Err(TypeShapeDslDefinitionError {
-                range: comprehension.target.range(),
-                message: "generator target must be exactly one bare name",
-            });
-        };
         if comprehension.ifs.len() > 1 {
             return Err(TypeShapeDslDefinitionError {
                 range: comprehension.range,
@@ -2202,17 +2251,83 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 },
             });
         }
+        let source_is_zip = matches!(
+            &comprehension.iter,
+            Expr::Call(call)
+                if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Zip)
+        );
+        if !source_is_zip && !matches!(&comprehension.target, Expr::Name(_)) {
+            return Err(TypeShapeDslDefinitionError {
+                range: comprehension.target.range(),
+                message: "generator target must be exactly one bare name",
+            });
+        }
 
-        self.validate_generator_source(&comprehension.iter, flow)?;
+        let source = self.validate_generator_source(
+            &comprehension.iter,
+            flow,
+            kind != GeneratorValidationKind::Condition,
+        )?;
+        let targets = match (source, &comprehension.target) {
+            (TypeShapeDslGeneratorSource::Single, Expr::Name(target)) => vec![target],
+            (TypeShapeDslGeneratorSource::Zip(sources), Expr::Tuple(targets))
+                if targets.elts.len() == sources =>
+            {
+                let mut names: Vec<&ExprName> = Vec::with_capacity(sources);
+                for target in &targets.elts {
+                    let Expr::Name(target) = target else {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: target.range(),
+                            message: "generator tuple targets require one bare name per `zip` source",
+                        });
+                    };
+                    if names.iter().any(|name| name.id == target.id) {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: target.range,
+                            message: "generator tuple target names must be distinct",
+                        });
+                    }
+                    names.push(target);
+                }
+                names
+            }
+            (TypeShapeDslGeneratorSource::Zip(_), Expr::Tuple(_)) => {
+                return Err(TypeShapeDslDefinitionError {
+                    range: comprehension.target.range(),
+                    message: "generator tuple target arity must match the number of `zip` sources",
+                });
+            }
+            (TypeShapeDslGeneratorSource::Zip(_), _) => {
+                return Err(TypeShapeDslDefinitionError {
+                    range: comprehension.target.range(),
+                    message: "generator `zip` sources require a fixed tuple target",
+                });
+            }
+            (TypeShapeDslGeneratorSource::Single, _) => {
+                return Err(TypeShapeDslDefinitionError {
+                    range: comprehension.target.range(),
+                    message: "generator target must be exactly one bare name",
+                });
+            }
+        };
         let binder = self.declared_local_kinds.len();
-        self.declared_local_kinds
-            .push(Some(DslStaticKind::GeneratorElement));
-        let previous = self.slots.insert(target.id.clone(), binder);
+        let mut previous = Vec::with_capacity(targets.len());
+        for target in &targets {
+            let slot = self.declared_local_kinds.len();
+            self.declared_local_kinds
+                .push(Some(DslStaticKind::GeneratorElement));
+            previous.push((
+                target.id.clone(),
+                self.slots.insert(target.id.clone(), slot),
+            ));
+        }
         let mut generator_flow = flow.clone();
         self.normalize_flow(&mut generator_flow);
-        generator_flow.assigned[binder] = true;
-        generator_flow.maybe_assigned[binder] = true;
-        generator_flow.kinds[binder] = DslStaticKind::GeneratorElement;
+        for slot in binder..binder + targets.len() {
+            generator_flow.assigned[slot] = true;
+            generator_flow.maybe_assigned[slot] = true;
+            generator_flow.kinds[slot] = DslStaticKind::GeneratorElement;
+        }
 
         let validation = (|| {
             if let Some(filter) = comprehension.ifs.first() {
@@ -2231,13 +2346,15 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 }
             }
         })();
-        if let Some(previous) = previous {
-            self.slots.insert(target.id.clone(), previous);
-        } else {
-            self.slots.remove(&target.id);
+        for (target, old) in previous {
+            if let Some(old) = old {
+                self.slots.insert(target, old);
+            } else {
+                self.slots.remove(&target);
+            }
         }
         validation?;
-        Ok(binder)
+        Ok((binder, targets.len()))
     }
 
     fn validate_int_tuple_constructor(
@@ -2252,11 +2369,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             });
         }
         if let Expr::Generator(generator) = &call.arguments.args[0] {
-            let binder =
+            let (binder, binders) =
                 self.validate_generator(generator, flow, GeneratorValidationKind::Dimension)?;
             self.expressions.push(TypeShapeDslExpression {
                 range: generator.range,
-                kind: TypeShapeDslExpressionKind::DimensionGenerator { binder },
+                kind: TypeShapeDslExpressionKind::DimensionGenerator { binder, binders },
             });
             self.expressions.push(TypeShapeDslExpression {
                 range: call.range,
@@ -2742,7 +2859,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     message: "`any` argument must be a bounded boolean generator",
                 });
             };
-            let binder =
+            let (binder, _) =
                 self.validate_generator(generator, flow, GeneratorValidationKind::Condition)?;
             self.conditions.push(TypeShapeDslCondition {
                 range: call.range,
@@ -4164,6 +4281,7 @@ impl ValidatedTypeShapeDslFunction {
         &self,
         generator: &ExprGenerator,
         binder: usize,
+        binders: usize,
         environment: &DslEnvironment,
         result: GeneratorResultKind,
         budget: &mut DslEvaluationBudget,
@@ -4171,24 +4289,96 @@ impl ValidatedTypeShapeDslFunction {
         let [comprehension] = generator.generators.as_slice() else {
             unreachable!("validated constructor generator has exactly one clause")
         };
-        let (values, truncated) =
-            match self.evaluate_generator_items(&comprehension.iter, environment, budget) {
-                Ok(EvaluatedGeneratorItems::Known { values, truncated }) => (values, truncated),
+        let source_expressions = match self.expression_kind(&comprehension.iter) {
+            TypeShapeDslExpressionKind::GeneratorZip { sources } => {
+                let Expr::Call(call) = &comprehension.iter else {
+                    unreachable!("validated generator zip source is a call")
+                };
+                assert_eq!(
+                    call.arguments.args.len(),
+                    sources,
+                    "validated generator zip metadata must align with its arguments"
+                );
+                &call.arguments.args
+            }
+            _ => std::slice::from_ref(&comprehension.iter),
+        };
+        assert_eq!(
+            source_expressions.len(),
+            binders,
+            "validated generator targets must align with source lanes"
+        );
+        if source_expressions.is_empty() {
+            return match result {
+                GeneratorResultKind::Dimensions => {
+                    DslOutcome::Value(DslValue::DimensionTuple(Vec::new()))
+                }
+                GeneratorResultKind::FlagValues => {
+                    DslOutcome::Value(DslValue::FlagSequence(DslFlagSequence::Values(Vec::new())))
+                }
+            };
+        }
+        let mut sources = Vec::with_capacity(source_expressions.len());
+        let mut sources_unknown = false;
+        for source in source_expressions {
+            match self.evaluate_generator_items(source, environment, budget) {
+                Ok(EvaluatedGeneratorItems::Known { values, truncated }) => {
+                    sources.push(Some((values, truncated)));
+                }
                 Ok(EvaluatedGeneratorItems::Unknown) => {
-                    return DslOutcome::Value(DslValue::Unknown);
+                    sources_unknown = true;
+                    sources.push(None);
                 }
                 Err(error) => return DslOutcome::Invalid(error),
+            }
+        }
+        if sources
+            .iter()
+            .any(|source| matches!(source, Some((values, false)) if values.is_empty()))
+        {
+            return match result {
+                GeneratorResultKind::Dimensions => {
+                    DslOutcome::Value(DslValue::DimensionTuple(Vec::new()))
+                }
+                GeneratorResultKind::FlagValues => {
+                    DslOutcome::Value(DslValue::FlagSequence(DslFlagSequence::Values(Vec::new())))
+                }
             };
+        }
+        if sources_unknown {
+            return DslOutcome::Value(DslValue::Unknown);
+        }
+        let sources = sources
+            .into_iter()
+            .map(|source| source.expect("known generator sources were retained"))
+            .collect::<Vec<_>>();
+        let length = sources
+            .iter()
+            .map(|(values, _)| values.len())
+            .min()
+            .expect("a generator with no source lanes returned above");
+        let truncated = sources
+            .iter()
+            .filter(|(values, _)| values.len() == length)
+            .all(|(_, truncated)| *truncated);
 
         let mut dimensions = Vec::new();
         let mut flag_values = Vec::new();
         let mut unknown = false;
         let mut iteration = environment.clone();
-        for value in values {
+        for index in 0..length {
             if !budget.consume_generator_step() {
                 return DslOutcome::Value(DslValue::Unknown);
             }
-            iteration.assign(binder, value);
+            for (lane, (values, _)) in sources.iter().enumerate() {
+                iteration.assign(
+                    binder + lane,
+                    values
+                        .get(index)
+                        .expect("shortest source length guarantees an item in every lane")
+                        .clone(),
+                );
+            }
             if let Some(filter) = comprehension.ifs.first() {
                 match self.evaluate_condition(filter, &iteration, budget) {
                     Err(error) => return DslOutcome::Invalid(error),
@@ -4254,6 +4444,9 @@ impl ValidatedTypeShapeDslFunction {
                     DslValue::Unknown => DslOutcome::Value(DslValue::Unknown),
                     _ => unreachable!("generator elements are integer values"),
                 }
+            }
+            TypeShapeDslExpressionKind::GeneratorZip { .. } => {
+                unreachable!("generator zip sources are evaluated by their enclosing generator")
             }
             TypeShapeDslExpressionKind::IntegerSlot { slot, .. } => match environment.value(slot) {
                 DslValue::FlagInt(value) => {
@@ -4700,19 +4893,20 @@ impl ValidatedTypeShapeDslFunction {
                     }
                 }
             }
-            TypeShapeDslExpressionKind::DimensionGenerator { binder } => {
+            TypeShapeDslExpressionKind::DimensionGenerator { binder, binders } => {
                 let Expr::Generator(generator) = expression else {
                     unreachable!("validated dimension generator retains its generator AST")
                 };
                 self.evaluate_generator(
                     generator,
                     binder,
+                    binders,
                     environment,
                     GeneratorResultKind::Dimensions,
                     budget,
                 )
             }
-            TypeShapeDslExpressionKind::FlagGenerator { binder } => {
+            TypeShapeDslExpressionKind::FlagGenerator { binder, binders } => {
                 let Expr::Call(call) = expression else {
                     unreachable!("validated Flag generator expression is a tuple call")
                 };
@@ -4722,6 +4916,7 @@ impl ValidatedTypeShapeDslFunction {
                 self.evaluate_generator(
                     generator,
                     binder,
+                    binders,
                     environment,
                     GeneratorResultKind::FlagValues,
                     budget,

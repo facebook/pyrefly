@@ -490,6 +490,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | TypeShapeDslExpressionKind::GeneratorSourceSlot { .. }
                     | TypeShapeDslExpressionKind::GeneratorElementAsDimension(_)
                     | TypeShapeDslExpressionKind::GeneratorElementAsFlagInt(_)
+                    | TypeShapeDslExpressionKind::GeneratorZip { .. }
                     | TypeShapeDslExpressionKind::Slot(_)
                     | TypeShapeDslExpressionKind::FlagValueSlot { .. }
                     | TypeShapeDslExpressionKind::FlagIntLiteral(_)
@@ -705,6 +706,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             && class.qname().id().as_str() == "tuple"
         {
             return Some(TypeShapeDslIntrinsic::Tuple);
+        }
+        if let Type::ClassDef(class) = &callee
+            && class.qname().module_name().as_str() == "builtins"
+            && class.qname().id().as_str() == "zip"
+        {
+            return Some(TypeShapeDslIntrinsic::Zip);
         }
         let Some(CalleeKind::Function(function_kind)) = callee.callee_kind() else {
             return None;

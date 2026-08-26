@@ -7720,7 +7720,8 @@ testcase!(
     shape_dsl_tensor_env(),
     r#"
 import shape_extensions.dsl as dsl
-from shape_extensions import Flag, Int, IntTuple, IntVar, type_shape_dsl_function
+from builtins import zip as paired
+from shape_extensions import Elements, Flag, Int, IntTuple, IntVar, type_shape_dsl_function
 from torch import Tensor
 from typing import assert_type, reveal_type
 
@@ -7805,6 +7806,64 @@ def shadowed(shape: IntTuple, index: Int) -> IntTuple:
         return shape
     return dsl.IntTuple(())
 
+@type_shape_dsl_function
+def zipped_mixed(left: IntTuple, right: IntTuple) -> IntTuple:
+    flags = (10, 20, 30)
+    return dsl.IntTuple(x + y + flag for x, y, flag in zip(left, right, flags))
+
+@type_shape_dsl_function
+def zipped_alias(left: IntTuple, right: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x + y for x, y in paired(left, right))
+
+@type_shape_dsl_function
+def zipped_empty(shape: IntTuple) -> IntTuple:
+    empty = ()
+    return dsl.IntTuple(x + y + z for x, y, z in zip(empty, range(5000), shape))
+
+@type_shape_dsl_function
+def zipped_empty_later_invalid(shape: IntTuple, divisor: int) -> IntTuple:
+    return dsl.IntTuple(x + y + z for x, y, z in zip(
+        (),
+        shape,
+        (1 // divisor,),
+    ))
+
+@type_shape_dsl_function
+def zipped_empty_skips_iteration(shape: IntTuple, divisor: int) -> IntTuple:
+    return dsl.IntTuple(1 // divisor for x, y in zip((), shape) if 1 // divisor == 1)
+
+@type_shape_dsl_function
+def zipped_zero_sources(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(shape[0] for () in zip())
+
+@type_shape_dsl_function
+def zipped_bounded(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x + y for x, y in zip(range(1, 4098), range(1, 2)))
+
+@type_shape_dsl_function
+def zipped_over_bound(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x + y for x, y in zip(range(1, 4098), range(1, 4098)))
+
+@type_shape_dsl_function
+def zipped_unknown_invalid(shape: IntTuple, divisor: int) -> IntTuple:
+    invalid = (1 // divisor,)
+    return dsl.IntTuple(x + y for x, y in zip(shape, invalid))
+
+@type_shape_dsl_function
+def zipped_eager_order(shape: IntTuple, first: int, second: int) -> IntTuple:
+    division = (1 // first,)
+    modulo = (1 % second,)
+    return dsl.IntTuple(x + y for x, y in zip(division, modulo))
+
+@type_shape_dsl_function
+def zipped_flag_and_fixed_shape(shape: IntTuple) -> IntTuple:
+    flags = tuple(x + y for x, y in zip(range(3), (10, 20)))
+    fixed = dsl.IntTuple((2, 3, 4))
+    combined = dsl.IntTuple(x + y for x, y in zip(fixed, dsl.IntTuple((5, 6))))
+    if 21 in flags:
+        return combined
+    return shape
+
 def apply_copy[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[copy_shape(Shape)]: ...
 def apply_reflexive[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[reflexive_filter(Shape)]: ...
 def apply_range[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[from_range(Shape)]: ...
@@ -7825,6 +7884,17 @@ def lazy_fallback(x: Tensor[[2]]) -> Tensor[lazy_unknown_filter(IntTuple[2], int
 def apply_later_invalid(x: Tensor[[2]]) -> Tensor[later_included_invalid(IntTuple[2], int)]: ...
 def apply_prefix_error(x: Tensor[[2]]) -> Tensor[bounded_prefix_error(IntTuple[2])]: ...
 def apply_shadowed[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[shadowed(Shape, Int[9])]: ...
+def apply_zipped[Left: IntTuple, Right: IntTuple](left: Tensor[Left], right: Tensor[Right]) -> Tensor[zipped_mixed(Left, Right)]: ...
+def apply_zipped_alias[Left: IntTuple, Right: IntTuple](left: Tensor[Left], right: Tensor[Right]) -> Tensor[zipped_alias(Left, Right)]: ...
+def apply_zipped_empty[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[zipped_empty(Shape)]: ...
+def apply_zipped_empty_invalid[Shape: IntTuple, Divisor: Flag[int]](x: Tensor[Shape], divisor: Divisor) -> Tensor[zipped_empty_later_invalid(Shape, Divisor)]: ...
+def apply_zipped_empty_skip[Shape: IntTuple, Divisor: Flag[int]](x: Tensor[Shape], divisor: Divisor) -> Tensor[zipped_empty_skips_iteration(Shape, Divisor)]: ...
+def apply_zipped_zero[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[zipped_zero_sources(Shape)]: ...
+def apply_zipped_bounded[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[zipped_bounded(Shape)]: ...
+def apply_zipped_over_bound[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[zipped_over_bound(Shape)]: ...
+def apply_zipped_unknown_invalid[Shape: IntTuple, Divisor: Flag[int]](x: Tensor[Shape], divisor: Divisor) -> Tensor[zipped_unknown_invalid(Shape, Divisor)]: ...
+def apply_zipped_order[Shape: IntTuple, First: Flag[int], Second: Flag[int]](x: Tensor[Shape], first: First, second: Second) -> Tensor[zipped_eager_order(Shape, First, Second)]: ...
+def apply_zipped_flag[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[zipped_flag_and_fixed_shape(Shape)]: ...
 
 def broad() -> Tensor[captured_filter(IntTuple[2, 3], int)]: ...
 def broad_dimension(x: Tensor[[2]]) -> Tensor[captured_dimension(IntTuple[2], Int)]: ...
@@ -7850,6 +7920,22 @@ def test[N: IntVar](concrete: Tensor[[2, 3, 4]], symbolic: Tensor[[N, 3]], one_d
     apply_later_invalid(literal)  # E: Flag integer division by zero
     apply_prefix_error(literal)  # E: Flag integer division by zero
     assert_type(apply_shadowed(concrete), Tensor[[2, 3, 4]])
+    assert_type(apply_zipped(concrete, literal), Tensor[[14]])
+    assert_type(apply_zipped_alias(concrete, symbolic), Tensor[[(2 + N), 6]])
+    reveal_type(apply_zipped(gradual, concrete))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_zipped_empty(concrete), Tensor[[]])
+    apply_zipped_empty_invalid(gradual, 0)  # E: Flag integer division by zero
+    assert_type(apply_zipped_empty_skip(gradual, 0), Tensor[[]])
+    assert_type(apply_zipped_zero(concrete), Tensor[[]])
+    assert_type(apply_zipped_bounded(concrete), Tensor[[2]])
+    reveal_type(apply_zipped_over_bound(concrete))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    apply_zipped_unknown_invalid(gradual, 0)  # E: Flag integer division by zero
+    apply_zipped_order(concrete, 0, 0)  # E: Flag integer division by zero
+    assert_type(apply_zipped_flag(concrete), Tensor[[7, 9]])
+
+def test_open[Rest: IntTuple](x: Tensor[[1, *Elements[Rest], 3]], concrete: Tensor[[2, 3, 4]]) -> None:
+    reveal_type(apply_zipped(x, concrete))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_zipped_empty(x), Tensor[[]])
 "#,
 );
 
@@ -7868,6 +7954,39 @@ def multiple(shape: IntTuple) -> IntTuple:
 @type_shape_dsl_function
 def destructured(shape: IntTuple) -> IntTuple:
     return dsl.IntTuple(x for x, y in ((1, 2),))  # E: generator target must be exactly one bare name
+
+@type_shape_dsl_function
+def zip_bare_target(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x for x in zip(shape))  # E: require a fixed tuple target
+
+@type_shape_dsl_function
+def zip_wrong_arity(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x for x, y in zip(shape))  # E: arity must match  # E: Cannot unpack tuple
+
+@type_shape_dsl_function
+def zip_duplicate_target(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x for x, x in zip(shape, shape))  # E: target names must be distinct
+
+@type_shape_dsl_function
+def zip_starred_target(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x for x, *rest in zip(shape, shape))  # E: one bare name per
+
+@type_shape_dsl_function
+def zip_nested_source(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x for x, y in zip(zip(shape), shape))  # E: only supported in constructor
+
+@type_shape_dsl_function
+def zip_bad_source(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x for x, y in zip([1, 2], shape))  # E: generator source must be an IntTuple
+
+@type_shape_dsl_function
+def zip_keyword(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple(x for x, y in zip(shape, shape, strict=True))  # E: does not support keyword
+
+@type_shape_dsl_function
+def zip_first_class(shape: IntTuple) -> IntTuple:
+    pairs = zip(shape, shape)  # E: local assignment value is not supported
+    return shape
 
 @type_shape_dsl_function
 def arbitrary_iterator(shape: IntTuple) -> IntTuple:
@@ -7985,6 +8104,35 @@ def test() -> None:
     apply_prefix_error()  # E: Flag integer division by zero
     reveal_type(apply_beyond_budget_error())  # E: revealed type: Tensor[tuple[Unknown, ...]]
     reveal_type(apply_nested_budget())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+"#,
+);
+
+// A zip spends one step per iteration of its shortest lane, not one step per lane.
+testcase!(
+    test_type_shape_dsl_zip_shares_generator_budget,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+@type_shape_dsl_function
+def exhausted(shape: IntTuple) -> IntTuple:
+    spender = tuple(x + y for x, y in zip(range(4096), range(4096)))
+    return dsl.IntTuple(x + y for x, y in zip(spender, shape))
+
+@type_shape_dsl_function
+def within_budget(shape: IntTuple) -> IntTuple:
+    spender = tuple(x + y for x, y in zip(range(4094), range(4094)))
+    return dsl.IntTuple(x + y for x, y in zip(spender, shape))
+
+def apply_exhausted() -> Tensor[exhausted(IntTuple[2, 3])]: ...
+def apply_within_budget() -> Tensor[within_budget(IntTuple[2, 3])]: ...
+
+def test() -> None:
+    reveal_type(apply_exhausted())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_within_budget(), Tensor[[2, 5]])
 "#,
 );
 
@@ -8164,6 +8312,12 @@ def not_a_generator(shape: IntTuple) -> IntTuple:
 @type_shape_dsl_function
 def invalid_source(shape: IntTuple) -> IntTuple:
     if any(item == 0 for item in [0, 1]):  # E: generator source must be an IntTuple
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def invalid_zip_source(shape: IntTuple) -> IntTuple:
+    if any(item == 0 for item in zip(shape)):  # E: only supported in constructor generators
         return shape
     return shape
 
