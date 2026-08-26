@@ -594,6 +594,15 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
+    /// Whether a type has to be parenthesized for display in a sequence of types, such as a union
+    /// written with the `|` syntax.
+    fn needs_parens_in_sequence(&self, t: &Type) -> bool {
+        matches!(
+            t,
+            Type::Callable(_) | Type::CallableResidual(_) | Type::Function(_) | Type::Intersect(_)
+        )
+    }
+
     /// Helper function to format a sequence of types with a separator.
     /// Used for unions, intersections, and other type sequences.
     fn fmt_type_sequence<'b>(
@@ -608,14 +617,7 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str(separator)?;
             }
 
-            let needs_parens = wrap_callables_and_intersect
-                && matches!(
-                    t,
-                    Type::Callable(_)
-                        | Type::CallableResidual(_)
-                        | Type::Function(_)
-                        | Type::Intersect(_)
-                );
+            let needs_parens = wrap_callables_and_intersect && self.needs_parens_in_sequence(t);
             if needs_parens {
                 output.write_str("(")?;
             }
@@ -1372,10 +1374,7 @@ impl<'a> TypeDisplayContext<'a> {
                             }
                             literals.push(&lit.value)
                         }
-                        Type::Callable(_)
-                        | Type::CallableResidual(_)
-                        | Type::Function(_)
-                        | Type::Intersect(_) => {
+                        t if self.needs_parens_in_sequence(t) => {
                             // These types need parentheses in union context
                             let mut temp = String::new();
                             {
@@ -1433,13 +1432,7 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str("]")?;
                         } else {
                             // Regular union member - use helper for just this one
-                            let needs_parens = matches!(
-                                t,
-                                Type::Callable(_)
-                                    | Type::CallableResidual(_)
-                                    | Type::Function(_)
-                                    | Type::Intersect(_)
-                            );
+                            let needs_parens = self.needs_parens_in_sequence(t);
                             if needs_parens {
                                 output.write_str("(")?;
                             }
