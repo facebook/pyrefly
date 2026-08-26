@@ -71,7 +71,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     pub fn get_enum_member(&self, cls: &Class, name: &Name) -> Option<Lit> {
         self.get_field_from_current_class_only(cls, name)
-            .and_then(|field| self.as_enum_member(&field, cls))
+            .and_then(|field| self.as_enum_member(field, cls))
     }
 
     pub fn get_enum_members(&self, cls: &Class) -> SmallSet<Lit> {

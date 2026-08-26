@@ -571,7 +571,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // to avoid triggering type resolution during synthesis, which can cause cycles.
         for field_name in &django_metadata.foreign_key_like_fields {
             if let Some(class_field) = self.get_field_from_current_class_only(cls, field_name)
-                && let Some(fk_id_type) = self.get_foreign_key_id_type(&class_field)
+                && let Some(fk_id_type) = self.get_foreign_key_id_type(class_field)
             {
                 let id_field_name = Name::new(format!("{}_id", field_name));
                 fields.insert(id_field_name, ClassSynthesizedField::new(fk_id_type));
