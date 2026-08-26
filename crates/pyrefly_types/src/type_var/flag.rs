@@ -169,9 +169,11 @@ impl Display for FlagMember {
 /// yield at least one member, so materialization may assume a member exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 pub struct FlagDomain {
-    /// Bitset indexed by `FlagMember` discriminant. Iteration
-    /// order comes from `FlagMember::ALL`, never from construction order.
-    members: u8,
+    integer: bool,
+    boolean: bool,
+    string: bool,
+    tuple: bool,
+    none: bool,
 }
 
 impl FlagDomain {
@@ -219,26 +221,48 @@ impl FlagDomain {
         }
     }
 
-    pub const fn of(member: FlagMember) -> Self {
-        Self {
-            members: 1 << member as u8,
+    pub fn of(member: FlagMember) -> Self {
+        let mut domain = Self {
+            integer: false,
+            boolean: false,
+            string: false,
+            tuple: false,
+            none: false,
+        };
+        match member {
+            FlagMember::Int => domain.integer = true,
+            FlagMember::Bool => domain.boolean = true,
+            FlagMember::Str => domain.string = true,
+            FlagMember::Tuple => domain.tuple = true,
+            FlagMember::NoneType => domain.none = true,
         }
+        domain
     }
 
     /// Least upper bound: the domain admitting everything either side admits.
     pub fn join(self, other: Self) -> Self {
         Self {
-            members: self.members | other.members,
+            integer: self.integer || other.integer,
+            boolean: self.boolean || other.boolean,
+            string: self.string || other.string,
+            tuple: self.tuple || other.tuple,
+            none: self.none || other.none,
         }
     }
 
     /// Whether everything this domain admits is also admitted by `other`.
     pub fn is_subset_of(self, other: Self) -> bool {
-        self.members & !other.members == 0
+        self.members().all(|member| other.contains(member))
     }
 
     pub fn contains(self, member: FlagMember) -> bool {
-        self.members & (1 << member as u8) != 0
+        match member {
+            FlagMember::Int => self.integer,
+            FlagMember::Bool => self.boolean,
+            FlagMember::Str => self.string,
+            FlagMember::Tuple => self.tuple,
+            FlagMember::NoneType => self.none,
+        }
     }
 
     fn members(self) -> impl Iterator<Item = FlagMember> {
@@ -354,9 +378,8 @@ mod tests {
         );
     }
 
-    /// Tuple membership uses the same representation as every other domain member.
     #[test]
-    fn flag_tuple_is_an_atom() {
+    fn flag_tuple_is_a_member() {
         let tuple_only = FlagDomain::of(FlagMember::Tuple);
         assert_eq!(tuple_only.class_names(), vec!["builtins.tuple"]);
         assert!(!tuple_only.contains(FlagMember::Int));
