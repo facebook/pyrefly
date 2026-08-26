@@ -7056,7 +7056,7 @@ def wrong_element_domain(shape: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def wrong_result(dim: Int) -> Int:
-    return dsl.IntTuple((dim,))  # E: dsl.IntTuple requires an `IntTuple` result  # E: Returned type
+    return dsl.IntTuple((dim,))  # E: returned shape expression requires an `IntTuple` result  # E: Returned type
 
 @type_shape_dsl_function
 def invalid_message(shape: IntTuple, message: str) -> IntTuple:
@@ -8230,5 +8230,265 @@ def test[B: IntTuple](
     assert_type(apply_rank_zero(unpacked), Tensor[[10]])
     reveal_type(apply_rank_two(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
     reveal_type(apply_rank_three(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_concat_and_prefix_slice,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Elements, Flag, Int, IntTuple, IntVar, type_shape_dsl_function
+from shape_extensions.dsl import concat as imported_concat
+from torch import Tensor
+from typing import reveal_type
+
+concat_alias = imported_concat
+
+@type_shape_dsl_function
+def qualified(left: IntTuple, right: IntTuple) -> IntTuple:
+    return dsl.concat(left, right)
+
+@type_shape_dsl_function
+def imported(left: IntTuple, right: IntTuple) -> IntTuple:
+    return imported_concat(left, right)
+
+@type_shape_dsl_function
+def aliased(left: IntTuple, right: IntTuple) -> IntTuple:
+    left_alias = left
+    joined = concat_alias(left_alias, right)
+    return joined
+
+@type_shape_dsl_function
+def shape_identity(shape: IntTuple) -> IntTuple:
+    return shape
+
+@type_shape_dsl_function
+def helper_local(shape: IntTuple) -> IntTuple:
+    prefix = shape[:1]
+    return shape_identity(prefix)
+
+@type_shape_dsl_function
+def empty_prefix(shape: IntTuple) -> IntTuple:
+    return shape[:0]
+
+@type_shape_dsl_function
+def first_two(shape: IntTuple) -> IntTuple:
+    return shape[:2]
+
+@type_shape_dsl_function
+def first_three(shape: IntTuple) -> IntTuple:
+    return shape[:3]
+
+@type_shape_dsl_function
+def clamped(shape: IntTuple) -> IntTuple:
+    return shape[:99]
+
+@type_shape_dsl_function
+def without_last(shape: IntTuple) -> IntTuple:
+    return shape[:-1]
+
+@type_shape_dsl_function
+def without_three(shape: IntTuple) -> IntTuple:
+    return shape[:-3]
+
+@type_shape_dsl_function
+def keep_last(shape: IntTuple) -> IntTuple:
+    prefix = shape[:-1]
+    return dsl.concat(prefix, dsl.IntTuple((1,)))
+
+@type_shape_dsl_function
+def nested(shape: IntTuple) -> IntTuple:
+    return dsl.concat(shape[:1], dsl.concat(dsl.IntTuple((7,)), shape[:-1]))
+
+@type_shape_dsl_function
+def concat_then_slice(shape: IntTuple) -> IntTuple:
+    return dsl.concat(dsl.IntTuple((7,)), shape)[:2]
+
+@type_shape_dsl_function
+def minimum_stop(shape: IntTuple) -> IntTuple:
+    return shape[:-9223372036854775808]
+
+@type_shape_dsl_function
+def unused_shape_expression(shape: IntTuple, dimension: Int) -> Int:
+    prefix = shape[:1]
+    joined = dsl.concat(prefix, dsl.IntTuple((7,)))
+    return dimension
+
+@type_shape_dsl_function
+def branch_join(shape: IntTuple, keep: bool) -> IntTuple:
+    if keep:
+        result = shape
+    else:
+        result = shape[:1]
+    return result
+
+@type_shape_dsl_function
+def mixed_branch_join(shape: IntTuple, keep: bool) -> IntTuple:
+    if keep:
+        result = shape[:1]
+    else:
+        result = dsl.IntTuple((1,))
+    return result
+
+@type_shape_dsl_function
+def distinct_branch_join(left: IntTuple, right: IntTuple, keep: bool) -> IntTuple:
+    if keep:
+        result = left[:1]
+    else:
+        result = right[:1]
+    return result
+
+@type_shape_dsl_function
+def invalid_before_unknown(left: IntTuple, right: IntTuple) -> IntTuple:
+    return dsl.concat(dsl.IntTuple((left[99],)), right[:1])
+
+def apply_qualified[L: IntTuple, R: IntTuple](left: Tensor[L], right: Tensor[R]) -> Tensor[qualified(L, R)]: ...
+def apply_imported[L: IntTuple, R: IntTuple](left: Tensor[L], right: Tensor[R]) -> Tensor[imported(L, R)]: ...
+def apply_aliased[L: IntTuple, R: IntTuple](left: Tensor[L], right: Tensor[R]) -> Tensor[aliased(L, R)]: ...
+def apply_helper_local[S: IntTuple](x: Tensor[S]) -> Tensor[helper_local(S)]: ...
+def apply_empty[S: IntTuple](x: Tensor[S]) -> Tensor[empty_prefix(S)]: ...
+def apply_first_two[S: IntTuple](x: Tensor[S]) -> Tensor[first_two(S)]: ...
+def apply_first_three[S: IntTuple](x: Tensor[S]) -> Tensor[first_three(S)]: ...
+def apply_clamped[S: IntTuple](x: Tensor[S]) -> Tensor[clamped(S)]: ...
+def apply_without_last[S: IntTuple](x: Tensor[S]) -> Tensor[without_last(S)]: ...
+def apply_without_three[S: IntTuple](x: Tensor[S]) -> Tensor[without_three(S)]: ...
+def apply_keep_last[S: IntTuple](x: Tensor[S]) -> Tensor[keep_last(S)]: ...
+def apply_nested[S: IntTuple](x: Tensor[S]) -> Tensor[nested(S)]: ...
+def apply_concat_then_slice[S: IntTuple](x: Tensor[S]) -> Tensor[concat_then_slice(S)]: ...
+def apply_minimum_stop[S: IntTuple](x: Tensor[S]) -> Tensor[minimum_stop(S)]: ...
+def apply_unused_shape[S: IntTuple, N: IntVar](x: Tensor[S], dimension: Int[N]) -> Tensor[[unused_shape_expression(S, N)]]: ...
+def apply_branch[S: IntTuple, Keep: Flag[bool]](x: Tensor[S], keep: Keep) -> Tensor[branch_join(S, Keep)]: ...
+def apply_mixed_branch[S: IntTuple, Keep: Flag[bool]](x: Tensor[S], keep: Keep) -> Tensor[mixed_branch_join(S, Keep)]: ...
+def apply_distinct_branch[L: IntTuple, R: IntTuple, Keep: Flag[bool]](
+    left: Tensor[L], right: Tensor[R], keep: Keep,
+) -> Tensor[distinct_branch_join(L, R, Keep)]: ...
+def apply_invalid_before_unknown[L: IntTuple, R: IntTuple](left: Tensor[L], right: Tensor[R]) -> Tensor[invalid_before_unknown(L, R)]: ...
+
+def test[S: IntTuple, T: IntTuple, N: IntVar](
+    left: Tensor[[2, 3]],
+    right: Tensor[[5]],
+    unpacked: Tensor[[10, 20, *Elements[S], 30, 40]],
+    another: Tensor[[50, *Elements[T], 60]],
+    gradual: Tensor[IntTuple],
+    dimension: Int[N],
+) -> None:
+    reveal_type(apply_qualified(left, right))  # E: revealed type: Tensor[[2, 3, 5]]
+    reveal_type(apply_imported(left, right))  # E: revealed type: Tensor[[2, 3, 5]]
+    reveal_type(apply_aliased(left, right))  # E: revealed type: Tensor[[2, 3, 5]]
+    reveal_type(apply_helper_local(left))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_empty(left))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_empty(unpacked))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_empty(gradual))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_first_two(right))  # E: revealed type: Tensor[[5]]
+    reveal_type(apply_clamped(left))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_first_two(unpacked))  # E: revealed type: Tensor[[10, 20]]
+    reveal_type(apply_first_three(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_without_last(unpacked))  # E: revealed type: Tensor[[10, 20, *Elements[S], 30]]
+    reveal_type(apply_without_three(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_keep_last(unpacked))  # E: revealed type: Tensor[[10, 20, *Elements[S], 30, 1]]
+    reveal_type(apply_nested(left))  # E: revealed type: Tensor[[2, 7, 2]]
+    reveal_type(apply_concat_then_slice(left))  # E: revealed type: Tensor[[7, 2]]
+    reveal_type(apply_minimum_stop(left))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_minimum_stop(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_unused_shape(left, dimension))  # E: revealed type: Tensor[[N]]
+    reveal_type(apply_branch(left, True))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_branch(left, False))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_mixed_branch(left, True))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_mixed_branch(left, False))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_distinct_branch(left, right, True))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_distinct_branch(left, right, False))  # E: revealed type: Tensor[[5]]
+    reveal_type(apply_qualified(left, unpacked))  # E: revealed type: Tensor[[2, 3, 10, 20, *Elements[S], 30, 40]]
+    reveal_type(apply_qualified(unpacked, right))  # E: revealed type: Tensor[[10, 20, *Elements[S], 30, 40, 5]]
+    reveal_type(apply_first_two(gradual))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_without_last(gradual))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_qualified(unpacked, another))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_qualified(gradual, right))  # E: revealed type: Tensor[[*tuple[int, ...], 5]]
+    reveal_type(apply_qualified(left, gradual))  # E: revealed type: Tensor[[2, 3, *tuple[int, ...]]]
+    apply_invalid_before_unknown(left, gradual)  # E: IntTuple index out of bounds
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_concat_and_prefix_slice,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def missing(shape: IntTuple) -> IntTuple:
+    return dsl.concat(shape)  # E: `dsl.concat` requires exactly two positional arguments  # E: Missing positional argument `right`
+
+@type_shape_dsl_function
+def extra(shape: IntTuple) -> IntTuple:
+    return dsl.concat(shape, shape, shape)  # E: `dsl.concat` requires exactly two positional arguments  # E: Expected 2 positional arguments
+
+@type_shape_dsl_function
+def keyword(shape: IntTuple) -> IntTuple:
+    return dsl.concat(left=shape, right=shape)  # E: `dsl.concat` requires exactly two positional arguments  # E: Expected argument `left` to be positional  # E: Expected argument `right` to be positional
+
+@type_shape_dsl_function
+def wrong_operand(left: Int, right: IntTuple) -> IntTuple:
+    return dsl.concat(left, right)  # E: shape expression operands must be annotated as `IntTuple`  # E: is not assignable to parameter
+
+@type_shape_dsl_function
+def wrong_result(left: IntTuple, right: IntTuple) -> Int:
+    return dsl.concat(left, right)  # E: returned shape expression requires an `IntTuple` result  # E: Returned type
+
+@type_shape_dsl_function
+def incompatible_local_return(shape: IntTuple, dimension: Int, choose_shape: bool) -> IntTuple:
+    if choose_shape:
+        result = shape[:1]
+    else:
+        result = dimension
+    return result  # E: local return requires contributing parameters to use the `IntTuple` domain  # E: Returned type
+
+@type_shape_dsl_function
+def shape_equality(shape: IntTuple) -> IntTuple:
+    if shape[:1] == shape:  # E: Flag integer expression is not supported
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def local_shape_is_not_int(shape: IntTuple) -> IntTuple:
+    local = dsl.concat(dsl.IntTuple((1,)), dsl.IntTuple((2,)))
+    if dsl.is_int_value(local):  # E: `is_int_value` requires a `Flag[int | tuple[int, ...] | None]` value
+        return local
+    return shape
+
+@type_shape_dsl_function
+def indexed_return(shape: IntTuple) -> Int:
+    return shape[0]  # E: return value must be a bare parameter name
+
+@type_shape_dsl_function
+def lower(shape: IntTuple) -> IntTuple:
+    return shape[1:2]  # E: IntTuple slices require an omitted lower bound and step
+
+@type_shape_dsl_function
+def step(shape: IntTuple) -> IntTuple:
+    return shape[:2:1]  # E: IntTuple slices require an omitted lower bound and step
+
+@type_shape_dsl_function
+def omitted(shape: IntTuple) -> IntTuple:
+    return shape[:]  # E: IntTuple slices require a literal stop
+
+@type_shape_dsl_function
+def dynamic(shape: IntTuple, stop: int) -> IntTuple:
+    return shape[:stop]  # E: IntTuple slice stop must be a representable signed integer literal
+
+@type_shape_dsl_function
+def huge(shape: IntTuple) -> IntTuple:
+    return shape[:999999999999999999999999]  # E: IntTuple slice stop must be a representable signed integer literal
+
+@type_shape_dsl_function
+def positive_overflow(shape: IntTuple) -> IntTuple:
+    return shape[:9223372036854775808]  # E: IntTuple slice stop must be a representable signed integer literal
+
+def concat(left: IntTuple, right: IntTuple) -> IntTuple: ...
+
+@type_shape_dsl_function
+def shadowed(left: IntTuple, right: IntTuple) -> IntTuple:
+    return concat(left, right)  # E: DSL helper callee must be a validated
 "#,
 );

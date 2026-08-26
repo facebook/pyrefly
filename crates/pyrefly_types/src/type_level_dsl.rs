@@ -794,6 +794,7 @@ pub enum TypeShapeDslReturnKind {
     Local {
         slot: usize,
         domain: TypeShapeDslDomain,
+        parameter_origins: Option<Box<[usize]>>,
     },
     AliasedParameter {
         slot: usize,
@@ -812,8 +813,8 @@ pub enum TypeShapeDslReturnKind {
         op: TypeShapeDslArithmeticOp,
         right: usize,
     },
-    /// Evaluate a validated value expression from the retained AST.
-    Expression,
+    /// Evaluate a validated `IntTuple` expression from the retained AST.
+    IntTupleExpression,
     /// Return an invalid shape computation with a source-provided message.
     Invalid,
     /// Return the gradual value for the function's declared result domain.
@@ -883,6 +884,7 @@ impl TypeShapeDslFlagIntComparisonOp {
 pub enum TypeShapeDslIntrinsic {
     Any,
     Broadcast,
+    Concat,
     Gradual(TypeShapeDslDomain),
     IsConcreteInt,
     IsIntValue,
@@ -897,6 +899,14 @@ pub enum TypeShapeDslIntrinsic {
 /// intrinsic resolution, so it participates in `ValidatedTypeShapeDslFunction` identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslExpressionKind {
+    IntTupleSlot {
+        slot: usize,
+        parameter_origins: Option<Box<[usize]>>,
+    },
+    IntTupleSlice {
+        stop: i64,
+    },
+    IntTupleConcat,
     DimensionSlot {
         slot: usize,
         parameter_origins: Option<Box<[usize]>>,
@@ -1114,10 +1124,27 @@ impl DslFlagOrigins {
     }
 }
 
+fn merge_parameter_origins(
+    left: Option<Box<[usize]>>,
+    right: Option<Box<[usize]>>,
+) -> Option<Box<[usize]>> {
+    let mut parameters = left.into_iter().chain(right).flatten().collect::<Vec<_>>();
+    if parameters.is_empty() {
+        return None;
+    }
+    parameters.sort_unstable();
+    parameters.dedup();
+    Some(parameters.into_boxed_slice())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DslStaticKind {
     /// One or more parameter slots whose domains are resolved after syntax validation.
     UnknownParameters(Box<[usize]>),
+    /// An `IntTuple` expression, plus any parameters whose domains must resolve to `IntTuple`.
+    IntTuple {
+        parameter_origins: Option<Box<[usize]>>,
+    },
     Dimension,
     GeneratorElement,
     Flag {
@@ -1130,6 +1157,7 @@ impl DslStaticKind {
     fn parameter_origins(&self) -> Option<&[usize]> {
         match self {
             Self::UnknownParameters(parameters) => Some(parameters),
+            Self::IntTuple { parameter_origins } => parameter_origins.as_deref(),
             Self::Flag {
                 origins: Some(origins),
                 ..
@@ -1161,6 +1189,22 @@ impl DslStaticKind {
                 origins: DslFlagOrigins::merge(left_origins, right_origins),
                 kinds: left | right,
             }),
+            (
+                Self::IntTuple {
+                    parameter_origins: left,
+                },
+                Self::IntTuple {
+                    parameter_origins: right,
+                },
+            ) => Some(Self::IntTuple {
+                parameter_origins: merge_parameter_origins(left, right),
+            }),
+            (Self::UnknownParameters(parameters), Self::IntTuple { parameter_origins })
+            | (Self::IntTuple { parameter_origins }, Self::UnknownParameters(parameters)) => {
+                Some(Self::IntTuple {
+                    parameter_origins: merge_parameter_origins(Some(parameters), parameter_origins),
+                })
+            }
             (Self::UnknownParameters(parameters), Self::Flag { origins, kinds })
             | (Self::Flag { origins, kinds }, Self::UnknownParameters(parameters)) => {
                 // The known branch determines the possible runtime kinds. Keeping the other
@@ -1854,6 +1898,99 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok(())
     }
 
+    fn validate_int_tuple_expression(
+        &mut self,
+        expression: &Expr,
+        flow: &DslValidationFlow,
+    ) -> Result<Option<Box<[usize]>>, TypeShapeDslDefinitionError> {
+        let parameter_origins = match expression {
+            Expr::Name(_) => {
+                let slot = self.slot(expression, flow)?;
+                let parameter_origins = match &flow.kinds[slot] {
+                    DslStaticKind::UnknownParameters(parameters) => Some(parameters.clone()),
+                    DslStaticKind::IntTuple { parameter_origins } => parameter_origins.clone(),
+                    _ => {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: expression.range(),
+                            message: "shape expression names must be `IntTuple` parameters or shape locals",
+                        });
+                    }
+                };
+                self.expressions.push(TypeShapeDslExpression {
+                    range: expression.range(),
+                    kind: TypeShapeDslExpressionKind::IntTupleSlot {
+                        slot,
+                        parameter_origins: parameter_origins.clone(),
+                    },
+                });
+                parameter_origins
+            }
+            Expr::Subscript(subscript) => {
+                let parameter_origins =
+                    self.validate_int_tuple_expression(&subscript.value, flow)?;
+                let Expr::Slice(slice) = subscript.slice.as_ref() else {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: subscript.slice.range(),
+                        message: "IntTuple shape expressions support only `shape[:literal_stop]`",
+                    });
+                };
+                if slice.lower.is_some() || slice.step.is_some() {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: slice.range,
+                        message: "IntTuple slices require an omitted lower bound and step",
+                    });
+                }
+                let Some(upper) = slice.upper.as_deref() else {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: slice.range,
+                        message: "IntTuple slices require a literal stop",
+                    });
+                };
+                let IntegerLiteral::Value(stop) = integer_literal(upper) else {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: upper.range(),
+                        message: "IntTuple slice stop must be a representable signed integer literal",
+                    });
+                };
+                self.expressions.push(TypeShapeDslExpression {
+                    range: expression.range(),
+                    kind: TypeShapeDslExpressionKind::IntTupleSlice { stop },
+                });
+                parameter_origins
+            }
+            Expr::Call(call)
+                if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::IntTuple) =>
+            {
+                self.validate_int_tuple_constructor(call, flow)?;
+                None
+            }
+            Expr::Call(call)
+                if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Concat) =>
+            {
+                if call.arguments.args.len() != 2 || !call.arguments.keywords.is_empty() {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: call.arguments.range,
+                        message: "`dsl.concat` requires exactly two positional arguments",
+                    });
+                }
+                let left = self.validate_int_tuple_expression(&call.arguments.args[0], flow)?;
+                let right = self.validate_int_tuple_expression(&call.arguments.args[1], flow)?;
+                self.expressions.push(TypeShapeDslExpression {
+                    range: call.range,
+                    kind: TypeShapeDslExpressionKind::IntTupleConcat,
+                });
+                merge_parameter_origins(left, right)
+            }
+            _ => {
+                return Err(TypeShapeDslDefinitionError {
+                    range: expression.range(),
+                    message: "IntTuple shape expressions support parameters, immutable aliases, restricted slices, `dsl.IntTuple`, and `dsl.concat`",
+                });
+            }
+        };
+        Ok(parameter_origins)
+    }
+
     fn validate_assignment_value(
         &mut self,
         expression: &Expr,
@@ -1921,8 +2058,23 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 })
             }
             Expr::Subscript(_) => {
-                self.validate_dimension(expression, flow)?;
-                Ok(DslStaticKind::Dimension)
+                if matches!(expression, Expr::Subscript(subscript) if matches!(subscript.slice.as_ref(), Expr::Slice(_)))
+                {
+                    let parameter_origins = self.validate_int_tuple_expression(expression, flow)?;
+                    Ok(DslStaticKind::IntTuple { parameter_origins })
+                } else {
+                    self.validate_dimension(expression, flow)?;
+                    Ok(DslStaticKind::Dimension)
+                }
+            }
+            Expr::Call(call)
+                if matches!(
+                    self.intrinsic(&call.func),
+                    Some(TypeShapeDslIntrinsic::IntTuple | TypeShapeDslIntrinsic::Concat)
+                ) =>
+            {
+                let parameter_origins = self.validate_int_tuple_expression(expression, flow)?;
+                Ok(DslStaticKind::IntTuple { parameter_origins })
             }
             Expr::Tuple(_) => {
                 self.validate_flag_sequence(expression, flow)?;
@@ -2023,7 +2175,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     .map(DslFlagOrigins::Narrowed),
                 kinds: kinds & mask,
             },
-            DslStaticKind::Dimension => {
+            DslStaticKind::Dimension | DslStaticKind::IntTuple { .. } => {
                 unreachable!("control-flow narrowing requires a Flag value")
             }
             DslStaticKind::GeneratorElement => {
@@ -2070,7 +2222,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             Expr::Name(name) => self.slots.get(&name.id).is_some_and(|slot| {
                 matches!(flow.kinds.get(*slot), Some(DslStaticKind::Dimension))
             }),
-            Expr::Subscript(subscript) => {
+            Expr::Subscript(subscript) if !matches!(subscript.slice.as_ref(), Expr::Slice(_)) => {
                 let Expr::Name(name) = &*subscript.value else {
                     return false;
                 };
@@ -2426,8 +2578,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     if slot < self.parameters.args.len() {
                         TypeShapeDslReturnKind::Parameter(slot)
                     } else {
-                        let domain = match &flow.kinds[slot] {
-                            DslStaticKind::Dimension => TypeShapeDslDomain::Int,
+                        let (domain, parameter_origins) = match &flow.kinds[slot] {
+                            DslStaticKind::Dimension => (TypeShapeDslDomain::Int, None),
+                            DslStaticKind::IntTuple { parameter_origins } => {
+                                (TypeShapeDslDomain::IntTuple, parameter_origins.clone())
+                            }
                             DslStaticKind::UnknownParameters(parameters) => {
                                 self.returns.push(TypeShapeDslReturn {
                                     statement_range: return_stmt.range,
@@ -2446,11 +2601,15 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                                 });
                             }
                         };
-                        TypeShapeDslReturnKind::Local { slot, domain }
+                        TypeShapeDslReturnKind::Local {
+                            slot,
+                            domain,
+                            parameter_origins,
+                        }
                     }
                 }
             }
-            Some(Expr::Call(call)) => match self.intrinsic(&call.func) {
+            Some(returned @ Expr::Call(call)) => match self.intrinsic(&call.func) {
                 Some(TypeShapeDslIntrinsic::Gradual(domain)) => {
                     if !call.arguments.args.is_empty() || !call.arguments.keywords.is_empty() {
                         return Err(TypeShapeDslDefinitionError {
@@ -2494,9 +2653,9 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         right_parameters: right_parameters.clone(),
                     }
                 }
-                Some(TypeShapeDslIntrinsic::IntTuple) => {
-                    self.validate_int_tuple_constructor(call, flow)?;
-                    TypeShapeDslReturnKind::Expression
+                Some(TypeShapeDslIntrinsic::IntTuple | TypeShapeDslIntrinsic::Concat) => {
+                    self.validate_int_tuple_expression(returned, flow)?;
+                    TypeShapeDslReturnKind::IntTupleExpression
                 }
                 Some(TypeShapeDslIntrinsic::Invalid) => {
                     if call.arguments.args.len() != 1
@@ -2525,12 +2684,12 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     }
                     let mut arguments = Vec::with_capacity(call.arguments.args.len());
                     for argument in &call.arguments.args {
-                        let slot = self.slot(argument, flow).map_err(|_| {
-                            TypeShapeDslDefinitionError {
+                        let Ok(slot) = self.slot(argument, flow) else {
+                            return Err(TypeShapeDslDefinitionError {
                                 range: argument.range(),
                                 message: "return value must be a bare parameter name or validated DSL helper call; helper arguments must be bare parameter or local names",
-                            }
-                        })?;
+                            });
+                        };
                         let provenance = match &flow.kinds[slot] {
                             DslStaticKind::UnknownParameters(parameters) => {
                                 TypeShapeDslHelperArgumentProvenance::Parameters(parameters.clone())
@@ -2540,6 +2699,21 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                                     TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int),
                                 )
                             }
+                            DslStaticKind::IntTuple {
+                                parameter_origins: Some(parameters),
+                            } => {
+                                TypeShapeDslHelperArgumentProvenance::ParametersWithRequiredDomain {
+                                    parameters: parameters.clone(),
+                                    domain: TypeShapeDslInputDomain::Value(
+                                        TypeShapeDslDomain::IntTuple,
+                                    ),
+                                }
+                            }
+                            DslStaticKind::IntTuple {
+                                parameter_origins: None,
+                            } => TypeShapeDslHelperArgumentProvenance::Exact(
+                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple),
+                            ),
                             DslStaticKind::Flag { origins, kinds } => {
                                 let Some(domain) = flag_domain_from_kinds(*kinds) else {
                                     return Err(TypeShapeDslDefinitionError {
@@ -2550,8 +2724,9 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                                 let domain = TypeShapeDslInputDomain::Flag(domain);
                                 match origins {
                                     Some(DslFlagOrigins::Inferred(parameters)) => {
+                                        let parameters = parameters.clone();
                                         TypeShapeDslHelperArgumentProvenance::ParametersWithRequiredDomain {
-                                            parameters: parameters.clone(),
+                                            parameters,
                                             domain,
                                         }
                                     }
@@ -2577,10 +2752,16 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 Some(_) => {
                     return Err(TypeShapeDslDefinitionError {
                         range: return_stmt.range,
-                        message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression; it may also be `dsl.Invalid(...)` or `dsl.IntTuple(...)`",
+                        message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression; it may also be `dsl.Invalid(...)`, an IntTuple constructor/concat/prefix slice expression, or a validated DSL helper call",
                     });
                 }
             },
+            Some(returned @ Expr::Subscript(subscript))
+                if matches!(subscript.slice.as_ref(), Expr::Slice(_)) =>
+            {
+                self.validate_int_tuple_expression(returned, flow)?;
+                TypeShapeDslReturnKind::IntTupleExpression
+            }
             Some(Expr::BinOp(binop)) => {
                 let (Some(left), Some(right)) = (
                     parameter_index(self.parameters, &binop.left),
@@ -2606,7 +2787,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: return_stmt.range,
-                    message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression; it may also be `dsl.Invalid(...)` or `dsl.IntTuple(...)`",
+                    message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression; it may also be `dsl.Invalid(...)`, an IntTuple constructor/concat/prefix slice expression, or a validated DSL helper call",
                 });
             }
         };
@@ -3337,7 +3518,7 @@ impl ResolvedTypeShapeDslProgram {
                             environment.value(left_slot),
                             environment.value(right_slot),
                         ),
-                        TypeShapeDslReturnKind::Expression => {
+                        TypeShapeDslReturnKind::IntTupleExpression => {
                             let expression = return_stmt
                                 .value
                                 .as_deref()
@@ -3575,6 +3756,50 @@ impl ValidatedTypeShapeDslFunction {
                     }
                     DslValue::Unknown => DslOutcome::Value(DslValue::Unknown),
                     _ => unreachable!("generator elements are integer values"),
+                }
+            }
+            TypeShapeDslExpressionKind::IntTupleSlot { slot, .. } => {
+                DslOutcome::Value(environment.value(slot).clone())
+            }
+            TypeShapeDslExpressionKind::IntTupleSlice { stop } => {
+                let Expr::Subscript(subscript) = expression else {
+                    unreachable!("validated IntTuple slice is a subscript")
+                };
+                let shape = match self.evaluate_expression(&subscript.value, environment, budget) {
+                    DslOutcome::Value(DslValue::Shape(shape)) => shape,
+                    DslOutcome::Value(DslValue::Unknown) => {
+                        return DslOutcome::Value(DslValue::Unknown);
+                    }
+                    DslOutcome::ExplicitGradual => {
+                        unreachable!("validated shape expression cannot return explicit gradual")
+                    }
+                    invalid @ DslOutcome::Invalid(_) => return invalid,
+                    DslOutcome::Value(_) => unreachable!("validated slice operand is a shape"),
+                };
+                DslOutcome::Value(DslValue::Shape(shape.prefix_slice(stop)))
+            }
+            TypeShapeDslExpressionKind::IntTupleConcat => {
+                let Expr::Call(call) = expression else {
+                    unreachable!("validated IntTuple concat is a call")
+                };
+                let left = self.evaluate_expression(&call.arguments.args[0], environment, budget);
+                let right = self.evaluate_expression(&call.arguments.args[1], environment, budget);
+                match (left, right) {
+                    (DslOutcome::Invalid(error), _) | (_, DslOutcome::Invalid(error)) => {
+                        DslOutcome::Invalid(error)
+                    }
+                    (
+                        DslOutcome::Value(DslValue::Shape(left)),
+                        DslOutcome::Value(DslValue::Shape(right)),
+                    ) => DslOutcome::Value(DslValue::Shape(left.concat(&right))),
+                    (DslOutcome::Value(DslValue::Unknown), _)
+                    | (_, DslOutcome::Value(DslValue::Unknown)) => {
+                        DslOutcome::Value(DslValue::Unknown)
+                    }
+                    (DslOutcome::ExplicitGradual, _) | (_, DslOutcome::ExplicitGradual) => {
+                        unreachable!("validated shape expression cannot return explicit gradual")
+                    }
+                    _ => unreachable!("validated concat operands are shapes"),
                 }
             }
             TypeShapeDslExpressionKind::DimensionLiteral(literal) => literal

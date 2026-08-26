@@ -366,6 +366,99 @@ impl IntTuple {
         }
     }
 
+    /// Return a prefix slice, falling back to a shapeless tuple when symbolic bounds cannot be
+    /// represented by one variadic middle.
+    pub(crate) fn prefix_slice(&self, stop: i64) -> Self {
+        match self.view() {
+            IntTupleView::Concrete(dimensions) => {
+                let length = i128::try_from(dimensions.len())
+                    .expect("concrete IntTuple length fits in i128");
+                let stop = i128::from(stop);
+                let stop = if stop < 0 {
+                    (length + stop).max(0)
+                } else {
+                    stop.min(length)
+                };
+                let stop = usize::try_from(stop)
+                    .expect("clamped concrete IntTuple slice stop fits in usize");
+                Self::new(dimensions[..stop].to_vec())
+            }
+            _ if stop == 0 => Self::new(Vec::new()),
+            IntTupleView::Unpacked { prefix, .. }
+                if stop > 0 && usize::try_from(stop).is_ok_and(|stop| stop <= prefix.len()) =>
+            {
+                Self::new(prefix[..stop as usize].to_vec())
+            }
+            IntTupleView::Unpacked {
+                prefix,
+                middle,
+                suffix,
+            } if stop < 0
+                && usize::try_from(stop.unsigned_abs())
+                    .is_ok_and(|removed| removed <= suffix.len()) =>
+            {
+                let removed = usize::try_from(stop.unsigned_abs())
+                    .expect("validated suffix slice count fits in usize");
+                Self::unpacked(
+                    prefix.to_vec(),
+                    middle.clone(),
+                    suffix[..suffix.len() - removed].to_vec(),
+                )
+            }
+            IntTupleView::Gradual | IntTupleView::Unpacked { .. } => Self::shapeless(),
+        }
+    }
+
+    /// Concatenate shapes, falling back to a shapeless tuple when the result would require two
+    /// variadic middles.
+    pub(crate) fn concat(&self, other: &Self) -> Self {
+        match (self.view(), other.view()) {
+            (IntTupleView::Concrete(left), IntTupleView::Concrete(right)) => {
+                let mut dimensions = left.to_vec();
+                dimensions.extend_from_slice(right);
+                Self::new(dimensions)
+            }
+            (
+                IntTupleView::Concrete(left),
+                IntTupleView::Unpacked {
+                    prefix,
+                    middle,
+                    suffix,
+                },
+            ) => {
+                let mut combined_prefix = left.to_vec();
+                combined_prefix.extend_from_slice(prefix);
+                Self::unpacked(combined_prefix, middle.clone(), suffix.to_vec())
+            }
+            (
+                IntTupleView::Unpacked {
+                    prefix,
+                    middle,
+                    suffix,
+                },
+                IntTupleView::Concrete(right),
+            ) => {
+                let mut combined_suffix = suffix.to_vec();
+                combined_suffix.extend_from_slice(right);
+                Self::unpacked(prefix.to_vec(), middle.clone(), combined_suffix)
+            }
+            // A gradual operand contributes one unrepresentable variadic middle, so the known
+            // concrete edge of the other operand can still be retained.
+            (IntTupleView::Concrete(left), IntTupleView::Gradual) => Self::unpacked(
+                left.to_vec(),
+                Self::shapeless().to_shape_arg_type(),
+                Vec::new(),
+            ),
+            (IntTupleView::Gradual, IntTupleView::Concrete(right)) => Self::unpacked(
+                Vec::new(),
+                Self::shapeless().to_shape_arg_type(),
+                right.to_vec(),
+            ),
+            // Two variadic middles cannot be represented by one unpacked shape.
+            _ => Self::shapeless(),
+        }
+    }
+
     /// Project this shape to the ordinary tuple type it denotes.
     pub fn to_tuple_type(&self) -> Type {
         match &self.0 {
@@ -1870,6 +1963,55 @@ mod tests {
 
     fn concrete_carrier(elts: Vec<Type>) -> Type {
         Type::Tuple(Tuple::Concrete(elts))
+    }
+
+    #[test]
+    fn int_tuple_prefix_slice_preserves_known_edges() {
+        let middle = gradual_shape_middle();
+        let unpacked =
+            IntTuple::unpacked(vec![dim(1), dim(2)], middle.clone(), vec![dim(3), dim(4)]);
+
+        assert_eq!(
+            IntTuple::new(vec![dim(1), dim(2), dim(3)]).prefix_slice(-1),
+            IntTuple::new(vec![dim(1), dim(2)]),
+        );
+        assert_eq!(
+            unpacked.prefix_slice(2),
+            IntTuple::new(vec![dim(1), dim(2)]),
+        );
+        assert_eq!(
+            unpacked.prefix_slice(-2),
+            IntTuple::unpacked(vec![dim(1), dim(2)], middle, Vec::new()),
+        );
+        assert_eq!(unpacked.prefix_slice(3), IntTuple::shapeless());
+        assert_eq!(
+            IntTuple::shapeless().prefix_slice(-1),
+            IntTuple::shapeless(),
+        );
+    }
+
+    #[test]
+    fn int_tuple_concat_preserves_one_variadic_middle() {
+        let middle = gradual_shape_middle();
+        let concrete = IntTuple::new(vec![dim(1), dim(2)]);
+        let unpacked = IntTuple::unpacked(vec![dim(3)], middle.clone(), vec![dim(4)]);
+
+        assert_eq!(
+            concrete.concat(&unpacked),
+            IntTuple::unpacked(vec![dim(1), dim(2), dim(3)], middle.clone(), vec![dim(4)],),
+        );
+        assert_eq!(
+            unpacked.concat(&concrete),
+            IntTuple::unpacked(vec![dim(3)], middle.clone(), vec![dim(4), dim(1), dim(2)],),
+        );
+        assert_eq!(
+            unpacked.concat(&IntTuple::unpacked(Vec::new(), middle, Vec::new())),
+            IntTuple::shapeless(),
+        );
+        assert_eq!(
+            IntTuple::shapeless().concat(&IntTuple::shapeless()),
+            IntTuple::shapeless(),
+        );
     }
 
     fn fake_module(module: &str) -> Module {

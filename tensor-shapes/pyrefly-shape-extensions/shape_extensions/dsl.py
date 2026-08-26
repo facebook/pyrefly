@@ -92,6 +92,14 @@ def is_concrete_int(value: typing.Any) -> bool: ...
 def is_int_value(value: object) -> typing.TypeIs[int]: ...
 
 
+def concat(
+    left: typing.Iterable[typing.Any], right: typing.Iterable[typing.Any], /
+) -> _IntTupleSchema:
+    """Concatenate two shape values inside a type-shape DSL body."""
+
+    return _IntTupleSchema((*left, *right))
+
+
 def prod(xs: list[int]) -> int:
     """Compute the product of a list of dimension sizes."""
     ...

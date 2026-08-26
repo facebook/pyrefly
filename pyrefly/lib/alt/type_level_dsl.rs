@@ -393,6 +393,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Some("`@type_shape_dsl_function` len and indexing require an `IntTuple` parameter")
                         }
                     }
+                    TypeShapeDslExpressionKind::IntTupleSlot {
+                        parameter_origins: Some(shapes),
+                        ..
+                    } => {
+                        (!shapes.iter().all(|shape| {
+                            parameter_domains[*shape]
+                                == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple)
+                        }))
+                        .then_some("`@type_shape_dsl_function` shape expression operands must be annotated as `IntTuple`")
+                    }
                     TypeShapeDslExpressionKind::GeneratorSourceSlot {
                         parameter_origins: Some(parameters),
                         narrowed,
@@ -414,11 +424,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         });
                         (!valid).then_some(
                             "`@type_shape_dsl_function` generator source must be an `IntTuple` or Flag sequence",
-                        )
-                    }
-                    TypeShapeDslExpressionKind::IntTupleConstructor => {
-                        (result != TypeShapeDslDomain::IntTuple).then_some(
-                            "`@type_shape_dsl_function` dsl.IntTuple requires an `IntTuple` result",
                         )
                     }
                     TypeShapeDslExpressionKind::FlagValueSlot {
@@ -446,6 +451,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         (!valid).then_some("`@type_shape_dsl_function` Flag operation requires a compatible Flag parameter")
                     }
                     TypeShapeDslExpressionKind::DimensionLiteral(_)
+                    | TypeShapeDslExpressionKind::IntTupleSlot { .. }
+                    | TypeShapeDslExpressionKind::IntTupleSlice { .. }
+                    | TypeShapeDslExpressionKind::IntTupleConcat
+                    | TypeShapeDslExpressionKind::IntTupleConstructor
                     | TypeShapeDslExpressionKind::DimensionSlot { .. }
                     | TypeShapeDslExpressionKind::IntTupleIndex { .. }
                     | TypeShapeDslExpressionKind::IntTupleLength { .. }
@@ -481,6 +490,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 match return_.kind() {
                     TypeShapeDslReturnKind::Local { domain, .. } if *domain != result => {
                         self.error(errors, return_.range(), ErrorKind::InvalidArgument, "`@type_shape_dsl_function` local return domain must match the declared result".to_owned());
+                        valid_body = false;
+                    }
+                    TypeShapeDslReturnKind::Local {
+                        domain,
+                        parameter_origins: Some(parameters),
+                        ..
+                    } if !parameters.iter().all(|parameter| {
+                        parameter_domains[*parameter] == TypeShapeDslInputDomain::Value(*domain)
+                    }) =>
+                    {
+                        self.error(
+                            errors,
+                            return_.range(),
+                            ErrorKind::InvalidArgument,
+                            format!(
+                                "`@type_shape_dsl_function` local return requires contributing parameters to use the `{}` domain",
+                                domain.as_str(),
+                            ),
+                        );
                         valid_body = false;
                     }
                     TypeShapeDslReturnKind::AliasedParameter { parameters, .. }
@@ -569,12 +597,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                         valid_body = false;
                     }
+                    TypeShapeDslReturnKind::IntTupleExpression
+                        if result != TypeShapeDslDomain::IntTuple =>
+                    {
+                        self.error(
+                            errors,
+                            return_.range(),
+                            ErrorKind::InvalidArgument,
+                            "`@type_shape_dsl_function` returned shape expression requires an `IntTuple` result"
+                                .to_owned(),
+                        );
+                        valid_body = false;
+                    }
                     TypeShapeDslReturnKind::Parameter(_)
                     | TypeShapeDslReturnKind::Local { .. }
                     | TypeShapeDslReturnKind::AliasedParameter { .. }
                     | TypeShapeDslReturnKind::Broadcast { .. }
                     | TypeShapeDslReturnKind::IntFlagArithmetic { .. }
-                    | TypeShapeDslReturnKind::Expression
+                    | TypeShapeDslReturnKind::IntTupleExpression
                     | TypeShapeDslReturnKind::Invalid
                     | TypeShapeDslReturnKind::HelperCall(_)
                     | TypeShapeDslReturnKind::Gradual(_) => {}
@@ -655,6 +695,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if id.qname.module_name().as_str() != "shape_extensions.dsl" {
             return None;
+        }
+        if id.has_toplevel_qname("shape_extensions.dsl", "concat") {
+            return Some(TypeShapeDslIntrinsic::Concat);
         }
         let class = id.cls.as_ref()?;
         if id.qname.id().as_str() != "gradual" {
