@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use lsp_types::SemanticToken;
 use lsp_types::SemanticTokenModifier;
@@ -20,12 +21,15 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit as _;
+use regex::Regex;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
+use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Operator;
 use ruff_python_ast::Pattern;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
@@ -42,6 +46,7 @@ use crate::binding::binding::Key;
 use crate::state::lsp::attribute_symbol_kind_from_type;
 
 const SELF_PARAMETER_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("selfParameter");
+const FORMAT_SPECIFIER: SemanticTokenType = SemanticTokenType::new("formatSpecifier");
 const BYTE_STRING_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("byteString");
 const FORMAT_STRING_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("formatString");
 const RAW_STRING_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("rawString");
@@ -98,6 +103,7 @@ impl SemanticTokensLegends {
                 SemanticTokenType::REGEXP,
                 SemanticTokenType::OPERATOR,
                 SemanticTokenType::DECORATOR,
+                FORMAT_SPECIFIER,
             ],
             token_modifiers: vec![
                 SemanticTokenModifier::DECLARATION,
@@ -295,14 +301,19 @@ pub struct SemanticTokenWithFullRange {
     pub token_modifiers: Vec<SemanticTokenModifier>,
 }
 
-pub struct SemanticTokenBuilder {
+pub struct SemanticTokenBuilder<'a> {
     tokens: Vec<SemanticTokenWithFullRange>,
     limit_range: Option<TextRange>,
     disabled_ranges: Vec<TextRange>,
+    source: Option<&'a str>,
 }
 
-impl SemanticTokenBuilder {
-    pub fn new(limit_range: Option<TextRange>, mut disabled_ranges: Vec<TextRange>) -> Self {
+impl<'a> SemanticTokenBuilder<'a> {
+    pub fn new(
+        limit_range: Option<TextRange>,
+        mut disabled_ranges: Vec<TextRange>,
+        source: Option<&'a str>,
+    ) -> Self {
         disabled_ranges.sort_by(|a, b| {
             a.start()
                 .cmp(&b.start())
@@ -312,6 +323,7 @@ impl SemanticTokenBuilder {
             tokens: Vec::new(),
             limit_range,
             disabled_ranges,
+            source,
         }
     }
 
@@ -460,6 +472,23 @@ impl SemanticTokenBuilder {
             }
             Expr::Call(call) => {
                 self.process_arguments(&call.arguments);
+                // Highlight printf-style format specifiers in the first positional
+                // string argument of any function call, e.g. `f("%s", x)`.
+                if let Some(Expr::StringLiteral(string_lit)) = call.arguments.args.first() {
+                    self.process_format_specifiers(string_lit);
+                }
+                x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
+            }
+            // `"format %s" % args` — the left operand of Python's `%` operator is
+            // unambiguously a printf-style format string; no heuristic required.
+            Expr::BinOp(ExprBinOp {
+                op: Operator::Mod,
+                left,
+                ..
+            }) => {
+                if let Expr::StringLiteral(string_lit) = left.as_ref() {
+                    self.process_format_specifiers(string_lit);
+                }
                 x.recurse(&mut |x| self.process_expr(x, get_type_of_attribute, get_symbol_kind));
             }
             Expr::Attribute(attr) => {
@@ -682,6 +711,53 @@ impl SemanticTokenBuilder {
                 x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
             }
             _ => x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind)),
+        }
+    }
+
+    /// Scans each part of a string literal for printf-style format specifiers and
+    /// emits a `formatSpecifier` semantic token for each match.
+    ///
+    /// When raw source text is available, scans the raw content slice so that
+    /// format specifier byte offsets correctly account for escape sequences (e.g. `\t`, `\n`)
+    /// preceding the specifier.
+    fn process_format_specifiers(&mut self, string_lit: &ruff_python_ast::ExprStringLiteral) {
+        static RE: OnceLock<Regex> = OnceLock::new();
+        let re = RE.get_or_init(|| {
+            // `%%` must be the first alternative so it is consumed before the engine
+            // can treat the second `%` as the start of a format specifier. Matches
+            // on `%%` are skipped below; they are not emitted as tokens.
+            Regex::new(r"%%|%[-+#0 ]*(?:\*|\d+)?(?:\.(?:\*|\d+))?[hlL]?[diouxXeEfFgGcrsa]|%\(\w+\)[-+#0 ]*(?:\*|\d+)?(?:\.(?:\*|\d+))?[hlL]?[diouxXeEfFgGcrsa]").unwrap()
+        });
+
+        for part in string_lit.value.iter() {
+            let content_range = part.content_range();
+            let content_start = content_range.start();
+            let content_text = if let Some(source) = self.source
+                && let Some(slice) =
+                    source.get(content_range.start().to_usize()..content_range.end().to_usize())
+            {
+                slice
+            } else {
+                part.as_str()
+            };
+
+            for m in re.find_iter(content_text) {
+                if m.as_str() == "%%" {
+                    // Escaped literal percent, not a format specifier.
+                    continue;
+                }
+                if let (Ok(start_offset), Ok(end_offset)) =
+                    (TextSize::try_from(m.start()), TextSize::try_from(m.end()))
+                {
+                    let start = content_start + start_offset;
+                    let end = content_start + end_offset;
+                    self.push_if_in_range(
+                        TextRange::new(start, end),
+                        FORMAT_SPECIFIER.clone(),
+                        Vec::new(),
+                    );
+                }
+            }
         }
     }
 
