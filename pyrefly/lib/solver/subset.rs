@@ -1035,7 +1035,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         }
     }
 
-    fn is_subset_tuple_to_int_tuple(
+    pub(crate) fn is_subset_tuple_to_int_tuple(
         &mut self,
         got: &Tuple,
         want: &IntTuple,
@@ -1050,7 +1050,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             return Err(SubsetError::Other);
         }
         if Self::int_tuple_has_carrier_middle(want) {
-            self.bind_tensor_dimensions(&IntTuple::from_tuple(got.clone()), want)
+            // Dimension binding recovers non-size elements to gradual dimensions, so
+            // validate the actual structurally first. This must not bind anything:
+            // the carrier is still unsolved, and callers can roll this attempt back.
+            let Some(got) = tuple_carrier_to_shape(&Type::Tuple(got.clone())) else {
+                return Err(SubsetError::Other);
+            };
+            self.bind_tensor_dimensions(&got, want)
         } else {
             self.is_subset_eq(&Type::Tuple(got.clone()), &want.to_tuple_type())
         }

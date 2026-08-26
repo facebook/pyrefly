@@ -9525,3 +9525,183 @@ def parameter_shadow(official_prod: IntTuple, shape: IntTuple) -> Int:
     return official_prod(shape)  # E: DSL helper callee must be a validated  # E: Expected a callable
 "#,
 );
+
+testcase!(
+    test_inttuple_carrier_call_inference,
+    shaped_array_env(),
+    r#"
+from shape_extensions import Int, IntTuple, IntVar
+from typing import Literal, assert_type, reveal_type
+
+class Tensor[Shape]: ...
+
+type ShapeBound = IntTuple
+
+def from_tuple[Shape: ShapeBound](size: Shape) -> Tensor[Shape]: ...
+def from_args[Shape: ShapeBound](*size: *Shape) -> Tensor[Shape]: ...
+
+assert_type(from_tuple(()), Tensor[IntTuple[()]])
+assert_type(from_tuple((2, 3)), Tensor[IntTuple[2, 3]])
+assert_type(from_tuple(size=(2, 3)), Tensor[IntTuple[2, 3]])
+assert_type(from_args(), Tensor[IntTuple[()]])
+assert_type(from_args(2, 3), Tensor[IntTuple[2, 3]])
+
+def actuals[N: IntVar](
+    n: Int[N],
+    plain: int,
+    fixed: tuple[Literal[2], Int[N]],
+    unbounded: tuple[int, ...],
+    unpacked: tuple[Literal[1], *tuple[int, ...], Literal[3]],
+) -> None:
+    assert_type(from_tuple((n, 3)), Tensor[IntTuple[N, 3]])
+    assert_type(from_tuple((plain,)), Tensor[IntTuple[int]])
+    assert_type(from_args(n, plain), Tensor[IntTuple[N, int]])
+    assert_type(from_tuple(fixed), Tensor[IntTuple[2, N]])
+    assert_type(from_tuple(unbounded), Tensor[IntTuple])
+    reveal_type(from_tuple(unpacked))  # E: revealed type: Tensor[IntTuple[1, *tuple[int, ...], 3]]
+"#,
+);
+
+testcase!(
+    test_inttuple_carrier_repeated_constraints_and_overload_rollback,
+    shaped_array_env(),
+    r#"
+from shape_extensions import IntTuple
+from typing import Any, assert_type, overload
+
+class Tensor[Shape]: ...
+
+def same[Shape: IntTuple](left: Shape, right: Shape) -> Tensor[Shape]: ...
+
+assert_type(same((2, 3), (2, 3)), Tensor[IntTuple[2, 3]])
+same((2, 3), (2, 4))  # E: Argument `tuple[Literal[2], Literal[4]]` is not assignable to parameter `right`
+same((2,), (2, 3))  # E: Argument `tuple[Literal[2], Literal[3]]` is not assignable to parameter `right`
+
+@overload
+def select[Shape: IntTuple](size: Shape) -> Tensor[Shape]: ...
+@overload
+def select(size: tuple[str, ...]) -> str: ...
+def select(size: Any) -> Any: ...
+
+@overload
+def select_args[Shape: IntTuple](*size: *Shape) -> Tensor[Shape]: ...
+@overload
+def select_args(*size: str) -> str: ...
+def select_args(*size: Any) -> Any: ...
+
+@overload
+def select_after_shape[Shape: IntTuple](size: Shape, marker: int) -> Tensor[Shape]: ...
+@overload
+def select_after_shape(size: tuple[int, ...], marker: str) -> str: ...
+def select_after_shape(size: Any, marker: Any) -> Any: ...
+
+assert_type(select((2, 3)), Tensor[IntTuple[2, 3]])
+assert_type(select(("bad",)), str)
+assert_type(select_args(2, 3), Tensor[IntTuple[2, 3]])
+assert_type(select_args("bad"), str)
+assert_type(select_after_shape((2, 3), "fallback"), str)
+"#,
+);
+
+testcase!(
+    test_inttuple_carrier_invalid_elements_and_ordinary_typevar_promotion,
+    shaped_array_env(),
+    r#"
+from shape_extensions import IntTuple
+from typing import assert_type
+
+class Tensor[Shape]: ...
+
+def from_tuple[Shape: IntTuple](size: Shape) -> Tensor[Shape]: ...
+def from_args[Shape: IntTuple](*size: *Shape) -> Tensor[Shape]: ...
+def ordinary[T](value: T) -> T: ...
+
+from_tuple((2, "bad"))  # E: Argument `tuple[Literal[2], Literal['bad']]` is not assignable to parameter `size`
+from_args(2, "bad")  # E: Unpacked argument `tuple[Literal[2], Literal['bad']]` is not assignable to parameter `*size`
+assert_type(ordinary(2), int)
+assert_type(ordinary((2, 3)), tuple[int, int])
+"#,
+);
+
+testcase!(
+    test_inttuple_carrier_imported_alias_and_finalization,
+    {
+        let mut env = shaped_array_env();
+        env.add(
+            "carrier_api",
+            r#"
+from shape_extensions import IntTuple
+
+class Tensor[Shape]: ...
+type ShapeBound = IntTuple
+
+def make[Shape: ShapeBound](size: Shape) -> Tensor[Shape]: ...
+def make_args[Shape: ShapeBound](*size: *Shape) -> Tensor[Shape]: ...
+def unresolved[Shape: ShapeBound]() -> Tensor[Shape]: ...
+"#,
+        );
+        env
+    },
+    r#"
+from carrier_api import Tensor, make, make_args, unresolved
+from shape_extensions import IntTuple
+from typing import Any, assert_type
+
+assert_type(make((4, 5)), Tensor[IntTuple[4, 5]])
+assert_type(make_args(4, 5), Tensor[IntTuple[4, 5]])
+make((4, "bad"))  # E: Argument `tuple[Literal[4], Literal['bad']]` is not assignable to parameter `size`
+assert_type(unresolved(), Tensor[Any])
+"#,
+);
+
+// `Tensor()` leaves `Shape` unsolved, so the first use pins a partially quantified
+// variable instead of a call-site one. Refusing to pin an invalid shape is silent
+// because first-use pinning never reports bound violations (an ordinary `T: int`
+// parameter pins `str` just as quietly).
+testcase!(
+    bug = "first-use pinning reports no error for invalid dimensions",
+    test_inttuple_carrier_first_use_inference,
+    shaped_array_env(),
+    r#"
+from shape_extensions import IntTuple
+from typing import Any, assert_type
+
+class Tensor[Shape: IntTuple]:
+    def fill(self, size: Shape) -> None: ...
+
+inferred = Tensor()
+inferred.fill((2, 3))
+assert_type(inferred, Tensor[IntTuple[2, 3]])
+
+invalid = Tensor()
+invalid.fill((2, "bad"))
+assert_type(invalid, Tensor[Any])
+"#,
+);
+
+testcase!(
+    test_inttuple_carrier_invalid_unbounded_actuals,
+    shaped_array_env(),
+    r#"
+from shape_extensions import IntTuple
+from typing import Any, Literal, assert_type, overload
+
+class Tensor[Shape]: ...
+
+def from_tuple[Shape: IntTuple](size: Shape) -> Tensor[Shape]: ...
+
+@overload
+def select[Shape: IntTuple](size: Shape) -> Tensor[Shape]: ...
+@overload
+def select(size: tuple[str, ...]) -> str: ...
+def select(size: Any) -> Any: ...
+
+def f(
+    unbounded: tuple[str, ...],
+    unpacked: tuple[Literal[1], *tuple[str, ...]],
+) -> None:
+    from_tuple(unbounded)  # E: Argument `tuple[str, ...]` is not assignable to parameter `size`
+    from_tuple(unpacked)  # E: Argument `tuple[Literal[1], *tuple[str, ...]]` is not assignable to parameter `size`
+    assert_type(select(unbounded), str)
+"#,
+);

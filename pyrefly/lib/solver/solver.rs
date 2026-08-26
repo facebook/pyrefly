@@ -32,6 +32,7 @@ use pyrefly_types::dimension::is_gradual_size;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tuple::Tuple;
@@ -3620,6 +3621,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         Some(best)
     }
 
+    /// Whether `q` is a `TypeVar` whose bound represents an entire shape.
+    fn has_int_tuple_bound(q: &Quantified) -> bool {
+        q.kind() == QuantifiedKind::TypeVar
+            && matches!(q.restriction(), Restriction::Bound(Type::IntTuple(_)))
+    }
+
     /// is_subset_eq_var(t1, Quantified)
     fn is_subset_eq_quantified(
         &mut self,
@@ -3629,7 +3636,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         upper_bound: Option<&Type>,
         is_shape_flag_binding_source: bool,
     ) -> (Type, Option<TypeVarSpecializationError>) {
-        let t1_p = {
+        // An `IntTuple`-bounded actual is a dimension sequence. Literal promotion would erase
+        // those dimensions, and the probe guarding promotion binds variables as a side effect.
+        let t1_p = if Self::has_int_tuple_bound(q) {
+            t1.clone()
+        } else {
             let t1_p = t1
                 .clone()
                 .promote_implicit_literals(self.type_order.stdlib());
@@ -4081,6 +4092,22 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 self.record_deferred_residual_target_vars(*v2, t1);
                 let variables = self.solver.variables.lock();
                 let v2_ref = variables.get(*v2);
+                // Tuple actuals for `IntTuple`-bounded variables use dimension binding.
+                let has_int_tuple_bound = match &*v2_ref {
+                    Variable::Quantified { quantified, .. }
+                    | Variable::PartialQuantified(quantified) => {
+                        Self::has_int_tuple_bound(quantified)
+                    }
+                    _ => false,
+                };
+                if has_int_tuple_bound && let Type::Tuple(tuple) = t1 {
+                    drop(v2_ref);
+                    drop(variables);
+                    return self.is_subset_tuple_to_int_tuple(
+                        tuple,
+                        &IntTuple::unpacked(Vec::new(), Type::Var(*v2), Vec::new()),
+                    );
+                }
                 match &*v2_ref {
                     Variable::Answer { ty: t2, .. } => {
                         let t2 = t2.clone();
