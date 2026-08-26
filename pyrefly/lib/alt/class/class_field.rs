@@ -1470,14 +1470,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) {
-        let has_default = call.arguments.find_keyword("default").is_some();
+        let default = call.arguments.find_keyword("default");
+        let has_default = default.is_some();
         let has_default_factory = call.arguments.find_keyword("default_factory").is_some();
         let has_factory = call.arguments.find_keyword("factory").is_some();
         let has_keyword_conflict = has_default && (has_default_factory || has_factory)
             || has_default_factory && has_factory;
         let may_have_positional_default =
             !call.arguments.args.is_empty() && (has_default_factory || has_factory);
-        if !has_keyword_conflict && !may_have_positional_default {
+        let mutable_default = default.filter(|default| {
+            matches!(&default.value, Expr::Dict(_) | Expr::List(_) | Expr::Set(_))
+        });
+        if !has_keyword_conflict && !may_have_positional_default && mutable_default.is_none() {
             return;
         }
 
@@ -1502,6 +1506,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 || id.has_toplevel_qname("pydantic.fields", "PrivateAttr")
                 || id.has_toplevel_qname("pydantic._internal._model_construction", "NoInitField")
         }) {
+            return;
+        }
+
+        // SQLAlchemy passes mapped dataclass fields to stdlib dataclasses, which reject mutable
+        // container defaults.
+        if !has_keyword_conflict
+            && let Some(default) = mutable_default
+            && function_id.is_some_and(|id| {
+                id.has_toplevel_qname("sqlalchemy.orm", "mapped_column")
+                    || id.has_toplevel_qname("sqlalchemy.orm._orm_constructors", "mapped_column")
+            })
+        {
+            self.error(
+                errors,
+                default.value.range(),
+                ErrorKind::BadClassDefinition,
+                format!("Mutable default for field `{name}` is not allowed; use `default_factory`"),
+            );
             return;
         }
 
