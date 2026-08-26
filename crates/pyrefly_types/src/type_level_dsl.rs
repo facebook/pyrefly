@@ -556,6 +556,132 @@ pub struct TypeShapeDslDefinitionError {
     pub message: &'static str,
 }
 
+trait SourceRangeKey {
+    fn source_range_key(&self) -> TextRange;
+}
+
+/// Validation metadata keyed by the exact source range of the AST node it describes.
+///
+/// Entries have unique ranges and are sorted by source offset. This supports exact binary-search
+/// lookup and gives the table deterministic equality and hashing independent of insertion order.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SourceRangeTable<T> {
+    entries: Vec<T>,
+}
+
+impl<T: SourceRangeKey> SourceRangeTable<T> {
+    fn new(table_name: &'static str, mut entries: Vec<T>) -> Self {
+        entries.sort_unstable_by_key(|entry| {
+            let range = entry.source_range_key();
+            (range.start(), range.end())
+        });
+        assert!(
+            entries
+                .windows(2)
+                .all(|pair| pair[0].source_range_key() != pair[1].source_range_key()),
+            "validated type-level DSL {table_name} metadata ranges must be unique"
+        );
+        Self { entries }
+    }
+
+    fn get(&self, range: TextRange) -> Option<&T> {
+        self.entries
+            .binary_search_by_key(&(range.start(), range.end()), |entry| {
+                let range = entry.source_range_key();
+                (range.start(), range.end())
+            })
+            .ok()
+            .map(|index| &self.entries[index])
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        self.entries.iter()
+    }
+}
+
+#[cfg(test)]
+mod source_range_table_tests {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hash;
+    use std::hash::Hasher;
+
+    use ruff_text_size::TextSize;
+
+    use super::SourceRangeTable;
+    use super::TextRange;
+    use super::TypeShapeDslAssignment;
+
+    fn range(start: u32, end: u32) -> TextRange {
+        TextRange::new(TextSize::new(start), TextSize::new(end))
+    }
+
+    fn entry(range: TextRange, slot: usize) -> TypeShapeDslAssignment {
+        TypeShapeDslAssignment { range, slot }
+    }
+
+    fn hashed(table: &SourceRangeTable<TypeShapeDslAssignment>) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        table.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn source_range_table_sorts_and_finds_exact_ranges() {
+        let first = range(0, 1);
+        let inner = range(2, 4);
+        let outer = range(2, 8);
+        let last = range(10, 12);
+        let missing = range(5, 6);
+        let table = SourceRangeTable::new(
+            "test",
+            vec![
+                entry(outer, 3),
+                entry(last, 4),
+                entry(inner, 2),
+                entry(first, 1),
+            ],
+        );
+
+        assert_eq!(
+            table
+                .iter()
+                .map(|entry| (entry.range, entry.slot))
+                .collect::<Vec<_>>(),
+            vec![(first, 1), (inner, 2), (outer, 3), (last, 4),]
+        );
+        assert_eq!(table.get(first).map(|entry| entry.slot), Some(1));
+        assert_eq!(table.get(inner).map(|entry| entry.slot), Some(2));
+        assert_eq!(table.get(outer).map(|entry| entry.slot), Some(3));
+        assert_eq!(table.get(last).map(|entry| entry.slot), Some(4));
+        assert_eq!(table.get(missing), None);
+    }
+
+    #[test]
+    fn source_range_table_identity_ignores_input_order() {
+        let first = range(0, 1);
+        let inner = range(2, 4);
+        let outer = range(2, 8);
+        let table = SourceRangeTable::new(
+            "test",
+            vec![entry(outer, 3), entry(first, 1), entry(inner, 2)],
+        );
+        let reordered = SourceRangeTable::new(
+            "test",
+            vec![entry(inner, 2), entry(outer, 3), entry(first, 1)],
+        );
+
+        assert_eq!(table, reordered);
+        assert_eq!(hashed(&table), hashed(&reordered));
+    }
+
+    #[test]
+    #[should_panic(expected = "validated type-level DSL test metadata ranges must be unique")]
+    fn source_range_table_rejects_duplicate_ranges() {
+        let duplicate = range(2, 4);
+        let _ = SourceRangeTable::new("test", vec![entry(duplicate, 1), entry(duplicate, 2)]);
+    }
+}
+
 /// A type-level shape DSL declaration whose envelope was validated during binding.
 #[derive(Debug, Clone)]
 pub struct ParsedTypeShapeDslFunction {
@@ -572,10 +698,10 @@ pub struct ParsedTypeShapeDslFunction {
 pub struct ValidatedTypeShapeDslFunction {
     parsed: ParsedTypeShapeDslFunction,
     // These source-keyed facts are validation invariants for the retained AST, not a body IR.
-    returns: Vec<TypeShapeDslReturn>,
-    conditions: Vec<TypeShapeDslCondition>,
-    expressions: Vec<TypeShapeDslExpression>,
-    assignments: Vec<TypeShapeDslAssignment>,
+    returns: SourceRangeTable<TypeShapeDslReturn>,
+    conditions: SourceRangeTable<TypeShapeDslCondition>,
+    expressions: SourceRangeTable<TypeShapeDslExpression>,
+    assignments: SourceRangeTable<TypeShapeDslAssignment>,
     helper_calls: Vec<TypeShapeDslHelperCall>,
     /// The number of indexed storage entries the body needs: one per parameter, then one per local.
     slot_count: usize,
@@ -598,6 +724,12 @@ impl TypeShapeDslReturn {
     }
 }
 
+impl SourceRangeKey for TypeShapeDslReturn {
+    fn source_range_key(&self) -> TextRange {
+        self.statement_range
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeShapeDslCondition {
     range: TextRange,
@@ -611,6 +743,12 @@ impl TypeShapeDslCondition {
 
     pub fn kind(&self) -> &TypeShapeDslConditionKind {
         &self.kind
+    }
+}
+
+impl SourceRangeKey for TypeShapeDslCondition {
+    fn source_range_key(&self) -> TextRange {
+        self.range
     }
 }
 
@@ -630,10 +768,22 @@ impl TypeShapeDslExpression {
     }
 }
 
+impl SourceRangeKey for TypeShapeDslExpression {
+    fn source_range_key(&self) -> TextRange {
+        self.range
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct TypeShapeDslAssignment {
     range: TextRange,
     slot: usize,
+}
+
+impl SourceRangeKey for TypeShapeDslAssignment {
+    fn source_range_key(&self) -> TextRange {
+        self.range
+    }
 }
 
 /// The validated source of a type-level shape DSL function's return value. Resolving this depends
@@ -2609,9 +2759,10 @@ impl TypeEqTrait for ParsedTypeShapeDslFunction {
     }
 }
 
-// `TextRange` has no total order, so the resolved metadata is ordered by its offsets. Like the
-// pointer ordering on the parsed program this is a process-local tie-breaker required by type
-// nodes that derive `Ord`, and it stays consistent with the derived `Eq` above.
+// Like the pointer ordering on the parsed program, this is a process-local tie-breaker required by
+// type nodes that derive `Ord`; it must not be used for stable output. The metadata tables order
+// themselves canonically and `helper_calls` is ordered by its offsets because `TextRange` has no
+// total order, so this stays consistent with the derived `Eq` above.
 impl PartialOrd for ValidatedTypeShapeDslFunction {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -2800,10 +2951,10 @@ impl ParsedTypeShapeDslFunction {
         let slot_count = declared_local_kinds.len();
         Ok(ValidatedTypeShapeDslFunction {
             parsed: self.clone(),
-            returns,
-            conditions,
-            expressions,
-            assignments,
+            returns: SourceRangeTable::new("return", returns),
+            conditions: SourceRangeTable::new("condition", conditions),
+            expressions: SourceRangeTable::new("expression", expressions),
+            assignments: SourceRangeTable::new("assignment", assignments),
             helper_calls,
             slot_count,
         })
@@ -3068,14 +3219,12 @@ impl ResolvedTypeShapeDslProgram {
         for statement in suite {
             match statement {
                 Stmt::Assign(assign) => {
-                    // Restricted DSL bodies keep these source-keyed validation tables small;
-                    // retaining source order also keeps their diagnostic and inspection APIs simple.
+                    // Validation recorded a slot under this statement's exact range, so the
+                    // exact-range lookup cannot miss for a statement of the retained AST.
                     let slot = definition
                         .assignments
-                        .iter()
-                        .find_map(|assignment| {
-                            (assignment.range == assign.range).then_some(assignment.slot)
-                        })
+                        .get(assign.range)
+                        .map(|assignment| assignment.slot)
                         .expect("validated assignment must have indexed-storage metadata");
                     match definition.evaluate_expression(&assign.value, environment, budget) {
                         DslOutcome::Value(value) => environment.assign(slot, value),
@@ -3090,11 +3239,8 @@ impl ResolvedTypeShapeDslProgram {
                 Stmt::Return(return_stmt) => {
                     let kind = definition
                         .returns
-                        .iter()
-                        .find_map(|return_| {
-                            (return_.statement_range == return_stmt.range)
-                                .then(|| return_.kind.clone())
-                        })
+                        .get(return_stmt.range)
+                        .map(|return_| return_.kind.clone())
                         .expect("validated return statement must have validation metadata");
                     return DslControlFlow::Return(match kind {
                         TypeShapeDslReturnKind::Parameter(return_index) => {
@@ -3257,10 +3403,8 @@ impl ResolvedTypeShapeDslProgram {
 impl ValidatedTypeShapeDslFunction {
     fn expression_kind(&self, expression: &Expr) -> TypeShapeDslExpressionKind {
         self.expressions
-            .iter()
-            .find_map(|metadata| {
-                (metadata.range == expression.range()).then(|| metadata.kind.clone())
-            })
+            .get(expression.range())
+            .map(|metadata| metadata.kind.clone())
             .expect("validated DSL value expression must have validation metadata")
     }
 
@@ -3918,10 +4062,8 @@ impl ValidatedTypeShapeDslFunction {
 
         let kind = self
             .conditions
-            .iter()
-            .find_map(|metadata| {
-                (metadata.range == condition.range()).then(|| metadata.kind.clone())
-            })
+            .get(condition.range())
+            .map(|metadata| metadata.kind.clone())
             .expect("validated atomic condition must have validation metadata");
         Ok(match kind {
             TypeShapeDslConditionKind::Any { binder } => {
