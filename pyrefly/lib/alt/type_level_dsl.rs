@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
 use std::slice;
 use std::sync::Arc;
 
@@ -120,14 +121,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Option<ResolvedTypeShapeDslFunction> {
         let mut helpers = Vec::new();
+        let mut deferred_integer_domains = HashMap::new();
         let mut valid = true;
         let swallowed_errors = self.error_swallower();
         for helper_call in definition.helper_calls() {
             let callee = self.expr_infer(helper_call.callee(), &swallowed_errors);
             match callee.callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::TypeShapeDsl(helper_id, helper))) => {
-                    let argument_domains = helper_call.argument_domains(&parameter_domains);
-                    if argument_domains.as_deref() != Some(helper.parameter_domains()) {
+                    if helper_call
+                        .argument_domains(
+                            &parameter_domains,
+                            helper.parameter_domains(),
+                            &mut deferred_integer_domains,
+                        )
+                        .is_none()
+                    {
                         self.error(
                             errors,
                             helper_call.callee().range(),
@@ -365,6 +373,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
                     }))
                     .then_some("`@type_shape_dsl_function` IntTuple elements must be annotated as `Int`"),
+                    TypeShapeDslExpressionKind::IntegerSlot {
+                        parameter_origins: Some(parameters),
+                        narrowed,
+                        ..
+                    } => {
+                        let valid = parameters.iter().all(|parameter| {
+                            match parameter_domains[*parameter] {
+                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => true,
+                                TypeShapeDslInputDomain::Flag(domain) if *narrowed => {
+                                    domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
+                                }
+                                TypeShapeDslInputDomain::Flag(domain) => {
+                                    domain == FlagDomain::of(FlagMember::Int)
+                                }
+                                _ => false,
+                            }
+                        });
+                        (!valid).then_some("`@type_shape_dsl_function` dimension arithmetic operands must be annotated as `Int` or `Flag[int]`")
+                    }
                     TypeShapeDslExpressionKind::IntTupleIndex {
                         parameter_origins: Some(shapes),
                         ..
@@ -457,6 +484,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | TypeShapeDslExpressionKind::IntTupleConstructor
                     | TypeShapeDslExpressionKind::IntTupleProduct
                     | TypeShapeDslExpressionKind::DimensionSlot { .. }
+                    | TypeShapeDslExpressionKind::IntegerSlot { .. }
                     | TypeShapeDslExpressionKind::IntTupleIndex { .. }
                     | TypeShapeDslExpressionKind::IntTupleLength { .. }
                     | TypeShapeDslExpressionKind::GeneratorSourceSlot { .. }
@@ -472,6 +500,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     | TypeShapeDslExpressionKind::FlagSequenceLength
                     | TypeShapeDslExpressionKind::FlagSequenceCount
                     | TypeShapeDslExpressionKind::FlagIntArithmetic(_)
+                    | TypeShapeDslExpressionKind::DimensionArithmetic(_)
                     | TypeShapeDslExpressionKind::DimensionTuple
                     | TypeShapeDslExpressionKind::Conditional
                     | TypeShapeDslExpressionKind::DimensionGenerator { .. }
@@ -566,24 +595,6 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                         valid_body = false;
                     }
-                    TypeShapeDslReturnKind::IntFlagArithmetic { left, right, .. }
-                        if result != TypeShapeDslDomain::Int
-                            || parameter_domains[*left]
-                                != TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
-                            || parameter_domains[*right]
-                                != TypeShapeDslInputDomain::Flag(FlagDomain::of(
-                                    FlagMember::Int,
-                                )) =>
-                    {
-                        self.error(
-                            errors,
-                            return_.range(),
-                            ErrorKind::InvalidArgument,
-                            "`@type_shape_dsl_function` arithmetic return requires `Int +/- Flag[int]` and an `Int` result"
-                                .to_owned(),
-                        );
-                        valid_body = false;
-                    }
                     TypeShapeDslReturnKind::Gradual(domain) if *domain != result => {
                         self.error(
                             errors,
@@ -622,13 +633,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         );
                         valid_body = false;
                     }
+                    TypeShapeDslReturnKind::Expression(domain) if *domain != result => {
+                        self.error(
+                            errors,
+                            return_.range(),
+                            ErrorKind::InvalidArgument,
+                            format!(
+                                "`@type_shape_dsl_function` returned expression requires a result in the `{}` domain",
+                                domain.as_str(),
+                            ),
+                        );
+                        valid_body = false;
+                    }
                     TypeShapeDslReturnKind::Parameter(_)
                     | TypeShapeDslReturnKind::Local { .. }
                     | TypeShapeDslReturnKind::AliasedParameter { .. }
                     | TypeShapeDslReturnKind::Broadcast { .. }
-                    | TypeShapeDslReturnKind::IntFlagArithmetic { .. }
                     | TypeShapeDslReturnKind::IntTupleExpression
                     | TypeShapeDslReturnKind::IntTupleProduct
+                    | TypeShapeDslReturnKind::Expression(_)
                     | TypeShapeDslReturnKind::Invalid
                     | TypeShapeDslReturnKind::HelperCall(_)
                     | TypeShapeDslReturnKind::Gradual(_) => {}

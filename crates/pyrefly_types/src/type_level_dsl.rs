@@ -12,6 +12,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -119,6 +120,11 @@ enum TypeShapeDslHelperArgumentProvenance {
         domain: TypeShapeDslInputDomain,
     },
     Exact(TypeShapeDslInputDomain),
+    DeferredInteger {
+        index: usize,
+        parameters: Box<[usize]>,
+        resolved_domain: Option<TypeShapeDslInputDomain>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -135,18 +141,27 @@ impl TypeShapeDslHelperCall {
     pub fn argument_domains(
         &self,
         caller_domains: &[TypeShapeDslInputDomain],
+        expected_domains: &[TypeShapeDslInputDomain],
+        deferred_domains: &mut HashMap<usize, TypeShapeDslInputDomain>,
     ) -> Option<Vec<TypeShapeDslInputDomain>> {
+        if self.arguments.len() != expected_domains.len() {
+            return None;
+        }
         self.arguments
             .iter()
-            .map(|argument| match &argument.provenance {
-                TypeShapeDslHelperArgumentProvenance::Exact(domain) => Some(*domain),
+            .zip(expected_domains)
+            .map(|(argument, expected)| match &argument.provenance {
+                TypeShapeDslHelperArgumentProvenance::Exact(domain) => {
+                    (domain == expected).then_some(*domain)
+                }
                 TypeShapeDslHelperArgumentProvenance::ParametersWithRequiredDomain {
                     parameters,
                     domain,
                 } => parameters
                     .iter()
                     .all(|parameter| caller_domains[*parameter] == *domain)
-                    .then_some(*domain),
+                    .then_some(*domain)
+                    .filter(|domain| domain == expected),
                 TypeShapeDslHelperArgumentProvenance::Parameters(parameters) => {
                     let mut domains = parameters
                         .iter()
@@ -154,7 +169,34 @@ impl TypeShapeDslHelperCall {
                     let first = domains
                         .next()
                         .expect("validated helper argument provenance is nonempty");
-                    domains.all(|domain| domain == first).then_some(first)
+                    (domains.all(|domain| domain == first) && first == *expected).then_some(first)
+                }
+                TypeShapeDslHelperArgumentProvenance::DeferredInteger {
+                    index,
+                    parameters,
+                    resolved_domain,
+                } => {
+                    let accepts_expected = match expected {
+                        TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => true,
+                        TypeShapeDslInputDomain::Flag(domain)
+                            if *domain == FlagDomain::of(FlagMember::Int) =>
+                        {
+                            parameters.iter().all(|parameter| {
+                                caller_domains[*parameter]
+                                    == TypeShapeDslInputDomain::Flag(FlagDomain::of(
+                                        FlagMember::Int,
+                                    ))
+                            })
+                        }
+                        _ => false,
+                    };
+                    if !accepts_expected
+                        || resolved_domain.is_some_and(|domain| domain != *expected)
+                    {
+                        return None;
+                    }
+                    let previous = deferred_domains.entry(*index).or_insert(*expected);
+                    (*previous == *expected).then_some(*expected)
                 }
             })
             .collect()
@@ -807,16 +849,12 @@ pub enum TypeShapeDslReturnKind {
         left_parameters: Box<[usize]>,
         right_parameters: Box<[usize]>,
     },
-    /// Return an arithmetic expression over two integer flag parameters.
-    IntFlagArithmetic {
-        left: usize,
-        op: TypeShapeDslArithmeticOp,
-        right: usize,
-    },
     /// Evaluate a validated `IntTuple` expression from the retained AST.
     IntTupleExpression,
     /// Evaluate a validated `IntTuple` product from the retained AST.
     IntTupleProduct,
+    /// Evaluate another validated expression in the declared result domain.
+    Expression(TypeShapeDslDomain),
     /// Return an invalid shape computation with a source-provided message.
     Invalid,
     /// Return the gradual value for the function's declared result domain.
@@ -830,13 +868,6 @@ pub enum TypeShapeDslReturnKind {
 /// requirements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslArithmeticOp {
-    Add,
-    Subtract,
-}
-
-/// The arithmetic a validated `Flag[int]` expression applies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TypeShapeDslFlagIntArithmeticOp {
     Add,
     Subtract,
     Multiply,
@@ -914,6 +945,11 @@ pub enum TypeShapeDslExpressionKind {
         slot: usize,
         parameter_origins: Option<Box<[usize]>>,
     },
+    IntegerSlot {
+        slot: usize,
+        parameter_origins: Option<Box<[usize]>>,
+        narrowed: bool,
+    },
     DimensionLiteral(Option<i64>),
     IntTupleIndex {
         shape: usize,
@@ -947,7 +983,8 @@ pub enum TypeShapeDslExpressionKind {
     FlagRange,
     FlagSequenceLength,
     FlagSequenceCount,
-    FlagIntArithmetic(TypeShapeDslFlagIntArithmeticOp),
+    FlagIntArithmetic(TypeShapeDslArithmeticOp),
+    DimensionArithmetic(TypeShapeDslArithmeticOp),
     Conditional,
     DimensionGenerator {
         binder: usize,
@@ -1145,6 +1182,8 @@ fn merge_parameter_origins(
 enum DslStaticKind {
     /// One or more parameter slots whose domains are resolved after syntax validation.
     UnknownParameters(Box<[usize]>),
+    /// An integer local whose shape dimension versus `Flag[int]` domain is determined by use.
+    DeferredInteger(usize),
     /// An `IntTuple` expression, plus any parameters whose domains must resolve to `IntTuple`.
     IntTuple {
         parameter_origins: Option<Box<[usize]>>,
@@ -1281,6 +1320,21 @@ struct DslValidationFlow {
     kinds: Vec<DslStaticKind>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DslIntegerDomain {
+    Flag,
+    Dimension,
+}
+
+#[derive(Clone)]
+struct DeferredInteger {
+    expression: Expr,
+    flow: DslValidationFlow,
+    domain: Option<DslIntegerDomain>,
+    parent: usize,
+    validated: bool,
+}
+
 struct DslValidator<'a, F> {
     parameters: &'a Parameters,
     intrinsic: &'a F,
@@ -1291,6 +1345,7 @@ struct DslValidator<'a, F> {
     helper_calls: Vec<TypeShapeDslHelperCall>,
     slots: HashMap<Name, usize>,
     declared_local_kinds: Vec<Option<DslStaticKind>>,
+    deferred_integers: Vec<DeferredInteger>,
 }
 
 impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
@@ -1314,6 +1369,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 helper_calls: Vec::new(),
                 slots,
                 declared_local_kinds: vec![None; kinds.len()],
+                deferred_integers: Vec::new(),
             },
             DslValidationFlow {
                 assigned,
@@ -1329,6 +1385,255 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         } else {
             (self.intrinsic)(expression)
         }
+    }
+
+    fn defer_integer(&mut self, expression: &Expr, flow: &DslValidationFlow) -> DslStaticKind {
+        let index = self.deferred_integers.len();
+        self.deferred_integers.push(DeferredInteger {
+            expression: expression.clone(),
+            flow: flow.clone(),
+            domain: None,
+            parent: index,
+            validated: false,
+        });
+        DslStaticKind::DeferredInteger(index)
+    }
+
+    fn deferred_integer_root(&self, mut index: usize) -> usize {
+        while self.deferred_integers[index].parent != index {
+            debug_assert!(
+                self.deferred_integers[index].domain.is_none(),
+                "only a deferred integer group root may carry its domain"
+            );
+            index = self.deferred_integers[index].parent;
+        }
+        index
+    }
+
+    fn deferred_integer_domain(&self, index: usize) -> (usize, Option<DslIntegerDomain>) {
+        let root = self.deferred_integer_root(index);
+        debug_assert!(
+            self.deferred_integers
+                .iter()
+                .enumerate()
+                .all(
+                    |(index, deferred)| self.deferred_integer_root(index) != root
+                        || index == root
+                        || deferred.domain.is_none()
+                ),
+            "only a deferred integer group root may carry its domain"
+        );
+        (root, self.deferred_integers[root].domain)
+    }
+
+    fn merge_deferred_integers(
+        &mut self,
+        left: usize,
+        right: usize,
+    ) -> Result<usize, TypeShapeDslDefinitionError> {
+        let right_range = self.deferred_integers[right].expression.range();
+        let (left, left_domain) = self.deferred_integer_domain(left);
+        let (right, right_domain) = self.deferred_integer_domain(right);
+        if left == right {
+            return Ok(left);
+        }
+        if left_domain.is_some() && right_domain.is_some() && left_domain != right_domain {
+            return Err(TypeShapeDslDefinitionError {
+                range: right_range,
+                message: "an integer local cannot be used as both a dimension and a Flag value",
+            });
+        }
+        let domain = left_domain.or(right_domain);
+        self.deferred_integers[right].domain = None;
+        self.deferred_integers[right].parent = left;
+        self.deferred_integers[left].domain = domain;
+        if let Some(domain) = domain {
+            self.resolve_deferred_integer(left, domain)?;
+        }
+        Ok(left)
+    }
+
+    fn collect_integer_parameters(
+        &self,
+        expression: &Expr,
+        flow: &DslValidationFlow,
+        parameters: &mut Vec<usize>,
+        expanded_deferred: &mut HashSet<usize>,
+    ) -> bool {
+        match expression {
+            Expr::Name(name) => {
+                let Some(&slot) = self.slots.get(&name.id) else {
+                    // Deferred validation will report the unbound name with its normal diagnostic.
+                    return true;
+                };
+                match &flow.kinds[slot] {
+                    DslStaticKind::UnknownParameters(origins) => {
+                        for &parameter in origins.iter() {
+                            if !parameters.contains(&parameter) {
+                                parameters.push(parameter);
+                            }
+                        }
+                        true
+                    }
+                    DslStaticKind::Flag {
+                        origins: Some(origins),
+                        kinds: FLAG_INT,
+                    } => {
+                        for &parameter in origins.parameters() {
+                            if !parameters.contains(&parameter) {
+                                parameters.push(parameter);
+                            }
+                        }
+                        true
+                    }
+                    DslStaticKind::DeferredInteger(index) => {
+                        let root = self.deferred_integer_root(*index);
+                        for (index, deferred) in self.deferred_integers.iter().enumerate() {
+                            if self.deferred_integer_root(index) == root
+                                && expanded_deferred.insert(index)
+                                && !self.collect_integer_parameters(
+                                    &deferred.expression,
+                                    &deferred.flow,
+                                    parameters,
+                                    expanded_deferred,
+                                )
+                            {
+                                return false;
+                            }
+                        }
+                        true
+                    }
+                    DslStaticKind::Flag {
+                        origins: None,
+                        kinds: FLAG_INT,
+                    } => true,
+                    _ => false,
+                }
+            }
+            Expr::BinOp(binop) => {
+                self.collect_integer_parameters(&binop.left, flow, parameters, expanded_deferred)
+                    && self.collect_integer_parameters(
+                        &binop.right,
+                        flow,
+                        parameters,
+                        expanded_deferred,
+                    )
+            }
+            _ => !matches!(integer_literal(expression), IntegerLiteral::NotLiteral),
+        }
+    }
+
+    fn deferred_integer_parameters(
+        &self,
+        index: usize,
+    ) -> Result<Box<[usize]>, TypeShapeDslDefinitionError> {
+        let root = self.deferred_integer_root(index);
+        let mut parameters = Vec::new();
+        let mut expanded_deferred = HashSet::new();
+        for (index, deferred) in self.deferred_integers.iter().enumerate() {
+            if self.deferred_integer_root(index) == root
+                && expanded_deferred.insert(index)
+                && !self.collect_integer_parameters(
+                    &deferred.expression,
+                    &deferred.flow,
+                    &mut parameters,
+                    &mut expanded_deferred,
+                )
+            {
+                return Err(TypeShapeDslDefinitionError {
+                    range: deferred.expression.range(),
+                    message: "helper integer arguments must contain only parameters, Flag integers, and integer literals",
+                });
+            }
+        }
+        parameters.sort_unstable();
+        parameters.dedup();
+        Ok(parameters.into_boxed_slice())
+    }
+
+    fn finalize_helper_deferred_domains(&mut self) {
+        let domains = self
+            .helper_calls
+            .iter()
+            .flat_map(|call| &call.arguments)
+            .filter_map(|argument| match &argument.provenance {
+                TypeShapeDslHelperArgumentProvenance::DeferredInteger { index, .. } => Some(*index),
+                _ => None,
+            })
+            .map(|index| {
+                let (root, domain) = self.deferred_integer_domain(index);
+                (index, (root, domain))
+            })
+            .collect::<HashMap<_, _>>();
+        for argument in self
+            .helper_calls
+            .iter_mut()
+            .flat_map(|call| &mut call.arguments)
+        {
+            let TypeShapeDslHelperArgumentProvenance::DeferredInteger {
+                index,
+                resolved_domain,
+                ..
+            } = &mut argument.provenance
+            else {
+                continue;
+            };
+            let (root, domain) = domains[index];
+            *index = root;
+            *resolved_domain = domain.map(|domain| match domain {
+                DslIntegerDomain::Dimension => {
+                    TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
+                }
+                DslIntegerDomain::Flag => {
+                    TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Int))
+                }
+            });
+        }
+    }
+
+    fn resolve_deferred_integer(
+        &mut self,
+        index: usize,
+        domain: DslIntegerDomain,
+    ) -> Result<(), TypeShapeDslDefinitionError> {
+        let (root, previous) = self.deferred_integer_domain(index);
+        if previous.is_some() && previous != Some(domain) {
+            return Err(TypeShapeDslDefinitionError {
+                range: self.deferred_integers[index].expression.range(),
+                message: "an integer local cannot be used as both a dimension and a Flag value",
+            });
+        }
+        self.deferred_integers[root].domain = Some(domain);
+        let group = (0..self.deferred_integers.len())
+            .filter(|index| self.deferred_integer_root(*index) == root)
+            .collect::<Vec<_>>();
+        for index in group {
+            debug_assert!(
+                index == root || self.deferred_integers[index].domain.is_none(),
+                "only a deferred integer group root may carry its domain"
+            );
+            if self.deferred_integers[index].validated {
+                continue;
+            }
+            self.deferred_integers[index].validated = true;
+            let expression = self.deferred_integers[index].expression.clone();
+            let flow = self.deferred_integers[index].flow.clone();
+            match domain {
+                DslIntegerDomain::Flag => self.validate_flag_int(&expression, &flow)?,
+                DslIntegerDomain::Dimension => self.validate_dimension(&expression, &flow)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_unused_deferred_integers(&mut self) -> Result<(), TypeShapeDslDefinitionError> {
+        for index in 0..self.deferred_integers.len() {
+            let (_, domain) = self.deferred_integer_domain(index);
+            if domain.is_none() {
+                self.resolve_deferred_integer(index, DslIntegerDomain::Dimension)?;
+            }
+        }
+        Ok(())
     }
 
     fn normalize_flow(&self, flow: &mut DslValidationFlow) {
@@ -1407,6 +1712,13 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         slot,
                         parameter_origins: None,
                     },
+                    DslStaticKind::DeferredInteger(index) => {
+                        self.resolve_deferred_integer(*index, DslIntegerDomain::Dimension)?;
+                        TypeShapeDslExpressionKind::DimensionSlot {
+                            slot,
+                            parameter_origins: None,
+                        }
+                    }
                     DslStaticKind::GeneratorElement => {
                         TypeShapeDslExpressionKind::GeneratorElementAsDimension(slot)
                     }
@@ -1442,10 +1754,29 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     message: "dimension literal supports only unary `+` or `-`",
                 });
             }
+            Expr::BinOp(binop) => {
+                let op = match binop.op {
+                    Operator::Add => TypeShapeDslArithmeticOp::Add,
+                    Operator::Sub => TypeShapeDslArithmeticOp::Subtract,
+                    Operator::Mult => TypeShapeDslArithmeticOp::Multiply,
+                    Operator::FloorDiv => TypeShapeDslArithmeticOp::FloorDivide,
+                    Operator::Mod => TypeShapeDslArithmeticOp::Modulo,
+                    _ => {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: binop.range,
+                            message: "dimension arithmetic supports only `+`, `-`, `*`, `//`, and `%`",
+                        });
+                    }
+                };
+                self.validate_dimension_arithmetic_operand(&binop.left, flow)?;
+                self.validate_dimension_arithmetic_operand(&binop.right, flow)?;
+                TypeShapeDslExpressionKind::DimensionArithmetic(op)
+            }
             Expr::Subscript(subscript) => {
                 let shape = self.slot(&subscript.value, flow)?;
                 let parameter_origins = match &flow.kinds[shape] {
                     DslStaticKind::UnknownParameters(parameters) => Some(parameters.clone()),
+                    DslStaticKind::IntTuple { parameter_origins } => parameter_origins.clone(),
                     _ => {
                         return Err(TypeShapeDslDefinitionError {
                             range: subscript.value.range(),
@@ -1477,6 +1808,47 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok(())
     }
 
+    fn validate_dimension_arithmetic_operand(
+        &mut self,
+        expression: &Expr,
+        flow: &DslValidationFlow,
+    ) -> Result<(), TypeShapeDslDefinitionError> {
+        let Expr::Name(_) = expression else {
+            return self.validate_dimension(expression, flow);
+        };
+        let slot = self.slot(expression, flow)?;
+        let (parameter_origins, narrowed) = match &flow.kinds[slot] {
+            DslStaticKind::UnknownParameters(parameters) => (Some(parameters.clone()), false),
+            DslStaticKind::DeferredInteger(index) => {
+                self.resolve_deferred_integer(*index, DslIntegerDomain::Dimension)?;
+                (None, false)
+            }
+            DslStaticKind::Dimension | DslStaticKind::GeneratorElement => (None, false),
+            DslStaticKind::Flag {
+                origins,
+                kinds: FLAG_INT,
+            } => origins.as_ref().map_or((None, false), |origins| {
+                let (parameters, narrowed) = origins.clone_parameters_with_narrowing();
+                (Some(parameters), narrowed)
+            }),
+            _ => {
+                return Err(TypeShapeDslDefinitionError {
+                    range: expression.range(),
+                    message: "dimension arithmetic operands must be integer values",
+                });
+            }
+        };
+        self.expressions.push(TypeShapeDslExpression {
+            range: expression.range(),
+            kind: TypeShapeDslExpressionKind::IntegerSlot {
+                slot,
+                parameter_origins,
+                narrowed,
+            },
+        });
+        Ok(())
+    }
+
     fn validate_flag_slot(
         &mut self,
         expression: &Expr,
@@ -1488,8 +1860,18 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             TypeShapeDslFlagValueKind::Int => FLAG_INT,
             TypeShapeDslFlagValueKind::Sequence => FLAG_SEQUENCE,
         };
+        if let DslStaticKind::DeferredInteger(index) = flow.kinds[slot] {
+            if expected != FLAG_INT {
+                return Err(TypeShapeDslDefinitionError {
+                    range: expression.range(),
+                    message: "integer local has the wrong domain for this Flag operation",
+                });
+            }
+            self.resolve_deferred_integer(index, DslIntegerDomain::Flag)?;
+        }
         let (parameter_origins, narrowed) = match &flow.kinds[slot] {
             DslStaticKind::UnknownParameters(parameters) => (Some(parameters.clone()), false),
+            DslStaticKind::DeferredInteger(_) if expected == FLAG_INT => (None, true),
             DslStaticKind::GeneratorElement if expected == FLAG_INT => {
                 self.expressions.push(TypeShapeDslExpression {
                     range: expression.range(),
@@ -1560,11 +1942,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             }
             Expr::BinOp(binop) => {
                 let op = match binop.op {
-                    Operator::Add => TypeShapeDslFlagIntArithmeticOp::Add,
-                    Operator::Sub => TypeShapeDslFlagIntArithmeticOp::Subtract,
-                    Operator::Mult => TypeShapeDslFlagIntArithmeticOp::Multiply,
-                    Operator::FloorDiv => TypeShapeDslFlagIntArithmeticOp::FloorDivide,
-                    Operator::Mod => TypeShapeDslFlagIntArithmeticOp::Modulo,
+                    Operator::Add => TypeShapeDslArithmeticOp::Add,
+                    Operator::Sub => TypeShapeDslArithmeticOp::Subtract,
+                    Operator::Mult => TypeShapeDslArithmeticOp::Multiply,
+                    Operator::FloorDiv => TypeShapeDslArithmeticOp::FloorDivide,
+                    Operator::Mod => TypeShapeDslArithmeticOp::Modulo,
                     _ => {
                         return Err(TypeShapeDslDefinitionError {
                             range: binop.range,
@@ -2077,11 +2459,23 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 })
             }
             Expr::BinOp(_) => {
-                self.validate_flag_int(expression, flow)?;
-                Ok(DslStaticKind::Flag {
-                    origins: None,
-                    kinds: FLAG_INT,
-                })
+                if self.is_dimension_expression(expression, flow) {
+                    self.validate_dimension(expression, flow)?;
+                    Ok(DslStaticKind::Dimension)
+                } else if self.is_deferred_integer_expression(expression, flow) {
+                    if self.is_traceable_integer_expression(expression, flow) {
+                        Ok(self.defer_integer(expression, flow))
+                    } else {
+                        self.validate_dimension(expression, flow)?;
+                        Ok(DslStaticKind::Dimension)
+                    }
+                } else {
+                    self.validate_flag_int(expression, flow)?;
+                    Ok(DslStaticKind::Flag {
+                        origins: None,
+                        kinds: FLAG_INT,
+                    })
+                }
             }
             Expr::Subscript(_) => {
                 if matches!(expression, Expr::Subscript(subscript) if matches!(subscript.slice.as_ref(), Expr::Slice(_)))
@@ -2209,6 +2603,10 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     .map(DslFlagOrigins::Narrowed),
                 kinds: kinds & mask,
             },
+            DslStaticKind::DeferredInteger(_) => DslStaticKind::Flag {
+                origins: None,
+                kinds: FLAG_INT & mask,
+            },
             DslStaticKind::Dimension | DslStaticKind::IntTuple { .. } => {
                 unreachable!("control-flow narrowing requires a Flag value")
             }
@@ -2219,12 +2617,16 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
     }
 
     fn validate_flag_narrowing_operand(
-        &self,
+        &mut self,
         expression: &Expr,
         flow: &DslValidationFlow,
         message: &'static str,
     ) -> Result<(usize, Option<Box<[usize]>>), TypeShapeDslDefinitionError> {
         let slot = self.slot(expression, flow)?;
+        if let DslStaticKind::DeferredInteger(index) = flow.kinds[slot] {
+            self.resolve_deferred_integer(index, DslIntegerDomain::Flag)?;
+            return Ok((slot, None));
+        }
         let parameter_origins = match &flow.kinds[slot] {
             DslStaticKind::UnknownParameters(parameters) => Some(parameters.clone()),
             DslStaticKind::Flag { origins, kinds }
@@ -2251,7 +2653,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
     /// not establish a domain by themselves, though the other operand can select this path for
     /// them. This only routes the comparison; `validate_dimension` still checks assignment and
     /// records the expression's complete validation metadata.
-    fn is_dimension_comparison_operand(&self, expression: &Expr, flow: &DslValidationFlow) -> bool {
+    fn is_dimension_expression(&self, expression: &Expr, flow: &DslValidationFlow) -> bool {
         match expression {
             Expr::Name(name) => self.slots.get(&name.id).is_some_and(|slot| {
                 matches!(flow.kinds.get(*slot), Some(DslStaticKind::Dimension))
@@ -2263,15 +2665,64 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 self.slots.get(&name.id).is_some_and(|slot| {
                     matches!(
                         flow.kinds.get(*slot),
-                        Some(DslStaticKind::UnknownParameters(_))
+                        Some(DslStaticKind::UnknownParameters(_) | DslStaticKind::IntTuple { .. })
                     )
                 })
             }
+            Expr::BinOp(binop) => {
+                self.is_dimension_expression(&binop.left, flow)
+                    || self.is_dimension_expression(&binop.right, flow)
+            }
+            Expr::Call(call) => self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Prod),
             Expr::If(if_expr) => {
-                self.is_dimension_comparison_operand(&if_expr.body, flow)
-                    || self.is_dimension_comparison_operand(&if_expr.orelse, flow)
+                self.is_dimension_expression(&if_expr.body, flow)
+                    || self.is_dimension_expression(&if_expr.orelse, flow)
             }
             _ => false,
+        }
+    }
+
+    fn is_deferred_integer_expression(&self, expression: &Expr, flow: &DslValidationFlow) -> bool {
+        match expression {
+            Expr::Name(name) => self.slots.get(&name.id).is_some_and(|slot| {
+                matches!(
+                    flow.kinds.get(*slot),
+                    Some(DslStaticKind::UnknownParameters(_) | DslStaticKind::DeferredInteger(_))
+                )
+            }),
+            Expr::BinOp(binop) => {
+                self.is_deferred_integer_expression(&binop.left, flow)
+                    || self.is_deferred_integer_expression(&binop.right, flow)
+            }
+            _ => false,
+        }
+    }
+
+    /// A deferred integer stays domain-polymorphic only while `collect_integer_parameters` can
+    /// trace every operand back to a caller parameter, a Flag integer, or a literal, because
+    /// that trace is what justifies passing it to a `Flag[int]` helper parameter. Any other
+    /// operand may evaluate to a symbolic dimension, so the local must resolve as a dimension.
+    /// Unbound names stay traceable so that deferred validation reports them.
+    fn is_traceable_integer_expression(&self, expression: &Expr, flow: &DslValidationFlow) -> bool {
+        match expression {
+            Expr::Name(name) => self.slots.get(&name.id).is_none_or(|slot| {
+                matches!(
+                    flow.kinds.get(*slot),
+                    Some(
+                        DslStaticKind::UnknownParameters(_)
+                            | DslStaticKind::DeferredInteger(_)
+                            | DslStaticKind::Flag {
+                                kinds: FLAG_INT,
+                                ..
+                            }
+                    )
+                )
+            }),
+            Expr::BinOp(binop) => {
+                self.is_traceable_integer_expression(&binop.left, flow)
+                    && self.is_traceable_integer_expression(&binop.right, flow)
+            }
+            _ => !matches!(integer_literal(expression), IntegerLiteral::NotLiteral),
         }
     }
 
@@ -2428,13 +2879,19 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 }
             } else {
                 let slot = self.slot(&call.arguments.args[0], flow)?;
+                if let DslStaticKind::DeferredInteger(index) = flow.kinds[slot] {
+                    self.resolve_deferred_integer(index, DslIntegerDomain::Dimension)?;
+                }
                 let parameter_origins = flow.kinds[slot]
                     .parameter_origins()
                     .map(<[usize]>::to_vec)
                     .map(Vec::into_boxed_slice);
                 if !matches!(
                     &flow.kinds[slot],
-                    DslStaticKind::UnknownParameters(_) | DslStaticKind::Dimension
+                    DslStaticKind::UnknownParameters(_)
+                        | DslStaticKind::DeferredInteger(_)
+                        | DslStaticKind::Dimension
+                        | DslStaticKind::GeneratorElement
                 ) {
                     return Err(TypeShapeDslDefinitionError {
                         range: call.arguments.args[0].range(),
@@ -2516,8 +2973,8 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             }
             _ => None,
         };
-        let has_dimension_expression = self.is_dimension_comparison_operand(&compare.left, flow)
-            || self.is_dimension_comparison_operand(right, flow);
+        let has_dimension_expression = self.is_dimension_expression(&compare.left, flow)
+            || self.is_dimension_expression(right, flow);
         let right_literal = match integer_literal(right) {
             IntegerLiteral::Value(value) => Some(value),
             IntegerLiteral::NotLiteral | IntegerLiteral::Unrepresentable => None,
@@ -2614,6 +3071,10 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     } else {
                         let (domain, parameter_origins) = match &flow.kinds[slot] {
                             DslStaticKind::Dimension => (TypeShapeDslDomain::Int, None),
+                            DslStaticKind::DeferredInteger(index) => {
+                                self.resolve_deferred_integer(*index, DslIntegerDomain::Dimension)?;
+                                (TypeShapeDslDomain::Int, None)
+                            }
                             DslStaticKind::IntTuple { parameter_origins } => {
                                 (TypeShapeDslDomain::IntTuple, parameter_origins.clone())
                             }
@@ -2741,6 +3202,13 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                                     TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int),
                                 )
                             }
+                            DslStaticKind::DeferredInteger(index) => {
+                                TypeShapeDslHelperArgumentProvenance::DeferredInteger {
+                                    index: *index,
+                                    parameters: self.deferred_integer_parameters(*index)?,
+                                    resolved_domain: None,
+                                }
+                            }
                             DslStaticKind::IntTuple {
                                 parameter_origins: Some(parameters),
                             } => {
@@ -2794,7 +3262,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 Some(_) => {
                     return Err(TypeShapeDslDefinitionError {
                         range: return_stmt.range,
-                        message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression; it may also be `dsl.Invalid(...)`, an IntTuple constructor/concat/prefix slice expression, or a validated DSL helper call",
+                        message: "return value must be a bare parameter name, gradual return, `broadcast(...)`, `dsl.Invalid(...)`, an Int/IntTuple expression, or a validated DSL helper call",
                     });
                 }
             },
@@ -2804,32 +3272,17 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 self.validate_int_tuple_expression(returned, flow)?;
                 TypeShapeDslReturnKind::IntTupleExpression
             }
-            Some(Expr::BinOp(binop)) => {
-                let (Some(left), Some(right)) = (
-                    parameter_index(self.parameters, &binop.left),
-                    parameter_index(self.parameters, &binop.right),
-                ) else {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: binop.range,
-                        message: "arithmetic return operands must be bare parameter names",
-                    });
-                };
-                let op = match binop.op {
-                    Operator::Add => TypeShapeDslArithmeticOp::Add,
-                    Operator::Sub => TypeShapeDslArithmeticOp::Subtract,
-                    _ => {
-                        return Err(TypeShapeDslDefinitionError {
-                            range: binop.range,
-                            message: "arithmetic return supports only `Int parameter + Flag[int] parameter` or `Int parameter - Flag[int] parameter`",
-                        });
-                    }
-                };
-                TypeShapeDslReturnKind::IntFlagArithmetic { left, op, right }
+            Some(Expr::BinOp(_)) => {
+                self.validate_dimension(
+                    return_stmt.value.as_deref().expect("matched return value"),
+                    flow,
+                )?;
+                TypeShapeDslReturnKind::Expression(TypeShapeDslDomain::Int)
             }
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: return_stmt.range,
-                    message: "return value must be a bare parameter name, a gradual return, `broadcast(...)`, or an exact `Int +/- Flag[int]` arithmetic expression; it may also be `dsl.Invalid(...)`, an IntTuple constructor/concat/prefix slice expression, or a validated DSL helper call",
+                    message: "return value must be a bare parameter name, gradual return, `broadcast(...)`, `dsl.Invalid(...)`, an Int/IntTuple expression, or a validated DSL helper call",
                 });
             }
         };
@@ -2845,7 +3298,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
     }
 
     fn merge_flows(
-        &self,
+        &mut self,
         flows: Vec<DslValidationFlow>,
         range: TextRange,
     ) -> Result<Option<DslValidationFlow>, TypeShapeDslDefinitionError> {
@@ -2860,12 +3313,39 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 result.assigned[slot] &= flow.assigned[slot];
                 result.maybe_assigned[slot] |= flow.maybe_assigned[slot];
                 if result.assigned[slot] {
-                    let Some(kind) = result.kinds[slot].clone().join(flow.kinds[slot].clone())
-                    else {
-                        return Err(TypeShapeDslDefinitionError {
+                    let left = result.kinds[slot].clone();
+                    let right = flow.kinds[slot].clone();
+                    let kind = match (left, right) {
+                        (
+                            DslStaticKind::DeferredInteger(left),
+                            DslStaticKind::DeferredInteger(right),
+                        ) => DslStaticKind::DeferredInteger(
+                            self.merge_deferred_integers(left, right)?,
+                        ),
+                        (DslStaticKind::DeferredInteger(index), DslStaticKind::Dimension)
+                        | (DslStaticKind::Dimension, DslStaticKind::DeferredInteger(index)) => {
+                            self.resolve_deferred_integer(index, DslIntegerDomain::Dimension)?;
+                            DslStaticKind::Dimension
+                        }
+                        (
+                            DslStaticKind::DeferredInteger(index),
+                            flag @ DslStaticKind::Flag {
+                                kinds: FLAG_INT, ..
+                            },
+                        )
+                        | (
+                            flag @ DslStaticKind::Flag {
+                                kinds: FLAG_INT, ..
+                            },
+                            DslStaticKind::DeferredInteger(index),
+                        ) => {
+                            self.resolve_deferred_integer(index, DslIntegerDomain::Flag)?;
+                            flag
+                        }
+                        (left, right) => left.join(right).ok_or(TypeShapeDslDefinitionError {
                             range,
                             message: "all continuing branch assignments to a local must have the same value domain",
-                        });
+                        })?,
                     };
                     result.kinds[slot] = kind;
                 }
@@ -2938,16 +3418,6 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         }
         Ok(can_continue.then_some(flow))
     }
-}
-
-fn parameter_index(parameters: &Parameters, expr: &Expr) -> Option<usize> {
-    let Expr::Name(name) = expr else {
-        return None;
-    };
-    parameters
-        .args
-        .iter()
-        .position(|parameter| parameter.parameter.name.id == name.id)
 }
 
 // The AST is executable program state, not a derived cache, so its identity must participate in
@@ -3191,6 +3661,10 @@ impl ParsedTypeShapeDslFunction {
                 message: "every control-flow path must return",
             });
         }
+        // Helper signatures can determine the domain of otherwise-unconstrained integer locals,
+        // so preserve their unresolved state before defaulting integers that have no such use.
+        validator.finalize_helper_deferred_domains();
+        validator.resolve_unused_deferred_integers()?;
         let DslValidator {
             returns,
             conditions,
@@ -3509,49 +3983,6 @@ impl ResolvedTypeShapeDslProgram {
                         TypeShapeDslReturnKind::AliasedParameter { slot, .. } => {
                             DslOutcome::Value(environment.value(slot).clone())
                         }
-                        TypeShapeDslReturnKind::IntFlagArithmetic { left, op, right } => {
-                            let (Some(left), Some(right)) =
-                                (environment.dimension(left), environment.flag_int(right))
-                            else {
-                                return DslControlFlow::Return(DslOutcome::Value(
-                                    DslValue::Unknown,
-                                ));
-                            };
-                            let result = match (left, op) {
-                                (Int::Literal(left), TypeShapeDslArithmeticOp::Add) => {
-                                    left.checked_add(right).map(Int::Literal)
-                                }
-                                (Int::Literal(left), TypeShapeDslArithmeticOp::Subtract) => {
-                                    left.checked_sub(right).map(Int::Literal)
-                                }
-                                (_, TypeShapeDslArithmeticOp::Subtract) if right == i64::MIN => {
-                                    None
-                                }
-                                (left, TypeShapeDslArithmeticOp::Add) => literal_offset(left)
-                                    .and_then(|offset| {
-                                        offset.checked_add(right).map(|_| {
-                                            Int::add(
-                                                Type::Int(left.clone()),
-                                                Type::Int(Int::Literal(right)),
-                                            )
-                                        })
-                                    }),
-                                (left, TypeShapeDslArithmeticOp::Subtract) => literal_offset(left)
-                                    .and_then(|offset| {
-                                        offset.checked_sub(right).map(|_| {
-                                            Int::sub(
-                                                Type::Int(left.clone()),
-                                                Type::Int(Int::Literal(right)),
-                                            )
-                                        })
-                                    }),
-                            };
-                            result
-                                .and_then(|result| Int::from_type(&canonicalize(Type::Int(result))))
-                                .map_or(DslOutcome::Value(DslValue::Unknown), |result| {
-                                    DslOutcome::Value(DslValue::Dimension(result))
-                                })
-                        }
                         TypeShapeDslReturnKind::Broadcast {
                             left_slot,
                             right_slot,
@@ -3561,7 +3992,8 @@ impl ResolvedTypeShapeDslProgram {
                             environment.value(right_slot),
                         ),
                         TypeShapeDslReturnKind::IntTupleExpression
-                        | TypeShapeDslReturnKind::IntTupleProduct => {
+                        | TypeShapeDslReturnKind::IntTupleProduct
+                        | TypeShapeDslReturnKind::Expression(_) => {
                             let expression = return_stmt
                                 .value
                                 .as_deref()
@@ -3591,10 +4023,36 @@ impl ResolvedTypeShapeDslProgram {
                         TypeShapeDslReturnKind::HelperCall(helper_index) => {
                             let helper = &definition.helper_calls[helper_index];
                             let target = node.helper_targets[helper_index];
+                            let expected_domains = self.node(target).parameter_domains();
                             let arguments = helper
                                 .arguments
                                 .iter()
-                                .map(|argument| environment.value(argument.slot).clone())
+                                .zip(expected_domains)
+                                .map(|(argument, expected)| {
+                                    let value = environment.value(argument.slot);
+                                    if matches!(
+                                        argument.provenance,
+                                        TypeShapeDslHelperArgumentProvenance::DeferredInteger { .. }
+                                    ) && *expected
+                                        == TypeShapeDslInputDomain::Flag(FlagDomain::of(
+                                            FlagMember::Int,
+                                        ))
+                                    {
+                                        match value {
+                                            DslValue::Dimension(Int::Literal(value)) => {
+                                                DslValue::FlagInt(*value)
+                                            }
+                                            DslValue::FlagInt(_) | DslValue::Unknown => {
+                                                value.clone()
+                                            }
+                                            _ => unreachable!(
+                                                "validated deferred Flag[int] helper argument is literal or gradual"
+                                            ),
+                                        }
+                                    } else {
+                                        value.clone()
+                                    }
+                                })
                                 .collect();
                             self.evaluate_lowered(target, arguments, budget)
                         }
@@ -3801,6 +4259,15 @@ impl ValidatedTypeShapeDslFunction {
                     _ => unreachable!("generator elements are integer values"),
                 }
             }
+            TypeShapeDslExpressionKind::IntegerSlot { slot, .. } => match environment.value(slot) {
+                DslValue::FlagInt(value) => {
+                    DslOutcome::Value(DslValue::Dimension(Int::Literal(*value)))
+                }
+                value @ (DslValue::Dimension(_) | DslValue::Unknown) => {
+                    DslOutcome::Value(value.clone())
+                }
+                _ => unreachable!("validated integer slot contains an integer value"),
+            },
             TypeShapeDslExpressionKind::IntTupleSlot { slot, .. } => {
                 DslOutcome::Value(environment.value(slot).clone())
             }
@@ -4146,8 +4613,7 @@ impl ValidatedTypeShapeDslFunction {
                 };
                 if matches!(
                     op,
-                    TypeShapeDslFlagIntArithmeticOp::FloorDivide
-                        | TypeShapeDslFlagIntArithmeticOp::Modulo
+                    TypeShapeDslArithmeticOp::FloorDivide | TypeShapeDslArithmeticOp::Modulo
                 ) && matches!(right, DslOutcome::Value(DslValue::FlagInt(0)))
                 {
                     return evaluate_flag_int_arithmetic(0, op, 0);
@@ -4166,6 +4632,20 @@ impl ValidatedTypeShapeDslFunction {
                     }
                     _ => unreachable!("validated Flag arithmetic operands are integers"),
                 }
+            }
+            TypeShapeDslExpressionKind::DimensionArithmetic(op) => {
+                let Expr::BinOp(binop) = expression else {
+                    unreachable!("validated dimension arithmetic expression is a binary operation")
+                };
+                let left = match self.evaluate_expression(&binop.left, environment, budget) {
+                    DslOutcome::Invalid(error) => return DslOutcome::Invalid(error),
+                    left => left,
+                };
+                let right = match self.evaluate_expression(&binop.right, environment, budget) {
+                    DslOutcome::Invalid(error) => return DslOutcome::Invalid(error),
+                    right => right,
+                };
+                evaluate_dimension_arithmetic(left, op, right)
             }
             TypeShapeDslExpressionKind::Conditional => {
                 let Expr::If(if_expr) = expression else {
@@ -4637,15 +5117,6 @@ fn evaluate_broadcast(left: &DslValue, right: &DslValue) -> DslOutcome {
     }
 }
 
-fn literal_offset(value: &Int) -> Option<i64> {
-    match value {
-        Int::Literal(value) => Some(*value),
-        Int::Add(left, right) => literal_offset(left)?.checked_add(literal_offset(right)?),
-        Int::Sub(left, right) => literal_offset(left)?.checked_sub(literal_offset(right)?),
-        _ => Some(0),
-    }
-}
-
 fn lower_parameter(ty: &Type, domain: TypeShapeDslInputDomain) -> DslValue {
     match domain {
         TypeShapeDslInputDomain::Value(domain) => DslValue::from_type(ty, domain),
@@ -4694,20 +5165,105 @@ fn lower_parameter(ty: &Type, domain: TypeShapeDslInputDomain) -> DslValue {
     }
 }
 
-fn evaluate_flag_int_arithmetic(
-    left: i64,
-    op: TypeShapeDslFlagIntArithmeticOp,
-    right: i64,
+fn evaluate_dimension_arithmetic(
+    left: DslOutcome,
+    op: TypeShapeDslArithmeticOp,
+    right: DslOutcome,
 ) -> DslOutcome {
+    fn operand(outcome: DslOutcome) -> Option<Int> {
+        match outcome {
+            DslOutcome::Value(DslValue::Dimension(value)) => Some(value),
+            DslOutcome::Value(DslValue::Unknown) => None,
+            DslOutcome::Invalid(_) => unreachable!(
+                "invalid dimension arithmetic operands are propagated before evaluation"
+            ),
+            DslOutcome::ExplicitGradual => {
+                unreachable!("dimension arithmetic operands cannot be explicit gradual returns")
+            }
+            DslOutcome::Value(_) => {
+                unreachable!("validated dimension arithmetic operands are integer values")
+            }
+        }
+    }
+
+    let right = operand(right);
+    if let Some(Int::Literal(0)) = right
+        && matches!(
+            op,
+            TypeShapeDslArithmeticOp::FloorDivide | TypeShapeDslArithmeticOp::Modulo
+        )
+    {
+        let operation = if op == TypeShapeDslArithmeticOp::FloorDivide {
+            "division"
+        } else {
+            "modulo"
+        };
+        return DslOutcome::Invalid(ShapeError::ShapeComputation {
+            message: format!("dimension integer {operation} by zero"),
+        });
+    }
+    let left = operand(left);
+    let (Some(left), Some(right)) = (left, right) else {
+        return DslOutcome::Value(DslValue::Unknown);
+    };
+    if let (Int::Literal(left), Int::Literal(right)) = (&left, &right) {
+        return evaluate_i64_arithmetic(*left, op, *right).map_or_else(
+            |operation| {
+                DslOutcome::Invalid(ShapeError::ShapeComputation {
+                    message: format!("dimension integer {operation} by zero"),
+                })
+            },
+            |value| {
+                value.map_or(DslOutcome::Value(DslValue::Unknown), |value| {
+                    DslOutcome::Value(DslValue::Dimension(Int::Literal(value)))
+                })
+            },
+        );
+    }
+    if matches!(op, TypeShapeDslArithmeticOp::Modulo) {
+        return DslOutcome::Value(DslValue::Unknown);
+    }
     let result = match op {
-        TypeShapeDslFlagIntArithmeticOp::Add => left.checked_add(right),
-        TypeShapeDslFlagIntArithmeticOp::Subtract => left.checked_sub(right),
-        TypeShapeDslFlagIntArithmeticOp::Multiply => left.checked_mul(right),
-        TypeShapeDslFlagIntArithmeticOp::FloorDivide => {
+        TypeShapeDslArithmeticOp::Add => Int::add(Type::Int(left), Type::Int(right)),
+        TypeShapeDslArithmeticOp::Subtract => Int::sub(Type::Int(left), Type::Int(right)),
+        TypeShapeDslArithmeticOp::Multiply => Int::mul(Type::Int(left), Type::Int(right)),
+        TypeShapeDslArithmeticOp::FloorDivide => Int::floor_div(Type::Int(left), Type::Int(right)),
+        TypeShapeDslArithmeticOp::Modulo => unreachable!("symbolic modulo is gradual"),
+    };
+    match canonicalize(Type::Int(result)) {
+        Type::Int(Int::Int) => DslOutcome::Value(DslValue::Unknown),
+        Type::Int(result) => DslOutcome::Value(DslValue::Dimension(result)),
+        _ => unreachable!("canonicalized dimension arithmetic must remain an Int"),
+    }
+}
+
+fn evaluate_flag_int_arithmetic(left: i64, op: TypeShapeDslArithmeticOp, right: i64) -> DslOutcome {
+    evaluate_i64_arithmetic(left, op, right).map_or_else(
+        |operation| {
+            DslOutcome::Invalid(ShapeError::ShapeComputation {
+                message: format!("Flag integer {operation} by zero"),
+            })
+        },
+        |value| {
+            value.map_or(DslOutcome::Value(DslValue::Unknown), |value| {
+                DslOutcome::Value(DslValue::FlagInt(value))
+            })
+        },
+    )
+}
+
+fn evaluate_i64_arithmetic(
+    left: i64,
+    op: TypeShapeDslArithmeticOp,
+    right: i64,
+) -> Result<Option<i64>, &'static str> {
+    let result = match op {
+        TypeShapeDslArithmeticOp::Add => left.checked_add(right),
+        TypeShapeDslArithmeticOp::Subtract => left.checked_sub(right),
+        TypeShapeDslArithmeticOp::Multiply => left.checked_mul(right),
+        TypeShapeDslArithmeticOp::FloorDivide => {
             if right == 0 {
-                return DslOutcome::Invalid(ShapeError::ShapeComputation {
-                    message: "Flag integer division by zero".to_owned(),
-                });
+                return Err("division");
             }
             // Python's `i64::MIN // -1` result is outside the DSL's `Flag[int]` domain,
             // so checked overflow intentionally becomes an automatic unknown.
@@ -4716,15 +5272,13 @@ fn evaluate_flag_int_arithmetic(
                 quotient.checked_sub(i64::from(remainder != 0 && (left < 0) != (right < 0)))
             })
         }
-        TypeShapeDslFlagIntArithmeticOp::Modulo => {
+        TypeShapeDslArithmeticOp::Modulo => {
             if right == 0 {
-                return DslOutcome::Invalid(ShapeError::ShapeComputation {
-                    message: "Flag integer modulo by zero".to_owned(),
-                });
+                return Err("modulo");
             }
             if right == -1 {
                 // Unlike division, modulo's result is representable for every i64 dividend.
-                return DslOutcome::Value(DslValue::FlagInt(0));
+                return Ok(Some(0));
             }
             left.checked_rem(right).and_then(|remainder| {
                 if remainder != 0 && (remainder < 0) != (right < 0) {
@@ -4735,9 +5289,7 @@ fn evaluate_flag_int_arithmetic(
             })
         }
     };
-    result.map_or(DslOutcome::Value(DslValue::Unknown), |value| {
-        DslOutcome::Value(DslValue::FlagInt(value))
-    })
+    Ok(result)
 }
 
 impl DslFlagSequence {
@@ -4839,22 +5391,6 @@ impl DslValue {
 impl DslEnvironment {
     fn value(&self, slot: usize) -> &DslValue {
         &self.slots[slot]
-    }
-
-    fn dimension(&self, parameter: usize) -> Option<&Int> {
-        match &self.slots[parameter] {
-            DslValue::Dimension(value) => Some(value),
-            DslValue::Unknown => None,
-            _ => unreachable!("validated dimension parameter has the Int domain"),
-        }
-    }
-
-    fn flag_int(&self, parameter: usize) -> Option<i64> {
-        match &self.slots[parameter] {
-            DslValue::FlagInt(value) => Some(*value),
-            DslValue::Unknown => None,
-            _ => unreachable!("validated Flag[int] parameter has the Flag integer domain"),
-        }
     }
 
     fn assign(&mut self, slot: usize, value: DslValue) {
