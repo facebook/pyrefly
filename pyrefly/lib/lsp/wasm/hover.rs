@@ -821,10 +821,11 @@ fn resolve_hovered_type(
         .or_else(|| transaction.operator_type_at(handle, position))?;
 
     // Find the innermost call whose callee (func) encloses the cursor, returning the
-    // callee's range and whether the cursor is on the callee's own name — the attribute
-    // in `a.b()`, or the whole callee otherwise. A receiver like `a` in `a.b()` is inside
-    // the callee range but not on the name, so hovering it must not coerce its type.
-    let callee_at_position = || -> Option<(TextRange, bool)> {
+    // callee and argument ranges and whether the cursor is on the callee's own name —
+    // the attribute in `a.b()`, or the whole callee otherwise. A receiver like `a` in
+    // `a.b()` is inside the callee range but not on the name, so hovering it must not
+    // coerce its type.
+    let callee_at_position = || -> Option<(TextRange, TextRange, bool)> {
         use ruff_python_ast::Expr;
         let ast = ast?;
         let mut result = None;
@@ -837,7 +838,7 @@ fn resolve_hovered_type(
                     _ => call.func.range(),
                 }
                 .contains(position);
-                result = Some((call.func.range(), on_callee_name));
+                result = Some((call.func.range(), call.arguments.range, on_callee_name));
             }
         });
         result
@@ -846,12 +847,14 @@ fn resolve_hovered_type(
     // Prefer the enclosing call found from the argument list; only walk the AST for a
     // callee hover when the cursor is not inside an argument. Hovering inside arguments
     // is never "on the callee", so coercion stays disabled there.
-    let (callee_range_opt, hovering_over_callee) =
+    let (callee_range_opt, call_arguments_range, hovering_over_callee) =
         match transaction.get_callables_from_call(handle, position) {
-            Some(info) => (Some(info.callee_range), false),
+            Some(info) => (Some(info.callee_range), None, false),
             None => match callee_at_position() {
-                Some((range, on_name)) => (Some(range), on_name),
-                None => (None, false),
+                Some((callee_range, arguments_range, on_name)) => {
+                    (Some(callee_range), Some(arguments_range), on_name)
+                }
+                None => (None, None, false),
             },
         };
 
@@ -863,7 +866,16 @@ fn resolve_hovered_type(
         if is_constructor && let Some(new_type) = override_constructor_return_type(type_.clone()) {
             type_ = new_type;
         } else if hovering_over_callee {
-            type_ = transaction.coerce_type_to_callable(handle, type_);
+            // Signature help owns navigation through an overload set. Keep the hover
+            // compact by showing the same selected (or first) signature that it starts on.
+            type_ = call_arguments_range
+                .and_then(|range| transaction.get_callables_from_call(handle, range.start()))
+                .and_then(|info| {
+                    info.callables
+                        .get(info.chosen_overload_index.unwrap_or(0))
+                        .cloned()
+                })
+                .unwrap_or_else(|| transaction.coerce_type_to_callable(handle, type_));
         }
     }
     Some(type_)
