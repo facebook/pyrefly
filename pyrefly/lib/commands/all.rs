@@ -83,8 +83,11 @@ impl Command {
         thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, Option<CheckResult>)> {
         match self {
-            Command::Check(args) => args.run(config_configurer_wrapper, thread_count).await,
-            Command::Snippet(args) => args.run(thread_count).await,
+            Command::Check(args) => {
+                args.run(version, config_configurer_wrapper, thread_count)
+                    .await
+            }
+            Command::Snippet(args) => args.run(version, thread_count).await,
             Command::BuckCheck(args) => Ok((args.run(thread_count)?, None)),
             Command::BazelCheck(args) => Ok((args.run(thread_count)?, None)),
             Command::Lsp(args) => Ok((
@@ -100,27 +103,34 @@ impl Command {
                 None,
             )),
             Command::Tsp(args) => Ok((
-                args.run(telemetry, config_configurer_wrapper, thread_count)?,
+                args.run(
+                    telemetry,
+                    config_configurer_wrapper,
+                    thread_count,
+                    Some(version.to_owned()),
+                )?,
                 None,
             )),
             Command::Init(args) => Ok((
-                args.run(config_configurer_wrapper.clone(), thread_count)?,
+                args.run(version, config_configurer_wrapper.clone(), thread_count)?,
                 None,
             )),
             Command::Infer(args) => Ok((args.run(config_configurer_wrapper, thread_count)?, None)),
             Command::DumpConfig(args) => Ok((args.run(config_configurer_wrapper)?, None)),
-            Command::Coverage { command } => {
-                Ok((command.run(config_configurer_wrapper, thread_count)?, None))
-            }
+            Command::Coverage { command } => Ok((
+                command.run(version, config_configurer_wrapper, thread_count)?,
+                None,
+            )),
             Command::Report(args) => {
                 eprintln!(
                     "warning: `pyrefly report` is deprecated; use `pyrefly coverage report` instead"
                 );
                 Ok((args.run(config_configurer_wrapper, thread_count)?, None))
             }
-            Command::Suppress(args) => {
-                Ok((args.run(config_configurer_wrapper, thread_count)?, None))
-            }
+            Command::Suppress(args) => Ok((
+                args.run(version, config_configurer_wrapper, thread_count)?,
+                None,
+            )),
             Command::Stubgen(args) => {
                 Ok((args.run(config_configurer_wrapper, thread_count)?, None))
             }

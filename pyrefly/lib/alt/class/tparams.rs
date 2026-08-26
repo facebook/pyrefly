@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_graph::index::Idx;
+use pyrefly_types::class::PrecomputedTParams;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::TypeParams;
 use ruff_text_size::Ranged;
@@ -159,12 +160,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         )
     }
 
-    pub fn get_class_tparams(&self, class: &Class) -> Arc<TParams> {
+    /// The type parameters of a class, or `None` when it has none.
+    pub fn get_class_tparams(&self, class: &Class) -> Option<Arc<TParams>> {
         match class.precomputed_tparams() {
-            Some(tparams) => tparams.dupe(),
-            None => self
-                .get_from_class(class, &KeyTParams(class.index()))
-                .unwrap_or_default(),
+            PrecomputedTParams::NotGeneric => None,
+            PrecomputedTParams::FromBinding => {
+                self.get_from_class(class, &KeyTParams(class.index()))
+            }
+            PrecomputedTParams::Precomputed(tparams) => Some(tparams.dupe()),
         }
     }
 }

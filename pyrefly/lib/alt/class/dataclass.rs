@@ -46,8 +46,6 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncMetadata;
-use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
@@ -55,10 +53,13 @@ use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::display::ClassDisplayContext;
+use crate::types::function::FuncMetadata;
+use crate::types::function::Function;
 use crate::types::keywords::ConverterMap;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::keywords::TypeMap;
 use crate::types::literal::Lit;
+use crate::types::types::Forallable;
 use crate::types::types::Type;
 
 /// Which constructor-copy builtin `call_dataclasses_replace` is serving. Chosen by the caller so the
@@ -142,6 +143,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Compute kw_only fields once for all methods that need it
         let kw_only_by_class = self.compute_kw_only_fields_by_class(cls);
 
+        self.check_duplicate_kw_only_markers(cls, errors);
         self.check_dataclass_non_data_descriptors(cls, dataclass, errors);
         self.check_dataclass_data_descriptor_defaults(cls, dataclass, errors);
         self.check_attrs_default_decorator_return_types(cls, dataclass, errors);
@@ -329,11 +331,76 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(ClassSynthesizedFields::new(fields))
     }
 
+    fn check_duplicate_kw_only_markers(&self, cls: &Class, errors: &ErrorCollector) {
+        let Some(class_fields) = self.get_class_fields(cls) else {
+            return;
+        };
+        let mut seen_marker = false;
+        for name in class_fields.names() {
+            if class_fields.is_field_annotated(name)
+                && matches!(
+                    self.get_dataclass_member(cls, name),
+                    DataclassMember::KwOnlyMarker
+                )
+            {
+                if seen_marker && let Some(range) = class_fields.field_decl_range(name) {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::BadClassDefinition,
+                        format!("`{name}` is KW_ONLY, but KW_ONLY has already been specified"),
+                    );
+                }
+                seen_marker = true;
+            }
+        }
+    }
+
+    /// Look up `name` on a descriptor class, substituting the descriptor's
+    /// type arguments so a generic descriptor such as `Desc[str]` reports its specialized
+    /// signatures rather than the bare type parameter. Returns `None` when the member is absent.
+    fn descriptor_member_type(&self, descriptor_cls: &ClassType, name: &Name) -> Option<Type> {
+        let field = self.get_class_member(descriptor_cls.class_object(), name)?;
+        Some(descriptor_cls.substitution().substitute_into(field.ty()))
+    }
+
+    /// Best-effort return type for descriptor `__get__` access through a dataclass instance.
+    ///
+    /// Descriptors commonly overload `__get__` on `obj: None` for class access and an instance
+    /// type for instance access. Union the returns of all overloads whose `obj` parameter can accept
+    /// the owning dataclass instance. If none matches, fall back to the combined callable return
+    /// type so the descriptor checks below remain conservative for malformed descriptors. Returns
+    /// `None` only when `__get__` is absent or not callable.
+    fn descriptor_instance_get_return_type(
+        &self,
+        cls: &Class,
+        descriptor_cls: &ClassType,
+    ) -> Option<Type> {
+        let get_ty = self.descriptor_member_type(descriptor_cls, &dunder::GET)?;
+        let instance_ty = self.instantiate(cls);
+        // `callable_signatures` yields the unbound member signatures, so the parameters are
+        // `__get__(self, obj, cls)` - the `obj` param is at index 1
+        let instance_returns = get_ty
+            .callable_signatures()
+            .iter()
+            .filter_map(|sig| {
+                let obj_ty = sig.get_positional_param(1)?;
+                self.is_subset_eq(&instance_ty, obj_ty)
+                    .then(|| sig.ret.clone())
+            })
+            .collect::<Vec<_>>();
+        if instance_returns.is_empty() {
+            get_ty.callable_return_type(self.heap)
+        } else {
+            Some(self.unions(instance_returns))
+        }
+    }
+
     /// Check for non-data descriptors in dataclass fields and emit errors.
     ///
-    /// Non-data descriptors (having __get__ but no __set__) are unsound in dataclasses
-    /// because the dataclass __init__ writes to the instance dict, shadowing the
-    /// class-level descriptor.
+    /// Non-data descriptors (having __get__ but neither __set__ nor __delete__) are unsound
+    /// in dataclasses because they do not take priority over the instance dict, so the
+    /// dataclass __init__ writes there, shadowing the class-level descriptor.
     ///
     /// Exception: a __get__ returning Self or the descriptor's own class is sound.
     fn check_dataclass_non_data_descriptors(
@@ -346,9 +413,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, name)
                 && let Some((range, descriptor_cls)) = field.value.non_data_descriptor_info()
             {
-                let get_return_ty = self
-                    .get_class_member(descriptor_cls.class_object(), &dunder::GET)
-                    .and_then(|get_field| get_field.ty().callable_return_type(self.heap));
+                let get_return_ty = self.descriptor_instance_get_return_type(cls, &descriptor_cls);
 
                 match &get_return_ty {
                     Some(Type::SelfType(_)) => continue,
@@ -360,7 +425,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors
                     .error_builder(
                         range,
-                        ErrorKind::BadClassDefinition,
+                        ErrorKind::BadDataclassDescriptor,
                         format!("Cannot set field `{name}` to non-data descriptor `{cls}`"),
                     )
                     .with_detail(format!(
@@ -373,7 +438,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Check that data descriptor defaults are type-safe in dataclass fields.
     ///
-    /// For a data descriptor (having both __get__ and __set__), the "default" value
+    /// For a data descriptor with a __set__, the "default" value
     /// when the field is not provided to __init__ is the class-level descriptor.
     /// Reading the field returns the `__get__` return type, but setting the field
     /// expects the `__set__` value parameter type. For the default to be type-safe,
@@ -388,31 +453,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if let DataclassMember::Field(field, _) = self.get_dataclass_member(cls, name)
                 && let Some((range, descriptor_cls)) = field.value.data_descriptor_info()
             {
-                // Get the __get__ method's return type from the descriptor class.
-                let get_return_ty = self
-                    .get_class_member(descriptor_cls.class_object(), &dunder::GET)
-                    .and_then(|get_field| get_field.ty().callable_return_type(self.heap));
+                let get_return_ty = self.descriptor_instance_get_return_type(cls, &descriptor_cls);
 
                 // Get the __set__ method and extract the value parameter type (3rd param).
                 let set_value_ty = self
-                    .get_class_member(descriptor_cls.class_object(), &dunder::SET)
-                    .and_then(|set_field| {
-                        set_field
-                            .ty()
+                    .descriptor_member_type(&descriptor_cls, &dunder::SET)
+                    .and_then(|set_ty| {
+                        set_ty
                             .callable_signatures()
                             .first()
-                            .and_then(|sig| {
-                                if let Params::List(params) = &sig.params {
-                                    match params.items().get(2) {
-                                        Some(Param::Pos(_, t, _) | Param::PosOnly(_, t, _)) => {
-                                            Some(t.clone())
-                                        }
-                                        _ => None,
-                                    }
-                                } else {
-                                    None
-                                }
-                            })
+                            .and_then(|sig| sig.get_positional_param(2).cloned())
                     });
 
                 if let (Some(get_ty), Some(set_ty)) = (get_return_ty, set_value_ty) {
@@ -422,7 +472,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors
                             .error_builder(
                                 range,
-                                ErrorKind::BadClassDefinition,
+                                ErrorKind::BadDataclassDescriptor,
                                 format!("Cannot set field `{name}` to data descriptor `{cls}` with inconsistent types"),
                             )
                             .with_detail(format!(
@@ -767,7 +817,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn dataclass_field_keywords(
         &self,
         func: &Type,
+        field_name: &Name,
         args: &Arguments,
+        annotated_field_ty: Option<&Type>,
         dataclass_metadata: &DataclassMetadata,
         errors: &ErrorCollector,
     ) -> DataclassFieldKeywords {
@@ -807,6 +859,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let le = map.0.get(&LE).cloned();
 
         let strict: Option<bool> = map.0.get(&STRICT).and_then(|v| v.as_bool());
+        let frozen = map.get_bool(&DataclassFieldKeywords::FROZEN);
 
         // The raw expression of the argument for `on_setattr`.
         let attrs_on_setattr_expr = args
@@ -823,11 +876,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Read the converter from an explicit `converter=` argument only, not the specifier
         // signature (which always declares one) — else every plain field's param goes Unknown.
         let converter_param = self
-            .attrs_converters_optional_param(args, errors)
+            .attrs_converters_combinator_param(args, annotated_field_ty, errors)
             .or_else(|| {
                 map.0
                     .get(&DataclassFieldKeywords::CONVERTER)
-                    .map(|converter| self.get_converter_param(converter))
+                    .map(|converter| self.get_converter_param(converter, annotated_field_ty))
             });
         // Note that we intentionally don't try to fill in `default`, since we can't distinguish
         // between a real default and something like `dataclasses.MISSING`.
@@ -846,6 +899,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &mut alias,
             );
         }
+        if alias.is_none() {
+            alias = dataclass_metadata
+                .init_defaults
+                .alias_generator
+                .as_ref()
+                .map(|generator| Name::new(generator.generate(field_name.as_str())));
+        }
         DataclassFieldKeywords {
             init: init.unwrap_or(true),
             default,
@@ -857,6 +917,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ge,
             le,
             strict,
+            frozen,
             converter_param,
             attrs_setattr_frozen,
         }
@@ -905,6 +966,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 &args.args.map(CallArg::expr_maybe_starred),
                 &args.keywords.map(CallKeyword::new),
                 args.range,
+                errors,
                 errors,
                 None,
                 None,
@@ -981,7 +1043,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
-    pub(crate) fn get_converter_param(&self, converter: &Type) -> Type {
+    pub(crate) fn get_converter_param(
+        &self,
+        converter: &Type,
+        annotated_field_ty: Option<&Type>,
+    ) -> Type {
+        let solved = match (converter, annotated_field_ty) {
+            (Type::ClassDef(cls), Some(hint)) => self.solve_generic_class_converter(cls, hint),
+            (Type::Forall(_), Some(hint)) => self.solve_generic_function_converter(converter, hint),
+            _ => None,
+        };
+        let converter = solved.as_ref().unwrap_or(converter);
         let constructor_callable = self.constructor_to_callable_distributed(converter);
         let converter = constructor_callable.as_ref().unwrap_or(converter);
         self.distribute_over_union(converter, |ty| {
@@ -992,6 +1064,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .filter(|sig| sig.accepts_single_positional_arg())
                 .filter_map(|sig| sig.get_first_param())
+                .cloned()
                 .collect();
             if inputs.is_empty() {
                 self.heap.mk_any_implicit()
@@ -999,6 +1072,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.unions(inputs)
             }
         })
+    }
+
+    /// A generic class converter is type-preserving, so solve its type parameters against the
+    /// declared field `hint` (e.g. `tuple` against `Sequence[int]` becomes `tuple[int, ...]`).
+    /// `None` for a non-generic class or an output incompatible with `hint`.
+    fn solve_generic_class_converter(&self, cls: &Class, hint: &Type) -> Option<Type> {
+        let mut class_type = self.as_class_type_unchecked(cls);
+        if class_type.targs().is_empty() {
+            return None;
+        }
+        let vs = self
+            .solver()
+            .freshen_class_targs(class_type.targs_mut(), self.uniques);
+        let matched = self.is_subset_eq(&self.heap.mk_class_type(class_type.clone()), hint);
+        self.solver()
+            .generalize_class_targs(class_type.targs_mut(), &SmallSet::new());
+        self.solver()
+            .finish_class_targs(class_type.targs_mut(), self.uniques);
+        // Finalizing the fresh vars is required; its specialization errors are dropped because this
+        // is best-effort param inference with no call site to report them against.
+        let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
+        matched.then(|| self.heap.mk_type(self.heap.mk_class_type(class_type)))
+    }
+
+    /// A generic function converter is solved by constraining its return type against the declared
+    /// field `hint`, so the `__init__` param is the solved input, not a leaked type variable.
+    fn solve_generic_function_converter(&self, converter: &Type, hint: &Type) -> Option<Type> {
+        let Type::Forall(forall) = converter else {
+            return None;
+        };
+        if !matches!(forall.body, Forallable::Function(_)) {
+            return None;
+        }
+        let (vs, instantiated) = self.solver().fresh_quantified(
+            &forall.tparams,
+            forall.body.clone().as_type(),
+            self.uniques,
+        );
+        if let Some(ret) = instantiated.callable_return_type(self.heap) {
+            self.is_subset_eq(&ret, hint);
+        }
+        let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
+        Some(self.solver().expand(instantiated))
     }
 
     fn get_default(&self, map: &TypeMap) -> Option<Type> {
@@ -1077,6 +1193,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 (DataclassMember::NotAField, _) => {}
                 (DataclassMember::Field(field, mut keywords), _)
                 | (DataclassMember::InitVar(field, mut keywords), true) => {
+                    if keywords.init_by_alias.is_none()
+                        && let Some(generator) = dataclass.init_defaults.alias_generator.as_ref()
+                    {
+                        keywords.init_by_alias = Some(Name::new(generator.generate(name.as_str())));
+                        keywords.init_by_name =
+                            keywords.init_by_name || dataclass.init_defaults.init_by_name;
+                    }
                     if keywords.kw_only.is_none() {
                         // kw_only hasn't been explicitly set on the field.
                         // A field is kw_only if:
@@ -1159,11 +1282,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             self.class_self_param(cls, false)
         };
+        // Pydantic models (BaseModel/RootModel/BaseSettings) do not honor `Field(init=False)`:
+        // the field still appears in the validator-driven `__init__`.
+        // Pydantic dataclasses and stdlib/attrs dataclasses follow the behavior of built-in dataclasses.
+        let init_arg_should_be_ignored = matches!(
+            self.get_metadata_for_class(cls).pydantic_model_kind(),
+            Some(
+                PydanticModelKind::BaseModel
+                    | PydanticModelKind::RootModel
+                    | PydanticModelKind::BaseSettings
+            )
+        );
         let mut params = vec![self_param];
         let mut has_seen_default = false;
         for (name, field, field_flags) in self.iter_fields(cls, dataclass, true, kw_only_by_class) {
             let strict = field_flags.strict.unwrap_or(strict_default);
-            if field_flags.init {
+            if field_flags.init || init_arg_should_be_ignored {
                 let has_default = force_optional
                     || field_flags.default.is_some()
                     || (field_flags.init_by_name && field_flags.init_by_alias.is_some());
@@ -1372,7 +1506,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Required::Required,
             ),
         ];
-        let mut metadata = FuncMetadata::def(self.module(), Some(cls), dunder::SETATTR);
+        let mut metadata = FuncMetadata::synthesized(self.module(), Some(cls), dunder::SETATTR);
         metadata.flags.has_final_decoration = true;
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.heap.mk_none()),
@@ -1391,7 +1525,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Required::Required,
             ),
         ];
-        let mut metadata = FuncMetadata::def(self.module(), Some(cls), dunder::DELATTR);
+        let mut metadata = FuncMetadata::synthesized(self.module(), Some(cls), dunder::DELATTR);
         metadata.flags.has_final_decoration = true;
         ClassSynthesizedField::new(self.heap.mk_function(Function {
             signature: Callable::list(ParamList::new(params), self.heap.mk_none()),

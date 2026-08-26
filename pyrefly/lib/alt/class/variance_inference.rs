@@ -12,14 +12,15 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
-use pyrefly_types::dimension::SizeExpr;
+use pyrefly_types::dimension::Int;
+use pyrefly_types::dimension::gradual_size;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::shaped_array::IntTupleView;
 use ruff_python_ast::name::Name;
-use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
@@ -27,12 +28,10 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::class_field::ClassFieldVariance;
 use crate::alt::types::class_bases::ClassBases;
-use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncMetadata;
-use crate::types::callable::FunctionKind;
 use crate::types::callable::Params;
 use crate::types::class::Class;
+use crate::types::function::FuncMetadata;
 use crate::types::quantified::Quantified;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
@@ -61,7 +60,7 @@ use crate::types::types::Type;
 // We need to visit the types that we know are required to be visited for variance inference, and appear in the context of a class with type variables.
 // For example, SelfType is intentionally skipped and should not be visited because it should not be included in the variance calculation.
 
-#[derive(Debug, Clone, PartialEq, Eq, TypeEq, Default, VisitMut)]
+#[derive(Debug, Clone, PartialEq, Eq, TypeEq, Default, Visit, VisitMut)]
 pub struct VarianceMap(SmallMap<Name, Variance>);
 
 impl Display for VarianceMap {
@@ -130,7 +129,7 @@ fn handle_tuple_type(
             on_type(variance, inj, unbounded_ty, on_edge, on_var);
         }
         Tuple::Unpacked(boxed_parts) => {
-            let (before, middle, after) = &**boxed_parts;
+            let (before, middle, after) = boxed_parts.parts();
             for ty in before {
                 on_type(variance, inj, ty, on_edge, on_var);
             }
@@ -138,6 +137,28 @@ fn handle_tuple_type(
             for ty in after {
                 on_type(variance, inj, ty, on_edge, on_var);
             }
+        }
+    }
+}
+
+fn on_int(
+    dim: &Int,
+    inj: bool,
+    on_edge: &mut impl FnMut(&Class) -> InferenceMap,
+    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+) {
+    match dim {
+        Int::Literal(_) | Int::Int => {}
+        Int::Symbolic(ty) => {
+            on_type(Variance::Invariant, inj, ty, on_edge, on_var);
+        }
+        Int::Add(left, right)
+        | Int::Sub(left, right)
+        | Int::Mul(left, right)
+        | Int::FloorDiv(left, right)
+        | Int::Pow(left, right) => {
+            on_int(left, inj, on_edge, on_var);
+            on_int(right, inj, on_edge, on_var);
         }
     }
 }
@@ -202,23 +223,27 @@ fn on_type(
             let mut visit_dim = |ty: &Type| {
                 on_type(Variance::Invariant, inj, ty, on_edge, on_var);
             };
-            match tensor.shape.as_tuple() {
-                Tuple::Concrete(dims) => {
+            match tensor.shape().view() {
+                IntTupleView::Concrete(dims) => {
                     for dim in dims {
-                        visit_dim(dim);
+                        visit_dim(&Type::Int(dim.clone()));
                     }
                 }
-                Tuple::Unbounded(middle) => {
-                    visit_dim(middle);
+                IntTupleView::Gradual => {
+                    let middle = gradual_size();
+                    visit_dim(&middle);
                 }
-                Tuple::Unpacked(f) => {
-                    let (prefix, middle, suffix) = &**f;
+                IntTupleView::Unpacked {
+                    prefix,
+                    middle,
+                    suffix,
+                } => {
                     for dim in prefix {
-                        visit_dim(dim);
+                        visit_dim(&Type::Int(dim.clone()));
                     }
                     visit_dim(middle);
                     for dim in suffix {
-                        visit_dim(dim);
+                        visit_dim(&Type::Int(dim.clone()));
                     }
                 }
             }
@@ -229,26 +254,18 @@ fn on_type(
                 on_type(Variance::Invariant, inj, ty, on_edge, on_var);
             }
         }
+        Type::DataFrame(schema) => {
+            on_type(variance, inj, &schema.underlying_type(), on_edge, on_var);
+        }
+        Type::Series(schema) => {
+            on_type(variance, inj, &schema.underlying_type(), on_edge, on_var);
+        }
         Type::Tuple(t) => {
             handle_tuple_type(t, variance, inj, on_edge, on_var);
         }
-        Type::Dim(inner) => {
-            // Dim wraps a dimension type - invariant
-            on_type(Variance::Invariant, inj, inner, on_edge, on_var);
-        }
-        Type::Size(dim) => {
-            // SizeExpr expressions contain types - all invariant
-            match dim {
-                SizeExpr::Literal(_) => {}
-                SizeExpr::Add(l, r)
-                | SizeExpr::Sub(l, r)
-                | SizeExpr::Mul(l, r)
-                | SizeExpr::FloorDiv(l, r)
-                | SizeExpr::Pow(l, r) => {
-                    on_type(Variance::Invariant, inj, l, on_edge, on_var);
-                    on_type(Variance::Invariant, inj, r, on_edge, on_var);
-                }
-            }
+        Type::Int(dim) => {
+            // Symbolic integer expressions contain types, all invariant.
+            on_int(dim, inj, on_edge, on_var);
         }
         _ => {}
     }
@@ -268,7 +285,7 @@ fn on_callable(
     // Walk parameters contravariantly. Receiver-bound methods skip their first parameter
     // because lookup either binds it from dynamic dispatch or requantifies it for class access.
     match &callable.params {
-        Params::List(param_list) => {
+        Params::List(param_list) | Params::Partial(param_list) => {
             for param in param_list.items().iter().skip(usize::from(skip_receiver)) {
                 on_type(variance.inv(), inj, param.as_type(), on_edge, on_var);
             }
@@ -476,7 +493,7 @@ fn check_callable_variance(
             violations,
         );
     }
-    if let Params::List(param_list) = &callable.params {
+    if let Params::List(param_list) | Params::Partial(param_list) = &callable.params {
         for param in param_list.items().iter() {
             if let Type::Quantified(q) = param.as_type() {
                 check_typevar(
@@ -504,9 +521,10 @@ fn initial_inference_status(gp: &Quantified) -> InferenceStatus {
     }
 }
 
-fn initial_inference_map(tparams: &[Quantified]) -> InferenceMap {
+fn initial_inference_map(tparams: Option<&TParams>) -> InferenceMap {
     tparams
         .iter()
+        .flat_map(|tparams| tparams.iter())
         .map(|p| (p.name().clone(), initial_inference_status(p)))
         .collect::<InferenceMap>()
 }
@@ -526,13 +544,14 @@ fn initialize_environment_impl<'a>(
     environment: &mut VarianceEnv,
     get_class_bases: &impl Fn(&Class) -> Arc<ClassBases>,
     get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
-    get_tparams: &impl Fn(&Class) -> Arc<TParams>,
+    get_tparams: &impl Fn(&Class) -> Option<Arc<TParams>>,
 ) -> InferenceMap {
     if let Some(params) = environment.get(class) {
         return params.clone();
     }
 
-    let params = initial_inference_map(get_tparams(class).as_vec());
+    let tparams = get_tparams(class);
+    let params = initial_inference_map(tparams.as_deref());
 
     environment.insert(class.dupe(), params.clone());
     let mut on_var = |_name: &Name, _variance: Variance, _inj: bool, _: PreInferenceVariance| {};
@@ -567,7 +586,7 @@ fn initialize_environment<'a>(
     environment: &mut VarianceEnv,
     get_class_bases: &impl Fn(&Class) -> Arc<ClassBases>,
     get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
-    get_tparams: &impl Fn(&Class) -> Arc<TParams>,
+    get_tparams: &impl Fn(&Class) -> Option<Arc<TParams>>,
 ) {
     let mut on_var = |_name: &Name, _variance: Variance, _inj: bool, _: PreInferenceVariance| {};
     let mut on_edge = |c: &Class| {
@@ -592,8 +611,8 @@ fn initialize_environment<'a>(
 
 impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn compute_variance_env(&self, class: &Class) -> VarianceEnv {
-        let initial_inference_map_for_class =
-            initial_inference_map(self.get_class_tparams(class).as_vec());
+        let tparams = self.get_class_tparams(class);
+        let initial_inference_map_for_class = initial_inference_map(tparams.as_deref());
         let need_inference = initial_inference_map_for_class
             .iter()
             .any(|(_, status)| status.specified_variance.is_none());
@@ -676,8 +695,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn infer_variance_ignoring_declared(&self, class: &Class) -> VarianceMap {
         let tparams = self.get_class_tparams(class);
         let inference_map = tparams
-            .as_vec()
             .iter()
+            .flat_map(|tparams| tparams.iter())
             .map(|p| {
                 (
                     p.name().clone(),
@@ -742,7 +761,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 |name: &Name, variance: Variance, _inj: bool, declared: PreInferenceVariance| {
                     check_typevar(name, variance, declared, range, &mut violations);
                 };
-            let mut on_edge = |c: &Class| initial_inference_map(self.get_class_tparams(c).as_vec());
+            let mut on_edge = |c: &Class| {
+                let tparams = self.get_class_tparams(c);
+                initial_inference_map(tparams.as_deref())
+            };
             on_type(
                 Variance::Covariant,
                 true,
@@ -770,19 +792,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         violations
     }
 
-    /// The `def`-name range of `metadata`'s function, via `KeyUndecoratedFunctionRange`.
-    /// `None` when there's no `def_index` (synthesized/metadata-only); the caller then
-    /// falls back to the field range. Current-module only: variance checks a class's own
-    /// fields, so `def_index` is always local — we don't resolve cross-module `FuncId`s.
+    /// The `def`-name range of `metadata`'s function.
+    /// Current-module only: variance checks a class's own fields, so `def_index` is always
+    /// local — we don't resolve cross-module `FuncDefId`s.
     fn func_def_range(&self, metadata: &FuncMetadata) -> Option<TextRange> {
-        let def_index = match &metadata.kind {
-            FunctionKind::Def(func_id) | FunctionKind::ShapeDsl(func_id, ..) => func_id.def_index?,
-            _ => return None,
-        };
-        let idx = self
-            .bindings()
-            .key_to_idx_hashed_opt(Hashed::new(&KeyUndecoratedFunctionRange(def_index)))?;
-        Some(self.get_idx(idx).0.range())
+        let func_id = metadata.kind.as_func_def_id()?;
+        self.bindings().function_def_range(func_id.def_index)
     }
 
     /// Check a method's signatures for variance violations (shallow: direct

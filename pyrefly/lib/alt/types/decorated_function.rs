@@ -14,17 +14,17 @@ use std::sync::Arc;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
-use pyrefly_graph::index::Idx;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::Deprecation;
-use pyrefly_types::callable::FuncDefIndex;
 use pyrefly_types::callable::Param;
 use pyrefly_types::class::Class;
+use pyrefly_types::function::Deprecation;
+use pyrefly_types::function::FuncDefIndex;
 use pyrefly_types::keywords::TypeMap;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_types::types::TParams;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::name::Name;
@@ -32,13 +32,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 
-use crate::alt::answers::Answers;
-use crate::alt::answers::LookupAnswer;
-use crate::alt::answers_solver::AnswersSolver;
-use crate::binding::binding::FunctionStubOrImpl;
-use crate::binding::binding::KeyDecoratedFunction;
-use crate::binding::bindings::Bindings;
-use crate::types::callable::FuncMetadata;
+use crate::types::function::FuncMetadata;
 use crate::types::types::Type;
 
 /// Information about the function def before decorators are applied. The metadata stored here
@@ -51,22 +45,14 @@ pub struct UndecoratedFunction {
     pub decorators: Box<[(Type, TextRange)]>,
     pub tparams: Arc<TParams>,
     pub params: Vec<Param>,
+    /// Alias-preserving parameter types used to construct the hover signature.
+    pub display_param_types: SmallMap<Name, Type>,
     pub paramspec: Option<Quantified>,
-    pub stub_or_impl: FunctionStubOrImpl,
     pub defining_cls: Option<Class>,
+    pub type_shape_dsl_def: Option<Arc<ParsedTypeShapeDslFunction>>,
     /// Maps parameter names to their resolved types - used to connect
     /// FunctionParameter and KeyUndecoratedFunction.
     pub resolved_param_types: SmallMap<Name, Type>,
-}
-
-/// A value that combines the metadata of a function def and also provides the type of the function
-/// after decorators are applied. Note that the type might not be a function at all, since
-/// decorators can produce any type.
-#[derive(Clone, Debug)]
-pub struct DecoratedFunction {
-    pub idx: Idx<KeyDecoratedFunction>,
-    pub ty: Arc<Type>,
-    pub undecorated: Arc<UndecoratedFunction>,
 }
 
 /// Answer for BindingDecorator
@@ -112,7 +98,7 @@ impl UndecoratedFunction {
                 Name::default(),
                 TextRange::default(),
             )),
-            metadata: FuncMetadata::def(
+            metadata: FuncMetadata::synthesized(
                 &Module::new(
                     ModuleName::from_str("__undecorated_function_recursive__"),
                     ModulePath::filesystem(PathBuf::default()),
@@ -124,9 +110,10 @@ impl UndecoratedFunction {
             decorators: Box::from([]),
             tparams: Arc::new(TParams::default()),
             params: Vec::new(),
+            display_param_types: SmallMap::new(),
             paramspec: None,
-            stub_or_impl: FunctionStubOrImpl::Stub,
             defining_cls: None,
+            type_shape_dsl_def: None,
             resolved_param_types: SmallMap::new(),
         }
     }
@@ -139,66 +126,5 @@ impl UndecoratedFunction {
 impl Display for UndecoratedFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "def {}: ...", self.metadata.kind.function_name())
-    }
-}
-
-impl DecoratedFunction {
-    pub fn from_bindings_answers(
-        idx: Idx<KeyDecoratedFunction>,
-        bindings: &Bindings,
-        answers: &Answers,
-    ) -> Self {
-        let binding = bindings.get(idx);
-        let undecorated = answers.get_idx(binding.undecorated_idx).unwrap();
-        let ty = answers.get_idx(idx).unwrap();
-        DecoratedFunction {
-            ty,
-            idx,
-            undecorated,
-        }
-    }
-
-    pub fn metadata(&self) -> &FuncMetadata {
-        &self.undecorated.metadata
-    }
-
-    pub fn id_range(&self) -> TextRange {
-        self.undecorated.identifier.range()
-    }
-
-    pub fn defining_cls(&self) -> Option<&Class> {
-        self.undecorated.defining_cls.as_ref()
-    }
-
-    pub fn is_stub(&self) -> bool {
-        self.undecorated.stub_or_impl == FunctionStubOrImpl::Stub
-    }
-
-    pub fn is_impl(&self) -> bool {
-        self.undecorated.stub_or_impl == FunctionStubOrImpl::Impl
-    }
-
-    pub fn is_overload(&self) -> bool {
-        self.undecorated.metadata.flags.is_overload
-    }
-}
-
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    pub fn get_decorated_function(&self, idx: Idx<KeyDecoratedFunction>) -> DecoratedFunction {
-        let binding = self.bindings().get(idx);
-        let undecorated = self.get_idx(binding.undecorated_idx);
-        let ty = self.get_idx(idx);
-        DecoratedFunction {
-            ty,
-            idx,
-            undecorated,
-        }
-    }
-
-    pub fn get_function_successor(
-        &self,
-        def: &DecoratedFunction,
-    ) -> Option<Idx<KeyDecoratedFunction>> {
-        self.bindings().get(def.idx).successor
     }
 }

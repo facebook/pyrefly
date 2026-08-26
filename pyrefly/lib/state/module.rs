@@ -34,6 +34,8 @@
 //! this condition remains true for the duration of the read.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use arc_swap::Guard;
 use dupe::Dupe;
@@ -56,6 +58,7 @@ use crate::state::errors::ModuleRanges;
 use crate::state::load::Load;
 use crate::state::require::AtomicRequire;
 use crate::state::require::Require;
+use crate::state::state::OldData;
 use crate::state::steps::Context;
 use crate::state::steps::ParsedModule;
 use crate::state::steps::Step;
@@ -91,6 +94,7 @@ impl ModuleState {
             require: AtomicRequire::new(self.require),
             computing: Mutex::new(false),
             computing_condvar: Condvar::new(),
+            computing_waiters: AtomicUsize::new(0),
         }
     }
 }
@@ -109,6 +113,9 @@ pub struct ModuleStateMut {
     computing: Mutex<bool>,
     /// Signaled when `computing` becomes false.
     computing_condvar: Condvar,
+    /// Threads parked in `computing_condvar.wait`, maintained under the
+    /// `computing` lock so we can skip `notify_all` (a `futex`) when nobody waits.
+    computing_waiters: AtomicUsize,
 }
 
 impl ModuleStateMut {
@@ -120,6 +127,7 @@ impl ModuleStateMut {
             require: AtomicRequire::new(require),
             computing: Mutex::new(false),
             computing_condvar: Condvar::new(),
+            computing_waiters: AtomicUsize::new(0),
         }
     }
 
@@ -205,7 +213,9 @@ impl ModuleStateMut {
             } else {
                 return None;
             }
+            self.computing_waiters.fetch_add(1, Ordering::Relaxed);
             computing = self.computing_condvar.wait(computing);
+            self.computing_waiters.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
@@ -226,7 +236,9 @@ impl ModuleStateMut {
                     _computing: ComputingFlag { state: self },
                 });
             }
+            self.computing_waiters.fetch_add(1, Ordering::Relaxed);
             computing = self.computing_condvar.wait(computing);
+            self.computing_waiters.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
@@ -292,7 +304,11 @@ impl Drop for ComputingFlag<'_> {
     fn drop(&mut self) {
         let mut computing = self.state.computing.lock();
         *computing = false;
-        self.state.computing_condvar.notify_all();
+        // Waiter count and this check both happen under the `computing` lock, so
+        // skipping the wake when nobody is parked is race-free and avoids a `futex`.
+        if self.state.computing_waiters.load(Ordering::Relaxed) > 0 {
+            self.state.computing_condvar.notify_all();
+        }
     }
 }
 
@@ -350,21 +366,6 @@ pub struct PostComputeGuard<'a> {
 }
 
 impl PostComputeGuard<'_> {
-    /// Take old exports saved before rebuild for diffing. Clears the slot.
-    pub fn take_old_exports(&self) -> Option<Arc<Exports>> {
-        self.state.steps.old_exports.swap(None)
-    }
-
-    /// Take old answers saved before rebuild for diffing. Clears the slot.
-    pub fn take_old_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
-        self.state.steps.old_answers.swap(None)
-    }
-
-    /// Take old solutions saved before rebuild for diffing. Clears the slot.
-    pub fn take_old_solutions(&self) -> Option<Arc<Solutions>> {
-        self.state.steps.old_solutions.swap(None)
-    }
-
     /// Evict the AST after computing answers (if not needed for retention).
     pub fn evict_ast(&self) {
         debug_assert!(
@@ -421,8 +422,8 @@ impl CleanGuard<'_> {
     /// `current_step`.
     ///
     /// `clear_ast`: if true, also clear the AST (e.g., load contents changed).
-    pub fn rebuild(&self, clear_ast: bool, now: Epoch) {
-        self.state.steps.reset_for_rebuild(clear_ast);
+    pub(crate) fn rebuild(&self, clear_ast: bool, now: Epoch, old: &mut OldData) {
+        self.state.steps.reset_for_rebuild(clear_ast, old);
 
         // Atomically set computed = now and clear all dirty flags.
         //

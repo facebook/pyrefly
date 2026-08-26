@@ -8,6 +8,461 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+fn flag_env() -> TestEnv {
+    TestEnv::one_with_path(
+        "shape_extensions",
+        "shape_extensions/__init__.pyi",
+        r#"
+class Flag[T]: ...
+"#,
+    )
+}
+
+fn flag_reexport_env() -> TestEnv {
+    let mut env = flag_env();
+    env.add(
+        "flag_reexport",
+        r#"
+from shape_extensions import Flag as ReexportedFlag
+"#,
+    );
+    env.add("flag_wildcard_reexport", "from flag_reexport import *\n");
+    env.add(
+        "shape_extensions.torchscript",
+        "from shape_extensions import Flag\n",
+    );
+    env
+}
+
+fn flag_stub_default_env() -> TestEnv {
+    let mut env = flag_env();
+    env.add_with_path(
+        "flag_defaults",
+        "flag_defaults.pyi",
+        r#"
+from shape_extensions import Flag
+
+def no_default[K: Flag[int]](k: K = ...) -> K: ...
+def type_parameter_default[K: Flag[int] = 3](k: K = ...) -> K: ...
+"#,
+    );
+    env
+}
+
+#[test]
+fn test_flag_same_module_marker_provenance() {
+    let (state, handle) = TestEnv::one(
+        "shape_extensions",
+        r#"
+from typing import Literal, assert_type
+
+class Flag[T]: ...
+
+def canonical[K: Flag[int]](k: K) -> K: ...
+assert_type(canonical(1), Literal[1])
+
+def scope() -> None:
+    class Flag[T]: ...
+    def shadowed[K: Flag[int]](k: K) -> K: ...
+
+class Namespace:
+    class Flag[T]: ...
+    def shadowed[K: Flag[int]](self, k: K) -> K: ...
+
+assert_type(
+    Namespace().shadowed(Namespace.Flag[int]()),
+    Namespace.Flag[int],
+)
+"#,
+    )
+    .to_state();
+    let handle = handle("shape_extensions");
+    let errors = state
+        .transaction()
+        .get_errors([&handle])
+        .collect_display_errors();
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+testcase!(
+    test_flag_literal_preservation_and_imports,
+    flag_env(),
+    r#"
+from typing import Any, Literal, assert_type
+from shape_extensions import Flag
+from shape_extensions import Flag as RenamedFlag
+import shape_extensions as se
+import shape_extensions
+
+IntAlias = int
+
+def direct[K: Flag[int]](k: K) -> tuple[K, K]: ...
+def renamed[K: RenamedFlag[bool]](k: K) -> K: ...
+def qualified[K: se.Flag[str]](k: K) -> K: ...
+def qualified_unaliased[K: shape_extensions.Flag[bool]](k: K) -> K: ...
+def inner_alias[K: Flag[IntAlias]](k: K) -> K: ...
+
+assert_type(direct(1), tuple[Literal[1], Literal[1]])
+assert_type(renamed(True), Literal[True])
+assert_type(qualified("x"), Literal["x"])
+assert_type(qualified_unaliased(False), Literal[False])
+assert_type(inner_alias(2), Literal[2])
+
+broad_int: int = 1
+dynamic: Any = 1
+mode: Literal["nearest", "bilinear"] = "nearest"
+assert_type(direct(broad_int), tuple[int, int])
+assert_type(direct(dynamic), tuple[Any, Any])
+assert_type(qualified(mode), Literal["nearest", "bilinear"])
+
+direct(True)  # E: `Literal[True]` is not a valid `Flag[int]` value for type variable `K`
+mixed: int | str = 1
+direct(mixed)  # E: `int | str` is not a valid `Flag[int]` value for type variable `K`
+"#,
+);
+
+testcase!(
+    test_flag_single_direct_binding_source,
+    flag_env(),
+    r#"
+from shape_extensions import Flag
+from typing import Literal, assert_type
+
+type Carrier[T] = T
+
+def missing[K: Flag[int]](x: int) -> K: ...  # E: `Flag` type parameter `K` must directly annotate exactly one function parameter, found 0
+def multiple[K: Flag[bool]](x: K, y: K) -> K: ...  # E: `Flag` type parameter `K` must directly annotate exactly one function parameter, found 2
+def wrapped[K: Flag[int]](x: Carrier[K]) -> K: ...  # E: `Flag` type parameter `K` must directly annotate exactly one function parameter, found 0
+def union_wrapped[K: Flag[int]](x: K | None) -> K: ...  # E: `Flag` type parameter `K` must directly annotate exactly one function parameter, found 0
+def variadic[K: Flag[int]](*args: K) -> K: ...  # E: `Flag` type parameter `K` must directly annotate exactly one function parameter, found 0
+def keywords[K: Flag[int]](**kwargs: K) -> K: ...  # E: `Flag` type parameter `K` must directly annotate exactly one function parameter, found 0
+
+assert_type(multiple(True, True), Literal[True])
+multiple(True, False)  # E: Argument `Literal[False]` is not assignable to parameter `y` with type `Literal[True]`
+
+class Invalid[K: Flag[int]]: ...  # E: `Flag` type parameters are currently supported only on functions
+type InvalidAlias[K: Flag[int]] = K  # E: `Flag` type parameters are currently supported only on functions
+"#,
+);
+
+testcase!(
+    test_flag_direct_source_binds_before_wrapped_occurrences,
+    flag_env(),
+    r#"
+from collections.abc import Callable
+from typing import Any, Literal, assert_type
+from shape_extensions import Flag
+
+def source_after_wrapped[K: Flag[int]](xs: list[K], k: K) -> K: ...
+def string_after_wrapped[M: Flag[str]](xs: list[M], m: M) -> M: ...
+def source_after_consumer[K: Flag[int]](consumer: Callable[[K], None], k: K) -> K: ...
+def source_between_bounds[K: Flag[int]](
+    lower: list[K], k: K, upper: Callable[[K], None]
+) -> K: ...
+def independent[K: Flag[int], M: Flag[str]](
+    xs: list[K], ys: list[M], k: K, m: M
+) -> tuple[K, M]: ...
+
+dynamic_items: list[Any] = []
+dynamic_strings: list[Any] = []
+assert_type(source_after_wrapped(dynamic_items, 2), Literal[2])
+assert_type(source_after_wrapped([], 2), Literal[2])
+assert_type(string_after_wrapped([], "x"), Literal["x"])
+assert_type(
+    independent(dynamic_items, dynamic_strings, 3, "x"),
+    tuple[Literal[3], Literal["x"]],
+)
+
+one_items: list[Literal[1]] = [1]
+source_after_wrapped(one_items, 2)  # E: `Literal[1]` is incompatible with selected `Flag` value `Literal[2]` for type variable `K`
+
+def accepts_two(x: Literal[2]) -> None: ...
+def accepts_one(x: Literal[1]) -> None: ...
+def accepts_three(x: Literal[3]) -> None: ...
+
+assert_type(source_after_consumer(accepts_two, 2), Literal[2])
+source_after_consumer(accepts_one, 2)  # E: `Literal[1]` is incompatible with selected `Flag` value `Literal[2]` for type variable `K`
+source_between_bounds(one_items, 2, accepts_three)  # E: `Literal[1]` is incompatible with selected `Flag` value `Literal[2]` for type variable `K`  # E: Argument `(x: Literal[3]) -> None` is not assignable to parameter `upper` with type `(Literal[2]) -> None` in function `source_between_bounds`
+"#,
+);
+
+testcase!(
+    test_flag_marker_and_domain_validation,
+    flag_env(),
+    r#"
+from typing import Literal, TypeVar, assert_type
+from shape_extensions import Flag as ShapeFlag
+
+class Flag[T]: ...
+def unrelated[K: Flag[int]](k: K) -> K: ...
+ordinary_flag = Flag[int]()
+assert_type(unrelated(ordinary_flag), Flag[int])
+
+Marker = ShapeFlag
+def marker_alias[K: Marker[int]](k: K) -> K: ...
+assert_type(marker_alias(1), Literal[1])
+def bare_alias[K: Marker](k: K) -> K: ...  # E: `shape_extensions.Flag` requires one domain argument: `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
+def bare_direct[K: ShapeFlag](k: K) -> K: ...  # E: `shape_extensions.Flag` requires one domain argument: `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
+
+Legacy = TypeVar("Legacy", bound=ShapeFlag[int])  # E: `shape_extensions.Flag` is supported only as a direct PEP 695 type parameter bound
+
+def union_domain[K: ShapeFlag[int | str]](k: K) -> K: ...
+def noncore_domain[K: ShapeFlag[bytes]](k: K) -> K: ...  # E: `Flag` domain must resolve to `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
+def float_domain[K: ShapeFlag[float]](k: K) -> K: ...  # E: `Flag` domain must resolve to `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
+def fixed_tuple_domain[K: ShapeFlag[tuple[int, int]]](k: K) -> K: ...  # E: `Flag` domain must resolve to `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
+"#,
+);
+
+testcase!(
+    test_flag_union_and_tuple_literal_preservation,
+    flag_env(),
+    r#"
+from typing import Any, Literal, assert_type
+from shape_extensions import Flag
+
+type Axis = int | tuple[int, ...] | None
+type ReorderedAxis = None | int | tuple[int, ...] | int
+
+def capture[A: Flag[Axis]](axis: A) -> A: ...
+def capture_reordered[A: Flag[ReorderedAxis]](axis: A) -> A: ...
+
+assert_type(capture(0), Literal[0])
+assert_type(capture(-1), Literal[-1])
+assert_type(capture((0, -1)), tuple[Literal[0], Literal[-1]])
+assert_type(capture(()), tuple[()])
+assert_type(capture(None), None)
+assert_type(capture_reordered((1, 2)), tuple[Literal[1], Literal[2]])
+
+broad_int: int = 0
+broad_tuple: tuple[int, ...] = (0, 1)
+broad_unpacked: tuple[Literal[0], *tuple[int, ...], Literal[-1]] = (0, 1, -1)
+broad_axis: Axis = 0
+dynamic: Any = 0
+assert_type(capture(broad_int), int)
+assert_type(capture(broad_tuple), tuple[int, ...])
+assert_type(
+    capture(broad_unpacked),
+    tuple[Literal[0], *tuple[int, ...], Literal[-1]],
+)
+assert_type(capture(broad_axis), Axis)
+assert_type(capture(dynamic), Any)
+
+capture(True)  # E: `Literal[True]` is not a valid `Flag[int | tuple[int, ...] | None]` value
+capture((0, "x"))  # E: is not a valid `Flag[int | tuple[int, ...] | None]` value
+"#,
+);
+
+testcase!(
+    test_flag_union_defaults_context_and_overloads,
+    flag_env(),
+    r#"
+from typing import Literal, assert_type, overload, reveal_type
+from shape_extensions import Flag
+
+type Axis = int | tuple[int, ...] | None
+
+def runtime_default[A: Flag[Axis]](axis: A = None) -> A: ...
+def type_default[A: Flag[Axis] = None](axis: A = None) -> A: ...
+def tuple_type_default[
+    A: Flag[tuple[int, ...]] = tuple[Literal[0], Literal[-1]]
+](axis: A = (0, -1)) -> A: ...
+def bool_default[A: Flag[bool]](enabled: A = False) -> A: ...
+
+assert_type(runtime_default(), None)
+assert_type(type_default(), None)
+assert_type(tuple_type_default(), tuple[Literal[0], Literal[-1]])
+assert_type(tuple_type_default((1,)), tuple[Literal[1]])
+assert_type(bool_default(), Literal[False])
+assert_type(bool_default(True), Literal[True])
+
+precise: tuple[Literal[0], Literal[-1]] = runtime_default((0, -1))
+wrong: tuple[Literal[1], Literal[-1]] = runtime_default((0, -1))  # E: not assignable
+
+@overload
+def pick[A: Flag[Axis]](axis: A, mode: Literal[0]) -> A: ...
+@overload
+def pick[A: Flag[Axis]](axis: A, mode: Literal[1]) -> tuple[A]: ...
+def pick(axis: Axis, mode: int) -> Axis | tuple[Axis]: ...
+
+assert_type(pick((0, -1), 0), tuple[Literal[0], Literal[-1]])
+assert_type(pick((0, -1), 1), tuple[tuple[Literal[0], Literal[-1]]])
+
+def accepts_union[A: Flag[int | str]](value: A) -> A: ...
+def capture_int[A: Flag[int]](value: A) -> A: ...
+def constrained[T: (int, str)](value: T) -> T: ...
+def forwards_int[A: Flag[int]](value: A) -> A:
+    return accepts_union(value)
+def forwards_constraints[A: Flag[int | str]](value: A) -> A:
+    return constrained(value)
+def rejects_union[A: Flag[int | str]](value: A) -> None:
+    capture_int(value)  # E: is not a valid `Flag[int]` value
+
+def rejects_wrong_tuple_element[A: Flag[tuple[int, ...]]](value: A) -> tuple[str, ...]:
+    return value  # E: not assignable
+
+def merge_narrowed[A: Flag[int | str]](value: A) -> None:
+    if isinstance(value, int):
+        merged = value
+    else:
+        merged = value
+    reveal_type(merged)  # E: revealed type: A
+"#,
+);
+
+// A union domain makes `type[K]` resolve to several constructors at once. Targeting the call
+// used to assume a single class, so this pins that a union domain stays a graceful diagnostic.
+testcase!(
+    test_flag_union_constructor_target_does_not_panic,
+    flag_env(),
+    r#"
+from shape_extensions import Flag
+
+def construct[K: Flag[int | str]](value: K, cls: type[K]) -> K:
+    return cls()
+"#,
+);
+
+testcase!(
+    test_flag_reexports_activate_marker_syntax,
+    flag_reexport_env(),
+    r#"
+from typing import Literal, assert_type
+from flag_reexport import ReexportedFlag
+from flag_wildcard_reexport import ReexportedFlag as WildcardFlag
+from shape_extensions.torchscript import Flag as TorchscriptFlag
+
+def reexported[K: ReexportedFlag[int]](k: K) -> K: ...
+def wildcard[K: WildcardFlag[int]](k: K) -> K: ...
+def torchscript[K: TorchscriptFlag[int]](k: K) -> K: ...
+
+assert_type(reexported(1), Literal[1])
+assert_type(wildcard(2), Literal[2])
+assert_type(torchscript(3), Literal[3])
+"#,
+);
+
+testcase!(
+    test_flag_default_precedence_and_validation,
+    flag_env(),
+    r#"
+from typing import Literal, assert_type
+from shape_extensions import Flag
+
+def runtime_default[K: Flag[int]](k: K = 1) -> K: ...
+def both_defaults[K: Flag[int] = 2](k: K = 1) -> K: ...
+
+assert_type(runtime_default(), Literal[1])
+assert_type(both_defaults(), Literal[1])
+assert_type(both_defaults(3), Literal[3])
+
+source_wins: Literal[1] = runtime_default()
+wrong_hint: Literal[2] = runtime_default()  # E: `Literal[1]` is not assignable to `Literal[2]`
+
+def bad_type_default[K: Flag[int] = "x"](k: K) -> K: ...  # E: Default for `Flag[int]` type parameter `K` must be a `int` literal, got `Literal['x']`
+def bad_runtime_default[K: Flag[int]](k: K = "x") -> K: ...  # E: Default for parameter binding `Flag[int]` type parameter `K` must be a `int` literal, got `Literal['x']`
+def bad_runtime_bool[K: Flag[int]](k: K = True) -> K: ...  # E: Default for parameter binding `Flag[int]` type parameter `K` must be a `int` literal, got `Literal[True]`
+
+computed_default: int = 1
+def broad_runtime_default[K: Flag[int]](k: K = computed_default) -> K: ...  # E: Default for parameter binding `Flag[int]` type parameter `K` must be a `int` literal, got `int`
+assert_type(broad_runtime_default(), int)
+
+def ordinary[T](x: T = 1) -> T: ...
+assert_type(ordinary(), int)
+"#,
+);
+
+testcase!(
+    test_flag_overload_inference,
+    flag_env(),
+    r#"
+from typing import Literal, assert_type, overload
+from shape_extensions import Flag
+
+@overload
+def pick[K: Flag[int]](k: K, mode: Literal[0]) -> K: ...
+@overload
+def pick[K: Flag[int]](k: K, mode: Literal[1]) -> tuple[K]: ...
+def pick(k: int, mode: int) -> int | tuple[int]: ...
+
+assert_type(pick(3, 0), Literal[3])
+assert_type(pick(4, 1), tuple[Literal[4]])
+"#,
+);
+
+testcase!(
+    test_flag_does_not_block_other_contextual_type_variables,
+    flag_env().enable_implicit_any_lambda_error(),
+    r#"
+from collections.abc import Callable
+from typing import Literal
+from shape_extensions import Flag
+
+def mixed[K: Flag[int], T](k: K, callback: Callable[[T], None]) -> tuple[K, T]: ...
+def takes_int(value: int) -> None: ...
+
+result: tuple[Literal[5], str] = mixed(5, lambda value: print(value.upper()))
+bad: tuple[Literal[5], str] = mixed(5, takes_int)  # E: `tuple[Literal[5], int | str]` is not assignable to `tuple[Literal[5], str]`
+"#,
+);
+
+testcase!(
+    test_flag_materialized_bound_and_type_constructor,
+    flag_env(),
+    r#"
+from shape_extensions import Flag
+
+def materialized_subset[K: Flag[int]](source: K) -> int | str:
+    return source
+
+def construct[K: Flag[int]](source: K, cls: type[K]) -> K:
+    return cls(unknown=source)  # E: No matching overload found for function `int.__new__`
+"#,
+);
+
+testcase!(
+    test_flag_forwarding_methods_and_call_forms,
+    flag_env(),
+    r#"
+from typing import TYPE_CHECKING, Literal, TypedDict, assert_type
+
+if TYPE_CHECKING:
+    from shape_extensions import Flag
+
+def identity[K: Flag[int]](value: K) -> K: ...
+def forward[K: Flag[int]](value: K) -> K:
+    return identity(value)
+def quoted_source[K: Flag[int]](value: "K") -> K: ...
+
+class Selector:
+    def select[K: Flag[str]](self, value: K) -> K: ...
+
+class IdentityKwargs(TypedDict):
+    value: Literal[9]
+
+assert_type(forward(4), Literal[4])
+assert_type(quoted_source(5), Literal[5])
+assert_type(Selector().select("x"), Literal["x"])
+assert_type(identity(value=6), Literal[6])
+
+args: tuple[Literal[8]] = (8,)
+assert_type(identity(*args), Literal[8])
+kwargs: IdentityKwargs = {"value": 9}
+assert_type(identity(**kwargs), Literal[9])
+"#,
+);
+
+testcase!(
+    test_flag_stub_ellipsis_defaults,
+    flag_stub_default_env(),
+    r#"
+from typing import Any, Literal, assert_type
+from flag_defaults import no_default, type_parameter_default
+
+assert_type(no_default(), Any)
+assert_type(type_parameter_default(), Literal[3])
+"#,
+);
+
 testcase!(
     test_quantified_subtyping_no_constraint,
     r#"
@@ -79,6 +534,51 @@ def test[T: B](x: T) -> None:
 test(A())  # E: `A` is not assignable to upper bound `B` of type variable `T`
 test(B())
 test(C())
+ "#,
+);
+
+testcase!(
+    test_any_bound_attribute_access,
+    r#"
+from typing import Any, TypeVar, assert_type
+
+class Concrete: ...
+
+def pep695_bound[T: Any](arg: T) -> T:
+    assert_type(arg.method(), Any)
+    return arg
+
+LegacyT = TypeVar("LegacyT", bound=Any)
+def legacy_bound(arg: LegacyT) -> LegacyT:
+    assert_type(arg.method(), Any)
+    return arg
+
+assert_type(pep695_bound(Concrete()), Concrete)
+assert_type(legacy_bound(Concrete()), Concrete)
+
+class Base:
+    def method(self) -> int: ...
+    @classmethod
+    def class_method(cls) -> int: ...
+class Inherited(Base): ...
+
+def union_bound[T: Any | Inherited](arg: T) -> T:
+    assert_type(arg.method(), int | Any)
+    arg.missing()  # E: Object of class `Inherited` has no attribute `missing`
+    return arg
+
+def constrained[T: (Any, Inherited)](arg: T) -> T:
+    assert_type(arg.method(), int | Any)
+    return arg
+
+def class_bound[T: Any](arg: type[T]) -> type[T]:
+    assert_type(arg.__name__, str)
+    assert_type(arg.class_method(), Any)
+    return arg
+
+def class_constrained[T: (Any, Inherited)](arg: type[T]) -> type[T]:
+    arg.class_method()
+    return arg
  "#,
 );
 
@@ -341,7 +841,7 @@ from typing import Self, TypeVar
 
 class B():
     def f(self) -> Self:
-        return self 
+        return self
 class C(B):
     pass
 class D(B):
@@ -1021,6 +1521,16 @@ class A:
 );
 
 testcase!(
+    test_nondefault_followed_by_default,
+    r#"
+from typing import assert_type
+class C[R, T = int, S = T]: ...
+def f(x: C[str]) -> None:
+    assert_type(x, C[str, int, int])
+    "#,
+);
+
+testcase!(
     test_nested_call_preserves_bound,
     r#"
 # Tests for preserving type variable bounds when unifying quantified variables.
@@ -1163,67 +1673,6 @@ from typing import reveal_type
 
 def f[T, U: int, V = str](x: T, y: U, z: V) -> tuple[T, U, V]: ...
 reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tuple[T, U, V]
-"#,
-);
-
-testcase!(
-    bug =
-        "conformance: Should error on unbound TypeVars in class bases, TypeAlias, and expressions",
-    test_typevar_scoping_restrictions,
-    r#"
-from typing import TypeVar, Generic, TypeAlias
-from collections.abc import Iterable
-
-T = TypeVar("T")
-S = TypeVar("S")
-
-# Unbound TypeVar S used in generic function body
-def fun_3(x: T) -> list[T]:
-    y: list[T] = []  # OK
-    z: list[S] = []  # E: Type variable `S` is not in scope
-    return y
-
-# Unbound TypeVar S in class body (not in method)
-class Bar(Generic[T]):
-    an_attr: list[S] = []  # E: Type variable `S` is not in scope
-
-# Nested class using outer class's TypeVar
-class Outer(Generic[T]):
-    class Bad(Iterable[T]):  # should error: T from outer not in scope
-        ...
-    class AlsoBad:
-        x: list[T]  # should error: T from outer not in scope
-
-    alias: TypeAlias = list[T]  # should error: T not allowed in TypeAlias here
-
-# Unbound TypeVars at global scope
-global_var1: T  # E: Type variable `T` is not in scope
-global_var2: list[T] = []  # E: Type variable `T` is not in scope
-list[T]()  # should error
-"#,
-);
-
-testcase!(
-    bug = "Follow-on errors on TypeVar usages inside nested class that shadows outer TypeVars",
-    test_nested_class_independent_typevar_adoption,
-    r#"
-from typing import Generic, Type, TypeVar
-
-_Deserialized = TypeVar("_Deserialized")
-_Serialized = TypeVar("_Serialized")
-
-class CustomCoercer(Generic[_Deserialized, _Serialized]):
-    # CoercerMapping uses the same TypeVars as CustomCoercer, which the spec forbids.
-    class CoercerMapping(
-        dict[
-            Type[_Deserialized],  # should error: _Deserialized already bound by CustomCoercer
-            Type["CustomCoercer[_Deserialized, _Serialized]"],  # should error: both TypeVars
-        ]
-    ):
-        def __getitem__(
-            self,
-            key: type[_Deserialized],
-        ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...
 "#,
 );
 
@@ -1542,5 +1991,53 @@ testcase!(
 def f[T: bytes | str](x: T):
     if isinstance(x, str):
         y: str = 2 * x
+    "#,
+);
+
+testcase!(
+    bug = "We sometimes solve to the wrong constraint when one constraint is a subtype of another",
+    test_constraint_subtyping,
+    r#"
+from typing import assert_type
+
+class Parent: ...
+class Child(Parent): ...
+class Unrelated: ...
+
+def f[T: (Child, Parent, Unrelated)](x: T, y: T) -> T:
+    return x
+
+assert_type(f(Parent(), Child()), Parent)
+# BUG: this `f` call and `assert_type` should succeed
+assert_type(f(Child(), Parent()), Parent)  # E: assert_type(Child, Parent)  # E: `Parent` is not assignable to parameter `y` with type `Child`
+
+# The below is a real error that we need to make sure to catch.
+# This shows why it would be incorrect for the solver to just ignore the `Child` bound when it does
+# not unambiguously solve the type parameter.
+f(Child(), Unrelated())  # E: `Unrelated` is not assignable to parameter `y` with type `Child`
+    "#,
+);
+
+testcase!(
+    test_constraint_do_not_pin_to_any,
+    r#"
+from typing import Any, assert_type
+
+def f1[T: (int, str)](x: T, y: T) -> T: ...
+def f2[T: (list[int], list[str])](x: T, y: T) -> T: ...
+def g(x: Any):
+    assert_type(f1(x, 0), int)
+    assert_type(f1(0, x), int)
+    assert_type(f2([x], [0]), list[int])
+    assert_type(f2([0], [x]), list[int])
+
+class A: ...
+class B(A): ...
+def f3[T: (A, B)](x: T, y: T) -> T: ...
+def h(x: Any):
+    # In cases that are ambiguous due to `Any`, we solve to the narrowest constraint. This is
+    # technically unsound (`x` could have type `A`) but is more useful than degrading to `Any`.
+    assert_type(f3(x, B()), B)
+    assert_type(f3(B(), x), B)
     "#,
 );

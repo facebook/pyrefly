@@ -29,7 +29,6 @@ use serde::ser::SerializeStruct;
 use starlark_map::Hashed;
 
 use crate::alt::class::class_field::ClassField;
-use crate::alt::class::class_field::WithDefiningClass;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassField;
@@ -306,16 +305,18 @@ pub fn get_class_field_from_current_class_only(
     Some(synthesized_fields.get(field_name)?.inner.dupe())
 }
 
-pub fn get_super_class_member(
+pub fn get_super_class_member_defining_class(
     class: &Class,
     field_name: &Name,
     start_lookup_cls: Option<&ClassType>,
     context: &ModuleContext,
-) -> Option<WithDefiningClass<Arc<ClassField>>> {
+) -> Option<Class> {
     context
         .resolver
         .with_solver("pysa_super_class_member", |solver| {
-            solver.get_super_class_member(class, start_lookup_cls, field_name)
+            solver
+                .get_super_class_member(class, start_lookup_cls, field_name)
+                .map(|member| member.defining_class)
         })
         .flatten()
 }

@@ -5,18 +5,46 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 
-SUITES = {
-    "arithmetic": (Path("test/test_arithmetic.py"),),
-    "broadcasting": (Path("test/test_broadcasting.py"),),
-    "creation-basics": (Path("test/test_creation_basics.py"),),
-    "dtype-properties": (Path("test/test_dtype_properties.py"),),
-    "examples": (Path("examples/stats.py"), Path("examples/physical_science.py")),
-    "indexing": (Path("test/test_indexing.py"),),
-    "linalg": (Path("test/test_linalg.py"),),
-    "math-ufuncs": (Path("test/test_math_ufuncs.py"),),
-    "random": (Path("test/test_random.py"),),
-    "reductions": (Path("test/test_reductions.py"),),
-}
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from shape_testing import Suite  # noqa: E402
+
+
+_PACKAGE_ROOT: Path = Path(__file__).resolve().parent
+
+
+def _suites() -> list[Suite]:
+    """One suite per test file, discovered rather than enumerated.
+
+    Listing the files by hand would let a new `test/test_*.py` be silently
+    neither type checked nor executed while the runner still reported success.
+    Names are derived from the file name, so `test_math_ufuncs.py` stays
+    addressable as `--suite math-ufuncs`.
+
+    Every numpy suite sets `expectations`: these files pair a `# E:` marker with
+    the runtime error NumPy itself raises, so both halves of a rejection are
+    asserted together.
+    """
+
+    paths = sorted((_PACKAGE_ROOT / "test").glob("test_*.py"))
+    if not paths:
+        raise ValueError(f"no test files under {_PACKAGE_ROOT / 'test'}")
+    suites = [
+        Suite(
+            name=path.stem.removeprefix("test_").replace("_", "-"),
+            patterns=(f"test/{path.name}",),
+            expectations=True,
+        )
+        for path in paths
+    ]
+    suites.append(
+        Suite(name="examples", expectations=True, patterns=("examples/*.py",))
+    )
+    return suites
+
+
+SUITES: list[Suite] = _suites()

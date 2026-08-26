@@ -18,9 +18,11 @@ use crate::migration::ignore_missing_imports::IgnoreMissingImports;
 use crate::migration::project_excludes::ProjectExcludes;
 use crate::migration::project_includes::ProjectIncludes;
 use crate::migration::python_interpreter::PythonInterpreter;
+use crate::migration::python_platform::PythonPlatformConfig;
 use crate::migration::python_version::PythonVersionConfig;
 use crate::migration::search_path::SearchPath;
 use crate::migration::sub_configs::SubConfigs;
+use crate::migration::untyped_def_behavior::UntypedDefBehaviorConfig;
 
 // A pyproject.toml Mypy config differs a bit from the INI format:
 // - The [mypy] section is written as [tool.mypy]
@@ -96,9 +98,11 @@ struct MypySection {
     #[serde(default)]
     strict: Option<bool>,
     #[serde(default)]
+    check_untyped_defs: Option<bool>,
+    #[serde(default)]
     report_deprecated_as_note: Option<bool>,
     #[serde(default)]
-    allow_redefinitions: Option<bool>,
+    allow_redefinition: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -218,6 +222,13 @@ fn pyproject_to_ini(raw_file: &str) -> anyhow::Result<Ini> {
     if let Some(strict) = mypy.strict {
         ini.set("mypy", "strict", Some(strict.to_string()));
     }
+    if let Some(check_untyped_defs) = mypy.check_untyped_defs {
+        ini.set(
+            "mypy",
+            "check_untyped_defs",
+            Some(check_untyped_defs.to_string()),
+        );
+    }
     if let Some(report_deprecated_as_note) = mypy.report_deprecated_as_note {
         ini.set(
             "mypy",
@@ -225,11 +236,11 @@ fn pyproject_to_ini(raw_file: &str) -> anyhow::Result<Ini> {
             Some(report_deprecated_as_note.to_string()),
         );
     }
-    if let Some(allow_redefinitions) = mypy.allow_redefinitions {
+    if let Some(allow_redefinition) = mypy.allow_redefinition {
         ini.set(
             "mypy",
-            "allow_redefinitions",
-            Some(allow_redefinitions.to_string()),
+            "allow_redefinition",
+            Some(allow_redefinition.to_string()),
         );
     }
 
@@ -285,11 +296,13 @@ pub fn parse_pyproject_config(raw_file: &str) -> anyhow::Result<ConfigFile> {
         Box::new(ProjectIncludes),
         Box::new(ProjectExcludes),
         Box::new(PythonInterpreter),
+        Box::new(PythonPlatformConfig),
         Box::new(PythonVersionConfig),
         Box::new(IgnoreMissingImports),
         Box::new(SearchPath),
         Box::new(ErrorCodes),
         Box::new(SubConfigs),
+        Box::new(UntypedDefBehaviorConfig),
     ];
 
     // Iterate through all config options and apply them to the config
@@ -306,6 +319,7 @@ mod tests {
     use std::path::Path;
     use std::path::PathBuf;
 
+    use pyrefly_python::sys_info::PythonPlatform;
     use pyrefly_util::globs::Globs;
 
     use super::*;
@@ -425,6 +439,35 @@ warn_return_any = true
     }
 
     #[test]
+    fn test_platform_untyped_defs_and_redefinition() -> anyhow::Result<()> {
+        let src = r#"[tool.mypy]
+platform = "darwin"
+check_untyped_defs = true
+allow_redefinition = true
+"#;
+        let mut cfg = parse_pyproject_config(src)?;
+
+        assert_eq!(
+            cfg.python_environment.python_platform,
+            Some(PythonPlatform::mac())
+        );
+        assert_eq!(cfg.root.check_unannotated_defs, Some(true));
+        cfg.configure();
+        assert_eq!(
+            cfg.errors(Path::new(".")).severity(ErrorKind::Redefinition),
+            Severity::Ignore
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_strict_checks_unannotated_defs() -> anyhow::Result<()> {
+        let cfg = parse_pyproject_config("[tool.mypy]\nstrict = true\n")?;
+        assert_eq!(cfg.root.check_unannotated_defs, Some(true));
+        Ok(())
+    }
+
+    #[test]
     fn test_ignore_imports() -> anyhow::Result<()> {
         let src = r#"[tool.mypy]
 files = ["src/a.py"]
@@ -452,10 +495,12 @@ module = [
             Some(vec![
                 ModuleWildcard::new("a.*.b").unwrap(),
                 ModuleWildcard::new("some.module").unwrap(),
-                ModuleWildcard::new("uses.follow").unwrap(),
             ])
         );
-        assert_eq!(cfg.root.replace_imports_with_any, Some(vec![]),);
+        assert_eq!(
+            cfg.root.replace_imports_with_any,
+            Some(vec![ModuleWildcard::new("uses.follow").unwrap()])
+        );
 
         Ok(())
     }

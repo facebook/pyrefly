@@ -10,6 +10,7 @@ use std::sync::Arc;
 use dupe::Dupe;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_types::callable::Callable;
+use pyrefly_types::class::PrecomputedTParams;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
 use ruff_python_ast::Identifier;
@@ -67,14 +68,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def_index: ClassDefIndex,
         x: &ClassDefData,
         parent: &NestingContext,
+        is_protocol: bool,
         tparams_require_binding: bool,
         errors: &ErrorCollector,
     ) -> Class {
-        let name = &x.name;
+        // Legacy type variables can produce a cycle, so their tparams are left to
+        // the class's `KeyTParams` binding. Everything else is computed here, and
+        // a class that turns out to declare nothing records no tparams at all.
         let precomputed_tparams = if tparams_require_binding {
-            None
+            PrecomputedTParams::FromBinding
         } else {
-            Some(self.calculate_class_tparams_no_legacy(name, x.type_params.as_deref(), errors))
+            let tparams =
+                self.calculate_class_tparams_no_legacy(&x.name, x.type_params.as_deref(), errors);
+            if tparams.is_empty() {
+                PrecomputedTParams::NotGeneric
+            } else {
+                PrecomputedTParams::Precomputed(tparams)
+            }
         };
         Class::new(
             def_index,
@@ -82,6 +92,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             parent.dupe(),
             self.module().dupe(),
             precomputed_tparams,
+            is_protocol,
         )
     }
 
@@ -96,7 +107,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             name.clone(),
             parent.dupe(),
             self.module().dupe(),
-            Some(Arc::new(TParams::default())),
+            PrecomputedTParams::NotGeneric,
+            false,
         )
     }
 
@@ -163,7 +175,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn unwrap_class_object_silently(&self, ty: &Type) -> Option<(TParams, Type)> {
         match ty {
             Type::ClassDef(c) if c.is_builtin("tuple") => Some(self.instantiate_unbounded_tuple()),
-            Type::ClassDef(c) => Some(((*self.get_class_tparams(c)).clone(), self.instantiate(c))),
+            Type::ClassDef(c) => Some((
+                self.get_class_tparams(c)
+                    .map_or_else(TParams::default, |tparams| (*tparams).clone()),
+                self.instantiate(c),
+            )),
             Type::TypeAlias(ta) => {
                 self.unwrap_class_object_silently(&self.get_type_alias(ta).as_value(self.stdlib))
             }

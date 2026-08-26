@@ -32,7 +32,7 @@ Key patterns exercised:
 - Tensor.view for reshaping final output to [B, Sources, AudioCh, T]
 
 Now ported (previously omitted):
-- downsample: x[:, :, ::stride] stride slicing works with Dim[S] step
+- downsample: x[:, :, ::stride] stride slicing works with Int[S] step
 - upsample: .size() tuple unpacking, view, ellipsis slicing, broadcasting
 - center_trim: symbolic slice bounds from .size() diffs, returns Tensor[[B, C, R]]
 """
@@ -44,7 +44,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
 
@@ -56,8 +56,8 @@ if TYPE_CHECKING:
 # Stride slicing computes ceil_div(dim, step) for the strided dimension.
 
 
-def downsample[B, C, T, S](
-    x: Tensor[[B, C, T]], stride: Dim[S]
+def downsample[B: IntVar, C: IntVar, T: IntVar, S: IntVar](
+    x: Tensor[[B, C, T]], stride: Int[S]
 ) -> Tensor[[B, C, (T + S - 1) // S]]:
     """Downsample x by decimation.
 
@@ -76,12 +76,12 @@ def downsample[B, C, T, S](
 #
 # Changes from original:
 # - Type annotations added on function signature
-# - stride: int (not Dim) because arange and broadcasting need runtime int
+# - stride: int (not Int) because arange and broadcasting need runtime int
 # - Variable reassignment x → x_4d (shape changes from 3D to 4D)
 # - out.reshape(batch, channels, -1) uses -1 for automatic size inference
 
 
-def center_trim[B, C, T, R](
+def center_trim[B: IntVar, C: IntVar, T: IntVar, R: IntVar](
     tensor: Tensor[[B, C, T]], reference: Tensor[[B, C, R]]
 ) -> Tensor[[B, C, R]]:
     """Center trim `tensor` to match `reference` along the last dimension.
@@ -103,11 +103,13 @@ def center_trim[B, C, T, R](
     return tensor[..., delta // 2 : tensor.size(-1) - (delta - delta // 2)]
 
 
-def upsample[B, C, T](x: Tensor[[B, C, T]], stride: int) -> Tensor:
+def upsample[B: IntVar, C: IntVar, T: IntVar](
+    x: Tensor[[B, C, T]], stride: int
+) -> Tensor:
     """Linear upsampling, the output will be `stride` times longer.
 
     Steps:
-    1. x.size() → (batch, channels, time) as Dim types
+    1. x.size() → (batch, channels, time) as Int types
     2. torch.arange(stride) / stride → weight vector
     3. view to [B, C, T, 1] for broadcasting
     4. x[..., :-1, :] * (1 - weight) + x[..., 1:, :] * weight
@@ -129,7 +131,7 @@ def upsample[B, C, T](x: Tensor[[B, C, T]], stride: int) -> Tensor:
 # → permute to [B, C, T]
 
 
-class BLSTM[Ch](nn.Module):
+class BLSTM[Ch: IntVar](nn.Module):
     """Bidirectional LSTM bottleneck.
 
     Input:  Tensor[[B, Ch, T]]
@@ -139,12 +141,14 @@ class BLSTM[Ch](nn.Module):
     Uses bidirectional=True: output is 2*dim, projected back to dim via Linear.
     """
 
-    def __init__(self, dim: Dim[Ch]) -> None:
+    def __init__(self, dim: Int[Ch]) -> None:
         super().__init__()
         self.lstm = nn.LSTM(dim, dim, bidirectional=True, batch_first=True)
         self.linear = nn.Linear(2 * dim, dim)
 
-    def forward[B, T](self, x: Tensor[[B, Ch, T]]) -> Tensor[[B, Ch, T]]:
+    def forward[B: IntVar, T: IntVar](
+        self, x: Tensor[[B, Ch, T]]
+    ) -> Tensor[[B, Ch, T]]:
         # [B, Ch, T] → [B, T, Ch]
         x_perm = x.permute(0, 2, 1)
         assert_type(x_perm, Tensor[[B, T, Ch]])
@@ -184,7 +188,9 @@ class EncoderBlockGLU(nn.Module):
             nn.GLU(dim=1),
         )
 
-    def forward[B, L](self, x: Tensor[[B, 2, L]]) -> Tensor[[B, 64, (L - 8) // 4 + 1]]:
+    def forward[B: IntVar, L: IntVar](
+        self, x: Tensor[[B, 2, L]]
+    ) -> Tensor[[B, 64, (L - 8) // 4 + 1]]:
         out = self.encode(x)
         assert_type(out, Tensor[[B, 64, (L - 8) // 4 + 1]])
         return out
@@ -204,18 +210,18 @@ class EncoderBlockGLU(nn.Module):
 #   Layer 2: 128 → 256    (channels*growth → channels*growth^2)
 
 
-class EncoderBlock[InC, OutC](nn.Module):
+class EncoderBlock[InC: IntVar, OutC: IntVar](nn.Module):
     """Encoder block: Conv1d(InC, OutC, 8, stride=4) → ReLU → Conv1d(OutC, OutC, 1) → ReLU.
 
     Spatial: L → (L - 8) // 4 + 1 (1x1 conv preserves spatial).
     """
 
-    def __init__(self, in_ch: Dim[InC], out_ch: Dim[OutC]) -> None:
+    def __init__(self, in_ch: Int[InC], out_ch: Int[OutC]) -> None:
         super().__init__()
         self.conv1 = nn.Conv1d(in_ch, out_ch, 8, stride=4)
         self.conv2 = nn.Conv1d(out_ch, out_ch, 1)
 
-    def forward[B, L](
+    def forward[B: IntVar, L: IntVar](
         self, x: Tensor[[B, InC, L]]
     ) -> Tensor[[B, OutC, (L - 8) // 4 + 1]]:
         h = F.relu(self.conv1(x))
@@ -238,19 +244,19 @@ class EncoderBlock[InC, OutC](nn.Module):
 # The type system canonicalizes (L-3)*4 + 8 to 4*L - 4 via distributive law.
 
 
-class DecoderBlock[InC, OutC](nn.Module):
+class DecoderBlock[InC: IntVar, OutC: IntVar](nn.Module):
     """Decoder block: Conv1d(InC, InC, 3) → ReLU → ConvTranspose1d(InC, OutC, 8, stride=4).
 
     No final ReLU — caller applies it for non-outermost layers.
     Spatial: L → (L-3)*4 + 8.
     """
 
-    def __init__(self, in_ch: Dim[InC], out_ch: Dim[OutC]) -> None:
+    def __init__(self, in_ch: Int[InC], out_ch: Int[OutC]) -> None:
         super().__init__()
         self.context_conv = nn.Conv1d(in_ch, in_ch, 3)
         self.deconv = nn.ConvTranspose1d(in_ch, out_ch, 8, stride=4)
 
-    def forward[B, L](
+    def forward[B: IntVar, L: IntVar](
         self, x: Tensor[[B, InC, L]]
     ) -> Tensor[[B, OutC, (L - 3) * 4 + 8]]:
         h = F.relu(self.context_conv(x))
@@ -287,7 +293,7 @@ class DemucsEncoder(nn.Module):
         self.enc1 = EncoderBlock(64, 128)
         self.enc2 = EncoderBlock(128, 256)
 
-    def forward[B, L](
+    def forward[B: IntVar, L: IntVar](
         self, x: Tensor[[B, 2, L]]
     ) -> Tensor[[B, 256, (((L // 4 - 1) // 4 - 1) // 4 - 1)]]:
         h0 = self.enc0(x)
@@ -304,7 +310,7 @@ class DemucsEncoder(nn.Module):
 # into [B, sources, audio_channels, T] using view.
 
 
-def reshape_output[B, T](
+def reshape_output[B: IntVar, T: IntVar](
     x: Tensor[[B, 8, T]],
 ) -> Tensor[[B, 4, 2, T]]:
     """Reshape decoder output to [B, sources=4, audio_channels=2, T]."""
@@ -347,7 +353,7 @@ class Demucs(nn.Module):
         self.dec1 = DecoderBlock(128, 64)
         self.dec0 = DecoderBlock(64, 8)
 
-    def forward[B, L](self, mix: Tensor[[B, 2, L]]):
+    def forward[B: IntVar, L: IntVar](self, mix: Tensor[[B, 2, L]]):
         # Encoder: save outputs for skip connections
         # Spatial: L → L//4-1 → (L//4-1)//4-1 → ((L//4-1)//4-1)//4-1
         x0 = self.enc0(mix)
@@ -499,7 +505,7 @@ def test_downsample():
     # Direct stride slicing with literal step — shape is tracked
     out = x[:, :, ::4]
     assert_type(out, Tensor[[2, 64, 256]])
-    # Function call with literal Dim stride — shape also tracked
+    # Function call with literal Int stride — shape also tracked
     out2 = downsample(x, 4)
     assert_type(out2, Tensor[[2, 64, 256]])
 
@@ -524,7 +530,7 @@ def test_upsample():
     """
     x: Tensor[[2, 64, 100]] = torch.randn(2, 64, 100)
     out = upsample(x, 4)
-    # Result is shapeless Tensor because stride is int (not Dim)
+    # Result is shapeless Tensor because stride is int (not Int)
     # and broadcasting between different-rank tensors uses Self return type
     assert_type(out, Tensor)
 

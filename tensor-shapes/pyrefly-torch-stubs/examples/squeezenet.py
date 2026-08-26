@@ -17,18 +17,18 @@ off-by-one in intermediate spatial dims does not affect the output; the
 gap is in the typing of `features`.
 """
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 import torch.nn.init as init
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
 
-class Fire[InC, SQ, E1, E3](nn.Module):
+class Fire[InC: IntVar, SQ: IntVar, E1: IntVar, E3: IntVar](nn.Module):
     """Fire module: squeeze (1x1 conv) then expand (parallel 1x1 + 3x3 convs).
 
     Input:  Tensor[[B, InC, H, W]]
@@ -40,10 +40,10 @@ class Fire[InC, SQ, E1, E3](nn.Module):
 
     def __init__(
         self,
-        inplanes: Dim[InC],
-        squeeze_planes: Dim[SQ],
-        expand1x1_planes: Dim[E1],
-        expand3x3_planes: Dim[E3],
+        inplanes: Int[InC],
+        squeeze_planes: Int[SQ],
+        expand1x1_planes: Int[E1],
+        expand3x3_planes: Int[E3],
     ) -> None:
         super().__init__()
         self.inplanes = inplanes
@@ -56,7 +56,9 @@ class Fire[InC, SQ, E1, E3](nn.Module):
         )
         self.expand3x3_activation = nn.ReLU(inplace=True)
 
-    def forward[B, H, W](self, x: Tensor[[B, InC, H, W]]) -> Tensor[[B, E1 + E3, H, W]]:
+    def forward[B: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, InC, H, W]]
+    ) -> Tensor[[B, E1 + E3, H, W]]:
         x1 = self.squeeze_activation(self.squeeze(x))
         assert_type(x1, Tensor[[B, SQ, H, W]])
         e1 = self.expand1x1_activation(self.expand1x1(x1))
@@ -68,7 +70,7 @@ class Fire[InC, SQ, E1, E3](nn.Module):
         return result
 
 
-class SqueezeNet[NC: Dim[Any] = 1000](nn.Module):
+class SqueezeNet[NC: IntVar = 1000](nn.Module):
     """SqueezeNet 1.0 architecture.
 
     Input:  Tensor[[B, 3, H, W]]
@@ -78,7 +80,7 @@ class SqueezeNet[NC: Dim[Any] = 1000](nn.Module):
     channel progression is fixed by architecture design.
     """
 
-    def __init__(self, num_classes: Dim[NC] = 1000, dropout: float = 0.5) -> None:
+    def __init__(self, num_classes: Int[NC] = 1000, dropout: float = 0.5) -> None:
         super().__init__()
         self.num_classes = num_classes
         self.features = nn.Sequential(
@@ -114,7 +116,9 @@ class SqueezeNet[NC: Dim[Any] = 1000](nn.Module):
                 if m.bias is not None:
                     init.constant_(m.bias, 0)
 
-    def forward[B, H, W](self, x: Tensor[[B, 3, H, W]]) -> Tensor[[B, NC]]:
+    def forward[B: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, 3, H, W]]
+    ) -> Tensor[[B, NC]]:
         x1 = self.features(x)
         assert_type(
             x1,

@@ -3,6 +3,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
 from shape_extensions.dsl import (
     Error,
     parse_einsum_equation,
@@ -13,6 +15,30 @@ from shape_extensions.dsl import (
     symint,
     Unknown,
 )
+
+@type_shape_dsl_function
+def eig_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) < 2:
+        if len(shape) == 0:
+            return dsl.Invalid("eig requires at least 2D input, got 0D tensor")
+        return dsl.Invalid("eig requires at least 2D input, got 1D tensor")
+    return dsl.IntTuple((shape[i] for i in range(len(shape) - 1)))
+
+@type_shape_dsl_function
+def eigvals_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) < 2:
+        if len(shape) == 0:
+            return dsl.Invalid("eigvals requires at least 2D input, got 0D tensor")
+        return dsl.Invalid("eigvals requires at least 2D input, got 1D tensor")
+    return dsl.IntTuple((shape[i] for i in range(len(shape) - 1)))
+
+@type_shape_dsl_function
+def slogdet_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) < 2:
+        if len(shape) == 0:
+            return dsl.Invalid("slogdet requires at least 2D input, got 0D tensor")
+        return dsl.Invalid("slogdet requires at least 2D input, got 1D tensor")
+    return dsl.IntTuple((shape[i] for i in range(len(shape) - 2)))
 
 @shape_dsl_function
 def normalize_dim(rank: int, dim: int) -> int:
@@ -33,10 +59,6 @@ def replace_dim(
     return dims[:i] + [value] + dims[i + 1 :]
 
 @shape_dsl_function
-def remove_dim(dims: list[int | symint], i: int) -> list[int | symint]:
-    return dims[:i] + dims[i + 1 :]
-
-@shape_dsl_function
 def insert_dim(
     dims: list[int | symint], i: int, value: int | symint
 ) -> list[int | symint]:
@@ -50,13 +72,6 @@ def broadcast(a: list[int | symint], b: list[int | symint]) -> list[int | symint
     return [bd if ad == 1 else ad for ad, bd in zip(padded_a, padded_b)]
 
 @shape_dsl_function
-def binary_broadcast_ir(self: ShapedArray, other: ShapedArray) -> ShapedArray:
-    # Unknown-rank RHS cannot be broadcast precisely; preserve the shaped LHS.
-    if not isinstance(len(other.shape), int):
-        return self
-    return ShapedArray(shape=broadcast(self.shape, other.shape))
-
-@shape_dsl_function
 def broadcast_int(
     expr: int | symint | list[int | symint], n: int
 ) -> list[int | symint]:
@@ -64,21 +79,75 @@ def broadcast_int(
         return expr
     return [expr for _ in range(n)]
 
-@shape_dsl_function
+@type_shape_dsl_function
 def reduce_shape(
-    dims: list[int | symint], dim: int | list[int] | None, keepdim: bool
-) -> list[int | symint]:
-    if dim == None:
-        if keepdim:
-            return [1 for _ in range(len(dims))]
-        return []
-    dim_list = dim if isinstance(dim, list) else [dim]
-    norm = [normalize_dim(len(dims), d) for d in dim_list]
-    return [
-        1 if i in norm else elem
-        for i, elem in enumerate(dims)
-        if not (i in norm) or keepdim
-    ]
+    shape: IntTuple,
+    dim: int | tuple[int, ...] | None,
+    keepdim: bool,
+) -> IntTuple:
+    if dim is None:
+        dims = range(len(shape))
+    elif dsl.is_int_value(dim):
+        if dim == -1:
+            if len(shape) == 0:
+                return shape
+            if keepdim:
+                return dsl.concat(shape[:-1], dsl.IntTuple((1,)))
+            return shape[:-1]
+        dims = (dim,)
+    elif len(dim) == 0:
+        dims = range(len(shape))
+    else:
+        dims = dim
+    if len(shape) == 0:
+        # PyTorch lets either 0 or -1 name the scalar reduction axis. After
+        # normalization, using both is therefore a duplicate dimension.
+        if any(item != 0 and item != -1 for item in dims):
+            return dsl.Invalid("dimension out of range")
+    elif any(item < 0 - len(shape) or item >= len(shape) for item in dims):
+        return dsl.Invalid("dimension out of range")
+    normalized = tuple(
+        (
+            0 if len(shape) == 0 else (item + len(shape) if item < 0 else item)
+            for item in dims
+        )
+    )
+    if any(normalized.count(item) > 1 for item in normalized):
+        return dsl.Invalid("duplicate dimension")
+    if keepdim:
+        return dsl.IntTuple(
+            (1 if index in normalized else shape[index] for index in range(len(shape)))
+        )
+    return dsl.IntTuple(
+        (shape[index] for index in range(len(shape)) if index not in normalized)
+    )
+
+@type_shape_dsl_function
+def reduce_shape_no_keep(
+    shape: IntTuple, dim: int | tuple[int, ...] | None
+) -> IntTuple:
+    keepdim = False
+    return reduce_shape(shape, dim, keepdim)
+
+@type_shape_dsl_function
+def cosine_similarity_shape(shape: IntTuple, dim: int) -> IntTuple:
+    if dim == -1:
+        if len(shape) == 0:
+            return shape
+        return shape[:-1]
+    if len(shape) == 0:
+        if dim == 0:
+            return shape
+        return dsl.Invalid("cosine_similarity dimension out of range")
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("cosine_similarity dimension out of range")
+    return dsl.IntTuple(
+        (
+            shape[index]
+            for index in range(len(shape))
+            if index != (dim + len(shape) if dim < 0 else dim)
+        )
+    )
 
 @shape_dsl_function
 def contains(lst: list[int], val: int) -> bool:
@@ -136,30 +205,73 @@ def reshape_ir(self: ShapedArray, shape: list[int | symint]) -> ShapedArray:
         return ShapedArray(shape=[total // known if d == -1 else d for d in shape])
     return ShapedArray(shape=shape)
 
-@shape_dsl_function
-def squeeze_ir(self: ShapedArray, dim: int | None = None) -> ShapedArray:
-    if dim == None:
-        return ShapedArray(shape=[d for d in self.shape if d != 1])
-    idx = normalize_dim(len(self.shape), dim)
-    return ShapedArray(
-        shape=[d for i, d in enumerate(self.shape) if not (i == idx and d == 1)]
+@type_shape_dsl_function
+def squeeze_shape(shape: IntTuple, dim: int | None) -> IntTuple:
+    if dim is None:
+        return dsl.IntTuple(
+            (shape[index] for index in range(len(shape)) if shape[index] != 1)
+        )
+    if dsl.is_int_value(dim):
+        if len(shape) == 0:
+            if dim == 0 or dim == -1:
+                return shape
+            return dsl.Invalid("squeeze dimension out of range")
+        if dim < 0 - len(shape) or dim >= len(shape):
+            return dsl.Invalid("squeeze dimension out of range")
+        return dsl.IntTuple(
+            (
+                shape[index]
+                for index in range(len(shape))
+                if index != (dim + len(shape) if dim < 0 else dim) or shape[index] != 1
+            )
+        )
+    return dsl.IntTuple.gradual()
+
+@type_shape_dsl_function
+def unsqueeze_shape(shape: IntTuple, dim: int) -> IntTuple:
+    if dim == -1:
+        return dsl.concat(shape, dsl.IntTuple((1,)))
+    if dim < 0 - len(shape) - 1 or dim > len(shape):
+        return dsl.Invalid("unsqueeze dimension out of range")
+    return dsl.IntTuple(
+        (
+            1
+            if index == (dim + len(shape) + 1 if dim < 0 else dim)
+            else shape[
+                index - 1
+                if index > (dim + len(shape) + 1 if dim < 0 else dim)
+                else index
+            ]
+            for index in range(len(shape) + 1)
+        )
     )
 
-@shape_dsl_function
-def unsqueeze_ir(self: ShapedArray, dim: int) -> ShapedArray:
-    d = normalize_dim(len(self.shape) + 1, dim)
-    return ShapedArray(shape=insert_dim(self.shape, d, 1))
-
-@shape_dsl_function
-def transpose_ir(self: ShapedArray, dim0: int, dim1: int) -> ShapedArray:
-    rank = len(self.shape)
-    d0 = normalize_dim(rank, dim0)
-    d1 = normalize_dim(rank, dim1)
-    return ShapedArray(
-        shape=[
-            self.shape[d1] if i == d0 else self.shape[d0] if i == d1 else d
-            for i, d in enumerate(self.shape)
-        ]
+@type_shape_dsl_function
+def transpose_shape(shape: IntTuple, dim0: int, dim1: int) -> IntTuple:
+    if dim0 == dim1 and (dim0 == 0 or dim0 == -1):
+        return shape
+    if len(shape) == 0:
+        if (dim0 == 0 or dim0 == -1) and (dim1 == 0 or dim1 == -1):
+            return shape
+        return dsl.Invalid("transpose dimension out of range")
+    if (
+        dim0 < 0 - len(shape)
+        or dim0 >= len(shape)
+        or dim1 < 0 - len(shape)
+        or dim1 >= len(shape)
+    ):
+        return dsl.Invalid("transpose dimension out of range")
+    if dim0 == dim1:
+        return shape
+    return dsl.IntTuple(
+        (
+            shape[dim1 + len(shape) if dim1 < 0 else dim1]
+            if index == (dim0 + len(shape) if dim0 < 0 else dim0)
+            else shape[dim0 + len(shape) if dim0 < 0 else dim0]
+            if index == (dim1 + len(shape) if dim1 < 0 else dim1)
+            else shape[index]
+            for index in range(len(shape))
+        )
     )
 
 @shape_dsl_function
@@ -185,11 +297,6 @@ def expand_ir(self: ShapedArray, sizes: list[int | symint]) -> ShapedArray:
 @shape_dsl_function
 def repeat_ir(self: ShapedArray, sizes: list[int | symint]) -> ShapedArray:
     return ShapedArray(shape=[d * r for d, r in zip(self.shape, sizes)])
-
-@shape_dsl_function
-def unbind_ir(self: ShapedArray, dim: int = 0) -> list[ShapedArray]:
-    d = normalize_dim(len(self.shape), dim)
-    return [ShapedArray(shape=remove_dim(self.shape, d)), ...]
 
 @shape_dsl_function
 def movedim_ir(
@@ -239,16 +346,68 @@ def tile_ir(self: ShapedArray, dims: list[int]) -> ShapedArray:
         )
     return ShapedArray(shape=[d * r for d, r in zip(self.shape, dims)])
 
-@shape_dsl_function
-def select_ir(self: ShapedArray, dim: int) -> ShapedArray:
-    d = normalize_dim(len(self.shape), dim)
-    return ShapedArray(shape=remove_dim(self.shape, d))
-
-@shape_dsl_function
-def narrow_ir(self: ShapedArray, dim: int, length: int | symint) -> ShapedArray:
-    return ShapedArray(
-        shape=replace_dim(self.shape, normalize_dim(len(self.shape), dim), length)
+@type_shape_dsl_function
+def select_shape(shape: IntTuple, dim: int) -> IntTuple:
+    if dim == -1:
+        if len(shape) == 0:
+            return dsl.Invalid("select dimension out of range")
+        return shape[:-1]
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("select dimension out of range")
+    return dsl.IntTuple(
+        (
+            shape[index]
+            for index in range(len(shape))
+            if index != (dim + len(shape) if dim < 0 else dim)
+        )
     )
+
+@type_shape_dsl_function
+def unbind_shape(shape: IntTuple, dim: int) -> IntTuple:
+    if dim == -1:
+        if len(shape) == 0:
+            return dsl.Invalid("unbind dimension out of range")
+        return shape[:-1]
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("unbind dimension out of range")
+    return dsl.IntTuple(
+        (
+            shape[index]
+            for index in range(len(shape))
+            if index != (dim + len(shape) if dim < 0 else dim)
+        )
+    )
+
+@type_shape_dsl_function
+def replace_axis_extent(shape: IntTuple, dim: int, extent: Int) -> IntTuple:
+    if dim == -1:
+        if len(shape) == 0:
+            return dsl.Invalid("dimension out of range")
+        return dsl.concat(shape[:-1], dsl.IntTuple((extent,)))
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("dimension out of range")
+    return dsl.IntTuple(
+        (
+            extent if index == (dim + len(shape) if dim < 0 else dim) else shape[index]
+            for index in range(len(shape))
+        )
+    )
+
+@type_shape_dsl_function
+def topk_shape(shape: IntTuple, dim: int, extent: Int) -> IntTuple:
+    if len(shape) == 0:
+        if dim == 0 or dim == -1:
+            return shape
+        return dsl.Invalid("topk dimension out of range")
+    return replace_axis_extent(shape, dim, extent)
+
+@type_shape_dsl_function
+def multinomial_shape(shape: IntTuple, num_samples: Int) -> IntTuple:
+    if len(shape) == 1:
+        return dsl.IntTuple((num_samples,))
+    if len(shape) == 2:
+        return dsl.IntTuple((shape[0], num_samples))
+    return dsl.Invalid("multinomial expects 1D or 2D input")
 
 @shape_dsl_function
 def split_ir(
@@ -318,67 +477,38 @@ def chunk_ir(self: ShapedArray, chunks: int, dim: int = 0) -> list[ShapedArray]:
         for i in range(chunks)
     ]
 
-@shape_dsl_function
-def index_select_ir(self: ShapedArray, dim: int, index: ShapedArray) -> ShapedArray:
-    return ShapedArray(
-        shape=replace_dim(
-            self.shape, normalize_dim(len(self.shape), dim), index.shape[0]
+@type_shape_dsl_function
+def index_select_shape(shape: IntTuple, dim: int, index_shape: IntTuple) -> IntTuple:
+    if len(index_shape) == 0:
+        if dim == -1:
+            if len(shape) == 0:
+                return dsl.Invalid("index_select dimension out of range")
+            return dsl.concat(shape[:-1], dsl.IntTuple((1,)))
+        if dim < 0 - len(shape) or dim >= len(shape):
+            return dsl.Invalid("index_select dimension out of range")
+        return dsl.IntTuple(
+            (
+                1 if index == (dim + len(shape) if dim < 0 else dim) else shape[index]
+                for index in range(len(shape))
+            )
+        )
+    if len(index_shape) != 1:
+        return dsl.Invalid("index_select index must be 0D or 1D")
+    index_extent = index_shape[0]
+    if dim == -1:
+        if len(shape) == 0:
+            return dsl.Invalid("index_select dimension out of range")
+        return dsl.concat(shape[:-1], dsl.IntTuple((index_extent,)))
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("index_select dimension out of range")
+    return dsl.IntTuple(
+        (
+            index_extent
+            if index == (dim + len(shape) if dim < 0 else dim)
+            else shape[index]
+            for index in range(len(shape))
         )
     )
-
-@shape_dsl_function
-def reduce_ir(
-    self: ShapedArray, dim: int | list[int] | None = None, keepdim: bool = False
-) -> ShapedArray:
-    if dim == None:
-        return ShapedArray(shape=reduce_shape(self.shape, dim, keepdim))
-    if isinstance(dim, list):
-        return ShapedArray(shape=reduce_shape(self.shape, dim, keepdim))
-    return ShapedArray(shape=reduce_single(self.shape, dim, keepdim))
-
-@shape_dsl_function
-def reduce_single(
-    dims: list[int | symint], dim: int, keepdim: bool
-) -> list[int | symint]:
-    before = dims[:dim]
-    if dim == -1:
-        if keepdim:
-            return before + [1]
-        return before
-    after = dims[dim + 1 :]
-    if keepdim:
-        return before + [1] + after
-    return before + after
-
-@shape_dsl_function
-def min_max_median_ir(
-    self: ShapedArray, dim: int | None = None, keepdim: bool = False
-) -> ShapedArray:
-    if dim == None:
-        return ShapedArray(shape=[])
-    s = reduce_shape(self.shape, dim, keepdim)
-    return [ShapedArray(shape=s), ShapedArray(shape=s)]
-
-@shape_dsl_function
-def aminmax_ir(
-    self: ShapedArray, dim: int | list[int] | None = None, keepdim: bool = False
-) -> [ShapedArray, ShapedArray]:
-    s = reduce_shape(self.shape, dim, keepdim)
-    return [ShapedArray(shape=s), ShapedArray(shape=s)]
-
-@shape_dsl_function
-def tuple_reduce_ir(
-    self: ShapedArray, dim: int = -1, keepdim: bool = False
-) -> [ShapedArray, ShapedArray]:
-    s = reduce_shape(self.shape, dim, keepdim)
-    return [ShapedArray(shape=s), ShapedArray(shape=s)]
-
-@shape_dsl_function
-def topk_ir(
-    self: ShapedArray, k: int | symint, dim: int = -1
-) -> [ShapedArray, ShapedArray]:
-    s = replace_dim(self.shape, normalize_dim(len(self.shape), dim), k)
-    return [ShapedArray(shape=s), ShapedArray(shape=s)]
 
 @shape_dsl_function
 def repeat_interleave_ir(
@@ -409,27 +539,12 @@ def repeat_interleave_input_ir(
     return repeat_interleave_ir(input, repeats, dim, output_size)
 
 @shape_dsl_function
-def cosine_similarity_ir(x1: ShapedArray, x2: ShapedArray, dim: int = 1) -> ShapedArray:
-    s = broadcast(x1.shape, x2.shape)
-    return ShapedArray(shape=reduce_single(s, normalize_dim(len(s), dim), False))
-
-@shape_dsl_function
 def randn_ir(size: list[int | symint]) -> ShapedArray:
     return ShapedArray(shape=size)
 
 @shape_dsl_function
 def randint_ir(low: int, high: int, size: list[int | symint]) -> ShapedArray:
     return ShapedArray(shape=size)
-
-@shape_dsl_function
-def linspace_ir(steps: int | symint) -> ShapedArray:
-    return ShapedArray(shape=[steps])
-
-@shape_dsl_function
-def eye_ir(n: int | symint, m: int | symint | None = None) -> ShapedArray:
-    if m == None:
-        return ShapedArray(shape=[n, n])
-    return ShapedArray(shape=[n, m])
 
 @shape_dsl_function
 def arange_ir(
@@ -467,12 +582,6 @@ def diag_embed_ir(self: ShapedArray, offset: int = 0) -> ShapedArray:
     return ShapedArray(shape=self.shape[:-1] + [new_dim, new_dim])
 
 @shape_dsl_function
-def tri_indices_ir(
-    row: int | symint, col: int | symint, offset: int = 0
-) -> ShapedArray:
-    return ShapedArray(shape=[2, 0])
-
-@shape_dsl_function
 def matmul_ir(self: ShapedArray, other: ShapedArray) -> ShapedArray:
     r1 = len(self.shape)
     r2 = len(other.shape)
@@ -495,26 +604,6 @@ def matmul_ir(self: ShapedArray, other: ShapedArray) -> ShapedArray:
             + [other.shape[-1]]
         )
     return Unknown
-
-@shape_dsl_function
-def mv_ir(self: ShapedArray, vec: ShapedArray) -> ShapedArray:
-    if len(self.shape) != 2:
-        raise Error("mv expects 2D matrix, got " + str(len(self.shape)) + "D tensor")
-    if len(vec.shape) != 1:
-        raise Error("mv expects 1D vector, got " + str(len(vec.shape)) + "D tensor")
-    return ShapedArray(shape=[self.shape[0]])
-
-@shape_dsl_function
-def outer_ir(self: ShapedArray, vec2: ShapedArray) -> ShapedArray:
-    if len(self.shape) != 1 or len(vec2.shape) != 1:
-        raise Error(
-            "outer expects 1D tensors, got "
-            + str(len(self.shape))
-            + "D and "
-            + str(len(vec2.shape))
-            + "D"
-        )
-    return ShapedArray(shape=[self.shape[0], vec2.shape[0]])
 
 @shape_dsl_function
 def tensordot_ir(self: ShapedArray, other: ShapedArray, dims: int) -> ShapedArray:
@@ -541,46 +630,6 @@ def einsum_ir(spec: str, operands: list[ShapedArray] | None = None) -> ShapedArr
         output_map, check_pairs = parse_einsum_equation(spec)
         return apply_einsum(output_map, check_pairs, operands)
     return Unknown
-
-@shape_dsl_function
-def eigvals_ir(self: ShapedArray) -> ShapedArray:
-    if len(self.shape) < 2:
-        raise Error(
-            "eigvals requires at least 2D input, got "
-            + str(len(self.shape))
-            + "D tensor"
-        )
-    return ShapedArray(shape=self.shape[:-2] + [self.shape[-2]])
-
-@shape_dsl_function
-def eig_ir(self: ShapedArray) -> [ShapedArray, ShapedArray]:
-    if len(self.shape) < 2:
-        raise Error(
-            "eig requires at least 2D input, got " + str(len(self.shape)) + "D tensor"
-        )
-    batch = self.shape[:-2]
-    return [
-        ShapedArray(shape=batch + [self.shape[-2]]),
-        ShapedArray(shape=batch + self.shape[-2:]),
-    ]
-
-@shape_dsl_function
-def slogdet_ir(self: ShapedArray) -> [ShapedArray, ShapedArray]:
-    if len(self.shape) < 2:
-        raise Error(
-            "slogdet requires at least 2D input, got "
-            + str(len(self.shape))
-            + "D tensor"
-        )
-    return [ShapedArray(shape=self.shape[:-2]), ShapedArray(shape=self.shape[:-2])]
-
-@shape_dsl_function
-def solve_ir(self: ShapedArray, other: ShapedArray) -> ShapedArray:
-    return ShapedArray(shape=other.shape)
-
-@shape_dsl_function
-def solve_reversed_ir(self: ShapedArray, other: ShapedArray) -> ShapedArray:
-    return ShapedArray(shape=self.shape)
 
 @shape_dsl_function
 def conv_ir(
@@ -722,15 +771,23 @@ def irfft_ir(
         return ShapedArray(shape=replace_dim(self.shape, d, n))
     return ShapedArray(shape=replace_dim(self.shape, d, 2 * (self.shape[d] - 1)))
 
-@shape_dsl_function
-def size_ir(self: ShapedArray, dim: int | None = None) -> int | symint:
-    if dim != None:
-        return self.shape[normalize_dim(len(self.shape), dim)]
-    return [d for d in self.shape]
+@type_shape_dsl_function
+def size_dim_shape(shape: IntTuple, dim: int) -> Int:
+    if len(shape) == 0:
+        return dsl.Invalid("size dimension out of range")
+    # A symbolic-rank shape has no known `len`, so the range check below gives up on it even
+    # when its last dimension is known. Answer `-1` from the known suffix first.
+    if dim == -1:
+        last = shape[-1]
+        return last
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("size dimension out of range")
+    result = shape[dim]
+    return result
 
-@shape_dsl_function
-def numel_ir(self: ShapedArray) -> int | symint:
-    return prod(self.shape)
+@type_shape_dsl_function
+def numel_shape(shape: IntTuple) -> Int:
+    return dsl.prod(shape)
 
 @shape_dsl_function
 def dim_ir(self: ShapedArray) -> int:
@@ -745,22 +802,6 @@ def item_ir(self: ShapedArray) -> ShapedArray:
             + "D tensor"
         )
     return Unknown
-
-@shape_dsl_function
-def tolist_ir(self: ShapedArray) -> ShapedArray:
-    return Unknown
-
-@shape_dsl_function
-def multinomial_ir(self: ShapedArray, num_samples: int | symint) -> ShapedArray:
-    return ShapedArray(shape=self.shape[:-1] + [num_samples])
-
-@shape_dsl_function
-def where_ir(condition: ShapedArray, x: ShapedArray, y: ShapedArray) -> ShapedArray:
-    return ShapedArray(shape=x.shape)
-
-@shape_dsl_function
-def take_along_dim_ir(self: ShapedArray, indices: ShapedArray) -> ShapedArray:
-    return ShapedArray(shape=indices.shape)
 
 @shape_dsl_function
 def nn_flatten_forward_ir(

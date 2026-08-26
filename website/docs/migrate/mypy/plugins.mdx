@@ -1,0 +1,164 @@
+---
+title: Mypy Plugin Support in Pyrefly
+slug: /migrate/mypy/plugins
+description:
+    Migrate common mypy plugin workloads to Pyrefly's built-in Pydantic, Django,
+    and attrs support, and identify custom plugins that still need manual
+    review.
+keywords:
+    - mypy plugins
+    - pyrefly mypy plugin support
+    - pydantic mypy plugin
+    - django mypy plugin
+    - attrs mypy plugin
+    - migrate mypy plugins
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+Pyrefly has first-party support for several of the most common mypy plugin
+workloads, including Pydantic, Django, and attrs. The implementation model is
+different: Pyrefly does not import Python modules written against `mypy.plugin`.
+Those integrations are modeled directly in the checker and the language server
+instead.
+
+For those workloads, migrating means dropping mypy-only plugin configuration
+from the Pyrefly side while keeping framework-aware type checking.
+
+## At a glance
+
+| Mypy integration                              | Pyrefly path                                                                | Migration status                       | What to verify                                                                                                     |
+| --------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `pydantic.mypy`                               | Built-in [Pydantic support](../../pydantic.mdx)                             | Native; no plugin or manual enablement | Pydantic v2+ models, generated signatures, strict/lax coercion, aliases, extra fields, project-specific validators |
+| `mypy_django_plugin.main` from `django-stubs` | Built-in [Django support](../../django.mdx), using installed `django-stubs` | Native; no Pyrefly plugin config       | Models, field types, `id` and `pk`, relationships, choices, managers, class-based views                            |
+| Mypy's built-in attrs integration             | Built-in [attrs support](../../attrs.mdx)                                   | Native and automatic for attrs 23.2+   | Modern and classic decorators, fields, factories, converters, frozen classes, inheritance                          |
+| A custom or proprietary mypy plugin           | No plugin-loader equivalent                                                 | Manual review                          | Every hook, generated member, decorator transform, and custom semantic assumption                                  |
+
+:::note
+
+"Pyrefly supports mypy plugin use cases" does not mean Pyrefly executes mypy
+plugin code. It means the common plugin-heavy frameworks have native support
+inside Pyrefly.
+
+:::
+
+## Pydantic: replace `pydantic.mypy` with native support
+
+A mypy project typically has:
+
+```toml
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+```
+
+Pyrefly needs no equivalent entry. It recognizes Pydantic v2 constructs
+including `BaseModel`, `Field`, `ConfigDict`, `pydantic_settings.BaseSettings`,
+and Pydantic dataclasses, and it reads model behavior such as strict validation
+and extra-field policy from the code rather than from plugin configuration.
+
+Keep these differences in mind:
+
+- Pydantic v1-only behavior is outside Pyrefly's documented support.
+- The mypy plugin's options do not translate one-to-one, because Pyrefly derives
+  more policy from the model definition itself.
+- Test aliases, validators, settings models, nested containers, and any
+  project-specific metaprogramming before retiring mypy.
+
+See [Pydantic support](../../pydantic.mdx) for the current feature set and its
+limitations.
+
+## Django: replace the plugin, keep `django-stubs`
+
+A mypy setup commonly contains:
+
+```toml
+[tool.mypy]
+plugins = ["mypy_django_plugin.main"]
+
+[tool.django-stubs]
+django_settings_module = "myproject.settings"
+```
+
+For Pyrefly, install `django-stubs` but do not add any Pyrefly plugin entry.
+Pyrefly models Django models and fields, auto-generated `id` and `pk`
+attributes, relationships, choices, and model-aware class-based views.
+
+Pyrefly's Django support is static: it follows stubs and models the code rather
+than running Django or introspecting settings at type-check time. That removes
+the plugin setup, but some relationship-manager and highly dynamic metaclass
+cases can produce different types. Test representative models and queries rather
+than assuming identical output.
+
+See [Django support](../../django.mdx) for setup, supported behavior, and
+documented differences from mypy.
+
+## attrs: built in, with no configuration
+
+Mypy ships attrs handling internally, so an attrs project may have no `plugins`
+entry at all even though the checker is doing much more than stub lookup. This
+is easy to overlook when inventorying what a migration has to replace.
+
+Pyrefly also has built-in attrs support, covering the modern API (`@define`,
+`@frozen`, `@mutable`, `attrs.field`) and the classic API (`@attr.s`,
+`@attr.ib`, `@attr.dataclass`) across both the `attr` and `attrs` namespaces.
+Support is automatic for attrs 23.2 and newer.
+
+See [attrs support](../../attrs.mdx) for decorators, fields, converters,
+factories, validators, inheritance, and helper functions.
+
+## Custom plugins need a decision
+
+A custom plugin may change:
+
+- generated methods or attributes;
+- decorator and metaclass semantics;
+- function signatures or return types;
+- dynamic ORM or schema behavior;
+- type-analysis rules for a proprietary API.
+
+Pyrefly does not run those hooks. For each custom plugin, pick one of four
+paths:
+
+1. model the behavior with standard annotations, `Protocol`, `TypedDict`,
+   overloads, or `dataclass_transform`;
+2. ship or improve `.pyi` stubs;
+3. request or contribute native Pyrefly support when the library is broadly
+   useful;
+4. keep mypy for that project until the behavior has an acceptable replacement.
+
+Do not suppress the resulting errors before understanding what the plugin was
+providing.
+
+## FAQ
+
+### Does Pyrefly support mypy plugins?
+
+Pyrefly supports the important **mypy plugin workloads** natively, including
+Pydantic, Django, and attrs. It does not expose mypy's plugin API or execute
+arbitrary mypy plugin modules.
+
+### Should I delete `plugins` from `[tool.mypy]` immediately?
+
+No. Keep the mypy configuration intact while mypy is still in parallel CI.
+Pyrefly does not read the entry and uses its own native support. Remove
+mypy-only configuration when the project actually retires mypy.
+
+### Is native support guaranteed to produce identical types?
+
+No. Pyrefly and mypy model these libraries independently. The goal is
+high-quality framework-aware behavior, not identical internal types or
+diagnostics.
+
+## Related guides
+
+- [Mypy vs Pyright vs Pyrefly](../../compare.mdx)
+- [Migrate from mypy](index.mdx)
+- [Mypy config reference](config-reference.mdx)
+- [Pydantic support](../../pydantic.mdx)
+- [Django support](../../django.mdx)
+- [attrs support](../../attrs.mdx)

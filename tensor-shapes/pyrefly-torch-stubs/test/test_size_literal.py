@@ -8,6 +8,7 @@
 from typing import assert_type, Literal, TYPE_CHECKING
 
 import torch
+from shape_extensions import IntTuple
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -18,3 +19,10 @@ def test_size_with_negative():
     x: Tensor[[10, 20, 30]] = torch.randn(10, 20, 30)
     s = x.size(-1)
     assert_type(s, Literal[30])  # Should be int
+
+
+def check_size_preserves_shape[Shape: IntTuple](
+    x: Tensor[Shape], scalar: Tensor[[]]
+) -> None:
+    assert_type(x.size(), Shape)
+    assert_type(scalar.size(), tuple[()])

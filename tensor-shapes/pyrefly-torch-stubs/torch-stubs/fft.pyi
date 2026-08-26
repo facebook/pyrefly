@@ -4,15 +4,15 @@
 # LICENSE file in the root directory of this source tree.
 
 # Type stubs for torch.fft module (Phase 6: FFT Operations)
-from shape_extensions import SizeTuple, uses_shape_dsl
+from shape_extensions import IntTuple, uses_shape_dsl
 from torch import Tensor
 from torch._shapes import irfft_ir, rfft_ir
 
 # 1D FFT operations
-def fft[Shape: SizeTuple](
+def fft[Shape: IntTuple](
     input: Tensor[Shape], n: int = None, dim: int = -1, norm: str = None
 ) -> Tensor[Shape]: ...
-def ifft[Shape: SizeTuple](
+def ifft[Shape: IntTuple](
     input: Tensor[Shape], n: int = None, dim: int = -1, norm: str = None
 ) -> Tensor[Shape]: ...
 @uses_shape_dsl(rfft_ir)
@@ -25,13 +25,13 @@ def hfft(self: Tensor, n: int = None, dim: int = -1, norm: str = None) -> Tensor
 def ihfft(self: Tensor, n: int = None, dim: int = -1, norm: str = None) -> Tensor: ...
 
 # 2D FFT operations
-def fft2[Shape: SizeTuple](
+def fft2[Shape: IntTuple](
     input: Tensor[Shape],
     s: tuple[int, int] = None,
     dim: tuple[int, int] = (-2, -1),
     norm: str = None,
 ) -> Tensor[Shape]: ...
-def ifft2[Shape: SizeTuple](
+def ifft2[Shape: IntTuple](
     input: Tensor[Shape],
     s: tuple[int, int] = None,
     dim: tuple[int, int] = (-2, -1),
@@ -51,13 +51,13 @@ def irfft2(
 ) -> Tensor: ...
 
 # ND FFT operations
-def fftn[Shape: SizeTuple](
+def fftn[Shape: IntTuple](
     input: Tensor[Shape],
     s: tuple[int, ...] = None,
     dim: tuple[int, ...] = None,
     norm: str = None,
 ) -> Tensor[Shape]: ...
-def ifftn[Shape: SizeTuple](
+def ifftn[Shape: IntTuple](
     input: Tensor[Shape],
     s: tuple[int, ...] = None,
     dim: tuple[int, ...] = None,
@@ -77,9 +77,9 @@ def irfftn(
 ) -> Tensor: ...
 
 # FFT shift operations
-def fftshift[Shape: SizeTuple](
+def fftshift[Shape: IntTuple](
     input: Tensor[Shape], dim: int | tuple[int, ...] = None
 ) -> Tensor[Shape]: ...
-def ifftshift[Shape: SizeTuple](
+def ifftshift[Shape: IntTuple](
     input: Tensor[Shape], dim: int | tuple[int, ...] = None
 ) -> Tensor[Shape]: ...

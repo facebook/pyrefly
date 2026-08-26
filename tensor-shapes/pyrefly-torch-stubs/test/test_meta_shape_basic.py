@@ -4,11 +4,15 @@
 # LICENSE file in the root directory of this source tree.
 
 # Test meta-shape function integration
-from typing import Any, assert_type, Literal
+from typing import Any, assert_type, Literal, TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
+from shape_extensions import Elements, IntTuple, IntVar
 from torch import Tensor
+
+if TYPE_CHECKING:
+    from shape_extensions import Int
 
 
 # Test 1: Basic torch.cat with literal dim
@@ -131,6 +135,127 @@ def test_unsqueeze_method():
     # Should infer: Tensor[[2, 1, 3]] (add dim at position 1)
     result = x.unsqueeze(dim=1)
     assert_type(result, Tensor[[2, 1, 3]])
+
+
+def test_shape_ops_negative_axes_and_scalar_squeeze():
+    x: Tensor[[2, 1, 3]] = torch.randn(2, 1, 3)
+    scalar: Tensor[[]] = torch.randn(())
+    scalar_index: Tensor[[]] = torch.zeros(())
+    indices: Tensor[[4]] = torch.zeros(4)
+
+    assert_type(torch.transpose(x, -1, 0), Tensor[[3, 1, 2]])
+    assert_type(torch.squeeze(x), Tensor[[2, 3]])
+    assert_type(x.squeeze(-2), Tensor[[2, 3]])
+    assert_type(torch.squeeze(x, 0), Tensor[[2, 1, 3]])
+    assert_type(x.squeeze(-1), Tensor[[2, 1, 3]])
+    assert_type(torch.unsqueeze(x, -1), Tensor[[2, 1, 3, 1]])
+    assert_type(x.select(-1, 0), Tensor[[2, 1]])
+    assert_type(torch.index_select(x, -2, indices), Tensor[[2, 4, 3]])
+    assert_type(torch.index_select(x, -2, scalar_index), Tensor[[2, 1, 3]])
+    assert_type(torch.squeeze(scalar, 0), Tensor[[]])
+    assert_type(scalar.squeeze(-1), Tensor[[]])
+    assert_type(torch.transpose(scalar, 0, -1), Tensor[[]])
+    assert_type(scalar.transpose(-1, 0), Tensor[[]])
+    assert_type(scalar.topk(1), tuple[Tensor[[]], Tensor[[]]])
+
+
+def check_shape_ops_gradual_and_bare_fallback(
+    x: Tensor[[2, 1, 3]], dim: int, indices: Tensor[[4]], bare: Tensor
+) -> None:
+    assert_type(x.transpose(dim, 0), Tensor[IntTuple])
+    assert_type(torch.squeeze(x, dim), Tensor[IntTuple])
+    assert_type(x.unsqueeze(dim), Tensor[IntTuple])
+    assert_type(torch.select(x, dim, 0), Tensor[IntTuple])
+    assert_type(x.index_select(dim, indices), Tensor[IntTuple])
+
+    assert_type(torch.transpose(bare, 0, 1), Tensor[IntTuple])
+    assert_type(bare.squeeze(), Tensor[IntTuple])
+    assert_type(torch.unsqueeze(bare, 0), Tensor[IntTuple])
+    assert_type(bare.select(0, 0), Tensor[IntTuple])
+    assert_type(torch.index_select(bare, 0, indices), Tensor[IntTuple])
+
+
+def check_shape_ops_symbolic_suffix[Ts: IntTuple](
+    x: Tensor[[*Elements[Ts], 3]], indices: Tensor[[4]]
+) -> None:
+    assert_type(x.transpose(-1, -1), Tensor[[*Elements[Ts], 3]])
+    assert_type(torch.transpose(x, 0, 0), Tensor[[*Elements[Ts], 3]])
+    assert_type(x.transpose(-1, 0), Tensor[IntTuple])
+    assert_type(torch.squeeze(x, -1), Tensor[IntTuple])
+    assert_type(x.select(-1, 0), Tensor[Ts])
+    assert_type(torch.select(x, -1, 0), Tensor[Ts])
+    assert_type(x.unsqueeze(-1), Tensor[[*Elements[Ts], 3, 1]])
+    assert_type(torch.unsqueeze(x, -1), Tensor[[*Elements[Ts], 3, 1]])
+    assert_type(x.index_select(-1, indices), Tensor[[*Elements[Ts], 4]])
+    assert_type(torch.index_select(x, -1, indices), Tensor[[*Elements[Ts], 4]])
+
+
+def test_unbind_concrete() -> None:
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+
+    assert_type(torch.unbind(x), tuple[Tensor[[3, 4]], ...])
+    assert_type(x.unbind(1), tuple[Tensor[[2, 4]], ...])
+    assert_type(torch.unbind(x, dim=-1), tuple[Tensor[[2, 3]], ...])
+    assert_type(x.unbind(-1), tuple[Tensor[[2, 3]], ...])
+
+
+def check_unbind_gradual(
+    x: Tensor[[2, 3]], dim: int, bare: Tensor, open_rank: Tensor[IntTuple]
+) -> None:
+    assert_type(torch.unbind(x, dim), tuple[Tensor[IntTuple], ...])
+    assert_type(x.unbind(dim), tuple[Tensor[IntTuple], ...])
+    assert_type(torch.unbind(bare), tuple[Tensor[IntTuple], ...])
+    assert_type(open_rank.unbind(-1), tuple[Tensor[IntTuple], ...])
+
+
+def check_unbind_symbolic_suffix[Ts: IntTuple](
+    x: Tensor[[*Elements[Ts], 3]],
+) -> None:
+    assert_type(torch.unbind(x, -1), tuple[Tensor[Ts], ...])
+    assert_type(x.unbind(-1), tuple[Tensor[Ts], ...])
+
+
+def check_axis_extent_ops_symbolic_suffix[Ts: IntTuple, K: IntVar](
+    x: Tensor[[*Elements[Ts], 3]], extent_source: Tensor[[K]]
+) -> None:
+    extent = extent_source.size(0)
+
+    assert_type(x.narrow(-1, 0, extent), Tensor[[*Elements[Ts], K]])
+    assert_type(torch.narrow(x, -1, 0, extent), Tensor[[*Elements[Ts], K]])
+    assert_type(
+        x.topk(extent), tuple[Tensor[[*Elements[Ts], K]], Tensor[[*Elements[Ts], K]]]
+    )
+    assert_type(
+        torch.topk(x, extent),
+        tuple[Tensor[[*Elements[Ts], K]], Tensor[[*Elements[Ts], K]]],
+    )
+    assert_type(x.multinomial(extent), Tensor[IntTuple])
+    assert_type(torch.multinomial(x, extent), Tensor[IntTuple])
+
+
+def check_axis_extent_ops_gradual(
+    x: Tensor[[2, 3, 4]], bare: Tensor, dim: int, extent: int
+) -> None:
+    assert_type(x.narrow(1, 0, extent), Tensor[[2, int, 4]])
+    assert_type(torch.narrow(x, dim, 0, 2), Tensor[IntTuple])
+    assert_type(x.topk(extent, dim=1), tuple[Tensor[[2, int, 4]], Tensor[[2, int, 4]]])
+    assert_type(torch.topk(x, 2, dim=dim), tuple[Tensor[IntTuple], Tensor[IntTuple]])
+    assert_type(torch.narrow(bare, 0, 0, 2), Tensor[IntTuple])
+    assert_type(bare.topk(2), tuple[Tensor[IntTuple], Tensor[IntTuple]])
+    assert_type(torch.multinomial(bare, 2), Tensor[IntTuple])
+
+
+def test_axis_extent_ops_literals() -> None:
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    vector: Tensor[[3]] = torch.randn(3)
+    matrix: Tensor[[2, 3]] = torch.randn(2, 3)
+
+    assert_type(torch.topk(x, 2, dim=1), tuple[Tensor[[2, 2, 4]], Tensor[[2, 2, 4]]])
+    assert_type(x.topk(2, dim=-2), tuple[Tensor[[2, 2, 4]], Tensor[[2, 2, 4]]])
+    assert_type(x.topk(3), tuple[Tensor[[2, 3, 3]], Tensor[[2, 3, 3]]])
+    assert_type(torch.narrow(x, -2, 0, 2), Tensor[[2, 2, 4]])
+    assert_type(torch.multinomial(vector, 5), Tensor[[5]])
+    assert_type(matrix.multinomial(6), Tensor[[2, 6]])
 
 
 # Test 7: torch.permute - permute dimensions
@@ -307,6 +432,7 @@ def test_narrow():
     # Should infer: Tensor[[3, 4]] (narrow dim 0 to length 3)
     result = torch.narrow(x, dim=0, start=1, length=3)
     assert_type(result, Tensor[[3, 4]])
+    assert_type(torch.narrow(x, dim=-1, start=0, length=2), Tensor[[5, 2]])
 
 
 # Test 22: torch.split
@@ -474,12 +600,29 @@ def test_arange():
 def test_linspace():
     # Should infer: Tensor[[5]] (5 points from 0 to 1)
     assert_type(torch.linspace(0, 1, 5), Tensor[[5]])
+    assert_type(torch.linspace(0, 1, steps=5), Tensor[[5]])
+
+
+def test_linspace_symbolic[Steps: IntVar](steps: Int[Steps]):
+    assert_type(torch.linspace(0, 1, steps), Tensor[[Steps]])
+
+
+def test_linspace_gradual(steps: int):
+    assert_type(torch.linspace(0, 1, steps), Tensor[[int]])
 
 
 # Test 39: torch.eye
 def test_eye():
     # Should infer: Tensor[[3, 3]] (3x3 identity matrix)
     assert_type(torch.eye(3), Tensor[[3, 3]])
+
+
+def test_eye_symbolic[N: IntVar](n: Int[N]):
+    assert_type(torch.eye(n), Tensor[[N, N]])
+
+
+def test_eye_gradual(n: int):
+    assert_type(torch.eye(n), Tensor[[int, int]])
 
 
 # Additional method-style tests for operations that also have method forms
@@ -837,6 +980,7 @@ def test_narrow_method():
     # Should infer: Tensor[[3, 4]] (narrow dim 0 to length 3)
     result = x.narrow(dim=0, start=1, length=3)
     assert_type(result, Tensor[[3, 4]])
+    assert_type(x.narrow(dim=-1, start=0, length=2), Tensor[[5, 2]])
 
 
 # Test 83M: x.split() method style

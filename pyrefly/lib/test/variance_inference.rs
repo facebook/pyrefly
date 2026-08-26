@@ -28,7 +28,7 @@ T = TypeVar("T", contravariant=True)
 # Intentionally set up 2 type variables:
 # - U needs to has its variance inferred (to be covariant)
 # - T has its variance specified incorrectly -- but downstream logic is expected to respect it.
-class Foo[U](Generic[T]):  # E: Type parameter T is not included in the type parameter list
+class Foo[U](Generic[T]):  # E: Type parameter `T` is not included in the type parameter list
     def m0(self) -> T: ...  # E: Type variable `T` is contravariant but is used in covariant position
     def m1(self) -> U: ...
 

@@ -55,8 +55,8 @@ A fixture stub provides a shape-generic type signature. For example,
 class Linear[N, M](Module):
     def __init__(
         self,
-        in_features: Dim[N],
-        out_features: Dim[M],
+        in_features: SymInt[N],
+        out_features: SymInt[M],
         bias: bool = True,
     ) -> None: ...
 
@@ -71,7 +71,7 @@ dimensions.
 
 1. Identify the shape signature: input dimensions, output dimensions, and how
    they relate.
-2. Use `Dim[X]` for parameters that determine tensor dimensions. Non-shape
+2. Use `SymInt[X]` for parameters that determine tensor dimensions. Non-shape
    parameters like `bias` and `dropout` stay as their original types.
 3. Write the method or function signature expressing the shape transform. Use
    `*Xs` or `*Bs` for batch dimensions that pass through unchanged.
@@ -86,8 +86,8 @@ Suppose you want to add `nn.GroupNorm`, which preserves spatial dimensions:
 class GroupNorm[NumGroups, NumChannels](Module):
     def __init__(
         self,
-        num_groups: Dim[NumGroups],
-        num_channels: Dim[NumChannels],
+        num_groups: SymInt[NumGroups],
+        num_channels: SymInt[NumChannels],
         eps: float = 1e-5,
         affine: bool = True,
     ) -> None: ...
@@ -138,6 +138,20 @@ including:
 
 Keep DSL functions simple and algebraic. They are analyzed by Pyrefly; they are
 not normal runtime implementations of PyTorch operations.
+
+The type-level DSL used by the NumPy and JAX stubs is a separate, smaller
+subset, and it is still being built out. Two things about it are worth knowing
+before writing one, because neither is guessable:
+
+- A DSL function that uses an unsupported construct evaluates to `Unknown` at
+  every call site, and the call site itself reports nothing. Type check the stub
+  files to see the real diagnostic; the runner does this for you as the `stubs`
+  suite.
+- A parameter typed `int | tuple[int, ...]` cannot be iterated after narrowing
+  with `is_int_value` alone. Leading with an `is None` check makes the narrowing
+  work, so such parameters are declared `int | tuple[int, ...] | None` with a
+  body that rejects `None`. Both `conv_shape` in the Torch stubs and
+  `reshape_shape` in the JAX stubs do this.
 
 ### Example: `torch.cat`
 
@@ -213,6 +227,19 @@ For most contributions, the important validation is the tensor-shape Pyrefly
 runner. It checks the focused tests, negative expectations, jaxtyping examples,
 and the example corpus using the shape-aware stubs.
 
+It also type checks the stub files themselves, reported as a `stubs` suite.
+This matters more than it sounds: Pyrefly reports errors only for the files it
+is asked to check, so a stub reached through `--search-path` is silent. A stub
+that fails to compile does not announce itself, it just stops contributing
+types, and every call site quietly infers `Unknown` -- which looks like a
+missing rule rather than a broken one. Checking the stubs directly turns that
+into an error with a line number.
+
+The Torch package opts out for now, via `check_stubs=False` in its
+`run_pyrefly.py`. Most of its errors are in `torch-stubs/_shapes.pyi`, whose V1
+`@shape_dsl_function` bodies are not valid Python. Type-level DSL files do check
+cleanly, so migrating those rules is what removes the opt-out.
+
 Build Pyrefly first, then run:
 
 ```bash
@@ -239,14 +266,18 @@ Use `--nocapture` when you want the full Pyrefly output on success. By default,
 the runner prints a compact `PASS ...` line and only dumps checker output on
 failure.
 
-In an internal Buck checkout, the equivalent static validation targets are:
+There are no Buck test targets for the stubs. An internal checkout runs the same
+runner and only sources Pyrefly differently, via `--buck`:
 
 ```bash
-buck test tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_all_test
-buck test tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_error_test
-buck test tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_jaxtyping_test
-buck test tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_jaxtyping_error_test
-buck test tensor-shapes/pyrefly-torch-stubs/examples:torch_examples_test
+python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --buck
+```
+
+To run every library at once, static and runtime, exactly as both CI systems do:
+
+```bash
+python3 tensor-shapes/run_tests.py           # add --buck in an internal checkout
+python3 tensor-shapes/run_tests.py --static-only   # no virtualenv needed
 ```
 
 The project-level `test.py` runner keeps tensor-shape validation separate from
@@ -267,15 +298,19 @@ The tests live in:
 tensor-shapes/pyrefly-torch-stubs/test/runtime_tests/
 ```
 
-Run them from a Python 3.12+ virtualenv with `torch` installed:
+Runtime tests need the shared virtualenv, which serves torch, numpy and jax
+together. Bootstrapping is the only step that downloads anything, so it is also
+the only step that needs network access -- on a Meta machine, via fwdproxy:
 
 ```bash
-python3.12 -m venv .tensor-shapes-venv
-. .tensor-shapes-venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install torch
-python tensor-shapes/pyrefly-torch-stubs/run_runtime_tests.py
+python3 tensor-shapes/bootstrap_venv.py            # add --fwdproxy internally
+python3 tensor-shapes/run_tests.py --runtime-only
 ```
+
+The virtualenv defaults to `~/.tensor-shapes-venv`; set `$TENSOR_SHAPES_VENV` to
+put it elsewhere. The runners never create it, and never reach the network: if it
+is missing they say so and print the bootstrap command. Type checking does not
+need it at all.
 
 Run one suite while iterating:
 
@@ -285,12 +320,9 @@ python tensor-shapes/pyrefly-torch-stubs/run_runtime_tests.py --suite model
 ```
 
 The runtime runner sets up import paths for `shape_extensions` and the runnable
-example modules. In an internal Buck checkout, the existing runtime targets are:
-
-```bash
-buck test tensor-shapes/pyrefly-torch-stubs/test:annotation_runtime_test
-buck test tensor-shapes/pyrefly-torch-stubs/test:model_runtime_test
-```
+example modules. Runtime tests are the same in an internal checkout: they run
+against the virtualenv, never through Buck, so that no workflow ever rebuilds
+torch, numpy or jax.
 
 ## Kernel Tests
 

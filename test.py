@@ -4,7 +4,6 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-# pyre-strict
 
 """
 Test that everything works well
@@ -194,9 +193,9 @@ class CargoExecutor(Executor):
 
     def tensor_shapes(self) -> None:
         run(["cargo", "build"])
-        # The runners resolve the debug pyrefly themselves, so we don't pass `--pyrefly`.
-        run([sys.executable, "tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py"])
-        run([sys.executable, "tensor-shapes/pyrefly-numpy-stubs/run_pyrefly.py"])
+        # Static only, so that `test.py` needs no virtualenv. The runner
+        # resolves the debug pyrefly itself, so we don't pass `--pyrefly`.
+        run([sys.executable, "tensor-shapes/run_tests.py", "--static-only"])
 
     def conformance(self) -> None:
         cargo_target_dir = os.environ.get("CARGO_TARGET_DIR", "target")
@@ -212,6 +211,7 @@ class CargoExecutor(Executor):
 
     def jsonschema(self) -> None:
         run(["python3", "schemas/validate_schemas.py"])
+        run(["python3", "test/sarif/validate_sarif.py"])
 
 
 @final
@@ -260,31 +260,10 @@ class BuckExecutor(Executor):
                 "Skipping tensor shape tests on CI because they're already scheduled."
             )
             return
-        run(
-            [
-                "buck2",
-                "test",
-                "tensor-shapes/pyrefly-torch-stubs/examples:torch_examples_test",
-                "tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_all_test",
-                "tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_error_test",
-                "tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_jaxtyping_test",
-                "tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_jaxtyping_error_test",
-                "tensor-shapes/pyrefly-numpy-stubs:numpy_arithmetic_static_test",
-                "tensor-shapes/pyrefly-numpy-stubs:numpy_broadcasting_static_test",
-                "tensor-shapes/pyrefly-numpy-stubs:numpy_creation_basics_static_test",
-                "tensor-shapes/pyrefly-numpy-stubs:numpy_dtype_properties_static_test",
-                "tensor-shapes/pyrefly-numpy-stubs:numpy_examples_static_test",
-                "tensor-shapes/pyrefly-numpy-stubs:numpy_indexing_static_test",
-                "tensor-shapes/pyrefly-numpy-stubs:numpy_linalg_static_test",
-                "tensor-shapes/pyrefly-numpy-stubs:numpy_math_ufuncs_static_test",
-                "tensor-shapes/pyrefly-numpy-stubs:numpy_random_static_test",
-                "tensor-shapes/pyrefly-numpy-stubs:numpy_reductions_static_test",
-                "tensor-shapes/pyrefly-numpy-stubs:numpy_runtime_test",
-                "--",
-                "--run-disabled",
-                "--return-zero-on-skips",
-            ]
-        )
+        # Same runner and same scope as the Cargo path; `--buck` only changes
+        # where the Pyrefly binary comes from. Runtime tests are left to CI so
+        # that `test.py` does not require a bootstrapped virtualenv.
+        run([sys.executable, "tensor-shapes/run_tests.py", "--static-only", "--buck"])
 
     def conformance(self) -> None:
         run(
@@ -304,6 +283,7 @@ class BuckExecutor(Executor):
                 "test",
                 "--reuse-current-config",
                 "schemas:test",
+                "test:sarif-schema",
             ]
         )
 

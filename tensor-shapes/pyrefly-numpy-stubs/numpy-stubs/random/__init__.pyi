@@ -5,11 +5,13 @@
 
 from typing import overload
 
-from shape_extensions import Dim
+from shape_extensions import Int, IntVar
 
 from .. import dtype, float64, ndarray
 
 @overload
-def randn[N](d0: Dim[N], /) -> ndarray[[N], dtype[float64]]: ...
+def randn[N: IntVar](d0: Int[N], /) -> ndarray[[N], dtype[float64]]: ...
 @overload
-def randn[N, M](d0: Dim[N], d1: Dim[M], /) -> ndarray[[N, M], dtype[float64]]: ...
+def randn[N: IntVar, M: IntVar](
+    d0: Int[N], d1: Int[M], /
+) -> ndarray[[N, M], dtype[float64]]: ...

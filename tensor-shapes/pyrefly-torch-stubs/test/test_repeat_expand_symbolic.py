@@ -5,20 +5,23 @@
 
 """Regression tests for repeat and expand with symbolic dimensions from size()
 
-These operations must work with symbolic dimensions like Dim[N] returned from x.size().
+These operations must work with symbolic dimensions like Int[N] returned from x.size().
 Previously failed when iter_shape_dims() filtered out Type::Quantified dimensions.
 """
 
 from typing import assert_type, TYPE_CHECKING
 
+from shape_extensions import IntVar
+
+
 if TYPE_CHECKING:
     from torch import Tensor
 
 
-def test_repeat_symbolic[N](x: Tensor[[N, 1]]):
+def test_repeat_symbolic[N: IntVar](x: Tensor[[N, 1]]):
     """Repeat with symbolic dimension from size()"""
     # Get symbolic dimension from size()
-    n = x.size(0)  # Returns Dim[N]
+    n = x.size(0)  # Returns Int[N]
 
     # Repeat using symbolic dimension and literal
     # This previously failed with "repeat sizes length 1 doesn't match tensor rank 2"
@@ -29,10 +32,10 @@ def test_repeat_symbolic[N](x: Tensor[[N, 1]]):
     assert_type(y, Tensor[[N * N, 3]])
 
 
-def test_expand_symbolic[N](x: Tensor[[N, 1]]):
+def test_expand_symbolic[N: IntVar](x: Tensor[[N, 1]]):
     """Expand with symbolic dimension from size()"""
     # Get symbolic dimension
-    n = x.size(0)  # Returns Dim[N]
+    n = x.size(0)  # Returns Int[N]
 
     # Expand using symbolic dimension and literal
     # This previously failed with "expand target size length 1 doesn't match tensor rank 2"
@@ -42,7 +45,7 @@ def test_expand_symbolic[N](x: Tensor[[N, 1]]):
     assert_type(y, Tensor[[N, 5]])
 
 
-def test_expand_runtime_values[N, M](x: Tensor[[N, M]]):
+def test_expand_runtime_values[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     """Expand with multiple symbolic dimensions from size()"""
     n = x.size(0)
     m = x.size(1)

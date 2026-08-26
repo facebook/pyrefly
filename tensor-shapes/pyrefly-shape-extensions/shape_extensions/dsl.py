@@ -11,7 +11,11 @@ Only used inside DSL definition files (e.g. torch/_shapes.pyi), not in
 normal stubs or user code.
 """
 
+from __future__ import annotations
+
 import typing
+
+from . import Int as _IntSchema, IntTuple as _IntTupleSchema
 
 
 def shape_dsl_function(fn: typing.Callable) -> typing.Callable:
@@ -59,7 +63,52 @@ class _Unknown:
 Unknown: _Unknown = _Unknown()
 
 
-def prod(xs: list[int]) -> int:
+def Invalid(message: str) -> typing.Any:
+    """Return an invalid shape computation from a type-shape DSL body."""
+
+    ...
+
+
+class Int:
+    """Operations that produce values in the DSL integer domain."""
+
+    @staticmethod
+    def gradual() -> typing.Any: ...
+
+
+class IntTuple(_IntTupleSchema):
+    """Operations that produce values in the DSL integer-tuple domain."""
+
+    def __new__(cls, values: typing.Iterable[typing.Any]) -> _IntTupleSchema:
+        return _IntTupleSchema(values)
+
+    @staticmethod
+    def gradual() -> typing.Any: ...
+
+
+def is_concrete_int(value: typing.Any) -> bool: ...
+
+
+def is_int_value(value: object) -> typing.TypeIs[int]: ...
+
+
+def concat(
+    left: typing.Iterable[typing.Any], right: typing.Iterable[typing.Any], /
+) -> _IntTupleSchema:
+    """Concatenate two shape values inside a type-shape DSL body."""
+
+    return _IntTupleSchema((*left, *right))
+
+
+@typing.overload
+def prod(xs: _IntTupleSchema, /) -> _IntSchema: ...
+
+
+@typing.overload
+def prod(xs: list[int]) -> int: ...
+
+
+def prod(xs: _IntTupleSchema | list[int]) -> _IntSchema | int:
     """Compute the product of a list of dimension sizes."""
     ...
 

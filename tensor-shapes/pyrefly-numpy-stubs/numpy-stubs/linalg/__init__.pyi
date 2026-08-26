@@ -5,50 +5,39 @@
 
 from typing import Literal, overload
 
-from numpy._shapes import svd_reduced_2d_ir
-from shape_extensions import Dim, uses_shape_dsl
+from numpy._shapes import int_min
+from shape_extensions import IntVar
 
 from .. import ndarray
 
 # MVP shape surface only; NumPy dtype promotion is intentionally not modeled.
 @overload
-def solve[N, DType](
+def solve[N: IntVar, DType](
     a: ndarray[[N, N], DType],
     b: ndarray[[N]],
 ) -> ndarray[[N], DType]: ...
 @overload
-def solve[N, K, DType](
+def solve[N: IntVar, K: IntVar, DType](
     a: ndarray[[N, N], DType],
     b: ndarray[[N, K]],
 ) -> ndarray[[N, K], DType]: ...
-def norm[N, M, DType](
+def norm[N: IntVar, M: IntVar, DType](
     x: ndarray[[N, M, 3], DType],
     axis: Literal[-1],
     keepdims: Literal[True],
 ) -> ndarray[[N, M, 1], DType]: ...
-def eigh[N, DType](
+def eigh[N: IntVar, DType](
     a: ndarray[[N, N], DType],
 ) -> tuple[ndarray[[N], DType], ndarray[[N, N], DType]]: ...
-@overload
-def svd[N, DType](
-    a: ndarray[[N, N], DType],
+def svd[M: IntVar, N: IntVar, DType](
+    a: ndarray[[M, N], DType],
     # NumPy defaults to full SVD; this MVP accepts only the reduced form needed
     # by PCA-style demos.
     full_matrices: Literal[False],
     compute_uv: Literal[True] = True,
     hermitian: Literal[False] = False,
 ) -> tuple[
-    ndarray[[N, N], DType],
-    ndarray[[N], DType],
-    ndarray[[N, N], DType],
+    ndarray[[M, int_min(M, N)], DType],
+    ndarray[[int_min(M, N)], DType],
+    ndarray[[int_min(M, N), N], DType],
 ]: ...
-@uses_shape_dsl(svd_reduced_2d_ir)
-@overload
-def svd(
-    a: ndarray,
-    # NumPy defaults to full SVD; this MVP accepts only the reduced form needed
-    # by PCA-style demos.
-    full_matrices: Literal[False],
-    compute_uv: Literal[True] = True,
-    hermitian: Literal[False] = False,
-) -> tuple[ndarray, ndarray, ndarray]: ...

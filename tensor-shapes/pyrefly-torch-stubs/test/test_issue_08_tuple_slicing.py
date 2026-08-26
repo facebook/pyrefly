@@ -5,32 +5,45 @@
 
 from typing import assert_type, TYPE_CHECKING
 
+from shape_extensions import IntVar
+
+
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
-def test_tuple_slicing[B, T, NHeads, HeadDim](
+def test_tuple_slicing[
+    B: IntVar,
+    T: IntVar,
+    NHeads: IntVar,
+    HeadDim: IntVar,
+](
     x: Tensor[[B, T, NHeads, HeadDim]],
 ) -> None:
     # Full size() works correctly
     full_size = x.size()
-    assert_type(full_size, tuple[Dim[B], Dim[T], Dim[NHeads], Dim[HeadDim]])
+    assert_type(full_size, tuple[Int[B], Int[T], Int[NHeads], Int[HeadDim]])
 
     # Sliced size now preserves positional type information
     sliced_size = x.size()[:-1]
-    assert_type(sliced_size, tuple[Dim[B], Dim[T], Dim[NHeads]])
+    assert_type(sliced_size, tuple[Int[B], Int[T], Int[NHeads]])
 
     # Explicit size(dim) calls also work
     s0 = x.size(0)
     s1 = x.size(1)
     s2 = x.size(2)
-    assert_type(s0, Dim[B])
-    assert_type(s1, Dim[T])
-    assert_type(s2, Dim[NHeads])
+    assert_type(s0, Int[B])
+    assert_type(s1, Int[T])
+    assert_type(s2, Int[NHeads])
 
 
-def test_reshape_with_slice[B, T, NHeads, HeadDim](
+def test_reshape_with_slice[
+    B: IntVar,
+    T: IntVar,
+    NHeads: IntVar,
+    HeadDim: IntVar,
+](
     x: Tensor[[B, T, NHeads, HeadDim]],
 ) -> None:
     # This pattern fails with tuple slicing

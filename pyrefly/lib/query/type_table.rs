@@ -19,6 +19,7 @@ use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_alias::TypeAliasData;
+use pyrefly_types::type_var::FlagDomain;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::NeverStyle;
@@ -40,10 +41,6 @@ pub struct LocatedTypeTableRef {
     pub location: PythonASTRange,
     #[serde(rename = "type")]
     pub type_index: usize,
-    // Omitted from the wire when the caller opted out of per-location display
-    // (the structured client resolves types from the table alone).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
@@ -483,6 +480,7 @@ pub(super) fn type_to_indexed_shape(
         Type::Materialization => indexed_named_leaf(table, "Materialization"),
         Type::Var(_) => indexed_named_leaf(table, "typing.Any"),
         Type::ShapedArray(_) => indexed_named_leaf(table, "Tensor"),
+        Type::IntTuple(_) => indexed_named_leaf(table, "IntTuple"),
         Type::NNModule(module) => {
             let args = module
                 .class
@@ -499,11 +497,10 @@ pub(super) fn type_to_indexed_shape(
                 Vec::new(),
             )
         }
-        Type::Size(_) => indexed_named_leaf(table, "Size"),
-        Type::Dim(inner) => {
-            let inner = type_to_indexed_shape(context, inner, table);
-            insert_indexed_named(table, "Dim", vec![inner], None, Vec::new())
-        }
+        Type::DataFrame(schema) => type_to_indexed_shape(context, &schema.underlying_type(), table),
+        Type::Series(schema) => type_to_indexed_shape(context, &schema.underlying_type(), table),
+        Type::Int(_) => indexed_named_leaf(table, "Int"),
+        Type::TypeLevelDslCall(_) => indexed_named_leaf(table, "type_level_dsl_call"),
         Type::TypeForm(inner) => {
             let inner = type_to_indexed_shape(context, inner, table);
             insert_indexed_named(table, "typing.TypeForm", vec![inner], None, Vec::new())
@@ -571,7 +568,9 @@ fn callable_param_indices(
     table: &mut TypeTableBuilder,
 ) -> Vec<usize> {
     match params {
-        Params::List(params) => param_list_to_indexed_shapes(context, params, table),
+        Params::List(params) | Params::Partial(params) => {
+            param_list_to_indexed_shapes(context, params, table)
+        }
         Params::ParamSpec(prefix, param_spec) => {
             let mut params = prefix
                 .iter()
@@ -637,7 +636,7 @@ fn tuple_indexed_args(
             indexed_named_leaf(table, "..."),
         ],
         Tuple::Unpacked(unpacked) => {
-            let (prefix, middle, suffix) = &**unpacked;
+            let (prefix, middle, suffix) = unpacked.parts();
             let mut args = prefix
                 .iter()
                 .map(|ty| type_to_indexed_shape(context, ty, table))
@@ -678,6 +677,7 @@ fn quantified_restriction_indexed_bounds(
 ) -> Vec<usize> {
     match restriction {
         Restriction::Bound(bound) => vec![type_to_indexed_shape(context, bound, table)],
+        Restriction::Flag(domain) => flag_domain_indexed_bounds(*domain, table),
         Restriction::Constraints(_) | Restriction::Unrestricted => Vec::new(),
     }
 }
@@ -693,8 +693,17 @@ fn restriction_indexed_bounds(
             .iter()
             .map(|ty| type_to_indexed_shape(context, ty, table))
             .collect(),
+        Restriction::Flag(domain) => flag_domain_indexed_bounds(*domain, table),
         Restriction::Unrestricted => Vec::new(),
     }
+}
+
+fn flag_domain_indexed_bounds(domain: FlagDomain, table: &mut TypeTableBuilder) -> Vec<usize> {
+    domain
+        .class_names()
+        .into_iter()
+        .map(|name| indexed_named_leaf(table, name))
+        .collect()
 }
 
 fn alias_to_indexed_shape(
@@ -763,15 +772,53 @@ fn union_to_indexed_shape(
 }
 
 pub(super) fn located_type_table_refs(
-    types: Vec<(PythonASTRange, (usize, String))>,
-    include_display: bool,
+    types: Vec<(PythonASTRange, usize)>,
 ) -> Vec<LocatedTypeTableRef> {
     types
         .into_iter()
-        .map(|(location, (type_index, display))| LocatedTypeTableRef {
+        .map(|(location, type_index)| LocatedTypeTableRef {
             location,
             type_index,
-            display: include_display.then_some(display),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use pyrefly_types::type_var::FlagMember;
+
+    use super::*;
+
+    fn indexed_flag_bound_names(domain: FlagDomain) -> Vec<String> {
+        let mut table = TypeTableBuilder::new();
+        let bounds = flag_domain_indexed_bounds(domain, &mut table);
+        let entries = table.into_type_table();
+        bounds
+            .into_iter()
+            .map(|i| match &entries[i].kind {
+                IndexedTypeShapeKind::Named { name, .. } => name.clone(),
+                kind => unreachable!("Flag bounds index named leaves, got {kind:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn flag_restriction_has_indexed_builtin_bound() {
+        assert_eq!(
+            indexed_flag_bound_names(FlagDomain::of(FlagMember::Int)),
+            vec!["builtins.int"]
+        );
+    }
+
+    /// A multi-member domain indexes every member, in canonical order rather than join order.
+    #[test]
+    fn flag_union_restriction_indexes_every_member() {
+        let domain = FlagDomain::of(FlagMember::NoneType)
+            .join(FlagDomain::of(FlagMember::Str))
+            .join(FlagDomain::of(FlagMember::Int));
+        assert_eq!(
+            indexed_flag_bound_names(domain),
+            vec!["builtins.int", "builtins.str", "types.NoneType"]
+        );
+    }
 }

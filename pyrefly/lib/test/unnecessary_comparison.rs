@@ -107,3 +107,14 @@ def f(x: object):
         pass
 "#,
 );
+
+testcase!(
+    test_classdef_vs_protocol_ok,
+    r#"
+from collections.abc import Hashable
+
+def f(x: Hashable):
+    if x is int:  # OK - class objects may satisfy protocols
+        pass
+"#,
+);

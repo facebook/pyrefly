@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-from typing import Any, assert_type, cast, Literal
+from typing import Any, assert_type, cast, Literal, TYPE_CHECKING
 
 import numpy as np
-from shape_extensions import assert_shape
+from shape_extensions import assert_shape, Int, IntTuple, IntVar
 
 
 def make_array(shape: Any) -> Any:
@@ -31,6 +31,36 @@ def test_reduce_higher_rank_no_axis() -> None:
     assert_shape(np.sum(a), ())
     assert_shape(np.mean(a, keepdims=True), (1, 1, 1))
     assert_shape(np.max(a, keepdims=True), (1, 1, 1))
+
+
+def test_reduce_scalar_and_empty_axis_tuple() -> None:
+    scalar = cast("np.ndarray[tuple[()]]", make_array(()))
+    matrix = np.ones((3, 4))
+
+    assert_shape(np.sum(scalar), ())
+    assert_shape(np.mean(scalar, keepdims=True), ())
+    assert_shape(np.sum(matrix, axis=()), (3, 4))
+    assert_shape(np.sum(matrix, axis=(), keepdims=True), (3, 4))
+
+    try:
+        # E: axis out of bounds
+        np.sum(scalar, axis=(0,))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected NumPy to reject an axis for a scalar")
+
+    if TYPE_CHECKING:
+        # The shared static rule rejects integer axes for rank-zero arrays.
+        np.sum(scalar, axis=0)  # E: axis out of bounds
+
+    try:
+        # `Flag` keeps bool and int separate, matching NumPy's rejection of boolean axes.
+        np.sum(matrix, axis=True)  # E: not a valid `Flag[int | tuple[int, ...] | None]`
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("expected NumPy to reject a boolean axis")
 
 
 def test_reduce_matrix_axis_zero() -> None:
@@ -80,6 +110,7 @@ def test_reduce_higher_rank_axis() -> None:
 
     assert_shape(np.sum(a, axis=1), (2, 4))
     assert_shape(np.mean(a, axis=-1), (2, 3))
+    assert_shape(np.sum(a, axis=(0, 2)), (3,))
 
 
 def test_method_sum_3d_axis_one_for_nbody() -> None:
@@ -148,6 +179,14 @@ def test_reduce_rejects_invalid_axes() -> None:
     else:
         raise AssertionError("expected NumPy to reject duplicate axes")
 
+    try:
+        # E: duplicate axis
+        np.sum(a, axis=(0, -2))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected NumPy to reject normalized duplicate axes")
+
 
 def test_reduce_matrix_axis_zero_keepdims() -> None:
     a = np.ones((3, 4))
@@ -182,3 +221,44 @@ def test_keepdims_reduction_broadcasts_over_matrix() -> None:
     row_totals = np.sum(a, axis=1, keepdims=True)
 
     assert_shape(a / row_totals, (3, 4))
+
+
+def check_generic_reduction_flags[N: IntVar](
+    a: np.ndarray[[N, 3], np.dtype[np.float32]],
+    gradual: np.ndarray[[int, 3], np.dtype[np.float32]],
+    axis: int,
+    axes: tuple[int, ...],
+    keepdims: bool,
+) -> None:
+    assert_type(np.sum(a, axis=1), np.ndarray[[N], Any])
+    assert_type(np.mean(a, axis=1), np.ndarray[[N], Any])
+    assert_type(np.min(a, axis=1), np.ndarray[[N], Any])
+    assert_type(np.max(a, axis=1), np.ndarray[[N], Any])
+    assert_type(np.sum(gradual, axis=1), np.ndarray[[int], Any])
+    assert_type(np.sum(a, axis=axis), np.ndarray[IntTuple, Any])
+    assert_type(np.sum(a, axis=axes), np.ndarray[IntTuple, Any])
+    assert_type(np.sum(a, axis=1, keepdims=keepdims), np.ndarray[IntTuple, Any])
+    if TYPE_CHECKING:
+        assert_type(
+            np.sum(a, axis=999999999999999999999999),
+            np.ndarray[IntTuple, Any],
+        )
+        assert_type(
+            np.sum(a, axis=-999999999999999999999999),
+            np.ndarray[IntTuple, Any],
+        )
+
+
+def check_union_reduction_flags(
+    a: np.ndarray[[2, 3]],
+    axis: Literal[0, 1],
+    keepdims: Literal[True, False],
+) -> None:
+    assert_type(np.sum(a, axis=axis), np.ndarray[IntTuple, Any])
+    assert_type(np.sum(a, axis=0, keepdims=keepdims), np.ndarray[IntTuple, Any])
+
+
+def check_symbolic_axis_becomes_gradual[N: IntVar](
+    a: np.ndarray[[N, 3]], axis: Int[N]
+) -> None:
+    assert_type(np.sum(a, axis=axis), np.ndarray[IntTuple, Any])

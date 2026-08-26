@@ -11,7 +11,7 @@ to capture variable-length shapes and return derived types.
 
 from typing import TYPE_CHECKING
 
-from shape_extensions import Elements, SizeTuple
+from shape_extensions import Elements, IntTuple, IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-def variadic_identity[Ts: SizeTuple](x: Tensor[Ts]) -> Tensor[Ts]:
+def variadic_identity[Ts: IntTuple](x: Tensor[Ts]) -> Tensor[Ts]:
     """Identity preserving variadic shape"""
     return x
 
@@ -42,7 +42,7 @@ def test_variadic_identity_4d(x: Tensor[[1, 2, 3, 4]]) -> Tensor[[1, 2, 3, 4]]:
 # ============================================================================
 
 
-def with_prefix_suffix[P, Qs: SizeTuple, R, S](
+def with_prefix_suffix[P: IntVar, Qs: IntTuple, R: IntVar, S: IntVar](
     x: Tensor[[P, *Elements[Qs], R, S]],
 ) -> Tensor[[P, *Elements[Qs], R, S]]:
     """Function with prefix P, middle *Qs, and suffix R, S"""
@@ -64,7 +64,7 @@ def test_prefix_suffix_4d(x: Tensor[[10, 20, 30, 40]]) -> Tensor[[10, 20, 30, 40
 # ============================================================================
 
 
-def split_first_rest[N, Rest: SizeTuple](
+def split_first_rest[N: IntVar, Rest: IntTuple](
     x: Tensor[[N, *Elements[Rest]]],
 ) -> tuple[Tensor[[N]], Tensor[Rest]]:
     """Split into first dimension and rest"""
@@ -83,7 +83,7 @@ def test_split_first_rest_2d(x: Tensor[[10, 20]]) -> tuple[Tensor[[10]], Tensor[
     return split_first_rest(x)
 
 
-def split_init_last[Init: SizeTuple, N](
+def split_init_last[Init: IntTuple, N: IntVar](
     x: Tensor[[*Elements[Init], N]],
 ) -> tuple[Tensor[Init], Tensor[[N]]]:
     """Split into init dimensions and last"""

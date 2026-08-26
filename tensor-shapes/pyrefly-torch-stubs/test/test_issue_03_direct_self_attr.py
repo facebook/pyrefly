@@ -7,24 +7,25 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
 
 
-class RMSNorm[D](nn.Module):
-    def __init__(self, dim: Dim[D], eps: float = 1e-5):
+class RMSNorm[D: IntVar](nn.Module):
+    def __init__(self, dim: Int[D], eps: float = 1e-5):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
 
-class DirectAssignmentFails[D](nn.Module):
+class DirectAssignmentFails[D: IntVar](nn.Module):
     """This class demonstrates Issue 3 with direct assignment."""
 
     ffn_norm: RMSNorm[D]
 
-    def __init__(self, dim: Dim[D]) -> None:
+    def __init__(self, dim: Int[D]) -> None:
         super().__init__()
         # Direct assignment - type is lost
         self.ffn_norm = RMSNorm(dim, 1e-5)
@@ -33,12 +34,12 @@ class DirectAssignmentFails[D](nn.Module):
         assert_type(self.ffn_norm, RMSNorm[D])
 
 
-class WorkaroundWorks[D](nn.Module):
+class WorkaroundWorks[D: IntVar](nn.Module):
     """This class demonstrates the workaround for Issue 3."""
 
     ffn_norm: RMSNorm[D]
 
-    def __init__(self, dim: Dim[D]) -> None:
+    def __init__(self, dim: Int[D]) -> None:
         super().__init__()
         # Workaround: assign to local first
         ffn = RMSNorm(dim, 1e-5)

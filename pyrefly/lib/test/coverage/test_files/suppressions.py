@@ -6,3 +6,4 @@
 x = 1  # pyrefly: ignore[error-code]
 y = 2
 z = 3  # pyrefly: ignore[code1, code2]
+s: str = "#hash"  # type: ignore
