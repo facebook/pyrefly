@@ -4900,8 +4900,7 @@ fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
                 definition.module.path().dupe(),
                 sys_info,
             );
-            let rdeps = transaction.transitive_rdeps(definition_handle.dupe());
-            rdeps
+            transaction.transitive_rdeps(definition_handle.dupe())
         }
     };
     for fs_counterpart_of_in_memory_handles in transitive_rdeps
