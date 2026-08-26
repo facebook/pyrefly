@@ -26,7 +26,10 @@
 //! Run with cargo: `cargo bench -p pyrefly --bench micro`
 //! Run with buck: `buck run @fbcode//mode/opt fbcode//pyrefly/pyrefly:micro_bench -- --bench`
 
+use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::hint::black_box;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -49,8 +52,10 @@ use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::suggest::best_suggestion;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::timer::set_timing_enabled;
+use ruff_python_ast::name::Name;
 
 const BENCH_FILE: &str = "bench.py";
 
@@ -96,6 +101,17 @@ static SHARED_STATE: LazyLock<State> = LazyLock::new(|| {
 });
 
 fn check_module(code: Arc<FileContents>, module: &str, path: &str) -> usize {
+    check_module_at(code, module, path, Require::Errors)
+}
+
+/// Check a module at a given require level.
+///
+/// Below `Require::Errors` the module is loaded with `ErrorStyle::Never`, so
+/// every error it produces is discarded. It is still bound: binding is what
+/// produces the types a dependent module reads, and binding is also where an
+/// unresolved name is noticed. Work done there on behalf of an error is
+/// therefore still reachable at this level, and still thrown away.
+fn check_module_at(code: Arc<FileContents>, module: &str, path: &str, require: Require) -> usize {
     let sys_info = SysInfo::new(PythonVersion::default(), PythonPlatform::default());
     let h = Handle::new(
         ModuleName::from_str(module),
@@ -104,7 +120,7 @@ fn check_module(code: Arc<FileContents>, module: &str, path: &str) -> usize {
     );
     let mut t = SHARED_STATE.transaction();
     t.set_memory(vec![(PathBuf::from(path), Some(code))]);
-    t.run(&[h.dupe()], Require::Errors, None);
+    t.run(&[h.dupe()], require, None);
     let errors = t.get_errors([&h]);
     errors.collect_errors().ordinary.len()
 }
@@ -467,6 +483,365 @@ fn pandas_method_dispatch(c: &mut Criterion) {
         "pandas/core/frame.py",
     );
 }
+// ---------------------------------------------------------------------------
+// Unknown-name suggestion search
+// ---------------------------------------------------------------------------
+
+/// The name every case searches for. Twelve characters, matching the real
+/// unresolved names in the Configerator config that motivated this: they are
+/// short thrift type names like `ColumnSchema` and `Int64ColumnType`.
+const MISSING: &str = "ColumnSchema";
+
+/// Names visible in the scope the missing name is looked up against.
+///
+/// `Spread` varies their length the way ordinary source does. `Long` makes
+/// every one far longer than the missing name, which is the production shape:
+/// a Thrift IDL wildcard-imported ~94,000 generated enum members, all around
+/// forty characters, into a module scope. `SameLength` makes every one exactly
+/// as long as the missing name, so no candidate can be rejected on length and
+/// every single one reaches the distance computation.
+enum ScopeShape {
+    Spread,
+    Long,
+    SameLength,
+}
+
+/// One name of the given shape. Kept separate from `scope_names` so that the
+/// whole-file cases below do not have to follow it as later commits change what
+/// the direct cases need alongside each name.
+fn scope_name(i: usize, shape: &ScopeShape) -> String {
+    match shape {
+        ScopeShape::Spread => format!("Cand{}{i:07}", "Q".repeat(i % 37)),
+        ScopeShape::Long => format!("Cand{}{i:07}", "Q".repeat(29)),
+        // Four, plus eight digits, is the length of `MISSING`.
+        ScopeShape::SameLength => format!("Cand{i:08}"),
+    }
+}
+
+fn scope_names(count: usize, shape: &ScopeShape) -> Vec<Name> {
+    (0..count)
+        .map(|i| Name::new(scope_name(i, shape)))
+        .collect()
+}
+
+/// Stand-in for the builtins wildcard, which every lookup searches after the
+/// enclosing scopes. Typeshed's `builtins.pyi` exports a few hundred names and,
+/// unlike generated scope names, they are short and varied.
+fn builtin_names() -> Vec<Name> {
+    (0..250)
+        .map(|i| Name::new(format!("bltn_{}{i:03}", "z".repeat(i % 11))))
+        .collect()
+}
+
+/// One `best_suggestion` call shaped like the real one: the names in scope
+/// innermost first, then the builtins at a priority no scope can reach.
+fn search(missing: &Name, scope: &[Name], builtins: &[Name]) -> Option<Name> {
+    best_suggestion(
+        missing,
+        scope
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name, i % 4))
+            .chain(builtins.iter().map(|n| (n, usize::MAX))),
+    )
+}
+
+/// A whole file: `scope` names in scope, then `missing` references to a name
+/// that is not.
+///
+/// The cases above call `best_suggestion` directly, which measures the search
+/// itself. These reach it the way the binder does, so they also cover walking
+/// the scopes to collect candidates and deciding whether the error is worth
+/// reporting -- work that a direct call cannot see.
+fn unresolved_names(scope: usize, missing: usize, shape: &ScopeShape) -> String {
+    let mut source = String::new();
+    for i in 0..scope {
+        source.push_str(&format!("{} = 1\n", scope_name(i, shape)));
+    }
+    for i in 0..missing {
+        source.push_str(&format!("_r{i} = {MISSING}\n"));
+    }
+    source
+}
+
+fn suggestion_whole_file(c: &mut Criterion) {
+    let mut group = c.benchmark_group("suggestion_whole_file");
+    for (shape, label) in [
+        (ScopeShape::Long, "unresolved_long"),
+        (ScopeShape::Spread, "unresolved_spread"),
+        (ScopeShape::SameLength, "unresolved_same_length"),
+    ] {
+        let name = format!("{label}_1k_scope_100_missing");
+        let code = Arc::new(FileContents::from_source(unresolved_names(
+            1000, 100, &shape,
+        )));
+        assert_eq!(
+            check_module(code.dupe(), "bench", BENCH_FILE),
+            100,
+            "benchmark `{name}` produced an unexpected error count"
+        );
+        group.bench_function(&name, |b| {
+            b.iter(|| check_module(code.dupe(), "bench", BENCH_FILE))
+        });
+    }
+    group.finish();
+}
+
+/// The same shape as `unresolved_names`, except that the names bound to the
+/// unresolved one are module-level exports rather than private.
+///
+/// A module below `Require::Errors` still solves its exported keys, so making
+/// these exports is what guarantees the unresolved name is actually looked up
+/// rather than left for a solve that never happens.
+fn exported_unresolved_names(scope: usize, missing: usize, shape: &ScopeShape) -> String {
+    let mut source = String::new();
+    for i in 0..scope {
+        let _ = writeln!(source, "{} = 1", scope_name(i, shape));
+    }
+    for i in 0..missing {
+        let _ = writeln!(source, "r{i} = {MISSING}");
+    }
+    source
+}
+
+/// A file loaded below `Require::Errors`, where every error it produces is
+/// discarded.
+///
+/// This is what a module pulled in behind the file the user is editing looks
+/// like: bound, because something needs its types, but silenced. An unresolved
+/// name in one is still noticed while binding, so working out what the author
+/// might have meant is pure waste -- the answer has nowhere to go. The
+/// benchmark is that waste, and it should cost almost nothing.
+fn suggestion_discarded_errors(c: &mut Criterion) {
+    let code = Arc::new(FileContents::from_source(exported_unresolved_names(
+        1000,
+        100,
+        &ScopeShape::Long,
+    )));
+    // Checked, the same source has to produce one error per unresolved name, or
+    // it no longer holds the names whose lookup this is here to measure.
+    assert_eq!(
+        check_module(code.dupe(), "bench", BENCH_FILE),
+        100,
+        "the source should hold one unresolved name per error"
+    );
+    assert_eq!(
+        check_module_at(code.dupe(), "bench", BENCH_FILE, Require::Exports),
+        0,
+        "a module below `Require::Errors` should report nothing"
+    );
+    let mut group = c.benchmark_group("suggestion_whole_file");
+    group.bench_function("discarded_errors_1k_scope_100_missing", |b| {
+        b.iter(|| check_module_at(code.dupe(), "bench", BENCH_FILE, Require::Exports))
+    });
+    group.finish();
+}
+
+fn suggestion_search(c: &mut Criterion) {
+    let builtins = builtin_names();
+    let absent = Name::new(MISSING);
+
+    // What almost every real lookup looks like: a handful of names in scope and
+    // the builtins behind them. Worth measuring separately because the builtin
+    // tail is a fixed cost paid on every unresolved name, however small the
+    // file.
+    let small = scope_names(200, &ScopeShape::Spread);
+    c.bench_function("suggestion_small_scope", |b| {
+        b.iter(|| black_box(search(black_box(&absent), &small, &builtins)))
+    });
+
+    // A genuine typo, so a match is found early and tightens the bound for
+    // every candidate after it.
+    let names = scope_names(100_000, &ScopeShape::Spread);
+    let typo = Name::new(format!("Cand{}0000123", "Q".repeat(12)));
+    c.bench_function("suggestion_typo_100k", |b| {
+        b.iter(|| black_box(search(black_box(&typo), &names, &builtins)))
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Suggestion search: real identifiers
+// ---------------------------------------------------------------------------
+
+/// Collect the identifiers in `source`, which needs no parser: the search only
+/// ever sees names, and every name is an ASCII identifier run.
+fn push_identifiers(source: &str, out: &mut HashSet<String>) {
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            // The search skips one-character candidates, so they are noise here.
+            if i - start > 1 {
+                out.insert(source[start..i].to_owned());
+            }
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Every identifier in the bundled stubs, ordered so the corpus is stable.
+///
+/// The generated shapes above differ only in a filler run and a digit tail, so
+/// each one holds nearly the same characters as the next. That makes them an
+/// honest test of the length filter and a misleading one for the character
+/// mask, which rejects on precisely the variety they lack: measured against
+/// these stubs a real name reaches the distance computation 6.6% of the time,
+/// against the generated ones 58%. Only real names put that filter under the
+/// pressure it sees in production.
+static REAL_IDENTIFIERS: LazyLock<Vec<Name>> = LazyLock::new(|| {
+    let mut set = HashSet::new();
+    for contents in pyrefly_bundled::bundled_typeshed()
+        .expect("bundled typeshed should extract")
+        .values()
+    {
+        push_identifiers(contents, &mut set);
+    }
+    let (typeshed_third_party, _) = pyrefly_bundled::bundled_third_party_stubs()
+        .expect("bundled typeshed third-party stubs should extract");
+    for contents in typeshed_third_party.values() {
+        push_identifiers(contents, &mut set);
+    }
+    for contents in pyrefly_bundled::bundled_third_party()
+        .expect("bundled third-party stubs should extract")
+        .values()
+    {
+        push_identifiers(contents, &mut set);
+    }
+    let mut names: Vec<String> = set.into_iter().collect();
+    names.sort();
+    names.into_iter().map(Name::new).collect()
+});
+
+/// `count` identifiers spread across the whole corpus. Striding rather than
+/// taking a prefix keeps the sample from being all names beginning with `_`.
+fn real_scope(count: usize) -> Vec<Name> {
+    let stride = (REAL_IDENTIFIERS.len() / count).max(1);
+    REAL_IDENTIFIERS
+        .iter()
+        .step_by(stride)
+        .take(count)
+        .cloned()
+        .collect()
+}
+
+/// The real builtins wildcard, which every lookup searches after the enclosing
+/// scopes. The stand-in above is uniform where these are short and varied, and
+/// this tail is paid on every unresolved name, so its character spread matters.
+fn real_builtins() -> Vec<Name> {
+    let files = pyrefly_bundled::bundled_typeshed().expect("bundled typeshed should extract");
+    let contents = files
+        .get(Path::new("builtins.pyi"))
+        .expect("bundled typeshed should contain builtins.pyi");
+    let mut set = HashSet::new();
+    push_identifiers(contents, &mut set);
+    let mut names: Vec<String> = set.into_iter().collect();
+    names.sort();
+    names.into_iter().map(Name::new).collect()
+}
+
+/// `name` with one character replaced, the way a real misspelling arrives.
+fn misspell(name: &Name) -> Name {
+    let chars: Vec<char> = name.as_str().chars().collect();
+    let at = chars.len() / 2;
+    let replacement = if chars[at] == 'x' { 'q' } else { 'x' };
+    Name::new(
+        chars
+            .iter()
+            .enumerate()
+            .map(|(i, c)| if i == at { replacement } else { *c })
+            .collect::<String>(),
+    )
+}
+
+fn suggestion_real(c: &mut Criterion) {
+    let builtins = real_builtins();
+    let scope = real_scope(100_000);
+
+    // No candidate is close, so every one has to be rejected. This is the shape
+    // production hits on a file full of names from an import that failed.
+    let unknown = Name::new("Zqxjkvwmpfghbd");
+    assert!(
+        search(&unknown, &scope, &builtins).is_none(),
+        "`suggestion_real_unknown` found a match, so it no longer measures the rejection path"
+    );
+    c.bench_function("suggestion_real_unknown", |b| {
+        b.iter(|| black_box(search(black_box(&unknown), &scope, &builtins)))
+    });
+
+    // An ordinary typo: the name it was meant to be is in scope, one edit away.
+    let target = scope[scope.len() / 2].clone();
+    let typo = misspell(&target);
+    assert_eq!(
+        search(&typo, &scope, &builtins).as_ref(),
+        Some(&target),
+        "`suggestion_real_typo` should recover the name it misspells"
+    );
+    c.bench_function("suggestion_real_typo", |b| {
+        b.iter(|| black_box(search(black_box(&typo), &scope, &builtins)))
+    });
+
+    // The same, but misspelling one of the long generated names, which select a
+    // wider distance tier and survive the length filter against more candidates.
+    let longest = scope
+        .iter()
+        .max_by_key(|name| name.as_str().len())
+        .expect("scope is not empty")
+        .clone();
+    let long_typo = misspell(&longest);
+    assert_eq!(
+        search(&long_typo, &scope, &builtins).as_ref(),
+        Some(&longest),
+        "`suggestion_real_long_typo` should recover the name it misspells"
+    );
+    c.bench_function("suggestion_real_long_typo", |b| {
+        b.iter(|| black_box(search(black_box(&long_typo), &scope, &builtins)))
+    });
+}
+
+/// A file whose unresolved references sit at the bottom of `depth` nested
+/// scopes, so each lookup walks every enclosing scope rather than just the
+/// module. Every fourth level is a class, whose names the code blocks nested
+/// inside it cannot see, so the walk also has to do its skipping.
+fn nested_scopes(depth: usize, per_scope: usize, missing: usize) -> String {
+    let mut source = String::new();
+    for level in 0..depth {
+        let pad = "    ".repeat(level);
+        if level % 4 == 3 && level + 1 < depth {
+            let _ = writeln!(source, "{pad}class C{level}:");
+        } else {
+            let _ = writeln!(source, "{pad}def f{level}():");
+        }
+        let inner = "    ".repeat(level + 1);
+        for i in 0..per_scope {
+            let _ = writeln!(source, "{inner}n{level}_{i} = 1");
+        }
+    }
+    let inner = "    ".repeat(depth);
+    for i in 0..missing {
+        let _ = writeln!(source, "{inner}_r{i} = {MISSING}");
+    }
+    source
+}
+
+fn suggestion_nested(c: &mut Criterion) {
+    let code = Arc::new(FileContents::from_source(nested_scopes(16, 60, 20)));
+    assert_eq!(
+        check_module(code.dupe(), "bench", BENCH_FILE),
+        20,
+        "benchmark `suggestion_whole_file/nested_scopes` produced an unexpected error count"
+    );
+    let mut group = c.benchmark_group("suggestion_whole_file");
+    group.bench_function("nested_scopes_16_deep", |b| {
+        b.iter(|| check_module(code.dupe(), "bench", BENCH_FILE))
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     smoke,
@@ -485,5 +860,10 @@ criterion_group!(
     method_name_collision,
     constructor_dispatch,
     pandas_method_dispatch,
+    suggestion_search,
+    suggestion_whole_file,
+    suggestion_real,
+    suggestion_nested,
+    suggestion_discarded_errors,
 );
 criterion_main!(benches);
