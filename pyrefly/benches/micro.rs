@@ -54,6 +54,7 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
+use pyrefly_util::suggest::char_mask;
 use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::timer::set_timing_enabled;
 use ruff_python_ast::name::Name;
@@ -521,12 +522,14 @@ fn scope_name(i: usize, shape: &ScopeShape) -> String {
 
 /// Paired with each name's character length, the way the static scope records
 /// it, so the benchmark measures the same work the binder does.
-fn scope_names(count: usize, shape: &ScopeShape) -> Vec<(Name, usize)> {
+fn scope_names(count: usize, shape: &ScopeShape) -> Vec<(Name, u32, u32)> {
     (0..count)
         .map(|i| {
             let name = Name::new(scope_name(i, shape));
-            let char_len = name.as_str().chars().count();
-            (name, char_len)
+            let (char_len, mask) = name.as_str().chars().fold((0u32, 0u32), |(len, mask), c| {
+                (len + 1, mask | char_mask(c))
+            });
+            (name, char_len, mask)
         })
         .collect()
 }
@@ -543,13 +546,15 @@ fn builtin_names() -> Vec<Name> {
 /// One `best_suggestion` call shaped like the real one: the names in scope
 /// innermost first with their lengths already known, then the builtins at a
 /// priority no scope can reach.
-fn search(missing: &Name, scope: &[(Name, usize)], builtins: &[Name]) -> Option<Name> {
+fn search(missing: &Name, scope: &[(Name, u32, u32)], builtins: &[Name]) -> Option<Name> {
     best_suggestion(
         missing,
         scope
             .iter()
             .enumerate()
-            .map(|(i, (name, char_len))| Candidate::new(name, *char_len, i % 4))
+            .map(|(i, (name, char_len, mask))| {
+                Candidate::new(name, *char_len as usize, *mask, i % 4)
+            })
             .chain(builtins.iter().map(|n| Candidate::measured(n, usize::MAX))),
     )
 }
@@ -727,15 +732,17 @@ static REAL_IDENTIFIERS: LazyLock<Vec<Name>> = LazyLock::new(|| {
 
 /// `count` identifiers spread across the whole corpus. Striding rather than
 /// taking a prefix keeps the sample from being all names beginning with `_`.
-fn real_scope(count: usize) -> Vec<(Name, usize)> {
+fn real_scope(count: usize) -> Vec<(Name, u32, u32)> {
     let stride = (REAL_IDENTIFIERS.len() / count).max(1);
     REAL_IDENTIFIERS
         .iter()
         .step_by(stride)
         .take(count)
         .map(|name| {
-            let char_len = name.as_str().chars().count();
-            (name.clone(), char_len)
+            let (char_len, mask) = name.as_str().chars().fold((0u32, 0u32), |(len, mask), c| {
+                (len + 1, mask | char_mask(c))
+            });
+            (name.clone(), char_len, mask)
         })
         .collect()
 }
@@ -800,7 +807,7 @@ fn suggestion_real(c: &mut Criterion) {
     // wider distance tier and survive the length filter against more candidates.
     let longest = scope
         .iter()
-        .max_by_key(|(name, _)| name.as_str().len())
+        .max_by_key(|(name, _, _)| name.as_str().len())
         .expect("scope is not empty")
         .0
         .clone();

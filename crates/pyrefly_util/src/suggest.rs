@@ -102,34 +102,54 @@ fn distance_at_most<T: PartialEq>(a: &[T], b: &[T], bound: usize) -> usize {
     prev[m + bound - n].min(over)
 }
 
+/// Which characters a name contains, folded into 32 buckets.
+///
+/// A lower bound on edit distance: an edit changes at most two buckets, since a
+/// substitution can clear the bucket of the character it removes and set the one
+/// it adds, while an insertion or deletion touches only one. So two names within
+/// distance `d` differ in at most `2 * d` buckets, and a wider difference rules a
+/// candidate out before any table is built. Folding to 32 buckets makes letters
+/// of either case collide, which only weakens the bound, never breaks it.
+pub fn char_mask(c: char) -> u32 {
+    1 << (c as u32 & 31)
+}
+
 /// A name the search may offer, and what it needs to know about it.
 pub struct Candidate<'a> {
     name: &'a Name,
     /// The name's length in characters.
     ///
-    /// Nearly always the only thing the search looks at, since a candidate too
-    /// far from the missing name in length cannot be within the edit distance.
+    /// One of the two keys the search nearly always decides on, since a
+    /// candidate too far from the missing name in length cannot be within the
+    /// edit distance.
     char_len: usize,
+    /// See [`char_mask`]. The other key, and precomputed for the same reason.
+    mask: u32,
     /// Smaller wins a tie on distance, so callers use it to prefer nearer
     /// scopes.
     priority: usize,
 }
 
 impl<'a> Candidate<'a> {
-    /// A candidate whose length the caller has already recorded somewhere cheap
-    /// to reach -- which one scanning a large scope should, rather than have it
-    /// counted here once per lookup.
-    pub fn new(name: &'a Name, char_len: usize, priority: usize) -> Self {
+    /// A candidate whose keys the caller has already recorded somewhere cheap
+    /// to reach -- which one scanning a large scope should, rather than have
+    /// them computed here once per lookup.
+    pub fn new(name: &'a Name, char_len: usize, mask: u32, priority: usize) -> Self {
         Self {
             name,
             char_len,
+            mask,
             priority,
         }
     }
 
-    /// A candidate whose length is not already known, measured on the spot.
+    /// A candidate whose keys are not already known, computed on the spot.
     pub fn measured(name: &'a Name, priority: usize) -> Self {
-        Self::new(name, char_len(name), priority)
+        let (char_len, mask) = name
+            .as_str()
+            .chars()
+            .fold((0, 0), |(len, mask), c| (len + 1, mask | char_mask(c)));
+        Self::new(name, char_len, mask, priority)
     }
 }
 
@@ -143,6 +163,7 @@ pub struct Search<'a> {
     /// compare bytes and skip decoding entirely.
     missing_ascii: bool,
     missing_len: usize,
+    missing_mask: u32,
     /// Built on demand: only the character path needs it, and that path is
     /// reached only when one of the two names is not ASCII.
     missing_chars: Option<Vec<char>>,
@@ -168,6 +189,7 @@ impl<'a> Search<'a> {
             missing,
             missing_ascii,
             missing_len,
+            missing_mask: missing.chars().fold(0, |mask, c| mask | char_mask(c)),
             missing_chars: None,
             candidate_chars: Vec::new(),
             best: None,
@@ -175,17 +197,20 @@ impl<'a> Search<'a> {
         }
     }
 
-    /// Whether length alone rules a candidate out, against the running bound.
+    /// Whether a candidate's two precomputed keys rule it out, against the
+    /// running bound.
     ///
-    /// A caller that holds a candidate's length can ask before assembling it.
-    /// Every rejection here is a distance computation not started.
+    /// Neither key reads the name, and every rejection here is a distance
+    /// computation not started.
     #[inline]
     fn rejects(&self, candidate: &Candidate) -> bool {
         // A single letter is noise as a suggestion whatever its distance.
         candidate.char_len == 1
-            // The distance is never smaller than the difference in length, so a
-            // candidate further away than the bound cannot come within it.
+            // The distance is never smaller than the difference in length, and
+            // one edit flips at most two character buckets, so a candidate
+            // further away than the bound on either count cannot come within it.
             || self.missing_len.abs_diff(candidate.char_len) > self.best_distance
+            || (self.missing_mask ^ candidate.mask).count_ones() as usize > 2 * self.best_distance
     }
 
     /// Measure a candidate [`Search::rejects`] could not dismiss, keeping it if
@@ -195,6 +220,7 @@ impl<'a> Search<'a> {
         let Candidate {
             name,
             char_len: candidate_len,
+            mask: _,
             priority,
         } = candidate;
         let candidate_str = name.as_str();
@@ -256,18 +282,6 @@ impl<'a> Search<'a> {
     /// The nearest candidate the search kept, if any.
     pub fn finish(self) -> Option<Name> {
         self.best.map(|(name, _, _)| name)
-    }
-}
-
-/// A name's length in characters. Cheap for ASCII, which identifiers almost
-/// always are.
-#[inline]
-fn char_len(name: &Name) -> usize {
-    let s = name.as_str();
-    if s.is_ascii() {
-        s.len()
-    } else {
-        s.chars().count()
     }
 }
 

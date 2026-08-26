@@ -21,6 +21,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::Search;
+use pyrefly_util::suggest::char_mask;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -232,11 +233,14 @@ struct StaticInfo {
     /// The range of the textually last assignment to this name. Used to check
     /// whether a captured variable is reassigned after a nested function definition.
     last_range: TextRange,
-    /// The name's length in characters, for the "did you mean" search. Recorded
-    /// here because that search scans every name in scope once per unresolved
-    /// name, and rejects nearly all of them on length alone: measuring at the
-    /// point of use would repeat the same count thousands of times.
+    /// What the "did you mean" search needs in order to reject this name
+    /// without reading it: its length in characters and its
+    /// [`char_mask`](pyrefly_util::suggest::char_mask). Recorded here because
+    /// that search scans every name in scope once per unresolved name, so
+    /// computing either at the point of use would repeat it thousands of times.
+    /// Both fit in padding `StaticInfo` already had, so they cost nothing.
     char_len: u32,
+    char_mask: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -416,11 +420,16 @@ pub(crate) fn is_constant_name(name: &Name) -> bool {
             .all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit())
 }
 
-/// Saturating so that `StaticInfo::char_len` can stay narrow. A name long
-/// enough to saturate is far past any suggestible edit distance, so clamping
-/// only ever makes the length filter reject it, which is the right answer.
-fn char_len_of(name: &Name) -> u32 {
-    name.as_str().chars().count().try_into().unwrap_or(u32::MAX)
+/// One pass over the name for both values the suggestion search filters on.
+///
+/// The length saturates so it can stay narrow. A name long enough to saturate is
+/// far past any suggestible edit distance, so clamping only ever makes the length
+/// filter reject it, which is the right answer.
+fn suggestion_keys(name: &Name) -> (u32, u32) {
+    let (len, mask) = name.as_str().chars().fold((0u32, 0u32), |(len, mask), c| {
+        (len.saturating_add(1), mask | char_mask(c))
+    });
+    (len, mask)
 }
 
 impl Static {
@@ -431,7 +440,7 @@ impl Static {
         style: StaticStyle,
         last_range: TextRange,
     ) {
-        let char_len = char_len_of(name.key());
+        let (char_len, char_mask) = suggestion_keys(name.key());
         match self.0.entry_hashed(name) {
             Entry::Vacant(e) => {
                 e.insert(StaticInfo {
@@ -439,6 +448,7 @@ impl Static {
                     style,
                     last_range,
                     char_len,
+                    char_mask,
                 });
             }
             Entry::Occupied(mut e) => {
@@ -3236,17 +3246,19 @@ impl Scopes {
              }| {
                 let flow_checked = flow_barrier == FlowBarrier::AllowFlowChecked;
                 for (name, static_info) in scope.stat.0.iter_hashed() {
-                    // The length comes from the static map, so deciding a
-                    // candidate is too far away never reads the name. Asking
-                    // the flow is the expensive part, so it goes behind the
-                    // bound: `offer_if` only consults it for a candidate close
-                    // enough to still be in the running. The static map hands
-                    // back the hash it stored, so that costs a probe rather
-                    // than a rehash of the name.
+                    // Ask the two keys the static map recorded first, against
+                    // a bound anything already matched has tightened. The name
+                    // itself is never read to decide this, and nearly every
+                    // candidate in a large scope dies here. Asking the flow is
+                    // the expensive part, so it goes behind them: `offer_if`
+                    // only consults it for a candidate still in the running,
+                    // and the static map hands back the hash it stored, so that
+                    // costs a probe rather than a rehash of the name.
                     search.offer_if(
                         Candidate::new(
                             name.into_key(),
                             static_info.char_len as usize,
+                            static_info.char_mask,
                             lookup_depth,
                         ),
                         || !flow_checked || scope.flow.get_info_hashed(name).is_some(),
@@ -3442,11 +3454,13 @@ impl Scopes {
                 .map_or_else(
                     || {
                         builtin_module_for_name(lookup, current_module, name.key()).map(|module| {
+                            let (char_len, char_mask) = suggestion_keys(name.key());
                             Ok(Box::new(StaticInfo {
                                 range: TextRange::default(),
                                 style: StaticStyle::ImplicitBuiltinImport(module),
                                 last_range: TextRange::default(),
-                                char_len: char_len_of(name.key()),
+                                char_len,
+                                char_mask,
                             }))
                         })
                     },
