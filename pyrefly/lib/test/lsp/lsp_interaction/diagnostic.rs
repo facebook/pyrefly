@@ -6,6 +6,7 @@
  */
 
 use lsp_server::RequestId;
+use lsp_types::DocumentDiagnosticReport;
 use lsp_types::DocumentDiagnosticReportResult;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Url;
@@ -2040,6 +2041,121 @@ fn test_unused_type_ignore_diagnostic() {
         .unwrap();
 
     interaction.shutdown().unwrap();
+}
+
+// An open file with no file extension (e.g. a shebang script the editor
+// opened as Python) gets diagnostics even though default `project-includes`
+// only covers extension-bearing names (#4397).
+#[test]
+fn test_diagnostics_for_extensionless_script() {
+    let test_files_root = get_test_files_root();
+    // The harness copies a fixed fixture tree, so the extension-less script is
+    // written at runtime to keep its name free of any extension.
+    std::fs::write(
+        test_files_root.path().join("myscript"),
+        "#!/usr/bin/env python3\n\nx: int = \"hello\"\n",
+    )
+    .unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "pyrefly": {"displayTypeErrors": "force-on"}
+            }]))),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    let script_path = test_files_root.path().join("myscript");
+
+    interaction.client.did_open("myscript");
+
+    // Push mode: publishDiagnostics carries the type error.
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_message_contains(
+            script_path,
+            "not assignable to `int`",
+        )
+        .expect("Failed to receive published diagnostics");
+
+    // Pull mode: textDocument/diagnostic returns the item.
+    interaction
+        .client
+        .diagnostic("myscript")
+        .expect_response_with(|response| {
+            let DocumentDiagnosticReportResult::Report(report) = response else {
+                return false;
+            };
+            let DocumentDiagnosticReport::Full(full) = report else {
+                return false;
+            };
+            full.full_document_diagnostic_report
+                .items
+                .iter()
+                .any(|item| {
+                    item.code
+                        == Some(lsp_types::NumberOrString::String(
+                            "bad-assignment".to_owned(),
+                        ))
+                })
+        })
+        .expect("Failed to receive expected response");
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
+// Explicit `project-excludes` still suppress an open extension-less script —
+// excludes scope open files down even when the includes bypass applies.
+#[test]
+fn test_diagnostics_extensionless_in_excludes_still_suppressed() {
+    let test_files_root = get_test_files_root();
+    // The harness copies a fixed fixture tree, so the excluded subdirectory is
+    // written at runtime.
+    let dir = test_files_root.path().join("extensionless_excluded");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("pyrefly.toml"),
+        "project-excludes = [\"myscript\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("myscript"),
+        "#!/usr/bin/env python3\n\nx: int = \"hello\"\n",
+    )
+    .unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "pyrefly": {"displayTypeErrors": "force-on"}
+            }]))),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    let script_path = dir.join("myscript");
+
+    interaction
+        .client
+        .did_open("extensionless_excluded/myscript");
+
+    // Push mode: nothing published for the excluded script.
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(script_path, 0)
+        .expect("Failed to receive empty diagnostics");
+
+    // Pull mode: no items for the excluded script.
+    interaction
+        .client
+        .diagnostic("extensionless_excluded/myscript")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
+
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]

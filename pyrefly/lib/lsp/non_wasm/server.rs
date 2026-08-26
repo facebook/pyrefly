@@ -2926,8 +2926,13 @@ impl Server {
             // the `typeCheckingMode` IDE setting reaches us through the
             // resolver at config synthesis time, not per-diagnostic.
 
+            // A file the editor explicitly opened as Python is in scope for
+            // diagnostics even though its name lacks a python extension —
+            // default includes are an extension heuristic, not a scope
+            // decision; only excludes scope open files down (pyright/ty
+            // parity, #4397).
             if let Some(lsp_file) = open_files.get(&path)
-                && config.project_includes.covers(&path)
+                && (config.project_includes.covers(&path) || path.extension().is_none())
                 && !config.project_excludes.covers(&path)
                 && type_error_status.is_enabled()
             {
