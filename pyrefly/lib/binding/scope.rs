@@ -1284,6 +1284,55 @@ struct ScopeView<'a> {
     static_barrier: bool,
 }
 
+/// The scopes a name lookup should consider, innermost first, each paired with
+/// the barriers that have accumulated between it and the current scope.
+///
+/// Python's scoping rules are applied here rather than by callers. From
+/// <https://docs.python.org/3/reference/executionmodel.html#resolution-of-names>:
+/// the scope of names defined in a class block is limited to that block and
+/// does not extend to the code blocks of methods, including comprehensions and
+/// generator expressions. Annotation scopes and PEP 695 type alias scopes are
+/// the exception and can see their enclosing class scope.
+struct ScopeViews<I> {
+    scopes: I,
+    flow_barrier: FlowBarrier,
+    static_barrier: bool,
+    /// Whether the scope the lookup starts from is one of the two kinds that
+    /// can see an enclosing class body.
+    from_annotation_like_scope: bool,
+}
+
+impl<'a, I: Iterator<Item = (usize, &'a Scope)>> Iterator for ScopeViews<I> {
+    type Item = ScopeView<'a>;
+
+    fn next(&mut self) -> Option<ScopeView<'a>> {
+        loop {
+            let (lookup_depth, scope) = self.scopes.next()?;
+            if matches!(scope.kind, ScopeKind::Class(_))
+                && !(lookup_depth == 0 || (self.from_annotation_like_scope && lookup_depth == 1))
+            {
+                // Class body scopes always have `flow_barrier =
+                // AllowFlowChecked`, so skipping the update below is harmless.
+                continue;
+            }
+            let view = ScopeView {
+                lookup_depth,
+                scope,
+                flow_barrier: self.flow_barrier,
+                static_barrier: self.static_barrier,
+            };
+            // The barriers describe what lies between the *next* scope and the
+            // current one, so they are advanced after the view is built.
+            self.flow_barrier = max(self.flow_barrier, scope.flow_barrier);
+            // Static type information is hidden by an intervening class
+            // annotation scope.
+            self.static_barrier |=
+                matches!(scope.kind, ScopeKind::Annotation { class_scope: true });
+            return Some(view);
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Scope {
     range: TextRange,
@@ -3127,46 +3176,20 @@ impl Scopes {
     }
 
     /// Helper for iterating over scopes in a way that respects class body visibility rules.
-    fn visit_scopes<'a, T>(
-        &'a self,
-        mut visitor: impl FnMut(ScopeView<'a>) -> Option<T>,
-    ) -> Option<T> {
-        let mut flow_barrier = FlowBarrier::AllowFlowChecked;
-        let mut static_barrier = false;
-        // Annotation scopes and type alias scopes (PEP 695) can see their enclosing class scope.
-        let is_current_scope_annotation_like = matches!(
-            self.current().kind,
-            ScopeKind::Annotation { .. } | ScopeKind::TypeAlias
-        );
-        for (lookup_depth, scope) in self.iter_rev().enumerate() {
-            // From https://docs.python.org/3/reference/executionmodel.html#resolution-of-names:
-            //   The scope of names defined in a class block is limited to the
-            //   class block; it does not extend to the code blocks of
-            //   methods. This includes comprehensions and generator
-            //   expressions, but it does not include annotation scopes, which
-            //   have access to their enclosing class scopes.
-            // Type alias scopes (PEP 695) also have access to enclosing class scopes.
-            if matches!(scope.kind, ScopeKind::Class(_))
-                && !((lookup_depth == 0) || (is_current_scope_annotation_like && lookup_depth == 1))
-            {
-                // Note: class body scopes have `flow_barrier = AllowFlowChecked`, so skipping the flow_barrier update is okay.
-                continue;
-            }
-
-            if let Some(result) = visitor(ScopeView {
-                lookup_depth,
-                scope,
-                flow_barrier,
-                static_barrier,
-            }) {
-                return Some(result);
-            }
-
-            flow_barrier = max(flow_barrier, scope.flow_barrier);
-            // Static type information is hidden by an intervening class annotation scope.
-            static_barrier |= matches!(scope.kind, ScopeKind::Annotation { class_scope: true });
+    fn scope_views(&self) -> impl Iterator<Item = ScopeView<'_>> {
+        ScopeViews {
+            scopes: self.iter_rev().enumerate(),
+            flow_barrier: FlowBarrier::AllowFlowChecked,
+            static_barrier: false,
+            from_annotation_like_scope: matches!(
+                self.current().kind,
+                ScopeKind::Annotation { .. } | ScopeKind::TypeAlias
+            ),
         }
-        None
+    }
+
+    fn visit_scopes<'a, T>(&'a self, visitor: impl FnMut(ScopeView<'a>) -> Option<T>) -> Option<T> {
+        self.scope_views().find_map(visitor)
     }
 
     pub fn suggest_similar_name(&self, missing: &Name, position: TextSize) -> Option<Name> {
