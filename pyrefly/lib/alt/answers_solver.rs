@@ -1126,29 +1126,35 @@ impl CalcStack {
     ///
     /// The write is lenient: it delegates to `Scc::on_placeholder_recorded`,
     /// which uses an advancement rank check so that a `Done` state is never
-    /// overwritten back to `HasPlaceholder`. If the top SCC does not contain
-    /// the target (e.g. during `handle_depth_overflow` where the node may not
-    /// be in any SCC), the call is a no-op.
+    /// overwritten back to `HasPlaceholder`.
+    ///
+    /// Returns the answer the node ends up with, which the caller must use in
+    /// place of the one it passed in.
     fn set_iteration_placeholder(
         &self,
         target: &CalcId,
         var: Var,
         answer: Arc<dyn Any + Send + Sync>,
-    ) {
+    ) -> Arc<dyn Any + Send + Sync> {
         let mut scc_stack = self.scc_stack.borrow_mut();
-        if let Some(top_scc) = scc_stack.last_mut() {
-            top_scc.on_placeholder_recorded(target, var, answer);
-            // Debug-only check: verify the node isn't in any other SCC.
-            debug_assert!(
-                scc_stack
-                    .iter()
-                    .rev()
-                    .skip(1)
-                    .all(|scc| !scc.node_state.contains_key(target)),
-                "set_iteration_placeholder: CalcId {} found in multiple SCCs",
-                target,
-            );
-        }
+        let answer = match scc_stack.last_mut() {
+            Some(top_scc) => top_scc.on_placeholder_recorded(target, var, answer),
+            // There is no SCC to record into (e.g. during `handle_depth_overflow`,
+            // where the node may not be in any SCC), so the caller's placeholder
+            // is the one in use.
+            None => answer,
+        };
+        // Debug-only check: verify the node isn't in any other SCC.
+        debug_assert!(
+            scc_stack
+                .iter()
+                .rev()
+                .skip(1)
+                .all(|scc| !scc.node_state.contains_key(target)),
+            "set_iteration_placeholder: CalcId {} found in multiple SCCs",
+            target,
+        );
+        answer
     }
 
     /// Retrieve the placeholder Var from SccNodeState::HasPlaceholder in the top SCC.
@@ -1635,21 +1641,37 @@ impl Scc {
     }
 
     /// Track that a placeholder has been recorded for a cycle-breaking node.
+    ///
+    /// Returns the answer the node ends up with. That is `answer` itself unless
+    /// the node has already advanced to `HasPlaceholder` or `Done`, in which
+    /// case it is the answer already recorded. The caller must use the returned
+    /// answer so that every reader of the node observes the same one.
     fn on_placeholder_recorded(
         &mut self,
         current: &CalcId,
         var: Var,
         answer: Arc<dyn Any + Send + Sync>,
-    ) {
-        if let Some(state) = self.node_state.get_mut(current) {
-            // Only upgrade: do not overwrite Done back to HasPlaceholder.
-            // This is defense-in-depth; placeholder recording should not
-            // regress a completed node.
-            if state.advancement_rank() < SccNodeState::HasPlaceholder(var).advancement_rank() {
-                self.iterative.answers.insert_current(current, answer);
-                *state = SccNodeState::HasPlaceholder(var);
-            }
+    ) -> Arc<dyn Any + Send + Sync> {
+        // A node that does not participate in this SCC keeps the caller's placeholder.
+        let Some(state) = self.node_state.get_mut(current) else {
+            return answer;
+        };
+        // Only upgrade: do not overwrite Done back to HasPlaceholder.
+        // This is defense-in-depth; placeholder recording should not
+        // regress a completed node.
+        if state.advancement_rank() >= SccNodeState::HasPlaceholder(var).advancement_rank() {
+            return self
+                .iterative
+                .answers
+                .get_current(current)
+                .expect("advanced SCC node must have a current answer")
+                .dupe();
         }
+        self.iterative
+            .answers
+            .insert_current(current, answer.dupe());
+        *state = SccNodeState::HasPlaceholder(var);
+        answer
     }
 
     /// Merge two SCCs into one, taking the most advanced state for each
@@ -3278,10 +3300,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let binding = self.bindings().get(idx);
         let rec = K::create_recursive(self, binding);
         let answer = Arc::new(K::promote_recursive(self.heap, rec));
-        let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(answer.dupe());
+        let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(answer);
         self.stack()
-            .set_iteration_placeholder(current, rec, answer_erased);
-        answer
+            .set_iteration_placeholder(current, rec, answer_erased)
+            .downcast_ref::<Arc<K::Answer>>()
+            .expect("placeholder answer type must match its binding key")
+            .dupe()
     }
 
     /// Handle depth overflow based on the configured handler.
