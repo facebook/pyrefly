@@ -77,6 +77,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
+use crate::alt::answers_solver::AnswerProvider;
 use crate::alt::answers_solver::AnswerScope;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::CalcId;
@@ -1883,23 +1884,26 @@ impl<'a> Transaction<'a> {
         // Ensure answers (or solutions) are computed. Cheap if already done.
         self.demand(module_data, Step::Answers);
 
-        // Load answers via Guard to avoid Arc refcount operations.
-        // The Guard borrows from the ArcSwap without incrementing the refcount.
-        let answers_guard = module_data.state.load_answers();
-        let Some(answers) = answers_guard.as_ref() else {
-            // If answers is None, solutions must exist.
-            let solutions = module_data
-                .state
-                .get_solutions()
-                .expect("answers evicted implies solutions exist");
-            return solutions.get_hashed_arc_opt(key);
+        let provider =
+            answer_scope.retain_module(module_data, || match module_data.state.get_answers() {
+                Some(answers) => AnswerProvider::Answers(answers),
+                None => AnswerProvider::Solutions(
+                    module_data
+                        .state
+                        .get_solutions()
+                        .expect("answers evicted implies solutions exist"),
+                ),
+            });
+        let (bindings, answers) = match provider {
+            AnswerProvider::Answers(answers) => (&answers.0, answers.1.as_ref()),
+            AnswerProvider::Solutions(solutions) => return solutions.get_hashed_arc_opt(key),
         };
 
         // Fast path: check if the answer is already computed in the
         // result slot. This avoids constructing
         // a TransactionHandle when the value is cached.
-        if let Some(idx) = answers.0.key_to_idx_hashed_opt(key)
-            && let Some(v) = answers.1.get_idx(idx)
+        if let Some(idx) = bindings.key_to_idx_hashed_opt(key)
+            && let Some(v) = answers.get_idx(idx)
         {
             return Some(v);
         }
@@ -1908,10 +1912,10 @@ impl<'a> Transaction<'a> {
         let load = module_data.state.get_load().unwrap();
         let stdlib = self.get_stdlib(&module_data.handle);
         let lookup = self.lookup(module_data);
-        answers.1.solve_exported_key(
+        answers.solve_exported_key(
             &lookup,
             &lookup,
-            &answers.0,
+            bindings,
             &load.errors,
             &stdlib,
             &self.data.state.uniques,

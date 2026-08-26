@@ -44,6 +44,7 @@ use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::PreInferenceVariance;
 use pyrefly_types::type_var::Restriction;
+use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::recurser::Guard;
 use pyrefly_util::uniques::UniqueFactory;
@@ -63,6 +64,7 @@ use crate::alt::answers::AnswerTable;
 use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::OverloadedCallee;
+use crate::alt::answers::Solutions;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
 use crate::alt::answers::TraceSideEffects;
@@ -283,6 +285,11 @@ impl<'a> GenerationAnswer<'a> {
     }
 }
 
+pub(crate) enum AnswerProvider {
+    Answers(Arc<(Bindings, Arc<Answers>)>),
+    Solutions(Arc<Solutions>),
+}
+
 /// Retains SCC answer generations for the lifetime of one solver view.
 ///
 /// Generations are appended at most once and never removed, so every answer
@@ -292,9 +299,15 @@ impl<'a> GenerationAnswer<'a> {
 /// retain the generation. The scope owns an independent `Rc` so memory safety
 /// does not rely on that stack invariant or require extending a reference with
 /// `unsafe`.
+///
+/// Cross-module answer providers are also retained for the scope lifetime. The
+/// transaction owns every referenced module allocation, so its `ArcId` remains
+/// unique while it is used as the cache key.
 pub struct AnswerScope {
     generations: AppendOnlyVec<Rc<AnswerGeneration>>,
     generation_indices: RefCell<SmallMap<usize, usize>>,
+    module_providers: AppendOnlyVec<AnswerProvider>,
+    module_provider_indices: RefCell<SmallMap<usize, usize>>,
 }
 
 impl AnswerScope {
@@ -304,6 +317,8 @@ impl AnswerScope {
         Box::new(Self {
             generations: AppendOnlyVec::new(),
             generation_indices: RefCell::new(SmallMap::new()),
+            module_providers: AppendOnlyVec::new(),
+            module_provider_indices: RefCell::new(SmallMap::new()),
         })
     }
 
@@ -321,6 +336,24 @@ impl AnswerScope {
             }
         };
         self.generations[generation_index].get_index(answer.answer_index)
+    }
+
+    pub(crate) fn retain_module<'answer, T>(
+        &'answer self,
+        module: &ArcId<T>,
+        create: impl FnOnce() -> AnswerProvider,
+    ) -> &'answer AnswerProvider {
+        let module_id = module.id();
+        let mut indices = self.module_provider_indices.borrow_mut();
+        let index = match indices.entry(module_id) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
+                let index = self.module_providers.push(create());
+                entry.insert(index);
+                index
+            }
+        };
+        &self.module_providers[index]
     }
 }
 
