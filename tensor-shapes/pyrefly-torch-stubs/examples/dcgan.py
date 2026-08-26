@@ -16,22 +16,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
 
 class DCGAN:
     # Number of channels in the training images. For color images this is 3
-    nc: Final[Dim[3]] = 3
+    nc: Final[Int[3]] = 3
 
     # Size of z latent vector (i.e. size of generator input)
-    nz: Final[Dim[100]] = 100
+    nz: Final[Int[100]] = 100
 
     # Size of feature maps in generator
-    ngf: Final[Dim[64]] = 64
+    ngf: Final[Int[64]] = 64
 
     # Size of feature maps in discriminator
-    ndf: Final[Dim[64]] = 64
+    ndf: Final[Int[64]] = 64
 
 
 # custom weights initialization called on netG and netD
@@ -48,35 +48,35 @@ def weights_init(m: nn.Module) -> None:
 # ============================================================================
 
 
-class GenUpStage[InC](nn.Module):
+class GenUpStage[InC: IntVar](nn.Module):
     """Generator upsample stage: halves channels, doubles spatial.
 
     ConvTranspose2d(C, C//2, 4, 2, 1) + BN + ReLU.
     """
 
-    def __init__(self, in_ch: Dim[InC]) -> None:
+    def __init__(self, in_ch: Int[InC]) -> None:
         super().__init__()
         self.deconv = nn.ConvTranspose2d(in_ch, in_ch // 2, 4, 2, 1, bias=False)
         self.bn = nn.BatchNorm2d(in_ch // 2)
 
-    def forward[B, H, W](
+    def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, InC, H, W]]
     ) -> Tensor[[B, InC // 2, (H - 1) * 2 + 2, (W - 1) * 2 + 2]]:
         return F.relu(self.bn(self.deconv(x)))
 
 
-class DiscDownStage[InC](nn.Module):
+class DiscDownStage[InC: IntVar](nn.Module):
     """Discriminator downsample stage: doubles channels, halves spatial.
 
     Conv2d(C, 2*C, 4, 2, 1) + BN + LeakyReLU.
     """
 
-    def __init__(self, in_ch: Dim[InC]) -> None:
+    def __init__(self, in_ch: Int[InC]) -> None:
         super().__init__()
         self.conv = nn.Conv2d(in_ch, 2 * in_ch, 4, 2, 1, bias=False)
         self.bn = nn.BatchNorm2d(2 * in_ch)
 
-    def forward[B, H, W](
+    def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, InC, H, W]]
     ) -> Tensor[[B, 2 * InC, (H - 2) // 2 + 1, (W - 2) // 2 + 1]]:
         return F.leaky_relu(self.bn(self.conv(x)), 0.2)
@@ -114,7 +114,7 @@ class Generator(nn.Module):
         # Output: ngf → nc
         self.output = nn.ConvTranspose2d(DCGAN.ngf, DCGAN.nc, 4, 2, 1, bias=False)
 
-    def _apply_stage[B, C, H, W](
+    def _apply_stage[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]], depth: int
     ) -> Tensor[[B, C // 2, (H - 1) * 2 + 2, (W - 1) * 2 + 2]]:
         idx = len(self.up_stages) - depth
@@ -122,27 +122,42 @@ class Generator(nn.Module):
         return stage(x)
 
     @overload
-    def _chain[B, C, H, W](
-        self, x: Tensor[[B, C, H, W]], depth: Dim[1]
+    def _chain[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: Int[1]
     ) -> Tensor[[B, C // 2, H * 2, W * 2]]: ...
 
     @overload
-    def _chain[Depth, B, C, H, W](
-        self, x: Tensor[[B, C, H, W]], depth: Dim[Depth]
+    def _chain[
+        Depth: IntVar,
+        B: IntVar,
+        C: IntVar,
+        H: IntVar,
+        W: IntVar,
+    ](
+        self, x: Tensor[[B, C, H, W]], depth: Int[Depth]
     ) -> Tensor[[B, C // 2**Depth, H * 2**Depth, W * 2**Depth]]: ...
 
-    def _chain[Depth, B, C, H, W](
-        self, x: Tensor[[B, C, H, W]], depth: Dim[Depth]
+    def _chain[
+        Depth: IntVar,
+        B: IntVar,
+        C: IntVar,
+        H: IntVar,
+        W: IntVar,
+    ](
+        self, x: Tensor[[B, C, H, W]], depth: Int[Depth]
     ) -> (
         Tensor[[B, C // 2, H * 2, W * 2]]
         | Tensor[[B, C // 2**Depth, H * 2**Depth, W * 2**Depth]]
+        | Tensor[[B, (C // 2) // 2 ** (Depth - 1), H * 2**Depth, W * 2**Depth]]
     ):
         y = self._apply_stage(x, depth)
         if depth == 1:
             return y
         return self._chain(y, depth - 1)
 
-    def forward[B](self, input: Tensor[[B, 100, 1, 1]]) -> Tensor[[B, 3, 64, 64]]:
+    def forward[B: IntVar](
+        self, input: Tensor[[B, 100, 1, 1]]
+    ) -> Tensor[[B, 3, 64, 64]]:
         h0 = F.relu(self.project_bn(self.project(input)))
         assert_type(h0, Tensor[[B, 512, 4, 4]])
         h1 = self._chain(h0, 3)  # 512→64, 4→32
@@ -181,7 +196,7 @@ class Discriminator(nn.Module):
         # Output: ndf*8 → 1
         self.output_conv = nn.Conv2d(DCGAN.ndf * 8, 1, 4, 1, 0, bias=False)
 
-    def _apply_stage[B, C, H, W](
+    def _apply_stage[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]], depth: int
     ) -> Tensor[[B, 2 * C, (H - 2) // 2 + 1, (W - 2) // 2 + 1]]:
         idx = len(self.down_stages) - depth
@@ -189,27 +204,47 @@ class Discriminator(nn.Module):
         return stage(x)
 
     @overload
-    def _chain[B, C, H, W](
-        self, x: Tensor[[B, C, H, W]], depth: Dim[1]
+    def _chain[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: Int[1]
     ) -> Tensor[[B, 2 * C, H // 2, W // 2]]: ...
 
     @overload
-    def _chain[Depth, B, C, H, W](
-        self, x: Tensor[[B, C, H, W]], depth: Dim[Depth]
+    def _chain[
+        Depth: IntVar,
+        B: IntVar,
+        C: IntVar,
+        H: IntVar,
+        W: IntVar,
+    ](
+        self, x: Tensor[[B, C, H, W]], depth: Int[Depth]
     ) -> Tensor[[B, C * 2**Depth, H // 2**Depth, W // 2**Depth]]: ...
 
-    def _chain[Depth, B, C, H, W](
-        self, x: Tensor[[B, C, H, W]], depth: Dim[Depth]
+    def _chain[
+        Depth: IntVar,
+        B: IntVar,
+        C: IntVar,
+        H: IntVar,
+        W: IntVar,
+    ](
+        self, x: Tensor[[B, C, H, W]], depth: Int[Depth]
     ) -> (
         Tensor[[B, 2 * C, H // 2, W // 2]]
         | Tensor[[B, C * 2**Depth, H // 2**Depth, W // 2**Depth]]
+        | Tensor[
+            [
+                B,
+                C * 2**Depth,
+                (H // 2) // 2 ** (Depth - 1),
+                (W // 2) // 2 ** (Depth - 1),
+            ]
+        ]
     ):
         y = self._apply_stage(x, depth)
         if depth == 1:
             return y
         return self._chain(y, depth - 1)
 
-    def forward[B](self, input: Tensor[[B, 3, 64, 64]]) -> Tensor[[B, 1, 1, 1]]:
+    def forward[B: IntVar](self, input: Tensor[[B, 3, 64, 64]]) -> Tensor[[B, 1, 1, 1]]:
         h0 = F.leaky_relu(self.input_conv(input), 0.2)
         assert_type(h0, Tensor[[B, 64, 32, 32]])
         h1 = self._chain(h0, 3)  # 64→512, 32→4

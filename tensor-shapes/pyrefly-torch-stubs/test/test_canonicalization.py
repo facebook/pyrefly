@@ -17,12 +17,15 @@ Each test documents:
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
 
 
-def test_combine_like_terms[N, M](x: Tensor[[N, M]]) -> Tensor[[M * N]]:
+def test_combine_like_terms[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]],
+) -> Tensor[[M * N]]:
     """Test that products are structurally commutative: N*M compatible with M*N"""
     # Flatten produces N*M (left-associative)
     result = x.flatten(0, 1)
@@ -33,7 +36,7 @@ def test_combine_like_terms[N, M](x: Tensor[[N, M]]) -> Tensor[[M * N]]:
     return expected
 
 
-def test_division_flattening[N, M, K](
+def test_division_flattening[N: IntVar, M: IntVar, K: IntVar](
     x: Tensor[[N, M, K]],
 ) -> Tensor[[(N * M) // 2, K]]:
     """Test that symbolic slicing preserves dimension expressions"""
@@ -47,7 +50,7 @@ def test_division_flattening[N, M, K](
     return result
 
 
-def test_product_ordering[N, M, K](
+def test_product_ordering[N: IntVar, M: IntVar, K: IntVar](
     x: Tensor[[N, M, K]],
 ) -> Tensor[[M * N * K]]:
     """Test that products are structurally commutative: N*M*K compatible with other orderings"""
@@ -61,7 +64,7 @@ def test_product_ordering[N, M, K](
     return expected2
 
 
-def test_flatten_compatibility[B, C, H, W](
+def test_flatten_compatibility[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
     images: Tensor[[B, C, H, W]],
 ) -> Tensor[[W * H * C * B]]:
     """Test that flatten produces correct product"""
@@ -73,7 +76,7 @@ def test_flatten_compatibility[B, C, H, W](
     return expected
 
 
-def test_literal_evaluation[N](x: Tensor[[N, 10]]) -> Tensor[[N * 10]]:
+def test_literal_evaluation[N: IntVar](x: Tensor[[N, 10]]) -> Tensor[[N * 10]]:
     """Test that literal expressions evaluate correctly"""
     # Flatten creates N*10
     result = x.flatten(0, 1)
@@ -81,26 +84,33 @@ def test_literal_evaluation[N](x: Tensor[[N, 10]]) -> Tensor[[N * 10]]:
     return result
 
 
-def test_distributive_symbolic[GR, I](
-    a: Tensor[[GR * I]],
+def test_distributive_symbolic[GR: IntVar, Iterations: IntVar](
+    a: Tensor[[GR * Iterations]],
     b: Tensor[[GR]],
 ) -> None:
     """Symbolic distribution enables like-term cancellation.
 
-    GR*I + GR = GR*(I+1): adding GR*I and GR should produce GR*(I+1).
+    GR*Iterations + GR = GR*(Iterations+1): adding GR*Iterations and GR should produce GR*(Iterations+1).
     This requires distributing GR across (I+1) and combining like terms.
 
-    Used in DenseNet: each block adds GR channels, so after I blocks
-    the channel count is InC + GR*I. Adding another GR gives InC + GR*(I+1).
+    Used in DenseNet: each block adds GR channels, so after Iterations blocks
+    the channel count is InC + GR*Iterations. Adding another GR gives InC + GR*(Iterations+1).
     """
-    # cat along dim 0: GR*I + GR
+    # cat along dim 0: GR*Iterations + GR
     result = torch.cat((a, b), dim=0)
-    assert_type(result, Tensor[[GR * I + GR]])
-    # The checker should canonicalize GR*I + GR to GR*(I+1)
-    expected: Tensor[[GR * (I + 1)]] = result
+    assert_type(result, Tensor[[GR * Iterations + GR]])
+    # The checker should canonicalize GR*Iterations + GR to GR*(Iterations+1)
+    expected: Tensor[[GR * (Iterations + 1)]] = result
+    _ = expected
 
 
-def test_multi_dim_flatten[A, B, C, D, E](
+def test_multi_dim_flatten[
+    A: IntVar,
+    B: IntVar,
+    C: IntVar,
+    D: IntVar,
+    E: IntVar,
+](
     x: Tensor[[A, B, C, D, E]],
 ) -> tuple[
     Tensor[[C * B * A, D, E]], Tensor[[E * D * C * B * A]], Tensor[[A, D * C * B, E]]
@@ -133,22 +143,22 @@ def test_pow_literal(x: Tensor[[2**3]]) -> Tensor[[8]]:
     return x
 
 
-def test_pow_identity[N](x: Tensor[[N**1]]) -> Tensor[[N]]:
+def test_pow_identity[N: IntVar](x: Tensor[[N**1]]) -> Tensor[[N]]:
     """N**1 = N."""
     return x
 
 
-def test_pow_zero[N](x: Tensor[[N**0]]) -> Tensor[[1]]:
+def test_pow_zero[N: IntVar](x: Tensor[[N**0]]) -> Tensor[[1]]:
     """N**0 = 1."""
     return x
 
 
-def test_pow_symbolic_base[I](x: Tensor[[2**I]]) -> Tensor[[2**I]]:
+def test_pow_symbolic_base[I: IntVar](x: Tensor[[2**I]]) -> Tensor[[2**I]]:
     """Symbolic exponent preserved."""
     return x
 
 
-def test_pow_product_grouping[I](
+def test_pow_product_grouping[I: IntVar](
     x: Tensor[[2**I]],
 ) -> Tensor[[2**I]]:
     """2 * 2**I = 2**(I+1) and 2**(I+1) canonically equals... 2**(I+1).
@@ -157,21 +167,21 @@ def test_pow_product_grouping[I](
     return x
 
 
-def test_pow_same_base_mul[I, B, C](
+def test_pow_same_base_mul[I: IntVar, B: IntVar, C: IntVar](
     x: Tensor[[B, C * 2**I]],
 ) -> Tensor[[B, C * 2**I]]:
     """Product with Pow factor stays canonical."""
     return x
 
 
-def test_pow_literal_absorb[I](
+def test_pow_literal_absorb[I: IntVar](
     x: Tensor[[8 * 2**I]],
 ) -> Tensor[[2 ** (I + 3)]]:
     """8 * 2**I = 2**3 * 2**I = 2**(I+3)."""
     return x
 
 
-def test_pow_mul_same_base[I](
+def test_pow_mul_same_base[I: IntVar](
     x: Tensor[[2**I * 2]],
 ) -> Tensor[[2 ** (I + 1)]]:
     """2**I * 2 = 2**(I+1)."""

@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
+use crate::module_name::is_python_identifier;
 use crate::sys_info::PythonVersion;
 
 /// Python keywords that can appear at the start of, or within, an expression.
@@ -45,9 +46,67 @@ static KEYWORD_ESCAPED_SET: LazyLock<HashSet<&'static str>> =
     LazyLock::new(|| KEYWORD_ESCAPED_DIRS.iter().copied().collect());
 
 /// Returns true if the given name is a Python keyword that may appear as an
-/// escaped directory name in configerator repos (e.g. `if` → `if_`).
-pub fn is_keyword(name: &str) -> bool {
+/// escaped directory name in configerator repos (e.g. `if` → `if_`). This is a
+/// deliberately narrow subset; use [`is_reserved_keyword`] to ask whether a name
+/// is a keyword at all.
+pub fn is_keyword_escaped_dir(name: &str) -> bool {
     KEYWORD_ESCAPED_SET.contains(name)
+}
+
+/// Whether `name` is a reserved keyword, i.e. `keyword.iskeyword(name)`. This is
+/// spelled out rather than derived from the lists above: those are grouped by
+/// where a keyword may appear, and include the soft keywords (`match`, `case`,
+/// `type`), which are contextual and remain usable as ordinary names.
+///
+/// Version-independent, unlike [`get_keywords`]: a name reserved in any supported
+/// version is reserved here, so callers asking "may this be written as an
+/// identifier?" get the conservative answer.
+pub fn is_reserved_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "False"
+            | "None"
+            | "True"
+            | "and"
+            | "as"
+            | "assert"
+            | "async"
+            | "await"
+            | "break"
+            | "class"
+            | "continue"
+            | "def"
+            | "del"
+            | "elif"
+            | "else"
+            | "except"
+            | "finally"
+            | "for"
+            | "from"
+            | "global"
+            | "if"
+            | "import"
+            | "in"
+            | "is"
+            | "lambda"
+            | "nonlocal"
+            | "not"
+            | "or"
+            | "pass"
+            | "raise"
+            | "return"
+            | "try"
+            | "while"
+            | "with"
+            | "yield"
+    )
+}
+
+/// Whether `name` can be written in source as an identifier: a keyword argument
+/// name, an attribute, or a class field. Equivalent to Python's
+/// `name.isidentifier() and not keyword.iskeyword(name)`.
+pub fn is_valid_identifier(name: &str) -> bool {
+    is_python_identifier(name) && !is_reserved_keyword(name)
 }
 
 /// Returns a Vec containing all Python keywords for the specified Python version.
@@ -131,15 +190,31 @@ mod tests {
     fn test_is_keyword_escaped_dirs() {
         // All 12 supported keywords should match.
         for kw in KEYWORD_ESCAPED_DIRS {
-            assert!(is_keyword(kw), "{kw} should be recognized as a keyword");
+            assert!(
+                is_keyword_escaped_dir(kw),
+                "{kw} should be recognized as a keyword"
+            );
         }
         // Keywords not in the configerator subset should NOT match.
-        assert!(!is_keyword("while"));
-        assert!(!is_keyword("class"));
-        assert!(!is_keyword("return"));
-        assert!(!is_keyword("try"));
+        assert!(!is_keyword_escaped_dir("while"));
+        assert!(!is_keyword_escaped_dir("class"));
+        assert!(!is_keyword_escaped_dir("return"));
+        assert!(!is_keyword_escaped_dir("try"));
         // Non-keywords should not match.
-        assert!(!is_keyword("foo"));
-        assert!(!is_keyword(""));
+        assert!(!is_keyword_escaped_dir("foo"));
+        assert!(!is_keyword_escaped_dir(""));
+    }
+
+    #[test]
+    fn test_valid_identifier_excludes_reserved_keywords() {
+        assert!(is_reserved_keyword("class"));
+        assert!(is_reserved_keyword("async"));
+        assert!(!is_valid_identifier("class"));
+        assert!(!is_valid_identifier("two words"));
+
+        for soft_keyword in ["match", "case", "type"] {
+            assert!(!is_reserved_keyword(soft_keyword));
+            assert!(is_valid_identifier(soft_keyword));
+        }
     }
 }

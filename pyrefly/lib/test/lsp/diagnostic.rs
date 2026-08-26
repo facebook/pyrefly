@@ -6,6 +6,7 @@
  */
 
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -23,7 +24,7 @@ fn get_unused_import_diagnostics(state: &State, handle: &Handle) -> String {
             if i > 0 {
                 report.push_str(", ");
             }
-            report.push_str(&format!("Import `{}` is unused", unused.name.as_str()));
+            report.push_str(&format!("Import `{}` may be unused", unused.name.as_str()));
         }
         report
     } else {
@@ -34,18 +35,21 @@ fn get_unused_import_diagnostics(state: &State, handle: &Handle) -> String {
 fn get_unused_variable_diagnostics(state: &State, handle: &Handle) -> String {
     let transaction = state.transaction();
     if let Some(bindings) = transaction.get_bindings(handle) {
-        let unused_variables = bindings.unused_variables();
-        if unused_variables.is_empty() {
-            return "No unused variables".to_owned();
-        }
         let mut report = String::new();
-        for (i, unused) in unused_variables.iter().enumerate() {
-            if i > 0 {
+        for unused in bindings.unused_variables() {
+            if Ast::is_intentionally_unused(unused.name.as_str()) {
+                continue;
+            }
+            if !report.is_empty() {
                 report.push_str(", ");
             }
             report.push_str(&format!("Variable `{}` is unused", unused.name.as_str()));
         }
-        report
+        if report.is_empty() {
+            "No unused variables".to_owned()
+        } else {
+            report
+        }
     } else {
         "No bindings".to_owned()
     }
@@ -76,7 +80,7 @@ def foo() -> str:
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
-    assert_eq!(report, "Import `os` is unused");
+    assert_eq!(report, "Import `os` may be unused");
 }
 
 #[test]
@@ -104,7 +108,7 @@ def foo() -> str:
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
-    assert_eq!(report, "Import `os` is unused");
+    assert_eq!(report, "Import `os` may be unused");
 }
 
 #[test]
@@ -132,7 +136,36 @@ def process(items: List[str]):
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
-    assert_eq!(report, "Import `Dict` is unused");
+    assert_eq!(report, "Import `Dict` may be unused");
+}
+
+#[test]
+fn test_intvar_type_parameter_marker_imports_are_used() {
+    let code = r#"
+from os import path
+from shape_extensions import Int, IntVar
+import shape_extensions as se
+
+def direct[N: IntVar](x: Int[N]) -> Int[N]:
+    return x
+
+def module_alias[N: se.IntVar](x: se.Int[N]) -> se.Int[N]:
+    return x
+"#;
+    let shape_extensions = r#"
+from typing import _SpecialForm
+
+class Int[T]: ...
+IntVar: _SpecialForm
+"#;
+    let (handles, state) = mk_multi_file_state(
+        &[("main", code), ("shape_extensions", shape_extensions)],
+        Require::Exports,
+        true,
+    );
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_import_diagnostics(&state, handle);
+    assert_eq!(report, "Import `path` may be unused");
 }
 
 #[test]
@@ -269,6 +302,39 @@ def main():
     assert_eq!(report, "Variable `unused_var` is unused");
 }
 
+#[test]
+fn test_pytest_tracebackhide_not_reported_as_unused() {
+    let code = r#"
+def helper() -> None:
+    __tracebackhide__ = True
+    unused_var = True
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "Variable `unused_var` is unused");
+}
+
+#[test]
+fn test_unused_variable_in_override() {
+    let code = r#"
+from typing_extensions import override
+
+class Base:
+    def method(self) -> None:
+        pass
+
+class Child(Base):
+    @override
+    def method(self) -> None:
+        unused_var = "this is unused"
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "Variable `unused_var` is unused");
+}
+
 // Reassigning a parameter inside a loop using its own value should not be
 // reported as unused.
 #[test]
@@ -384,7 +450,7 @@ import os as operating_system
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
-    assert_eq!(report, "Import `operating_system` is unused");
+    assert_eq!(report, "Import `operating_system` may be unused");
 }
 
 #[test]
@@ -396,5 +462,5 @@ from math import tau as my_tau
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_import_diagnostics(&state, handle);
-    assert_eq!(report, "Import `my_tau` is unused");
+    assert_eq!(report, "Import `my_tau` may be unused");
 }

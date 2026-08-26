@@ -23,7 +23,7 @@ class E(enum.Enum):
     Y = 2
         "#,
     );
-    let cls = get_class("E", &handle, &state);
+    let cls = get_class("E", &handle, &state.reader());
     let bindings = state.transaction().get_bindings(&handle).unwrap();
     let class_fields = bindings.get_class_fields(cls.index()).unwrap();
     let fields = class_fields
@@ -300,9 +300,9 @@ class MyEnum(Enum):
     def C(self) -> None: pass
     def D(self) -> None: pass
 
-reveal_type(MyEnum.A)  # E: revealed type: Literal[MyEnum.A]
-reveal_type(MyEnum.B)  # E: revealed type: int
-reveal_type(MyEnum.C)  # E: revealed type: Literal[MyEnum.C]
+assert_type(MyEnum.A, Literal[MyEnum.A])
+assert_type(MyEnum.B, int)
+assert_type(MyEnum.C, Literal[MyEnum.C])
 reveal_type(MyEnum.D)  # E: revealed type: (self: MyEnum) -> None
 "#,
 );
@@ -391,6 +391,36 @@ def foo(f: MyFlag) -> None:
         pass
     else:
         assert_type(f, MyFlag)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4657
+testcase!(
+    test_flag_union_return_self,
+    r#"
+import enum
+from typing import Self
+
+class MyFlag(enum.Flag):
+    a = enum.auto()
+    b = enum.auto()
+
+    @classmethod
+    def all_flags(cls) -> Self:
+        return cls.a | cls.b
+
+    def foo(self) -> Self:
+        return self.a | self.b
+"#,
+);
+
+testcase!(
+    test_recursive_enum_class,
+    r#"
+import enum
+
+class C(C, enum.Enum):  # E: Class `C` inheriting from `C` creates a cycle  # E: Cannot extend final class `C`
+    a = 1
 "#,
 );
 
@@ -595,7 +625,7 @@ fn env_enum_dots() -> TestEnv {
 from enum import IntEnum
 
 class Color(IntEnum):
-    RED = ... # E: Enum member `RED` has type `Ellipsis`, must match the `_value_` attribute annotation of `int`
+    RED = ... # E: Enum member `RED` has type `EllipsisType`, must match the `_value_` attribute annotation of `int`
     GREEN = "wrong" # E: Enum member `GREEN` has type `Literal['wrong']`, must match the `_value_` attribute annotation of `int`
 "#
     );
@@ -706,6 +736,18 @@ def accepts_generic(cls: type[T_Enum], key: str) -> None:
 
 def bad_key(cls: type[Enum]) -> None:
     cls[0]  # E: Enum type `type[Enum]` can only be indexed by strings
+"#,
+);
+
+testcase!(
+    test_enum_type_getitem_after_issubclass_narrow,
+    r#"
+from enum import Enum
+
+def get_as[T](name: str, expected_type: type[T]) -> T:
+    if issubclass(expected_type, Enum):
+        return expected_type[name]
+    raise NotImplementedError()
 "#,
 );
 
@@ -977,13 +1019,37 @@ assert_type(Foo.X.value, Literal["x"])
 # str, Enum mixin: specific literal correctly gives literal type
 assert_type(Bar.Y.value, Literal["y"])
 
-# Generic instance access should give the mixed-in type
+# Generic instance access gives the union of the members' literal values
 def test(foo: Foo, bar: Bar) -> None:
-    assert_type(foo.value, str)
-    assert_type(bar.value, str)
+    assert_type(foo.value, Literal["x"])
+    assert_type(bar.value, Literal["y"])
     take_literal(Foo.X.value)
     take_literal(Bar.Y.value)
     "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/3365
+testcase!(
+    test_enum_value_union_of_member_literals,
+    r#"
+from enum import Enum
+from typing import Literal, TypedDict, assert_type
+
+class Biscuits(str, Enum):
+    DIGESTIVES = "digestives"
+    CUSTARD_CREMES = "custard_cremes"
+
+class Params(TypedDict):
+    biscuit_type: Literal["digestives", "custard_cremes"]
+
+def fun2(params: Params) -> None: ...
+
+def fun(biscuit_type: Biscuits) -> None:
+    # `.value` on the enum type is the union of the members' literal values, so it is
+    # assignable to the `Literal[...]` TypedDict key rather than being widened to `str`.
+    assert_type(biscuit_type.value, Literal["digestives", "custard_cremes"])
+    fun2(params={"biscuit_type": biscuit_type.value})
+"#,
 );
 
 // When a member's value type doesn't match the mixin (e.g. int value in a str-mixin enum),
@@ -1176,7 +1242,7 @@ class MyMeta(type):
     def __getitem__(cls, item) -> str: ...
     def __len__(cls) -> int: ...
 
-class Base(Enum, metaclass=MyMeta):  # E: Class `Base` has metaclass `MyMeta` which is not a subclass of metaclass `EnumMeta` from base class `Enum`
+class Base(Enum, metaclass=MyMeta):  # E: Class `Base` has metaclass `MyMeta` which is not compatible with metaclass `EnumMeta` from base class `Enum`
     @classmethod
     def where(cls, pred: bool, a: Self, b: Self) -> Self: ...
 
@@ -1197,18 +1263,18 @@ A.where(True, A.x, A.y)
 testcase!(
     test_enum_conflicting_metaclass_no_iter,
     r#"
-from typing import reveal_type
+from typing import Literal, assert_type, reveal_type
 from enum import Enum
 
 class MyMeta(type):
     pass
 
-class E(Enum, metaclass=MyMeta):  # E: Class `E` has metaclass `MyMeta` which is not a subclass of metaclass `EnumMeta` from base class `Enum`
+class E(Enum, metaclass=MyMeta):  # E: Class `E` has metaclass `MyMeta` which is not compatible with metaclass `EnumMeta` from base class `Enum`
     A = 1
     B = 2
     C = 3
 
-reveal_type(E.A)  # E: revealed type: Literal[E.A]
+assert_type(E.A, Literal[E.A])
 
 for x in E:  # E: Type `type[E]` is not iterable
     reveal_type(x)  # E: revealed type: Unknown

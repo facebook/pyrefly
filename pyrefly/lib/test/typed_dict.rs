@@ -229,6 +229,29 @@ def f(c: C | Any):
 );
 
 testcase!(
+    test_typed_dict_str_enum_key,
+    r#"
+from enum import StrEnum
+from typing import assert_type, TypedDict
+
+class MyEnum(StrEnum):
+    i = "i"
+    j = "j"
+
+class MyDict(TypedDict):
+    i: int
+
+my_d = MyDict(i=1)
+my_d[MyEnum.i] = 2
+my_d[MyEnum.i] = "bad"  # E: `Literal['bad']` is not assignable to TypedDict key `i` with type `int`
+my_d[MyEnum.j] = 2  # E: TypedDict `MyDict` does not have key `j`
+my_d[MyEnum.i.name] = 2
+assert_type(my_d[MyEnum.i], int)
+my_d[MyEnum.j]  # E: TypedDict `MyDict` does not have key `j`
+    "#,
+);
+
+testcase!(
     test_typed_dict_readonly_partial_update,
     r#"
 from typing import Never, NotRequired, TypedDict, ReadOnly
@@ -1023,6 +1046,8 @@ testcase!(
 from typing import TypedDict, assert_type
 class C(TypedDict): ...
 assert_type(C.__total__, bool)
+assert_type(C.__required_keys__, frozenset[str])
+assert_type(C.__optional_keys__, frozenset[str])
     "#,
 );
 
@@ -1332,6 +1357,21 @@ class TD(TypedDict, extra_items=ReadOnly[int]):
 );
 
 testcase!(
+    test_extra_items_never_is_closed,
+    r#"
+from typing import Never, TypedDict
+class Closed(TypedDict, closed=True):
+    x: int
+class ExtraNever(TypedDict, extra_items=Never):
+    x: int
+class OpenChild(ExtraNever, closed=False):  # E: Non-closed TypedDict cannot inherit from closed TypedDict `ExtraNever`
+    pass
+c: Closed = {'x': 0}
+n: ExtraNever = c
+    "#,
+);
+
+testcase!(
     test_bad_extra_items,
     r#"
 from typing import TypedDict
@@ -1524,6 +1564,19 @@ class BadChild1(Parent):
 class BadChild2(Parent):
     x: NotRequired[bool]  # E: `bool` is not consistent with `extra_items` type `int`
     "#,
+);
+
+testcase!(
+    test_recursive_field_with_extra_items,
+    r#"
+from typing import NotRequired, TypedDict
+
+class C(TypedDict, extra_items=bool):
+    pass
+
+class D(C):
+    a: NotRequired[D]  # E: `D` is not consistent with `extra_items` type `bool` of TypedDict `C`  # E: `D` is uninitialized
+"#,
 );
 
 testcase!(
@@ -2101,8 +2154,8 @@ def fun(field1: str, field2: str):
     pass
 
 def test(x: TD, y: TD2, z: TD3):
-    fun(**x)
-    fun(**y)  # E: Missing argument `field2` in function `fun`
+    fun(**x)  # E: `TD` may contain extra items of type `str`, which cannot be unpacked into a callable that accepts no extra keyword arguments
+    fun(**y)  # E: `TD2` may contain extra items of type `str`
     fun(**z)
 "#,
 );
@@ -2320,7 +2373,7 @@ test(other=int, default="") # E: Argument `Literal['']` is not assignable to par
 testcase!(
     test_typed_dict_contains_narrowing,
     r#"
-from typing import TypedDict, Literal, reveal_type
+from typing import Literal, TypedDict, assert_type
 
 class AClient: ...
 class BClient: ...
@@ -2332,7 +2385,7 @@ class Clients(TypedDict):
 
 def test_in(clients: Clients, name: str):
     if name in clients:
-        reveal_type(name)  # E: revealed type: Literal['a', 'b']
+        assert_type(name, Literal['a', 'b'])
         client = clients[name]
     else:
         client = GenericClient()
@@ -2340,20 +2393,20 @@ def test_in(clients: Clients, name: str):
 
 def test_not_in(clients: Clients, name: str):
     if name not in clients:
-        reveal_type(name)  # E: revealed type: str
+        assert_type(name, str)
         return GenericClient()
     # name is narrowed in the else branch
-    reveal_type(name)  # E: revealed type: Literal['a', 'b']
+    assert_type(name, Literal['a', 'b'])
     client = clients[name]
 
 def test_literal_union_in(clients: Clients, name: Literal['a', 'b', 'c']):
     # Test narrowing a literal union with 'in'
     if name in clients:
-        reveal_type(name)  # E: revealed type: Literal['a', 'b']
+        assert_type(name, Literal['a', 'b'])
         client = clients[name]
     else:
         # Only 'c' remains outside the TypedDict
-        reveal_type(name)  # E: revealed type: Literal['c']
+        assert_type(name, Literal['c'])
         client = GenericClient()
     return client
 
@@ -2361,10 +2414,10 @@ def test_literal_union_not_in(clients: Clients, name: Literal['a', 'b', 'c']):
     # Test narrowing a literal union with 'not in'
     if name not in clients:
         # Only 'c' is not in the TypedDict
-        reveal_type(name)  # E: revealed type: Literal['c']
+        assert_type(name, Literal['c'])
         return GenericClient()
     # 'a' and 'b' remain
-    reveal_type(name)  # E: revealed type: Literal['a', 'b']
+    assert_type(name, Literal['a', 'b'])
     client = clients[name]
     return client
 "#,
@@ -2373,7 +2426,7 @@ def test_literal_union_not_in(clients: Clients, name: Literal['a', 'b', 'c']):
 testcase!(
     test_typed_dict_contains_narrowing_inheritance,
     r#"
-from typing import TypedDict, Literal, reveal_type
+from typing import Literal, TypedDict, assert_type
 
 class Base(TypedDict):
     a: int
@@ -2384,20 +2437,20 @@ class Extended(Base):
 def test_inherited_in(e: Extended, k: str):
     # Should narrow to all keys including inherited ones
     if k in e:
-        reveal_type(k)  # E: revealed type: Literal['a', 'b']
+        assert_type(k, Literal['a', 'b'])
 
 def test_inherited_not_in(e: Extended, k: Literal['a', 'b', 'c']):
     if k not in e:
-        reveal_type(k)  # E: revealed type: Literal['c']
+        assert_type(k, Literal['c'])
     else:
-        reveal_type(k)  # E: revealed type: Literal['a', 'b']
+        assert_type(k, Literal['a', 'b'])
 "#,
 );
 
 testcase!(
     test_typed_dict_contains_narrowing_empty,
     r#"
-from typing import TypedDict, Literal, reveal_type
+from typing import Never, TypedDict, assert_type
 
 class Empty(TypedDict):
     pass
@@ -2405,16 +2458,16 @@ class Empty(TypedDict):
 def test_empty_in(e: Empty, k: str):
     # Empty TypedDict - `in` check is always false, so type narrows to Never
     if k in e:
-        reveal_type(k)  # E: revealed type: Never
+        assert_type(k, Never)
     else:
-        reveal_type(k)  # E: revealed type: str
+        assert_type(k, str)
 
 def test_empty_not_in(e: Empty, k: str):
     # Empty TypedDict - `not in` check is always true, type is unchanged
     if k not in e:
-        reveal_type(k)  # E: revealed type: str
+        assert_type(k, str)
     else:
-        reveal_type(k)  # E: revealed type: Never
+        assert_type(k, Never)
 "#,
 );
 
@@ -2869,5 +2922,56 @@ T = TypeVar("T", bound=DeviceInfo)
 def test(x: T) -> object:
     # type vars bounded by typed dict get treated as dict[str, T]
     return x.get("name")
+    "#,
+);
+
+testcase!(
+    test_ancestor_with_generic_extra_items,
+    r#"
+from typing import assert_type, TypedDict
+
+class Base[T](TypedDict, extra_items=T):
+    pass
+
+class Middle[S](Base[list[S]]):
+    pass
+
+class Leaf(Middle[int]):
+    pass
+
+def f(leaf: Leaf):
+    assert_type(leaf["extra"], list[int])
+    "#,
+);
+
+testcase!(
+    test_legacy_generic_extra_items,
+    r#"
+from typing import Generic, TypedDict, TypeVar, assert_type
+T = TypeVar("T")
+class TD(TypedDict, Generic[T], extra_items=T):
+    a: int
+d: TD[str] = {"a": 1}
+assert_type(d["b"], str)
+    "#,
+);
+
+testcase!(
+    test_inherited_generic_extra_items,
+    r#"
+from typing import assert_type, TypedDict
+class Extra[T](TypedDict, extra_items=T):
+    name: str
+class IntExtra(Extra[int]):
+    pass
+def f(x: IntExtra, y: Extra[int]) -> None:
+    IntExtra(name="a", other=1)
+    IntExtra(name="a", other="wrong")  # E: Keyword argument `other` with type `Literal['wrong']` is not assignable to kwargs type `int`
+    x.update({"other": 1})
+    # This is consistent with Pyrefly's behavior on non-generic `TypedDict`s: for unknown keys,
+    # `get` returns the overall value type unioned with `None`, even though in this case we know
+    # "other" is an extra and cannot be a `str`.
+    assert_type(x.get("other"), int | str | None)
+    assert_type(y.get("other"), int | str | None)
     "#,
 );

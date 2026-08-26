@@ -8,12 +8,15 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
 
 
-def accepts_symbolic_returns_symbolic[N](x: Tensor[[N, 3]]) -> Tensor[[N, 3]]:
+def accepts_symbolic_returns_symbolic[N: IntVar](
+    x: Tensor[[N, 3]],
+) -> Tensor[[N, 3]]:
     """Identity function with symbolic dimension - preserves shape"""
     return x
 
@@ -30,8 +33,8 @@ def test_detailed():
 
     # Step 3: The concrete shape is preserved, so mismatched first dimensions are rejected.
     case1: Tensor[[2, 3]] = result
-    # E: `Tensor[[2, 3]]` is not assignable to `Tensor[[4, 3]]`
+    # E: `Tensor[IntTuple[2, 3]]` is not assignable to `Tensor[IntTuple[4, 3]]`
     case2: Tensor[[4, 3]] = result
-    # E: `Tensor[[2, 3]]` is not assignable to `Tensor[[100, 3]]`
+    # E: `Tensor[IntTuple[2, 3]]` is not assignable to `Tensor[IntTuple[100, 3]]`
     case3: Tensor[[100, 3]] = result
     _ = (case1, case2, case3)

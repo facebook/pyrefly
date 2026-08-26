@@ -90,6 +90,7 @@ pub struct AttrsFieldSpecifier {
     pub kind: AttrsFieldSpecifierKind,
     pub default_is_nothing: bool,
     pub default_decorator_method_range: Option<TextRange>,
+    pub converter_decorator_method_range: Option<TextRange>,
 }
 
 /// Simple properties of class fields that can be attached to the class definition. Note that this
@@ -222,6 +223,14 @@ impl ClassFields {
             .and_then(|s| s.default_decorator_method_range)
     }
 
+    /// The name range of this field's first `@<field>.converter` method, if any.
+    pub fn attrs_converter_decorator_method_range(&self, name: &Name) -> Option<TextRange> {
+        self.0
+            .get(name)
+            .and_then(|prop| prop.attrs_field_specifier)
+            .and_then(|s| s.converter_decorator_method_range)
+    }
+
     /// Whether the field's attrs specifier honors a `type=` argument (`attr.ib`, not `field`).
     pub fn attrs_specifier_honors_type(&self, name: &Name) -> bool {
         self.0.get(name).is_some_and(|prop| {
@@ -245,6 +254,20 @@ impl ClassFields {
     }
 }
 
+/// What is known about a class's type parameters after the binding phase.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PrecomputedTParams {
+    /// The class declares no type parameters, so there is nothing to look up.
+    NotGeneric,
+    /// The class has legacy type variables. Computing its type parameters at
+    /// binding time could produce a cycle, so they come from the class's
+    /// `KeyTParams` / `BindingTParams` pair instead.
+    FromBinding,
+    /// Computed during binding, which is possible whenever the class has no
+    /// legacy type variables.
+    Precomputed(Arc<TParams>),
+}
+
 /// Align to a cache line to prevent false sharing. `ClassInner` is stored
 /// behind `Arc` and accessed concurrently from multiple threads during
 /// type checking. Without alignment, multiple `Arc<ClassInner>` allocations
@@ -255,11 +278,8 @@ impl ClassFields {
 struct ClassInner {
     def_index: ClassDefIndex,
     qname: QName,
-    /// The precomputed tparams will be `Some(..)` if we were able to verify that there
-    /// are no legacy type variables (at which point there's no chance of producing a cycle
-    /// when computing the class tparams). Whenever it is `None`, there will be a corresponding
-    /// `KeyTParams` / `BindingTParams` pair to compute the class tparams.
-    precomputed_tparams: Option<Arc<TParams>>,
+    is_protocol: bool,
+    precomputed_tparams: PrecomputedTParams,
 }
 
 impl Debug for ClassInner {
@@ -267,6 +287,7 @@ impl Debug for ClassInner {
         f.debug_struct("ClassInner")
             .field("index", &self.def_index)
             .field("qname", &self.qname)
+            .field("is_protocol", &self.is_protocol)
             .field("tparams", &self.precomputed_tparams)
             // We don't print `fields` because it's way too long.
             .finish_non_exhaustive()
@@ -330,11 +351,13 @@ impl Class {
         name: Identifier,
         parent: NestingContext,
         module: Module,
-        precomputed_tparams: Option<Arc<TParams>>,
+        precomputed_tparams: PrecomputedTParams,
+        is_protocol: bool,
     ) -> Self {
         Self(Arc::new(ClassInner {
             def_index,
             qname: QName::new(name, parent, module),
+            is_protocol,
             precomputed_tparams,
         }))
     }
@@ -355,7 +378,11 @@ impl Class {
         ClassKind::from_qname(self.qname())
     }
 
-    pub fn precomputed_tparams(&self) -> &Option<Arc<TParams>> {
+    pub fn is_protocol(&self) -> bool {
+        self.0.is_protocol
+    }
+
+    pub fn precomputed_tparams(&self) -> &PrecomputedTParams {
         &self.0.precomputed_tparams
     }
 

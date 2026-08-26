@@ -64,10 +64,10 @@ if [[ -n "$BARE_SIG" ]]; then
     fi
 fi
 
-# 3. Find int params that might should be Dim
+# 3. Find int params that might should be Int
 INT_PARAMS=$(grep -n 'def __init__' "$FILE" 2>/dev/null | grep -E ':\s*int\s*[,=)]' || true)
 if [[ -n "$INT_PARAMS" ]]; then
-    echo "ℹ️  int params in constructors (check if any should be Dim):"
+    echo "ℹ️  int params in constructors (check if any should be Int):"
     echo "$INT_PARAMS" | while read -r line; do
         echo "   $line"
     done

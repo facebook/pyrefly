@@ -7,6 +7,7 @@
 from typing import assert_type
 
 import torch
+from shape_extensions import IntTuple
 from torch import Tensor
 
 # ==== torch.where ====
@@ -18,8 +19,7 @@ def test_where_2d():
     x: Tensor[[3, 4]] = torch.randn(3, 4)
     y: Tensor[[3, 4]] = torch.randn(3, 4)
     result = torch.where(condition, x, y)
-    # Returns same shape as inputs: (3, 4)
-    assert_type(result, Tensor[[3, 4]])
+    assert_type(result, Tensor)
 
 
 def test_where_broadcasting():
@@ -28,8 +28,13 @@ def test_where_broadcasting():
     x: Tensor[[3, 4]] = torch.randn(3, 4)
     y: Tensor[[3, 4]] = torch.randn(3, 4)
     result = torch.where(condition, x, y)
-    # Returns shape of x: (3, 4)
-    assert_type(result, Tensor[[3, 4]])
+    assert_type(result, Tensor)
+
+
+def test_where_generic_shape[XShape: IntTuple](
+    condition: Tensor, x: Tensor[XShape], y: Tensor
+):
+    assert_type(torch.where(condition, x, y), Tensor)
 
 
 # ==== torch.masked_fill ====
@@ -244,6 +249,21 @@ def test_take_along_dim_method():
     result = x.take_along_dim(indices, dim=1)
     # Output shape matches indices: (5, 3)
     assert_type(result, Tensor[[5, 3]])
+
+
+def test_take_along_dim_generic_shape[IndexShape: IntTuple](
+    x: Tensor, indices: Tensor[IndexShape]
+):
+    assert_type(torch.take_along_dim(x, indices, dim=0), Tensor[IndexShape])
+    assert_type(x.take_along_dim(indices, dim=0), Tensor[IndexShape])
+
+
+def test_projection_bare_tensor_fallback(
+    condition: Tensor, x: Tensor, y: Tensor, indices: Tensor
+):
+    assert_type(torch.where(condition, x, y), Tensor)
+    assert_type(torch.take_along_dim(x, indices, dim=0), Tensor)
+    assert_type(x.take_along_dim(indices, dim=0), Tensor)
 
 
 # ==== torch.put ====

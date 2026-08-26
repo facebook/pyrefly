@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
 # A no-arg factory that produces a shape-preserving activation module.
@@ -30,10 +30,10 @@ ShapePreservingActivation = (
 # ============================================================================
 
 
-class ResNetBlock[C](nn.Module):
+class ResNetBlock[C: IntVar](nn.Module):
     """Shape-preserving residual block: (B, C, H, W) -> (B, C, H, W)."""
 
-    def __init__(self, c: Dim[C], act_fn: ShapePreservingActivation) -> None:
+    def __init__(self, c: Int[C], act_fn: ShapePreservingActivation) -> None:
         super().__init__()
         self.net = nn.Sequential(
             nn.Conv2d(c, c, kernel_size=3, padding=1, bias=False),
@@ -44,7 +44,9 @@ class ResNetBlock[C](nn.Module):
         )
         self.act_fn = act_fn()
 
-    def forward[B, H, W](self, x: Tensor[[B, C, H, W]]) -> Tensor[[B, C, H, W]]:
+    def forward[B: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]]
+    ) -> Tensor[[B, C, H, W]]:
         z = self.net(x)
         assert_type(z, Tensor[[B, C, H, W]])
         out = z + x
@@ -52,13 +54,13 @@ class ResNetBlock[C](nn.Module):
         return out
 
 
-class ResNetDownsampleBlock[C_in, C_out](nn.Module):
+class ResNetDownsampleBlock[C_in: IntVar, C_out: IntVar](nn.Module):
     """Downsampling residual block: (B, C_in, H, W) -> (B, C_out, H', W')."""
 
     def __init__(
         self,
-        c_in: Dim[C_in],
-        c_out: Dim[C_out],
+        c_in: Int[C_in],
+        c_out: Int[C_out],
         act_fn: ShapePreservingActivation,
     ) -> None:
         super().__init__()
@@ -72,7 +74,7 @@ class ResNetDownsampleBlock[C_in, C_out](nn.Module):
         self.downsample = nn.Conv2d(c_in, c_out, kernel_size=1, stride=2)
         self.act_fn = act_fn()
 
-    def forward[B, H, W](
+    def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C_in, H, W]]
     ) -> Tensor[[B, C_out, (H - 1) // 2 + 1, (W - 1) // 2 + 1]]:
         z = self.net(x)
@@ -84,19 +86,21 @@ class ResNetDownsampleBlock[C_in, C_out](nn.Module):
         return out
 
 
-class ResNetGroup[C](nn.Module):
+class ResNetGroup[C: IntVar](nn.Module):
     """A group of shape-preserving ResNet blocks at channel C."""
 
     def __init__(
         self,
-        c: Dim[C],
+        c: Int[C],
         num_blocks: int,
         act_fn: ShapePreservingActivation,
     ) -> None:
         super().__init__()
         self.blocks = nn.ModuleList([ResNetBlock(c, act_fn) for _ in range(num_blocks)])
 
-    def forward[B, H, W](self, x: Tensor[[B, C, H, W]]) -> Tensor[[B, C, H, W]]:
+    def forward[B: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]]
+    ) -> Tensor[[B, C, H, W]]:
         for block in self.blocks:
             x = block(x)
         return x
@@ -107,7 +111,7 @@ class ResNetGroup[C](nn.Module):
 # ============================================================================
 
 
-class ResNetModel[NumClasses](nn.Module):
+class ResNetModel[NumClasses: IntVar](nn.Module):
     """ResNet with recursive downsample chain (Pattern C — exponential).
 
     Architecture:
@@ -123,7 +127,7 @@ class ResNetModel[NumClasses](nn.Module):
 
     def __init__(
         self,
-        num_classes: Dim[NumClasses],
+        num_classes: Int[NumClasses],
         act_fn_name: str = "relu",
     ):
         super().__init__()
@@ -171,7 +175,7 @@ class ResNetModel[NumClasses](nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-    def _apply_stage[B, C, H, W](
+    def _apply_stage[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]], depth: int
     ) -> Tensor[[B, 2 * C, (H - 1) // 2 + 1, (W - 1) // 2 + 1]]:
         idx = len(self.downs) - depth
@@ -181,29 +185,49 @@ class ResNetModel[NumClasses](nn.Module):
         return group(y)
 
     @overload
-    def _chain[B, C, H, W](
-        self, x: Tensor[[B, C, H, W]], depth: Dim[1]
+    def _chain[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]], depth: Int[1]
     ) -> Tensor[[B, 2 * C, (H - 1) // 2 + 1, (W - 1) // 2 + 1]]: ...
 
     @overload
-    def _chain[Depth, B, C, H, W](
-        self, x: Tensor[[B, C, H, W]], depth: Dim[Depth]
+    def _chain[
+        Depth: IntVar,
+        B: IntVar,
+        C: IntVar,
+        H: IntVar,
+        W: IntVar,
+    ](
+        self, x: Tensor[[B, C, H, W]], depth: Int[Depth]
     ) -> Tensor[
         [B, C * 2**Depth, (H - 1) // 2**Depth + 1, (W - 1) // 2**Depth + 1]
     ]: ...
 
-    def _chain[Depth, B, C, H, W](
-        self, x: Tensor[[B, C, H, W]], depth: Dim[Depth]
+    def _chain[
+        Depth: IntVar,
+        B: IntVar,
+        C: IntVar,
+        H: IntVar,
+        W: IntVar,
+    ](
+        self, x: Tensor[[B, C, H, W]], depth: Int[Depth]
     ) -> (
         Tensor[[B, 2 * C, (H - 1) // 2 + 1, (W - 1) // 2 + 1]]
         | Tensor[[B, C * 2**Depth, (H - 1) // 2**Depth + 1, (W - 1) // 2**Depth + 1]]
+        | Tensor[
+            [
+                B,
+                C * 2**Depth,
+                ((H - 1) // 2) // 2 ** (Depth - 1) + 1,
+                ((W - 1) // 2) // 2 ** (Depth - 1) + 1,
+            ]
+        ]
     ):
         y = self._apply_stage(x, depth)
         if depth == 1:
             return y
         return self._chain(y, depth - 1)
 
-    def forward[B](self, x: Tensor[[B, 3, 32, 32]]) -> Tensor[[B, NumClasses]]:
+    def forward[B: IntVar](self, x: Tensor[[B, 3, 32, 32]]) -> Tensor[[B, NumClasses]]:
         x1 = self.input_net(x)
         assert_type(x1, Tensor[[B, 16, 32, 32]])
         x2 = self.initial_group(x1)

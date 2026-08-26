@@ -27,6 +27,8 @@ pub trait ConfigOptionMigrater {
     ///
     /// * `pyright_cfg` - The pyright configuration
     /// * `pyrefly_cfg` - The ConfigFile to update
+    /// * `basedpyright` - Is this coming from a `[tool.basedpyright]` section in a
+    ///   `pyproject.toml`?
     fn migrate_from_pyright(
         &self,
         pyright_cfg: &PyrightConfig,

@@ -130,6 +130,9 @@ impl<'a> Instance<'a> {
                     Restriction::Unrestricted => return quantified_ty,
                     Restriction::Bound(b) => b.clone(),
                     Restriction::Constraints(cs) => unions(cs.clone(), heap),
+                    // Shape-extension restrictions need a Stdlib to materialize their ordinary
+                    // upper bound. Preserve the quantified instead of inventing a fallback.
+                    Restriction::ShapeExtension(_) => return quantified_ty,
                 };
                 let instance_ty =
                     heap.mk_class_type(ClassType::new(self.class.dupe(), self.targs.clone()));

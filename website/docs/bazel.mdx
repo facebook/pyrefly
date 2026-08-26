@@ -1,0 +1,135 @@
+---
+title: Bazel Integration
+slug: /bazel
+description: Run Pyrefly type checking over Bazel Python targets with rules_pyrefly
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Bazel Integration
+
+The Bazel integration requires Pyrefly 1.2 or later and uses the
+`pyrefly bazel-check` subcommand with the companion ruleset
+[`rules_pyrefly`](https://github.com/facebook/rules_pyrefly) (available via the
+[Bazel Central Registry](https://registry.bazel.build/modules/rules_pyrefly); check
+there for the latest version).
+Instead of writing custom build logic to collect sources, dependencies, import
+paths, and generated files, you can apply Pyrefly as a Bazel
+[aspect](https://bazel.build/extending/aspects) over existing `py_library`,
+`py_binary`, and `py_test` targets.
+
+:::info Under active development
+
+`pyrefly bazel-check` and the `rules_pyrefly` Starlark API are under active
+development and may still see breaking changes in minor `rules_pyrefly` releases
+before they stabilize. Please try the integration and report any problems in the
+appropriate repository. See
+[`rules_pyrefly` releases](https://github.com/facebook/rules_pyrefly/releases) and
+[`pyrefly/private/versions.bzl`](https://github.com/facebook/rules_pyrefly/blob/main/pyrefly/private/versions.bzl)
+for the currently supported Pyrefly version(s).
+
+:::
+
+## When to use it
+
+- Your Python code is already built with [`rules_python`](https://github.com/bazelbuild/rules_python) and you want `bazel build` to also type-check it.
+- You want one pinned Pyrefly version per repository, resolved hermetically through a Bzlmod toolchain, with no per-`BUILD` file boilerplate.
+
+If you do not use Bazel, use [`pyrefly check`](./configuration.mdx) as before. The Bazel integration does not read `pyrefly.toml`; checking policy is configured on the aspect.
+
+## Setup
+
+### 1. Add the dependency and register a toolchain
+
+This guide assumes your root `MODULE.bazel` already declares `rules_python`. Keep
+that existing `bazel_dep` unchanged; adding a second declaration causes an error.
+
+Choose each version independently:
+
+- `RULES_PYREFLY_VERSION`: the latest compatible
+  [`rules_pyrefly` release](https://registry.bazel.build/modules/rules_pyrefly).
+- `PYREFLY_VERSION`: a version listed in
+  [`pyrefly/private/versions.bzl`](https://github.com/facebook/rules_pyrefly/blob/main/pyrefly/private/versions.bzl).
+
+Replace the uppercase placeholders below in your root `MODULE.bazel`:
+
+```starlark
+bazel_dep(name = "rules_pyrefly", version = "RULES_PYREFLY_VERSION")
+
+pyrefly = use_extension("@rules_pyrefly//pyrefly:extensions.bzl", "pyrefly")
+pyrefly.toolchain(version = "PYREFLY_VERSION")
+use_repo(pyrefly, "pyrefly_toolchains")
+register_toolchains("@pyrefly_toolchains//:all")
+```
+
+For forks, mirrors, or prereleases that are not in the checked-in release
+metadata, `pyrefly.toolchain` also accepts `base_url` + `sha256` — see the
+[`rules_pyrefly` README](https://github.com/facebook/rules_pyrefly#configuration)
+for that form.
+
+### 2. Define an aspect
+
+The aspect can live in any `.bzl` file in a Bazel package. This example creates an
+empty `tools/BUILD.bazel` so Bazel recognizes `//tools` as a package, then exports
+the aspect from `tools/aspects.bzl`:
+
+```starlark
+# tools/aspects.bzl
+load("@rules_pyrefly//pyrefly:pyrefly.bzl", "pyrefly")
+
+pyrefly_aspect = pyrefly()
+```
+
+If you choose another location, update the `--aspects` label in the next step to
+match.
+
+With no arguments the aspect infers the Python version from the
+`rules_python` toolchain and the platform from Bazel platform constraints. For
+the full set of overrides, see the [`rules_pyrefly` README](https://github.com/facebook/rules_pyrefly#configuration).
+
+### 3. Wire it in `.bazelrc`
+
+```text
+# .bazelrc
+build:pyrefly --aspects=//tools:aspects.bzl%pyrefly_aspect
+build:pyrefly --output_groups=pyrefly
+```
+
+`--output_groups=pyrefly` is a type-check-only build. Use
+`--output_groups=+pyrefly` only when you also want the normal target outputs.
+
+### 4. Run
+
+```shell
+# one package
+bazel build --config=pyrefly //path/to/package:target
+
+# whole repo (with --keep_going to collect all findings in one pass)
+bazel build --config=pyrefly --keep_going //...
+```
+
+Diagnostics are printed to Bazel's stderr, and `error`-severity findings fail the
+action. The [`rules_pyrefly` aspect configuration](https://github.com/facebook/rules_pyrefly#configuration)
+controls the minimum severity; at its default `error` threshold, lower-severity
+findings are omitted from both stderr and the per-target JSON. The minimum-severity
+filter does not remove `reveal_type()` output. The JSON diagnostics are available in
+the `pyrefly` output group, and the generated input JSON is available in the
+debug-only `pyrefly_input` output group.
+
+## How it works
+
+Each eligible Python target gets one `pyrefly bazel-check` action that checks
+the target's own sources (from `PyInfo`) with its dependencies available for
+import resolution. Implementation details, including target selection, check roots,
+search-path facts, path overlays for generated files, output groups, and the
+JSON contract, live in [`rules_pyrefly` docs/integration.md](https://github.com/facebook/rules_pyrefly/blob/main/docs/integration.md) and the
+Pyrefly-side parser in [`pyrefly/lib/commands/bazel_check.rs`](https://github.com/facebook/pyrefly/blob/main/pyrefly/lib/commands/bazel_check.rs).
+
+For design tradeoffs and rationales, see
+[`rules_pyrefly` docs/design.md](https://github.com/facebook/rules_pyrefly/blob/main/docs/design.md) and
+[`docs/users.md`](https://github.com/facebook/rules_pyrefly/blob/main/docs/users.md).

@@ -5,12 +5,17 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::time::Duration;
+use std::time::Instant;
+
+use lsp_types::Url;
+use lsp_types::notification::DidChangeTextDocument;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::check_inlay_hint_label_values;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::check_inlay_hint_label_values;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_inlay_hint_default_config() {
@@ -106,6 +111,63 @@ fn test_inlay_hint_default_config() {
             )
         })
         .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_inlay_hint_debounce_defers_response() {
+    // VS Code offers no client-side inlay-hint debounce (microsoft/vscode#133730),
+    // so pyrefly debounces server-side (#4138): a request issued while the
+    // document is still being edited is deferred until editing pauses. Only
+    // genuine edits (didChange) open the debounce window, so we send one right
+    // before the request to place it inside the window; it must not be answered
+    // until the window elapses.
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "pyrefly": {"displayTypeErrors": "force-on"},
+                "analysis": {"inlayHintDebounceMs": 400}
+            }]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("inlay_hint_test.py");
+
+    let filepath = root.path().join("inlay_hint_test.py");
+    interaction
+        .client
+        .send_notification::<DidChangeTextDocument>(json!({
+            "textDocument": {
+                "uri": Url::from_file_path(&filepath).unwrap().to_string(),
+                "languageId": "python",
+                "version": 2
+            },
+            "contentChanges": [{
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 0}
+                },
+                "text": "\n"
+            }],
+        }));
+
+    let start = Instant::now();
+    interaction
+        .client
+        .inlay_hint("inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| result.is_some_and(|hints| !hints.is_empty()))
+        .unwrap();
+
+    assert!(
+        start.elapsed() >= Duration::from_millis(250),
+        "inlay hint response should be debounced by ~400ms, took {:?}",
+        start.elapsed()
+    );
 
     interaction.shutdown().unwrap();
 }
@@ -891,6 +953,65 @@ fn test_inlay_hint_unpack_has_location() {
                     ("None", false),
                 ],
             )
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+// Regression coverage for #4611: instance-method parameter-name hints must
+// align one-to-one with positional arguments (`self` never consumes a slot)
+// through the full LSP handler path.
+#[test]
+fn test_inlay_hint_issue_4611_instance_method_alignment() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "pyrefly": {"analysis": {"inlayHints": {
+                    "callArgumentNames": "all",
+                    "functionReturnTypes": false,
+                    "pytestParameters": false,
+                    "variableTypes": false,
+                }}},
+            }]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("issue_4611_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("issue_4611_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 3 {
+                return false;
+            }
+            // All three hints sit on the `m.method(1, "x", 2.0)` call line,
+            // ordered by column; labels align with the positional args.
+            let mut sorted = hints.clone();
+            sorted.sort_by_key(|hint| hint.position.character);
+            let expected_columns = [9, 12, 17];
+            let expected_labels = ["a= ", "b= ", "c= "];
+            for (hint, (column, label)) in sorted
+                .iter()
+                .zip(expected_columns.iter().zip(expected_labels.iter()))
+            {
+                if hint.position.line != 12 || hint.position.character != *column {
+                    return false;
+                }
+                if !check_inlay_hint_label_values(hint, &[(*label, false)]) {
+                    return false;
+                }
+            }
+            true
         })
         .unwrap();
 

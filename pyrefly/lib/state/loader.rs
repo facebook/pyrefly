@@ -25,8 +25,9 @@ use crate::config::config::FallbackSearchPath;
 use crate::config::config::ImportLookupPathPart;
 use crate::error::context::ErrorContext;
 use crate::module::finder::DirEntryCache;
+use crate::module::finder::ImportLookupMode;
 use crate::module::finder::find_import;
-use crate::module::finder::find_import_filtered;
+use crate::module::finder::find_import_with_mode;
 use crate::module::finder::suggest_stdlib_import;
 use crate::state::state::TransactionTimingCounters;
 
@@ -193,6 +194,18 @@ impl<T> FindingOrError<T> {
             x => x,
         }
     }
+
+    pub fn with_error_opt(self, error: Option<FindError>) -> Self {
+        if let Some(error) = error {
+            self.with_error(error)
+        } else {
+            self
+        }
+    }
+
+    pub fn from_error_opt(error: Option<FindError>) -> Self {
+        Self::Error(error.unwrap_or(FindError::Ignored))
+    }
 }
 
 #[derive(Debug)]
@@ -244,11 +257,11 @@ impl LoaderFindCache {
             Some(Some(module)) => FindingOrError::new_finding(module.dupe()),
             Some(None) => self.find_import(module, origin, timing),
             None => {
-                match find_import_filtered(
+                match find_import_with_mode(
                     &self.config,
                     module,
                     origin,
-                    Some(ModuleStyle::Executable),
+                    ImportLookupMode::Style(ModuleStyle::Executable),
                     &self.dir_cache,
                     timing,
                 ) {

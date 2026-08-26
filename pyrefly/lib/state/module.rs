@@ -37,8 +37,8 @@ use std::sync::Arc;
 
 use arc_swap::Guard;
 use dupe::Dupe;
-use pyrefly_util::lock::Condvar;
-use pyrefly_util::lock::Mutex;
+use parking_lot::Condvar;
+use parking_lot::Mutex;
 use ruff_python_ast::ModModule;
 
 use crate::alt::answers::Answers;
@@ -56,6 +56,7 @@ use crate::state::errors::ModuleRanges;
 use crate::state::load::Load;
 use crate::state::require::AtomicRequire;
 use crate::state::require::Require;
+use crate::state::state::OldData;
 use crate::state::steps::Context;
 use crate::state::steps::ParsedModule;
 use crate::state::steps::Step;
@@ -205,7 +206,7 @@ impl ModuleStateMut {
             } else {
                 return None;
             }
-            computing = self.computing_condvar.wait(computing);
+            self.computing_condvar.wait(&mut computing);
         }
     }
 
@@ -226,7 +227,7 @@ impl ModuleStateMut {
                     _computing: ComputingFlag { state: self },
                 });
             }
-            computing = self.computing_condvar.wait(computing);
+            self.computing_condvar.wait(&mut computing);
         }
     }
 
@@ -350,21 +351,6 @@ pub struct PostComputeGuard<'a> {
 }
 
 impl PostComputeGuard<'_> {
-    /// Take old exports saved before rebuild for diffing. Clears the slot.
-    pub fn take_old_exports(&self) -> Option<Arc<Exports>> {
-        self.state.steps.old_exports.swap(None)
-    }
-
-    /// Take old answers saved before rebuild for diffing. Clears the slot.
-    pub fn take_old_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
-        self.state.steps.old_answers.swap(None)
-    }
-
-    /// Take old solutions saved before rebuild for diffing. Clears the slot.
-    pub fn take_old_solutions(&self) -> Option<Arc<Solutions>> {
-        self.state.steps.old_solutions.swap(None)
-    }
-
     /// Evict the AST after computing answers (if not needed for retention).
     pub fn evict_ast(&self) {
         debug_assert!(
@@ -421,8 +407,8 @@ impl CleanGuard<'_> {
     /// `current_step`.
     ///
     /// `clear_ast`: if true, also clear the AST (e.g., load contents changed).
-    pub fn rebuild(&self, clear_ast: bool, now: Epoch) {
-        self.state.steps.reset_for_rebuild(clear_ast);
+    pub(crate) fn rebuild(&self, clear_ast: bool, now: Epoch, old: &mut OldData) {
+        self.state.steps.reset_for_rebuild(clear_ast, old);
 
         // Atomically set computed = now and clear all dirty flags.
         //

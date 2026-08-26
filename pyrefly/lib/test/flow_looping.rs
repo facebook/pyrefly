@@ -59,11 +59,11 @@ def f(my_set: set[int]):
 testcase!(
     test_loop_with_dict_get,
     r#"
-from typing import reveal_type
+from typing import assert_type
 def f(keys: list[str]):
     counters: dict[str, int] = {}
     for k in keys:
-        counters[k] = reveal_type(counters.get(k, 0))  # E: revealed type: int
+        counters[k] = assert_type(counters.get(k, 0), int)
 "#,
 );
 

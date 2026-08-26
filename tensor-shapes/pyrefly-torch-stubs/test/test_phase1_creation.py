@@ -7,6 +7,7 @@
 from typing import assert_type
 
 import torch
+from shape_extensions import IntTuple
 from torch import Tensor
 
 # ==== *_like Operations (preserve shape) ====
@@ -90,6 +91,23 @@ def test_diag_embed_method():
     assert_type(result, Tensor[[4, 4]])
 
 
+def test_diag_embed_offsets_and_dims():
+    x: Tensor[[2, 3]] = torch.randn(2, 3)
+    assert_type(torch.diag_embed(x, offset=2), Tensor[[2, 5, 5]])
+    assert_type(x.diag_embed(offset=-2), Tensor[[2, 5, 5]])
+    assert_type(torch.diag_embed(x, dim1=0, dim2=1), Tensor[[3, 3, 2]])
+    assert_type(torch.diag_embed(x, dim1=2, dim2=0), Tensor[[3, 2, 3]])
+    assert_type(x.diag_embed(dim1=-1, dim2=-3), Tensor[[3, 2, 3]])
+
+
+def test_diag_embed_shapeless(x: Tensor):
+    assert_type(torch.diag_embed(x, offset=1), Tensor)
+
+
+def test_diag_embed_gradual_dims(x: Tensor[[2, 3]], dim1: int, dim2: int):
+    assert_type(torch.diag_embed(x, dim1=dim1, dim2=dim2), Tensor)
+
+
 # ==== Triangular Operations (preserve shape) ====
 
 
@@ -151,28 +169,38 @@ def test_triu_method():
 
 # Test: torch.tril_indices
 def test_tril_indices():
-    # Returns [2, num_indices] where num_indices is calculated
-    _ = torch.tril_indices(3, 3)
-    # We expect [2, ?] but can't assert exact second dim
-    # Just verify the call works
+    result = torch.tril_indices(3, 3)
+    assert_type(result.shape, IntTuple[2, int])
 
 
 def test_tril_indices_rectangular():
-    _ = torch.tril_indices(4, 5)
+    result = torch.tril_indices(4, 5)
+    assert_type(result.shape, IntTuple[2, int])
 
 
 def test_tril_indices_with_offset():
-    _ = torch.tril_indices(3, 3, offset=1)
+    result = torch.tril_indices(3, 3, offset=1)
+    assert_type(result.shape, IntTuple[2, int])
 
 
 # Test: torch.triu_indices
 def test_triu_indices():
-    _ = torch.triu_indices(3, 3)
+    result = torch.triu_indices(3, 3)
+    assert_type(result.shape, IntTuple[2, int])
 
 
 def test_triu_indices_rectangular():
-    _ = torch.triu_indices(5, 4)
+    result = torch.triu_indices(5, 4)
+    assert_type(result.shape, IntTuple[2, int])
 
 
 def test_triu_indices_with_offset():
-    _ = torch.triu_indices(3, 3, offset=-1)
+    result = torch.triu_indices(3, 3, offset=-1)
+    assert_type(result.shape, IntTuple[2, int])
+
+
+def check_tri_indices_runtime_parameters(row: int, col: int, offset: int) -> None:
+    lower = torch.tril_indices(row=row, col=col, offset=offset)
+    upper = torch.triu_indices(row, col, offset)
+    assert_type(lower.shape, IntTuple[2, int])
+    assert_type(upper.shape, IntTuple[2, int])

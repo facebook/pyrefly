@@ -14,9 +14,10 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 # ============================================================================
@@ -24,17 +25,17 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class DynamicLinear[N, M](nn.Module):
+class DynamicLinear[N: IntVar, M: IntVar](nn.Module):
     """Linear layer with runtime dimension parameters"""
 
     weight: Tensor[[M, N]]
 
-    def __init__(self, in_features: Dim[N], out_features: Dim[M]):
+    def __init__(self, in_features: Int[N], out_features: Int[M]):
         super().__init__()
         # Now N and M are bound via Literal params, so we can create tensors
         self.weight = torch.randn(out_features, in_features)
 
-    def forward[B](self, x: Tensor[[B, N]]) -> Tensor[[B, M]]:
+    def forward[B: IntVar](self, x: Tensor[[B, N]]) -> Tensor[[B, M]]:
         weight_t: Tensor[[N, M]] = self.weight.transpose(0, 1)
         return torch.matmul(x, weight_t)
 
@@ -86,21 +87,21 @@ def test_multiple_instances():
 # ============================================================================
 
 
-class ModelConfig[N, M, K]:
+class ModelConfig[N: IntVar, M: IntVar, K: IntVar]:
     """Generic configuration with dimension type parameters"""
 
-    input_dim: Dim[N]
-    hidden_dim: Dim[M]
-    output_dim: Dim[K]
+    input_dim: Int[N]
+    hidden_dim: Int[M]
+    output_dim: Int[K]
 
-    def __init__(self, input_dim: Dim[N], hidden_dim: Dim[M], output_dim: Dim[K]):
+    def __init__(self, input_dim: Int[N], hidden_dim: Int[M], output_dim: Int[K]):
         # Store Literal parameters - they retain their types when assigned to typed fields
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
 
 
-class ConfiguredModel[N, M, K](nn.Module):
+class ConfiguredModel[N: IntVar, M: IntVar, K: IntVar](nn.Module):
     """Model configured via generic config object"""
 
     w1: Tensor[[M, N]]
@@ -108,12 +109,12 @@ class ConfiguredModel[N, M, K](nn.Module):
 
     def __init__(self, config: ModelConfig[N, M, K]):
         super().__init__()
-        # Now config.hidden_dim has type Dim[M], config.input_dim has type Dim[N]
+        # Now config.hidden_dim has type Int[M], config.input_dim has type Int[N]
         # So torch.randn() gets Literal arguments and can infer shapes!
         self.w1 = torch.randn(config.hidden_dim, config.input_dim)
         self.w2 = torch.randn(config.output_dim, config.hidden_dim)
 
-    def forward[B](self, x: Tensor[[B, N]]) -> Tensor[[B, K]]:
+    def forward[B: IntVar](self, x: Tensor[[B, N]]) -> Tensor[[B, K]]:
         w1_t: Tensor[[N, M]] = self.w1.transpose(0, 1)
         h: Tensor[[B, M]] = torch.matmul(x, w1_t)
         h_relu: Tensor[[B, M]] = torch.relu(h)
@@ -167,21 +168,21 @@ def test_config_multiple_instances():
 # Test 3: Summary - Solution with Literal Parameters
 # ============================================================================
 
-# SOLUTION: Use Dim[N] parameters to bind type variables!
+# SOLUTION: Use Int[N] parameters to bind type variables!
 #
 # Previously these were LIMITATIONS, but now they work:
 #
 # 1. torch.randn() with Literal parameters works! ✅
-#    def __init__(self, in_features: Dim[N], out_features: Dim[M]):
+#    def __init__(self, in_features: Int[N: IntVar], out_features: Int[M]):
 #        self.weight = torch.randn(out_features, in_features)
 #
 # 2. Runtime __init__ parameters CAN connect to generic type params via Literal ✅
-#    The Dim[N] annotation binds the type variable N to the runtime value
+#    The Int[N] annotation binds the type variable N to the runtime value
 #
 # 3. Multiple instances with different dimensions work! ✅
 #    layer1 = DynamicLinear(64, 128)
 #    layer2 = DynamicLinear(256, 512)
 #
-# Key insight: Dim[N] creates a bridge between compile-time type variables
+# Key insight: Int[N] creates a bridge between compile-time type variables
 # and runtime dimension values. When you pass a literal value to __init__,
 # the type variable becomes bound to that concrete dimension.

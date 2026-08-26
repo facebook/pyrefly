@@ -229,6 +229,13 @@ impl ConfigFinder {
         self.errors.lock().extend(errors);
     }
 
+    /// Print and clear all accumulated config errors.
+    pub fn print_errors(&self) {
+        for error in self.errors() {
+            error.print();
+        }
+    }
+
     /// Get the config file associated with a (non-Python) file. If no config exists
     /// on disk, return `None`.
     ///
@@ -280,9 +287,7 @@ impl ConfigFinder {
     /// to ensure that config errors are still surfaced if we exit early.
     pub fn checkpoint<R, E>(&self, result: Result<R, E>) -> Result<R, E> {
         if result.is_err() {
-            for error in self.errors() {
-                error.print();
-            }
+            self.print_errors();
         }
         result
     }

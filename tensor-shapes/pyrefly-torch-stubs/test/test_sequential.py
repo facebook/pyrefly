@@ -59,12 +59,52 @@ def test_upsample_only():
     assert_type(out, Tensor[[2, 64, 64, 64]])
 
 
+def test_upsample_size_in_sequential():
+    seq = nn.Sequential(nn.Upsample(size=48, mode="bilinear", align_corners=False))
+    x: Tensor[[2, 64, 32, 40]] = torch.randn(2, 64, 32, 40)
+    assert_type(seq(x), Tensor[[2, 64, 48, 48]])
+
+
+def test_gradual_upsample_composes_in_sequential():
+    # Tuple sizes and float scales are valid but gradual, so composing them must
+    # widen the pipeline rather than reject it or keep a stale precise shape.
+    x: Tensor[[2, 64, 32, 40]] = torch.randn(2, 64, 32, 40)
+    tuple_size = nn.Sequential(nn.Conv2d(64, 64, 3, padding=1), nn.Upsample((64, 80)))
+    float_scale = nn.Sequential(nn.Upsample(scale_factor=1.5), nn.ReLU())
+    assert_type(tuple_size(x), Tensor)
+    assert_type(float_scale(x), Tensor)
+
+
 # Test 6: Upsample called directly for comparison
 def test_upsample_direct():
     up = nn.Upsample(scale_factor=2)
     x: Tensor[[2, 64, 32, 32]] = torch.randn(2, 64, 32, 32)
     out = up(x)
     assert_type(out, Tensor[[2, 64, 64, 64]])
+
+
+def test_maxpool_modules_in_sequential():
+    one = nn.Sequential(nn.MaxPool1d(2))
+    two = nn.Sequential(nn.MaxPool2d(2, stride=2))
+    three = nn.Sequential(nn.MaxPool3d(2, padding=1))
+    x1: Tensor[[2, 3, 16]] = torch.randn(2, 3, 16)
+    x2: Tensor[[2, 3, 16, 20]] = torch.randn(2, 3, 16, 20)
+    x3: Tensor[[2, 3, 8, 10, 12]] = torch.randn(2, 3, 8, 10, 12)
+    assert_type(one(x1), Tensor[[2, 3, 8]])
+    assert_type(two(x2), Tensor[[2, 3, 8, 10]])
+    assert_type(three(x3), Tensor[[2, 3, 5, 6, 7]])
+
+
+def test_avgpool_modules_in_sequential():
+    one = nn.Sequential(nn.AvgPool1d(2))
+    two = nn.Sequential(nn.AvgPool2d(2, stride=2))
+    three = nn.Sequential(nn.AvgPool3d(2, padding=1))
+    x1: Tensor[[2, 3, 16]] = torch.randn(2, 3, 16)
+    x2: Tensor[[2, 3, 16, 20]] = torch.randn(2, 3, 16, 20)
+    x3: Tensor[[2, 3, 8, 10, 12]] = torch.randn(2, 3, 8, 10, 12)
+    assert_type(one(x1), Tensor[[2, 3, 8]])
+    assert_type(two(x2), Tensor[[2, 3, 8, 10]])
+    assert_type(three(x3), Tensor[[2, 3, 5, 6, 7]])
 
 
 # Test 7: Sequential with only typed-stub module (Conv2d alone)

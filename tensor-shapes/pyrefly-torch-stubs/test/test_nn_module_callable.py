@@ -11,17 +11,20 @@ from typing import assert_type, Protocol, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
 
 
-class SimpleModule[N, M](nn.Module):
+class SimpleModule[N: IntVar, M: IntVar](nn.Module):
     def forward(self, x: Tensor[[N, M]]) -> Tensor[[N, M * 2]]:
         return torch.cat([x, x], dim=1)
 
 
-def test_module_callable[N, M](module: SimpleModule[N, M], x: Tensor[[N, M]]):
+def test_module_callable[N: IntVar, M: IntVar](
+    module: SimpleModule[N, M], x: Tensor[[N, M]]
+):
     """Test that we can call module(x) instead of module.forward(x)"""
     # Should be able to call module directly
     result = module(x)
@@ -30,22 +33,22 @@ def test_module_callable[N, M](module: SimpleModule[N, M], x: Tensor[[N, M]]):
     assert_type(call_attr_result, Tensor[[N, M * 2]])
 
 
-class GenericModule[N, M](nn.Module):
+class GenericModule[N: IntVar, M: IntVar](nn.Module):
     def forward(self, x: Tensor[[N, M]]) -> Tensor[[N, M]]:
         return x
 
 
-class ModuleCallback[N, M](Protocol):
+class ModuleCallback[N: IntVar, M: IntVar](Protocol):
     def __call__(self, x: Tensor[[N, M]]) -> Tensor[[N, M * 2]]: ...
 
 
-def use_callback_protocol[N, M](
+def use_callback_protocol[N: IntVar, M: IntVar](
     callback: ModuleCallback[N, M], x: Tensor[[N, M]]
 ) -> Tensor[[N, M * 2]]:
     return callback(x)
 
 
-def test_module_matches_callback_protocol[N, M](
+def test_module_matches_callback_protocol[N: IntVar, M: IntVar](
     module: SimpleModule[N, M], x: Tensor[[N, M]]
 ):
     callback: ModuleCallback[N, M] = module
@@ -53,7 +56,9 @@ def test_module_matches_callback_protocol[N, M](
     assert_type(result, Tensor[[N, M * 2]])
 
 
-def test_generic_module_callable[B, C](module: GenericModule[B, C], x: Tensor[[B, C]]):
+def test_generic_module_callable[B: IntVar, C: IntVar](
+    module: GenericModule[B, C], x: Tensor[[B, C]]
+):
     """Test that generic modules are callable"""
     # Call module directly
     result = module(x)

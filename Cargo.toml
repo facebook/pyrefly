@@ -8,7 +8,12 @@ codegen-units = 1
 strip = "debuginfo"
 
 [profile.dev]
-debug = 1
+debug = true
+
+[profile.bench]
+lto = false
+codegen-units = 16
+inherits = "release"
 
 [profile.dbg]
 debug = true
@@ -16,11 +21,14 @@ inherits = "dev"
 
 [workspace]
 members = [
+  "crates/pyrefly_bench_harness",
   "crates/pyrefly_build",
   "crates/pyrefly_bundled",
   "crates/pyrefly_config",
   "crates/pyrefly_derive",
+  "crates/pyrefly_glean_schema",
   "crates/pyrefly_graph",
+  "crates/pyrefly_lsp_test",
   "crates/pyrefly_python",
   "crates/pyrefly_types",
   "crates/pyrefly_util",
@@ -33,3 +41,9 @@ resolver = "2"
 [workspace.package]
 license = "MIT"
 repository = "https://github.com/facebook/pyrefly"
+
+[workspace.lints.clippy]
+dbg_macro = { level = "deny" }
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fbcode_build)"]}

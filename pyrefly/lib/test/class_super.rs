@@ -49,6 +49,17 @@ class C(B, A):
 );
 
 testcase!(
+    test_class_super_with_self_type,
+    r#"
+class Base:
+    def __init_subclass__(cls) -> None:
+        super(cls, cls)
+class Child(Base):
+    pass
+    "#,
+);
+
+testcase!(
     bug = "Demonstration of a limitation of our super() implementation",
     test_inherit_method_with_super,
     r#"
@@ -185,7 +196,7 @@ class Parent:
 
 class Child(Parent):
     def __init__(self) -> None:
-        self.meth2 = super().meth1  # E: `(self: type[Self@Child]) -> int` is not assignable to attribute `meth2` with type `(self: type[Self@Child]) -> str`
+        self.meth2 = super().meth1  # E: `() -> int` is not assignable to attribute `meth2` with type `() -> str`
 
 # At runtime, this is a call to the inherited `Parent.meth2` classmethod.
 # We don't have a good way of modeling this, so we treat this as an (illegal) class access of the
