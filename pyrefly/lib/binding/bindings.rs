@@ -1090,32 +1090,21 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn suggest_builtin_name(&self, missing: &Name) -> Option<Name> {
-        // Hold the wildcard sets so `best_suggestion` can borrow their names; only the chosen
-        // suggestion is cloned, not every builtin candidate.
+    pub fn suggest_similar_name(&self, missing: &Name) -> Option<Name> {
+        // Hold the wildcard sets so their names can be borrowed for the search;
+        // only the chosen suggestion is cloned, not every builtin candidate.
         let wildcards: Vec<_> = fallback_builtin_modules(self.module_info.name())
             .filter_map(|module| self.lookup.get_wildcard(module))
             .collect();
-        best_suggestion(
-            missing,
-            wildcards
-                .iter()
-                .flat_map(|wildcard| wildcard.iter())
-                .map(|candidate| (candidate, 0)),
-        )
-    }
-
-    pub fn suggest_similar_name(&self, missing: &Name) -> Option<Name> {
-        let scope_suggestion = self.scopes.suggest_similar_name(missing);
-        let builtin_suggestion = self.suggest_builtin_name(missing);
-        let mut candidates = Vec::new();
-        if let Some(scope_suggestion) = &scope_suggestion {
-            candidates.push((scope_suggestion, 0));
-        }
-        if let Some(builtin_suggestion) = &builtin_suggestion {
-            candidates.push((builtin_suggestion, 1));
-        }
-        best_suggestion(missing, candidates)
+        // Builtins are the outermost scope there is, so they are searched in the
+        // same pass and lose every tie to a name that is actually in scope.
+        // Sharing one pass also lets a close match found anywhere tighten the
+        // bound for everything after it.
+        let builtins = wildcards
+            .iter()
+            .flat_map(|wildcard| wildcard.iter())
+            .map(|candidate| (candidate, usize::MAX));
+        best_suggestion(missing, self.scopes.suggestion_candidates().chain(builtins))
     }
 
     /// Materialize a lazily-discovered implicit builtin as an entry in the module's static

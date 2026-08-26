@@ -19,7 +19,6 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -3192,40 +3191,35 @@ impl Scopes {
         self.scope_views().find_map(visitor)
     }
 
-    pub fn suggest_similar_name(&self, missing: &Name) -> Option<Name> {
-        // Every scope kind is treated the same way: take the names it declares,
-        // and where the flow is still being walked, keep only the ones it has
-        // bound. Class bodies needed a rule of their own while the flow and the
-        // static map were searched separately, because only the flow described
-        // them; searching them together makes that distinction disappear.
-        //
-        // Whether the flow has to be consulted at all depends on the barrier.
-        // Across a function boundary the order of execution is unknowable, so
-        // everything the scope declares counts -- which is what makes a helper
-        // defined further down the file a legitimate suggestion.
-        let mut candidates: Vec<(&Name, usize)> = Vec::new();
-
-        self.visit_scopes(
-            |ScopeView {
-                 lookup_depth,
-                 scope,
-                 flow_barrier,
-                 static_barrier: _,
-             }| {
-                let flow_checked = flow_barrier == FlowBarrier::AllowFlowChecked;
-                for (candidate, _static_info) in scope.stat.0.iter_hashed() {
+    /// The names a "did you mean" search should consider, innermost scope
+    /// first, each paired with the depth it was found at so that a nearer name
+    /// wins a tie.
+    ///
+    /// Every scope kind is treated the same way: take the names it declares,
+    /// and where the flow is still being walked, keep only the ones it has
+    /// bound. Across a function boundary the order of execution is unknowable,
+    /// so everything the scope declares counts.
+    pub fn suggestion_candidates(&self) -> impl Iterator<Item = (&Name, usize)> {
+        // `scope_views` has already applied the language's scoping rules,
+        // including withholding a class body's names from the code blocks
+        // nested inside it, so whatever it yields is in scope.
+        self.scope_views().flat_map(move |view| {
+            let depth = view.lookup_depth;
+            let flow_checked = view.flow_barrier == FlowBarrier::AllowFlowChecked;
+            let flow = &view.scope.flow;
+            view.scope
+                .stat
+                .0
+                .iter_hashed()
+                .filter_map(move |(name, _static_info)| {
                     // The static map hands back the hash it stored, so this
                     // costs a probe rather than a rehash of the name.
-                    if flow_checked && scope.flow.get_info_hashed(candidate).is_none() {
-                        continue;
+                    if flow_checked && flow.get_info_hashed(name).is_none() {
+                        return None;
                     }
-                    candidates.push((candidate.into_key(), lookup_depth));
-                }
-                None::<()>
-            },
-        );
-
-        best_suggestion(missing, candidates)
+                    Some((name.into_key(), depth))
+                })
+        })
     }
 
     /// Look up the information needed to create a binding for a read of a name
