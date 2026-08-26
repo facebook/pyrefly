@@ -519,9 +519,15 @@ fn scope_name(i: usize, shape: &ScopeShape) -> String {
     }
 }
 
-fn scope_names(count: usize, shape: &ScopeShape) -> Vec<Name> {
+/// Paired with each name's character length, the way the static scope records
+/// it, so the benchmark measures the same work the binder does.
+fn scope_names(count: usize, shape: &ScopeShape) -> Vec<(Name, usize)> {
     (0..count)
-        .map(|i| Name::new(scope_name(i, shape)))
+        .map(|i| {
+            let name = Name::new(scope_name(i, shape));
+            let char_len = name.as_str().chars().count();
+            (name, char_len)
+        })
         .collect()
 }
 
@@ -535,14 +541,15 @@ fn builtin_names() -> Vec<Name> {
 }
 
 /// One `best_suggestion` call shaped like the real one: the names in scope
-/// innermost first, then the builtins at a priority no scope can reach.
-fn search(missing: &Name, scope: &[Name], builtins: &[Name]) -> Option<Name> {
+/// innermost first with their lengths already known, then the builtins at a
+/// priority no scope can reach.
+fn search(missing: &Name, scope: &[(Name, usize)], builtins: &[Name]) -> Option<Name> {
     best_suggestion(
         missing,
         scope
             .iter()
             .enumerate()
-            .map(|(i, name)| Candidate::measured(name, i % 4))
+            .map(|(i, (name, char_len))| Candidate::new(name, *char_len, i % 4))
             .chain(builtins.iter().map(|n| Candidate::measured(n, usize::MAX))),
     )
 }
@@ -720,13 +727,16 @@ static REAL_IDENTIFIERS: LazyLock<Vec<Name>> = LazyLock::new(|| {
 
 /// `count` identifiers spread across the whole corpus. Striding rather than
 /// taking a prefix keeps the sample from being all names beginning with `_`.
-fn real_scope(count: usize) -> Vec<Name> {
+fn real_scope(count: usize) -> Vec<(Name, usize)> {
     let stride = (REAL_IDENTIFIERS.len() / count).max(1);
     REAL_IDENTIFIERS
         .iter()
         .step_by(stride)
         .take(count)
-        .cloned()
+        .map(|name| {
+            let char_len = name.as_str().chars().count();
+            (name.clone(), char_len)
+        })
         .collect()
 }
 
@@ -775,7 +785,7 @@ fn suggestion_real(c: &mut Criterion) {
     });
 
     // An ordinary typo: the name it was meant to be is in scope, one edit away.
-    let target = scope[scope.len() / 2].clone();
+    let target = scope[scope.len() / 2].0.clone();
     let typo = misspell(&target);
     assert_eq!(
         search(&typo, &scope, &builtins).as_ref(),
@@ -790,8 +800,9 @@ fn suggestion_real(c: &mut Criterion) {
     // wider distance tier and survive the length filter against more candidates.
     let longest = scope
         .iter()
-        .max_by_key(|name| name.as_str().len())
+        .max_by_key(|(name, _)| name.as_str().len())
         .expect("scope is not empty")
+        .0
         .clone();
     let long_typo = misspell(&longest);
     assert_eq!(

@@ -153,7 +153,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 &key_name,
                                 fields
                                     .keys()
-                                    .map(|candidate| Candidate::measured(candidate, 0usize)),
+                                    .map(|candidate| Candidate::measured(candidate, 0)),
                             ) {
                                 builder =
                                     builder.with_detail(format!("Did you mean `{suggestion}`?"));

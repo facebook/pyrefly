@@ -232,6 +232,11 @@ struct StaticInfo {
     /// The range of the textually last assignment to this name. Used to check
     /// whether a captured variable is reassigned after a nested function definition.
     last_range: TextRange,
+    /// The name's length in characters, for the "did you mean" search. Recorded
+    /// here because that search scans every name in scope once per unresolved
+    /// name, and rejects nearly all of them on length alone: measuring at the
+    /// point of use would repeat the same count thousands of times.
+    char_len: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -411,6 +416,13 @@ pub(crate) fn is_constant_name(name: &Name) -> bool {
             .all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit())
 }
 
+/// Saturating so that `StaticInfo::char_len` can stay narrow. A name long
+/// enough to saturate is far past any suggestible edit distance, so clamping
+/// only ever makes the length filter reject it, which is the right answer.
+fn char_len_of(name: &Name) -> u32 {
+    name.as_str().chars().count().try_into().unwrap_or(u32::MAX)
+}
+
 impl Static {
     fn upsert(
         &mut self,
@@ -419,12 +431,14 @@ impl Static {
         style: StaticStyle,
         last_range: TextRange,
     ) {
+        let char_len = char_len_of(name.key());
         match self.0.entry_hashed(name) {
             Entry::Vacant(e) => {
                 e.insert(StaticInfo {
                     range,
                     style,
                     last_range,
+                    char_len,
                 });
             }
             Entry::Occupied(mut e) => {
@@ -3221,15 +3235,22 @@ impl Scopes {
                  static_barrier: _,
              }| {
                 let flow_checked = flow_barrier == FlowBarrier::AllowFlowChecked;
-                for (name, _static_info) in scope.stat.0.iter_hashed() {
-                    // Asking the flow is the expensive part, so it goes behind
-                    // the bound: `offer_if` only consults it for a candidate
-                    // close enough to still be in the running. The static map
-                    // hands back the hash it stored, so it costs a probe rather
+                for (name, static_info) in scope.stat.0.iter_hashed() {
+                    // The length comes from the static map, so deciding a
+                    // candidate is too far away never reads the name. Asking
+                    // the flow is the expensive part, so it goes behind the
+                    // bound: `offer_if` only consults it for a candidate close
+                    // enough to still be in the running. The static map hands
+                    // back the hash it stored, so that costs a probe rather
                     // than a rehash of the name.
-                    search.offer_if(Candidate::measured(name.into_key(), lookup_depth), || {
-                        !flow_checked || scope.flow.get_info_hashed(name).is_some()
-                    });
+                    search.offer_if(
+                        Candidate::new(
+                            name.into_key(),
+                            static_info.char_len as usize,
+                            lookup_depth,
+                        ),
+                        || !flow_checked || scope.flow.get_info_hashed(name).is_some(),
+                    );
                 }
                 None::<()>
             },
@@ -3425,6 +3446,7 @@ impl Scopes {
                                 range: TextRange::default(),
                                 style: StaticStyle::ImplicitBuiltinImport(module),
                                 last_range: TextRange::default(),
+                                char_len: char_len_of(name.key()),
                             }))
                         })
                     },
