@@ -667,33 +667,62 @@ def diag_embed_shape(shape: IntTuple, offset: int, dim1: int, dim2: int) -> IntT
         )
     )
 
-@shape_dsl_function
-def matmul_ir(self: ShapedArray, other: ShapedArray) -> ShapedArray:
-    r1 = len(self.shape)
-    r2 = len(other.shape)
+@type_shape_dsl_function
+def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
+    r1 = len(left)
+    r2 = len(right)
     if r1 == 1 and r2 == 1:
-        return ShapedArray(shape=[])
-    if r1 == 1 and r2 == 2:
-        return ShapedArray(shape=[other.shape[1]])
-    if r1 == 2 and r2 == 1:
-        return ShapedArray(shape=[self.shape[0]])
+        return dsl.IntTuple(())
+    if r1 == 1 and r2 >= 2:
+        return dsl.concat(right[:-2], right[-1:])
+    if r1 >= 2 and r2 == 1:
+        return left[:-1]
     if r1 == 2 and r2 == 2:
-        return ShapedArray(shape=[self.shape[0], other.shape[1]])
+        return dsl.IntTuple((left[0], right[1]))
     if r1 == 2 and r2 >= 3:
-        return ShapedArray(shape=other.shape[:-2] + [self.shape[0]] + [other.shape[-1]])
+        return dsl.concat(right[:-2], dsl.IntTuple((left[0], right[-1])))
     if r1 >= 3 and r2 == 2:
-        return ShapedArray(shape=self.shape[:-2] + [self.shape[-2]] + [other.shape[1]])
+        return dsl.concat(left[:-2], dsl.IntTuple((left[-2], right[1])))
     if r1 >= 3 and r2 >= 3:
-        return ShapedArray(
-            shape=broadcast(self.shape[:-2], other.shape[:-2])
-            + [self.shape[-2]]
-            + [other.shape[-1]]
-        )
-    return Unknown
+        # Batch dimensions prefer a non-unit dimension and otherwise the left operand.
+        if r1 < r2:
+            extra = r2 - r1
+            batch = dsl.IntTuple(
+                (
+                    right[i]
+                    if i < extra
+                    else left[i - extra]
+                    if left[i - extra] == right[i]
+                    else right[i]
+                    if left[i - extra] == 1
+                    else left[i - extra]
+                    for i in range(r2 - 2)
+                )
+            )
+        else:
+            extra = r1 - r2
+            batch = dsl.IntTuple(
+                (
+                    left[i]
+                    if i < extra or left[i] == right[i - extra]
+                    else right[i - extra]
+                    if left[i] == 1
+                    else left[i]
+                    for i in range(r1 - 2)
+                )
+            )
+        return dsl.concat(batch, dsl.IntTuple((left[-2], right[-1])))
+    return dsl.IntTuple.gradual()
 
-@shape_dsl_function
-def tensordot_ir(self: ShapedArray, other: ShapedArray, dims: int) -> ShapedArray:
-    return ShapedArray(shape=self.shape[: len(self.shape) - dims] + other.shape[dims:])
+@type_shape_dsl_function
+def tensordot_shape(left: IntTuple, right: IntTuple, dims: int) -> IntTuple:
+    if dims < 0:
+        return dsl.Invalid("tensordot dims must be non-negative")
+    if dims > len(left) or dims > len(right):
+        return dsl.Invalid("tensordot dims exceeds input rank")
+    # TODO(stroxler): Validate contracted dimensions pairwise. This rule currently validates only
+    # ranks.
+    return dsl.concat(left[: len(left) - dims], right[dims:])
 
 @shape_dsl_function
 def apply_einsum(
@@ -839,23 +868,87 @@ def pad_ir(self: ShapedArray, pad: list[int]) -> ShapedArray:
     ]
     return ShapedArray(shape=[d + offsets[i] for i, d in enumerate(self.shape)])
 
-@shape_dsl_function
-def rfft_ir(
-    self: ShapedArray, n: int | symint | None = None, dim: int = -1
-) -> ShapedArray:
-    d = normalize_dim(len(self.shape), dim)
-    if n != None:
-        return ShapedArray(shape=replace_dim(self.shape, d, n // 2 + 1))
-    return ShapedArray(shape=replace_dim(self.shape, d, self.shape[d] // 2 + 1))
+# The `+ 0` branches below keep normalized axes in one deferred integer domain.
+@type_shape_dsl_function
+def rfft_shape(shape: IntTuple, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    extent = shape[axis] // 2 + 1
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
 
-@shape_dsl_function
-def irfft_ir(
-    self: ShapedArray, n: int | symint | None = None, dim: int = -1
-) -> ShapedArray:
-    d = normalize_dim(len(self.shape), dim)
-    if n != None:
-        return ShapedArray(shape=replace_dim(self.shape, d, n))
-    return ShapedArray(shape=replace_dim(self.shape, d, 2 * (self.shape[d] - 1)))
+@type_shape_dsl_function
+def rfft_literal_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    extent = n // 2 + 1
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def rfft_n_shape(shape: IntTuple, n: Int, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((n // 2 + 1,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def irfft_shape(shape: IntTuple, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    extent = 2 * (shape[axis] - 1)
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def irfft_literal_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    # Arithmetic converts the `Flag[int]` length to an `Int` dimension.
+    extent = n + 0
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def irfft_n_shape(shape: IntTuple, n: Int, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    return dsl.concat(dsl.concat(shape[:axis], dsl.IntTuple((n,))), shape[axis + 1 :])
 
 @type_shape_dsl_function
 def size_dim_shape(shape: IntTuple, dim: int) -> Int:

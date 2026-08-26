@@ -10,6 +10,7 @@ import torch
 import torch.fft
 import torch.nn
 import torch.nn.functional
+from shape_extensions import Int, IntVar
 from torch import Tensor
 
 # ==== Loss Functions ====
@@ -159,6 +160,26 @@ def test_irfft():
     result = torch.fft.irfft(x)
     # Inverse real FFT: [6] -> [10] (2*(n-1) = 2*(6-1) = 10)
     assert_type(result, Tensor[[10]])
+
+
+def test_real_fft_axes_and_lengths():
+    x: Tensor[[4, 10, 6]] = torch.randn(4, 10, 6)
+    assert_type(torch.fft.rfft(x, dim=-2), Tensor[[4, 6, 6]])
+    assert_type(torch.fft.rfft(x, n=8, dim=0), Tensor[[5, 10, 6]])
+    assert_type(torch.fft.irfft(x, n=12, dim=1), Tensor[[4, 12, 6]])
+    assert_type(torch.fft.hfft(x, dim=0), Tensor[[6, 10, 6]])
+    assert_type(torch.fft.ihfft(x, dim=1), Tensor[[4, 6, 6]])
+
+
+def test_real_fft_symbolic_n[N: IntVar](x: Tensor[[3, 7]], n: Int[N]):
+    assert_type(torch.fft.rfft(x, n=n, dim=0), Tensor[[N // 2 + 1, 7]])
+    assert_type(torch.fft.irfft(x, n=n, dim=-1), Tensor[[3, N]])
+
+
+def test_real_fft_gradual(x: Tensor, n: int):
+    assert_type(torch.fft.rfft(x), Tensor)
+    assert_type(torch.fft.rfft(x, dim=0), Tensor)
+    assert_type(torch.fft.irfft(x, n=n), Tensor)
 
 
 def test_fftshift():

@@ -31,7 +31,7 @@ from torch._shapes import (
     flatten_ir,
     index_select_shape,
     item_ir,
-    matmul_ir,
+    matmul_shape,
     movedim_ir,
     multinomial_shape,
     normal_ir,
@@ -52,7 +52,7 @@ from torch._shapes import (
     split_ir,
     squeeze_shape,
     stack_ir,
-    tensordot_ir,
+    tensordot_shape,
     tile_ir,
     topk_shape,
     transpose_shape,
@@ -144,8 +144,9 @@ class Tensor[Shape: _Shape = _AnyShape]:
     # ==== Matrix Multiplication ====
     # Uses meta-shape for shape inference
 
-    @uses_shape_dsl(matmul_ir)
-    def __matmul__(self: Tensor, other: Tensor) -> Tensor:
+    def __matmul__[Left: IntTuple, Right: IntTuple](
+        self: Tensor[Left], other: Tensor[Right]
+    ) -> Tensor[matmul_shape(Left, Right)]:
         """Matrix multiplication (@). Shape inference via meta-shape: torch.Tensor.matmul"""
         ...
 
@@ -847,8 +848,9 @@ class Tensor[Shape: _Shape = _AnyShape]:
 
     # ==== Phase 1.4: Basic Linear Algebra Operations (Methods) ====
 
-    @uses_shape_dsl(matmul_ir)
-    def matmul(self: Tensor, other: Tensor) -> Tensor:
+    def matmul[Left: IntTuple, Right: IntTuple](
+        self: Tensor[Left], other: Tensor[Right]
+    ) -> Tensor[matmul_shape(Left, Right)]:
         """Matrix multiplication. Shape inference via meta-shape: torch.Tensor.matmul"""
         ...
 
@@ -1377,8 +1379,9 @@ class Tensor[Shape: _Shape = _AnyShape]:
 # Module-level Functions
 # ============================================================================
 
-@uses_shape_dsl(matmul_ir)
-def matmul(self: Tensor, other: Tensor) -> Tensor:
+def matmul[Left: IntTuple, Right: IntTuple](
+    self: Tensor[Left], other: Tensor[Right]
+) -> Tensor[matmul_shape(Left, Right)]:
     """Matrix multiplication function. Shape inference via meta-shape: torch.matmul"""
     ...
 
@@ -2372,10 +2375,15 @@ def fmin[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
 # ==============================================================================
 
 # Advanced matmul operations
-@uses_shape_dsl(tensordot_ir)
-def tensordot(
-    self: Tensor, other: Tensor, dims: int | tuple[list[int], list[int]] = 2
-) -> Tensor:
+@overload
+def tensordot[Left: IntTuple, Right: IntTuple, Dims: Flag[builtins.int]](
+    self: Tensor[Left], other: Tensor[Right], dims: Dims = 2
+) -> Tensor[tensordot_shape(Left, Right, Dims)]:
+    """Tensor contraction over specified dimensions. Shape inference via meta-shape: torch.tensordot"""
+    ...
+
+@overload
+def tensordot(self: Tensor, other: Tensor, dims: tuple[list[int], list[int]]) -> Tensor:
     """Tensor contraction over specified dimensions. Shape inference via meta-shape: torch.tensordot"""
     ...
 
