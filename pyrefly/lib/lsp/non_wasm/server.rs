@@ -1889,23 +1889,10 @@ impl Server {
                     let ruff_notebook =
                         params.notebook_document.to_ruff_notebook(&cell_contents)?;
                     let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
-                    let notebook_path = url
-                        .to_file_path()
-                        .or_else(|_| {
-                            if url.scheme() == "untitled" || url.scheme() == "inmemory" {
-                                Ok(self
-                                    .unsaved_file_tracker
-                                    .ensure_path_for_open(&url, "jupyter"))
-                            } else {
-                                Err(())
-                            }
-                        })
-                        .map_err(|_| {
-                            anyhow::anyhow!(
-                                "Could not convert uri to filepath: {}, expected a notebook",
-                                url
-                            )
-                        })?;
+                    let notebook_path = url.to_file_path().unwrap_or_else(|_| {
+                        self.unsaved_file_tracker
+                            .ensure_path_for_open(&url, "jupyter")
+                    });
                     for cell_url in lsp_notebook.code_cell_urls() {
                         self.open_notebook_cells
                             .write()
@@ -2927,7 +2914,11 @@ impl Server {
             // resolver at config synthesis time, not per-diagnostic.
 
             if let Some(lsp_file) = open_files.get(&path)
-                && config.project_includes.covers(&path)
+                && (config.project_includes.covers(&path)
+                    || (matches!(&**lsp_file, LspFile::Notebook(_))
+                        && config
+                            .project_includes
+                            .covers(&path.with_extension("ipynb"))))
                 && !config.project_excludes.covers(&path)
                 && type_error_status.is_enabled()
             {
@@ -3660,13 +3651,14 @@ impl Server {
         version: i32,
         contents: Arc<LspFile>,
     ) -> anyhow::Result<()> {
+        let is_notebook = matches!(&*contents, LspFile::Notebook(_));
         let path = url
             .to_file_path()
             .or_else(|_| {
-                if url.scheme() == "untitled" || url.scheme() == "inmemory" {
+                if is_notebook || url.scheme() == "untitled" || url.scheme() == "inmemory" {
                     Ok(self
                         .unsaved_file_tracker
-                        .ensure_path_for_open(&url, "python"))
+                        .ensure_path_for_open(&url, if is_notebook { "jupyter" } else { "python" }))
                 } else {
                     Err(())
                 }
