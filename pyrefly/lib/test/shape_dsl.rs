@@ -8178,3 +8178,57 @@ def index_results[N: IntVar, Tail: IntTuple](
     apply_lazy(symbolic, True)  # E: Cannot evaluate type-level shape DSL call: Flag integer division by zero
 "#,
 );
+
+testcase!(
+    test_type_shape_dsl_int_tuple_length_minimum,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Elements, IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+@type_shape_dsl_function
+def rank_zero(shape: IntTuple) -> IntTuple:
+    if len(shape) == 0:
+        return dsl.IntTuple((0,))
+    return dsl.IntTuple((10,))
+
+@type_shape_dsl_function
+def rank_two(shape: IntTuple) -> IntTuple:
+    if len(shape) == 2:
+        return dsl.IntTuple((2,))
+    return dsl.IntTuple((12,))
+
+@type_shape_dsl_function
+def rank_three(shape: IntTuple) -> IntTuple:
+    if len(shape) == 3:
+        return dsl.IntTuple((3,))
+    return dsl.IntTuple((13,))
+
+@type_shape_dsl_function
+def rank_negative(shape: IntTuple) -> IntTuple:
+    if len(shape) == -1:
+        return dsl.IntTuple((9,))
+    return dsl.IntTuple((19,))
+
+def apply_rank_zero[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[rank_zero(Shape)]: ...
+def apply_rank_two[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[rank_two(Shape)]: ...
+def apply_rank_three[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[rank_three(Shape)]: ...
+def apply_rank_negative[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[rank_negative(Shape)]: ...
+
+def test[B: IntTuple](
+    concrete_two: Tensor[[4, 5]],
+    gradual: Tensor[IntTuple],
+    unpacked: Tensor[IntTuple[2, *Elements[B], 3]],
+) -> None:
+    assert_type(apply_rank_zero(concrete_two), Tensor[[10]])
+    assert_type(apply_rank_two(concrete_two), Tensor[[2]])
+    assert_type(apply_rank_three(concrete_two), Tensor[[13]])
+    reveal_type(apply_rank_zero(gradual))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_rank_negative(gradual), Tensor[[19]])
+    assert_type(apply_rank_zero(unpacked), Tensor[[10]])
+    reveal_type(apply_rank_two(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_rank_three(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+"#,
+);

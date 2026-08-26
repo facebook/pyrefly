@@ -342,7 +342,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .then_some("`@type_shape_dsl_function` a name used directly as a condition requires a `Flag[bool]` value")
                     }),
                     TypeShapeDslConditionKind::FlagIntCompare(_)
-                    | TypeShapeDslConditionKind::Membership { .. } => None,
+                    | TypeShapeDslConditionKind::Membership { .. }
+                    | TypeShapeDslConditionKind::LengthEqualLiteral { .. } => None,
                 };
                 if let Some(message) = invalid_domain {
                     self.error(

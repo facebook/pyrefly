@@ -989,6 +989,10 @@ pub enum TypeShapeDslConditionKind {
     Membership {
         negated: bool,
     },
+    LengthEqualLiteral {
+        slot: usize,
+        literal: i64,
+    },
 }
 
 const FLAG_INT: u8 = 1;
@@ -2328,6 +2332,10 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         };
         let has_dimension_expression = self.is_dimension_comparison_operand(&compare.left, flow)
             || self.is_dimension_comparison_operand(right, flow);
+        let right_literal = match integer_literal(right) {
+            IntegerLiteral::Value(value) => Some(value),
+            IntegerLiteral::NotLiteral | IntegerLiteral::Unrepresentable => None,
+        };
         let kind = match slot_comparison {
             Some(kind) => kind,
             None if has_dimension_expression => {
@@ -2343,7 +2351,29 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     negated: op == CmpOp::NotEq,
                 }
             }
-            None => {
+            None if op == CmpOp::Eq
+                && right_literal.is_some()
+                && matches!(
+                    &*compare.left,
+                    Expr::Call(call)
+                        if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len)
+                            && call.arguments.args.len() == 1
+                            && call.arguments.keywords.is_empty()
+                ) =>
+            {
+                self.validate_flag_int(&compare.left, flow)?;
+                self.validate_flag_int(right, flow)?;
+                let Expr::Call(call) = &*compare.left else {
+                    unreachable!("guarded length equality has a call on the left")
+                };
+                let slot = self.slot(&call.arguments.args[0], flow)?;
+                TypeShapeDslConditionKind::LengthEqualLiteral {
+                    slot,
+                    literal: right_literal
+                        .expect("guarded length equality has a representable integer literal"),
+                }
+            }
+            _ => {
                 self.validate_flag_int(&compare.left, flow)?;
                 self.validate_flag_int(right, flow)?;
                 TypeShapeDslConditionKind::FlagIntCompare(comparison_op)
@@ -4238,6 +4268,47 @@ impl ValidatedTypeShapeDslFunction {
                 | TypeShapeDslFlagIntComparisonOp::LessThan
                 | TypeShapeDslFlagIntComparisonOp::GreaterThan => DslCondition::False,
             },
+            TypeShapeDslConditionKind::LengthEqualLiteral { slot, literal } => {
+                if literal < 0 {
+                    return Ok(DslCondition::False);
+                }
+                match environment.value(slot) {
+                    DslValue::Shape(shape) => match shape.view() {
+                        IntTupleView::Concrete(shape) => {
+                            if i64::try_from(shape.len())
+                                .expect("concrete IntTuple length must fit in a control integer")
+                                == literal
+                            {
+                                DslCondition::True
+                            } else {
+                                DslCondition::False
+                            }
+                        }
+                        IntTupleView::Unpacked { prefix, suffix, .. } => {
+                            let minimum_length = i64::try_from(prefix.len() + suffix.len()).expect(
+                                "fixed IntTuple prefix and suffix length must fit in a control integer",
+                            );
+                            if literal < minimum_length {
+                                DslCondition::False
+                            } else {
+                                DslCondition::Unknown
+                            }
+                        }
+                        IntTupleView::Gradual => DslCondition::Unknown,
+                    },
+                    DslValue::FlagSequence(sequence) => match sequence.len() {
+                        Some(length) if length == literal => DslCondition::True,
+                        Some(_) => DslCondition::False,
+                        None => DslCondition::Unknown,
+                    },
+                    DslValue::Unknown => DslCondition::Unknown,
+                    _ => {
+                        unreachable!(
+                            "validated length equality evaluates an IntTuple or Flag sequence"
+                        )
+                    }
+                }
+            }
         })
     }
 }
