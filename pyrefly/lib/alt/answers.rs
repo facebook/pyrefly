@@ -6,6 +6,7 @@
  */
 
 use std::any::Any;
+use std::any::type_name;
 use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Debug;
@@ -544,10 +545,22 @@ impl<K: Keyed> Default for AnswerEntry<K> {
     }
 }
 
+/// `Answers::new` gives every binding a slot, so a lookup only fails when `idx`
+/// came from different `Bindings` than the answers being indexed.
+fn missing_answer_slot<K: Keyed>(idx: Idx<K>) -> ! {
+    panic!(
+        "no answer slot for {} at index {}; the index must come from the bindings these answers were built from",
+        type_name::<K>(),
+        idx.idx(),
+    )
+}
+
 impl<K: Keyed> AnswerEntry<K> {
-    fn answer_slot(&self, idx: Idx<K>) -> Option<&AnswerSlot<K::Answer>> {
+    fn answer_slot(&self, idx: Idx<K>) -> &AnswerSlot<K::Answer> {
         assert!(!K::EXPORTED, "exported answers live in SolutionsData");
-        self.0.get(idx.idx())
+        self.0
+            .get(idx.idx())
+            .unwrap_or_else(|| missing_answer_slot(idx))
     }
 }
 
@@ -630,7 +643,7 @@ impl SolutionsData {
         Self { table }
     }
 
-    fn slot_idx<K: Keyed>(&self, idx: Idx<K>) -> Option<&AnswerSlot<K::Answer>>
+    fn slot_idx<K: Keyed>(&self, idx: Idx<K>) -> &AnswerSlot<K::Answer>
     where
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
@@ -640,6 +653,7 @@ impl SolutionsData {
             .get::<K>()
             .get_index(idx.idx())
             .map(|(_, slot)| slot)
+            .unwrap_or_else(|| missing_answer_slot(idx))
     }
 }
 
@@ -1156,7 +1170,8 @@ impl Answers {
         &self.table
     }
 
-    pub(crate) fn answer_slot<K: Keyed>(&self, idx: Idx<K>) -> Option<&AnswerSlot<K::Answer>>
+    /// The result slot holding `idx`'s answer.
+    pub(crate) fn answer_slot<K: Keyed>(&self, idx: Idx<K>) -> &AnswerSlot<K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
@@ -1339,7 +1354,7 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        self.answer_slot(k)?.get_arc()
+        self.answer_slot(k).get_arc()
     }
 
     /// Borrow a published answer retained by this `Answers` instance.
@@ -1348,7 +1363,7 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        self.answer_slot(k)?.get()
+        self.answer_slot(k).get()
     }
 
     /// Drive a cross-module iteration member by constructing a temporary
@@ -1401,7 +1416,7 @@ impl Answers {
     pub fn publish_reserved_preliminary<Ans: LookupAnswer>(
         &self,
         reserved: &mut ReservedSlot<'_, '_, '_, Ans>,
-    ) -> bool {
+    ) {
         let CalcId(_, any_idx) = reserved.calc_id().dupe();
         // SAFETY: `reserved` proves that this SCC owns the pending slot.
         unsafe { dispatch_anyidx!(&any_idx, self, publish_reserved_typed) }
@@ -1427,24 +1442,17 @@ impl Answers {
                 .downcast::<Arc<K::Answer>>()
                 .expect("Answers::reserve_typed: type mismatch"),
         );
-        let Some(slot) = self.answer_slot(idx) else {
-            return false;
-        };
-        slot.reserve(typed_answer)
+        self.answer_slot(idx).reserve(typed_answer)
     }
 
-    unsafe fn publish_reserved_typed<K: Keyed>(&self, idx: Idx<K>) -> bool
+    unsafe fn publish_reserved_typed<K: Keyed>(&self, idx: Idx<K>)
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        let Some(slot) = self.answer_slot(idx) else {
-            return false;
-        };
         // SAFETY: The caller derives `idx` from its exclusive `&mut ReservedSlot`,
         // which proves ownership of this pending reservation.
-        unsafe { slot.publish_reserved() };
-        true
+        unsafe { self.answer_slot(idx).publish_reserved() }
     }
 
     unsafe fn rollback_reserved_if_pending_typed<K: Keyed>(&self, idx: Idx<K>) -> bool
@@ -1452,12 +1460,9 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        let Some(slot) = self.answer_slot(idx) else {
-            return false;
-        };
         // SAFETY: The caller derives `idx` from its exclusive `&mut ReservedSlot`,
         // which proves ownership of this pending reservation.
-        unsafe { slot.rollback_reserved_if_pending() }
+        unsafe { self.answer_slot(idx).rollback_reserved_if_pending() }
     }
 
     fn force_for_export_boundary(&self, t: Type) -> Type {
@@ -1594,16 +1599,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        self.current().answer_slot(idx).unwrap_or_else(|| {
-            // Do not fix a panic by removing this error.
-            // We should always be sure before calling `get`.
-            panic!(
-                "Internal error: answer not found, module {}, path {}, key {:?}",
-                self.module().name(),
-                self.module().path(),
-                self.bindings().idx_to_key(idx),
-            )
-        })
+        self.current().answer_slot(idx)
     }
 
     pub fn solver(&self) -> &Solver {

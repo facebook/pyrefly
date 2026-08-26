@@ -3238,7 +3238,8 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
                 if let Some(traces) = traces {
                     answers.merge_trace_side_effects(traces);
                 }
-                answers.publish_reserved_preliminary(reserved)
+                answers.publish_reserved_preliminary(reserved);
+                true
             }
         }
     }

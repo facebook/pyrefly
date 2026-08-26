@@ -2886,7 +2886,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if self.is_same_module(&calc_id) {
             let (errors, traces) = reserved.take_side_effects();
             // SAFETY: `reserved` proves that this SCC owns the pending slot.
-            unsafe { dispatch_anyidx!(any_idx, self, publish_reserved_same_module, errors, traces) }
+            unsafe {
+                dispatch_anyidx!(any_idx, self, publish_reserved_same_module, errors, traces)
+            };
+            true
         } else {
             self.answers.publish_reserved_in_module(reserved)
         }
@@ -2897,8 +2900,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         idx: Idx<K>,
         errors: Option<Arc<ErrorCollector>>,
         traces: Option<TraceSideEffects>,
-    ) -> bool
-    where
+    ) where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
@@ -2913,8 +2915,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         // SAFETY: The caller derives `idx` from its exclusive `&mut ReservedSlot`,
         // which proves ownership of this pending reservation.
-        unsafe { self.get_answer_slot(idx).publish_reserved() };
-        true
+        unsafe { self.get_answer_slot(idx).publish_reserved() }
     }
 
     /// Roll back a reservation if it is still pending.
