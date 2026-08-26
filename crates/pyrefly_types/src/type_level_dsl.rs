@@ -937,9 +937,7 @@ pub enum TypeShapeDslExpressionKind {
         slot: usize,
         parameter_origins: Option<Box<[usize]>>,
     },
-    IntTupleSlice {
-        stop: i64,
-    },
+    IntTupleSlice,
     IntTupleConcat,
     DimensionSlot {
         slot: usize,
@@ -1267,7 +1265,7 @@ impl DslStaticKind {
 
 enum IntegerLiteral {
     NotLiteral,
-    Unrepresentable,
+    Unrepresentable { negative: bool },
     Value(i64),
 }
 
@@ -1275,19 +1273,19 @@ impl IntegerLiteral {
     fn into_value(self) -> Result<Option<i64>, ()> {
         match self {
             Self::NotLiteral => Err(()),
-            Self::Unrepresentable => Ok(None),
+            Self::Unrepresentable { .. } => Ok(None),
             Self::Value(value) => Ok(Some(value)),
         }
     }
 }
 
 fn integer_literal(expr: &Expr) -> IntegerLiteral {
-    // TODO: Preserve the sign of out-of-`i64` thresholds instead of falling back to gradual.
     match expr {
         Expr::NumberLiteral(number) => match &number.value {
-            Number::Int(value) => value
-                .as_i64()
-                .map_or(IntegerLiteral::Unrepresentable, IntegerLiteral::Value),
+            Number::Int(value) => value.as_i64().map_or(
+                IntegerLiteral::Unrepresentable { negative: false },
+                IntegerLiteral::Value,
+            ),
             _ => IntegerLiteral::NotLiteral,
         },
         Expr::UnaryOp(unary) if matches!(unary.op, UnaryOp::UAdd | UnaryOp::USub) => {
@@ -1298,15 +1296,19 @@ fn integer_literal(expr: &Expr) -> IntegerLiteral {
                 return IntegerLiteral::NotLiteral;
             };
             if unary.op == UnaryOp::UAdd {
-                value
-                    .as_i64()
-                    .map_or(IntegerLiteral::Unrepresentable, IntegerLiteral::Value)
+                value.as_i64().map_or(
+                    IntegerLiteral::Unrepresentable { negative: false },
+                    IntegerLiteral::Value,
+                )
             } else {
                 value
                     .as_i64()
                     .and_then(i64::checked_neg)
                     .or_else(|| (value.as_u64() == Some(i64::MAX as u64 + 1)).then_some(i64::MIN))
-                    .map_or(IntegerLiteral::Unrepresentable, IntegerLiteral::Value)
+                    .map_or(
+                        IntegerLiteral::Unrepresentable { negative: true },
+                        IntegerLiteral::Value,
+                    )
             }
         }
         _ => IntegerLiteral::NotLiteral,
@@ -1921,7 +1923,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         }
         match integer_literal(expression) {
             IntegerLiteral::NotLiteral => {}
-            IntegerLiteral::Unrepresentable => {
+            IntegerLiteral::Unrepresentable { .. } => {
                 self.expressions.push(TypeShapeDslExpression {
                     range: expression.range(),
                     kind: TypeShapeDslExpressionKind::FlagIntLiteral(None),
@@ -2339,30 +2341,24 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 let Expr::Slice(slice) = subscript.slice.as_ref() else {
                     return Err(TypeShapeDslDefinitionError {
                         range: subscript.slice.range(),
-                        message: "IntTuple shape expressions support only `shape[:literal_stop]`",
+                        message: "IntTuple shape expression subscripts must use slice syntax",
                     });
                 };
-                if slice.lower.is_some() || slice.step.is_some() {
+                if slice.step.is_some() {
                     return Err(TypeShapeDslDefinitionError {
                         range: slice.range,
-                        message: "IntTuple slices require an omitted lower bound and step",
+                        message: "IntTuple slices do not support steps",
                     });
                 }
-                let Some(upper) = slice.upper.as_deref() else {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: slice.range,
-                        message: "IntTuple slices require a literal stop",
-                    });
-                };
-                let IntegerLiteral::Value(stop) = integer_literal(upper) else {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: upper.range(),
-                        message: "IntTuple slice stop must be a representable signed integer literal",
-                    });
-                };
+                if let Some(lower) = slice.lower.as_deref() {
+                    self.validate_flag_int(lower, flow)?;
+                }
+                if let Some(upper) = slice.upper.as_deref() {
+                    self.validate_flag_int(upper, flow)?;
+                }
                 self.expressions.push(TypeShapeDslExpression {
                     range: expression.range(),
-                    kind: TypeShapeDslExpressionKind::IntTupleSlice { stop },
+                    kind: TypeShapeDslExpressionKind::IntTupleSlice,
                 });
                 parameter_origins
             }
@@ -2977,7 +2973,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             || self.is_dimension_expression(right, flow);
         let right_literal = match integer_literal(right) {
             IntegerLiteral::Value(value) => Some(value),
-            IntegerLiteral::NotLiteral | IntegerLiteral::Unrepresentable => None,
+            IntegerLiteral::NotLiteral | IntegerLiteral::Unrepresentable { .. } => None,
         };
         let kind = match slot_comparison {
             Some(kind) => kind,
@@ -4271,22 +4267,62 @@ impl ValidatedTypeShapeDslFunction {
             TypeShapeDslExpressionKind::IntTupleSlot { slot, .. } => {
                 DslOutcome::Value(environment.value(slot).clone())
             }
-            TypeShapeDslExpressionKind::IntTupleSlice { stop } => {
+            TypeShapeDslExpressionKind::IntTupleSlice => {
                 let Expr::Subscript(subscript) = expression else {
                     unreachable!("validated IntTuple slice is a subscript")
                 };
-                let shape = match self.evaluate_expression(&subscript.value, environment, budget) {
-                    DslOutcome::Value(DslValue::Shape(shape)) => shape,
-                    DslOutcome::Value(DslValue::Unknown) => {
+                let Expr::Slice(slice) = subscript.slice.as_ref() else {
+                    unreachable!("validated IntTuple slice has slice syntax")
+                };
+                let shape = self.evaluate_expression(&subscript.value, environment, budget);
+                let mut evaluate_bound = |bound: Option<&Expr>| {
+                    bound.map_or(DslOutcome::Value(DslValue::FlagNone), |bound| {
+                        match integer_literal(bound) {
+                            IntegerLiteral::Unrepresentable { negative } => {
+                                DslOutcome::Value(DslValue::FlagInt(if negative {
+                                    i64::MIN
+                                } else {
+                                    i64::MAX
+                                }))
+                            }
+                            IntegerLiteral::NotLiteral | IntegerLiteral::Value(_) => {
+                                self.evaluate_expression(bound, environment, budget)
+                            }
+                        }
+                    })
+                };
+                let start = evaluate_bound(slice.lower.as_deref());
+                let stop = evaluate_bound(slice.upper.as_deref());
+                let (shape, start, stop) = match (shape, start, stop) {
+                    (DslOutcome::Invalid(error), _, _)
+                    | (_, DslOutcome::Invalid(error), _)
+                    | (_, _, DslOutcome::Invalid(error)) => return DslOutcome::Invalid(error),
+                    (DslOutcome::Value(DslValue::Unknown), _, _)
+                    | (_, DslOutcome::Value(DslValue::Unknown), _)
+                    | (_, _, DslOutcome::Value(DslValue::Unknown)) => {
                         return DslOutcome::Value(DslValue::Unknown);
                     }
-                    DslOutcome::ExplicitGradual => {
-                        unreachable!("validated shape expression cannot return explicit gradual")
+                    (DslOutcome::ExplicitGradual, _, _)
+                    | (_, DslOutcome::ExplicitGradual, _)
+                    | (_, _, DslOutcome::ExplicitGradual) => {
+                        unreachable!("validated slice expressions cannot return explicit gradual")
                     }
-                    invalid @ DslOutcome::Invalid(_) => return invalid,
-                    DslOutcome::Value(_) => unreachable!("validated slice operand is a shape"),
+                    (
+                        DslOutcome::Value(DslValue::Shape(shape)),
+                        DslOutcome::Value(start),
+                        DslOutcome::Value(stop),
+                    ) => (shape, start, stop),
+                    _ => unreachable!("validated IntTuple slice operand is a shape"),
                 };
-                DslOutcome::Value(DslValue::Shape(shape.prefix_slice(stop)))
+                let bound = |value| match value {
+                    DslValue::FlagNone => None,
+                    DslValue::FlagInt(value) => Some(value),
+                    _ => unreachable!("validated IntTuple slice bound is an optional Flag[int]"),
+                };
+                evaluate_int_tuple_slice(&shape, bound(start), bound(stop))
+                    .map_or(DslOutcome::Value(DslValue::Unknown), |shape| {
+                        DslOutcome::Value(DslValue::Shape(shape))
+                    })
             }
             TypeShapeDslExpressionKind::IntTupleConcat => {
                 let Expr::Call(call) = expression else {
@@ -5114,6 +5150,93 @@ fn evaluate_broadcast(left: &DslValue, right: &DslValue) -> DslOutcome {
     match broadcast_shapes(left, right) {
         Ok(shape) => DslOutcome::Value(DslValue::Shape(shape)),
         Err(error) => DslOutcome::Invalid(error),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum IntTupleSlicePosition {
+    Prefix(usize),
+    Suffix(usize),
+}
+
+/// Slice an immutable shape while retaining an unpacked symbolic middle when both bounds can be
+/// located in its fixed prefix or suffix. Bounds that depend on the unknown middle return `None`.
+fn evaluate_int_tuple_slice(
+    shape: &IntTuple,
+    start: Option<i64>,
+    stop: Option<i64>,
+) -> Option<IntTuple> {
+    if stop == Some(0)
+        || stop.is_some_and(|stop| {
+            let start = start.unwrap_or(0);
+            // Equal or reversed bounds with the same sign are empty independently of tuple length.
+            ((start >= 0 && stop >= 0) || (start < 0 && stop < 0)) && start >= stop
+        })
+    {
+        return Some(IntTuple::new(Vec::new()));
+    }
+    match shape.view() {
+        IntTupleView::Concrete(dimensions) => {
+            let length =
+                i128::try_from(dimensions.len()).expect("concrete tuple length must fit in i128");
+            let normalize = |bound: Option<i64>, default: i128| {
+                let bound = bound.map_or(default, i128::from);
+                let normalized = if bound < 0 {
+                    length
+                        .checked_add(bound)
+                        .expect("negative i64 slice bound plus tuple length fits in i128")
+                        .max(0)
+                } else {
+                    bound.min(length)
+                };
+                usize::try_from(normalized)
+                    .expect("clamped concrete tuple slice bound must fit in usize")
+            };
+            let start = normalize(start, 0);
+            let stop = normalize(stop, length);
+            Some(IntTuple::new(dimensions[start..stop.max(start)].to_vec()))
+        }
+        IntTupleView::Gradual => None,
+        IntTupleView::Unpacked {
+            prefix,
+            middle,
+            suffix,
+        } => {
+            let locate = |bound: i64| {
+                if bound >= 0 {
+                    usize::try_from(bound)
+                        .ok()
+                        .filter(|bound| *bound <= prefix.len())
+                        .map(IntTupleSlicePosition::Prefix)
+                } else {
+                    usize::try_from(bound.unsigned_abs())
+                        .ok()
+                        .filter(|removed| *removed <= suffix.len())
+                        .map(|removed| IntTupleSlicePosition::Suffix(suffix.len() - removed))
+                }
+            };
+            let start = start.map_or(Some(IntTupleSlicePosition::Prefix(0)), locate)?;
+            let stop = stop.map_or(Some(IntTupleSlicePosition::Suffix(suffix.len())), locate)?;
+            match (start, stop) {
+                (IntTupleSlicePosition::Prefix(start), IntTupleSlicePosition::Prefix(stop)) => {
+                    Some(IntTuple::new(prefix[start..stop.max(start)].to_vec()))
+                }
+                (IntTupleSlicePosition::Suffix(start), IntTupleSlicePosition::Suffix(stop)) => {
+                    Some(IntTuple::new(suffix[start..stop.max(start)].to_vec()))
+                }
+                (IntTupleSlicePosition::Prefix(start), IntTupleSlicePosition::Suffix(stop)) => {
+                    Some(IntTuple::unpacked(
+                        prefix[start..].to_vec(),
+                        middle.clone(),
+                        suffix[..stop].to_vec(),
+                    ))
+                }
+                (IntTupleSlicePosition::Suffix(_), IntTupleSlicePosition::Prefix(_)) => {
+                    // A suffix position cannot precede a prefix position, regardless of middle length.
+                    Some(IntTuple::new(Vec::new()))
+                }
+            }
+        }
     }
 }
 

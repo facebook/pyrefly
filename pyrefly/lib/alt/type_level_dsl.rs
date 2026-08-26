@@ -479,7 +479,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     TypeShapeDslExpressionKind::DimensionLiteral(_)
                     | TypeShapeDslExpressionKind::IntTupleSlot { .. }
-                    | TypeShapeDslExpressionKind::IntTupleSlice { .. }
+                    | TypeShapeDslExpressionKind::IntTupleSlice
                     | TypeShapeDslExpressionKind::IntTupleConcat
                     | TypeShapeDslExpressionKind::IntTupleConstructor
                     | TypeShapeDslExpressionKind::IntTupleProduct

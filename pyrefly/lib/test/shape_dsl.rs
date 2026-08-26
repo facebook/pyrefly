@@ -8810,7 +8810,7 @@ def test[B: IntTuple](
 );
 
 testcase!(
-    test_type_shape_dsl_concat_and_prefix_slice,
+    test_type_shape_dsl_concat_and_slice,
     shape_dsl_tensor_env(),
     r#"
 import shape_extensions.dsl as dsl
@@ -8886,6 +8886,47 @@ def minimum_stop(shape: IntTuple) -> IntTuple:
     return shape[:-9223372036854775808]
 
 @type_shape_dsl_function
+def full_slice(shape: IntTuple) -> IntTuple:
+    return shape[:]
+
+@type_shape_dsl_function
+def bounded(shape: IntTuple, start: int, stop: int) -> IntTuple:
+    start_alias = start
+    computed_stop = stop - 1
+    return shape[start_alias:computed_stop]
+
+@type_shape_dsl_function
+def suffix(shape: IntTuple, start: int) -> IntTuple:
+    return shape[start:]
+
+@type_shape_dsl_function
+def helper_slice(shape: IntTuple, start: int, stop: int) -> IntTuple:
+    return shape[start:stop]
+
+@type_shape_dsl_function
+def call_helper_slice(shape: IntTuple, start: int, stop: int) -> IntTuple:
+    return helper_slice(shape, start, stop)
+
+@type_shape_dsl_function
+def extreme_stop(shape: IntTuple) -> IntTuple:
+    return shape[:999999999999999999999999]
+
+@type_shape_dsl_function
+def exact_extreme_bounds(shape: IntTuple) -> IntTuple:
+    return shape[-9223372036854775808:9223372036854775807]
+
+@type_shape_dsl_function
+def invalid_bound(shape: IntTuple, divisor: int) -> IntTuple:
+    stop = 1 // divisor
+    return shape[:stop]
+
+@type_shape_dsl_function
+def invalid_bound_after_unknown(
+    shape: IntTuple, unknown_stop: int, divisor: int,
+) -> IntTuple:
+    return shape[:unknown_stop][:1 // divisor]
+
+@type_shape_dsl_function
 def unused_shape_expression(shape: IntTuple, dimension: Int) -> Int:
     prefix = shape[:1]
     joined = dsl.concat(prefix, dsl.IntTuple((7,)))
@@ -8933,6 +8974,28 @@ def apply_keep_last[S: IntTuple](x: Tensor[S]) -> Tensor[keep_last(S)]: ...
 def apply_nested[S: IntTuple](x: Tensor[S]) -> Tensor[nested(S)]: ...
 def apply_concat_then_slice[S: IntTuple](x: Tensor[S]) -> Tensor[concat_then_slice(S)]: ...
 def apply_minimum_stop[S: IntTuple](x: Tensor[S]) -> Tensor[minimum_stop(S)]: ...
+def apply_full_slice[S: IntTuple](x: Tensor[S]) -> Tensor[full_slice(S)]: ...
+def apply_bounded[S: IntTuple, Start: Flag[int], Stop: Flag[int]](
+    x: Tensor[S], start: Start, stop: Stop,
+) -> Tensor[bounded(S, Start, Stop)]: ...
+def apply_suffix[S: IntTuple, Start: Flag[int]](
+    x: Tensor[S], start: Start,
+) -> Tensor[suffix(S, Start)]: ...
+def apply_helper_slice[S: IntTuple, Start: Flag[int], Stop: Flag[int]](
+    x: Tensor[S], start: Start, stop: Stop,
+) -> Tensor[call_helper_slice(S, Start, Stop)]: ...
+def apply_extreme_stop[S: IntTuple](x: Tensor[S]) -> Tensor[extreme_stop(S)]: ...
+def apply_exact_extreme_bounds[S: IntTuple](
+    x: Tensor[S],
+) -> Tensor[exact_extreme_bounds(S)]: ...
+def apply_invalid_bound[S: IntTuple, Divisor: Flag[int]](
+    x: Tensor[S], divisor: Divisor,
+) -> Tensor[invalid_bound(S, Divisor)]: ...
+def apply_invalid_bound_after_unknown[
+    S: IntTuple, Stop: Flag[int], Divisor: Flag[int]
+](x: Tensor[S], unknown_stop: Stop, divisor: Divisor) -> Tensor[
+    invalid_bound_after_unknown(S, Stop, Divisor)
+]: ...
 def apply_unused_shape[S: IntTuple, N: IntVar](x: Tensor[S], dimension: Int[N]) -> Tensor[[unused_shape_expression(S, N)]]: ...
 def apply_branch[S: IntTuple, Keep: Flag[bool]](x: Tensor[S], keep: Keep) -> Tensor[branch_join(S, Keep)]: ...
 def apply_mixed_branch[S: IntTuple, Keep: Flag[bool]](x: Tensor[S], keep: Keep) -> Tensor[mixed_branch_join(S, Keep)]: ...
@@ -8948,6 +9011,7 @@ def test[S: IntTuple, T: IntTuple, N: IntVar](
     another: Tensor[[50, *Elements[T], 60]],
     gradual: Tensor[IntTuple],
     dimension: Int[N],
+    flag_value: int,
 ) -> None:
     reveal_type(apply_qualified(left, right))  # E: revealed type: Tensor[[2, 3, 5]]
     reveal_type(apply_imported(left, right))  # E: revealed type: Tensor[[2, 3, 5]]
@@ -8967,6 +9031,33 @@ def test[S: IntTuple, T: IntTuple, N: IntVar](
     reveal_type(apply_concat_then_slice(left))  # E: revealed type: Tensor[[7, 2]]
     reveal_type(apply_minimum_stop(left))  # E: revealed type: Tensor[[]]
     reveal_type(apply_minimum_stop(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_full_slice(left))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_full_slice(unpacked))  # E: revealed type: Tensor[[10, 20, *Elements[S], 30, 40]]
+    reveal_type(apply_full_slice(gradual))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_bounded(left, 0, 2))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_bounded(left, -2, 2))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_bounded(left, -99, 99))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_bounded(left, 2, 1))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_suffix(left, 1))  # E: revealed type: Tensor[[3]]
+    reveal_type(apply_suffix(left, 99))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_suffix(left, -1))  # E: revealed type: Tensor[[3]]
+    reveal_type(apply_suffix(unpacked, 1))  # E: revealed type: Tensor[[20, *Elements[S], 30, 40]]
+    reveal_type(apply_suffix(unpacked, -1))  # E: revealed type: Tensor[[40]]
+    reveal_type(apply_helper_slice(left, 1, 2))  # E: revealed type: Tensor[[3]]
+    reveal_type(apply_helper_slice(unpacked, 1, -1))  # E: revealed type: Tensor[[20, *Elements[S], 30]]
+    reveal_type(apply_helper_slice(unpacked, 1, 2))  # E: revealed type: Tensor[[20]]
+    reveal_type(apply_helper_slice(unpacked, -2, -1))  # E: revealed type: Tensor[[30]]
+    reveal_type(apply_helper_slice(unpacked, -2, 1))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_helper_slice(unpacked, 2, -2))  # E: revealed type: Tensor[S]
+    reveal_type(apply_helper_slice(unpacked, 99, 100))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_helper_slice(gradual, 1, 1))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_helper_slice(gradual, -1, 0))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_bounded(left, 0, flag_value))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_extreme_stop(left))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_exact_extreme_bounds(left))  # E: revealed type: Tensor[[2, 3]]
+    apply_invalid_bound(left, 0)  # E: division by zero
+    apply_invalid_bound(gradual, 0)  # E: division by zero
+    apply_invalid_bound_after_unknown(left, flag_value, 0)  # E: division by zero
     reveal_type(apply_unused_shape(left, dimension))  # E: revealed type: Tensor[[N]]
     reveal_type(apply_branch(left, True))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(apply_branch(left, False))  # E: revealed type: Tensor[[2]]
@@ -9007,7 +9098,7 @@ def test[Batch: IntTuple, N: IntVar](x: Tensor[[*Elements[Batch], N]]) -> None:
 );
 
 testcase!(
-    test_type_shape_dsl_invalid_concat_and_prefix_slice,
+    test_type_shape_dsl_invalid_concat_and_slice,
     shape_dsl_tensor_env(),
     r#"
 import shape_extensions.dsl as dsl
@@ -9059,28 +9150,16 @@ def indexed_return(shape: IntTuple) -> Int:
     return shape[0]  # E: return value must be a bare parameter name
 
 @type_shape_dsl_function
-def lower(shape: IntTuple) -> IntTuple:
-    return shape[1:2]  # E: IntTuple slices require an omitted lower bound and step
-
-@type_shape_dsl_function
 def step(shape: IntTuple) -> IntTuple:
-    return shape[:2:1]  # E: IntTuple slices require an omitted lower bound and step
+    return shape[:2:1]  # E: IntTuple slices do not support steps
 
 @type_shape_dsl_function
-def omitted(shape: IntTuple) -> IntTuple:
-    return shape[:]  # E: IntTuple slices require a literal stop
+def dimension_bound(shape: IntTuple, start: Int) -> IntTuple:
+    return shape[start:]  # E: Flag operation requires a compatible Flag parameter
 
 @type_shape_dsl_function
-def dynamic(shape: IntTuple, stop: int) -> IntTuple:
-    return shape[:stop]  # E: IntTuple slice stop must be a representable signed integer literal
-
-@type_shape_dsl_function
-def huge(shape: IntTuple) -> IntTuple:
-    return shape[:999999999999999999999999]  # E: IntTuple slice stop must be a representable signed integer literal
-
-@type_shape_dsl_function
-def positive_overflow(shape: IntTuple) -> IntTuple:
-    return shape[:9223372036854775808]  # E: IntTuple slice stop must be a representable signed integer literal
+def bool_bound(shape: IntTuple, stop: bool) -> IntTuple:
+    return shape[:stop]  # E: Flag operation requires a compatible Flag parameter
 
 def concat(left: IntTuple, right: IntTuple) -> IntTuple: ...
 
