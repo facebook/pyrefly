@@ -193,6 +193,36 @@ assert_type(x, int)
 );
 
 testcase!(
+    test_bounded_type_with_metaclass_call_returns_something_else,
+    r#"
+from typing import assert_type
+
+class Meta(type):
+    def __call__(cls, x: int) -> str: ...
+
+class BoundClass(metaclass=Meta):
+    pass
+
+class C[T: BoundClass]:
+    x: type[T]
+    y: type[BoundClass]
+
+    def check(self) -> None:
+        assert_type(self.x(10), str)
+        assert_type(self.y(10), str)
+
+assert_type(BoundClass(10), str)
+
+class OrdinaryBase: ...
+
+def ordinary[T: OrdinaryBase](cls: type[T]) -> T:
+    return cls()
+
+assert_type(ordinary(OrdinaryBase), OrdinaryBase)
+    "#,
+);
+
+testcase!(
     test_metaclass_invalid_generic,
     r#"
 from typing import Any, assert_type

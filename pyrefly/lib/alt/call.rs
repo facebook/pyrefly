@@ -1710,6 +1710,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 };
                 self.check_unnecessary_type_conversion(&cls, args, arguments_range, errors);
+                let class_object = cls.class_object().clone();
                 let constructed_type = self.construct_class(
                     cls,
                     constructor_kind,
@@ -1725,7 +1726,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // this class is being called via a quantified type with a class
                 // bound, to allow calls on TypeVars with class bounds to work
                 // as expected.
-                if let Some(quantified) = as_quantified_bound {
+                if let Some(quantified) = as_quantified_bound
+                    && self.is_compatible_constructor_return(&constructed_type, &class_object)
+                {
                     Type::Quantified(Box::new(quantified))
                 } else {
                     constructed_type
