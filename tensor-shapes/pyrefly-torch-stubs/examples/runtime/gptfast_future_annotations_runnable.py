@@ -26,7 +26,6 @@ from torch.nn.attention.flex_attention import (
     flex_attention,
 )
 
-
 if TYPE_CHECKING:
     from shape_extensions import Int, IntVar
     from torch import Tensor

@@ -39,10 +39,21 @@ pub enum QuantifiedOrigin {
     ScopedLegacy,
     /// PEP 695 type parameter — has its own definition range, no ambiguity.
     Pep695,
-    /// Synthetic Self quantified synthesized for `__new__` on a class.
-    SyntheticSelf,
-    /// Synthetic binder created during callable/tuple instantiation (TypeVarTuple residual).
-    SyntheticCallableResidual,
+    /// Synthetic quantified created by pyrefly rather than written in source.
+    Synthetic {
+        /// Is this a Self quantified synthesized for `__new__` on a class?
+        is_self: bool,
+    },
+    /// Synthetic binder for the parameter of an `IntTuples` mapper.
+    MapIntTuplesParameter,
+    /// De Bruijn sentinel used only while comparing `MapIntTuples` lambdas.
+    NormalizedMapIntTuplesParameter,
+}
+
+impl QuantifiedOrigin {
+    pub fn synthetic() -> Self {
+        Self::Synthetic { is_self: false }
+    }
 }
 
 /// A source range plus an index that disambiguates multiple quantifieds sharing the same range.
@@ -384,7 +395,7 @@ impl Quantified {
                     }
                     write!(f, ")")?;
                 }
-                Restriction::Flag(domain) => write!(f, ": Flag[{domain}]")?,
+                Restriction::ShapeExtension(extension) => write!(f, ": {extension}")?,
                 Restriction::Unrestricted => {}
             }
             if let Some(default) = self.default() {
@@ -412,6 +423,11 @@ impl Quantified {
 
     pub fn identity(&self) -> &QuantifiedIdentity {
         &self.identity
+    }
+
+    pub(crate) fn normalized_map_int_tuples_parameter_depth(&self) -> Option<u32> {
+        (self.identity.origin == QuantifiedOrigin::NormalizedMapIntTuplesParameter)
+            .then_some(self.identity.anchor.index)
     }
 
     pub fn as_gradual_type_helper(kind: QuantifiedKind, default: Option<&Type>) -> Type {

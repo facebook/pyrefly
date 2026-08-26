@@ -190,6 +190,65 @@ impl Incremental {
 }
 
 #[test]
+fn test_index_shape_argument_edit_invalidates_consumer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+from typing import Any
+class IntTuple: pass
+class Index: pass
+def index_shape(shape: IntTuple, index: Any) -> IntTuple: ...
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from typing import Literal
+from shape_extensions import IntTuple, index_shape
+
+class Array[Shape: IntTuple]: ...
+def selected() -> Array[index_shape(IntTuple[10, 20], slice[Literal[1], Literal[5], None])]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from typing import assert_type
+from shape_extensions import IntTuple
+from main import Array, selected
+
+assert_type(selected(), Array[IntTuple[4, 20]])
+"#,
+    );
+    i.check(&["consumer"], &["consumer", "main", "shape_extensions"]);
+
+    i.set(
+        "main",
+        r#"
+from typing import Literal
+from shape_extensions import IntTuple, index_shape
+
+class Array[Shape: IntTuple]: ...
+def selected() -> Array[index_shape(IntTuple[10, 20], slice[Literal[1], Literal[7], None])]: ...
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0]
+            .msg()
+            .contains("assert_type(Array[IntTuple[6, 20]], Array[IntTuple[4, 20]]) failed")
+    );
+}
+
+#[test]
 fn test_type_shape_dsl_body_edit_invalidates_importer() {
     let mut i = Incremental::with_files(vec![
         "foo".to_owned(),
@@ -227,6 +286,153 @@ def identity(x: Int) -> Int:
 "#,
     );
     i.check(&["main"], &["foo", "main"]);
+}
+
+/// A list literal is inverted from its elements rather than its joined `list` type, so edits
+/// to the elements must invalidate and recompute the call result.
+#[test]
+fn test_map_int_tuples_pattern_list_literal_edits_invalidate_consumer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class IntTuple: pass
+class IntTuples: pass
+class MapIntTuples: pass
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+
+class Box[Shape: IntTuple]: ...
+
+def shapes[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def box2() -> Box[IntTuple[2]]: ...
+def box34() -> Box[IntTuple[3, 4]]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import box2, shapes
+from shape_extensions import IntTuple
+from typing import assert_type
+
+assert_type(shapes([box2()]), tuple[IntTuple[2]])
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "consumer",
+        r#"
+from main import box34, shapes
+from shape_extensions import IntTuple
+from typing import assert_type
+
+assert_type(shapes([box34()]), tuple[IntTuple[2]])
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].msg().contains("assert_type("));
+
+    i.set(
+        "consumer",
+        r#"
+from main import box2, shapes
+from shape_extensions import IntTuple
+from typing import assert_type
+
+assert_type(shapes([box2(), box2()]), tuple[IntTuple[2], IntTuple[2]])
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer"]);
+    let errors = changed.errors.collect_display_errors();
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
+fn test_shape_flag_constructor_source_edit_invalidates_consumers() {
+    let mut i = Incremental::with_files(vec!["consumer".to_owned(), "main".to_owned()]);
+    let main = |annotation: &str| {
+        format!(
+            r#"
+type Carrier[T] = T
+from shape_extensions import Flag
+
+class Control[T: Flag[int]]:
+    def __init__(self, value: {annotation}) -> None: ...
+"#,
+        )
+    };
+    i.set("main", &main("T"));
+    i.set(
+        "consumer",
+        r#"
+from main import Control
+
+control = Control(value=1)
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    // The alias resolves to the same parameter type, so constructor-source metadata is the only
+    // exported type information that changes.
+    i.set("main", &main("Carrier[T]"));
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main"]);
+    assert!(changed.errors.collect_display_errors().is_empty());
+}
+
+#[test]
+fn test_shape_flag_constructor_source_after_paramspec_edit_invalidates_consumers() {
+    let mut i = Incremental::with_files(vec!["consumer".to_owned(), "main".to_owned()]);
+    let main = |annotation: &str| {
+        format!(
+            r#"
+type Carrier[T] = T
+from shape_extensions import Flag
+
+class Control[T: Flag[int]]:
+    def __init__[**P](
+        self, *args: P.args, value: {annotation}, **kwargs: P.kwargs
+    ) -> None: ...
+"#,
+        )
+    };
+    i.set("main", &main("T"));
+    i.set(
+        "consumer",
+        r#"
+from main import Control
+
+control = Control(value=1)
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    // ParamSpec variadics are removed from the lowered parameter list. Match the remaining
+    // parameter to its source by name so this provenance change still invalidates consumers.
+    i.set("main", &main("Carrier[T]"));
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main"]);
+    assert!(changed.errors.collect_display_errors().is_empty());
 }
 
 #[test]
@@ -304,6 +510,120 @@ def leaf(first: Int, second: Int) -> Int:
     let errors = changed.errors.collect_display_errors();
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(errors[0].msg().contains("not assignable to `Tensor[[2]]`"));
+}
+
+#[test]
+fn test_type_shape_dsl_broadcast_edit_invalidates_importer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class IntTuple: pass
+def shaped_array[T](*, shape: str): ...
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+
+@type_shape_dsl_function
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    return left
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from shape_extensions import IntTuple, broadcast, shaped_array
+
+@shaped_array(shape="Shape")
+class Tensor[Shape: IntTuple]: ...
+
+def chosen() -> Tensor[broadcast(IntTuple[2], IntTuple[3])]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import Tensor, chosen
+
+result: Tensor[[2]] = chosen()
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "shape_extensions",
+        r#"
+class IntTuple: pass
+def shaped_array[T](*, shape: str): ...
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+
+@type_shape_dsl_function
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    return right
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main", "shape_extensions"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].msg().contains("not assignable to `Tensor[[2]]`"));
+}
+
+#[test]
+fn test_type_shape_dsl_cross_module_helper_cycle_is_rejected() {
+    let mut i = Incremental::with_files(vec![
+        "left".to_owned(),
+        "right".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "left",
+        r#"
+from right import right
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def left(x: Int) -> Int:
+    return right(x)
+"#,
+    );
+    i.set(
+        "right",
+        r#"
+from left import left
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def right(x: Int) -> Int:
+    return left(x)
+"#,
+    );
+
+    let result = i.unchecked(&["left"]);
+    let errors = result.errors.collect_display_errors();
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one cycle diagnostic, got {errors:?}"
+    );
+    // Neither side of a helper cycle can become a validated DSL function, so cycles surface at
+    // the ordinary helper-validation boundary rather than through an evaluator-specific error.
+    assert!(
+        errors[0]
+            .msg()
+            .contains("DSL helper callee must be a validated"),
+        "expected the cross-module helper cycle to be rejected, got {errors:?}"
+    );
 }
 
 #[test]
@@ -2495,4 +2815,70 @@ fn test_dunder_all_module_entry_change_invalidates() {
     );
     // main should be recomputed because the wildcard set changed
     i.check_ignoring_expectations(&["foo"], &["foo", "main"]);
+}
+
+#[test]
+fn test_type_shape_dsl_parameter_domain_edit_revalidates_indexed_locals() {
+    let mut i = Incremental::with_files(vec![
+        "consumer".to_owned(),
+        "helpers".to_owned(),
+        "main".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+class IntTuple: pass
+class IntTuples: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+
+@type_shape_dsl_function
+def first(shapes: IntTuples) -> IntTuple:
+    selected = shapes[0]
+    return selected
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from helpers import first
+from shape_extensions import IntTuple
+
+class ShapeBox[Shape: IntTuple]: ...
+def result() -> ShapeBox[first(tuple[IntTuple[2, 3], IntTuple[4]])]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import ShapeBox, result
+from shape_extensions import IntTuple
+
+expected: ShapeBox[IntTuple[2, 3]] = result()
+"#,
+    );
+    let initial = i.unchecked(&["consumer", "helpers"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def first(shapes: IntTuple) -> IntTuple:
+    selected = shapes[0]
+    return selected  # E: local return domain must match  # E: Returned type `Int[int]` is not assignable
+"#,
+    );
+    let changed = i.unchecked(&["consumer", "helpers"]);
+    changed.check_recompute(&["consumer", "helpers", "main"]);
+    changed.check_errors();
 }

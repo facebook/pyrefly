@@ -54,6 +54,8 @@ use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -88,6 +90,7 @@ use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::lsp_attributes::AttributeContext;
 use crate::state::lsp_attributes::definition_from_executable_ast;
+use crate::state::lsp_attributes::expr_matches_name;
 use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
@@ -399,7 +402,7 @@ pub(crate) fn attribute_symbol_kind_from_type(ty: &Type) -> SymbolKind {
             // function. Overloads and bound dunder methods (e.g. `__getitem__`, an
             // overloaded operator) carry no directly resolvable definition metadata, so they
             // must default to method rather than function.
-            let is_function = ty.visit_toplevel_func_metadata(&|meta| {
+            let is_function = ty.toplevel_func_metadata().is_some_and(|meta| {
                 meta.kind
                     .to_func_symbol()
                     .is_some_and(|symbol| symbol.cls.is_none())
@@ -828,65 +831,35 @@ impl<'a> Transaction<'a> {
         )
     }
 
-    fn get_type_for_surface(&self, handle: &Handle, key: &Key, for_display: bool) -> Option<Type> {
+    fn get_type_for_surface(&self, handle: &Handle, key: &Key) -> Option<Type> {
         let idx = self.get_bindings(handle)?.key_to_idx(key);
-        let answers = self.get_answers(handle)?;
-        if for_display {
-            answers.get_type_at_for_display(idx)
-        } else {
-            answers.get_type_at(idx)
-        }
+        self.get_answers(handle)?.get_type_at(idx)
     }
 
     pub fn get_type(&self, handle: &Handle, key: &Key) -> Option<Type> {
-        self.get_type_for_surface(handle, key, false)
+        self.get_type_for_surface(handle, key)
     }
 
-    pub fn get_type_for_display(&self, handle: &Handle, key: &Key) -> Option<Type> {
-        self.get_type_for_surface(handle, key, true)
-    }
-
-    fn get_type_trace_for_surface(
-        &self,
-        handle: &Handle,
-        range: TextRange,
-        for_display: bool,
-    ) -> Option<Type> {
-        let ans = self.get_answers(handle)?;
-        if for_display {
-            ans.get_type_trace_for_display(range)
-        } else {
-            ans.get_type_trace(range)
-        }
+    fn get_type_trace_for_surface(&self, handle: &Handle, range: TextRange) -> Option<Type> {
+        self.get_answers(handle)?.get_type_trace(range)
     }
 
     pub fn get_type_trace(&self, handle: &Handle, range: TextRange) -> Option<Type> {
-        self.get_type_trace_for_surface(handle, range, false)
-    }
-
-    pub fn get_type_trace_for_display(&self, handle: &Handle, range: TextRange) -> Option<Type> {
-        self.get_type_trace_for_surface(handle, range, true)
+        self.get_type_trace_for_surface(handle, range)
     }
 
     fn get_chosen_overload_trace_for_surface(
         &self,
         handle: &Handle,
         range: TextRange,
-        for_display: bool,
     ) -> Option<Type> {
-        let ans = self.get_answers(handle)?;
-        if for_display {
-            ans.get_chosen_overload_trace_for_display(range)
-        } else {
-            ans.get_chosen_overload_trace(range)
-        }
+        self.get_answers(handle)?.get_chosen_overload_trace(range)
     }
 
     fn get_active_call_argument_type_for_surface(
         &self,
         handle: &Handle,
         position: TextSize,
-        for_display: bool,
     ) -> Option<Type> {
         let CallInfo {
             callables,
@@ -898,11 +871,7 @@ impl<'a> Transaction<'a> {
         let params = Self::normalize_singleton_function_type_into_params(callable)?;
         let arg_index = Self::active_parameter_index(&params, &active_argument)?;
         let ty = params.get(arg_index)?.as_type().clone();
-        if for_display {
-            Some(self.get_answers(handle)?.solver().for_display(ty))
-        } else {
-            Some(ty)
-        }
+        Some(ty)
     }
 
     fn import_handle_with_preference(
@@ -949,7 +918,6 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
         prefer_result_type: bool,
-        for_display: bool,
     ) -> Option<Type> {
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
@@ -959,21 +927,17 @@ impl<'a> Transaction<'a> {
             }
             let range = node.range();
             if prefer_result_type {
-                if let Some(ty) = self.get_type_trace_for_surface(handle, range, for_display) {
+                if let Some(ty) = self.get_type_trace_for_surface(handle, range) {
                     return Some(ty);
                 }
-                if let Some(callable) =
-                    self.get_chosen_overload_trace_for_surface(handle, range, for_display)
-                {
+                if let Some(callable) = self.get_chosen_overload_trace_for_surface(handle, range) {
                     return Some(callable);
                 }
             } else {
-                if let Some(callable) =
-                    self.get_chosen_overload_trace_for_surface(handle, range, for_display)
-                {
+                if let Some(callable) = self.get_chosen_overload_trace_for_surface(handle, range) {
                     return Some(callable);
                 }
-                if let Some(ty) = self.get_type_trace_for_surface(handle, range, for_display) {
+                if let Some(ty) = self.get_type_trace_for_surface(handle, range) {
                     return Some(ty);
                 }
             }
@@ -985,7 +949,6 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         position: TextSize,
-        for_display: bool,
     ) -> Option<Type> {
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
@@ -1008,12 +971,12 @@ impl<'a> Transaction<'a> {
             .get_bindings(handle)
             .is_some_and(|bindings| bindings.is_valid_key(&key))
         {
-            self.get_type_for_surface(handle, &key, for_display)
+            self.get_type_for_surface(handle, &key)
         } else {
             // The subject must be looked up by its whole range: a position inside it
             // resolves the leading token, which is the base (`obj` in `match obj.attr:`)
             // rather than the subject expression.
-            self.get_type_trace_for_surface(handle, subject_range, for_display)
+            self.get_type_trace_for_surface(handle, subject_range)
         }
     }
 
@@ -1243,13 +1206,76 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn get_type_at_impl(
+    fn refine_keyword_argument_definition_for_class(
         &self,
-        handle: &Handle,
-        position: TextSize,
-        for_display: bool,
-    ) -> Option<Type> {
-        self.get_type_at_impl_with_options(handle, position, for_display, true)
+        class_def: &StmtClassDef,
+        param_name: &Identifier,
+    ) -> Option<(TextRange, DefinitionMetadata)> {
+        let param_id = param_name.id();
+
+        // Prefer class field annotations/assignments when present.
+        for stmt in &class_def.body {
+            match stmt {
+                Stmt::AnnAssign(assign) if expr_matches_name(assign.target.as_ref(), param_id) => {
+                    return Some((assign.target.range(), DefinitionMetadata::Attribute));
+                }
+                Stmt::Assign(assign) => {
+                    if let Some(target) = assign
+                        .targets
+                        .iter()
+                        .find(|target| expr_matches_name(target, param_id))
+                    {
+                        return Some((target.range(), DefinitionMetadata::Attribute));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Fall back to __init__ parameters if no class field matches.
+        for stmt in &class_def.body {
+            if let Stmt::FunctionDef(function_def) = stmt
+                && function_def.name.id == dunder::INIT
+            {
+                for regular_param in function_def.parameters.args.iter() {
+                    if regular_param.name().id() == param_id {
+                        return Some((
+                            regular_param.name().range(),
+                            DefinitionMetadata::Variable(Some(SymbolKind::Variable)),
+                        ));
+                    }
+                }
+                for kwonly_param in function_def.parameters.kwonlyargs.iter() {
+                    if kwonly_param.name().id() == param_id {
+                        return Some((
+                            kwonly_param.name().range(),
+                            DefinitionMetadata::Variable(Some(SymbolKind::Variable)),
+                        ));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn refine_keyword_argument_definition_for_callee(
+        &self,
+        ast: &ModModule,
+        callee_range: TextRange,
+        param_name: &Identifier,
+    ) -> Option<(TextRange, DefinitionMetadata)> {
+        let covering_nodes = Ast::locate_node(ast, callee_range.start());
+        match (covering_nodes.first(), covering_nodes.get(1)) {
+            (Some(AnyNodeRef::Identifier(_)), Some(AnyNodeRef::StmtClassDef(class_def))) => {
+                self.refine_keyword_argument_definition_for_class(class_def, param_name)
+            }
+            _ => None,
+        }
+    }
+
+    fn get_type_at_impl(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        self.get_type_at_impl_with_options(handle, position, true)
     }
 
     /// Classify how the identifier `identifier` in `context` resolves to a type.
@@ -1337,7 +1363,6 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         position: TextSize,
-        for_display: bool,
         coerce_callees: bool,
     ) -> Option<Type> {
         let Some(IdentifierWithContext {
@@ -1346,10 +1371,8 @@ impl<'a> Transaction<'a> {
         }) = self.identifier_at(handle, position)
         else {
             return self
-                .type_from_match_wildcard_at_impl(handle, position, for_display)
-                .or_else(|| {
-                    self.type_from_expression_at_impl(handle, position, false, for_display)
-                });
+                .type_from_match_wildcard_at_impl(handle, position)
+                .or_else(|| self.type_from_expression_at_impl(handle, position, false));
         };
         let kind = self.classify_surface(handle, &identifier, &context);
         self.type_from_resolution(
@@ -1358,7 +1381,6 @@ impl<'a> Transaction<'a> {
             &identifier,
             &context,
             kind,
-            for_display,
             coerce_callees,
         )
     }
@@ -1374,27 +1396,26 @@ impl<'a> Transaction<'a> {
         identifier: &Identifier,
         context: &IdentifierContext,
         kind: ResolutionKind,
-        for_display: bool,
         coerce_callees: bool,
     ) -> Option<Type> {
         match kind {
             ResolutionKind::Type(ty) => Some(ty),
             ResolutionKind::ActiveCallArgument(position) => {
-                self.get_active_call_argument_type_for_surface(handle, position, for_display)
+                self.get_active_call_argument_type_for_surface(handle, position)
             }
             ResolutionKind::KeyInModule(handle, key) => {
                 let bindings = self.get_bindings(&handle)?;
                 if !bindings.is_valid_key(&key) {
                     return None;
                 }
-                self.get_type_for_surface(&handle, &key, for_display)
+                self.get_type_for_surface(&handle, &key)
             }
             ResolutionKind::Key(key) => {
                 let bindings = self.get_bindings(handle)?;
                 if !bindings.is_valid_key(&key) {
                     return None;
                 }
-                let mut ty = self.get_type_for_surface(handle, &key, for_display)?;
+                let mut ty = self.get_type_for_surface(handle, &key)?;
                 // Only a plain expression reference coerces to its callee signature.
                 if coerce_callees && let IdentifierContext::Expr(_) = context {
                     let call_args_range = self.callee_at(handle, position).and_then(
@@ -1405,11 +1426,9 @@ impl<'a> Transaction<'a> {
                         },
                     );
                     if let Some(arguments_range) = call_args_range {
-                        if let Some(ret) = self.get_chosen_overload_trace_for_surface(
-                            handle,
-                            arguments_range,
-                            for_display,
-                        ) {
+                        if let Some(ret) =
+                            self.get_chosen_overload_trace_for_surface(handle, arguments_range)
+                        {
                             return Some(ret);
                         }
                         ty = self.coerce_type_to_callable(handle, ty);
@@ -1423,26 +1442,19 @@ impl<'a> Transaction<'a> {
                     func, arguments, ..
                 }) = &self.callee_at(handle, position)
                     && func.range() == range
-                    && let Some(ret) = self.get_chosen_overload_trace_for_surface(
-                        handle,
-                        arguments.range,
-                        for_display,
-                    )
+                    && let Some(ret) =
+                        self.get_chosen_overload_trace_for_surface(handle, arguments.range)
                 {
                     Some(ret)
                 } else {
-                    self.get_type_trace_for_surface(handle, range, for_display)
+                    self.get_type_trace_for_surface(handle, range)
                 }
             }
         }
     }
 
     pub fn get_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
-        self.get_type_at_impl(handle, position, false)
-    }
-
-    pub fn get_type_at_for_display(&self, handle: &Handle, position: TextSize) -> Option<Type> {
-        self.get_type_at_impl(handle, position, true)
+        self.get_type_at_impl(handle, position)
     }
 
     /// Like `get_type_at`, but returns the raw bound type of an identifier
@@ -1460,7 +1472,7 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         position: TextSize,
     ) -> Option<Type> {
-        self.get_type_at_impl_with_options(handle, position, false, false)
+        self.get_type_at_impl_with_options(handle, position, false)
     }
 
     /// Computed type for the TSP `getComputedType` endpoint.
@@ -1492,29 +1504,16 @@ impl<'a> Transaction<'a> {
                     | ResolutionKind::ActiveCallArgument(_)
             )
         {
-            self.type_from_resolution(
-                handle,
-                range.start(),
-                &identifier,
-                &context,
-                kind,
-                false,
-                false,
-            )
+            self.type_from_resolution(handle, range.start(), &identifier, &context, kind, false)
         } else {
             self.get_type_trace(handle, range)
         }
     }
 
-    fn get_result_type_at_impl(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-        for_display: bool,
-    ) -> Option<Type> {
+    fn get_result_type_at_impl(&self, handle: &Handle, position: TextSize) -> Option<Type> {
         match self.identifier_at(handle, position) {
-            None => self.type_from_expression_at_impl(handle, position, true, for_display),
-            _ => self.get_type_at_impl(handle, position, for_display),
+            None => self.type_from_expression_at_impl(handle, position, true),
+            _ => self.get_type_at_impl(handle, position),
         }
     }
 
@@ -1523,15 +1522,7 @@ impl<'a> Transaction<'a> {
     /// provide-type endpoint where `+pos` should return `Literal[False]` rather
     /// than the `__pos__` method signature.
     pub fn get_result_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
-        self.get_result_type_at_impl(handle, position, false)
-    }
-
-    pub fn get_result_type_at_for_display(
-        &self,
-        handle: &Handle,
-        position: TextSize,
-    ) -> Option<Type> {
-        self.get_result_type_at_impl(handle, position, true)
+        self.get_result_type_at_impl(handle, position)
     }
 
     /// The type that the context at `position` expects a value to have.
@@ -1551,7 +1542,7 @@ impl<'a> Transaction<'a> {
     pub fn get_expected_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
         // Call-argument position: predict the active parameter's type from the
         // call signature. Works for not-yet-typed arguments and selects an overload.
-        if let Some(ty) = self.get_active_call_argument_type_for_surface(handle, position, false) {
+        if let Some(ty) = self.get_active_call_argument_type_for_surface(handle, position) {
             return Some(ty);
         }
 
@@ -1611,8 +1602,8 @@ impl<'a> Transaction<'a> {
             Type::Quantified(quantified) => match quantified.restriction {
                 Restriction::Bound(bound) => Self::callable_from_type(solver, bound),
                 Restriction::Constraints(options) => Self::callable_from_types(solver, options),
-                Restriction::Flag(domain) => {
-                    Self::callable_from_types(solver, domain.types(solver.stdlib))
+                Restriction::ShapeExtension(extension) => {
+                    Self::callable_from_types(solver, extension.upper_bound_members(solver.stdlib))
                 }
                 Restriction::Unrestricted => None,
             },
@@ -2123,10 +2114,6 @@ impl<'a> Transaction<'a> {
                 );
                 defs
             }
-            // Workaround so functions decorated with `functools.lru_cache` go to definition on the source, not the decorator.
-            Type::ClassType(class) if class.has_qname("functools", "_lru_cache_wrapper") => {
-                vec![]
-            }
             Type::ClassType(_) => self
                 .find_attribute_definition_for_base_type(handle, preference, ty, &dunder::CALL)
                 .map(Vec1::into_vec)
@@ -2216,6 +2203,10 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    fn position_is_between(position: TextSize, left_end: TextSize, right_start: TextSize) -> bool {
+        TextRange::new(left_end, right_start).contains(position)
+    }
+
     /// Try to find the dunder method associated with an operator at the cursor.
     ///
     /// Returns:
@@ -2227,6 +2218,7 @@ impl<'a> Transaction<'a> {
     fn find_operator_dunder(
         &self,
         handle: &Handle,
+        position: TextSize,
         covering_nodes: &[AnyNodeRef],
     ) -> Result<Option<OperatorDunder>, EmptyResponseReason> {
         // Look up the type of an expression, distinguishing "no answers"
@@ -2244,17 +2236,23 @@ impl<'a> Transaction<'a> {
             .iter()
             .find_map(|node| match node {
                 AnyNodeRef::ExprCompare(compare) => {
-                    for op in &compare.ops {
+                    let mut left = compare.left.as_ref();
+                    for (op, right) in compare.ops.iter().zip(compare.comparators.iter()) {
+                        if !Self::position_is_between(
+                            position,
+                            left.range().end(),
+                            right.range().start(),
+                        ) {
+                            left = right;
+                            continue;
+                        }
                         // Handle membership test operators (in/not in) - uses __contains__ on the right operand
                         if matches!(op, CmpOp::In | CmpOp::NotIn) {
-                            let result =
-                                type_at(compare.comparators.first()?.range()).map(|right_type| {
-                                    OperatorDunder {
-                                        base_type: right_type,
-                                        dunder_name: dunder::CONTAINS,
-                                        range: compare.range(),
-                                    }
-                                });
+                            let result = type_at(right.range()).map(|right_type| OperatorDunder {
+                                base_type: right_type,
+                                dunder_name: dunder::CONTAINS,
+                                range: compare.range(),
+                            });
                             return Some(result);
                         }
                         // is / is not — no dunder
@@ -2270,18 +2268,25 @@ impl<'a> Transaction<'a> {
                         }
                         // Handle rich comparison operators
                         if let Some(dunder_name) = dunder::rich_comparison_dunder(*op) {
-                            let result =
-                                type_at(compare.left.range()).map(|left_type| OperatorDunder {
-                                    base_type: left_type,
-                                    dunder_name,
-                                    range: compare.range(),
-                                });
+                            let result = type_at(left.range()).map(|left_type| OperatorDunder {
+                                base_type: left_type,
+                                dunder_name,
+                                range: compare.range(),
+                            });
                             return Some(result);
                         }
+                        left = right;
                     }
                     None
                 }
                 AnyNodeRef::ExprBinOp(binop) => {
+                    if !Self::position_is_between(
+                        position,
+                        binop.left.range().end(),
+                        binop.right.range().start(),
+                    ) {
+                        return None;
+                    }
                     let dunder_name = Name::new_static(binop.op.dunder());
                     Some(type_at(binop.left.range()).map(|left_type| OperatorDunder {
                         base_type: left_type,
@@ -2290,6 +2295,13 @@ impl<'a> Transaction<'a> {
                     }))
                 }
                 AnyNodeRef::StmtAugAssign(augassign) => {
+                    if !Self::position_is_between(
+                        position,
+                        augassign.target.range().end(),
+                        augassign.value.range().start(),
+                    ) {
+                        return None;
+                    }
                     let dunder_name = Name::new_static(augassign.op.in_place_dunder());
                     Some(
                         type_at(augassign.target.range()).map(|left_type| OperatorDunder {
@@ -2300,6 +2312,13 @@ impl<'a> Transaction<'a> {
                     )
                 }
                 AnyNodeRef::ExprUnaryOp(unaryop) => {
+                    if !Self::position_is_between(
+                        position,
+                        unaryop.range.start(),
+                        unaryop.operand.range().start(),
+                    ) {
+                        return None;
+                    }
                     let dunder_name = match unaryop.op {
                         UnaryOp::Invert => Ok(dunder::INVERT),
                         UnaryOp::UAdd => Ok(dunder::POS),
@@ -2332,15 +2351,31 @@ impl<'a> Transaction<'a> {
                     )
                 }
                 // Handle iteration `in` keyword in for loops
-                AnyNodeRef::StmtFor(stmt_for) => Some(type_at(stmt_for.iter.range()).map(
-                    |iter_type| OperatorDunder {
-                        base_type: iter_type,
-                        dunder_name: dunder::ITER,
-                        range: stmt_for.iter.range(),
-                    },
-                )),
+                AnyNodeRef::StmtFor(stmt_for) => {
+                    if !Self::position_is_between(
+                        position,
+                        stmt_for.target.range().end(),
+                        stmt_for.iter.range().start(),
+                    ) {
+                        return None;
+                    }
+                    Some(
+                        type_at(stmt_for.iter.range()).map(|iter_type| OperatorDunder {
+                            base_type: iter_type,
+                            dunder_name: dunder::ITER,
+                            range: stmt_for.iter.range(),
+                        }),
+                    )
+                }
                 // Handle iteration `in` keyword in comprehensions
                 AnyNodeRef::Comprehension(comp) => {
+                    if !Self::position_is_between(
+                        position,
+                        comp.target.range().end(),
+                        comp.iter.range().start(),
+                    ) {
+                        return None;
+                    }
                     Some(type_at(comp.iter.range()).map(|iter_type| OperatorDunder {
                         base_type: iter_type,
                         dunder_name: dunder::ITER,
@@ -2377,7 +2412,7 @@ impl<'a> Transaction<'a> {
         if position < subscript.value.range().end() {
             return None;
         }
-        self.get_chosen_overload_trace_for_surface(handle, subscript.range(), true)
+        self.get_chosen_overload_trace_for_surface(handle, subscript.range())
     }
 
     pub(crate) fn operator_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
@@ -2386,8 +2421,10 @@ impl<'a> Transaction<'a> {
         }
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
-        let dunder = self.find_operator_dunder(handle, &covering_nodes).ok()??;
-        self.get_chosen_overload_trace_for_surface(handle, dunder.range, true)
+        let dunder = self
+            .find_operator_dunder(handle, position, &covering_nodes)
+            .ok()??;
+        self.get_chosen_overload_trace_for_surface(handle, dunder.range)
     }
 
     /// Try operator-based go-to-definition. Returns `Ok(None)` when there is
@@ -2396,10 +2433,11 @@ impl<'a> Transaction<'a> {
     fn find_definition_for_operator(
         &self,
         handle: &Handle,
+        position: TextSize,
         covering_nodes: &[AnyNodeRef],
         preference: FindPreference,
     ) -> Result<Option<Vec1<FindDefinitionItemWithDocstring>>, EmptyResponseReason> {
-        let Some(dunder) = self.find_operator_dunder(handle, covering_nodes)? else {
+        let Some(dunder) = self.find_operator_dunder(handle, position, covering_nodes)? else {
             return Ok(None);
         };
         let OperatorDunder {
@@ -2546,7 +2584,11 @@ impl<'a> Transaction<'a> {
             let ast = self.get_ast_or_parse_module(handle, &module_info);
 
             for range in ranges.into_iter() {
-                let (metadata, definition_range) = if let Some(param_range) =
+                let (metadata, definition_range) = if let Some((definition_range, metadata)) = self
+                    .refine_keyword_argument_definition_for_callee(ast.as_ref(), range, identifier)
+                {
+                    (metadata, definition_range)
+                } else if let Some(param_range) =
                     self.refine_param_location_for_callee(ast.as_ref(), range, identifier)
                 {
                     (
@@ -2625,6 +2667,46 @@ impl<'a> Transaction<'a> {
             return Ok(vec1![definition]);
         }
 
+        if let Some(AnyNodeRef::ExprStringLiteral(literal)) = covering_nodes
+            .iter()
+            .find(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+            && let Some(part) = literal
+                .value
+                .iter()
+                .find(|part| part.content_range().contains(position))
+            && let Some(module) = self.get_module_info(handle)
+        {
+            let contents = module.code_at(part.content_range());
+            // Only treat the string as a module path if the complete contents resolve.
+            if let Ok(Some(full_definition)) = self.find_definition_for_imported_module(
+                handle,
+                ModuleName::from_str(contents),
+                preference,
+            ) {
+                let offset = (position - part.content_range().start())
+                    .to_usize()
+                    .min(contents.len());
+                let component = contents.as_bytes()[..offset]
+                    .iter()
+                    .filter(|c| **c == b'.')
+                    .count();
+                let end = contents
+                    .match_indices('.')
+                    .nth(component)
+                    .map_or(contents.len(), |(offset, _)| offset);
+                if end == contents.len() {
+                    return Ok(vec1![full_definition]);
+                }
+                if let Ok(Some(definition)) = self.find_definition_for_imported_module(
+                    handle,
+                    ModuleName::from_str(&contents[..end]),
+                    preference,
+                ) {
+                    return Ok(vec1![definition]);
+                }
+            }
+        }
+
         match Self::identifier_from_covering_nodes(&covering_nodes) {
             Some(IdentifierWithContext {
                 identifier: id,
@@ -2645,9 +2727,20 @@ impl<'a> Transaction<'a> {
                         }
                     }
                     ExprContext::Load | ExprContext::Del | ExprContext::Invalid => {
+                        let definition = self.find_definition_for_name_use(handle, &id, preference);
+                        // A decorator may give a function a class instance type. Preserve the
+                        // function definition instead of navigating to the instance's `__call__`.
+                        let is_function_or_method = match &definition {
+                            Ok(Some(item)) => matches!(
+                                item.metadata.symbol_kind(),
+                                Some(SymbolKind::Function | SymbolKind::Method)
+                            ),
+                            Ok(None) | Err(_) => false,
+                        };
                         // If this name is the callee of a call expression, jump
                         // to constructor or __call__ definitions when applicable.
                         if preference.resolve_call_dunders
+                            && !is_function_or_method
                             && let Some(AnyNodeRef::ExprCall(call)) = covering_nodes.get(1)
                             && call.func.range() == id.range
                             && let Some(bindings) = self.get_bindings(handle)
@@ -2664,7 +2757,7 @@ impl<'a> Transaction<'a> {
                             }
                         }
                         // This is a usage of the variable
-                        match self.find_definition_for_name_use(handle, &id, preference)? {
+                        match definition? {
                             Some(item) => Ok(vec1![item]),
                             None => Err(EmptyResponseReason::DefinitionNotFound {
                                 name: id.id.to_string(),
@@ -2956,9 +3049,12 @@ impl<'a> Transaction<'a> {
                     };
                 }
                 // Fall back to operator handling
-                if let Some(defs) =
-                    self.find_definition_for_operator(handle, &covering_nodes, preference)?
-                {
+                if let Some(defs) = self.find_definition_for_operator(
+                    handle,
+                    position,
+                    &covering_nodes,
+                    preference,
+                )? {
                     return Ok(defs);
                 }
                 let found = covering_nodes
@@ -3126,8 +3222,9 @@ impl<'a> Transaction<'a> {
             // signature and report the classes of the parameter types, which are never
             // the type of this expression. A non-function type visits to `None`, as
             // does a function with no `def`, and both fall through as before.
-            if let Some(def) =
-                t.visit_toplevel_func_metadata(&|m| self.function_def_location(handle, m))
+            if let Some(def) = t
+                .toplevel_func_metadata()
+                .and_then(|m| self.function_def_location(handle, m))
             {
                 return Ok(vec![def?]);
             }
@@ -3215,6 +3312,12 @@ impl<'a> Transaction<'a> {
         // Actions that carry more than one edit (e.g. the missing-`@override` fix,
         // which inserts both the decorator and an import).
         let mut multi_actions: Vec<(String, Vec<(Module, TextRange, String)>)> = Vec::new();
+        // Deduplicates the actions pushed onto `other_actions`. The same fix can
+        // be generated more than once -- e.g. several errors on one line all
+        // produce an identical "add pyrefly ignore" action, or one unused binding
+        // is reported through multiple imports -- and we don't want to offer the
+        // user the same quick fix twice. Keying on (title, edit range, edit text)
+        // treats two actions as equal when they would make the same visible edit.
         let mut other_action_keys: HashSet<(String, TextRange, String)> = HashSet::new();
         if let Some(bindings) = self.get_bindings(handle) {
             for unused in bindings.unused_imports() {
@@ -3226,7 +3329,12 @@ impl<'a> Transaction<'a> {
                             unused,
                         )
                 {
-                    other_actions.push(action);
+                    // `insert` returns false when this exact edit was already
+                    // queued, so a duplicate action is dropped rather than pushed.
+                    let key = (action.0.clone(), action.2, action.3.clone());
+                    if other_action_keys.insert(key) {
+                        other_actions.push(action);
+                    }
                 }
             }
         }
@@ -3234,6 +3342,18 @@ impl<'a> Transaction<'a> {
             let error_range = error.range();
             if error_range.contains_range(range)
                 && let Some(action) = quick_fixes::enum_member::replace_with_enum_member_code_action(
+                    &module_info,
+                    &ast,
+                    &error,
+                )
+            {
+                let key = (action.0.clone(), action.2, action.3.clone());
+                if other_action_keys.insert(key) {
+                    other_actions.push(action);
+                }
+            }
+            if error_range.contains_range(range)
+                && let Some(action) = quick_fixes::assert_not_none::assert_not_none_code_action(
                     &module_info,
                     &ast,
                     &error,
@@ -4494,13 +4614,20 @@ impl<'a> Transaction<'a> {
         let source = module.lined_buffer().contents();
         let mut offset = TextSize::from(0);
 
-        for line in source.lines() {
+        for line_with_ending in source.split_inclusive('\n') {
+            let line_without_lf = line_with_ending
+                .strip_suffix('\n')
+                .unwrap_or(line_with_ending);
+            let line = line_without_lf
+                .strip_suffix('\r')
+                .unwrap_or(line_without_lf);
             if let Some(comment_pos) = pyrefly_python::ignore::find_comment_start_in_line(line) {
                 let comment_start = offset + TextSize::from(comment_pos as u32);
                 let comment_end = offset + TextSize::from(line.len() as u32);
                 ranges.push(TextRange::new(comment_start, comment_end));
             }
-            offset += TextSize::from((line.len() + 1) as u32);
+            offset += TextSize::try_from(line_with_ending.len())
+                .expect("source line length must fit in TextSize");
         }
 
         ranges
@@ -4815,6 +4942,8 @@ fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
                 sys_info,
             );
             let rdeps = transaction.transitive_rdeps(definition_handle.dupe());
+            // Same-module reference discovery reads the definition's AST, bindings, and answers,
+            // even though most reverse dependencies can be answered from their retained indexes.
             transaction.run_for_handles(&[definition_handle], Require::Everything)?;
             rdeps
         }
@@ -4833,10 +4962,10 @@ fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
     {
         transitive_rdeps.remove(&fs_counterpart_of_in_memory_handles);
     }
-    let candidate_handles = transitive_rdeps
+    let candidate_handles: Vec<Handle> = transitive_rdeps
         .into_iter()
         .sorted_by_key(|h| h.path().dupe())
-        .collect::<Vec<_>>();
+        .collect();
 
     Ok(candidate_handles)
 }
@@ -4878,11 +5007,25 @@ fn process_rdeps_with_definition_impl<T: RdepTransaction, R>(
     transaction: &mut T,
     sys_info: SysInfo,
     definition: &TextRangeWithModule,
-    mut process_fn: impl FnMut(&mut T, &Handle, &TextRangeWithModule) -> Option<R>,
+    process_fn: impl FnMut(&mut T, &Handle, &TextRangeWithModule) -> Option<R>,
 ) -> Result<Vec<R>, Cancelled> {
     let candidate_handles =
         compute_transitive_rdeps_for_definition_impl(transaction, sys_info, definition)?;
 
+    Ok(process_candidate_handles_with_definition_impl(
+        transaction,
+        candidate_handles,
+        definition,
+        process_fn,
+    ))
+}
+
+fn process_candidate_handles_with_definition_impl<T: RdepTransaction, R>(
+    transaction: &mut T,
+    candidate_handles: Vec<Handle>,
+    definition: &TextRangeWithModule,
+    mut process_fn: impl FnMut(&mut T, &Handle, &TextRangeWithModule) -> Option<R>,
+) -> Vec<R> {
     let mut results = Vec::new();
     for handle in candidate_handles {
         let patched_definition = patch_definition_for_handle_impl(transaction, &handle, definition);
@@ -4891,7 +5034,7 @@ fn process_rdeps_with_definition_impl<T: RdepTransaction, R>(
         }
     }
 
-    Ok(results)
+    results
 }
 
 fn find_global_references_from_definition_impl<T: RdepTransaction>(
@@ -4901,9 +5044,16 @@ fn find_global_references_from_definition_impl<T: RdepTransaction>(
     definition: TextRangeWithModule,
     options: ReferenceOptions,
 ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
-    let results = process_rdeps_with_definition_impl(
+    let candidate_handles =
+        compute_transitive_rdeps_for_definition_impl(transaction, sys_info, &definition)?;
+    if definition_kind.symbol_kind() == Some(SymbolKind::Parameter) {
+        // Keyword argument references require each candidate's AST and bindings to resolve the
+        // callee and refine the argument back to this parameter.
+        transaction.run_for_handles(&candidate_handles, Require::Everything)?;
+    }
+    let results = process_candidate_handles_with_definition_impl(
         transaction,
-        sys_info,
+        candidate_handles,
         &definition,
         |transaction, handle, patched_definition| {
             let mut module_refs: Vec<(Module, Vec<TextRange>)> = Vec::new();
@@ -4944,7 +5094,7 @@ fn find_global_references_from_definition_impl<T: RdepTransaction>(
                 Some(module_refs)
             }
         },
-    )?;
+    );
 
     let mut global_references: Vec<(Module, Vec<TextRange>)> = Vec::new();
     for module_refs in results {
@@ -4990,8 +5140,9 @@ impl<'a> Transaction<'a> {
 impl<'a> CancellableTransaction<'a> {
     /// Processes each transitive reverse dependency for a given definition location.
     ///
-    /// This is a common pattern in workspace-wide
-    /// references-related features
+    /// This is a common pattern in workspace-wide references-related features. Candidates are
+    /// processed at their current requirement level; callers must explicitly request any data
+    /// beyond the retained index.
     pub(crate) fn process_rdeps_with_definition<T>(
         &mut self,
         sys_info: SysInfo,

@@ -351,3 +351,9 @@ def slice_wrong_size(x: Tensor[[10, 20]]) -> Tensor[[3, 20]]:
     # E: Returned type `Tensor[[5, 20]]` is not assignable
     #    to declared return type `Tensor[[3, 20]]`
     return x[:5]
+
+
+def unsupported_string_index(x: Tensor[[10, 20]]) -> None:
+    x[  # E: Cannot index into
+        "bad"
+    ]

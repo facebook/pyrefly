@@ -88,6 +88,7 @@ const inlayHintFunctionsForMonaco = new Map<
     monaco.editor.ITextModel,
     InlayHintFunction
 >();
+const inlayHintsChanged = new monaco.Emitter<void>();
 
 function setInlayHintFunctionForMonaco(
     model: monaco.editor.ITextModel,
@@ -98,6 +99,7 @@ function setInlayHintFunctionForMonaco(
         monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
     );
     inlayHintFunctionsForMonaco.set(model, f);
+    inlayHintsChanged.fire();
 }
 
 const defaultSemanticTokensFunctionForMonaco: SemanticTokensFunction =
@@ -250,6 +252,7 @@ monaco.languages.registerHoverProvider('python', {
 });
 
 monaco.languages.registerInlayHintsProvider('python', {
+    onDidChangeInlayHints: inlayHintsChanged.event,
     provideInlayHints(model) {
         const f =
             inlayHintFunctionsForMonaco.get(model) ??

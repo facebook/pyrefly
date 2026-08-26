@@ -9,11 +9,12 @@ convolution, pooling, loss, and misc modules.
 """
 
 from collections.abc import Callable
-from typing import assert_type, TYPE_CHECKING
+from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from shape_extensions import Int, IntTuple, IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -292,6 +293,118 @@ def test_maxpool2d_with_padding():
     assert_type(y, Tensor[[4, 64, 32, 32]])
 
 
+def test_maxpool1d_padding_and_dilation():
+    pool = nn.MaxPool1d(3, stride=2, padding=1, dilation=2)
+    x: Tensor[[2, 3, 17]] = torch.randn(2, 3, 17)
+    assert_type(pool(x), Tensor[[2, 3, 8]])
+    assert_type(nn.MaxPool1d(3, padding=1, dilation=2)(x), Tensor[[2, 3, 5]])
+    assert_type(
+        nn.MaxPool1d(3, stride=None, padding=1, dilation=2)(x), Tensor[[2, 3, 5]]
+    )
+
+
+def test_maxpool3d_padding_and_dilation():
+    pool = nn.MaxPool3d(3, stride=2, padding=1, dilation=2)
+    x: Tensor[[2, 3, 9, 11, 13]] = torch.randn(2, 3, 9, 11, 13)
+    assert_type(pool(x), Tensor[[2, 3, 4, 5, 6]])
+
+
+def test_maxpool_explicit_none_stride():
+    x: Tensor[[2, 3, 16, 20]] = torch.randn(2, 3, 16, 20)
+    assert_type(nn.MaxPool2d(2, stride=None)(x), Tensor[[2, 3, 8, 10]])
+
+
+def test_maxpool_symbolic_parameters[
+    B: IntVar,
+    C: IntVar,
+    L: IntVar,
+    K: IntVar,
+    S: IntVar,
+    P: IntVar,
+    D: IntVar,
+](
+    x: Tensor[[B, C, L]],
+    kernel: Int[K],
+    stride: Int[S],
+    padding: Int[P],
+    dilation: Int[D],
+) -> None:
+    # A symbolic parameter cannot be checked against its range, and the DSL is not
+    # re-evaluated once the parameter is specialized, so the whole call recovers
+    # gradually rather than deferring arithmetic no validation would revisit.
+    pool = nn.MaxPool1d(kernel, stride, padding, dilation)
+    assert_type(pool(x), Tensor)
+
+
+def test_maxpool_gradual_parameters(
+    x: Tensor[[2, 3, 16, 20]],
+    bare: Tensor,
+    kernel: int,
+    stride: int,
+    optional_stride: int | None,
+    padding: int,
+    dilation: int,
+    ceil_mode: bool,
+    dynamic: Any,
+) -> None:
+    # An argument with no known value cannot be validated, and neither can an unknown
+    # `ceil_mode` choose a rounding rule, so every result here is fully gradual.
+    assert_type(nn.MaxPool2d(kernel, stride, padding, dilation)(x), Tensor)
+    assert_type(nn.MaxPool2d(kernel, optional_stride)(x), Tensor)
+    assert_type(nn.MaxPool2d(2, 2, ceil_mode=ceil_mode)(x), Tensor[[2, 3, int, int]])
+    assert_type(nn.MaxPool2d(dynamic, stride=dynamic)(x), Tensor)
+    assert_type(nn.MaxPool2d(2)(bare), Tensor)
+
+
+def test_maxpool_return_indices_limitation():
+    x: Tensor[[2, 3, 5]] = torch.randn(2, 3, 5)
+    # Module stubs do not yet model the return_indices output tuple.
+    assert_type(nn.MaxPool1d(2, stride=2, return_indices=True)(x), Tensor[[2, 3, 2]])
+
+
+def test_pool_batched_and_unbatched_ranks():
+    one_unbatched: Tensor[[3, 16]] = torch.randn(3, 16)
+    one_batched: Tensor[[2, 3, 16]] = torch.randn(2, 3, 16)
+    two_unbatched: Tensor[[3, 16, 20]] = torch.randn(3, 16, 20)
+    two_batched: Tensor[[2, 3, 16, 20]] = torch.randn(2, 3, 16, 20)
+    three_unbatched: Tensor[[3, 8, 10, 12]] = torch.randn(3, 8, 10, 12)
+    three_batched: Tensor[[2, 3, 8, 10, 12]] = torch.randn(2, 3, 8, 10, 12)
+    assert_type(nn.MaxPool1d(2)(one_unbatched), Tensor[[3, 8]])
+    assert_type(nn.MaxPool1d(2)(one_batched), Tensor[[2, 3, 8]])
+    assert_type(nn.MaxPool2d(2)(two_unbatched), Tensor[[3, 8, 10]])
+    assert_type(nn.MaxPool2d(2)(two_batched), Tensor[[2, 3, 8, 10]])
+    assert_type(nn.MaxPool3d(2)(three_unbatched), Tensor[[3, 4, 5, 6]])
+    assert_type(nn.MaxPool3d(2)(three_batched), Tensor[[2, 3, 4, 5, 6]])
+    assert_type(nn.AvgPool1d(2)(one_unbatched), Tensor[[3, 8]])
+    assert_type(nn.AvgPool1d(2)(one_batched), Tensor[[2, 3, 8]])
+    assert_type(nn.AvgPool2d(2)(two_unbatched), Tensor[[3, 8, 10]])
+    assert_type(nn.AvgPool2d(2)(two_batched), Tensor[[2, 3, 8, 10]])
+    assert_type(nn.AvgPool3d(2)(three_unbatched), Tensor[[3, 4, 5, 6]])
+    assert_type(nn.AvgPool3d(2)(three_batched), Tensor[[2, 3, 4, 5, 6]])
+
+
+def test_pool_ceil_mode_and_last_window_correction():
+    adds_window: Tensor[[2, 3, 6]] = torch.randn(2, 3, 6)
+    corrects_window: Tensor[[2, 3, 5]] = torch.randn(2, 3, 5)
+    assert_type(nn.MaxPool1d(3, stride=2)(adds_window), Tensor[[2, 3, 2]])
+    assert_type(
+        nn.MaxPool1d(3, stride=2, ceil_mode=True)(adds_window), Tensor[[2, 3, 3]]
+    )
+    assert_type(nn.AvgPool1d(3, stride=2)(adds_window), Tensor[[2, 3, 2]])
+    assert_type(
+        nn.AvgPool1d(3, stride=2, ceil_mode=True)(adds_window), Tensor[[2, 3, 3]]
+    )
+    # A naive ceil result is 4; ATen drops the padding-only final window.
+    assert_type(
+        nn.MaxPool1d(2, stride=2, padding=1, ceil_mode=True)(corrects_window),
+        Tensor[[2, 3, 3]],
+    )
+    assert_type(
+        nn.AvgPool1d(2, stride=2, padding=1, ceil_mode=True)(corrects_window),
+        Tensor[[2, 3, 3]],
+    )
+
+
 def test_avgpool2d():
     """AvgPool2d(2, 2): 32x32 → 16x16"""
     pool = nn.AvgPool2d(2, 2)
@@ -306,6 +419,69 @@ def test_avgpool2d_stride_default():
     x: Tensor[[4, 64, 32, 32]] = torch.randn(4, 64, 32, 32)
     y = pool(x)
     assert_type(y, Tensor[[4, 64, 16, 16]])
+
+
+def test_avgpool1d_padding():
+    pool = nn.AvgPool1d(3, stride=2, padding=1)
+    x: Tensor[[2, 3, 17]] = torch.randn(2, 3, 17)
+    assert_type(pool(x), Tensor[[2, 3, 9]])
+
+
+def test_avgpool3d_padding():
+    pool = nn.AvgPool3d(3, stride=2, padding=1)
+    x: Tensor[[2, 3, 9, 11, 13]] = torch.randn(2, 3, 9, 11, 13)
+    assert_type(pool(x), Tensor[[2, 3, 5, 6, 7]])
+
+
+def test_avgpool_explicit_none_stride():
+    x: Tensor[[2, 3, 16, 20]] = torch.randn(2, 3, 16, 20)
+    assert_type(nn.AvgPool2d(2, stride=None)(x), Tensor[[2, 3, 8, 10]])
+
+
+def test_avgpool_symbolic_parameters[
+    B: IntVar,
+    C: IntVar,
+    L: IntVar,
+    K: IntVar,
+    S: IntVar,
+    P: IntVar,
+](
+    x: Tensor[[B, C, L]],
+    kernel: Int[K],
+    stride: Int[S],
+    padding: Int[P],
+) -> None:
+    pool = nn.AvgPool1d(kernel, stride, padding)
+    assert_type(pool(x), Tensor)
+
+
+def test_avgpool_gradual_parameters(
+    x: Tensor[[2, 3, 16, 20]],
+    bare: Tensor,
+    kernel: int,
+    stride: int,
+    optional_stride: int | None,
+    padding: int,
+    ceil_mode: bool,
+    dynamic: Any,
+) -> None:
+    assert_type(nn.AvgPool2d(kernel, stride, padding)(x), Tensor)
+    assert_type(nn.AvgPool2d(kernel, optional_stride, padding)(x), Tensor)
+    assert_type(nn.AvgPool2d(2, 2, ceil_mode=ceil_mode)(x), Tensor[[2, 3, int, int]])
+    assert_type(nn.AvgPool2d(dynamic, stride=dynamic, padding=dynamic)(x), Tensor)
+    assert_type(nn.AvgPool2d(2)(bare), Tensor)
+
+
+def test_avgpool_shape_neutral_parameters():
+    x: Tensor[[2, 3, 5]] = torch.randn(2, 3, 5)
+    # These parameters are accepted but do not alter the output shape.
+    assert_type(
+        nn.AvgPool1d(2, stride=2, count_include_pad=False)(x), Tensor[[2, 3, 2]]
+    )
+    image: Tensor[[2, 3, 5, 5]] = torch.randn(2, 3, 5, 5)
+    assert_type(
+        nn.AvgPool2d(2, stride=2, divisor_override=7)(image), Tensor[[2, 3, 2, 2]]
+    )
 
 
 def test_adaptive_avg_pool2d():
@@ -338,12 +514,57 @@ def test_upsample_size():
     assert_type(y, Tensor[[4, 64, 64, 64]])
 
 
+def test_upsample_symbolic_arguments[S: IntVar](size: Int[S], scale: Int[S]) -> None:
+    x: Tensor[[4, 64, 5, 7]] = torch.randn(4, 64, 5, 7)
+    assert_type(nn.Upsample(size=size)(x), Tensor[[4, 64, S, S]])
+    assert_type(nn.Upsample(scale_factor=scale)(x), Tensor[[4, 64, 5 * S, 7 * S]])
+
+
+def test_upsample_gradual_scalar_arguments(size: int, scale: int) -> None:
+    x: Tensor[[4, 64, 5, 7]] = torch.randn(4, 64, 5, 7)
+    assert_type(nn.Upsample(size=size)(x), Tensor[[4, 64, int, int]])
+    assert_type(nn.Upsample(scale_factor=scale)(x), Tensor[[4, 64, int, int]])
+
+
+def test_upsample_valid_tuple_and_float_arguments() -> None:
+    """Tuple sizes and float scales are valid at runtime, but gradual here."""
+    x: Tensor[[4, 64, 5, 7]] = torch.randn(4, 64, 5, 7)
+    assert_type(nn.Upsample(size=(10, 14))(x), Tensor)
+    assert_type(nn.Upsample(scale_factor=1.5)(x), Tensor)
+    assert_type(nn.Upsample(scale_factor=(1.5, 2.0))(x), Tensor)
+    assert_type(nn.Upsample(None, 1.5)(x), Tensor)
+
+
+def test_upsample_bare_annotation_is_gradual(up: nn.Upsample) -> None:
+    # An unparameterized annotation says the arguments are unknown, not absent:
+    # unlike `nn.Upsample()` (see `negative_tests/test_interpolate_errors.py`)
+    # it must recover gradually instead of reporting a missing argument.
+    x: Tensor[[4, 64, 5, 7]] = torch.randn(4, 64, 5, 7)
+    assert_type(up(x), Tensor)
+
+
 def test_pixel_shuffle():
     """PixelShuffle(2): [B, C*4, H, W] → [B, C, H*2, W*2]"""
     ps = nn.PixelShuffle(2)
     x: Tensor[[4, 32, 16, 16]] = torch.randn(4, 32, 16, 16)
     y = ps(x)
     assert_type(y, Tensor[[4, 8, 32, 32]])
+
+
+def test_pixel_shuffle_leading_symbolic_dims[B: IntVar, H: IntVar, W: IntVar](
+    x: Tensor[[7, B, 32, H, W]],
+) -> Tensor[[7, B, 8, H * 2, W * 2]]:
+    return nn.PixelShuffle(upscale_factor=2)(x)
+
+
+def test_pixel_shuffle_identity_reuse_and_gradual():
+    shuffle = nn.PixelShuffle(1)
+    x: Tensor[[2, 8, 3, 4]] = torch.randn(2, 8, 3, 4)
+    y: Tensor[[5, 12, 6, 7]] = torch.randn(5, 12, 6, 7)
+    gradual: Tensor[IntTuple] = torch.randn(2, 8, 3, 4)
+    assert_type(shuffle(x), Tensor[[2, 8, 3, 4]])
+    assert_type(shuffle(y), Tensor[[5, 12, 6, 7]])
+    assert_type(nn.PixelShuffle(2)(gradual), Tensor[IntTuple])
 
 
 def test_glu():
@@ -355,11 +576,41 @@ def test_glu():
 
 
 def test_glu_default_dim():
-    """GLU(): default dim=1, halves dim 1."""
+    """GLU(): default dim=-1, halves the last axis."""
     glu = nn.GLU()
     x: Tensor[[4, 128]] = torch.randn(4, 128)
     y = glu(x)
     assert_type(y, Tensor[[4, 64]])
+    rank_three: Tensor[[4, 64, 16]] = torch.randn(4, 64, 16)
+    assert_type(glu(rank_three), Tensor[[4, 64, 8]])
+
+
+def test_glu_negative_dimension_symbolic_reuse_and_gradual[C: IntVar](
+    symbolic: Tensor[[3, C * 2]], gradual: Tensor[IntTuple]
+) -> Tensor[[3, C]]:
+    glu = nn.GLU(-1)
+    assert_type(glu(gradual), Tensor[IntTuple])
+    return glu(symbolic)
+
+
+def test_symmetric_pad2d_modules():
+    reflection = nn.ReflectionPad2d(padding=1)
+    replication = nn.ReplicationPad2d(2)
+    image: Tensor[[4, 3, 16, 20]] = torch.randn(4, 3, 16, 20)
+    unbatched: Tensor[[3, 16, 20]] = torch.randn(3, 16, 20)
+    gradual: Tensor[IntTuple] = torch.randn(4, 3, 16, 20)
+    assert_type(reflection(image), Tensor[[4, 3, 18, 22]])
+    assert_type(reflection(unbatched), Tensor[[3, 18, 22]])
+    assert_type(replication(image), Tensor[[4, 3, 20, 24]])
+    assert_type(replication(unbatched), Tensor[[3, 20, 24]])
+    assert_type(reflection(gradual), Tensor[IntTuple])
+    assert_type(replication(gradual), Tensor[IntTuple])
+
+
+def test_symmetric_pad2d_symbolic[H: IntVar, W: IntVar](
+    x: Tensor[[2, 3, H, W]],
+) -> tuple[Tensor[[2, 3, H + 2, W + 2]], Tensor[[2, 3, H + 4, W + 4]]]:
+    return nn.ReflectionPad2d(1)(x), nn.ReplicationPad2d(padding=2)(x)
 
 
 def test_lstm_unidirectional():
@@ -380,6 +631,120 @@ def test_lstm_bidirectional():
     assert_type(output, Tensor[[4, 10, 1024]])
     assert_type(h_n, Tensor[[2, 4, 512]])
     assert_type(c_n, Tensor[[2, 4, 512]])
+
+
+def test_lstm_multi_layer():
+    """An explicit `num_layers` stacks the state, and the instance keeps every
+    constructor argument across repeated forward calls."""
+    lstm = nn.LSTM(256, 512, 3, batch_first=True)
+    x: Tensor[[4, 10, 256]] = torch.randn(4, 10, 256)
+    output, h_n, c_n = lstm(x)
+    assert_type(output, Tensor[[4, 10, 512]])
+    assert_type(h_n, Tensor[[3, 4, 512]])
+    assert_type(c_n, Tensor[[3, 4, 512]])
+    again, _, _ = lstm(x)
+    assert_type(again, Tensor[[4, 10, 512]])
+
+
+def test_lstm_cell():
+    cell = nn.LSTMCell(256, 512)
+    x: Tensor[[4, 256]] = torch.randn(4, 256)
+    h, c = cell(x)
+    assert_type(h, Tensor[[4, 512]])
+    assert_type(c, Tensor[[4, 512]])
+    h_again, _ = cell(x)
+    assert_type(h_again, Tensor[[4, 512]])
+
+
+def test_recurrent_symbolic_constructor_flow[
+    B: IntVar,
+    T: IntVar,
+    I: IntVar,
+    H: IntVar,
+    L: IntVar,
+](
+    sequence: Tensor[[B, T, I]],
+    cell_input: Tensor[[B, I]],
+    input_size: Int[I],
+    hidden_size: Int[H],
+    num_layers: Int[L],
+) -> None:
+    lstm_output, lstm_h, lstm_c = nn.LSTM(
+        input_size,
+        hidden_size,
+        num_layers,
+        batch_first=True,
+        bidirectional=True,
+    )(sequence)
+    assert_type(lstm_output, Tensor[[B, T, H * 2]])
+    assert_type(lstm_h, Tensor[[L * 2, B, H]])
+    assert_type(lstm_c, Tensor[[L * 2, B, H]])
+
+    gru_output, gru_h = nn.GRU(input_size, hidden_size, num_layers, batch_first=True)(
+        sequence
+    )
+    assert_type(gru_output, Tensor[[B, T, H]])
+    assert_type(gru_h, Tensor[[L, B, H]])
+
+    cell_h, cell_c = nn.LSTMCell(input_size, hidden_size)(cell_input)
+    assert_type(cell_h, Tensor[[B, H]])
+    assert_type(cell_c, Tensor[[B, H]])
+
+
+def test_recurrent_gradual_constructor_arguments(
+    input_size: int,
+    hidden_size: int,
+    num_layers: int,
+    bidirectional: bool,
+) -> None:
+    sequence: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    lstm_output, lstm_h, lstm_c = nn.LSTM(
+        input_size,
+        hidden_size,
+        num_layers,
+        bidirectional=bidirectional,
+    )(sequence)
+    assert_type(lstm_output, Tensor)
+    assert_type(lstm_h, Tensor)
+    assert_type(lstm_c, Tensor)
+
+    gru_output, gru_h = nn.GRU(
+        input_size,
+        hidden_size,
+        num_layers,
+        bidirectional=bidirectional,
+    )(sequence)
+    assert_type(gru_output, Tensor)
+    assert_type(gru_h, Tensor)
+
+    cell_input: Tensor[[2, 4]] = torch.randn(2, 4)
+    cell_h, cell_c = nn.LSTMCell(input_size, hidden_size)(cell_input)
+    assert_type(cell_h, Tensor[[2, int]])
+    assert_type(cell_c, Tensor[[2, int]])
+
+    gradual: Tensor[IntTuple] = torch.randn(2, 3, 4)
+    gradual_output, gradual_h, gradual_c = nn.LSTM(4, 8)(gradual)
+    assert_type(gradual_output, Tensor[[int, int, 8]])
+    assert_type(gradual_h, Tensor[[1, int, 8]])
+    assert_type(gradual_c, Tensor[[1, int, 8]])
+
+
+def test_recurrent_mixed_gradual_constructor_arguments(
+    hidden_size: int,
+    bidirectional: bool,
+) -> None:
+    sequence: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+
+    output, h, c = nn.LSTM(4, 8, 2, bidirectional=bidirectional)(sequence)
+    assert_type(output, Tensor)
+    assert_type(h, Tensor)
+    assert_type(c, Tensor)
+
+    output, h = nn.GRU(4, hidden_size, 2, batch_first=True, bidirectional=False)(
+        sequence
+    )
+    assert_type(output, Tensor[[2, 3, int]])
+    assert_type(h, Tensor[[2, 2, int]])
 
 
 # ============================================================================
@@ -515,6 +880,83 @@ def test_flatten_module_custom_dims():
     assert_type(y, Tensor[[12, 32, 32]])
 
 
+def test_flatten_module_constructor_binding():
+    x: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
+    assert_type(nn.Flatten(start_dim=2, end_dim=3)(x), Tensor[[2, 3, 20]])
+
+
+def test_flatten_module_rank_and_dim_ranges():
+    scalar: Tensor[[]] = torch.tensor(1)
+    vector: Tensor[[7]] = torch.randn(7)
+    tensor: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
+    assert_type(nn.Flatten(0, -1)(scalar), Tensor[[1]])
+    assert_type(nn.Flatten(0)(vector), Tensor[[7]])
+    assert_type(nn.Flatten(-2, -1)(tensor), Tensor[[2, 3, 20]])
+    assert_type(nn.Flatten(-3, 2)(tensor), Tensor[[2, 12, 5]])
+    assert_type(nn.Flatten(1, 2)(tensor), Tensor[[2, 12, 5]])
+
+
+def flatten_symbolic[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+    x: Tensor[[B, C, H, W]],
+) -> Tensor[[B, C * H * W]]:
+    return nn.Flatten()(x)
+
+
+def test_flatten_module_symbolic_and_gradual():
+    symbolic: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
+    gradual: Tensor[IntTuple] = torch.randn(2, 3, 4)
+    assert_type(flatten_symbolic(symbolic), Tensor[[2, 60]])
+    assert_type(nn.Flatten()(gradual), Tensor[IntTuple])
+
+
+def test_flatten_module_reuse():
+    flatten = nn.Flatten(1, -1)
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    y: Tensor[[5, 6, 7, 8]] = torch.randn(5, 6, 7, 8)
+    assert_type(flatten(x), Tensor[[2, 12]])
+    assert_type(flatten(y), Tensor[[5, 336]])
+
+
+def test_flatten_method_function_module_parity():
+    x: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
+    assert_type(x.flatten(1, 2), Tensor[[2, 12, 5]])
+    assert_type(torch.flatten(x, 1, 2), Tensor[[2, 12, 5]])
+    assert_type(nn.Flatten(1, 2)(x), Tensor[[2, 12, 5]])
+
+
+class StoredControlModules:
+    def __init__(self):
+        self.flatten = nn.Flatten(1, -1)
+        self.glu = nn.GLU(-1)
+        self.shuffle = nn.PixelShuffle(2)
+        self.reflection = nn.ReflectionPad2d(1)
+        self.replication = nn.ReplicationPad2d(2)
+
+
+def test_stored_unannotated_control_modules():
+    modules = StoredControlModules()
+    flat_input: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    glu_input: Tensor[[2, 3, 8]] = torch.randn(2, 3, 8)
+    image: Tensor[[2, 8, 4, 5]] = torch.randn(2, 8, 4, 5)
+    assert_type(modules.flatten(flat_input), Tensor[[2, 12]])
+    assert_type(modules.flatten.forward(flat_input), Tensor[[2, 12]])
+    assert_type(modules.glu(glu_input), Tensor[[2, 3, 4]])
+    assert_type(modules.shuffle(image), Tensor[[2, 2, 8, 10]])
+    assert_type(modules.reflection(image), Tensor[[2, 8, 6, 7]])
+    assert_type(modules.replication(image), Tensor[[2, 8, 8, 9]])
+
+
+def test_gradual_constructor_controls(
+    start_dim: int, end_dim: int, dim: int, factor: int, padding: int
+):
+    x: Tensor[[2, 8, 4, 4]] = torch.randn(2, 8, 4, 4)
+    assert_type(nn.Flatten(start_dim, end_dim)(x), Tensor[IntTuple])
+    assert_type(nn.GLU(dim)(x), Tensor[IntTuple])
+    assert_type(nn.PixelShuffle(factor)(x), Tensor[IntTuple])
+    assert_type(nn.ReflectionPad2d(padding)(x), Tensor[[2, 8, int, int]])
+    assert_type(nn.ReplicationPad2d(padding)(x), Tensor[[2, 8, int, int]])
+
+
 def test_flatten_in_sequential():
     seq = nn.Sequential(
         nn.AdaptiveAvgPool2d((1, 1)),
@@ -523,6 +965,20 @@ def test_flatten_in_sequential():
     x: Tensor[[4, 64, 8, 8]] = torch.randn(4, 64, 8, 8)
     y = seq(x)
     assert_type(y, Tensor[[4, 64]])
+
+
+def test_migrated_control_modules_in_sequential():
+    rearrange = nn.Sequential(
+        nn.ReflectionPad2d(1),
+        nn.PixelShuffle(2),
+        nn.GLU(1),
+        nn.Flatten(1, -1),
+    )
+    replicate = nn.Sequential(nn.ReplicationPad2d(2), nn.Flatten())
+    image: Tensor[[2, 8, 4, 4]] = torch.randn(2, 8, 4, 4)
+    channels: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
+    assert_type(rearrange(image), Tensor[[2, 144]])
+    assert_type(replicate(channels), Tensor[[2, 216]])
 
 
 # ============================================================================

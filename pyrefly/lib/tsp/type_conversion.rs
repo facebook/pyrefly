@@ -194,6 +194,8 @@ fn test_class(module_name: ModuleName, name: &str) -> PyreflyClassType {
     use pyrefly_types::types::TArgs;
     use ruff_python_ast::Identifier;
 
+    use crate::types::class::PrecomputedTParams;
+
     let module = Module::new(
         module_name,
         ModulePath::bundled_typeshed(PathBuf::from(format!("{module_name}.pyi"))),
@@ -204,7 +206,7 @@ fn test_class(module_name: ModuleName, name: &str) -> PyreflyClassType {
         Identifier::new(Name::new(name), TextRange::default()),
         NestingContext::toplevel(),
         module,
-        None,
+        PrecomputedTParams::NotGeneric,
         false,
     );
     PyreflyClassType::new(class, TArgs::default())
@@ -1169,7 +1171,7 @@ mod tests {
 
     #[test]
     fn test_convert_any() {
-        let ty = PyreflyType::Any(AnyStyle::Implicit);
+        let ty = PyreflyType::any_implicit();
         let tsp = convert_type(&ty);
         match tsp {
             TspType::BuiltInType(b) => {
@@ -1955,7 +1957,10 @@ mod tests {
         );
         let func = Function {
             signature: callable,
-            metadata: FuncMetadata::new(FunctionKind::Overload, FuncFlags::default()),
+            metadata: FuncMetadata {
+                kind: FunctionKind::Overload,
+                flags: FuncFlags::default(),
+            },
         };
         let ty = PyreflyType::Function(Box::new(func));
         match convert_type(&ty) {
@@ -2034,7 +2039,10 @@ mod tests {
         let callable = Callable::list(ParamList::new(vec![]), PyreflyType::None);
         let func = Function {
             signature: callable,
-            metadata: FuncMetadata::new(FunctionKind::Overload, FuncFlags::default()),
+            metadata: FuncMetadata {
+                kind: FunctionKind::Overload,
+                flags: FuncFlags::default(),
+            },
         };
         let ty = PyreflyType::Function(Box::new(func));
         let range = lsp_types::Range {

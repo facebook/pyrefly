@@ -15,6 +15,27 @@ don't crash when evaluated by Python.
 import typing
 from dataclasses import dataclass
 
+__all__ = [
+    "D",
+    "Elements",
+    "Int",
+    "IntTuple",
+    "IntTuples",
+    "IntVar",
+    "Index",
+    "MapIntTuples",
+    "ProxyMethod",
+    "SymbolicArithExpr",
+    "TypeVarTuple",
+    "assert_shape",
+    "broadcast",
+    "defines_assert_shape",
+    "gufunc_broadcast",
+    "shaped_array",
+    "index_shape",
+    "type_shape_dsl_function",
+]
+
 
 def _return_class(cls, params):
     return cls
@@ -83,6 +104,13 @@ class IntTuple:
         return cls
 
 
+class IntTuples:
+    """A tuple whose elements are `IntTuple` values."""
+
+    def __new__(cls, iterable=()):
+        return tuple(iterable)
+
+
 class Elements:
     """Inverse of ``tuple[Unpack[S]]``: extracts the element sequence from a IntTuple carrier.
 
@@ -126,20 +154,16 @@ class Flag[T]:
     pass
 
 
-class ProxyMethod[T]:
-    """Type-checker marker for method forwarding annotations."""
+class Index:
+    """Marker for an index value retained for type-level shape evaluation."""
 
     pass
 
 
-def enable_torchscript_runtime_compat() -> None:
-    """Erase shape-only runtime annotations to types TorchScript understands.
+class ProxyMethod[T]:
+    """Type-checker marker for method forwarding annotations."""
 
-    This is a one-way, process-global compatibility mode for legacy TorchScript
-    paths. It intentionally has no disable API for production callers.
-    """
-
-    Int.__class_getitem__ = classmethod(_return_int)
+    pass
 
 
 @dataclass(frozen=True)
@@ -254,8 +278,13 @@ def assert_shape(x, shape):
     return x
 
 
-def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
-    """Decorator that marks a class as carrying a shape TypeVarTuple."""
+def shaped_array(
+    *, shape: str, builtin_indexing: bool = True
+) -> typing.Callable[[type], type]:
+    """Mark a class as carrying a shape parameter.
+
+    ``builtin_indexing=False`` lets its annotated ``__getitem__`` determine the result.
+    """
 
     def decorator(cls: type) -> type:
         return cls
@@ -263,16 +292,55 @@ def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
     return decorator
 
 
-def broadcast(*_args: typing.Any) -> IntTuple:
-    """Runtime placeholder for Pyrefly's native type-level broadcast intrinsic."""
+def index_shape(_shape: IntTuple, _index: typing.Any) -> IntTuple:
+    """Runtime placeholder for Pyrefly's native shape-indexing intrinsic."""
 
     return IntTuple()
+
+
+class MapIntTuples:
+    """Map a unary type lambda over an ``IntTuples`` value.
+
+    A forward map preserves each source shape::
+
+        MapIntTuples[lambda S: Tensor[S], tuple[IntTuple[2], IntTuple[3, 4]]]
+
+    A map used directly as a parameter annotation reverses that relationship, so
+    passing ``(Tensor[IntTuple[2]], Tensor[IntTuple[3, 4]])`` infers the source
+    as ``tuple[IntTuple[2], IntTuple[3, 4]]``. Each symbolic source may occur in
+    only one parameter pattern, keeping inference unambiguous.
+
+    At runtime this is a placeholder that does not inspect its arguments,
+    because valid static sources such as ``Any`` and ``Never`` cannot be mapped
+    as Python values.
+    """
+
+    def __class_getitem__(cls, params):
+        return tuple
 
 
 def type_shape_dsl_function[F: typing.Callable](fn: F) -> F:
     """Runtime no-op for a user-defined type-level shape DSL function."""
 
     return fn
+
+
+# `dsl` imports the public schema classes above, so defer this import until they exist.
+from . import dsl as _dsl
+
+
+@type_shape_dsl_function
+def gufunc_broadcast(spec: str, shapes: IntTuples) -> IntTuple:
+    """Compute the output shape described by a generalized ufunc signature."""
+
+    return _dsl._gufunc_broadcast(spec, shapes)
+
+
+@type_shape_dsl_function
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    spec = "(),()->()"
+    shapes = _dsl.IntTuples((left, right))
+    return gufunc_broadcast(spec, shapes)
 
 
 class IntVar:
@@ -363,22 +431,3 @@ class TypeVarTuple:
     @property
     def __typing_is_unpacked_typevartuple__(self):
         return True
-
-
-def uses_shape_dsl(
-    ir_fn: typing.Callable,
-    *,
-    capture_init: list[str] | None = None,
-) -> typing.Callable[[typing.Callable], typing.Callable]:
-    """Decorator that associates a shape DSL function with an API function.
-
-    At runtime this is a no-op: the decorator arguments are ignored and the
-    decorated function is returned unchanged. Pyrefly uses this decorator
-    at type-checking time to route bound arguments through the shape DSL
-    for return-type refinement.
-    """
-
-    def decorator(fn: typing.Callable) -> typing.Callable:
-        return fn
-
-    return decorator

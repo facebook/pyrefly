@@ -828,24 +828,28 @@ def test_alias_hiding_any_consumed(x: Alias) -> None:
 );
 
 testcase!(
-    test_isinstance_dynamic_classinfo_narrows_to_any,
+    test_isinstance_dynamic_classinfo_keeps_subject,
     r#"
 from typing import Any, assert_type, reveal_type
 
 class A: ...
 class B: ...
 
-def test_dynamic_classinfo_narrows_to_any(x: A, cls: Any) -> None:
+def test_dynamic_classinfo_keeps_subject(x: A, cls: Any) -> None:
     if isinstance(x, cls):
-        assert_type(x, Any)
+        assert_type(x, A)
         if isinstance(x, B):
-            reveal_type(x)  # E: revealed type: B
+            reveal_type(x)  # E: revealed type: A & B
+    else:
+        assert_type(x, A)
 
-def test_type_any_classinfo_narrows_to_any(x: A, cls: type[Any]) -> None:
+def test_type_any_classinfo_keeps_subject(x: A, cls: type[Any]) -> None:
     if isinstance(x, cls):
-        assert_type(x, Any)
+        assert_type(x, A)
         if isinstance(x, B):
-            reveal_type(x)  # E: revealed type: B
+            reveal_type(x)  # E: revealed type: A & B
+    else:
+        assert_type(x, A)
     "#,
 );
 
@@ -1216,7 +1220,45 @@ def f(x: object, y: type[str]) -> None:
 
 def g(x: object, y: type[Any]) -> None:
     if isinstance(x, y):
-        assert_type(x, Any)
+        assert_type(x, object)
+"#,
+);
+
+// `type` is equivalent to `type[Any]`, so both spellings must behave the same.
+testcase!(
+    test_isinstance_type_no_widen,
+    r#"
+from typing import Any, Literal, assert_type
+
+def f(flag: bool, t: type) -> None:
+    x = 1 if flag else "foo"
+    if isinstance(x, t):
+        assert_type(x, Literal[1, "foo"])
+    else:
+        assert_type(x, Literal[1, "foo"])
+
+def g(flag: bool, t: type[Any]) -> None:
+    x = 1 if flag else "foo"
+    if isinstance(x, t):
+        assert_type(x, Literal[1, "foo"])
+    else:
+        assert_type(x, Literal[1, "foo"])
+"#,
+);
+
+// An instance of a `type` subclass is a class object of unknown identity too.
+testcase!(
+    test_isinstance_metaclass_instance_no_widen,
+    r#"
+from typing import assert_type
+
+class Meta(type): ...
+
+def f(x: int | str, m: Meta) -> None:
+    if isinstance(x, m):
+        assert_type(x, int | str)
+    else:
+        assert_type(x, int | str)
 "#,
 );
 
@@ -1305,6 +1347,25 @@ from typing import assert_type
 def f(cls: type[int], x: type[int] | type[str]):
     if not issubclass(x, cls):
         # cls might be a subclass of int, so x can still be int here
+        assert_type(x, type[int] | type[str])
+    "#,
+);
+
+testcase!(
+    test_issubclass_unknown_target_no_narrow,
+    r#"
+from typing import Any, assert_type
+
+def f(x: type[int] | type[str], cls: type):
+    if issubclass(x, cls):
+        assert_type(x, type[int] | type[str])
+    else:
+        assert_type(x, type[int] | type[str])
+
+def g(x: type[int] | type[str], cls: type[Any]):
+    if issubclass(x, cls):
+        assert_type(x, type[int] | type[str])
+    else:
         assert_type(x, type[int] | type[str])
     "#,
 );
@@ -1568,7 +1629,7 @@ def f(tp: type[Point] | type[Other]) -> None:
 testcase!(
     test_typeis_any_keeps_definite_members,
     r#"
-from typing import Any, TypeIs, reveal_type
+from typing import Any, TypeIs, assert_type, reveal_type
 
 class A: ...
 class B: ...
@@ -1579,6 +1640,9 @@ def f(x: A) -> None:
     if is_any(x):
         if isinstance(x, B):
             reveal_type(x)  # E: revealed type: A & B
+    else:
+        # `TypeIs[Any]` rules nothing out, so the negative branch is not empty
+        assert_type(x, A)
     "#,
 );
 
@@ -4175,7 +4239,6 @@ def f[T: A | B](x: T):
 );
 
 testcase!(
-    bug = "We can't handle a quantified intersected with multiple concrete types",
     test_narrow_typevar_multiple_times,
     r#"
 class A:
@@ -4189,12 +4252,12 @@ class B:
 def f[T: (A, B)](x: T, y: T) -> T | None:
     if isinstance(x, A):
         if isinstance(x, B):
-            return x + y  # E: `B` is not assignable to declared return type `T | None`
+            return x + y
 
 def g[T: (A, B)](x: T) -> T | None:
     if isinstance(x, A):
         if isinstance(x, B):
-            return x.f()  # E: `B` is not assignable to declared return type `T | None`
+            return x.f()
     "#,
 );
 
@@ -4433,5 +4496,21 @@ class MyClass(Enum):
 
 def myfn(x: MyClass | None):
     assert_type(x and x.name, str | None)
+    "#,
+);
+
+testcase!(
+    test_attribute_lookup_on_intersection,
+    r#"
+from typing import reveal_type
+class A: ...
+class B: ...
+class C:
+    x: A
+class D:
+    x: B
+def f(c: C):
+    if isinstance(c, D):
+        reveal_type(c.x)  # E: A & B
     "#,
 );

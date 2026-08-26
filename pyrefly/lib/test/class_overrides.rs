@@ -179,6 +179,33 @@ class B(A):
  "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1493
+testcase!(
+    test_override_with_differently_named_parent_overloads,
+    r#"
+from typing import overload
+
+class A:
+    @overload
+    def f(self, x: int) -> None: ...
+    @overload
+    def f(self, y: int, z: str) -> None: ...
+    def f(self, *args, **kwargs) -> None: ...
+
+class B(A):
+    # E: Class member `B.f` overrides parent class `A` in an inconsistent manner
+    # !E: Got parameter name
+    def f(self, x: int) -> None:
+        pass
+
+class C(A):
+    # E: Class member `C.f` overrides parent class `A` in an inconsistent manner
+    # !E: Got parameter name
+    def f(self, y: int) -> None:
+        pass
+"#,
+);
+
 testcase!(
     test_override_generic_simple,
     r#"
@@ -1991,6 +2018,90 @@ class A:
 
 class B(A):
     p: int  # E: Class member `B.p` overrides parent class `A` in an inconsistent manner
+ "#,
+);
+
+testcase!(
+    test_override_mutable_attribute_with_property,
+    r#"
+class ExprNode: ...
+
+class Expr:
+    def __init__(self, *nodes: ExprNode) -> None:
+        self._nodes = nodes
+
+class Then(Expr):
+    _cached_nodes: tuple[ExprNode, ...] | None = None
+
+    @property
+    def _nodes(self) -> tuple[ExprNode, ...]:
+        return self._cached_nodes or ()
+
+    @_nodes.setter
+    def _nodes(self, nodes: tuple[ExprNode, ...]) -> None:
+        self._cached_nodes = nodes
+
+class Value:
+    value: int
+
+class WideGetter(Value):
+    @property
+    def value(self) -> object:  # E: Class member `WideGetter.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+    @value.setter
+    def value(self, value: int) -> None:
+        pass
+
+class WideGetterSuppressed(Value):
+    @property
+    def value(self) -> object:  # pyrefly: ignore[bad-override-mutable-attribute]
+        return 0
+
+    @value.setter
+    def value(self, value: int) -> None:
+        pass
+
+class NarrowSetter(Value):
+    @property
+    def value(self) -> int:  # E: Class member `NarrowSetter.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+    @value.setter
+    def value(self, value: bool) -> None:
+        pass
+
+class NarrowSetterSuppressed(Value):
+    @property
+    def value(self) -> int:  # pyrefly: ignore[bad-override-mutable-attribute]
+        return 0
+
+    @value.setter
+    def value(self, value: bool) -> None:
+        pass
+
+class Compatible(Value):
+    @property
+    def value(self) -> bool:
+        return True
+
+    @value.setter
+    def value(self, value: object) -> None:
+        pass
+
+class ReadOnly(Value):
+    @property
+    def value(self) -> int:  # E: Class member `ReadOnly.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+class MissingSetterValue(Value):
+    @property
+    def value(self) -> int:  # E: Class member `MissingSetterValue.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+    @value.setter
+    def value(self) -> None:
+        pass
  "#,
 );
 

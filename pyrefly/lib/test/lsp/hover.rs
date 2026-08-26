@@ -591,71 +591,6 @@ def f(c: C) -> None:
 }
 
 #[test]
-fn hover_preserves_type_aliases_in_function_signatures() {
-    let code = r#"
-from typing import TypeAlias
-
-Messages: TypeAlias = list[str]
-type Payloads = list[str]
-
-def func(msgs: Messages) -> None:
-    pass
-
-def handle(payloads: Payloads) -> None:
-    pass
-
-func
-#^
-handle
-#^
-"#;
-    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
-        match get_hover(&state.transaction(), handle, position, false) {
-            Some(Hover {
-                contents: HoverContents::Markup(markup),
-                ..
-            }) => markup.value,
-            _ => "None".to_owned(),
-        }
-    });
-    assert!(
-        report.contains("def func(msgs: Messages) -> None: ..."),
-        "Expected hover to preserve the legacy alias name, got: {report}"
-    );
-    assert!(
-        report.contains("def handle(payloads: Payloads) -> None: ..."),
-        "Expected hover to preserve the scoped alias name, got: {report}"
-    );
-    assert!(
-        !report.contains("def func(msgs: list[str]) -> None: ..."),
-        "Expected hover not to expand the alias, got: {report}"
-    );
-}
-
-#[test]
-fn hover_preserves_type_aliases_in_imported_function_signatures() {
-    let main = r#"
-from lib import handle
-
-handle
-#^
-"#;
-    let lib = r#"
-from typing import TypeAlias
-
-Messages: TypeAlias = list[str]
-type Payload[T] = list[T]
-
-def handle(messages: Messages, payload: Payload[str]) -> Payload[int]: ...
-"#;
-    let report =
-        get_batched_lsp_operations_report(&[("main", main), ("lib", lib)], get_test_report);
-    assert!(report.contains("messages: Messages"), "got: {report}");
-    assert!(report.contains("payload: Payload[str]"), "got: {report}");
-    assert!(report.contains(") -> Payload[int]: ..."), "got: {report}");
-}
-
-#[test]
 fn hover_over_inline_ignore_comment() {
     let code = r#"
 a: int = "test"  # pyrefly: ignore
@@ -1302,6 +1237,27 @@ c += 1
             "```python\n(method) __iadd__: def __iadd__(\n    self: Counter,\n    other: int\n) -> Counter: ...\n```"
         ),
         "Expected __iadd__ signature in hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_binop_lhs_literal_does_not_show_operator_dunder() {
+    let code = r#"
+x = 1 + 1
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | x = 1 + 1
+        ^
+```python
+Literal[1]
+```
+"#
+        .trim(),
+        report.trim(),
     );
 }
 
@@ -2166,6 +2122,51 @@ Person("Alice", 25)
         report.contains("-> Person"),
         "Expected constructor hover to show -> Person, got: {report}"
     );
+}
+
+#[test]
+fn hover_on_pydantic_constructor_ignores_inherited_unannotated_new() {
+    let sqlmodel = r#"
+from typing import Any
+from pydantic import BaseModel
+
+class SQLModel(BaseModel):
+    def __new__(cls, *args: Any, **kwargs: Any):
+        return object.__new__(cls)
+
+    def __init__(self, **data: Any) -> None: ...
+"#;
+    let main = r#"
+from sqlmodel import SQLModel
+
+class A(SQLModel):
+    a: int
+    b: str
+
+value = A
+#       ^
+A(a=1, b="")
+#^
+"#;
+    let pydantic_path =
+        std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
+    let mut test_env = TestEnv::new_with_site_package_paths(&[&pydantic_path]);
+    test_env.add("sqlmodel", sqlmodel);
+    test_env.add("main", main);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    for position in extract_cursors_for_test(main) {
+        let report = get_test_report(&state, &handle("main"), position);
+        assert!(
+            report.contains("a:") && report.contains("b:"),
+            "Expected Pydantic constructor hover to show synthesized fields, got: {report}"
+        );
+        assert!(
+            !report.contains("*args: Any") && !report.contains("**kwargs: Any"),
+            "Expected Pydantic constructor hover to hide inherited broad __new__, got: {report}"
+        );
+    }
 }
 
 #[test]

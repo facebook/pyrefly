@@ -228,7 +228,13 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn class_def(&mut self, mut x: StmtClassDef, parent: &NestingContext) {
+        // See the matching comment in `function_def`: a nameless class comes from
+        // parse-error recovery and defines nothing, but its decorators still do.
         if x.name.id.is_empty() {
+            self.ensure_and_bind_decorators(
+                mem::take(&mut x.decorator_list),
+                &mut Usage::NonPinningValue(None),
+            );
             return;
         }
         let synthesized_base_classes = self.prescan_synthesized_bases(&mut x, parent);
@@ -382,16 +388,8 @@ impl<'a> BindingsBuilder<'a> {
         let mut keywords = Vec::new();
         if let Some(args) = &mut x.arguments {
             args.keywords.iter_mut().for_each(|keyword| {
-                if let Some(name) = &keyword.arg {
-                    self.ensure_expr(&mut keyword.value, class_object.usage());
-                    keywords.push((name.clone(), keyword.value.clone()));
-                } else {
-                    self.error(
-                        keyword.range(),
-                        ErrorKind::InvalidInheritance,
-                        "Unpacking is not supported in class header".to_owned(),
-                    )
-                }
+                self.ensure_expr(&mut keyword.value, class_object.usage());
+                keywords.push(keyword.clone());
             });
         }
         let bases: Arc<[BaseClass]> = Arc::from(bases.into_boxed_slice());
@@ -416,11 +414,6 @@ impl<'a> BindingsBuilder<'a> {
                 class_idx: class_indices.class_idx,
             },
         );
-        self.insert_binding_idx(
-            class_indices.synthesized_fields_idx,
-            BindingClassSynthesizedFields(class_indices.class_idx),
-        );
-
         self.add_name_definitions(&legacy);
 
         self.scopes.push(Scope::class_body(
@@ -443,7 +436,16 @@ impl<'a> BindingsBuilder<'a> {
             body,
             &NestingContext::class(ShortIdentifier::new(&x.name), parent.dupe()),
         );
-        let field_definitions = self.scopes.finish_class_and_get_field_definitions();
+        let (field_definitions, nn_module_registrations) =
+            self.scopes.finish_class_and_get_field_definitions();
+        self.insert_binding_idx(
+            class_indices.synthesized_fields_idx,
+            BindingClassSynthesizedFields {
+                class_idx: class_indices.class_idx,
+                nn_module_registrations: (!nn_module_registrations.is_empty())
+                    .then(|| Box::new(nn_module_registrations)),
+            },
+        );
 
         let django_field_info = self.extract_django_fields_from_class_body(&field_definitions);
         let mut fields = SmallMap::with_capacity(field_definitions.len());
@@ -1002,7 +1004,7 @@ impl<'a> BindingsBuilder<'a> {
         class_indices: ClassIndices,
         parent: &NestingContext,
         base: Option<Expr>,
-        keywords: Box<[(Identifier, Expr)]>,
+        keywords: Box<[Keyword]>,
         // name, position, annotation, value
         member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)>,
         illegal_identifier_handling: IllegalIdentifierHandling,
@@ -1055,7 +1057,10 @@ impl<'a> BindingsBuilder<'a> {
         );
         self.insert_binding_idx(
             class_indices.synthesized_fields_idx,
-            BindingClassSynthesizedFields(class_indices.class_idx),
+            BindingClassSynthesizedFields {
+                class_idx: class_indices.class_idx,
+                nn_module_registrations: None,
+            },
         );
 
         let mut fields = SmallMap::new();
@@ -1451,11 +1456,7 @@ impl<'a> BindingsBuilder<'a> {
                 _ => None,
             };
             if recognized_kw.is_some() {
-                let kw_name = kw
-                    .arg
-                    .clone()
-                    .expect("recognized TypedDict keyword must have a name");
-                base_class_keywords.push((kw_name, kw.value.clone()));
+                base_class_keywords.push(kw.clone());
             } else {
                 let msg = if let Some(name) = &kw.arg {
                     format!("Unrecognized keyword argument `{name}`")

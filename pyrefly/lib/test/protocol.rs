@@ -1260,6 +1260,21 @@ issubclass(ConcreteClass, RuntimeProtocol)
 );
 
 testcase!(
+    test_type_of_protocol_is_concrete_runtime_class,
+    r#"
+from typing import Protocol, assert_type
+
+class Worker(Protocol):
+    def work(self) -> None: ...
+
+def same_concrete_type(existing: Worker, candidate: Worker) -> bool:
+    candidate_type = type(candidate)
+    assert_type(candidate_type, type[Worker])
+    return isinstance(existing, candidate_type)
+"#,
+);
+
+testcase!(
     test_protocol_union_isinstance,
     r#"
 from typing import Protocol, runtime_checkable, Union
@@ -1467,6 +1482,18 @@ class A:
 
 cls1: type[CanFly] = CanFly # E: `type[CanFly]` is not assignable to `type[CanFly]`
 cls2: type[CanFly] = A      # OK
+    "#,
+);
+
+testcase!(
+    test_call_classmethod_on_protocol,
+    r#"
+from typing import Protocol
+class P(Protocol):
+    @classmethod
+    def f(cls) -> None:
+        return None
+P.f()
     "#,
 );
 

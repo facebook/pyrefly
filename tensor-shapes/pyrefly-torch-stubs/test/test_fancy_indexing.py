@@ -28,21 +28,21 @@ def test_tuple_indexing():
     assert_type(y3, Tensor[[2, 3, 4]])
 
 
-def test_list_indexing_preserves_literal_length():
-    """A list literal has a statically known length, so the indexed dimension is concrete."""
+def test_list_indexing_is_gradual():
+    """The Index restriction retains list elements but not a list literal's length."""
     x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
 
     # List with single element
     y1 = x[:, [-1], :]
-    assert_type(y1, Tensor[[2, 1, 4]])
+    assert_type(y1, Tensor[[2, int, 4]])
 
     # List with multiple elements
     y2 = x[:, [0, 2], :]
-    assert_type(y2, Tensor[[2, 2, 4]])
+    assert_type(y2, Tensor[[2, int, 4]])
 
     # List with all indices
     y3 = x[:, [0, 1, 2], :]
-    assert_type(y3, Tensor[[2, 3, 4]])
+    assert_type(y3, Tensor[[2, int, 4]])
 
 
 def test_mixed_indexing():

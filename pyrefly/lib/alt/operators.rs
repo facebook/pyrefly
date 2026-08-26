@@ -56,7 +56,7 @@ enum EqualityCompatibilityGroup {
     Str,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn callable_dunder_helper(
         &self,
         method_type: Type,
@@ -589,15 +589,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Then e1 + e2 should have a return type of Any since e2's __radd__  signature could be
                 // inconsistent with the signature of e1 __add__.
                 //
-                // Exception: when one operand is a shaped Tensor, fall through
-                // to dunder dispatch. Tensor's arithmetic dunders accept any
-                // numeric type and return Self, so the shape is preserved
-                // regardless of the other operand's type. Without this, e.g.
-                // Tensor[B, 1] / (2**n - 1.0) loses shape because 2**n is Any.
-                if (lhs.is_any() || rhs.is_any())
-                    && !matches!(lhs, Type::ShapedArray(_))
-                    && !matches!(rhs, Type::ShapedArray(_))
-                {
+                if lhs.is_any() || rhs.is_any() {
                     if let Type::Any(style) = &rhs {
                         return style.propagate();
                     } else if let Type::Any(style) = &lhs {
@@ -751,7 +743,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         });
         // If we're assigning to something with an annotation, make sure the produced value is assignable to it
         if let Some(ann) = ann.map(|k| self.get_idx(k)) {
-            self.check_final_reassignment(&ann, x.range(), errors);
+            self.check_final_reassignment(ann, x.range(), errors);
             if let Some(ann_ty) = ann.ty(self.heap, self.stdlib) {
                 if result.is_any() {
                     // Any provides no useful narrowing information, so preserve
@@ -1069,7 +1061,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match (left, right) {
             // If both are literals/None, check for predictable results
             (Type::Literal(l1), Type::Literal(l2)) => {
-                if l1 != l2 {
+                // Explicit/implicit literal style is typing metadata, not runtime identity.
+                if l1.value != l2.value {
                     emit_literal_warning(
                         &l1.value.to_string(),
                         &l2.value.to_string(),

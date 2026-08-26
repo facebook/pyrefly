@@ -5,9 +5,10 @@
 
 # Tests for literal int support in meta-shapes
 # Demonstrates: size() literal tracking, numel() literals, dim() literals
-from typing import assert_type, Literal
+from typing import assert_type, cast, Literal
 
 import torch
+from shape_extensions import Elements, Int, IntTuple, IntVar
 from torch import Tensor
 
 # ==== tensor.size() -> tuple[Literal[...], ...] ====
@@ -91,6 +92,19 @@ def test_numel_enables_comparisons():
     assert_type(n, Literal[24])
 
 
+def check_numel_scalar_and_gradual[Shape: IntTuple](
+    gradual_element: Tensor[[int, 3]],
+    gradual_rank: Tensor[IntTuple],
+    unpacked_rank: Tensor[[*Elements[Shape]]],
+) -> None:
+    assert_type(cast(Tensor[[]], ...).numel(), Literal[1])
+    assert_type(torch.empty(0).numel(), Literal[0])
+    assert_type(torch.numel(input=cast(Tensor[[2, 3]], ...)), Literal[6])
+    assert_type(gradual_element.numel(), Int[int])
+    assert_type(gradual_rank.numel(), Int[int])
+    assert_type(unpacked_rank.numel(), Int[int])
+
+
 # ==== tensor.dim() / tensor.ndim() -> Literal[n] ====
 
 
@@ -108,6 +122,28 @@ def test_dim_2d():
     d = x.dim()
     # Should infer: Literal[2]
     assert_type(d, Literal[2])
+
+
+def test_dim_scalar_one_dimensional_and_arithmetic():
+    scalar = cast(Tensor[[]], ...)
+    vector = cast(Tensor[[7]], ...)
+    higher = cast(Tensor[[2, 3, 4, 5]], ...)
+    assert_type(scalar.dim(), Literal[0])
+    assert_type(vector.dim(), Literal[1])
+    assert_type(higher.dim(), Literal[4])
+    assert_type(higher.dim() + 2, Literal[6])
+
+
+def check_dim_symbolic_and_gradual[N: IntVar, M: IntVar, Shape: IntTuple](
+    symbolic: Tensor[[N, M, 3]],
+    prefixed_and_suffixed: Tensor[[N, *Elements[Shape], M]],
+    open_rank: Tensor[IntTuple],
+    bare: Tensor,
+) -> None:
+    assert_type(symbolic.dim(), Literal[3])
+    assert_type(prefixed_and_suffixed.dim(), Int[int])
+    assert_type(open_rank.dim(), Int[int])
+    assert_type(bare.dim(), Int[int])
 
 
 # def test_ndim_alias():

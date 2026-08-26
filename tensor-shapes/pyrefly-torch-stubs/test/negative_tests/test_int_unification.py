@@ -7,6 +7,7 @@
 
 from typing import assert_type, TYPE_CHECKING
 
+import torch
 from shape_extensions import IntVar
 
 if TYPE_CHECKING:
@@ -64,3 +65,18 @@ def test_nested_with_simplification[A: IntVar](a: Int[A]):
     # Second arg: X // 2 = (A + A) // 2 = A (after simplification)
     result = two_args(double_a, a)
     assert_type(result, Int[A + A])
+
+
+def test_zero_numel() -> None:
+    # E: `Int[0]` is not assignable to `Int[1]`
+    one: Int[1] = torch.empty(0).numel()
+    _ = one
+
+
+def test_creation_rejects_non_integer_sizes() -> None:
+    # E: No matching overload found
+    torch.randn("bad")
+    # E: No matching overload found
+    torch.randn((2, "bad"))
+    # E: Argument `tuple[Literal['bad']]` is not assignable to parameter `size`
+    torch.full(("bad",), 1.0)

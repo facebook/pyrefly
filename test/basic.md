@@ -234,7 +234,8 @@ ERROR */hidden2.py:1:26-35: `str` is not assignable to `int` [bad-assignment] (g
 ## We can find a venv interpreter, even when not sourced
 
 ```scrut {output_stream: stderr}
-$ python3 -m venv $TMPDIR/venv && \
+$ python3 -m venv $TMPDIR/venv 2>$TMPDIR/venv_stderr || \
+> { cat $TMPDIR/venv_stderr >&2; false; } && \
 > echo "import third_party.test2" > $TMPDIR/test.py && \
 > export site_packages=$($TMPDIR/venv/bin/python -c "import site; print(site.getsitepackages()[0])") && \
 > mkdir $site_packages/third_party && \
@@ -248,7 +249,8 @@ $ python3 -m venv $TMPDIR/venv && \
 
 ```scrut {output_stream: stderr}
 $ VENV_PROJECT=$(mktemp -d -p /tmp venv.XXXXXX) && \
-> python3 -m venv $VENV_PROJECT/venv && \
+> python3 -m venv $VENV_PROJECT/venv 2>$TMPDIR/venv_stderr || \
+> { cat $TMPDIR/venv_stderr >&2; false; } && \
 > site_packages=$($VENV_PROJECT/venv/bin/python -c "import site; print(site.getsitepackages()[0])") && \
 > mkdir $site_packages/third_party && \
 > printf 'def f() -> int:\n    return 1\n' > $site_packages/third_party/test2.py && \
@@ -267,7 +269,8 @@ Docs: https://pyrefly.org/en/docs/installation/
 
 ```scrut {output_stream: stderr}
 $ CONDA_PROJECT=$(mktemp -d -p /tmp conda.XXXXXX) && \
-> python3 -m venv $CONDA_PROJECT/conda && \
+> python3 -m venv $CONDA_PROJECT/conda 2>$TMPDIR/venv_stderr || \
+> { cat $TMPDIR/venv_stderr >&2; false; } && \
 > site_packages=$($CONDA_PROJECT/conda/bin/python -c "import site; print(site.getsitepackages()[0])") && \
 > mkdir $site_packages/third_party && \
 > echo "x = 1" > $site_packages/third_party/test2.py && \

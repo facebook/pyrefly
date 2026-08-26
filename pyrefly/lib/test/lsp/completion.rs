@@ -459,6 +459,40 @@ item: FooBar = {
 }
 
 #[test]
+fn dict_value_completion_narrows_discriminated_typed_dict_union_literal() {
+    let code = r#"
+from typing import Literal, TypedDict
+
+class Foo(TypedDict):
+    kind: Literal["foo"]
+    mode: Literal["foo-mode"]
+
+class Bar(TypedDict):
+    kind: Literal["bar"]
+    mode: Literal["bar-mode"]
+
+type FooBar = Foo | Bar
+
+item: FooBar = {
+    "kind": "foo",
+    "mode": "|",
+#            ^
+}
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.contains("- (Value) 'foo-mode': Literal['foo-mode']"),
+        "{report}"
+    );
+    assert!(
+        !report.contains("- (Value) 'bar-mode': Literal['bar-mode']"),
+        "{report}"
+    );
+}
+
+#[test]
 fn dict_key_completion_from_discriminated_typed_dict_union_literal() {
     let code = r#"
 from typing import Literal, TypedDict
@@ -485,6 +519,58 @@ item: FooBar = {
     let txn = state.transaction();
     let labels = dict_field_labels(&txn, handle, position);
     assert_eq!(labels, vec!["foo_value".to_owned()]);
+}
+
+#[test]
+fn dict_key_completion_uses_enclosing_expected_type() {
+    let code = r#"
+from typing import Literal, TypedDict
+
+class Foo(TypedDict):
+    kind: Literal["foo"]
+    foo_value: int
+
+class Bar(TypedDict):
+    kind: Literal["bar"]
+    bar_value: str
+
+type FooBar = Foo | Bar
+
+def consume(item: FooBar) -> None: ...
+
+consume({
+    "kind": "foo",
+    "": 0,
+#    ^
+})
+
+def make() -> FooBar:
+    return {
+        "kind": "foo",
+        "": 0,
+#        ^
+    }
+
+class Outer(TypedDict):
+    item: FooBar
+
+outer: Outer = {
+    "item": {
+        "kind": "foo",
+        "": 0,
+#        ^
+    },
+}
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let txn = state.transaction();
+    for position in extract_cursors_for_test(code) {
+        assert_eq!(
+            dict_field_labels(&txn, handle, position),
+            vec!["foo_value".to_owned()]
+        );
+    }
 }
 
 #[test]
@@ -1726,6 +1812,44 @@ Completion Results:
         .trim(),
         report.trim(),
     );
+}
+
+#[test]
+fn kwargs_completion_pydantic_constructor_ignores_inherited_unannotated_new() {
+    let sqlmodel = r#"
+from typing import Any
+from pydantic import BaseModel
+
+class SQLModel(BaseModel):
+    def __new__(cls, *args: Any, **kwargs: Any):
+        return object.__new__(cls)
+
+    def __init__(self, **data: Any) -> None: ...
+"#;
+    let main = r#"
+from sqlmodel import SQLModel
+
+class A(SQLModel):
+    a: int
+    b: str
+
+A(
+# ^
+"#;
+    let pydantic_path =
+        std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
+    let mut test_env = TestEnv::new_with_site_package_paths(&[&pydantic_path]);
+    test_env.add("sqlmodel", sqlmodel);
+    test_env.add("main", main);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let report =
+        get_default_test_report()(&state, &handle("main"), extract_cursors_for_test(main)[0]);
+    assert!(report.contains("- (Variable) a=:"), "{report}");
+    assert!(report.contains("- (Variable) b=:"), "{report}");
+    assert!(!report.contains("args="), "{report}");
+    assert!(!report.contains("kwargs="), "{report}");
 }
 
 #[test]
@@ -3797,10 +3921,11 @@ This has documentation.
     );
 }
 
-// Regression test for https://github.com/facebook/pyrefly/issues/1257
-// Because the base type for completion is passed to Type::for_display,
-// which converts all unsolved Var to Var::ZERO, we were running into an
-// unexpected Var::ZERO in attribute lookup, leading to a panic.
+// Regression test for https://github.com/facebook/pyrefly/issues/1257.
+// Completion takes its base type from the type trace, and hover rendering of a bound method
+// shows the `self` parameter that ordinary display strips. Both the detail string and the
+// property's type therefore expose whatever the trace holds, so this pins that no solver
+// variable reaches either.
 #[test]
 fn dot_complete_var_crash_regression() {
     let code = r#"
@@ -3822,8 +3947,8 @@ f().
 9 | f().
         ^
 Completion Results:
-- (Method) m: def m(self: C[@12]) -> None: ...
-- (Field) p: @12
+- (Method) m: def m(self: C[Unknown]) -> None: ...
+- (Field) p: Unknown
 "#
         .trim(),
         report.trim(),
@@ -3859,6 +3984,32 @@ x = sys.version
     assert!(
         !normal_completions.is_empty(),
         "Expected completions in normal code but got none"
+    );
+}
+
+#[test]
+fn completion_before_comment_with_crlf_line_endings() {
+    let code = concat!(
+        "class Foo:\r\n",
+        "    x: int\r\n",
+        "foo = Foo()\r\n",
+        "foo.\r\n",
+        "# comment\r\n",
+    );
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = TextSize::try_from(
+        code.find("foo.\r\n").expect("completion line must exist") + "foo.".len(),
+    )
+    .expect("completion position must fit in TextSize");
+    let completions =
+        state
+            .transaction()
+            .completion(handle, position, ImportFormat::Absolute, true, None);
+
+    assert!(
+        completions.iter().any(|item| item.label == "x"),
+        "Expected attribute completions before a comment, got {completions:?}"
     );
 }
 

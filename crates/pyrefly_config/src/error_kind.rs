@@ -379,6 +379,8 @@ pub enum ErrorKind {
     RedundantCast,
     /// Attempting to use value that is equivalent to True or always False in boolean context.
     RedundantCondition,
+    /// An invalid regex pattern or regex group access.
+    Regex,
     /// Raised by a call to reveal_type().
     RevealType,
     /// Passing a string to something that expects an iterable of strings.
@@ -624,10 +626,7 @@ impl ErrorKind {
     /// this kind. Unused-ignore diagnostics are excluded because suppressing one
     /// would only leave behind another unused ignore.
     pub fn is_suppressable(self) -> bool {
-        match self {
-            ErrorKind::UnusedIgnore | ErrorKind::UnusedTypeIgnore => false,
-            _ => true,
-        }
+        !matches!(self, ErrorKind::UnusedIgnore | ErrorKind::UnusedTypeIgnore)
     }
 
     /// A soft error is a diagnostic that should not influence overload selection

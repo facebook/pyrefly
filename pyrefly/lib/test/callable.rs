@@ -8,6 +8,23 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+// `CallArgPreEval::advance_after_match` is shared with shape-specific call matching. Keep this
+// regression in the general callable suite so the refactor cannot change ordinary variadic
+// type-variable consumption.
+testcase!(
+    ordinary_type_var_tuple_argument_advancement_is_unchanged,
+    r#"
+from typing import assert_type
+
+def pack[*Ts](*args: *Ts) -> tuple[*Ts]: ...
+
+assert_type(pack(1, "x"), tuple[int, str])
+
+def check(xs: tuple[int, str]) -> None:
+    assert_type(pack(*xs), tuple[int, str])
+"#,
+);
+
 testcase!(
     test_lambda,
     r#"
@@ -828,6 +845,29 @@ def f(x: int, y: int, z: int): ...
 def test(kwargs: dict[str, int]):
     f(**kwargs) # OK
     f(1, **kwargs) # OK
+"#,
+);
+
+testcase!(
+    test_splat_unknown_length_with_known_kwargs_keys,
+    r#"
+from typing import Any
+
+def get_content(
+    service_instance: Any,
+    obj_type: str,
+    property_list: list[str] | None = None,
+    container_ref: Any = None,
+) -> dict[str, Any]:
+    return {}
+
+def call_get_content(instance: Any, obj_type: str) -> dict[str, Any]:
+    args: list[Any] = [instance, obj_type]
+    kwargs = {
+        "property_list": ["name"],
+        "container_ref": None,
+    }
+    return get_content(*args, **kwargs)  # OK
 "#,
 );
 

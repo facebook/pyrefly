@@ -27,17 +27,18 @@ use pyrefly_types::function::FunctionKind;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::literal::Literal;
 use pyrefly_types::series::SeriesSchema;
-use pyrefly_types::shaped_array::IndexOp;
+use pyrefly_types::shape_index::IndexOp;
+use pyrefly_types::shape_index::index_shape_int;
+use pyrefly_types::shape_index::index_shape_multi;
+use pyrefly_types::shape_index::index_shape_slice;
+use pyrefly_types::shape_index::index_shape_tensor;
 use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::shaped_array::IntTupleView;
 use pyrefly_types::shaped_array::ShapedArrayType;
-use pyrefly_types::shaped_array::index_shape_int;
-use pyrefly_types::shaped_array::index_shape_multi;
-use pyrefly_types::shaped_array::index_shape_slice;
-use pyrefly_types::shaped_array::index_shape_tensor;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier;
 use pyrefly_types::shaped_array::tuple_carrier_to_shape;
 use pyrefly_types::shaped_array::type_to_dim;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItems;
@@ -47,6 +48,7 @@ use pyrefly_types::types::Forallable;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
@@ -87,9 +89,13 @@ use crate::alt::callable::CallArg;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
 use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::polars_specials::is_polars_series;
+use crate::alt::regex::RegexValidationError;
+use crate::alt::regex::validate_pattern;
+use crate::alt::shape_extension::is_int_tuple_bound;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::solve::UntypeContext;
 use crate::alt::unwrap::HintRef;
+use crate::alt::unwrap::ListElementHint;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
@@ -150,15 +156,44 @@ enum DimensionExprContext {
     /// An operand of shape arithmetic, e.g. the `N` in `Tensor[N + 1]`. Only a
     /// `IntVar` is allowed; a plain `TypeVar` is rejected.
     Arithmetic,
+    /// The root of an `Int` or `Int | None` shape-DSL argument. It retains the
+    /// diagnostics of a bare dimension while allowing explicit `Int[...]`
+    /// wrappers here and in nested arithmetic.
+    DslArgument,
+    /// Arithmetic in an `Int` or `Int | None` shape-DSL argument. Unlike ordinary
+    /// shape arithmetic, explicit `Int[...]` wrappers are valid operands.
+    DslArithmetic,
 }
 
 impl DimensionExprContext {
     fn error_context(self) -> &'static str {
         match self {
-            Self::Bare => "as a shape dimension",
-            Self::Arithmetic => "in shape arithmetic",
+            Self::Bare | Self::DslArgument => "as a shape dimension",
+            Self::Arithmetic | Self::DslArithmetic => "in shape arithmetic",
         }
     }
+
+    fn operand(self) -> Self {
+        match self {
+            Self::Bare | Self::Arithmetic => Self::Arithmetic,
+            Self::DslArgument | Self::DslArithmetic => Self::DslArithmetic,
+        }
+    }
+
+    fn allows_explicit_int_wrapper(self) -> bool {
+        matches!(self, Self::DslArgument | Self::DslArithmetic)
+    }
+
+    fn rejects_raw_int_var(self) -> bool {
+        matches!(self, Self::DslArgument | Self::DslArithmetic)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum DimensionExprError {
+    Invalid,
+    InvalidExplicitIntWrapper,
+    RawIntVar { range: TextRange, ty: Type },
 }
 
 impl Ranged for TypeOrExpr<'_> {
@@ -391,9 +426,9 @@ fn classify_shaped_array_index_type(ty: &Type) -> Option<IndexOp> {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn synthesized_functional_class_type(&self, call: &ExprCall) -> Option<Type> {
-        let anon_key = Key::Anon(call.range);
+        let anon_key = Key::Anon(call.range());
         let idx = self
             .bindings()
             .key_to_idx_hashed_opt(Hashed::new(&anon_key))?;
@@ -487,7 +522,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     let result = self
                         .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                        .arc_clone();
+                        .clone();
                     // Complements PromoteForward for seeded captures.
                     if self.bindings().should_promote_at_range(x.range) {
                         result.map_ty(|ty| ty.promote_shallow_implicit_literals(self.stdlib))
@@ -520,7 +555,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::Named(x) => match &*x.target {
                 Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => self
                     .get(&Key::Definition(ShortIdentifier::expr_name(name)))
-                    .arc_clone(),
+                    .clone(),
                 _ => self.expr_infer_impl(&x.value, hint, errors, type_form_context),
             },
             // All other expressions operate at the `Type` level only, so we avoid the overhead of
@@ -754,20 +789,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 |hint| self.decompose_list(hint),
                 |elt_hint, hint| {
                     if x.is_empty() {
-                        let elem_ty = elt_hint.unwrap_or_else(|| {
-                            self.solver()
+                        let elem_ty = match elt_hint {
+                            Some(ListElementHint::Hint(elem_hint)) => elem_hint,
+                            Some(ListElementHint::UninformativeAny(_)) | None => self
+                                .solver()
                                 .fresh_partial_contained(self.uniques, x.range)
-                                .to_type(self.heap)
-                        });
+                                .to_type(self.heap),
+                        };
                         self.heap.mk_class_type(self.stdlib.list(elem_ty))
                     } else {
+                        let (elt_hint, partial_fallback) = elt_hint
+                            .map(ListElementHint::into_parts)
+                            .unwrap_or_default();
                         let elem_tys = self.elts_infer(
                             &x.elts,
                             HintRef::with_ty_opt(hint, elt_hint.as_ref()),
                             errors,
                         );
-                        self.heap
-                            .mk_class_type(self.stdlib.list(self.unions(elem_tys)))
+                        let ty = self
+                            .heap
+                            .mk_class_type(self.stdlib.list(self.unions(elem_tys)));
+                        if let Some(partial_fallback) = partial_fallback {
+                            self.solver()
+                                .replace_unresolved_partials(ty, &partial_fallback)
+                        } else {
+                            ty
+                        }
                     }
                 },
             ),
@@ -798,6 +845,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 hint,
                 |hint| self.decompose_list(hint),
                 |elem_hint, hint| {
+                    let (elem_hint, partial_fallback) = elem_hint
+                        .map(ListElementHint::into_parts)
+                        .unwrap_or_default();
                     self.ifs_infer(&x.generators, errors);
                     let elem_ty = self.expr_infer_with_hint_promote(
                         &x.elt,
@@ -805,7 +855,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         errors,
                         HintCoercion::BestEffort,
                     );
-                    self.heap.mk_class_type(self.stdlib.list(elem_ty))
+                    let ty = self.heap.mk_class_type(self.stdlib.list(elem_ty));
+                    if let Some(partial_fallback) = partial_fallback {
+                        self.solver()
+                            .replace_unresolved_partials(ty, &partial_fallback)
+                    } else {
+                        ty
+                    }
                 },
             ),
             Expr::SetComp(x) => self.infer_with_decomposed_hint(
@@ -913,7 +969,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if type_form_context != TypeFormContext::BaseClassList {
                         return self.error(
                             errors,
-                            x.range,
+                            x.range(),
                             ErrorKind::InvalidAnnotation,
                             "Function call cannot be used in annotations".to_owned(),
                         );
@@ -976,15 +1032,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::Slice(x) => {
                 let none = self.heap.mk_none();
                 let elts = vec![
-                    x.lower
-                        .as_ref()
-                        .map_or_else(|| none.clone(), |e| self.expr_infer(e, errors)),
-                    x.upper
-                        .as_ref()
-                        .map_or_else(|| none.clone(), |e| self.expr_infer(e, errors)),
-                    x.step
-                        .as_ref()
-                        .map_or_else(|| none.clone(), |e| self.expr_infer(e, errors)),
+                    x.lower.as_ref().map_or_else(
+                        || none.clone(),
+                        |e| self.infer_shape_index_slice_bound(e, errors),
+                    ),
+                    x.upper.as_ref().map_or_else(
+                        || none.clone(),
+                        |e| self.infer_shape_index_slice_bound(e, errors),
+                    ),
+                    x.step.as_ref().map_or_else(
+                        || none.clone(),
+                        |e| self.infer_shape_index_slice_bound(e, errors),
+                    ),
                 ];
                 self.specialize(&self.stdlib.slice_class_object(), elts, x.range(), errors)
             }
@@ -1054,7 +1113,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.check_pytorch_redundant_to_call(x, &callee_ty, errors);
         self.check_sqlalchemy_update_values_call(x, errors);
         if let Some(d) = self.call_to_dict(&callee_ty, &x.arguments) {
-            self.dict_infer(&d, hint, x.range, errors)
+            self.dict_infer(&d, hint, x.range(), errors)
         } else if let Some(ty) = self
             .anonymous_typed_dict_get_or_setdefault_with_literal(
                 &x.func,
@@ -1084,7 +1143,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.subscript_infer_for_type_with_key_present(
                     obj_ty.ty(),
                     key_expr,
-                    x.range,
+                    x.range(),
                     errors,
                     true,
                     TypeFormContext::TypeExpression,
@@ -1097,7 +1156,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .into_ty()
             }
         } else {
-            self.expr_call_infer(x, callee_ty, hint, errors)
+            let regex_pattern = Self::regex_pattern_argument(&x.arguments);
+            let regex_flags_position =
+                regex_pattern.and_then(|_| self.regex_flags_position(&callee_ty));
+            let ret = self.expr_call_infer(x, callee_ty, hint, errors);
+            if let (Some(pattern), Some(flags_position)) = (regex_pattern, regex_flags_position) {
+                self.regex_validate_pattern_argument(pattern, &x.arguments, flags_position, errors);
+            }
+            ret
         }
     }
 
@@ -1423,7 +1489,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 if let Some(suggestion) = best_suggestion(
                     field_name,
-                    mapped_fields.iter().map(|candidate| (candidate, 0usize)),
+                    mapped_fields
+                        .iter()
+                        .map(|candidate| Candidate::measured(candidate, 0)),
                 ) {
                     builder = builder.with_detail(format!("Did you mean `{suggestion}`?"));
                 }
@@ -1999,6 +2067,101 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }))
     }
 
+    /// Return the positional index of `flags` for `re` functions that accept a pattern.
+    fn regex_flags_position(&self, callee_ty: &Type) -> Option<usize> {
+        callee_ty.toplevel_func_metadata().and_then(|metadata| {
+            if metadata.kind.module_name().as_str() != "re" {
+                return None;
+            }
+            let class = metadata.kind.class();
+            let class = class.as_ref().map(|class| class.name().as_str());
+            let function = metadata.kind.function_name();
+            match (class, function.as_ref().as_str()) {
+                (None, "compile" | "template") => Some(1),
+                (None, "match" | "fullmatch" | "search" | "findall" | "finditer") => Some(2),
+                (None, "split") => Some(3),
+                (None, "sub" | "subn") => Some(4),
+                _ => None,
+            }
+        })
+    }
+
+    fn regex_pattern_argument(args: &Arguments) -> Option<&Expr> {
+        let pattern = args.args.first().or_else(|| {
+            args.keywords.iter().find_map(|kw| {
+                (kw.arg
+                    .as_ref()
+                    .is_some_and(|name| name.id.as_str() == "pattern"))
+                .then_some(&kw.value)
+            })
+        })?;
+        matches!(pattern, Expr::StringLiteral(_) | Expr::BytesLiteral(_)).then_some(pattern)
+    }
+
+    fn regex_validate_pattern_argument(
+        &self,
+        pattern: &Expr,
+        args: &Arguments,
+        flags_position: usize,
+        errors: &ErrorCollector,
+    ) {
+        let flags = args.args.get(flags_position).or_else(|| {
+            args.keywords.iter().find_map(|kw| {
+                (kw.arg
+                    .as_ref()
+                    .is_some_and(|name| name.id.as_str() == "flags"))
+                .then_some(&kw.value)
+            })
+        });
+        let Some(verbose) =
+            flags.map_or(Some(false), |flags| self.regex_verbose_flag(flags, errors))
+        else {
+            return;
+        };
+        let result = match pattern {
+            Expr::StringLiteral(ExprStringLiteral { value, .. }) => {
+                validate_pattern(value.to_str().as_bytes(), verbose)
+            }
+            Expr::BytesLiteral(value) => match Lit::from_bytes_literal(value) {
+                Some(Lit::Bytes(value)) => validate_pattern(&value, verbose),
+                _ => return,
+            },
+            _ => return,
+        };
+        if let Err(RegexValidationError::Invalid(error)) = result {
+            self.error(errors, pattern.range(), ErrorKind::Regex, error.to_owned());
+        }
+    }
+
+    fn regex_verbose_flag(&self, expr: &Expr, errors: &ErrorCollector) -> Option<bool> {
+        match expr {
+            Expr::BinOp(ExprBinOp {
+                left,
+                op: Operator::BitOr,
+                right,
+                ..
+            }) => match (
+                self.regex_verbose_flag(left, errors),
+                self.regex_verbose_flag(right, errors),
+            ) {
+                (Some(true), _) | (_, Some(true)) => Some(true),
+                (Some(false), Some(false)) => Some(false),
+                _ => None,
+            },
+            _ => match self.expr_infer(expr, errors) {
+                Type::Literal(literal) => match literal.value {
+                    Lit::Int(value) => value.as_i64().map(|value| value & 64 != 0),
+                    Lit::Bool(_) => Some(false),
+                    Lit::Enum(value) if value.class.has_qname("re", "RegexFlag") => {
+                        Some(matches!(value.member.as_str(), "X" | "VERBOSE"))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
+        }
+    }
+
     /// If `func(args)` is a `.<method>("<literal>", ...)` call, return the receiver's
     /// type, the key expression, and the literal key. Callers apply their own
     /// receiver/arg-count constraints.
@@ -2302,17 +2465,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             x.attr.range,
             AttributeReferenceKind::Textual,
         );
-        let attr_type = self.attr_infer(base, &x.attr.id, x.range, errors, None);
-        if base.ty().is_literal_string() {
-            match attr_type.ty() {
-                Type::BoundMethod(method) => attr_type
-                    .clone()
-                    .with_ty(method.with_bound_object(base.ty().clone()).as_type()),
-                _ => attr_type,
-            }
-        } else {
-            attr_type
-        }
+        self.attr_infer(base, &x.attr.id, x.range, errors, None)
     }
 
     pub fn attr_infer(
@@ -2533,7 +2686,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidSentinel,
                 "Sentinel requires a name as the first argument".to_owned(),
             );
@@ -2611,7 +2764,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if lit.value.to_str() != name.id.as_str() {
                     self.error(
                         errors,
-                        x.range,
+                        x.range(),
                         ErrorKind::InvalidTypeVar,
                         format!(
                             "{construct} must be assigned to a variable named `{}`",
@@ -2671,7 +2824,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 format!("{construct} cannot have both constraints and bound"),
                             );
                             restriction = Some(Restriction::Unrestricted);
-                        } else if self.reject_legacy_shape_flag_bound(
+                        } else if self.reject_legacy_shape_extension_bound(
                             &bound,
                             kw.value.range(),
                             errors,
@@ -2731,7 +2884,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !arg_name {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeVar,
                 "Missing `name` argument".to_owned(),
             );
@@ -2742,7 +2895,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeVar,
                 format!(
                     "Expected at least 2 constraints in {construct} `{}`, got {}",
@@ -2791,7 +2944,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if lit.value.to_str() != name.id.as_str() {
                     self.error(
                         errors,
-                        x.range,
+                        x.range(),
                         ErrorKind::InvalidParamSpec,
                         format!(
                             "ParamSpec must be assigned to a variable named `{}`",
@@ -2859,7 +3012,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !arg_name {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidParamSpec,
                 "Missing `name` argument".to_owned(),
             );
@@ -2890,7 +3043,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if lit.value.to_str() != name.id.as_str() {
                     self.error(
                         errors,
-                        x.range,
+                        x.range(),
                         ErrorKind::InvalidTypeVarTuple,
                         format!(
                             "TypeVarTuple must be assigned to a variable named `{}`",
@@ -2968,7 +3121,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !arg_name {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeVarTuple,
                 "Missing `name` argument".to_owned(),
             );
@@ -3052,8 +3205,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .iter()
                         .all(|constraint| self.is_enum_class_type(constraint))
             }
-            Restriction::Flag(domain) => domain
-                .types(self.stdlib)
+            Restriction::ShapeExtension(extension) => extension
+                .upper_bound_members(self.stdlib)
                 .iter()
                 .all(|ty| self.is_enum_class_type(ty)),
         }
@@ -3133,6 +3286,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         key_present: bool, // true if the key is definitely known to be present
         type_form_context: TypeFormContext<'_>,
+    ) -> Type {
+        let mut aliases = SmallSet::new();
+        self.subscript_infer_for_type_with_key_present_inner(
+            base,
+            slice,
+            range,
+            errors,
+            key_present,
+            type_form_context,
+            &mut aliases,
+        )
+    }
+
+    fn subscript_infer_for_type_with_key_present_inner(
+        &self,
+        base: &Type,
+        slice: &Expr,
+        range: TextRange,
+        errors: &ErrorCollector,
+        key_present: bool, // true if the key is definitely known to be present
+        type_form_context: TypeFormContext<'_>,
+        aliases: &mut SmallSet<TypeAliasData>,
     ) -> Type {
         let xs = Ast::unpack_slice(slice);
         let slice_ty = LazyCell::new(|| self.expr_infer(slice, errors));
@@ -3252,6 +3427,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     self.proxy_method_subscript_infer(cls, xs, range, errors)
                 }
+                Type::ClassDef(ref cls) if self.is_map_int_tuples_class(cls) =>
+                {
+                    // Normal class subscripts are generic specializations. This experimental
+                    // shape extension instead reduces its type lambda eagerly, leaving an
+                    // ordinary tuple type for the rest of the checker.
+                    self.heap.mk_type_of(self.parse_map_int_tuples(
+                        xs,
+                        range,
+                        type_form_context,
+                        errors,
+                    ))
+                }
                 Type::ClassDef(ref cls)
                     if let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = slice
                         && self.get_enum_from_class(cls).is_some() =>
@@ -3299,7 +3486,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let Type::Quantified(quantified) = *f else { unreachable!("guarded by matches! above") };
                     let quantified = *quantified;
                     let base_display_ty =
-                        self.heap.mk_type(self.heap.mk_quantified(quantified.clone()));
+                        self.heap.mk_type_of(self.heap.mk_quantified(quantified.clone()));
                     if self.is_restricted_to_enum_class_def_type(&quantified) {
                         if self.is_subset_eq(
                             &self.expr_check(slice, None, errors),
@@ -3427,12 +3614,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     )
                 }
                 // Tensor indexing: tensor[0] reduces dimensionality
-                Type::ShapedArray(ref shaped_array_type) => {
+                Type::ShapedArray(ref shaped_array_type)
+                    if self.uses_builtin_shaped_array_indexing(
+                        shaped_array_type.base_class.class_object(),
+                    ) =>
+                {
                     self.infer_shaped_array_index(shaped_array_type, slice, range, errors)
                 }
+                // Shaped arrays that opt out of built-in indexing use their declared method.
+                Type::ShapedArray(_) => self.call_method_or_error(
+                    &base,
+                    &dunder::GETITEM,
+                    range,
+                    &[CallArg::expr(slice)],
+                    &[],
+                    errors,
+                    Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
+                ),
                 // Shaped arrays that have not gone through annotation
                 // canonicalization still use tensor indexing logic.
-                Type::ClassType(ref cls) if self.is_shaped_array_class(cls.class_object()) => {
+                Type::ClassType(ref cls)
+                    if self.uses_builtin_shaped_array_indexing(cls.class_object()) =>
+                {
                     let shaped_array_type = self.shaped_array_classtype_to_shaped_array_type(cls);
                     self.infer_shaped_array_index(&shaped_array_type, slice, range, errors)
                 }
@@ -3510,13 +3713,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         }
                     }
-                    let result = self.subscript_infer_for_type_with_key_present(
+                    let result = self.subscript_infer_for_type_with_key_present_inner(
                         &schema.underlying_type(),
                         slice,
                         range,
                         errors,
                         key_present,
                         type_form_context,
+                        aliases,
                     );
                     // Preserve the stub's Series class when attaching an element dtype.
                     match (column_dtype, result) {
@@ -3532,45 +3736,49 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         (_, result) => result,
                     }
                 }
-                Type::Series(schema) => self.subscript_infer_for_type_with_key_present(
+                Type::Series(schema) => self.subscript_infer_for_type_with_key_present_inner(
                     &schema.underlying_type(),
                     slice,
                     range,
                     errors,
                     key_present,
                     type_form_context,
+                    aliases,
                 ),
                 Type::Quantified(ref q) if q.is_type_var() && q.restriction().is_restricted() => {
                     match q.restriction() {
                         Restriction::Bound(bound) => self
-                            .subscript_infer_for_type_with_key_present(
+                            .subscript_infer_for_type_with_key_present_inner(
                                 bound,
                                 slice,
                                 range,
                                 errors,
                                 key_present,
                                 type_form_context,
+                                aliases,
                             ),
                         Restriction::Constraints(constraints) => {
                             self.unions(constraints.map(|constraint| {
-                                self.subscript_infer_for_type_with_key_present(
+                                self.subscript_infer_for_type_with_key_present_inner(
                                     constraint,
                                     slice,
                                     range,
                                     errors,
                                     key_present,
                                     type_form_context,
+                                    aliases,
                                 )
                             }))
                         }
-                        Restriction::Flag(domain) => self
-                            .subscript_infer_for_type_with_key_present(
-                                &domain.as_type(self.stdlib, self.heap),
+                        Restriction::ShapeExtension(extension) => self
+                            .subscript_infer_for_type_with_key_present_inner(
+                                &extension.upper_bound(self.stdlib, self.heap),
                                 slice,
                                 range,
                                 errors,
                                 key_present,
                                 type_form_context,
+                                aliases,
                             ),
                         Restriction::Unrestricted => {
                             unreachable!("restricted TypeVar cannot be unrestricted")
@@ -3619,7 +3827,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         let fields = self.typed_dict_fields(&typed_dict);
                                         if let Some(suggestion) = best_suggestion(
                                             &key_name,
-                                            fields.keys().map(|candidate| (candidate, 0usize)),
+                                            fields
+                                                .keys()
+                                                .map(|candidate| Candidate::measured(candidate, 0)),
                                         ) {
                                             builder = builder.with_detail(format!(
                                                 "Did you mean `{suggestion}`?"
@@ -3657,14 +3867,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     })
                 }
-                Type::UntypedAlias(ta) => self.subscript_infer_for_type_with_key_present(
-                    &self.untype_alias(&ta),
-                    slice,
-                    range,
-                    errors,
-                    key_present,
-                    type_form_context,
-                ),
+                Type::UntypedAlias(ta) => {
+                    // Recursive aliases can contain a mapping whose value is the alias itself.
+                    // A subscript on that value cannot be made more precise without expanding
+                    // the alias again, so stop the cycle with an implicit Any.
+                    if !aliases.insert((*ta).clone()) {
+                        self.heap.mk_any_implicit()
+                    } else {
+                        let result = self.subscript_infer_for_type_with_key_present_inner(
+                            &self.untype_alias(&ta),
+                            slice,
+                            range,
+                            errors,
+                            key_present,
+                            type_form_context,
+                            aliases,
+                        );
+                        aliases.shift_remove(&*ta);
+                        result
+                    }
+                }
                 t => self.error(
                     errors,
                     range,
@@ -3894,7 +4116,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub(crate) fn shaped_array_shape_arg_index(&self, cls: &ClassType) -> Option<usize> {
         let shape_param = self.shaped_array_shape_for_class_type(cls)?;
-        self.get_class_tparams(cls.class_object())
+        self.get_class_tparams(cls.class_object())?
             .iter()
             .position(|param| param == &shape_param)
     }
@@ -3906,7 +4128,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Some(shape_arg)
     }
 
-    pub(crate) fn shaped_array_shape_arg_to_shape(&self, shape_arg: &Type) -> Option<IntTuple> {
+    pub(crate) fn shape_arg_to_int_tuple(&self, shape_arg: &Type) -> Option<IntTuple> {
         IntTuple::from_shape_arg_type(shape_arg)
             .or_else(|| tuple_carrier_to_shape(shape_arg))
             .or_else(|| {
@@ -3916,7 +4138,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ => return None,
                 };
                 let int_type = self.stdlib.int().clone().to_type();
-                Self::is_int_tuple_carrier_bound(&upper_bound, &int_type)
+                is_int_tuple_bound(&upper_bound, &int_type)
                     .then(|| IntTuple::unpacked(Vec::new(), shape_arg.clone(), Vec::new()))
             })
     }
@@ -3934,6 +4156,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let shape_idx = self
             .get_class_tparams(cls.class_object())
             .iter()
+            .flat_map(|tparams| tparams.iter())
             .position(|param| param == &shape_param)
             .expect("shaped-array metadata should refer to a class type parameter");
         let mut shape_arg = cls
@@ -3946,7 +4169,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         match shape_param.kind() {
             QuantifiedKind::TypeVar | QuantifiedKind::IntVar => {
                 let shape = self
-                    .shaped_array_shape_arg_to_shape(&shape_arg)
+                    .shape_arg_to_int_tuple(&shape_arg)
                     .unwrap_or_else(IntTuple::shapeless);
                 let mut base_class = cls.clone();
                 let shape_arg = base_class
@@ -4042,17 +4265,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// `Tensor[Batch, Channels + 1, 3]` the dimension expressions are the type
     /// variable `Batch`, the arithmetic expression `Channels + 1`, and the
     /// integer literal `3`. Returns the `Type` the dimension resolves to, or
-    /// `None` (after emitting an error) if it is not a valid dimension.
-    fn parse_dimension_expr(&self, expr: &Expr, errors: &ErrorCollector) -> Option<Type> {
-        self.parse_dimension_expr_with_context(expr, errors, DimensionExprContext::Bare)
-    }
-
+    /// an error (after emitting a diagnostic) if it is not a valid dimension.
     fn parse_dimension_expr_with_context(
         &self,
         expr: &Expr,
         errors: &ErrorCollector,
         context: DimensionExprContext,
-    ) -> Option<Type> {
+        type_form_context: TypeFormContext<'_>,
+    ) -> Result<Type, DimensionExprError> {
         // shape_extensions.D[...] and D(...) are runtime-only wrappers that
         // let Python evaluate arithmetic on PEP 695 type variables.
         match expr {
@@ -4061,7 +4281,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if let Type::ClassDef(ref cls) = base
                     && self.is_shape_arith_wrapper_class(cls)
                 {
-                    return self.parse_dimension_expr_with_context(&x.slice, errors, context);
+                    let operand = match x.slice.as_ref() {
+                        Expr::Tuple(tuple) if tuple.elts.len() == 1 => &tuple.elts[0],
+                        Expr::Tuple(tuple) => {
+                            self.error(
+                                errors,
+                                expr.range(),
+                                ErrorKind::InvalidAnnotation,
+                                format!("Expected 1 argument for `D`, got {}", tuple.elts.len()),
+                            );
+                            return Err(DimensionExprError::Invalid);
+                        }
+                        operand => operand,
+                    };
+                    return self.parse_dimension_expr_with_context(
+                        operand,
+                        errors,
+                        context,
+                        type_form_context,
+                    );
+                }
+                if context.allows_explicit_int_wrapper()
+                    && matches!(base, Type::ClassDef(ref cls) if self.is_int_class(cls))
+                {
+                    let wrapper_errors = self.error_collector();
+                    let wrapped = self.expr_untype(expr, type_form_context, &wrapper_errors);
+                    errors.extend(wrapper_errors);
+                    return match wrapped {
+                        Type::Int(_) => Ok(wrapped),
+                        Type::Any(AnyStyle::Explicit | AnyStyle::Implicit) => Ok(gradual_size()),
+                        _ => Err(DimensionExprError::InvalidExplicitIntWrapper),
+                    };
                 }
             }
             Expr::Call(ExprCall {
@@ -4076,6 +4326,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             &arguments.args[0],
                             errors,
                             context,
+                            type_form_context,
                         );
                     }
                     self.error(
@@ -4095,7 +4346,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             )
                         },
                     );
-                    return None;
+                    return Err(DimensionExprError::Invalid);
                 }
             }
             _ => {}
@@ -4110,7 +4361,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ErrorKind::InvalidAnnotation,
                     "String literals are not valid tensor dimensions".to_owned(),
                 );
-                None
+                Err(DimensionExprError::Invalid)
             }
             // Number literal: concrete dimension
             Expr::NumberLiteral(ExprNumberLiteral { value, .. }) => match value {
@@ -4118,7 +4369,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if let Some(value) = int_val.as_i64() {
                         // Allow any integer value during parsing - validation happens later
                         // This allows expressions like N + 0 where 0 is part of an expression
-                        Some(self.heap.mk_int(Int::literal(value)))
+                        Ok(self.heap.mk_int(Int::literal(value)))
                     } else {
                         self.error(
                             errors,
@@ -4126,7 +4377,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ErrorKind::InvalidAnnotation,
                             "Tensor shape dimension too large".to_owned(),
                         );
-                        None
+                        Err(DimensionExprError::Invalid)
                     }
                 }
                 _ => {
@@ -4137,7 +4388,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         "Tensor shape dimensions must be integers, not floats or complex numbers"
                             .to_owned(),
                     );
-                    None
+                    Err(DimensionExprError::Invalid)
                 }
             },
             // Name expression: could be a type variable
@@ -4148,9 +4399,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Type::ClassDef(cls) if cls.has_toplevel_qname("typing", "Any") => {
                         // typing.Any in a type annotation position (e.g., Tensor[16, Any])
                         // Use Explicit since the user wrote Any explicitly
-                        Some(Type::Any(AnyStyle::Explicit))
+                        Ok(Type::Any(AnyStyle::Explicit))
                     }
-                    Type::ClassDef(cls) if cls.is_builtin("int") => Some(gradual_size()),
+                    Type::ClassDef(cls) if cls.is_builtin("int") => Ok(gradual_size()),
+                    _ if context.allows_explicit_int_wrapper()
+                        && let Some(dimension) = type_to_dim(&expr_type) =>
+                    {
+                        Ok(self.heap.mk_int(dimension))
+                    }
                     _ => {
                         match self.untype_opt_with_context(
                             expr_type.clone(),
@@ -4158,11 +4414,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             errors,
                             UntypeContext::SymbolicInt(context.error_context()),
                         ) {
-                            Some(Type::Quantified(q)) if q.kind() == QuantifiedKind::IntVar => {
-                                Some(Type::Quantified(q))
+                            Some(ty)
+                                if context.rejects_raw_int_var()
+                                    && match &ty {
+                                        Type::Quantified(q) => q.kind() == QuantifiedKind::IntVar,
+                                        Type::TypeVar(type_var) => {
+                                            type_var.kind() == QuantifiedKind::IntVar
+                                        }
+                                        _ => false,
+                                    } =>
+                            {
+                                Err(DimensionExprError::RawIntVar {
+                                    range: expr.range(),
+                                    ty,
+                                })
                             }
-                            Some(ty @ Type::TypeVar(_)) => Some(ty),
-                            Some(ty) if ty.is_error() => Some(ty),
+                            Some(Type::Quantified(q)) if q.kind() == QuantifiedKind::IntVar => {
+                                Ok(Type::Quantified(q))
+                            }
+                            Some(ty @ Type::TypeVar(_)) => Ok(ty),
+                            Some(ty) if ty.is_error() => Ok(ty),
                             _ => {
                                 self.error(
                                     errors,
@@ -4173,7 +4444,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         self.for_display(expr_type)
                                     ),
                                 );
-                                None
+                                Err(DimensionExprError::Invalid)
                             }
                         }
                     }
@@ -4184,12 +4455,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let inner = self.parse_dimension_expr_with_context(
                     &x.operand,
                     errors,
-                    DimensionExprContext::Arithmetic,
+                    context.operand(),
+                    type_form_context,
                 )?;
-                Some(
-                    self.heap
-                        .mk_int(Int::sub(self.heap.mk_int(Int::Literal(0)), inner)),
-                )
+                Ok(self
+                    .heap
+                    .mk_int(Int::sub(self.heap.mk_int(Int::Literal(0)), inner)))
             }
             // Binary operations: N + M, N * M, etc.
             Expr::BinOp(ExprBinOp {
@@ -4211,18 +4482,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 op.as_str()
                             ),
                         );
-                        return None;
+                        return Err(DimensionExprError::Invalid);
                     }
                 };
                 let left_dim = self.parse_dimension_expr_with_context(
                     left,
                     errors,
-                    DimensionExprContext::Arithmetic,
+                    context.operand(),
+                    type_form_context,
                 )?;
                 let right_dim = self.parse_dimension_expr_with_context(
                     right,
                     errors,
-                    DimensionExprContext::Arithmetic,
+                    context.operand(),
+                    type_form_context,
                 )?;
                 if *op == Operator::Pow {
                     let right_dim_canon = canonicalize(right_dim.clone());
@@ -4235,13 +4508,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ErrorKind::InvalidAnnotation,
                             "Tensor shape exponent must not be negative".to_owned(),
                         );
-                        return None;
+                        return Err(DimensionExprError::Invalid);
                     }
-                    return Some(canonicalize(
+                    return Ok(canonicalize(
                         self.heap.mk_int(Int::pow(left_dim, right_dim_canon)),
                     ));
                 }
-                Some(self.heap.mk_int(make_int(left_dim, right_dim)))
+                Ok(self.heap.mk_int(make_int(left_dim, right_dim)))
             }
             // Anything else is an error
             _ => {
@@ -4255,7 +4528,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.for_display(expr_type)
                     ),
                 );
-                None
+                Err(DimensionExprError::Invalid)
             }
         }
     }
@@ -4268,29 +4541,69 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Option<Vec<Type>> {
+        self.parse_dimension_list_with_context(
+            args,
+            type_form_context,
+            errors,
+            DimensionExprContext::Bare,
+        )
+        .ok()
+    }
+
+    /// Parse an `Int` or `Int | None` shape-DSL argument, where explicit `Int[...]`
+    /// wrappers are valid arithmetic operands.
+    pub(super) fn parse_dimension_list_for_type_shape_dsl_int_argument(
+        &self,
+        args: &[Expr],
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+    ) -> Result<Vec<Type>, DimensionExprError> {
+        self.parse_dimension_list_with_context(
+            args,
+            type_form_context,
+            errors,
+            DimensionExprContext::DslArgument,
+        )
+    }
+
+    fn parse_dimension_list_with_context(
+        &self,
+        args: &[Expr],
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+        context: DimensionExprContext,
+    ) -> Result<Vec<Type>, DimensionExprError> {
         let mut dims = Vec::new();
         for arg in args {
             let dim = if let Expr::Call(call) = arg
                 && type_form_context.allows_type_level_dsl_call()
             {
                 let callee = self.expr_infer(&call.func, &self.error_swallower());
-                let ty = self.parse_type_level_dsl_call(call, &callee, type_form_context, errors);
-                if let Type::TypeLevelDslCall(call) = &ty
-                    && call.result_domain() != TypeShapeDslDomain::Int
-                {
-                    self.error(
-                        errors,
-                        arg.range(),
-                        ErrorKind::InvalidAnnotation,
-                        "Expected a type-level shape DSL call with an `Int` result in a shape dimension, got an `IntTuple` result"
-                            .to_owned(),
-                    );
-                    Type::any_error()
+                if matches!(
+                    callee,
+                    Type::ClassDef(ref cls) if self.is_shape_arith_wrapper_class(cls)
+                ) {
+                    self.parse_dimension_expr_with_context(arg, errors, context, type_form_context)?
                 } else {
-                    ty
+                    let ty =
+                        self.parse_type_level_dsl_call(call, &callee, type_form_context, errors);
+                    if let Type::TypeLevelDslCall(call) = &ty
+                        && call.result_domain() != Some(TypeShapeDslDomain::Int)
+                    {
+                        self.error(
+                            errors,
+                            arg.range(),
+                            ErrorKind::InvalidAnnotation,
+                            "Expected a type-level shape DSL call with an `Int` result in a shape dimension, got an `IntTuple` result"
+                                .to_owned(),
+                        );
+                        Type::any_error()
+                    } else {
+                        ty
+                    }
                 }
             } else {
-                self.parse_dimension_expr(arg, errors)?
+                self.parse_dimension_expr_with_context(arg, errors, context, type_form_context)?
             };
             let simplified = canonicalize(dim);
 
@@ -4304,12 +4617,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     ErrorKind::InvalidAnnotation,
                     format!("Tensor shape dimension must be positive, got {}", value),
                 );
-                return None;
+                return Err(DimensionExprError::Invalid);
             }
 
             dims.push(simplified);
         }
-        Some(dims)
+        Ok(dims)
     }
 
     pub fn parse_assert_shape_expr(
@@ -4388,7 +4701,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let metadata = self.get_metadata_for_class(cls);
         let class_ty = Type::ClassDef(cls.dupe());
-        let allow_dunder_lookup = self.get_class_tparams(cls).is_empty()
+        let allow_dunder_lookup = self
+            .get_class_tparams(cls)
+            .as_ref()
+            .is_none_or(|tparams| tparams.is_empty())
             && !metadata.has_base_any()
             && !metadata.is_new_type();
         let class_getitem_result = if allow_dunder_lookup {
@@ -4441,7 +4757,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Vec<Type> {
         let tparams = self.get_class_tparams(cls);
-        self.parse_type_args_for_tparams(args, tparams.as_vec(), type_form_context, errors)
+        let tparams: &[Quantified] = tparams.map_or(&[], |tparams| tparams.as_vec());
+        self.parse_type_args_for_tparams(args, tparams, type_form_context, errors)
     }
 
     fn parse_type_args_for_tparams(
@@ -4489,10 +4806,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     if param.kind() == QuantifiedKind::TypeVar
                         && let Expr::List(ExprList { elts, .. }) = arg
-                        && Self::is_int_tuple_carrier_bound(
-                            &param.upper_bound(self.stdlib, self.heap),
-                            &int_type,
-                        )
+                        && is_int_tuple_bound(&param.upper_bound(self.stdlib, self.heap), &int_type)
                     {
                         return self
                             .parse_int_tuple_shape_args(elts, type_argument_context, errors)
@@ -4505,24 +4819,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect()
     }
 
-    /// Returns whether `ty` is the normalized upper bound for a bare `IntTuple`
-    /// carrier `TypeVar`.
-    ///
-    /// Other tuple bounds are ordinary type bounds and must not enable compact
-    /// shape-list parsing.
-    fn is_int_tuple_carrier_bound(ty: &Type, int_type: &Type) -> bool {
-        match ty {
-            Type::IntTuple(_) => true,
-            Type::Tuple(Tuple::Unbounded(inner)) => inner.as_ref() == int_type,
-            _ => false,
-        }
-    }
-
     /// Returns whether `ty` can legally be the argument inside `Elements[...]`.
     ///
-    /// Valid carriers are concrete tuple types, type aliases (which normalize to
+    /// Valid arguments are concrete tuple types, type aliases (which normalize to
     /// tuples), and `TypeVar`s whose upper bound is an `IntTuple` (i.e., a tuple type).
-    fn is_int_tuple_elements_carrier(&self, ty: &Type) -> bool {
+    fn is_int_tuple_elements_argument(&self, ty: &Type) -> bool {
         let upper_bound = match ty {
             Type::Tuple(_) | Type::IntTuple(_) | Type::UntypedAlias(_) => return true,
             Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
@@ -4530,14 +4831,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => return false,
         };
         let int_type = self.stdlib.int().clone().to_type();
-        Self::is_int_tuple_carrier_bound(&upper_bound, &int_type)
+        is_int_tuple_bound(&upper_bound, &int_type)
     }
 
     fn is_shape_elements_class(&self, cls: &Class) -> bool {
         cls.has_toplevel_qname("shape_extensions", "Elements")
     }
 
-    /// Parse `Elements[S]` in `*Elements[S]`, returning the bare `S` carrier.
+    /// Parse `Elements[S]` in `*Elements[S]`, returning the bare `S` argument.
     ///
     /// `Elements` is the conceptual inverse of `tuple[Unpack[Ts]]`: whereas
     /// `tuple[Unpack[Ts]]` wraps a `TypeVarTuple` into a concrete tuple type,
@@ -4563,8 +4864,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         match Ast::unpack_slice(&subscript.slice) {
             [arg] => {
-                let carrier = self.expr_untype(arg, TypeFormContext::type_argument(), errors);
-                match carrier {
+                let argument = self.expr_untype(arg, TypeFormContext::type_argument(), errors);
+                match argument {
                     Type::IntTuple(shape) => match shape.view() {
                         IntTupleView::Concrete(_) => Ok(Some(shape_to_tuple_carrier(&shape))),
                         IntTupleView::Gradual => Ok(Some(self.bare_int_tuple_carrier())),
@@ -4573,21 +4874,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 errors,
                                 arg.range(),
                                 ErrorKind::InvalidAnnotation,
-                                "`Elements[...]` only supports concrete `IntTuple[...]` values or shape carriers"
+                                "`Elements[...]` cannot expand a symbolic-rank `IntTuple[...]` value"
                                     .to_owned(),
                             );
                             Err(())
                         }
                     },
-                    carrier if self.is_int_tuple_elements_carrier(&carrier) => Ok(Some(carrier)),
-                    carrier => {
+                    argument if self.is_int_tuple_elements_argument(&argument) => {
+                        Ok(Some(argument))
+                    }
+                    argument => {
                         self.error(
                             errors,
                             arg.range(),
                             ErrorKind::InvalidAnnotation,
                             format!(
-                                "`Elements[...]` requires an `IntTuple` carrier, got `{}`",
-                                self.for_display(carrier)
+                                "`Elements[...]` requires an `IntTuple` or integer tuple, got `{}`",
+                                self.for_display(argument)
                             ),
                         );
                         Err(())
@@ -4698,6 +5001,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tparams = self.get_class_tparams(cls);
         let shape_idx = tparams
             .iter()
+            .flat_map(|tparams| tparams.iter())
             .position(|param| param == &shape_param)
             .expect("shaped-array metadata should refer to a class type parameter");
         match shape_param.kind() {
@@ -4709,7 +5013,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 unreachable!("shaped-array metadata validation rejects ParamSpec shape parameters")
             }
         }
-        let validate_shape_slot = shape_idx < args.len() && args.len() <= tparams.len();
+        let validate_shape_slot = shape_idx < args.len()
+            && args.len() <= tparams.as_ref().map_or(0, |tparams| tparams.len());
         let shape_param_accepts_int_tuple = matches!(
             shape_param.upper_bound(self.stdlib, self.heap),
             Type::IntTuple(_)
@@ -4756,7 +5061,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 ty
                             }
                             Type::TypeLevelDslCall(call) if i == shape_idx => {
-                                if call.result_domain() == TypeShapeDslDomain::IntTuple {
+                                if call.result_domain() == Some(TypeShapeDslDomain::IntTuple) {
                                     let ty = Type::TypeLevelDslCall(call);
                                     shape_arg_carrier = Some(ty);
                                     shape_validation_arg(
@@ -4821,7 +5126,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             })
             .collect();
-        if args.len() <= tparams.len() && shape_arg_failed_to_parse {
+        if args.len() <= tparams.as_ref().map_or(0, |tparams| tparams.len())
+            && shape_arg_failed_to_parse
+        {
             return Type::any_error();
         }
         let mut base_class =
@@ -4831,17 +5138,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             *shape_arg = carrier;
         }
-        if matches!(
-            base_class.targs().as_slice().get(shape_idx),
-            Some(Type::TypeLevelDslCall(_))
-        ) {
+        if let Some(Type::TypeLevelDslCall(call)) = base_class.targs().as_slice().get(shape_idx)
+            && call.result_domain() == Some(TypeShapeDslDomain::IntTuple)
+        {
             return Type::ClassType(base_class);
         }
         self.shaped_array_classtype_to_shaped_array_type(&base_class)
             .to_type()
     }
 
-    fn parse_int_tuple_type(
+    pub(crate) fn parse_int_tuple_type(
         &self,
         args: &[Expr],
         type_form_context: TypeFormContext<'_>,

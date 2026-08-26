@@ -18,27 +18,22 @@ fn is_venv_root(dir: &Path) -> bool {
 }
 
 #[cfg(windows)]
-fn interpreter_candidates(root: &Path) -> [PathBuf; 2] {
-    [
-        root.join("Scripts").join("python.exe"),
-        root.join("python.exe"),
-    ]
+fn interpreter_path(root: &Path) -> PathBuf {
+    root.join("Scripts").join("python.exe")
 }
 
 #[cfg(not(windows))]
-fn interpreter_candidates(root: &Path) -> [PathBuf; 4] {
-    [
-        root.join("bin").join("python3"),
-        root.join("bin").join("python"),
-        root.join("python3"),
-        root.join("python"),
-    ]
+fn interpreter_path(root: &Path) -> PathBuf {
+    root.join("bin").join("python")
 }
 
+/// Every environment builder writes the platform's canonical interpreter path.
+/// Version-suffixed names such as `python3` and `python3.12` are additional names
+/// for that same interpreter, never the only one, so an environment lacking the
+/// canonical path was modified after creation and needs a configured interpreter.
 fn find_interpreter(root: &Path) -> Option<PathBuf> {
-    interpreter_candidates(root)
-        .into_iter()
-        .find(|path| path.is_file())
+    let interpreter = interpreter_path(root);
+    interpreter.is_file().then_some(interpreter)
 }
 
 /// Find the interpreter in a known virtual environment root.
@@ -80,17 +75,20 @@ mod tests {
 
     use super::*;
 
-    fn interp_name(version_suffix: &str) -> String {
-        let windows_suffix = if cfg!(windows) { ".exe" } else { "" };
-        format!("python{version_suffix}{windows_suffix}")
+    fn interp_name() -> &'static str {
+        if cfg!(windows) {
+            "python.exe"
+        } else {
+            "python"
+        }
     }
 
     fn interp_dir() -> &'static str {
         if cfg!(windows) { "Scripts" } else { "bin" }
     }
 
-    fn interp_path(root: &Path, version_suffix: &str) -> PathBuf {
-        root.join(interp_dir()).join(interp_name(version_suffix))
+    fn interp_path(root: &Path) -> PathBuf {
+        root.join(interp_dir()).join(interp_name())
     }
 
     #[test]
@@ -110,55 +108,44 @@ mod tests {
 
     #[test]
     fn test_find_standard_venv_layout() {
-        fn test(version_suffix: &str) {
-            let tempdir = tempfile::tempdir().unwrap();
-            let root = tempdir.path();
-            let interp_name = interp_name(version_suffix);
-            TestPath::setup_test_directory(
-                root,
-                vec![
-                    TestPath::file("pyrefly.toml"),
-                    TestPath::dir("foo", vec![TestPath::file("bar.py")]),
-                    TestPath::dir(
-                        ".venv",
-                        vec![
-                            TestPath::file(CONFIG_FILE),
-                            TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
-                            // we should never find this first
-                            TestPath::file(&interp_name),
-                        ],
-                    ),
-                ],
-            );
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file("pyrefly.toml"),
+                TestPath::dir("foo", vec![TestPath::file("bar.py")]),
+                TestPath::dir(
+                    ".venv",
+                    vec![
+                        TestPath::file(CONFIG_FILE),
+                        TestPath::dir(interp_dir(), vec![TestPath::file(interp_name())]),
+                        // we should never find this first
+                        TestPath::file(interp_name()),
+                    ],
+                ),
+            ],
+        );
 
-            assert_eq!(
-                find(root),
-                Some(interp_path(&root.join(".venv"), version_suffix))
-            );
-        }
-
-        test("");
-        #[cfg(not(windows))]
-        test("3");
+        assert_eq!(find(root), Some(interp_path(&root.join(".venv"))));
     }
 
     #[test]
     fn test_find_env_directory() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        let interp_name = interp_name("");
         TestPath::setup_test_directory(
             root,
             vec![TestPath::dir(
                 "env",
                 vec![
                     TestPath::file(CONFIG_FILE),
-                    TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
+                    TestPath::dir(interp_dir(), vec![TestPath::file(interp_name())]),
                 ],
             )],
         );
 
-        assert_eq!(find(root), Some(interp_path(&root.join("env"), "")));
+        assert_eq!(find(root), Some(interp_path(&root.join("env"))));
     }
 
     #[cfg(unix)]
@@ -168,7 +155,6 @@ mod tests {
 
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        let interp_name = interp_name("3");
         let project_root = root.join("project");
         let real_venv = root.join("real-venv");
         TestPath::setup_test_directory(
@@ -178,7 +164,7 @@ mod tests {
                     "real-venv",
                     vec![
                         TestPath::file(CONFIG_FILE),
-                        TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
+                        TestPath::dir(interp_dir(), vec![TestPath::file(interp_name())]),
                     ],
                 ),
                 TestPath::dir("project", vec![TestPath::file("pyrefly.toml")]),
@@ -188,41 +174,17 @@ mod tests {
 
         assert_eq!(
             find(&project_root),
-            Some(interp_path(&project_root.join(".venv"), "3")),
+            Some(interp_path(&project_root.join(".venv"))),
         );
     }
 
     #[test]
-    fn test_find_nonstandard_venv_layout() {
-        fn test(python_version: &str) {
-            let tempdir = tempfile::tempdir().unwrap();
-            let root = tempdir.path();
-            let interp_name = interp_name(python_version);
-            TestPath::setup_test_directory(
-                root,
-                vec![
-                    TestPath::file("pyrefly.toml"),
-                    TestPath::dir("foo", vec![TestPath::file("bar.py")]),
-                    TestPath::dir(
-                        ".venv",
-                        vec![TestPath::file(CONFIG_FILE), TestPath::file(&interp_name)],
-                    ),
-                ],
-            );
-
-            assert_eq!(find(root), Some(root.join(".venv").join(interp_name)),);
-        }
-
-        test("");
-        #[cfg(not(windows))]
-        test("3");
-    }
-
-    #[test]
-    fn test_find_missing_config_file() {
+    fn test_find_ignores_interpreter_beside_config() {
+        // No environment builder puts the interpreter next to `pyvenv.cfg`, so an
+        // environment shaped like this has been modified and must be configured
+        // explicitly rather than guessed at.
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        let interp_name = interp_name("");
         TestPath::setup_test_directory(
             root,
             vec![
@@ -230,10 +192,56 @@ mod tests {
                 TestPath::dir("foo", vec![TestPath::file("bar.py")]),
                 TestPath::dir(
                     ".venv",
-                    vec![
-                        TestPath::file(&interp_name),
-                        TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
-                    ],
+                    vec![TestPath::file(CONFIG_FILE), TestPath::file(interp_name())],
+                ),
+            ],
+        );
+
+        assert_eq!(find(root), None);
+    }
+
+    #[test]
+    fn test_find_ignores_version_suffixed_interpreter() {
+        // A pruned environment keeping only `python3` or `python3.12` needs a
+        // configured interpreter; we do not enumerate version-suffixed names.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let suffix = if cfg!(windows) { ".exe" } else { "" };
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                ".venv",
+                vec![
+                    TestPath::file(CONFIG_FILE),
+                    TestPath::dir(
+                        interp_dir(),
+                        vec![
+                            TestPath::file(&format!("python3{suffix}")),
+                            TestPath::file(&format!("python3.12{suffix}")),
+                        ],
+                    ),
+                ],
+            )],
+        );
+
+        assert_eq!(find(root), None);
+    }
+
+    #[test]
+    fn test_find_missing_config_file() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file("pyrefly.toml"),
+                TestPath::dir("foo", vec![TestPath::file("bar.py")]),
+                TestPath::dir(
+                    ".venv",
+                    vec![TestPath::dir(
+                        interp_dir(),
+                        vec![TestPath::file(interp_name())],
+                    )],
                 ),
             ],
         );
@@ -245,7 +253,6 @@ mod tests {
     fn test_find_searches_ancestor_roots() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        let interp_name = interp_name("");
         let project_root = root.join("project");
         TestPath::setup_test_directory(
             root,
@@ -254,7 +261,7 @@ mod tests {
                     ".venv",
                     vec![
                         TestPath::file(CONFIG_FILE),
-                        TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
+                        TestPath::dir(interp_dir(), vec![TestPath::file(interp_name())]),
                     ],
                 ),
                 TestPath::dir(
@@ -264,17 +271,13 @@ mod tests {
             ],
         );
 
-        assert_eq!(
-            find(&project_root),
-            Some(interp_path(&root.join(".venv"), "")),
-        );
+        assert_eq!(find(&project_root), Some(interp_path(&root.join(".venv"))),);
     }
 
     #[test]
     fn test_find_prefers_nearest_ancestor_root() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        let interp_name = interp_name("");
         let project_root = root.join("project");
         let start_path = project_root.join("src");
         TestPath::setup_test_directory(
@@ -284,7 +287,7 @@ mod tests {
                     ".venv",
                     vec![
                         TestPath::file(CONFIG_FILE),
-                        TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
+                        TestPath::dir(interp_dir(), vec![TestPath::file(interp_name())]),
                     ],
                 ),
                 TestPath::dir(
@@ -294,7 +297,7 @@ mod tests {
                             ".venv",
                             vec![
                                 TestPath::file(CONFIG_FILE),
-                                TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
+                                TestPath::dir(interp_dir(), vec![TestPath::file(interp_name())]),
                             ],
                         ),
                         TestPath::dir("src", vec![TestPath::file("main.py")]),
@@ -307,7 +310,7 @@ mod tests {
         // The nearest ancestor with .venv is project/, not root/.
         assert_eq!(
             find(&start_path),
-            Some(interp_path(&project_root.join(".venv"), "")),
+            Some(interp_path(&project_root.join(".venv"))),
         );
     }
 
@@ -315,29 +318,27 @@ mod tests {
     fn test_find_active_venv_root() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        let interp_name = interp_name("");
         TestPath::setup_test_directory(
             root,
             vec![
                 TestPath::file(CONFIG_FILE),
-                TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
+                TestPath::dir(interp_dir(), vec![TestPath::file(interp_name())]),
             ],
         );
 
-        assert_eq!(find_active(root), Some(interp_path(root, "")));
+        assert_eq!(find_active(root), Some(interp_path(root)));
     }
 
     #[test]
     fn test_find_does_not_treat_ancestor_as_venv() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        let interp_name = interp_name("");
         let project_root = root.join("project");
         TestPath::setup_test_directory(
             root,
             vec![
                 TestPath::file(CONFIG_FILE),
-                TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
+                TestPath::dir(interp_dir(), vec![TestPath::file(interp_name())]),
                 TestPath::dir("project", vec![TestPath::file("main.py")]),
             ],
         );
@@ -349,7 +350,6 @@ mod tests {
     fn test_find_does_not_search_nonstandard_venv_names_at_start_path() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        let interp_name = interp_name("");
         TestPath::setup_test_directory(
             root,
             vec![
@@ -358,7 +358,7 @@ mod tests {
                     "custom-venv",
                     vec![
                         TestPath::file(CONFIG_FILE),
-                        TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
+                        TestPath::dir(interp_dir(), vec![TestPath::file(interp_name())]),
                     ],
                 ),
             ],
@@ -371,7 +371,6 @@ mod tests {
     fn test_find_does_not_search_nonstandard_venv_names_in_ancestors() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        let interp_name = interp_name("");
         let project_root = root.join("project");
         TestPath::setup_test_directory(
             root,
@@ -380,7 +379,7 @@ mod tests {
                     "custom-venv",
                     vec![
                         TestPath::file(CONFIG_FILE),
-                        TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
+                        TestPath::dir(interp_dir(), vec![TestPath::file(interp_name())]),
                     ],
                 ),
                 TestPath::dir("project", vec![TestPath::file("pyrefly.toml")]),
@@ -392,8 +391,6 @@ mod tests {
 
     #[test]
     fn test_find_does_not_search_nested_subdirectories() {
-        let interp_name = interp_name("");
-
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
         TestPath::setup_test_directory(
@@ -406,25 +403,8 @@ mod tests {
                         ".venv",
                         vec![
                             TestPath::file(CONFIG_FILE),
-                            TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
+                            TestPath::dir(interp_dir(), vec![TestPath::file(interp_name())]),
                         ],
-                    )],
-                ),
-            ],
-        );
-        assert_eq!(find(root), None);
-
-        let tempdir = tempfile::tempdir().unwrap();
-        let root = tempdir.path();
-        TestPath::setup_test_directory(
-            root,
-            vec![
-                TestPath::file("pyrefly.toml"),
-                TestPath::dir(
-                    "subdir",
-                    vec![TestPath::dir(
-                        ".venv",
-                        vec![TestPath::file(CONFIG_FILE), TestPath::file(&interp_name)],
                     )],
                 ),
             ],
@@ -436,7 +416,6 @@ mod tests {
     fn test_find_does_not_search_venv_beside_deep_source_tree() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        let interp_name = interp_name("");
         TestPath::setup_test_directory(
             root,
             vec![
@@ -452,7 +431,7 @@ mod tests {
                     "my-venv",
                     vec![
                         TestPath::file(CONFIG_FILE),
-                        TestPath::dir(interp_dir(), vec![TestPath::file(&interp_name)]),
+                        TestPath::dir(interp_dir(), vec![TestPath::file(interp_name())]),
                     ],
                 ),
             ],

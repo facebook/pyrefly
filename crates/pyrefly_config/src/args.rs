@@ -130,6 +130,38 @@ pub struct EnvironmentArgs {
 }
 
 impl EnvironmentArgs {
+    fn has_overrides(&self) -> bool {
+        let Self {
+            preset,
+            disable_project_excludes_heuristics,
+            search_path,
+            disable_search_path_heuristics,
+            enable_fallback_search_path,
+            python_version,
+            python_platform,
+            site_package_path,
+            conda_environment,
+            python_interpreter_path,
+            fallback_python_interpreter_name,
+            skip_interpreter_query,
+            typeshed_path,
+        } = self;
+
+        preset.is_some()
+            || disable_project_excludes_heuristics.is_some()
+            || search_path.is_some()
+            || disable_search_path_heuristics.is_some()
+            || enable_fallback_search_path.is_some()
+            || python_version.is_some()
+            || python_platform.is_some()
+            || site_package_path.is_some()
+            || conda_environment.is_some()
+            || python_interpreter_path.is_some()
+            || fallback_python_interpreter_name.is_some()
+            || *skip_interpreter_query
+            || typeshed_path.is_some()
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         fn validate_arg(arg_name: &str, paths: Option<&[PathBuf]>) -> anyhow::Result<()> {
             if let Some(paths) = paths {
@@ -246,6 +278,9 @@ pub struct ConfigOverrideArgs {
     /// related import errors.
     #[arg(long)]
     ignore_missing_imports: Option<Vec<String>>,
+    /// Replace specified third-party imports with typing.Any when no stubs or py.typed marker exist.
+    #[arg(long)]
+    replace_untyped_imports_with_any: Option<Vec<String>>,
     /// Whether to ignore type errors in generated code.
     #[arg(
         long,
@@ -265,6 +300,14 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     infer_with_first_use: Option<bool>,
+    /// Check every match statement for exhaustiveness instead of limiting checks to closed subject types.
+    #[arg(
+        long,
+        default_missing_value = "true",
+        require_equals = true,
+        num_args = 0..=1
+    )]
+    check_all_matches: Option<bool>,
     /// Whether to respect ignore files (.gitignore, .ignore, .git/exclude).
     #[arg(
         long,
@@ -382,6 +425,65 @@ pub struct ConfigOverrideArgs {
 }
 
 impl ConfigOverrideArgs {
+    /// Whether the invocation supplies any configuration overrides.
+    pub fn has_overrides(&self) -> bool {
+        let Self {
+            environment,
+            replace_imports_with_any,
+            ignore_missing_imports,
+            replace_untyped_imports_with_any,
+            ignore_errors_in_generated_code,
+            infer_with_first_use,
+            check_all_matches,
+            use_ignore_files,
+            untyped_def_behavior,
+            check_unannotated_defs,
+            infer_return_types,
+            permissive_ignores,
+            enabled_ignores,
+            error,
+            warn,
+            ignore,
+            info,
+            recursion_depth_limit,
+            recursion_overflow_handler,
+            pytorch_efficiency_lints,
+            tensor_shapes,
+            strict_callable_subtyping,
+            strict_partial_subtyping,
+            spec_compliant_overloads,
+            legacy_overload_expansion,
+            treat_all_caps_as_final,
+        } = self;
+
+        environment.has_overrides()
+            || replace_imports_with_any.is_some()
+            || ignore_missing_imports.is_some()
+            || replace_untyped_imports_with_any.is_some()
+            || ignore_errors_in_generated_code.is_some()
+            || infer_with_first_use.is_some()
+            || check_all_matches.is_some()
+            || use_ignore_files.is_some()
+            || untyped_def_behavior.is_some()
+            || check_unannotated_defs.is_some()
+            || infer_return_types.is_some()
+            || permissive_ignores.is_some()
+            || enabled_ignores.is_some()
+            || !error.is_empty()
+            || !warn.is_empty()
+            || !ignore.is_empty()
+            || !info.is_empty()
+            || recursion_depth_limit.is_some()
+            || recursion_overflow_handler.is_some()
+            || pytorch_efficiency_lints.is_some()
+            || tensor_shapes.is_some()
+            || strict_callable_subtyping.is_some()
+            || strict_partial_subtyping.is_some()
+            || spec_compliant_overloads.is_some()
+            || legacy_overload_expansion.is_some()
+            || treat_all_caps_as_final.is_some()
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         self.environment.validate()?;
         let ignored_errors = &self.ignore.iter().collect::<HashSet<_>>();
@@ -514,11 +616,22 @@ impl ConfigOverrideArgs {
                     .collect(),
             );
         }
+        if let Some(wildcards) = &self.replace_untyped_imports_with_any {
+            config.root.replace_untyped_imports_with_any = Some(
+                wildcards
+                    .iter()
+                    .filter_map(|x| ModuleWildcard::new(x).ok())
+                    .collect(),
+            );
+        }
         if let Some(x) = &self.ignore_errors_in_generated_code {
             config.root.ignore_errors_in_generated_code = Some(*x);
         }
         if let Some(x) = &self.infer_with_first_use {
             config.root.infer_with_first_use = Some(*x);
+        }
+        if let Some(x) = &self.check_all_matches {
+            config.root.check_all_matches = Some(*x);
         }
         if let Some(x) = &self.recursion_depth_limit {
             config.root.recursion_depth_limit = Some(*x);

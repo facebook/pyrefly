@@ -1541,8 +1541,11 @@ the non-convergence.
 
 Default severity: `warn`
 
-Pyrefly warns when a `match` statement over an `Enum` attempts to enumerate the members
-but forgets at least one case. Add the missing members or a default arm.
+Pyrefly warns when a `match` statement may fall through without matching a case. By
+default, this check applies to closed subject types such as enums, literal unions,
+`None`, `bool`, and non-subclassable classes. Set
+[`check-all-matches`](./configuration.mdx#check-all-matches) to check open-domain
+subjects as well. Add the missing cases or a default arm.
 
 ```python
 from enum import Enum
@@ -1848,6 +1851,16 @@ if f:
 # This is likely a mistake, as it's equivalent to `if True`.
 if "abc":
   ...
+```
+
+## regex
+
+This error is raised when Pyrefly can statically detect an invalid regular expression pattern.
+
+```python
+import re
+
+re.compile("(")  # missing ), unterminated subpattern [regex]
 ```
 
 ## reveal-type

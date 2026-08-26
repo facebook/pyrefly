@@ -170,6 +170,7 @@ impl<'a, 'b> SourceOrderVisitor<'a> for SuperMethodCallFinder<'b> {
 pub struct SelfAssignments {
     pub method_name: Name,
     pub instance_attributes: SmallMap<Name, InstanceAttribute>,
+    pub nn_module_registrations: SmallMap<Name, Vec<Expr>>,
 }
 
 /// Determine whether a function definition is annotated.
@@ -274,6 +275,7 @@ impl<'a> SelfAttrNames<'a> {
         Some(SelfAssignments {
             method_name: func_name.id.clone(),
             instance_attributes,
+            nn_module_registrations: SmallMap::new(),
         })
     }
 }
@@ -855,8 +857,15 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn function_def(&mut self, mut x: StmtFunctionDef, parent: &NestingContext) {
-        // This is to handle "def" with no func name after
+        // Parse-error recovery produces a nameless function (e.g. a `def` with no
+        // name, or a decorator with no definition after it). It defines nothing,
+        // but its decorators are still expressions that the static definitions pass
+        // has walked, so they need bindings for anything they define.
         if x.name.id.is_empty() {
+            self.ensure_and_bind_decorators(
+                mem::take(&mut x.decorator_list),
+                &mut Usage::NonPinningValue(None),
+            );
             return;
         }
         let func_name = x.name.clone();

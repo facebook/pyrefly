@@ -19,8 +19,10 @@ use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
+use crate::binding::binding::LambdaKind;
 use crate::binding::binding::ShapedArrayMetadata;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
 use crate::config::error_kind::ErrorKind;
 use crate::export::special::SpecialExport;
@@ -32,6 +34,15 @@ pub enum TypeParameterBound {
         domain: Option<Expr>,
         range: TextRange,
     },
+    ShapeIndex,
+}
+
+impl TypeParameterBound {
+    /// Selects value-expression inference while syntax is being bound. The resolved restriction
+    /// exposes the same policy later, after the bound has become a semantic `Restriction`.
+    pub fn infer_default_as_value(&self) -> bool {
+        matches!(self, Self::ShapeFlag { .. } | Self::ShapeIndex)
+    }
 }
 
 pub(super) struct ShapeFunctionMetadata {
@@ -40,6 +51,85 @@ pub(super) struct ShapeFunctionMetadata {
     pub uses_shape_dsl_ir_name: Option<ShortIdentifier>,
 }
 impl BindingsBuilder<'_> {
+    /// Binds the arguments of the experimental `shape_extensions.MapIntTuples` operation.
+    ///
+    /// The first argument's lambda parameter denotes a type rather than a runtime value. Record
+    /// that shape-specific meaning while import provenance is still available; all other
+    /// arguments follow ordinary type-expression binding.
+    pub(super) fn bind_map_int_tuples_arguments(
+        &mut self,
+        slice: &mut Expr,
+        mut tparams_builder: Option<&mut LegacyTParamCollector>,
+        in_string_literal: bool,
+        usage: &mut Usage,
+    ) {
+        let arguments = match slice {
+            Expr::Tuple(tuple) => tuple.elts.as_mut_slice(),
+            single => std::slice::from_mut(single),
+        };
+        for (index, argument) in arguments.iter_mut().enumerate() {
+            if index == 0 && argument.is_lambda_expr() {
+                self.with_semantic_checker(|semantic, context| {
+                    semantic.visit_expr(argument, context)
+                });
+                let lambda = argument
+                    .as_lambda_expr_mut()
+                    .expect("is_lambda_expr established that this is a lambda");
+                self.bind_lambda(lambda, usage, LambdaKind::TypeLevel);
+            } else {
+                self.ensure_type_impl(
+                    argument,
+                    tparams_builder.as_deref_mut(),
+                    in_string_literal,
+                    true,
+                    usage,
+                    false,
+                );
+            }
+        }
+    }
+
+    /// Recognizes a shape-extension class through import provenance or in its defining module.
+    ///
+    /// The local-name case is needed while binding `shape_extensions` itself: its class has no
+    /// import provenance, so we additionally require the module-level name to resolve to that
+    /// class definition. Consumers use `SpecialExport` provenance, including through aliases and
+    /// re-exports, rather than relying on a raw imported name.
+    fn is_shape_extensions_class_export_with_provenance(
+        &self,
+        expr: &Expr,
+        special: SpecialExport,
+        provenance: Option<SpecialExport>,
+    ) -> bool {
+        if let Expr::Name(name) = expr
+            && SpecialExport::new(&name.id) == Some(special)
+            && special.defined_in(self.module_info.name())
+        {
+            return self.scopes.current_binding_is_module_binding(&name.id)
+                && matches!(
+                    self.scopes.binding_idx_for_name(&name.id),
+                    Some((idx, _)) if self.binding_is_class_def(idx)
+                );
+        }
+        provenance == Some(special)
+    }
+
+    pub(super) fn is_map_int_tuples(&self, expr: &Expr) -> bool {
+        self.is_map_int_tuples_with_provenance(expr, self.as_special_export(expr))
+    }
+
+    pub(super) fn is_map_int_tuples_with_provenance(
+        &self,
+        expr: &Expr,
+        provenance: Option<SpecialExport>,
+    ) -> bool {
+        self.is_shape_extensions_class_export_with_provenance(
+            expr,
+            SpecialExport::MapIntTuples,
+            provenance,
+        )
+    }
+
     /// Bind shape-specific function decorators before ordinary decorator processing consumes them.
     pub(super) fn record_shape_function_metadata(
         &mut self,
@@ -196,6 +286,7 @@ impl BindingsBuilder<'_> {
             }
 
             let mut shape_keyword = None;
+            let mut builtin_indexing = true;
             for keyword in &call.arguments.keywords {
                 let Some(arg) = &keyword.arg else {
                     self.error(
@@ -210,12 +301,24 @@ impl BindingsBuilder<'_> {
                     if shape_keyword.is_none() {
                         shape_keyword = Some(keyword);
                     }
+                } else if arg.as_str() == "builtin_indexing" {
+                    let Expr::BooleanLiteral(value) = &keyword.value else {
+                        self.error(
+                            keyword.value.range(),
+                            ErrorKind::InvalidArgument,
+                            "`@shaped_array` `builtin_indexing` argument must be a boolean literal"
+                                .to_owned(),
+                        );
+                        invalid = true;
+                        continue;
+                    };
+                    builtin_indexing = value.value;
                 } else {
                     self.error(
                         keyword.range(),
                         ErrorKind::InvalidArgument,
                         format!(
-                            "Unexpected keyword argument `{}` for `@shaped_array`; expected `shape`",
+                            "Unexpected keyword argument `{}` for `@shaped_array`; expected `shape` or `builtin_indexing`",
                             arg.id
                         ),
                     );
@@ -245,6 +348,7 @@ impl BindingsBuilder<'_> {
                 metadata = Some(Box::new(ShapedArrayMetadata {
                     shape_name: Name::new(shape.value.to_str()),
                     range: shape_keyword.value.range(),
+                    builtin_indexing,
                 }));
             }
         }
@@ -291,47 +395,51 @@ impl BindingsBuilder<'_> {
     }
 
     /// Record binding dependencies for a type parameter bound, including the
-    /// shape-specific handling required by `shape_extensions.Flag`.
+    /// shape-specific handling required by `shape_extensions.Flag` and
+    /// `shape_extensions.Index`.
     pub(super) fn record_type_parameter_bound(
         &mut self,
         bound_expr: &mut Expr,
         usage: &mut Usage,
     ) -> TypeParameterBound {
-        match bound_expr {
-            Expr::Subscript(subscript) if self.is_shape_flag(&subscript.value) => {
-                self.ensure_expr(&mut subscript.value, usage);
-                self.ensure_type_with_usage(&mut subscript.slice, None, usage);
-                TypeParameterBound::ShapeFlag {
-                    domain: Some((*subscript.slice).clone()),
-                    range: subscript.range,
-                }
-            }
-            marker if self.is_shape_flag(marker) => {
-                let range = marker.range();
-                self.ensure_expr(marker, usage);
+        if let Expr::Subscript(subscript) = bound_expr
+            && self.shape_extension_type_parameter_bound_marker(&subscript.value)
+                == Some(SpecialExport::Flag)
+        {
+            self.ensure_expr(&mut subscript.value, usage);
+            self.ensure_type_with_usage(&mut subscript.slice, None, usage);
+            return TypeParameterBound::ShapeFlag {
+                domain: Some((*subscript.slice).clone()),
+                range: subscript.range,
+            };
+        }
+
+        match self.shape_extension_type_parameter_bound_marker(bound_expr) {
+            Some(SpecialExport::Flag) => {
+                let range = bound_expr.range();
+                self.ensure_expr(bound_expr, usage);
                 TypeParameterBound::ShapeFlag {
                     domain: None,
                     range,
                 }
             }
-            bound => {
-                self.ensure_type_with_usage(bound, None, usage);
-                TypeParameterBound::Ordinary(bound.clone())
+            Some(SpecialExport::Index) => {
+                self.ensure_expr(bound_expr, usage);
+                TypeParameterBound::ShapeIndex
+            }
+            _ => {
+                self.ensure_type_with_usage(bound_expr, None, usage);
+                TypeParameterBound::Ordinary(bound_expr.clone())
             }
         }
     }
 
-    fn is_shape_flag(&self, expr: &Expr) -> bool {
-        if let Expr::Name(name) = expr
-            && SpecialExport::new(&name.id) == Some(SpecialExport::Flag)
-            && SpecialExport::Flag.defined_in(self.module_info.name())
-        {
-            return self.scopes.current_binding_is_module_binding(&name.id)
-                && matches!(
-                    self.scopes.binding_idx_for_name(&name.id),
-                    Some((idx, _)) if self.binding_is_class_def(idx)
-                );
-        }
-        self.as_special_export(expr) == Some(SpecialExport::Flag)
+    fn shape_extension_type_parameter_bound_marker(&self, expr: &Expr) -> Option<SpecialExport> {
+        let provenance = self.as_special_export(expr);
+        [SpecialExport::Flag, SpecialExport::Index]
+            .into_iter()
+            .find(|special| {
+                self.is_shape_extensions_class_export_with_provenance(expr, *special, provenance)
+            })
     }
 }

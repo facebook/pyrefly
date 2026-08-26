@@ -5,26 +5,27 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_build::handle::Handle;
 
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::KeyClassMro;
 use crate::state::state::State;
+use crate::state::state::StateReader;
 use crate::test::util::get_class;
 use crate::test::util::mk_state;
 use crate::testcase;
 
-pub fn get_class_mro(name: &str, handle: &Handle, state: &State) -> Arc<ClassMro> {
-    let solutions = state.transaction().get_solutions(handle).unwrap();
-
-    let cls = get_class(name, handle, state);
-    solutions.get_arc(&KeyClassMro(cls.index()))
+pub fn get_class_mro<'a>(name: &str, handle: &Handle, reader: &'a StateReader<'_>) -> &'a ClassMro {
+    let cls = get_class(name, handle, reader);
+    reader
+        .get_solutions(handle)
+        .unwrap()
+        .get(&KeyClassMro(cls.index()))
 }
 
 fn get_mro_names(name: &str, handle: &Handle, state: &State) -> Vec<String> {
-    get_class_mro(name, handle, state)
+    let reader = state.reader();
+    get_class_mro(name, handle, &reader)
         .ancestors_no_object()
         .iter()
         .map(|cls| cls.name().as_str().to_owned())

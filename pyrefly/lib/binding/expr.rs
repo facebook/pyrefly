@@ -41,12 +41,14 @@ use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
+use crate::binding::binding::ClassBodyUnknownName;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::binding::binding::LambdaKind;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::PrivateAttributeAccessCheck;
@@ -294,7 +296,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_builder: Option<&mut LegacyTParamCollector>,
     ) -> Idx<Key> {
-        self.ensure_name_in_type(name, usage, tparams_builder, false)
+        self.ensure_name_in_type(name, usage, tparams_builder, false, false)
     }
 
     fn ensure_name_in_type(
@@ -303,6 +305,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_builder: Option<&mut LegacyTParamCollector>,
         is_runtime_evaluated_annotation: bool,
+        allow_class_body_forward_reference: bool,
     ) -> Idx<Key> {
         self.ensure_name_impl(
             name,
@@ -310,6 +313,7 @@ impl<'a> BindingsBuilder<'a> {
             tparams_builder
                 .map(|tparams_builder| (tparams_builder, LegacyTParamId::Name(name.clone()))),
             is_runtime_evaluated_annotation,
+            allow_class_body_forward_reference,
         )
     }
 
@@ -326,6 +330,7 @@ impl<'a> BindingsBuilder<'a> {
             tparams_builder.map(|tparams_builder| {
                 (tparams_builder, LegacyTParamId::Attr(value.clone(), attrs))
             }),
+            false,
             false,
         )
     }
@@ -357,6 +362,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_lookup: Option<(&mut LegacyTParamCollector, LegacyTParamId)>,
         is_runtime_evaluated_annotation: bool,
+        allow_class_body_forward_reference: bool,
     ) -> Idx<Key> {
         let key = Key::BoundName(ShortIdentifier::new(name));
         if name.is_empty() {
@@ -441,7 +447,6 @@ impl<'a> BindingsBuilder<'a> {
                 if self.scopes.is_definitely_unreachable() {
                     return self.insert_binding(key, Binding::Any(AnyStyle::Implicit));
                 }
-                let suggestion = self.suggest_similar_name(&name.id, name.range.start());
                 if is_special_name(name.id.as_str()) {
                     self.error(
                         name.range,
@@ -455,23 +460,30 @@ impl<'a> BindingsBuilder<'a> {
                 } else if self.scopes.in_class_body()
                     && let Some(cls) = self.scopes.current_class_key()
                 {
+                    let suggestion = self.suggest_similar_name(&name.id);
                     self.insert_binding(
                         key,
-                        Binding::ClassBodyUnknownName(Box::new((cls, name.clone(), suggestion))),
+                        Binding::ClassBodyUnknownName(Box::new(ClassBodyUnknownName {
+                            class_key: cls,
+                            name: name.clone(),
+                            suggestion,
+                            allow_class_body_forward_reference,
+                        })),
                     )
                 } else {
-                    // Record a type error and fall back to `Any`.
-                    let header = format!("Could not find name `{name}`");
-                    if let Some(suggestion) = suggestion {
-                        self.error_with_detail(
-                            name.range,
-                            ErrorKind::UnknownName,
-                            header,
-                            format!("Did you mean `{suggestion}`?"),
-                        );
-                    } else {
-                        self.error(name.range, ErrorKind::UnknownName, header);
-                    }
+                    // Record a type error and fall back to `Any`. Searching the
+                    // scope for a near-miss is the expensive part of reporting
+                    // this, and it is worth nothing unless the error is kept, so
+                    // it waits until the builder knows that.
+                    self.error_with_detail_from(
+                        name.range,
+                        ErrorKind::UnknownName,
+                        format!("Could not find name `{name}`"),
+                        || {
+                            self.suggest_similar_name(&name.id)
+                                .map(|suggestion| format!("Did you mean `{suggestion}`?"))
+                        },
+                    );
                     self.insert_binding(key, Binding::Any(AnyStyle::Error))
                 }
             }
@@ -526,7 +538,7 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn bind_lambda(&mut self, lambda: &mut ExprLambda, usage: &mut Usage) {
+    pub fn bind_lambda(&mut self, lambda: &mut ExprLambda, usage: &mut Usage, kind: LambdaKind) {
         // Process default values in the enclosing scope before pushing the lambda scope,
         // because default values are evaluated at function definition time.
         if let Some(parameters) = &mut lambda.parameters {
@@ -546,10 +558,9 @@ impl<'a> BindingsBuilder<'a> {
             Identifier::new("<lambda>", lambda.range),
             false,
         ));
-        let owner = usage.current_idx();
         if let Some(parameters) = &lambda.parameters {
             for x in parameters {
-                self.bind_lambda_param(x.name(), owner);
+                self.bind_lambda_param(x.name(), kind, usage);
             }
         }
         self.ensure_expr(&mut lambda.body, usage);
@@ -663,7 +674,7 @@ impl<'a> BindingsBuilder<'a> {
             _ => unreachable!("caller only passes CollectionsNamedTuple or TypingNamedTuple"),
         };
         Some(self.insert_binding(
-            Key::Anon(call.range),
+            Key::Anon(call.range()),
             Binding::ClassDef(class_idx, Box::new([])),
         ))
     }
@@ -728,7 +739,17 @@ impl<'a> BindingsBuilder<'a> {
                     _ => None,
                 };
 
-                if let Some(special_export) = special_export
+                if self.is_map_int_tuples_with_provenance(value, special_export) {
+                    self.ensure_expr(&mut *value, usage);
+                    self.bind_map_int_tuples_arguments(
+                        &mut *slice,
+                        None,
+                        false,
+                        &mut Usage::StaticTypeInformation {
+                            is_annotation: false,
+                        },
+                    );
+                } else if let Some(special_export) = special_export
                     && special_export.is_static_type_subscript()
                 {
                     self.ensure_expr(&mut *value, usage);
@@ -921,7 +942,7 @@ impl<'a> BindingsBuilder<'a> {
                 // binding-variant choice — it drives a demand edge to
                 // `target::Exports`.
                 let special = self.as_special_export(&call.func);
-                let call_range = call.range;
+                let call_range = call.range();
                 match special {
                     Some(
                         SpecialExport::CollectionsNamedTuple | SpecialExport::TypingNamedTuple,
@@ -1127,7 +1148,7 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Expr::Lambda(x) => {
-                self.bind_lambda(x, usage);
+                self.bind_lambda(x, usage, LambdaKind::Ordinary);
             }
             Expr::ListComp(x) => {
                 self.with_await_context(AwaitContext::General, |this| {
@@ -1258,7 +1279,7 @@ impl<'a> BindingsBuilder<'a> {
         self.ensure_type_impl(x, tparams_builder, false, false, usage, false);
     }
 
-    fn ensure_type_impl(
+    pub(super) fn ensure_type_impl(
         &mut self,
         x: &mut Expr,
         mut tparams_builder: Option<&mut LegacyTParamCollector>,
@@ -1297,6 +1318,9 @@ impl<'a> BindingsBuilder<'a> {
                     usage,
                     tparams_builder,
                     check_runtime_name && !in_string_literal,
+                    in_string_literal
+                        || self.scopes.has_future_annotations()
+                        || self.sys_info.version().at_least(3, 14),
                 );
             }
             Expr::Subscript(ExprSubscript { value, .. })
@@ -1359,6 +1383,24 @@ impl<'a> BindingsBuilder<'a> {
                         },
                     );
                 }
+            }
+            Expr::Subscript(ExprSubscript { value, slice, .. })
+                if self.is_map_int_tuples(value) =>
+            {
+                self.ensure_type_impl(
+                    &mut *value,
+                    tparams_builder.as_deref_mut(),
+                    in_string_literal,
+                    true,
+                    usage,
+                    allow_proxy_method,
+                );
+                self.bind_map_int_tuples_arguments(
+                    &mut *slice,
+                    tparams_builder,
+                    in_string_literal,
+                    usage,
+                );
             }
             Expr::Subscript(ExprSubscript { value, slice, .. }) => {
                 self.ensure_type_impl(

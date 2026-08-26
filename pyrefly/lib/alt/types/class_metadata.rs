@@ -50,6 +50,30 @@ pub struct SlotsInfo {
     pub names: SmallSet<Name>,
 }
 
+/// Metadata for a class registered with `@shaped_array`.
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+pub struct ShapedArrayMetadata {
+    shape: Quantified,
+    builtin_indexing: bool,
+}
+
+impl ShapedArrayMetadata {
+    pub fn new(shape: Quantified, builtin_indexing: bool) -> Self {
+        Self {
+            shape,
+            builtin_indexing,
+        }
+    }
+
+    pub fn shape(&self) -> &Quantified {
+        &self.shape
+    }
+
+    pub fn uses_builtin_indexing(&self) -> bool {
+        self.builtin_indexing
+    }
+}
+
 impl SlotsInfo {
     /// Whether `__dict__` appears among the slot names, which disables enforcement.
     pub fn has_dict(&self) -> bool {
@@ -65,6 +89,12 @@ pub enum ExplicitSlots {
     Absent,
     Unknown,
     Known(SlotsInfo),
+}
+
+#[derive(Clone, Copy, Debug, TypeEq, PartialEq, Eq)]
+pub enum DjangoRestFrameworkSerializerKind {
+    Serializer,
+    ModelSerializer,
 }
 
 impl ExplicitSlots {
@@ -111,16 +141,16 @@ pub struct ClassMetadata {
     pydantic_model_kind: Option<PydanticModelKind>,
     is_attrs_class: bool,
     django_model_metadata: Option<DjangoModelMetadata>,
+    django_rest_framework_serializer_kind: Option<DjangoRestFrameworkSerializerKind>,
     is_marshmallow_schema: bool,
     is_factory_boy_factory: bool,
-    is_django_rest_framework_model_serializer: bool,
     /// Whether this class is a metaclass (i.e., a subclass of `type`).
     is_metaclass: bool,
     explicit_slots: ExplicitSlots,
     /// `__init__` parameter names to capture for shape inference, extracted from
     /// `@uses_shape_dsl(..., capture_init=[...])` on a `forward` method.
     capture_init: Option<Vec<Name>>,
-    shaped_array_shape: Option<Quantified>,
+    shaped_array: Option<ShapedArrayMetadata>,
 }
 
 impl VisitMut<Type> for ClassMetadata {
@@ -144,8 +174,8 @@ impl VisitMut<Type> for ClassMetadata {
         if let Some(dataclass_transform_metadata) = &mut self.dataclass_transform_metadata {
             dataclass_transform_metadata.visit_mut(f);
         }
-        if let Some(shaped_array_shape) = &mut self.shaped_array_shape {
-            shaped_array_shape.visit_mut(f);
+        if let Some(shaped_array) = &mut self.shaped_array {
+            shaped_array.shape.visit_mut(f);
         }
     }
 }
@@ -169,8 +199,8 @@ impl VisitTrait<Type> for ClassMetadata {
         if let Some(dataclass_transform_metadata) = &self.dataclass_transform_metadata {
             dataclass_transform_metadata.visit(f);
         }
-        if let Some(shaped_array_shape) = &self.shaped_array_shape {
-            shaped_array_shape.visit(f);
+        if let Some(shaped_array) = &self.shaped_array {
+            shaped_array.shape.visit(f);
         }
     }
 }
@@ -184,6 +214,37 @@ impl Display for ClassMetadata {
         write!(f, "ClassMetadata(metaclass={metaclass})")
     }
 }
+
+static RECURSIVE_CLASS_METADATA: ClassMetadata = ClassMetadata {
+    metaclass: None,
+    keywords: Keywords(Vec::new()),
+    typed_dict_metadata: None,
+    named_tuple_metadata: None,
+    enum_metadata: None,
+    protocol_metadata: None,
+    dataclass_metadata: None,
+    extends_abc: false,
+    bases: Vec::new(),
+    has_generic_base_class: false,
+    has_base_any: false,
+    is_new_type: false,
+    is_final: false,
+    deprecation: None,
+    is_local_disjoint_base: false,
+    has_local_dataclass_slots_request: false,
+    total_ordering_metadata: None,
+    dataclass_transform_metadata: None,
+    pydantic_model_kind: None,
+    is_attrs_class: false,
+    django_model_metadata: None,
+    is_marshmallow_schema: false,
+    is_factory_boy_factory: false,
+    django_rest_framework_serializer_kind: None,
+    is_metaclass: false,
+    explicit_slots: ExplicitSlots::Absent,
+    capture_init: None,
+    shaped_array: None,
+};
 
 impl ClassMetadata {
     pub fn new(
@@ -208,13 +269,13 @@ impl ClassMetadata {
         pydantic_model_kind: Option<PydanticModelKind>,
         is_attrs_class: bool,
         django_model_metadata: Option<DjangoModelMetadata>,
+        django_rest_framework_serializer_kind: Option<DjangoRestFrameworkSerializerKind>,
         is_marshmallow_schema: bool,
         is_factory_boy_factory: bool,
-        is_django_rest_framework_model_serializer: bool,
         is_metaclass: bool,
         explicit_slots: ExplicitSlots,
         capture_init: Option<Vec<Name>>,
-        shaped_array_shape: Option<Quantified>,
+        shaped_array: Option<ShapedArrayMetadata>,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass,
@@ -238,47 +299,18 @@ impl ClassMetadata {
             pydantic_model_kind,
             is_attrs_class,
             django_model_metadata,
+            django_rest_framework_serializer_kind,
             is_marshmallow_schema,
             is_factory_boy_factory,
-            is_django_rest_framework_model_serializer,
             is_metaclass,
             explicit_slots,
             capture_init,
-            shaped_array_shape,
+            shaped_array,
         }
     }
 
-    pub fn recursive() -> Self {
-        ClassMetadata {
-            metaclass: None,
-            keywords: Keywords::default(),
-            typed_dict_metadata: None,
-            named_tuple_metadata: None,
-            enum_metadata: None,
-            protocol_metadata: None,
-            dataclass_metadata: None,
-            extends_abc: false,
-            bases: Vec::new(),
-            has_generic_base_class: false,
-            has_base_any: false,
-            is_new_type: false,
-            is_final: false,
-            deprecation: None,
-            is_local_disjoint_base: false,
-            has_local_dataclass_slots_request: false,
-            total_ordering_metadata: None,
-            dataclass_transform_metadata: None,
-            pydantic_model_kind: None,
-            is_attrs_class: false,
-            django_model_metadata: None,
-            is_marshmallow_schema: false,
-            is_factory_boy_factory: false,
-            is_django_rest_framework_model_serializer: false,
-            is_metaclass: false,
-            explicit_slots: ExplicitSlots::Absent,
-            capture_init: None,
-            shaped_array_shape: None,
-        }
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_CLASS_METADATA
     }
 
     /// The class's custom (non-`type`) metaclass, if it has one.
@@ -310,6 +342,10 @@ impl ClassMetadata {
         self.django_model_metadata.is_some()
     }
 
+    pub fn is_django_rest_framework_serializer(&self) -> bool {
+        self.django_rest_framework_serializer_kind.is_some()
+    }
+
     pub fn is_marshmallow_schema(&self) -> bool {
         self.is_marshmallow_schema
     }
@@ -319,7 +355,8 @@ impl ClassMetadata {
     }
 
     pub fn is_django_rest_framework_model_serializer(&self) -> bool {
-        self.is_django_rest_framework_model_serializer
+        self.django_rest_framework_serializer_kind
+            == Some(DjangoRestFrameworkSerializerKind::ModelSerializer)
     }
 
     /// Whether this class is a metaclass (i.e., a subclass of `type`).
@@ -445,11 +482,17 @@ impl ClassMetadata {
     }
 
     pub fn is_shaped_array(&self) -> bool {
-        self.shaped_array_shape.is_some()
+        self.shaped_array.is_some()
     }
 
     pub fn shaped_array_shape(&self) -> Option<&Quantified> {
-        self.shaped_array_shape.as_ref()
+        self.shaped_array.as_ref().map(ShapedArrayMetadata::shape)
+    }
+
+    pub fn uses_builtin_shaped_array_indexing(&self) -> bool {
+        self.shaped_array
+            .as_ref()
+            .is_some_and(ShapedArrayMetadata::uses_builtin_indexing)
     }
 }
 
@@ -492,6 +535,12 @@ impl ClassSynthesizedField {
     pub fn new_classvar(ty: Type) -> Self {
         Self {
             inner: Arc::new(ClassField::new_synthesized_classvar(ty)),
+        }
+    }
+
+    pub fn new_instance_attribute(ty: Type) -> Self {
+        Self {
+            inner: Arc::new(ClassField::new_synthesized_instance_attribute(ty)),
         }
     }
 }
@@ -794,6 +843,8 @@ pub enum ClassMro {
     Cyclic,
 }
 
+static RECURSIVE_CLASS_MRO: ClassMro = ClassMro::Cyclic;
+
 impl Display for ClassMro {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
@@ -821,7 +872,7 @@ impl ClassMro {
     /// `Generic`, `Protocol`, and `object`.
     pub fn new(
         cls: &Class,
-        bases_with_mro: Vec<(&ClassType, Arc<ClassMro>)>,
+        bases_with_mro: Vec<(&ClassType, &ClassMro)>,
         errors: &ErrorCollector,
     ) -> Self {
         match Linearization::new(cls, bases_with_mro, errors) {
@@ -867,8 +918,8 @@ impl ClassMro {
         )
     }
 
-    pub fn recursive() -> Self {
-        Self::Cyclic
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_CLASS_MRO
     }
 }
 
@@ -886,6 +937,10 @@ pub struct ClassDisjointBase {
     representative: Option<Class>,
 }
 
+static RECURSIVE_CLASS_DISJOINT_BASE: ClassDisjointBase = ClassDisjointBase {
+    representative: None,
+};
+
 impl Display for ClassDisjointBase {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match &self.representative {
@@ -900,10 +955,8 @@ impl ClassDisjointBase {
         Self { representative }
     }
 
-    pub fn recursive() -> Self {
-        Self {
-            representative: None,
-        }
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_CLASS_DISJOINT_BASE
     }
 
     pub fn representative(&self) -> Option<&Class> {
@@ -954,7 +1007,7 @@ impl Linearization {
     /// - One consisting of the base classes themselves in the order defined.
     fn new(
         cls: &Class,
-        bases_with_mro: Vec<(&ClassType, Arc<ClassMro>)>,
+        bases_with_mro: Vec<(&ClassType, &ClassMro)>,
         errors: &ErrorCollector,
     ) -> Linearization {
         let bases = match Vec1::try_from_vec(
@@ -971,7 +1024,7 @@ impl Linearization {
         let mut all_bases_complete = true;
         let mut seen_ancestors: SmallMap<Class, ClassType> = SmallMap::new();
         for (base, mro) in bases_with_mro {
-            match &*mro {
+            match mro {
                 ClassMro::Resolved {
                     ancestors,
                     linearization_complete,

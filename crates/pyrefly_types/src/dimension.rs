@@ -21,6 +21,7 @@ use crate::equality::TypeEq;
 use crate::literal::Lit;
 use crate::quantified::QuantifiedKind;
 use crate::type_level_dsl::TypeShapeDslDomain;
+use crate::type_var::Restriction;
 use crate::types::AnyStyle;
 use crate::types::Type;
 
@@ -146,7 +147,9 @@ impl Int {
                 Some(Int::Symbolic(Box::new(ty.clone())))
             }
             Type::Var(_) => Some(Int::Symbolic(Box::new(ty.clone()))),
-            Type::TypeLevelDslCall(call) if call.result_domain() == TypeShapeDslDomain::Int => {
+            Type::TypeLevelDslCall(call)
+                if call.result_domain() == Some(TypeShapeDslDomain::Int) =>
+            {
                 Some(Int::Symbolic(Box::new(ty.clone())))
             }
             _ => None,
@@ -171,6 +174,53 @@ pub fn gradual_size() -> Type {
 /// Whether `ty` is the gradual size type.
 pub fn is_gradual_size(ty: &Type) -> bool {
     matches!(ty, Type::Int(Int::Int))
+}
+
+/// Whether a type-variable restriction is bounded by exactly the gradual size `Int`.
+fn is_gradual_size_bound(restriction: &Restriction) -> bool {
+    matches!(restriction, Restriction::Bound(bound) if is_gradual_size(bound))
+}
+
+fn type_var_restriction(ty: &Type) -> Option<&Restriction> {
+    let (kind, restriction) = match ty {
+        Type::Quantified(q) => (q.kind(), q.restriction()),
+        Type::TypeVar(type_var) => (type_var.kind(), type_var.restriction()),
+        _ => return None,
+    };
+    (kind == QuantifiedKind::TypeVar).then_some(restriction)
+}
+
+fn type_var_bound(ty: &Type) -> Option<&Type> {
+    match type_var_restriction(ty)? {
+        Restriction::Bound(bound) => Some(bound),
+        Restriction::Constraints(_)
+        | Restriction::ShapeExtension(_)
+        | Restriction::Unrestricted => None,
+    }
+}
+
+/// Whether `ty` is an ordinary type variable whose bound is exactly the gradual size `Int`.
+///
+/// Shape features currently support only this broad bound. Narrower or wider bounds remain on
+/// the ordinary type-variable path until their shape semantics are defined explicitly.
+pub fn is_gradual_size_bound_type_var(ty: &Type) -> bool {
+    type_var_restriction(ty).is_some_and(is_gradual_size_bound)
+}
+
+/// Whether `ty` is exactly the shape `Int | None` domain, in either order.
+pub fn is_optional_int(ty: &Type) -> bool {
+    let Type::Union(union) = ty else {
+        return false;
+    };
+    matches!(
+        union.members.as_slice(),
+        [int, Type::None] | [Type::None, int] if is_gradual_size(int)
+    )
+}
+
+/// Whether `ty` is an ordinary type variable whose resolved bound is exactly `Int | None`.
+pub fn is_optional_int_bound_type_var(ty: &Type) -> bool {
+    type_var_bound(ty).is_some_and(is_optional_int)
 }
 
 pub fn int_type_is_provably_nonnegative(ty: &Type) -> bool {
@@ -1223,6 +1273,10 @@ pub enum ShapeError {
     /// Too many indices for tensor rank
     TooManyIndices { got: usize, max: usize },
 
+    /// An indexing failure produced while evaluating the `index_shape` intrinsic.
+    /// The solving layer reports this with the ordinary `BadIndex` diagnostic category.
+    BadIndex { message: String },
+
     /// Operation not supported on variadic shapes.
     /// Triggers fixture fallback instead of a user-visible error.
     Unsupported { message: String },
@@ -1269,6 +1323,7 @@ impl Display for ShapeError {
                     got, max
                 )
             }
+            Self::BadIndex { message } => f.write_str(message),
             Self::Unsupported { message } => {
                 write!(f, "Unsupported: {}", message)
             }
@@ -1341,18 +1396,109 @@ fn contains_var_in_symbolic_type(ty: &Type, nested: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use ruff_python_ast::Identifier;
     use ruff_python_ast::Int as AstInt;
+    use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
 
     use super::*;
     use crate::lit_int::LitInt;
     use crate::literal::Lit;
     use crate::literal::LitStyle;
     use crate::literal::Literal;
+    use crate::quantified::AnchorIndex;
+    use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
+    use crate::quantified::QuantifiedOrigin;
+    use crate::type_var::PreInferenceVariance;
+    use crate::type_var::TypeVar;
     use crate::types::AnyStyle;
     use crate::types::Var;
 
     fn int_literal(n: i64) -> Type {
         Type::Int(Int::Literal(n))
+    }
+
+    fn quantified_type_var(bound: Type) -> Type {
+        Type::Quantified(Box::new(Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
+            Name::new_static("N"),
+            QuantifiedKind::TypeVar,
+            None,
+            Restriction::Bound(bound),
+            PreInferenceVariance::Invariant,
+        )))
+    }
+
+    fn legacy_type_var(bound: Type) -> Type {
+        let module = Module::new(
+            ModuleName::from_str("__test__"),
+            ModulePath::filesystem(PathBuf::from("__test__")),
+            Arc::new(String::new()),
+        );
+        Type::TypeVar(TypeVar::new_with_kind(
+            Identifier::new(
+                Name::new_static("LegacyN"),
+                TextRange::empty(TextSize::new(0)),
+            ),
+            module,
+            QuantifiedKind::TypeVar,
+            Restriction::Bound(bound),
+            None,
+            PreInferenceVariance::Invariant,
+        ))
+    }
+
+    #[test]
+    fn gradual_size_bound_type_var_requires_exact_bound() {
+        assert!(is_gradual_size_bound_type_var(&quantified_type_var(
+            gradual_size()
+        )));
+
+        assert!(is_gradual_size_bound_type_var(&legacy_type_var(
+            gradual_size()
+        )));
+
+        assert!(!is_gradual_size_bound_type_var(&quantified_type_var(
+            Type::Int(Int::Literal(5))
+        )));
+    }
+
+    #[test]
+    fn optional_int_requires_exact_members() {
+        for optional in [
+            Type::union(vec![gradual_size(), Type::None]),
+            Type::union(vec![Type::None, gradual_size()]),
+        ] {
+            assert!(is_optional_int(&optional));
+            assert!(is_optional_int_bound_type_var(&quantified_type_var(
+                optional.clone()
+            )));
+            assert!(is_optional_int_bound_type_var(&legacy_type_var(optional)));
+        }
+
+        let narrow = Type::union(vec![Type::Int(Int::Literal(3)), Type::None]);
+        assert!(!is_optional_int(&narrow));
+        assert!(!is_optional_int_bound_type_var(&quantified_type_var(
+            narrow.clone()
+        )));
+        assert!(!is_optional_int_bound_type_var(&legacy_type_var(narrow)));
+        assert!(!is_optional_int(&Type::union(vec![
+            gradual_size(),
+            Type::None,
+            Type::Any(AnyStyle::Explicit),
+        ])));
     }
 
     #[test]

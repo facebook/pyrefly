@@ -44,6 +44,9 @@ use crate::callable::IdentityIgnored;
 use crate::dimension::Int;
 use crate::dimension::ShapeError;
 use crate::dimension::canonicalize;
+use crate::einsum::EinsumClassification;
+use crate::einsum::EinsumLocation;
+use crate::einsum::parse_einsum_equation;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::lit_int::LitInt;
@@ -3024,66 +3027,60 @@ fn eval_call(
                     1,
                     "DSL bug: {op_name}: einsum_parse takes 1 arg"
                 );
-                let spec = args[0].as_str_val();
-
-                // Parse spec: "ij,jk->ik"
-                let parts: Vec<&str> = spec.split("->").collect();
-                if parts.len() != 2 {
-                    return Err(ShapeError::ShapeComputation {
-                        message: format!("einsum spec must contain '->', got: {}", spec),
-                    });
-                }
-                let input_specs: Vec<Vec<char>> = parts[0]
-                    .split(',')
-                    .map(|s| s.trim().chars().filter(|c| c.is_alphanumeric()).collect())
-                    .collect();
-                let output_spec: Vec<char> = parts[1]
-                    .trim()
-                    .chars()
-                    .filter(|c| c.is_alphanumeric())
-                    .collect();
-
-                // Build char → (input_idx, dim_pos) map, collecting consistency
-                // check pairs for labels that appear in multiple positions.
-                let mut char_to_location: HashMap<char, (usize, usize)> = HashMap::new();
-                let mut check_pairs: Vec<Val> = Vec::new();
-                for (input_idx, spec_chars) in input_specs.iter().enumerate() {
-                    for (pos, ch) in spec_chars.iter().enumerate() {
-                        if let Some(&(prev_input, prev_pos)) = char_to_location.get(ch) {
-                            // Each check pair is [idx1, pos1, idx2, pos2].
-                            check_pairs.push(Val::List(vec![
-                                Val::Int(prev_input as i64),
-                                Val::Int(prev_pos as i64),
-                                Val::Int(input_idx as i64),
-                                Val::Int(pos as i64),
-                            ]));
-                        } else {
-                            char_to_location.insert(*ch, (input_idx, pos));
-                        }
+                let equation = match parse_einsum_equation(args[0].as_str_val()) {
+                    EinsumClassification::Supported(equation) => equation,
+                    EinsumClassification::Unsupported(unsupported) => {
+                        return Err(ShapeError::Unsupported {
+                            message: unsupported.message(),
+                        });
                     }
-                }
-
-                // Build output_map: for each output char, resolve to [input_idx, dim_pos].
-                let mut output_map: Vec<Val> = Vec::new();
-                for ch in &output_spec {
-                    let &(input_idx, dim_pos) =
-                        char_to_location
-                            .get(ch)
-                            .ok_or_else(|| ShapeError::ShapeComputation {
-                                message: format!(
-                                    "einsum: output index '{}' not found in inputs",
-                                    ch
-                                ),
-                            })?;
-                    output_map.push(Val::List(vec![
-                        Val::Int(input_idx as i64),
-                        Val::Int(dim_pos as i64),
-                    ]));
-                }
+                    EinsumClassification::Invalid(error) => {
+                        return Err(ShapeError::ShapeComputation {
+                            message: error.message(),
+                        });
+                    }
+                };
+                let location_pair = |location: EinsumLocation| {
+                    [
+                        Val::Int(location.input as i64),
+                        Val::Int(location.dimension as i64),
+                    ]
+                };
+                let output_map = equation
+                    .output
+                    .iter()
+                    .map(|label| {
+                        Val::List(
+                            location_pair(equation.labels[*label].locations[0])
+                                .into_iter()
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                let check_pairs = equation
+                    .equalities()
+                    .map(|(first, second)| {
+                        Val::List(
+                            location_pair(first)
+                                .into_iter()
+                                .chain(location_pair(second))
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                let input_ranks = equation
+                    .input_ranks
+                    .iter()
+                    .enumerate()
+                    .map(|(input, rank)| {
+                        Val::List(vec![Val::Int(input as i64), Val::Int(*rank as i64)])
+                    })
+                    .collect();
 
                 Ok(Val::List(vec![
                     Val::List(output_map),
                     Val::List(check_pairs),
+                    Val::List(input_ranks),
                 ]))
             }
             DslBuiltin::Enumerate => {
@@ -3334,10 +3331,10 @@ fn val_to_type(
 
         // Int and Bool synthesize Literal[n] / Literal[bool] from the DSL's
         // traced runtime value, just like Int does via `val_to_scalar_type`.
-        // This is intentionally load-bearing: functions like `dim_ir`,
-        // `numel_ir`, and `size_ir(dim=N)` trace exact integer results, and
-        // downstream consumers (assert_type, reshape validation, shape
-        // inference) rely on the literal precision. Returning
+        // This is intentionally load-bearing: functions like `dim_ir` and
+        // `size_ir(dim=N)` trace exact integer results, and downstream
+        // consumers (assert_type, reshape validation, shape inference) rely on
+        // the literal precision. Returning
         // `expected_return_type` here would discard the traced value and
         // produce `int` instead of e.g. `Literal[3]`.
         //
@@ -3902,6 +3899,7 @@ mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::class::PrecomputedTParams;
     use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedIdentity;
@@ -3942,7 +3940,7 @@ mod tests {
             Identifier::new(Name::new(name), TextRange::empty(TextSize::new(0))),
             NestingContext::toplevel(),
             module,
-            None,
+            PrecomputedTParams::NotGeneric,
             false,
         )
     }

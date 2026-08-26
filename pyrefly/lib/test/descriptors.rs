@@ -1343,3 +1343,25 @@ class C(metaclass=Meta):
 assert_type(C.value, DeleteOnlyDescriptor)
     "#,
 );
+
+// The `value` parameter of a descriptor's `__set__` is unioned across its overloads through the
+// solver, so complementary bool literals collapse to `bool` in the synthesized dataclass
+// `__init__`.
+testcase!(
+    test_descriptor_setter_value_unions_bool_literals,
+    r#"
+from dataclasses import dataclass
+from typing import Literal, overload, reveal_type
+class D:
+    def __get__(self, obj: object, cls: type) -> bool: ...
+    @overload
+    def __set__(self, obj: object, value: Literal[True]) -> None: ...
+    @overload
+    def __set__(self, obj: object, value: Literal[False]) -> None: ...
+    def __set__(self, obj: object, value: bool) -> None: ...
+@dataclass
+class K:
+    x: D = D()  # E: Cannot set field `x` to data descriptor `D` with inconsistent types
+reveal_type(K.__init__)  # E: revealed type: (self: K, x: bool = ...) -> None
+"#,
+);

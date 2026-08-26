@@ -54,6 +54,14 @@
           },
           "default": []
         },
+        "replace-untyped-imports-with-any": {
+          "description": "Instruct Pyrefly to replace the given module globs with typing.Any when the installed third-party package provides neither stubs nor a py.typed marker.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
         "ignore-errors-in-generated-code": {
           "description": "Whether to ignore type errors in generated code. If enabled, generated files will be treated as if they are included in project-excludes. The generated code status is determined by checking if the file contents contain the substring '@generated'.",
           "type": "boolean",
@@ -63,6 +71,11 @@
           "description": "Whether to infer type variables not determined by a call or constructor based on their first usage. This includes empty containers like [] and {}. Default behavior is similar to Mypy.",
           "type": "boolean",
           "default": true
+        },
+        "check-all-matches": {
+          "description": "Whether to check every match statement for exhaustiveness instead of limiting checks to closed subject types.",
+          "type": "boolean",
+          "default": false
         },
         "untyped-def-behavior": {
           "description": "How should Pyrefly treat function definitions with no parameter or return type annotations?",
@@ -105,6 +118,11 @@
     {
       "type": "object",
       "properties": {
+        "required-version": {
+          "description": "A PEP 440 version specifier that the running version of Pyrefly must satisfy.",
+          "type": "string",
+          "examples": [">=1.2.0", ">=1.2.0,<2.0.0", "==1.2.0"]
+        },
         "preset": {
           "description": "Named preset that provides default error severities and behavior settings. User-specified settings override the preset.",
           "type": "string",

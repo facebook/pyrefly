@@ -40,6 +40,7 @@ use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::state::lsp::DefinitionMetadata;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::ReferenceOptions;
+use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 
 pub struct CallerInfo {
@@ -353,14 +354,13 @@ impl CancellableTransaction<'_> {
         definition_kind: DefinitionMetadata,
         target_definition: &TextRangeWithModule,
     ) -> Result<Vec<(Module, Vec<CallerInfo>)>, Cancelled> {
-        // Use process_rdeps_with_definition to find references and filter to call sites in a single pass
-        let results = self.process_rdeps_with_definition(
+        // Pass 1: work out which files reference the target at all. This is answered from
+        // the index, which every rdep carries at `Require::Indexing`, so a file that never
+        // mentions the target costs nothing beyond the lookup.
+        let files_with_refs = self.process_rdeps_with_definition(
             sys_info,
             target_definition,
             |transaction, handle, patched_definition| {
-                let module_info = transaction.as_ref().get_module_info(handle)?;
-                let ast = transaction.as_ref().get_ast(handle)?;
-
                 let references = transaction
                     .as_ref()
                     .local_references_from_definition(
@@ -373,62 +373,76 @@ impl CancellableTransaction<'_> {
                     .unwrap_or_default();
 
                 if references.is_empty() {
-                    return None;
-                }
-
-                let ref_set: std::collections::HashSet<TextRange> =
-                    references.into_iter().collect();
-
-                let mut callers_in_file = Vec::new();
-
-                fn collect_calls_from_expr(
-                    expr: &Expr,
-                    ref_set: &std::collections::HashSet<TextRange>,
-                    module_name: ModuleName,
-                    ast: &ModModule,
-                    callers: &mut Vec<CallerInfo>,
-                ) {
-                    if let Expr::Call(call) = expr
-                        && ref_set
-                            .iter()
-                            .any(|ref_range| call.func.range().contains(ref_range.start()))
-                    {
-                        let (name, full_range, name_range, kind) =
-                            find_containing_function_for_call(
-                                module_name,
-                                ast,
-                                call.range().start(),
-                            );
-                        callers.push(CallerInfo {
-                            call_range: call.range(),
-                            name,
-                            full_range,
-                            name_range,
-                            kind,
-                        });
-                    }
-                    expr.recurse(&mut |child| {
-                        collect_calls_from_expr(child, ref_set, module_name, ast, callers)
-                    });
-                }
-
-                ast.visit(&mut |expr| {
-                    collect_calls_from_expr(
-                        expr,
-                        &ref_set,
-                        handle.module(),
-                        &ast,
-                        &mut callers_in_file,
-                    )
-                });
-
-                if callers_in_file.is_empty() {
                     None
                 } else {
-                    Some((module_info, callers_in_file))
+                    Some((handle.dupe(), references))
                 }
             },
         )?;
+
+        // Attributing a call site to its enclosing function needs the AST, and the AST is
+        // only retained at `Require::Everything`. A file the client never opened is held at
+        // `Require::Indexing`, so its AST is absent and its call sites were previously
+        // dropped without a trace. Pull up exactly the files that do reference the target,
+        // and do it in one run: escalating them individually from inside the walk above
+        // leaves every file after the first still missing its AST.
+        let handles_needing_ast = files_with_refs
+            .iter()
+            .filter(|(handle, _)| self.as_ref().get_ast(handle).is_none())
+            .map(|(handle, _)| handle.dupe())
+            .collect::<Vec<_>>();
+        if !handles_needing_ast.is_empty() {
+            self.run(&handles_needing_ast, Require::Everything, None)?;
+        }
+
+        fn collect_calls_from_expr(
+            expr: &Expr,
+            ref_set: &std::collections::HashSet<TextRange>,
+            module_name: ModuleName,
+            ast: &ModModule,
+            callers: &mut Vec<CallerInfo>,
+        ) {
+            if let Expr::Call(call) = expr
+                && ref_set
+                    .iter()
+                    .any(|ref_range| call.func.range().contains(ref_range.start()))
+            {
+                let (name, full_range, name_range, kind) =
+                    find_containing_function_for_call(module_name, ast, call.range().start());
+                callers.push(CallerInfo {
+                    call_range: call.range(),
+                    name,
+                    full_range,
+                    name_range,
+                    kind,
+                });
+            }
+            expr.recurse(&mut |child| {
+                collect_calls_from_expr(child, ref_set, module_name, ast, callers)
+            });
+        }
+
+        // Pass 2: attribute each call site to the function that contains it.
+        let mut results = Vec::new();
+        for (handle, references) in files_with_refs {
+            let (Some(module_info), Some(ast)) = (
+                self.as_ref().get_module_info(&handle),
+                self.as_ref().get_ast(&handle),
+            ) else {
+                continue;
+            };
+
+            let ref_set: std::collections::HashSet<TextRange> = references.into_iter().collect();
+            let mut callers_in_file = Vec::new();
+
+            ast.visit(&mut |expr| {
+                collect_calls_from_expr(expr, &ref_set, handle.module(), &ast, &mut callers_in_file)
+            });
+
+            if !callers_in_file.is_empty() {
+                results.push((module_info, callers_in_file));
+            }
+        }
 
         Ok(results)
     }

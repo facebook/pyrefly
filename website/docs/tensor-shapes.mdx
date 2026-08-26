@@ -127,8 +127,19 @@ For operators with more complex shape logic (like `reshape`, `cat`, or
 
 ```python
 # Internal library definition — not user-facing code
-def repeat_ir(self: Tensor, sizes: list[int | symint]) -> Tensor:
-    return Tensor(shape=[d * r for d, r in zip(self.shape, sizes)])
+@type_shape_dsl_function
+def repeat_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:
+    if len(repeats) < len(shape):
+        return dsl.Invalid(
+            "Number of dimensions of repeat dims can not be smaller than number of dimensions of tensor"
+        )
+    extra = len(repeats) - len(shape)
+    return dsl.IntTuple(
+        (
+            repeats[index] if index < extra else shape[index - extra] * repeats[index]
+            for index in range(len(repeats))
+        )
+    )
 ```
 
 This means you can extend Pyrefly's shape coverage for new PyTorch operators

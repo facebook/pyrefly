@@ -64,6 +64,7 @@ use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::unix_path::path_to_unix_string;
 use pyrefly_util::watcher::Watcher;
 use ruff_text_size::Ranged;
+use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
@@ -83,6 +84,7 @@ use crate::error::code_climate::CodeClimateIssues;
 use crate::error::error::BaselineStatus;
 use crate::error::error::Error;
 use crate::error::error::ErrorRenderer;
+use crate::error::error::SerializableError;
 use crate::error::error::print_error_counts;
 use crate::error::legacy::BaselineErrors;
 use crate::error::legacy::LegacyError;
@@ -470,6 +472,79 @@ impl FromStr for ErrorOutput {
 }
 
 impl OutputArgs {
+    fn has_daemon_incompatible_options(&self) -> bool {
+        let Self {
+            output,
+            output_format,
+            debug_info,
+            report_binding_memory,
+            report_trace,
+            dependency_graph,
+            report_timings,
+            report_glean,
+            report_pysa,
+            report_pysa_format,
+            report_demand_tree,
+            report_cinderx,
+            cinderx_include_readable,
+            cinderx_include_deps,
+            count_errors,
+            summarize_errors,
+            only,
+            summary,
+            no_progress_bar,
+            progress_bar,
+            relative_to,
+            baseline,
+            baseline_error_level,
+            update_baseline,
+            prune_baseline,
+            error_stale_baseline,
+            min_severity: _,
+        } = self;
+
+        let unsupported_output_format = match output_format {
+            None | Some(OutputFormat::MinText | OutputFormat::FullText | OutputFormat::Json) => {
+                false
+            }
+            Some(
+                OutputFormat::FullTextWithGithub
+                | OutputFormat::Github
+                | OutputFormat::JunitXml
+                | OutputFormat::CodeClimate
+                | OutputFormat::Sarif
+                | OutputFormat::OmitErrors,
+            ) => true,
+        };
+
+        !output.is_empty()
+            || unsupported_output_format
+            || debug_info.is_some()
+            || report_binding_memory.is_some()
+            || report_trace.is_some()
+            || dependency_graph.is_some()
+            || report_timings.is_some()
+            || report_glean.is_some()
+            || report_pysa.is_some()
+            || !matches!(report_pysa_format, report::pysa::PysaFormat::Capnp)
+            || report_demand_tree.is_some()
+            || report_cinderx.is_some()
+            || *cinderx_include_readable
+            || *cinderx_include_deps
+            || count_errors.is_some()
+            || summarize_errors.is_some()
+            || only.is_some()
+            || !matches!(summary, Summary::Default)
+            || *no_progress_bar
+            || progress_bar.is_some()
+            || relative_to.is_some()
+            || baseline.is_some()
+            || baseline_error_level.is_some()
+            || *update_baseline
+            || *prune_baseline
+            || *error_stale_baseline
+    }
+
     /// Validate invariants across all requested output destinations.
     fn validate_outputs(&self) -> anyhow::Result<()> {
         let mut has_stdout = false;
@@ -576,6 +651,19 @@ struct BehaviorArgs {
     remove_unused_ignores: Option<UnusedIgnoreKind>,
 }
 
+impl BehaviorArgs {
+    fn has_custom_options(&self) -> bool {
+        let Self {
+            check_all,
+            suppress_errors,
+            expectations,
+            remove_unused_ignores,
+        } = self;
+
+        *check_all || *suppress_errors || *expectations || remove_unused_ignores.is_some()
+    }
+}
+
 fn write_errors_to_file(
     format: OutputFormat,
     path: &Path,
@@ -617,6 +705,53 @@ pub(crate) fn write_errors_to_console(
         OutputFormat::Sarif => write_error_sarif_to_console(version, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
+}
+
+pub fn write_serializable_errors_to_console(
+    format: OutputFormat,
+    errors: &[SerializableError],
+) -> anyhow::Result<()> {
+    match format {
+        OutputFormat::MinText => write_serializable_error_text_to_console(errors, false),
+        OutputFormat::FullText => write_serializable_error_text_to_console(errors, true),
+        OutputFormat::Json => write_serializable_error_json_to_console(errors),
+        OutputFormat::FullTextWithGithub
+        | OutputFormat::Github
+        | OutputFormat::JunitXml
+        | OutputFormat::CodeClimate
+        | OutputFormat::Sarif
+        | OutputFormat::OmitErrors => {
+            bail!("output format `{format:?}` is not supported for serialized errors")
+        }
+    }
+}
+
+fn write_serializable_error_text_to_console(
+    errors: &[SerializableError],
+    verbose: bool,
+) -> anyhow::Result<()> {
+    let stdout = stdout();
+    let color_choice = stdout.current_choice();
+    let mut renderer = ErrorRenderer::new(BufWriter::new(stdout.lock()), color_choice);
+    // Serialized diagnostics arrive as a complete batch, so there is no partial result to flush.
+    for error in errors {
+        renderer.write_serializable(error, verbose)?;
+    }
+    renderer.flush()?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct LegacyErrorReferences<'a> {
+    errors: Vec<&'a LegacyError>,
+}
+
+fn write_serializable_error_json_to_console(errors: &[SerializableError]) -> anyhow::Result<()> {
+    let errors = errors.iter().map(SerializableError::legacy_error).collect();
+    let mut writer = BufWriter::new(stdout());
+    serde_json::to_writer_pretty(&mut writer, &LegacyErrorReferences { errors })?;
+    writer.flush()?;
+    Ok(())
 }
 
 fn write_error_text_to_file(
@@ -1005,6 +1140,14 @@ impl Handles {
         self.path_data.len()
     }
 
+    fn with_additional_files(&self, files: &[PathBuf]) -> Self {
+        // `path_data` is a set, so explicitly requesting a configured file does not
+        // create a duplicate handle.
+        let mut path_data = self.path_data.clone();
+        path_data.extend(files.iter().cloned().map(ModulePath::filesystem));
+        Self { path_data }
+    }
+
     pub fn all(
         &self,
         config_finder: &ConfigFinder,
@@ -1268,8 +1411,17 @@ impl IncrementalChecker {
 
     /// Run a check after applying the filesystem events supplied by the caller.
     pub fn check(&mut self, events: &CategorizedEvents) -> IncrementalCheckResult {
-        self.prepare_check(events)
-            .run(|transaction, handles, mut sourcedb_errors| {
+        self.check_with_additional_files(events, &[])
+    }
+
+    /// Run a check with additional files without adding them to the configured file set.
+    pub fn check_with_additional_files(
+        &mut self,
+        events: &CategorizedEvents,
+        additional_files: &[PathBuf],
+    ) -> IncrementalCheckResult {
+        self.prepare_check(events, additional_files).run(
+            |transaction, handles, mut sourcedb_errors| {
                 let diagnostics = transaction
                     .get_errors(handles)
                     .collect_display_errors_with_unused_ignores();
@@ -1279,10 +1431,29 @@ impl IncrementalChecker {
                     diagnostics,
                     config_errors,
                 }
-            })
+            },
+        )
     }
 
-    fn prepare_check(&mut self, events: &CategorizedEvents) -> IncrementalCheckTransaction<'_> {
+    /// Return the number of configured files checked by this checker.
+    pub fn checked_file_count(&self) -> usize {
+        self.handles.len()
+    }
+
+    /// Return whether every file is already in the configured handle set.
+    pub fn all_files_are_configured(&self, files: &[PathBuf]) -> bool {
+        files.iter().all(|file| {
+            self.handles
+                .path_data
+                .contains(&ModulePath::filesystem(file.clone()))
+        })
+    }
+
+    fn prepare_check(
+        &mut self,
+        events: &CategorizedEvents,
+        additional_files: &[PathBuf],
+    ) -> IncrementalCheckTransaction<'_> {
         let mut transaction = self
             .state
             .new_committable_transaction(self.require_levels.default, None);
@@ -1290,8 +1461,13 @@ impl IncrementalChecker {
         self.handles
             .apply_events(events, self.files_to_check.as_ref());
 
-        let (loaded_handles, reloaded_configs, sourcedb_errors) =
-            self.handles.all(self.state.config_finder());
+        let (loaded_handles, reloaded_configs, sourcedb_errors) = if additional_files.is_empty() {
+            self.handles.all(self.state.config_finder())
+        } else {
+            self.handles
+                .with_additional_files(additional_files)
+                .all(self.state.config_finder())
+        };
 
         transaction
             .as_mut()
@@ -1340,7 +1516,7 @@ impl IncrementalCheckCommand {
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
         let timings = Timings::new();
         let args = &self.args;
-        let mut check = self.checker.prepare_check(events);
+        let mut check = self.checker.prepare_check(events, &[]);
         let transaction = check.transaction.as_mut();
         let handles = &check.handles;
         let config = handles.first().map(|handle| {
@@ -1398,6 +1574,21 @@ struct PreparedCliRun {
 }
 
 impl CheckArgs {
+    /// Whether the invocation uses an option unsupported by daemon checks.
+    pub fn has_daemon_incompatible_options(&self) -> bool {
+        self.output.has_daemon_incompatible_options() || self.behavior.has_custom_options()
+    }
+
+    /// Return the output format selected by the client, configuration, or built-in default.
+    pub fn output_format(&self, config: Option<&ConfigFile>) -> OutputFormat {
+        self.output.resolve(config).output_format
+    }
+
+    /// Return the minimum severity selected by the client, configuration, or built-in default.
+    pub fn min_severity(&self, config: Option<&ConfigFile>) -> Severity {
+        self.output.resolve(config).min_severity
+    }
+
     /// Run a one-shot type check. Returns the exit status, the CLI-visible errors,
     /// and a `CheckResult` suitable for telemetry logging.
     pub fn run_once(
@@ -2100,13 +2291,19 @@ mod tests {
         }
     }
 
-    fn incremental_checker(root: &Path, initial_files: Vec<PathBuf>) -> IncrementalChecker {
+    /// A config finder that resolves everything under `root` without querying an
+    /// interpreter, so tests do not depend on the machine's Python environment.
+    fn test_config_finder(root: &Path) -> ConfigFinder {
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
         config.interpreters.skip_interpreter_query = true;
         config.search_path_from_file = vec![root.to_path_buf()];
         config.disable_search_path_heuristics = true;
         config.configure();
+        ConfigFinder::new_constant(ArcId::new(config))
+    }
+
+    fn incremental_checker(root: &Path, initial_files: Vec<PathBuf>) -> IncrementalChecker {
         IncrementalChecker::new(
             RequireLevels {
                 specified: Require::Errors,
@@ -2116,7 +2313,7 @@ mod tests {
                 root: root.to_path_buf(),
                 initial_files,
             }),
-            ConfigFinder::new_constant(ArcId::new(config)),
+            test_config_finder(root),
             ThreadCount::Inline,
         )
         .unwrap()
@@ -2155,6 +2352,70 @@ mod tests {
         )
     }
 
+    /// Asking for two reports in one run must produce both of them in full.
+    /// See https://github.com/facebook/pyrefly/issues/4683: the CinderX report
+    /// dropped the ASTs that the Glean report reads once the check is done, so
+    /// the run died partway through writing its output.
+    #[test]
+    fn check_writes_cinderx_and_glean_reports_together() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let module = root.join("main.py");
+        fs::write(
+            &module,
+            r#"class Widget:
+    def apply(self, n: int) -> int:
+        return n + 1
+
+
+def go(w: Widget) -> int:
+    return w.apply(1)
+"#,
+        )
+        .unwrap();
+        let cinderx_dir = temp.path().join("cinderx");
+        let glean_dir = temp.path().join("glean");
+
+        let args = CheckArgs::parse_from([
+            "check",
+            "--report-cinderx",
+            cinderx_dir.to_str().unwrap(),
+            "--report-glean",
+            glean_dir.to_str().unwrap(),
+        ]);
+        let (status, errors, _) = args
+            .run_once(
+                "test",
+                Box::new(TestIncludes {
+                    root: root.clone(),
+                    initial_files: vec![module],
+                }),
+                test_config_finder(&root),
+                UpsellDecision::Skip,
+                ThreadCount::Inline,
+            )
+            .unwrap();
+        assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
+        assert!(matches!(status, CommandExitStatus::Success));
+
+        // The CinderX report is only complete with its two project-level files
+        // beside `types/`; a consumer that sees `types/` alone cannot tell a
+        // truncated report from a report over a smaller codebase.
+        assert!(cinderx_dir.join("types").join("main.json").is_file());
+        assert!(cinderx_dir.join("index.json").is_file());
+        assert!(cinderx_dir.join("class_metadata.json").is_file());
+
+        // Glean names each file after a hash of the module path, so look for
+        // any non-empty file rather than a fixed name.
+        let glean_files: Vec<_> = fs::read_dir(&glean_dir)
+            .expect("glean output directory should exist")
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(glean_files.len(), 1, "expected one Glean file per module");
+        assert!(fs::metadata(&glean_files[0]).unwrap().len() > 0);
+    }
+
     #[test]
     fn incremental_checker_rechecks_modified_files() {
         let temp = TempDir::new().unwrap();
@@ -2178,6 +2439,32 @@ mod tests {
         )
         .diagnostics;
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn incremental_checker_checks_additional_files_without_retaining_them() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let configured = root.join("configured.py");
+        let additional = root.join("excluded.py");
+        fs::write(&configured, "x: int = 1\n").unwrap();
+        fs::write(&additional, "x: int = 'bad'\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![configured]);
+
+        let result = checker.check_with_additional_files(
+            &CategorizedEvents::default(),
+            std::slice::from_ref(&additional),
+        );
+        assert!(result.config_errors.is_empty());
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(result.diagnostics[0].path().as_path(), additional);
+
+        assert!(
+            check(&mut checker, &CategorizedEvents::default())
+                .diagnostics
+                .is_empty()
+        );
     }
 
     #[test]

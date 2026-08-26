@@ -59,6 +59,10 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::error;
+#[cfg(not(target_arch = "wasm32"))]
+use uv_pep440::Version;
+#[cfg(not(target_arch = "wasm32"))]
+use uv_pep440::VersionSpecifiers;
 
 use crate::base::ConfigBase;
 use crate::base::ExtraConfigs;
@@ -530,6 +534,9 @@ pub struct ConfigFile {
     #[serde(skip)]
     pub source: ConfigSource,
 
+    /// The PEP 440 version requirement that the running Pyrefly must satisfy.
+    pub required_version: Option<String>,
+
     /// Files that should be counted as sources (e.g. user-space code).
     /// NOTE: unlike other args, this is never replaced with CLI arg overrides
     /// in this config, but may be overridden by CLI args where used.
@@ -699,6 +706,7 @@ impl Default for ConfigFile {
     fn default() -> Self {
         ConfigFile {
             source: ConfigSource::Synthetic(None),
+            required_version: None,
             project_includes: Default::default(),
             project_excludes: Default::default(),
             interpreters: Interpreters {
@@ -1033,6 +1041,34 @@ impl ConfigFile {
         found_match == Some(true)
     }
 
+    /// Whether an untyped third-party import should be replaced with `typing.Any`.
+    pub fn replace_untyped_imports_with_any(
+        &self,
+        path: Option<&Path>,
+        module: ModuleName,
+    ) -> bool {
+        let wildcards = path
+            .and_then(|path| {
+                self.get_from_sub_configs(ConfigBase::get_replace_untyped_imports_with_any, path)
+            })
+            .unwrap_or_else(|| {
+                self.root
+                    .replace_untyped_imports_with_any
+                    .as_deref()
+                    .expect("configure should set replace_untyped_imports_with_any")
+            });
+        let found_match = wildcards.iter().find_map(|w| {
+            if w.matches(module) == Match::Negative {
+                Some(false)
+            } else if w.matches(module) == Match::Positive {
+                Some(true)
+            } else {
+                None
+            }
+        });
+        found_match == Some(true)
+    }
+
     pub fn check_unannotated_defs(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_check_unannotated_defs, path)
             .unwrap_or_else(|| self.root.check_unannotated_defs.unwrap())
@@ -1062,6 +1098,11 @@ impl ConfigFile {
                  // we can use unwrap here, because the value in the root config must
                  // be set in `ConfigFile::configure()`.
                  self.root.infer_with_first_use.unwrap())
+    }
+
+    pub fn check_all_matches(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_check_all_matches, path)
+            .unwrap_or_else(|| self.root.check_all_matches.unwrap())
     }
 
     pub fn strict_callable_subtyping(&self, path: &Path) -> bool {
@@ -1457,8 +1498,8 @@ impl ConfigFile {
                 }
                 (Some(_), None) => {}
             }
-            // For scalar fields: preset fills in None values. Any preset field
-            // not listed here is silently dropped, so new fields added to
+            // The preset fills in None values. Any preset field not listed here
+            // is silently dropped, so new fields added to
             // `Preset::apply()` must be added here as well — `test_preset_fields_propagate`
             // guards against accidental omissions.
             macro_rules! apply_preset_default {
@@ -1471,12 +1512,14 @@ impl ConfigFile {
             apply_preset_default!(check_unannotated_defs);
             apply_preset_default!(infer_return_types);
             apply_preset_default!(infer_with_first_use);
+            apply_preset_default!(check_all_matches);
             apply_preset_default!(strict_callable_subtyping);
             apply_preset_default!(strict_partial_subtyping);
             apply_preset_default!(spec_compliant_overloads);
             apply_preset_default!(legacy_overload_expansion);
             apply_preset_default!(ignore_errors_in_generated_code);
             apply_preset_default!(permissive_ignores);
+            apply_preset_default!(replace_untyped_imports_with_any);
             apply_preset_default!(treat_all_caps_as_final);
         }
 
@@ -1514,6 +1557,10 @@ impl ConfigFile {
             self.root.ignore_missing_imports = Some(Default::default());
         }
 
+        if self.root.replace_untyped_imports_with_any.is_none() {
+            self.root.replace_untyped_imports_with_any = Some(Default::default());
+        }
+
         if self.root.check_unannotated_defs.is_none() {
             self.root.check_unannotated_defs = Some(true);
         }
@@ -1528,6 +1575,10 @@ impl ConfigFile {
 
         if self.root.infer_with_first_use.is_none() {
             self.root.infer_with_first_use = Some(true);
+        }
+
+        if self.root.check_all_matches.is_none() {
+            self.root.check_all_matches = Some(false);
         }
 
         if self.root.strict_callable_subtyping.is_none() {
@@ -1746,6 +1797,32 @@ impl ConfigFile {
                 )));
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(required_version) = &config.required_version {
+                match required_version.parse::<VersionSpecifiers>() {
+                    Ok(specifiers) => {
+                        let running_version = env!("CARGO_PKG_VERSION");
+                        let parsed_running_version = running_version
+                            .parse::<Version>()
+                            .expect("Pyrefly's package version must be PEP 440 compatible");
+                        if !specifiers.contains(&parsed_running_version) {
+                            errors.push(ConfigError::error(anyhow!(
+                                "Pyrefly {running_version} does not satisfy `required-version = \"{required_version}\"`"
+                            )));
+                        }
+                    }
+                    Err(error) => errors.push(ConfigError::error(anyhow!(
+                        "Invalid `required-version` `{required_version}`: {error}"
+                    ))),
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            if config.required_version.is_some() {
+                errors.push(ConfigError::error(anyhow!(
+                    "`required-version` is not supported on WebAssembly"
+                )));
+            }
+
             if !config.root.extras.0.is_empty() {
                 let extra_keys = config.root.extras.0.keys().join(", ");
                 errors.push(ConfigError::warn(anyhow!(
@@ -1898,7 +1975,7 @@ impl Display for ConfigFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{{source: {:?}, project_includes: {}, project_excludes: {}, search_path: [{}], python_interpreter_path: {:?}, python_environment: {}, replace_imports_with_any: [{}], ignore_missing_imports: [{}]}}",
+            "{{source: {:?}, project_includes: {}, project_excludes: {}, search_path: [{}], python_interpreter_path: {:?}, python_environment: {}, replace_imports_with_any: [{}], ignore_missing_imports: [{}], replace_untyped_imports_with_any: [{}]}}",
             self.source,
             self.project_includes,
             self.project_excludes,
@@ -1912,6 +1989,11 @@ impl Display for ConfigFile {
                 .unwrap_or_default(),
             self.root
                 .ignore_missing_imports
+                .as_ref()
+                .map(|r| { r.iter().map(|p| p.as_str()).join(", ") })
+                .unwrap_or_default(),
+            self.root
+                .replace_untyped_imports_with_any
                 .as_ref()
                 .map(|r| { r.iter().map(|p| p.as_str()).join(", ") })
                 .unwrap_or_default(),
@@ -2000,6 +2082,7 @@ mod tests {
             config,
             ConfigFile {
                 source: ConfigSource::Synthetic(None),
+                required_version: None,
                 project_includes: Globs::new(vec![
                     "tests".to_owned(),
                     "./implementation".to_owned()
@@ -2047,11 +2130,13 @@ mod tests {
                     disable_type_errors_in_ide: None,
                     ignore_errors_in_generated_code: Some(true),
                     infer_with_first_use: None,
+                    check_all_matches: None,
                     pytorch_efficiency_lints: None,
                     strict_callable_subtyping: None,
                     strict_partial_subtyping: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
                     ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
+                    replace_untyped_imports_with_any: None,
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                     check_unannotated_defs: None,
                     infer_return_types: None,
@@ -2075,11 +2160,13 @@ mod tests {
                         disable_type_errors_in_ide: None,
                         ignore_errors_in_generated_code: Some(false),
                         infer_with_first_use: Some(false),
+                        check_all_matches: None,
                         pytorch_efficiency_lints: None,
                         strict_callable_subtyping: Some(false),
                         strict_partial_subtyping: None,
                         replace_imports_with_any: Some(Vec::new()),
                         ignore_missing_imports: Some(Vec::new()),
+                        replace_untyped_imports_with_any: None,
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
                         check_unannotated_defs: None,
                         infer_return_types: None,
@@ -2390,6 +2477,7 @@ mod tests {
         let interpreter = "venv/bin/python3".to_owned();
         let mut config = ConfigFile {
             source: ConfigSource::Synthetic(None),
+            required_version: None,
             project_includes: Globs::new(vec!["path1/**".to_owned(), "path2/path3".to_owned()])
                 .unwrap(),
             project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]).unwrap(),
@@ -2466,6 +2554,7 @@ mod tests {
 
         let expected_config = ConfigFile {
             source: ConfigSource::Synthetic(None),
+            required_version: None,
             project_includes: Globs::new(project_includes_vec).unwrap(),
             project_excludes: Globs::new(project_excludes_vec).unwrap(),
             interpreters: Interpreters {
@@ -2696,12 +2785,14 @@ output-format = "omit-errors"
                 errors: Some(Default::default()),
                 replace_imports_with_any: Some(vec![ModuleWildcard::new("root").unwrap()]),
                 ignore_missing_imports: None,
+                replace_untyped_imports_with_any: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 check_unannotated_defs: None,
                 infer_return_types: None,
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                check_all_matches: Some(false),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
@@ -2721,6 +2812,7 @@ output-format = "omit-errors"
                         replace_imports_with_any: Some(vec![
                             ModuleWildcard::new("highest").unwrap(),
                         ]),
+                        check_all_matches: Some(true),
                         ignore_errors_in_generated_code: None,
                         ..Default::default()
                     },
@@ -2753,6 +2845,9 @@ output-format = "omit-errors"
 
         // test empty value falls back to next
         assert!(config.ignore_errors_in_generated_code(Path::new("this/is/highest/priority")));
+        // test scalar sub-config override and root fallback
+        assert!(config.check_all_matches(Path::new("this/is/highest/priority")));
+        assert!(!config.check_all_matches(Path::new("this/does/not/match/any")));
         // test no pattern match
         assert!(config.replace_imports_with_any(
             Some(Path::new("this/does/not/match/any")),
@@ -2889,6 +2984,10 @@ output-format = "omit-errors"
         // Preset leaves `infer_with_first_use` unset, so the post-preset
         // default-fill in `configure()` provides the default value of `true`.
         assert_eq!(config.root.infer_with_first_use, Some(true));
+        assert_eq!(
+            config.root.replace_untyped_imports_with_any,
+            Some(vec![ModuleWildcard::new("*").unwrap()])
+        );
         let errors = config.root.errors.as_ref().unwrap();
         assert_eq!(
             errors.severity(ErrorKind::BadOverrideMutableAttribute),
@@ -2907,6 +3006,7 @@ output-format = "omit-errors"
             preset: Some(Preset::Legacy),
             root: ConfigBase {
                 check_unannotated_defs: Some(true),
+                replace_untyped_imports_with_any: Some(vec![ModuleWildcard::new("!*").unwrap()]),
                 errors: Some(ErrorDisplayConfig::new(HashMap::from([(
                     ErrorKind::BadOverrideMutableAttribute,
                     Severity::Error,
@@ -2919,6 +3019,10 @@ output-format = "omit-errors"
 
         // User setting overrides preset
         assert_eq!(config.root.check_unannotated_defs, Some(true));
+        assert_eq!(
+            config.root.replace_untyped_imports_with_any,
+            Some(vec![ModuleWildcard::new("!*").unwrap()])
+        );
         let errors = config.root.errors.as_ref().unwrap();
         // Explicit user error override wins
         assert_eq!(
@@ -2944,6 +3048,17 @@ output-format = "omit-errors"
         without_preset.configure();
 
         assert_eq!(with_preset.root, without_preset.root);
+    }
+
+    #[test]
+    fn test_check_all_matches() {
+        let mut default = ConfigFile::default();
+        default.configure();
+        assert!(!default.check_all_matches(Path::new("test.py")));
+
+        let mut enabled = ConfigFile::parse_config("check-all-matches = true").unwrap();
+        enabled.configure();
+        assert!(enabled.check_all_matches(Path::new("test.py")));
     }
 
     #[test]
@@ -3679,12 +3794,14 @@ output-format = "omit-errors"
                     ModuleWildcard::new("example.path.*").unwrap(),
                 ]),
                 ignore_missing_imports: None,
+                replace_untyped_imports_with_any: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 check_unannotated_defs: None,
                 infer_return_types: None,
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                check_all_matches: None,
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
@@ -3721,12 +3838,14 @@ output-format = "omit-errors"
                     ModuleWildcard::new("!example.path.specific.*").unwrap(),
                 ]),
                 ignore_missing_imports: None,
+                replace_untyped_imports_with_any: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 check_unannotated_defs: None,
                 infer_return_types: None,
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                check_all_matches: None,
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
@@ -4078,6 +4197,30 @@ output-format = "omit-errors"
         assert!(!errors.is_empty(), "Expected errors for invalid TOML");
         // The config should still respect the file's location for project root detection.
         assert_eq!(config.source.root_from_file(), Some(root.path()));
+    }
+
+    #[test]
+    fn test_required_version() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        for (required_version, expect_error) in [
+            (format!("=={}", env!("CARGO_PKG_VERSION")), false),
+            ("<0".to_owned(), true),
+            ("not a specifier".to_owned(), true),
+        ] {
+            fs::write(&path, format!("required-version = {required_version:?}")).unwrap();
+            let (config, errors) = ConfigFile::from_file(&path);
+            assert_eq!(
+                config.required_version.as_deref(),
+                Some(required_version.as_str())
+            );
+            if expect_error {
+                assert_eq!(errors.len(), 1);
+                assert_eq!(errors[0].severity(), Severity::Error);
+            } else {
+                assert!(errors.is_empty());
+            }
+        }
     }
 
     #[test]

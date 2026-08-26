@@ -928,7 +928,7 @@ impl PolarsExprMethod {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn polars_method_call(
         &self,
         base: &Type,
@@ -2316,12 +2316,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let b = self.eval_polars_expr(right, schema, errors)?;
                 comparison_value(a, b)
             }
+            Expr::Attribute(_) => {
+                let name = self.polars_col_attribute_name(expr)?;
+                resolve_column(schema, &name, expr.range(), errors).map(ExprValue::Dtype)
+            }
             _ => literal_value(expr),
         }
     }
 
     fn polars_function(&self, func: &Expr) -> Option<PolarsFunction> {
         PolarsFunction::from_callee(&self.expr_infer(func, &self.error_swallower()))
+    }
+
+    fn polars_col_attribute_name(&self, expr: &Expr) -> Option<Name> {
+        let Expr::Attribute(attr) = expr else {
+            return None;
+        };
+        let Type::ClassType(base) = self.expr_infer(&attr.value, &self.error_swallower()) else {
+            return None;
+        };
+        (RuntimeClass::PolarsCol.matches(base.class_object()) && self.is_polars_expr_value(expr))
+            .then(|| attr.attr.id.clone())
     }
 
     /// Prove an expression produces one column, so its output name is well-defined.
@@ -2355,6 +2370,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Expr::StringLiteral(_)
             | Expr::BytesLiteral(_)
             | Expr::NoneLiteral(_) => true,
+            Expr::Attribute(_) if self.polars_col_attribute_name(expr).is_some() => true,
             _ => !self.is_polars_expr_value(expr),
         }
     }
@@ -2434,6 +2450,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Expr::NoneLiteral(_) => {
                 literal_value(expr).map(|_| Name::new_static(POLARS_LITERAL_OUTPUT_NAME))
             }
+            Expr::Attribute(_) => self.polars_col_attribute_name(expr),
             _ => None,
         }
     }

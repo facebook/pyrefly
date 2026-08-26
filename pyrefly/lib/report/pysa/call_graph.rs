@@ -1627,8 +1627,8 @@ impl<'a> CallGraphVisitor<'a> {
                     // Use the bound of the type var as the base class.
                     self.receiver_class_from_type(bound, is_class_method)
                 }
-                Restriction::Flag(domain) => self.receiver_class_from_type(
-                    &domain.as_type(
+                Restriction::ShapeExtension(extension) => self.receiver_class_from_type(
+                    &extension.upper_bound(
                         &self.module_answers_context.stdlib,
                         self.module_answers_context.answers.heap(),
                     ),
@@ -2902,9 +2902,8 @@ impl<'a> CallGraphVisitor<'a> {
 
         // Extract parameter types from the callee's callable signature.
         // Only filter when there's exactly one signature (no overloads).
-        let signatures = callee_type.callable_signatures();
-        let params = match signatures.as_slice() {
-            [sig] => match &sig.params {
+        let params = match callee_type.toplevel_callable_signatures().exactly_one() {
+            Ok((sig, _)) => match &sig.params {
                 Params::List(param_list) => param_list.items(),
                 _ => return higher_order_parameters,
             },
@@ -4089,7 +4088,7 @@ impl<'a> CallGraphVisitor<'a> {
                     let return_type = self
                         .module_answers_context
                         .answers
-                        .get_idx_ref(idx)
+                        .get_idx(idx)
                         .unwrap()
                         .callable_return_type(self.module_answers_context.answers.heap())
                         .map_or(ScalarTypeProperties::none(), |type_| {

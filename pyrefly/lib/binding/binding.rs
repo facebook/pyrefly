@@ -42,6 +42,7 @@ use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprYield;
 use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Keyword;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::StmtAugAssign;
 use ruff_python_ast::StmtClassDef;
@@ -50,6 +51,7 @@ use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
@@ -123,9 +125,9 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 4);
-assert_words!(BindingExpect, 14);
+assert_words!(BindingExpect, 13);
 assert_words!(BindingTypeAlias, 6);
-assert_words!(BindingAnnotation, 13);
+assert_words!(BindingAnnotation, 12);
 assert_words!(BindingClass, 10);
 assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
@@ -137,11 +139,11 @@ assert_bytes!(BindingClassDisjointBase, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_bytes!(BindingClassSubscriptSymmetry, 4);
 assert_words!(BindingClassField, 11);
-assert_bytes!(BindingClassSynthesizedFields, 4);
+assert_words!(BindingClassSynthesizedFields, 2);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
-assert_words!(BindingDecorator, 11);
+assert_words!(BindingDecorator, 10);
 assert_bytes!(BindingDecoratedFunction, 20);
 assert_words!(BindingUndecoratedFunction, 18);
 
@@ -500,7 +502,7 @@ impl Keyed for KeyClass {
 impl Keyed for KeyTParams {
     const EXPORTED: bool = true;
     type Value = BindingTParams;
-    type Answer = TParams;
+    type Answer = Arc<TParams>;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyTParams(idx)
     }
@@ -574,7 +576,7 @@ impl Keyed for KeyClassSynthesizedFields {
     where
         BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
     {
-        bindings.idx_to_key(bindings.get(idx).0).range()
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
     }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         Some(AnyExportedKey::KeyClassSynthesizedFields(self.clone()))
@@ -1213,10 +1215,7 @@ pub enum BindingExpect {
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
     Bool(Expr),
     /// A match statement that may be non-exhaustive at runtime.
-    /// Due to gaps in our type algebra, we only check exhaustiveness for enums & unions
-    /// of enum literals.
-    /// Since this makes use of narrowing, not every match subject will be
-    /// checked for exhaustiveness, only variables and chained subscripts/attributes of variables
+    /// The solver checks closed subject types by default and all representable subjects when configured.
     MatchExhaustiveness {
         subject_idx: Idx<Key>,
         narrowing_subject: Option<NarrowingSubject>,
@@ -2286,6 +2285,23 @@ pub struct SuppressedException {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct LambdaParamId(pub u32);
 
+/// Which rule a lambda's parameters follow, decided while its enclosing expression is bound.
+#[derive(Copy, Clone, Debug)]
+pub enum LambdaKind {
+    Ordinary,
+    /// A lambda whose parameter denotes a type rather than a runtime value.
+    TypeLevel,
+}
+
+/// Binding data for a parameter introduced by a type-level lambda.
+#[derive(Clone, Debug)]
+pub struct TypeLevelLambdaParameter {
+    /// Retained because the lambda expression can still pass through ordinary callable inference.
+    pub id: LambdaParamId,
+    /// Determines the synthetic type binder independently of solve order.
+    pub identifier: Identifier,
+}
+
 /// Data for `Binding::Import`. Carries the `(module, name)` of an imported
 /// symbol, plus metadata for downstream consumers.
 #[derive(Clone, Debug)]
@@ -2329,6 +2345,15 @@ pub struct ImportFallback {
     /// Suppress the missing-attribute error in that case — the bind-time
     /// logic did the same via `is_unreachable_from_static_test`.
     pub is_unreachable: bool,
+}
+
+/// Data for a name in a class body that wasn't found in the static scope.
+#[derive(Clone, Debug)]
+pub struct ClassBodyUnknownName {
+    pub class_key: Idx<KeyClass>,
+    pub name: Identifier,
+    pub suggestion: Option<Name>,
+    pub allow_class_body_forward_reference: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2479,11 +2504,15 @@ pub enum Binding {
     PatternMatchClassKeyword(Box<(Box<Expr>, Identifier, Idx<Key>)>),
     /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean flag is true) clause
     ExceptionHandler(Box<Expr>, bool),
-    /// Binding for a lambda parameter.
+    /// Binding for an ordinary lambda parameter.
     /// The optional owner is the binding whose expression contains this lambda.
     /// If the parameter is solved before that owner has established thread-local
     /// lambda vars, we can force the owner to solve first.
     LambdaParameter(LambdaParamId, Option<Idx<Key>>),
+    /// Parameter of a type-level lambda. It denotes a deterministic synthetic type binder rather
+    /// than a contextual value type. The experimental `shape_extensions.MapIntTuples` operation
+    /// is currently the only syntax that creates this binding.
+    TypeLevelLambdaParameter(Box<TypeLevelLambdaParameter>),
     /// Binding for a function parameter. We either have an annotation, or we will determine the
     /// parameter type when solving the function type.
     FunctionParameter(Box<FunctionParameter>),
@@ -2502,8 +2531,9 @@ pub enum Binding {
     Delete(Box<Expr>),
     /// A name in the class body that wasn't found in the static scope
     /// It could either be an unbound name or a reference to an inherited attribute
-    /// We'll find out which when we solve the class
-    ClassBodyUnknownName(Box<(Idx<KeyClass>, Identifier, Option<Name>)>),
+    /// We'll find out which when we solve the class. The boolean records whether a postponed or
+    /// quoted annotation may also resolve an attribute declared later in the same class body.
+    ClassBodyUnknownName(Box<ClassBodyUnknownName>),
     /// A match statement or if/elif chain that may be type-exhaustive.
     /// Resolves to Never if ANY narrow entry narrows to Never, None otherwise.
     Exhaustive(Box<ExhaustiveBinding>),
@@ -2754,6 +2784,9 @@ impl DisplayWith<Bindings> for Binding {
             Self::LambdaParameter(id, owner) => {
                 write!(f, "LambdaParameter(id={id:?}, owner={owner:?})")
             }
+            Self::TypeLevelLambdaParameter(parameter) => {
+                write!(f, "TypeLevelLambdaParameter({parameter:?})")
+            }
             Self::FunctionParameter(x) => write!(
                 f,
                 "FunctionParameter({})",
@@ -2807,12 +2840,18 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::Delete(x) => write!(f, "Delete({})", m.display(x)),
             Self::ClassBodyUnknownName(x) => {
-                let (class_key, name, suggestion) = x.as_ref();
+                let ClassBodyUnknownName {
+                    class_key,
+                    name,
+                    suggestion,
+                    allow_class_body_forward_reference,
+                } = x.as_ref();
                 write!(
                     f,
-                    "ClassBodyUnknownName({}, {}",
+                    "ClassBodyUnknownName({}, {}, allow_class_body_forward_reference={}",
                     m.display(ctx.idx_to_key(*class_key)),
                     name,
+                    allow_class_body_forward_reference,
                 )?;
                 if let Some(suggestion) = suggestion {
                     write!(f, ", {suggestion}")?;
@@ -2900,9 +2939,9 @@ impl Binding {
                     Some(SymbolKind::Variable)
                 }
             }
-            Binding::LambdaParameter(..) | Binding::FunctionParameter(_) => {
-                Some(SymbolKind::Parameter)
-            }
+            Binding::LambdaParameter(..)
+            | Binding::TypeLevelLambdaParameter(_)
+            | Binding::FunctionParameter(_) => Some(SymbolKind::Parameter),
             Binding::PatternCapture(_) => Some(SymbolKind::Variable),
             Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
                 Some(SymbolKind::Variable)
@@ -3322,11 +3361,18 @@ pub enum MethodSelfKind {
 /// has to be its own key/binding type because of the dependencies between the various pieces of
 /// information about a class: ClassDef -> ClassMetadata -> ClassField -> ClassSynthesizedFields.
 #[derive(Clone, Debug)]
-pub struct BindingClassSynthesizedFields(pub Idx<KeyClass>);
+pub struct BindingClassSynthesizedFields {
+    pub class_idx: Idx<KeyClass>,
+    pub nn_module_registrations: Option<Box<SmallMap<Name, Vec<Expr>>>>,
+}
 
 impl DisplayWith<Bindings> for BindingClassSynthesizedFields {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        write!(f, "BindingClassSynthesizedFields({})", ctx.display(self.0))
+        write!(
+            f,
+            "BindingClassSynthesizedFields({})",
+            ctx.display(self.class_idx)
+        )
     }
 }
 
@@ -3360,6 +3406,7 @@ impl DisplayWith<Bindings> for BindingClassChecks {
 pub struct ShapedArrayMetadata {
     pub shape_name: Name,
     pub range: TextRange,
+    pub builtin_indexing: bool,
 }
 
 /// Binding for the class's metadata (anything obtained directly from base classes,
@@ -3372,7 +3419,7 @@ pub struct BindingClassMetadata {
     /// The class keywords (these are keyword args that appear in the base class list, the
     /// Python runtime will dispatch most of them to the metaclass, but the metaclass
     /// itself can also potentially be one of these).
-    pub keywords: Box<[(Identifier, Expr)]>,
+    pub keywords: Box<[Keyword]>,
     /// The class decorators.
     pub decorators: Box<[Idx<KeyDecorator>]>,
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.

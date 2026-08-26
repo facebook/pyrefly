@@ -321,7 +321,6 @@ fn extract_params(
             .expect("decorated function must have an undecorated answer")
     });
     let resolved_map: HashMap<&str, &Param> = undecorated
-        .as_ref()
         .map(|d| {
             d.params
                 .iter()

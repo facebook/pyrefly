@@ -119,7 +119,7 @@ enum IntersectFallback {
     Right,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // Get the union of all members of an enum, minus the specified member
     fn subtract_enum_member(&self, instance: Instance, name: &Name) -> Type {
         if self
@@ -166,8 +166,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Bound(bound) => self.disjoint_base(bound),
-                Restriction::Flag(domain) => {
-                    self.disjoint_base(&domain.as_type(self.stdlib, self.heap))
+                Restriction::ShapeExtension(extension) => {
+                    self.disjoint_base(&extension.upper_bound(self.stdlib, self.heap))
                 }
                 Restriction::Constraints(_) | Restriction::Unrestricted => {
                     self.stdlib.object().class_object().dupe()
@@ -417,8 +417,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     left.clone()
                 }
-            } else if !left.is_any() && self.is_subset_eq(left, right) {
-                // is_any check because `Any <: int` is always true, but `Any - int` shouldn't produce Never.
+            } else if !left.is_any() && !right.is_any() && self.is_subset_eq(left, right) {
+                // The is_any checks are because `Any <: int` and `int <: Any` are both true, but
+                // neither `Any - int` nor `int - Any` should produce Never.
                 self.heap.mk_never()
             } else {
                 left.clone()
@@ -700,12 +701,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.distribute_over_union(left, |l| {
             self.with_fresh_class_info_target(l, right, |right| {
                 if right.is_any() {
-                    // NOTE(grievejia): The most precise refinement would be `left`:
-                    // `isinstance(x, Any)` provides no concrete evidence about the type
-                    // of `x`, so keeping the original type is sound. In practice, that is
-                    // currently too strict for some primer projects. Refining to `Any` is
-                    // a gradual-typing compromise; we can revisit `left` in strict mode.
-                    right.clone()
+                    // A class object whose identity is unknown gives no evidence about the
+                    // subject, so keep the subject's type rather than degrading it to `Any`.
+                    // The cost is losing the permissiveness of `Any` inside the branch.
+                    l.clone()
                 } else {
                     // TODO: falling back to Never when the lhs is a union is a hack to get
                     // reasonable behavior in cases like this:
@@ -875,8 +874,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// with the type. We allow negative narrowing as long as it is not definitely unsafe - that
     /// is, if we're unsure, we allow it.
     fn expr_as_class_info(&self, e: &Expr, errors: &ErrorCollector) -> Vec<(Type, bool)> {
-        fn f<'a, Ans: LookupAnswer>(
-            me: &AnswersSolver<'a, Ans>,
+        fn f<Ans: LookupAnswer>(
+            me: &AnswersSolver<'_, '_, Ans>,
             e: &Expr,
             res: &mut Vec<(Type, bool)>,
             errors: &ErrorCollector,
@@ -956,7 +955,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         for right in self.as_class_info(right.clone()) {
-            if self.unwrap_class_object_silently(&right).is_some() {
+            // A class object whose identity is unknown gives no evidence about the subject, so
+            // only narrow against targets that resolve to a specific class.
+            let target_is_known_class = self
+                .unwrap_class_object_silently(&right)
+                .is_some_and(|(_, target)| !target.is_any());
+            if target_is_known_class {
                 // Handle type vars specially: we need to enforce restrictions and avoid
                 // simplifying them away.
                 let mut quantifieds = Vec::new();
@@ -1721,7 +1725,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                     if let Type::TypeIs(t) = ret {
                         let target = if is_builtin_callable {
-                            // `callable` proves callability but reveals nothing about the return type.
+                            // `callable` is annotated as `TypeIs[Callable[..., object]]` which is
+                            // too conservative and prone to false positives, see
+                            // https://github.com/facebook/pyrefly/issues/911
                             self.heap.mk_callable_ellipsis(self.heap.mk_any_implicit())
                         } else {
                             *t
@@ -2251,9 +2257,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    /// Determines if a type should be checked for match exhaustiveness.
-    /// We check exhaustiveness when the type has a finite, known set of possible values.
-    fn should_check_exhaustiveness(&self, ty: &Type) -> bool {
+    /// Whether the subject type is closed enough for default exhaustiveness checking.
+    pub(crate) fn should_check_exhaustiveness_by_default(&self, ty: &Type) -> bool {
         match ty {
             Type::ClassType(cls) => {
                 // Non-subclassable classes are exhaustible, with the exception of Flag enums,
@@ -2275,7 +2280,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && union
                         .members
                         .iter()
-                        .all(|m| self.should_check_exhaustiveness(m))
+                        .all(|m| self.should_check_exhaustiveness_by_default(m))
             }
 
             _ => false,
@@ -2314,9 +2319,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
-        let subject_info = self.with_type_for_exhaustiveness_check(&self.get_idx(*subject_idx));
-        // We only check match exhaustiveness if the subject is an enum or a union of enum literals
-        if !self.should_check_exhaustiveness(subject_info.ty()) {
+        let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
+        if !self.solver().check_all_matches
+            && !self.should_check_exhaustiveness_by_default(subject_info.ty())
+        {
             return;
         }
         let ignore_errors = self.error_swallower();
@@ -2378,7 +2384,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !Self::is_match_case_reachability_op(op) {
             return;
         }
-        let subject_info = self.with_type_for_exhaustiveness_check(&self.get_idx(*subject_idx));
+        let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
         let subject_ty = subject_info.ty().clone();
         if subject_ty.is_any()
             || matches!(&subject_ty, Type::ClassType(cls) if cls.is_builtin("object"))

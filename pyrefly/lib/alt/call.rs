@@ -12,6 +12,7 @@ use itertools::Itertools;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_types::dimension::ShapeError;
 use pyrefly_types::function::BodyKind;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
@@ -19,9 +20,7 @@ use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
-use pyrefly_types::types::Forall;
 use pyrefly_types::types::NNModuleType;
-use pyrefly_types::types::Overload;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use pyrefly_util::prelude::SliceExt;
@@ -53,7 +52,7 @@ use crate::alt::class::dataclass::ReplaceKind;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::nn_module_specials::is_nn_sequential;
 use crate::alt::unwrap::HintRef;
-use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
+use crate::alt::unwrap::MAX_HINT_WIDTH;
 use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -222,7 +221,7 @@ impl ConstructedInstance {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn error_call_target(
         &self,
         errors: &ErrorCollector,
@@ -453,15 +452,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             Some(*quantified),
                         )
                     }
-                    Restriction::Flag(domain) => {
-                        let targets = domain
-                            .types(self.stdlib)
+                    Restriction::ShapeExtension(extension) => {
+                        let targets = extension
+                            .upper_bound_members(self.stdlib)
                             .into_iter()
                             .map(|ty| {
                                 let cls = match ty {
                                     Type::ClassType(cls) => cls,
+                                    Type::Tuple(tuple) => self.erase_tuple_type(tuple),
                                     ty => unreachable!(
-                                        "Flag domain members materialize to builtin class types, got `{ty}`"
+                                        "shape-extension upper-bound members materialize to builtin types, got `{ty}`"
                                     ),
                                 };
                                 CallTarget::Class(
@@ -703,8 +703,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     CallTargetLookup::Ok(Box::new(CallTarget::Union(targets)))
                 }
-                Restriction::Flag(domain) => self
-                    .as_call_target_impl(domain.as_type(self.stdlib, self.heap), Some((*q).clone()))
+                Restriction::ShapeExtension(extension) => self
+                    .as_call_target_impl(
+                        extension.upper_bound(self.stdlib, self.heap),
+                        Some((*q).clone()),
+                    )
                     .with_error_type(|_| Type::Quantified(q)),
             },
             Type::KwCall(call) => {
@@ -971,6 +974,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) {
         for error in errors_to_add.into_iter().unique() {
             match error {
+                ReturnTypeResolutionError::TypeLevelDsl(ShapeError::BadIndex { message }) => {
+                    self.error_with_context(errors, range, ErrorKind::BadIndex, message, context)
+                }
                 ReturnTypeResolutionError::TypeLevelDsl(error) => self.error_with_context(
                     errors,
                     range,
@@ -997,7 +1003,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         if let Some(hint) = hint
             && let hints = hint.types()
-            && hints.len() <= MAX_CALL_HINT_WIDTH
+            && hints.len() <= MAX_HINT_WIDTH
         {
             let mut ret_no_match_hint = None;
             for member_hint in hints.iter() {
@@ -1081,18 +1087,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None => (args, keywords),
         };
 
-        self.construct_with_hint(arguments_range, errors, context, hint, |hint| {
-            self.construct_class_inner(
-                cls.clone(),
-                constructor_kind.clone(),
-                args,
-                keywords,
-                arguments_range,
-                callee_range,
-                context,
-                hint,
-            )
-        })
+        self.construct_with_hint(
+            arguments_range,
+            errors,
+            context,
+            HintRef::filter_for_constructor(hint, cls.targs()),
+            |hint| {
+                self.construct_class_inner(
+                    cls.clone(),
+                    constructor_kind.clone(),
+                    args,
+                    keywords,
+                    arguments_range,
+                    callee_range,
+                    context,
+                    hint,
+                )
+            },
+        )
     }
 
     fn construct_class_inner(
@@ -1124,6 +1136,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Tracks whether we've already recorded a trace for IDE features.
         // Priority: metaclass __call__ > overridden __new__ > __init__.
         let mut recorded_trace = false;
+        let prefer_init_trace = self.constructor_prefers_init_over_inherited_new(&cls);
         let errors = self.error_collector();
         if let Some(ret) = self.call_metaclass(
             &cls,
@@ -1220,7 +1233,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         AttributeReferenceKind::ConstructorCall,
                     );
                 }
-                if !recorded_trace {
+                if !recorded_trace && !prefer_init_trace {
                     self.record_resolved_trace(arguments_range, &new_method);
                     recorded_trace = true;
                 }
@@ -1418,16 +1431,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
     ) -> Type {
-        self.construct_with_hint(arguments_range, errors, context, hint, |hint| {
-            self.construct_typed_dict_inner(
-                typed_dict.clone(),
-                args,
-                keywords,
-                arguments_range,
-                context,
-                hint,
-            )
-        })
+        self.construct_with_hint(
+            arguments_range,
+            errors,
+            context,
+            HintRef::filter_for_constructor(hint, typed_dict.targs()),
+            |hint| {
+                self.construct_typed_dict_inner(
+                    typed_dict.clone(),
+                    args,
+                    keywords,
+                    arguments_range,
+                    context,
+                    hint,
+                )
+            },
+        )
     }
 
     fn construct_typed_dict_inner(
@@ -1709,6 +1728,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 };
                 self.check_unnecessary_type_conversion(&cls, args, arguments_range, errors);
+                let class_object = cls.class_object().clone();
                 let constructed_type = self.construct_class(
                     cls,
                     constructor_kind,
@@ -1724,7 +1744,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // this class is being called via a quantified type with a class
                 // bound, to allow calls on TypeVars with class bounds to work
                 // as expected.
-                if let Some(quantified) = as_quantified_bound {
+                if let Some(quantified) = as_quantified_bound
+                    && self.is_compatible_constructor_return(&constructed_type, &class_object)
+                {
                     Type::Quantified(Box::new(quantified))
                 } else {
                     constructed_type
@@ -1931,6 +1953,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         hint: Option<HintRef>,
         ctor_targs: Option<&mut TArgs>,
     ) -> Type {
+        let hint = HintRef::filter_for_call(hint, tparams);
         let retry_input = hint.map(|_| (callable.clone(), self_obj.clone()));
         // First try the call without the hint to see if it succeeds.
         let mut ctor_targs_no_hint = ctor_targs.as_ref().map(|x| (**x).clone());
@@ -2268,6 +2291,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             (default_constructor(), false)
         };
+        if overrides_init && self.constructor_prefers_init_over_inherited_new(cls) {
+            // An inherited catch-all `__new__` should not obscure a more useful `__init__`
+            // signature. Direct construction still checks both methods independently.
+            return init_attr_ty;
+        }
         if !overrides_new && overrides_init {
             // If `__init__` is overridden and `__new__` is inherited from object, use `__init__`
             init_attr_ty
@@ -2293,15 +2321,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Convert a bare class definition while keeping its type parameters generic.
     pub fn constructor_to_callable_for_class_def(&self, cls: &Class) -> Type {
-        let class_tparams = self.get_class_tparams(cls);
-        if class_tparams.is_empty() {
+        let Some(class_tparams) = self
+            .get_class_tparams(cls)
+            .filter(|tparams| !tparams.is_empty())
+        else {
             return Type::type_of(self.promote_silently(cls));
-        }
+        };
         // `cls` is generic. `constructor_to_callable` converts it to a constructor in which its
         // type parameters are free in the signature.
         let constructor = self.constructor_to_callable(&self.as_class_type_unchecked(cls));
         // Quantify the free type parameters to make the resulting callable generic.
-        self.normalize_class_constructor_tparams(constructor, class_tparams.as_ref())
+        self.normalize_class_constructor_tparams(constructor, class_tparams)
     }
 
     /// Normalize class type parameters for each callable branch in `ty`.
@@ -2317,7 +2347,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .collect();
             return self.unions(members);
         }
-        ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
+        ty.transform_toplevel_callable_signatures(|callable: &mut Callable, tparams| {
             let mut parameter_tparams = SmallSet::new();
             callable
                 .params
@@ -2330,15 +2360,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .subst_mut_fn(&mut |candidate| (candidate == q).then(|| gradual.clone()));
                 }
             }
-        });
 
-        fn quantify<T: Visit<Type>>(
-            body: &T,
-            tparams: Option<&TParams>,
-            class_tparams: &TParams,
-        ) -> Arc<TParams> {
             let mut used = SmallSet::new();
-            body.visit(&mut |ty| ty.collect_quantifieds(&mut used));
+            callable.visit(&mut |ty| ty.collect_quantifieds(&mut used));
             let mut quantifieds = Vec::new();
             for q in tparams
                 .iter()
@@ -2349,46 +2373,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     quantifieds.push(q.clone());
                 }
             }
-            Arc::new(TParams::new(quantifieds))
-        }
-
-        match ty {
-            Type::Forall(forall) => {
-                let Forall { tparams, body } = *forall;
-                let tparams = quantify(&body, Some(&tparams), class_tparams);
-                body.forall(tparams)
-            }
-            Type::Overload(Overload {
-                signatures,
-                metadata,
-            }) => {
-                let signatures = signatures.mapped(|sig| {
-                    let (body, tparams) = match sig {
-                        OverloadType::Function(body) => (body, None),
-                        OverloadType::Forall(Forall { tparams, body }) => (body, Some(tparams)),
-                    };
-                    let tparams = quantify(&body, tparams.as_deref(), class_tparams);
-                    if tparams.is_empty() {
-                        OverloadType::Function(body)
-                    } else {
-                        OverloadType::Forall(Forall { tparams, body })
-                    }
-                });
-                self.heap.mk_overload(Overload {
-                    signatures,
-                    metadata,
-                })
-            }
-            Type::Function(body) => {
-                let tparams = quantify(&*body, None, class_tparams);
-                Forallable::Function(*body).forall(tparams)
-            }
-            Type::Callable(body) => {
-                let tparams = quantify(&*body, None, class_tparams);
-                Forallable::Callable(*body).forall(tparams)
-            }
-            ty => ty,
-        }
+            *tparams = (!quantifieds.is_empty()).then(|| Arc::new(TParams::new(quantifieds)));
+        });
+        ty
     }
 
     pub fn expr_call_infer(
@@ -2407,7 +2394,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             let input_ty = self.expr_infer(&x.arguments.args[0], errors);
             if let Some(result) =
-                self.try_nn_sequential_chain_forward(cls, input_ty, x.range, errors)
+                self.try_nn_sequential_chain_forward(cls, input_ty, x.range(), errors)
             {
                 return result;
             }
@@ -2419,32 +2406,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Because we have to construct a binding for super in order to fill in implicit arguments,
             // we can't handle things like local aliases to super. If we hit a case where the binding
             // wasn't constructed, fall back to `Any`.
-            self.get_hashed_opt(Hashed::new(&Key::SuperInstance(x.range)))
+            self.get_hashed_opt(Hashed::new(&Key::SuperInstance(x.range())))
                 .map_or_else(
                     || self.heap.mk_any_implicit(),
-                    |type_info| type_info.arc_clone_ty(),
+                    |type_info| type_info.ty().clone(),
                 )
         } else {
             self.expand_mut(&mut callee_ty);
             self.check_unittest_mock_patch_target(&callee_ty, &x.arguments, errors);
 
-            let args;
-            let kws;
             let call = CallWithTypes::new();
-            if callee_ty.is_union() {
+            let (args, kws) = if callee_ty.is_union() {
                 // If we have a union we will distribute over it, and end up duplicating each function call.
-                args = x
-                    .arguments
-                    .args
-                    .map(|x| call.call_arg(&CallArg::expr_maybe_starred(x), self, errors));
-                kws = x
-                    .arguments
-                    .keywords
-                    .map(|x| call.call_keyword(&CallKeyword::new(x), self, errors));
+                (
+                    x.arguments
+                        .args
+                        .map(|x| call.call_arg(&CallArg::expr_maybe_starred(x), self, errors)),
+                    x.arguments
+                        .keywords
+                        .map(|x| call.call_keyword(&CallKeyword::new(x), self, errors)),
+                )
             } else {
-                args = x.arguments.args.map(CallArg::expr_maybe_starred);
-                kws = x.arguments.keywords.map(CallKeyword::new);
-            }
+                (
+                    x.arguments.args.map(CallArg::expr_maybe_starred),
+                    x.arguments.keywords.map(CallKeyword::new),
+                )
+            };
 
             let result = self.distribute_over_union(&callee_ty, |ty| {
                 // NotImplemented is a singleton constant, not a callable class.
@@ -2466,7 +2453,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         hint,
                         errors,
                     ),
-                _ if ty.is_assert_shape() => self
+                _ if ty.toplevel_func_metadata().is_some_and(|meta| {
+                    meta.flags.is_assert_shape || meta.kind == FunctionKind::AssertShape
+                }) => self
                     .call_assert_shape(
                         &x.arguments.args,
                         &x.arguments.keywords,

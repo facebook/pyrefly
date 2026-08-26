@@ -43,7 +43,7 @@ fn is_chained_attribute_access(x: &Expr) -> bool {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Apply a special form that takes exactly one type argument.
     /// Validates arity, evaluates the argument, wraps the result in a type form.
     pub(crate) fn apply_unary_special_form(

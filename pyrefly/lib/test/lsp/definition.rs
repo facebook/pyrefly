@@ -85,6 +85,25 @@ Definition Result: None
 }
 
 #[test]
+fn operator_does_not_include_binop_lhs_literal() {
+    let code = r#"
+x = 1 + 1
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | x = 1 + 1
+        ^
+Definition Result: None
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn no_crash_on_dead_branch_test() {
     let code = r#"
 from typing import TYPE_CHECKING
@@ -697,6 +716,31 @@ Definition Result:
 Definition Result:
 5 |     def bar(self) -> None:
             ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn keyword_argument_test_class_field() {
+    let code = r#"
+class Foo:
+    x: int
+
+def test() -> None:
+    Foo(x=1)
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+6 |     Foo(x=1)
+            ^
+Definition Result:
+3 |     x: int
+        ^
 "#
         .trim(),
         report.trim(),
@@ -2499,6 +2543,46 @@ from mymod.submod.deep import Bar
 }
 
 #[test]
+fn goto_def_on_module_components_in_string_literal() {
+    let code = r#"
+def include(path: str): ...
+include("accounts.urls")
+#         ^        ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("accounts", "# accounts/__init__.py"),
+            ("accounts.urls", "# accounts/urls.py"),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+3 | include("accounts.urls")
+              ^
+Definition Result:
+1 | # accounts/__init__.py
+    ^
+
+3 | include("accounts.urls")
+                       ^
+Definition Result:
+1 | # accounts/urls.py
+    ^
+
+
+# accounts.py
+
+# accounts.urls.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn goto_def_on_first_component_when_intermediate_module_missing() {
     // Only mymod.submod exists, not mymod itself
     let mymod_submod_init = r#"# mymod/submod/__init__.py
@@ -3057,6 +3141,60 @@ Definition Result:
 Definition Result:
 18 | def qualified_lru_add(a: int, b: int) -> int:
          ^^^^^^^^^^^^^^^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn goto_def_decorated_function_call_goes_to_function() {
+    let task_code = r#"
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+class Task[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def task(*, retries: int = 0) -> Callable[[Callable[P, R]], Task[P, R]]: ...
+"#;
+    let decorated_code = r#"
+from task import task
+
+@task(retries=2)
+def foo(value: int) -> int:
+    return value + 1
+"#;
+    let code = r#"
+from decorated import foo
+
+foo(value=1)
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("decorated", decorated_code),
+            ("task", task_code),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+4 | foo(value=1)
+      ^
+Definition Result:
+5 | def foo(value: int) -> int:
+        ^^^
+
+
+# decorated.py
+
+# task.py
 "#
         .trim(),
         report.trim(),

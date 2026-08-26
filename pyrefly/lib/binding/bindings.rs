@@ -29,7 +29,8 @@ use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::gas::Gas;
-use pyrefly_util::suggest::best_suggestion;
+use pyrefly_util::suggest::Candidate;
+use pyrefly_util::suggest::Search;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::Identifier;
@@ -83,12 +84,14 @@ use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
+use crate::binding::binding::LambdaKind;
 use crate::binding::binding::LambdaParamId;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LegacyTypeParamModule;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeAliasRefBinding;
+use crate::binding::binding::TypeLevelLambdaParameter;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::metadata::BindingsMetadata;
@@ -571,18 +574,26 @@ impl Bindings {
 
     pub fn get_lambda_param_id(&self, name: &Identifier) -> LambdaParamId {
         let b = self.get(self.key_to_idx(&Key::Definition(ShortIdentifier::new(name))));
-        if let Binding::LambdaParameter(id, _) = b {
-            *id
-        } else {
-            panic!(
+        match b {
+            Binding::LambdaParameter(id, _) => *id,
+            Binding::TypeLevelLambdaParameter(parameter) => parameter.id,
+            _ => panic!(
                 "Internal error: unexpected binding for lambda parameter `{}` @  {:?}: {}, module={}, path={}",
                 name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
                 self.module().path(),
-            )
+            ),
         }
+    }
+
+    /// Whether `name` is bound as an experimental `MapIntTuples` mapper parameter.
+    pub fn is_type_level_lambda_parameter(&self, name: &Identifier) -> bool {
+        matches!(
+            self.get(self.key_to_idx(&Key::Definition(ShortIdentifier::new(name)))),
+            Binding::TypeLevelLambdaParameter(_)
+        )
     }
 
     pub fn get_function_param(&self, name: &Identifier) -> &FunctionParameter {
@@ -714,8 +725,8 @@ impl Bindings {
             );
         }
 
-        if let Some(exported_names) = exports.get_explicit_dunder_all_names_iter() {
-            builder.record_used_imports_from_dunder_all_names(exported_names);
+        if let Some(exported_names) = exports.explicit_dunder_all_names() {
+            builder.record_used_imports_from_dunder_all_names(exported_names.iter());
         }
 
         let unused_imports = builder.scopes.collect_module_unused_imports();
@@ -805,6 +816,7 @@ impl Bindings {
             | SemanticSyntaxErrorKind::LateFutureImport
             | SemanticSyntaxErrorKind::ReboundComprehensionVariable
             | SemanticSyntaxErrorKind::DuplicateParameter(_)
+            | SemanticSyntaxErrorKind::DuplicateKeywordArgument(_)
             | SemanticSyntaxErrorKind::NonlocalDeclarationAtModuleLevel
             | SemanticSyntaxErrorKind::MultipleCaseAssignment(_)
             | SemanticSyntaxErrorKind::DuplicateMatchKey(_)
@@ -841,7 +853,8 @@ impl Bindings {
             | SemanticSyntaxErrorKind::NamedExpressionInClassBodyComprehension
             | SemanticSyntaxErrorKind::TypeParameterDefaultOrder(_)
             | SemanticSyntaxErrorKind::MultipleStarredNamesInSequencePattern
-            | SemanticSyntaxErrorKind::ReturnInGenerator => false,
+            | SemanticSyntaxErrorKind::ReturnInGenerator
+            | SemanticSyntaxErrorKind::NonlocalParameter(_) => false,
         }
     }
 }
@@ -1090,32 +1103,24 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn suggest_builtin_name(&self, missing: &Name) -> Option<Name> {
-        // Hold the wildcard sets so `best_suggestion` can borrow their names; only the chosen
-        // suggestion is cloned, not every builtin candidate.
+    pub fn suggest_similar_name(&self, missing: &Name) -> Option<Name> {
+        // Hold the wildcard sets so their names can be borrowed for the search;
+        // only the chosen suggestion is cloned, not every builtin candidate.
         let wildcards: Vec<_> = fallback_builtin_modules(self.module_info.name())
             .filter_map(|module| self.lookup.get_wildcard(module))
             .collect();
-        best_suggestion(
-            missing,
-            wildcards
-                .iter()
-                .flat_map(|wildcard| wildcard.iter())
-                .map(|candidate| (candidate, 0)),
-        )
-    }
-
-    pub fn suggest_similar_name(&self, missing: &Name, position: TextSize) -> Option<Name> {
-        let scope_suggestion = self.scopes.suggest_similar_name(missing, position);
-        let builtin_suggestion = self.suggest_builtin_name(missing);
-        let mut candidates = Vec::new();
-        if let Some(scope_suggestion) = &scope_suggestion {
-            candidates.push((scope_suggestion, 0));
-        }
-        if let Some(builtin_suggestion) = &builtin_suggestion {
-            candidates.push((builtin_suggestion, 1));
-        }
-        best_suggestion(missing, candidates)
+        // Builtins are the outermost scope there is, so they are searched in the
+        // same pass and lose every tie to a name that is actually in scope.
+        // Sharing one pass also lets a close match found anywhere tighten the
+        // bound for everything after it.
+        let builtins = wildcards
+            .iter()
+            .flat_map(|wildcard| wildcard.iter())
+            .map(|candidate| Candidate::measured(candidate, usize::MAX));
+        let mut search = Search::new(missing);
+        self.scopes
+            .fold_suggestion_candidates(&mut search, builtins);
+        search.finish()
     }
 
     /// Materialize a lazily-discovered implicit builtin as an entry in the module's static
@@ -1453,6 +1458,22 @@ impl<'a> BindingsBuilder<'a> {
             .emit();
     }
 
+    /// Like [`Self::error_with_detail`], but for a detail that costs something
+    /// to work out. Modules loaded below `Require::Errors` discard everything
+    /// they collect, so for them the detail is never computed at all.
+    pub fn error_with_detail_from(
+        &self,
+        range: TextRange,
+        kind: ErrorKind,
+        header: String,
+        detail: impl FnOnce() -> Option<String>,
+    ) {
+        self.errors
+            .error_builder(range, kind, header)
+            .with_detail_from(detail)
+            .emit();
+    }
+
     pub fn declare_mutable_capture(&mut self, name: &Identifier, kind: MutableCaptureKind) {
         // Record any errors finding the identity of the mutable capture, and get a binding
         // that provides the type coming from the parent scope.
@@ -1707,37 +1728,44 @@ impl<'a> BindingsBuilder<'a> {
         let (default_idx, partial_type_info) =
             self.follow_to_partial_type(deferred.lookup_result_idx);
 
-        if let Some((def_idx, first_use)) = partial_type_info {
-            // Determine side effects based on usage and first_use state.
-            if deferred.usage.is_static() {
-                self.mark_does_not_pin_if_first_use(def_idx);
-            } else if deferred.usage.may_pin_partial_type() {
-                // Normal reads: if this is the first use, mark it.
-                if matches!(first_use, FirstUse::Undetermined)
-                    && let Some(current_idx) = deferred.usage.current_idx()
-                {
-                    self.mark_first_use(def_idx, current_idx);
+        let (target_idx, forward_to_first_use) =
+            if let Some((def_idx, first_use)) = partial_type_info {
+                // Determine side effects based on usage and first_use state.
+                if deferred.usage.is_static() {
+                    self.mark_does_not_pin_if_first_use(def_idx);
+                } else if deferred.usage.may_pin_partial_type() {
+                    // Normal reads: if this is the first use, mark it.
+                    if matches!(first_use, FirstUse::Undetermined)
+                        && let Some(current_idx) = deferred.usage.current_idx()
+                    {
+                        self.mark_first_use(def_idx, current_idx);
+                    }
                 }
-            }
-            // Non-pinning reads leave first_use as Undetermined so that the next
-            // semantic read can still become the first use for pinning.
-            // All partial type reads forward to the NameAssign (def_idx).
-            self.insert_binding_idx(deferred.bound_name_idx, Binding::ForwardToFirstUse(def_idx));
-        } else {
-            let orig_binding = self.idx_to_binding(default_idx);
-            let binding = if let Some(b) = orig_binding
-                && matches!(b, Binding::LambdaParameter(..))
-            {
-                // Lambda parameters have special handling in Key::check_shortcut.
-                // We bind directly to the definition to ensure the shortcut is always detected.
-                b.clone()
-            } else if deferred.promote {
-                Binding::PromoteForward(default_idx)
+                // Non-pinning reads leave first_use as Undetermined so that the next
+                // semantic read can still become the first use for pinning.
+                // All partial type reads forward to the NameAssign (def_idx).
+                (def_idx, true)
             } else {
-                Binding::Forward(default_idx)
+                (default_idx, false)
             };
-            self.insert_binding_idx(deferred.bound_name_idx, binding);
-        }
+
+        let binding = if forward_to_first_use {
+            Binding::ForwardToFirstUse(target_idx)
+        } else if let Some(b) = self.idx_to_binding(target_idx)
+            && matches!(
+                b,
+                Binding::LambdaParameter(..) | Binding::TypeLevelLambdaParameter(_)
+            )
+        {
+            // Lambda parameters have special handling in Key::check_shortcut.
+            // We bind directly to the definition to ensure the shortcut is always detected.
+            b.clone()
+        } else if deferred.promote {
+            Binding::PromoteForward(target_idx)
+        } else {
+            Binding::Forward(target_idx)
+        };
+        self.insert_binding_idx(deferred.bound_name_idx, binding);
 
         if matches!(
             deferred.usage,
@@ -2121,7 +2149,10 @@ impl<'a> BindingsBuilder<'a> {
                         }
                     }
                     if let Some(default_expr) = &mut tv.default {
-                        if matches!(bound, Some(TypeParameterBound::ShapeFlag { .. })) {
+                        if bound
+                            .as_ref()
+                            .is_some_and(TypeParameterBound::infer_default_as_value)
+                        {
                             self.ensure_expr(default_expr, &mut usage);
                         } else {
                             self.ensure_type_with_usage(default_expr, None, &mut usage);
@@ -2192,13 +2223,19 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn bind_lambda_param(&mut self, name: &Identifier, owner: Option<Idx<Key>>) {
+    pub fn bind_lambda_param(&mut self, name: &Identifier, kind: LambdaKind, usage: &Usage) {
         let id = LambdaParamId(self.next_lambda_param_id);
         self.next_lambda_param_id += 1;
-        let idx = self.insert_binding(
-            Key::Definition(ShortIdentifier::new(name)),
-            Binding::LambdaParameter(id, owner),
-        );
+        let binding = match kind {
+            LambdaKind::Ordinary => Binding::LambdaParameter(id, usage.current_idx()),
+            LambdaKind::TypeLevel => {
+                Binding::TypeLevelLambdaParameter(Box::new(TypeLevelLambdaParameter {
+                    id,
+                    identifier: name.clone(),
+                }))
+            }
+        };
+        let idx = self.insert_binding(Key::Definition(ShortIdentifier::new(name)), binding);
         self.scopes.add_parameter_to_current_static(name, None);
         self.bind_name(&name.id, idx, FlowStyle::Other);
     }

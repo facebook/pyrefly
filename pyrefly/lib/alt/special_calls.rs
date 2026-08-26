@@ -12,7 +12,6 @@
  */
 
 use pyrefly_python::dunder;
-use pyrefly_types::function::FuncMetadata;
 use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
@@ -40,7 +39,7 @@ use crate::types::function::FunctionKind;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn call_assert_type(
         &self,
         args: &[Expr],
@@ -705,7 +704,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Returns the list of types passed as the second argument to `isinstance` or `issubclass`.
     pub fn as_class_info(&self, ty: Type) -> Vec<Type> {
-        fn f<'a, Ans: LookupAnswer>(me: &AnswersSolver<'a, Ans>, t: Type, res: &mut Vec<Type>) {
+        fn f<Ans: LookupAnswer>(me: &AnswersSolver<'_, '_, Ans>, t: Type, res: &mut Vec<Type>) {
             match t {
                 Type::Var(v) if let Some(_guard) = me.recurse(v) => {
                     f(me, me.solver().force_var(v), res)
@@ -780,10 +779,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Try to apply the decorator to arg_ty. Does nothing if the decorator does not have known
             // typing effects or if arg_ty is not a function.
             let mut applied = false;
-            arg_ty.transform_toplevel_func_metadata(|meta: &mut FuncMetadata| {
+            if let Some(meta) = arg_ty.toplevel_func_metadata_mut() {
                 applied |=
                     self.set_flag_from_special_decorator(&mut meta.flags, &special_decorator);
-            });
+            };
             if applied { Some(arg_ty) } else { None }
         } else {
             None

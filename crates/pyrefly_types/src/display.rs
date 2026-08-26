@@ -32,7 +32,6 @@ use crate::callable::Required;
 use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
 use crate::data_frame::SchemaCompleteness;
-use crate::function::FuncMetadata;
 use crate::function::Function;
 use crate::function::FunctionKind;
 use crate::heap::TypeHeap;
@@ -49,6 +48,7 @@ use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
 use crate::type_alias::TypeAliasRef;
 use crate::type_alias::TypeAliasStyle;
+use crate::type_level_dsl::TypeLevelDslFunction;
 use crate::type_output::AnnotationOutput;
 use crate::type_output::AnnotationPart;
 use crate::type_output::DisplayOutput;
@@ -407,7 +407,7 @@ impl<'a> TypeDisplayContext<'a> {
                     commas_iter(|| tys.iter().map(|ty| self.display_internal(ty)))
                 )?;
             }
-            Restriction::Flag(domain) => write!(f, ": Flag[{domain}]")?,
+            Restriction::ShapeExtension(extension) => write!(f, ": {extension}")?,
             _ => {}
         }
         if let Some(default) = param.default() {
@@ -594,6 +594,23 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
+    /// Whether a type has to be parenthesized for display in a sequence of types, such as a union
+    /// written with the `|` syntax.
+    fn needs_parens_in_sequence(&self, t: &Type) -> bool {
+        match t {
+            Type::Callable(_)
+            | Type::CallableResidual(_)
+            | Type::Function(_)
+            | Type::Intersect(_) => true,
+            // Overloads are already wrapped in `Overload[...]`, and query mode wraps bound methods in `BoundMethod[...]`.
+            Type::BoundMethod(m) => {
+                !matches!(m.func, BoundMethodType::Overload(_))
+                    && self.lsp_display_mode != LspDisplayMode::Query
+            }
+            _ => false,
+        }
+    }
+
     /// Helper function to format a sequence of types with a separator.
     /// Used for unions, intersections, and other type sequences.
     fn fmt_type_sequence<'b>(
@@ -608,14 +625,7 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str(separator)?;
             }
 
-            let needs_parens = wrap_callables_and_intersect
-                && matches!(
-                    t,
-                    Type::Callable(_)
-                        | Type::CallableResidual(_)
-                        | Type::Function(_)
-                        | Type::Intersect(_)
-                );
+            let needs_parens = wrap_callables_and_intersect && self.needs_parens_in_sequence(t);
             if needs_parens {
                 output.write_str("(")?;
             }
@@ -854,18 +864,6 @@ impl<'a> TypeDisplayContext<'a> {
         self.fmt_helper_generic(&value_type, false, output)
     }
 
-    fn function_signature_for_display<'b>(
-        &self,
-        signature: &'b Callable,
-        metadata: &'b FuncMetadata,
-    ) -> &'b Callable {
-        if self.lsp_display_mode == LspDisplayMode::Hover {
-            metadata.display_signature.as_deref().unwrap_or(signature)
-        } else {
-            signature
-        }
-    }
-
     fn fmt_hover_type<O: TypeOutput>(
         &self,
         t: &Type,
@@ -1095,6 +1093,18 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
+            Type::TypeLevelDslCall(call)
+                if let TypeLevelDslFunction::MapIntTuples(map) = &call.function =>
+            {
+                let (mapper, _, source) = map.parts();
+                write!(output, "{}[lambda ", call.function_name())?;
+                output.write_str(mapper.parameter().name.as_str())?;
+                output.write_str(": ")?;
+                self.fmt_helper_generic(mapper.body(), false, output)?;
+                output.write_str(", ")?;
+                self.fmt_helper_generic(source, false, output)?;
+                output.write_str("]")
+            }
             Type::TypeLevelDslCall(call) => {
                 output.write_str(call.function_name())?;
                 output.write_str("(")?;
@@ -1111,7 +1121,6 @@ impl<'a> TypeDisplayContext<'a> {
                     signature,
                     metadata,
                 } = &**func;
-                let signature = self.function_signature_for_display(signature, metadata);
                 // A singledispatch dispatcher is modeled as a callback protocol over the fallback
                 // signature, but should still reveal as `_SingleDispatchCallable[T]`.
                 if let FunctionKind::CallbackProtocol(cls) = &metadata.kind
@@ -1233,8 +1242,6 @@ impl<'a> TypeDisplayContext<'a> {
                                 metadata,
                             }) => {
                                 let func_name = metadata.kind.function_name();
-                                let signature =
-                                    self.function_signature_for_display(signature, metadata);
                                 output.write_str("def ")?;
                                 self.write_func_fqn(output, &func_name, &metadata.kind)?;
                                 // Strip the `self` parameter only in ProvideType mode;
@@ -1271,8 +1278,6 @@ impl<'a> TypeDisplayContext<'a> {
                                         metadata,
                                     },
                             }) => {
-                                let signature =
-                                    self.function_signature_for_display(signature, metadata);
                                 let func_name = metadata.kind.function_name();
                                 output.write_str("def ")?;
                                 self.write_func_fqn(output, &func_name, &metadata.kind)?;
@@ -1372,10 +1377,7 @@ impl<'a> TypeDisplayContext<'a> {
                             }
                             literals.push(&lit.value)
                         }
-                        Type::Callable(_)
-                        | Type::CallableResidual(_)
-                        | Type::Function(_)
-                        | Type::Intersect(_) => {
+                        t if self.needs_parens_in_sequence(t) => {
                             // These types need parentheses in union context
                             let mut temp = String::new();
                             {
@@ -1433,13 +1435,7 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str("]")?;
                         } else {
                             // Regular union member - use helper for just this one
-                            let needs_parens = matches!(
-                                t,
-                                Type::Callable(_)
-                                    | Type::CallableResidual(_)
-                                    | Type::Function(_)
-                                    | Type::Intersect(_)
-                            );
+                            let needs_parens = self.needs_parens_in_sequence(t);
                             if needs_parens {
                                 output.write_str("(")?;
                             }
@@ -1498,8 +1494,6 @@ impl<'a> TypeDisplayContext<'a> {
                         | LspDisplayMode::ProvideType
                             if is_toplevel =>
                         {
-                            let signature =
-                                self.function_signature_for_display(signature, metadata);
                             let func_name = metadata.kind.function_name();
                             output.write_str("def ")?;
                             self.write_func_fqn(output, &func_name, &metadata.kind)?;
@@ -1686,29 +1680,7 @@ impl<'a> TypeDisplayContext<'a> {
             Type::UntypedAlias(ta) if let TypeAliasData::Ref(r) = &**ta => {
                 self.fmt_helper_type_alias_ref(r, output)
             }
-            Type::UntypedAlias(ta) => {
-                let TypeAliasData::Value(alias) = &**ta else {
-                    unreachable!("type alias references are handled above")
-                };
-                if self.always_display_expanded_unions
-                    && let Type::Type(inner) = alias.as_type_ref()
-                    && matches!(&**inner, Type::Union(_))
-                {
-                    return self.fmt_helper_generic(inner, false, output);
-                }
-                output.write_str(alias.name.as_str())?;
-                if let Some(args) = alias.display_args() {
-                    output.write_str("[")?;
-                    for (index, arg) in args.iter().enumerate() {
-                        if index > 0 {
-                            output.write_str(", ")?;
-                        }
-                        self.fmt_helper_generic(arg, false, output)?;
-                    }
-                    output.write_str("]")?;
-                }
-                Ok(())
-            }
+            Type::UntypedAlias(ta) => output.write_str(ta.name().as_str()),
             Type::SuperInstance(s) => {
                 let (cls, obj) = &**s;
                 if self.always_display_builtins_module_name {
@@ -1919,6 +1891,7 @@ pub mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::class::PrecomputedTParams;
     use crate::data_frame::DataFrameKind;
     use crate::data_frame::DataFrameSchema;
     use crate::dimension::Int;
@@ -1961,7 +1934,7 @@ pub mod tests {
             Identifier::new(Name::new(name), TextRange::empty(TextSize::new(range))),
             NestingContext::toplevel(),
             mi,
-            None,
+            PrecomputedTParams::NotGeneric,
             false,
         )
     }
@@ -2903,6 +2876,22 @@ pub mod tests {
         assert_eq!(
             ctx.display(&bound_method).to_string(),
             "BoundMethod[builtins.type[my.module.MyClass], (self: typing.Any, x: typing.Any, y: typing.Any) -> None]"
+        );
+    }
+
+    #[test]
+    fn test_display_bound_method_in_union() {
+        let bound_method = fake_bound_method("foo", "MyClass", "my.module");
+        let union = Type::union(vec![bound_method, Type::None]);
+        let mut ctx = TypeDisplayContext::new(&[&union]);
+        assert_eq!(
+            ctx.display(&union).to_string(),
+            "((x: Any, y: Any) -> None) | None"
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Query);
+        assert_eq!(
+            ctx.display(&union).to_string(),
+            "BoundMethod[builtins.type[my.module.MyClass], (self: typing.Any, x: typing.Any, y: typing.Any) -> None] | None"
         );
     }
 

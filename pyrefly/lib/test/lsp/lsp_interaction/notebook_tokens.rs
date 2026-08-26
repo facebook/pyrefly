@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::Url;
+use pyrefly_lsp_test::object_model::CellKind;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
@@ -47,6 +49,35 @@ fn test_semantic_tokens_full() {
 
     interaction
         .semantic_tokens_cell("notebook.ipynb", "cell2")
+        .expect_response(json!({"data":[0,0,2,8,0]}))
+        .unwrap();
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_semantic_tokens_full_custom_scheme() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction.initialize(initialize_settings()).unwrap();
+
+    let file_name = "notebook_custom_scheme/analysis.qmd";
+    let file_uri = Url::from_file_path(root.path().join(file_name)).unwrap();
+    let notebook_uri = format!("quarto-cells:{}", file_uri.path());
+    interaction.open_notebook_with_uri(
+        &notebook_uri,
+        "quarto-cells",
+        file_name,
+        vec![(CellKind::Code, "x = 1"), (CellKind::Code, "x2 = 1")],
+    );
+
+    interaction
+        .semantic_tokens_cell(file_name, "cell1")
+        .expect_response(json!({"data":[0,0,1,8,0]}))
+        .unwrap();
+
+    interaction
+        .semantic_tokens_cell(file_name, "cell2")
         .expect_response(json!({"data":[0,0,2,8,0]}))
         .unwrap();
     interaction.shutdown().unwrap();

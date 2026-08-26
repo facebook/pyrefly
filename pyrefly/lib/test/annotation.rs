@@ -264,6 +264,47 @@ type Tree = Union[Leaf, Node]
 "#,
 );
 
+testcase!(
+    test_nested_class_forward_reference_in_enclosing_class_annotation,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from __future__ import annotations
+from typing import assert_type
+
+class Formatter:
+    a: _Section
+    class _Section: ...
+    b: _Section
+
+def check(formatter: Formatter) -> None:
+    assert_type(formatter.a, Formatter._Section)
+    assert_type(formatter.b, Formatter._Section)
+"#,
+);
+
+testcase!(
+    test_nested_class_runtime_reference_before_declaration_is_error,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+class Formatter:
+    a = _Section  # E: Could not find name `_Section`
+    class _Section: ...
+"#,
+);
+
+testcase!(
+    test_annotation_only_class_field_is_not_a_forward_reference,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from __future__ import annotations
+
+class C:
+    x: x  # E: Could not find name `x`
+    A: B  # E: Could not find name `B`
+    B: A  # E: Could not find name `A`
+"#,
+);
+
 fn env_3_13_with_stub() -> TestEnv {
     let mut env = TestEnv::new_with_version(PythonVersion::new(3, 13, 0));
     env.add_with_path("foo", "foo.pyi", "x: int | 'str'");
