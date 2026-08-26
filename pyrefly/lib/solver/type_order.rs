@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
+use std::borrow::Cow;
 
 use dupe::Clone_;
 use dupe::Copy_;
@@ -192,7 +192,10 @@ impl<'solver, Ans: LookupAnswer> TypeOrder<'solver, Ans> {
         self.0.bind_boundmethod(m, is_subset)
     }
 
-    pub fn get_type_alias(self, ta: &TypeAliasData) -> Arc<TypeAlias> {
+    pub fn get_type_alias<'b>(self, ta: &'b TypeAliasData) -> Cow<'b, TypeAlias>
+    where
+        'solver: 'b,
+    {
         self.0.get_type_alias(ta)
     }
 

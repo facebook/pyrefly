@@ -6,6 +6,7 @@
  */
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -3488,7 +3489,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.get_from_module(cls.module_name(), Some(cls.module_path()), k)
     }
 
-    pub fn get_type_alias(&self, data: &TypeAliasData) -> Arc<TypeAlias> {
+    /// Resolve a type alias, borrowing it when no substitution is needed.
+    ///
+    /// A `Ref` borrows from answer storage and a `Value` borrows from `data`,
+    /// so the result is bounded by those two rather than by the borrow of
+    /// `self`.
+    pub fn get_type_alias<'b>(&self, data: &'b TypeAliasData) -> Cow<'b, TypeAlias>
+    where
+        'answer: 'b,
+    {
         match data {
             TypeAliasData::Ref(r) => {
                 let ta = self.get_from_module(
@@ -3497,17 +3506,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     &KeyTypeAlias(r.index),
                 );
                 let Some(ta) = ta else {
-                    return Arc::new(TypeAlias::unknown(r.name.clone()));
+                    return Cow::Owned(TypeAlias::unknown(r.name.clone()));
                 };
                 if let Some(args) = &r.args {
                     let mut ta = (*ta).clone();
                     args.substitute_into_mut(ta.as_type_mut());
-                    Arc::new(ta)
+                    Cow::Owned(ta)
                 } else {
-                    Arc::new(ta.clone())
+                    Cow::Borrowed(ta)
                 }
             }
-            TypeAliasData::Value(ta) => Arc::new(ta.clone()),
+            TypeAliasData::Value(ta) => Cow::Borrowed(ta),
         }
     }
 
