@@ -746,60 +746,105 @@ def einsum_ir(spec: str, operands: list[ShapedArray] | None = None) -> ShapedArr
         return apply_einsum(output_map, check_pairs, operands)
     return Unknown
 
-@shape_dsl_function
-def conv_ir(
-    self: ShapedArray,
-    weight: ShapedArray,
-    stride: int | list[int] = 1,
-    padding: int | list[int] = 0,
-    dilation: int | list[int] = 1,
-) -> ShapedArray:
-    spatial_dims = len(self.shape) - 2
-    stride_list = broadcast_int(stride, spatial_dims)
-    padding_list = broadcast_int(padding, spatial_dims)
-    dilation_list = broadcast_int(dilation, spatial_dims)
-    return ShapedArray(
-        shape=[self.shape[0], weight.shape[0]]
-        + [
-            conv_spatial_out(s, k, st, p, dil)
+@type_shape_dsl_function
+def conv_shape(
+    input_shape: IntTuple,
+    weight_shape: IntTuple,
+    stride: int | tuple[int, ...] | None,
+    padding: int | tuple[int, ...] | None,
+    dilation: int | tuple[int, ...] | None,
+) -> IntTuple:
+    # `zip` stops at the shortest input, so unequal ranks would silently drop
+    # trailing spatial dimensions instead of reporting the mismatch.
+    if len(input_shape) != len(weight_shape):
+        return dsl.Invalid("convolution input and weight must have the same rank")
+    spatial_rank = len(input_shape) - 2
+    if stride is None:
+        return dsl.Invalid("convolution stride cannot be None")
+    elif dsl.is_int_value(stride):
+        strides = tuple(stride for _ in range(spatial_rank))
+    else:
+        strides = stride
+    if padding is None:
+        return dsl.Invalid("convolution padding cannot be None")
+    elif dsl.is_int_value(padding):
+        paddings = tuple(padding for _ in range(spatial_rank))
+    else:
+        paddings = padding
+    if dilation is None:
+        return dsl.Invalid("convolution dilation cannot be None")
+    elif dsl.is_int_value(dilation):
+        dilations = tuple(dilation for _ in range(spatial_rank))
+    else:
+        dilations = dilation
+    input_spatial = input_shape[2:]
+    weight_spatial = weight_shape[2:]
+    spatial = dsl.IntTuple(
+        (
+            (s + 2 * p - dil * (k - 1) - 1) // st + 1
             for s, k, st, p, dil in zip(
-                self.shape[2:],
-                weight.shape[2:],
-                stride_list,
-                padding_list,
-                dilation_list,
+                input_spatial,
+                weight_spatial,
+                strides,
+                paddings,
+                dilations,
             )
-        ]
+        )
     )
+    return dsl.concat(dsl.IntTuple((input_shape[0], weight_shape[0])), spatial)
 
-@shape_dsl_function
-def conv_transpose_ir(
-    self: ShapedArray,
-    weight: ShapedArray,
-    stride: int | list[int] = 1,
-    padding: int | list[int] = 0,
-    output_padding: int | list[int] = 0,
-    dilation: int | list[int] = 1,
-) -> ShapedArray:
-    spatial_dims = len(self.shape) - 2
-    stride_list = broadcast_int(stride, spatial_dims)
-    padding_list = broadcast_int(padding, spatial_dims)
-    outpad_list = broadcast_int(output_padding, spatial_dims)
-    dilation_list = broadcast_int(dilation, spatial_dims)
-    return ShapedArray(
-        shape=[self.shape[0], weight.shape[1]]
-        + [
+@type_shape_dsl_function
+def conv_transpose_shape(
+    input_shape: IntTuple,
+    weight_shape: IntTuple,
+    stride: int | tuple[int, ...] | None,
+    padding: int | tuple[int, ...] | None,
+    output_padding: int | tuple[int, ...] | None,
+    dilation: int | tuple[int, ...] | None,
+    groups: int,
+) -> IntTuple:
+    spatial_rank = len(input_shape) - 2
+    if stride is None:
+        return dsl.Invalid("convolution stride cannot be None")
+    elif dsl.is_int_value(stride):
+        strides = tuple(stride for _ in range(spatial_rank))
+    else:
+        strides = stride
+    if padding is None:
+        return dsl.Invalid("convolution padding cannot be None")
+    elif dsl.is_int_value(padding):
+        paddings = tuple(padding for _ in range(spatial_rank))
+    else:
+        paddings = padding
+    if output_padding is None:
+        return dsl.Invalid("convolution output_padding cannot be None")
+    elif dsl.is_int_value(output_padding):
+        output_paddings = tuple(output_padding for _ in range(spatial_rank))
+    else:
+        output_paddings = output_padding
+    if dilation is None:
+        return dsl.Invalid("convolution dilation cannot be None")
+    elif dsl.is_int_value(dilation):
+        dilations = tuple(dilation for _ in range(spatial_rank))
+    else:
+        dilations = dilation
+    input_spatial = input_shape[2:]
+    weight_spatial = weight_shape[2:]
+    spatial = dsl.IntTuple(
+        (
             (s - 1) * st - 2 * p + dil * (k - 1) + op + 1
             for s, k, st, p, op, dil in zip(
-                self.shape[2:],
-                weight.shape[2:],
-                stride_list,
-                padding_list,
-                outpad_list,
-                dilation_list,
+                input_spatial,
+                weight_spatial,
+                strides,
+                paddings,
+                output_paddings,
+                dilations,
             )
-        ]
+        )
     )
+    # Transposed convolution stores per-group output channels in `weight_shape[1]`.
+    return dsl.concat(dsl.IntTuple((input_shape[0], weight_shape[1] * groups)), spatial)
 
 @shape_dsl_function
 def pool_ir(
