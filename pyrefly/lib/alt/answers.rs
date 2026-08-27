@@ -258,17 +258,14 @@ impl<T> Default for AnswerSlot<T> {
 }
 
 impl<T> AnswerSlot<T> {
-    #[inline]
     fn is_pending(ptr: *mut T) -> bool {
         ptr.addr() & PENDING_TAG != 0
     }
 
-    #[inline]
     fn pending(ptr: *mut T) -> *mut T {
         ptr.map_addr(|addr| addr | PENDING_TAG)
     }
 
-    #[inline]
     fn published(ptr: *mut T) -> *mut T {
         ptr.map_addr(|addr| addr & !PENDING_TAG)
     }
@@ -287,7 +284,6 @@ impl<T> AnswerSlot<T> {
     /// Wait for a pending writer to publish its result. Returns `None` only if
     /// panic unwinding rolls back an SCC reservation before publication.
     #[cold]
-    #[inline(never)]
     fn wait_for_publish(&self) -> Option<*mut T> {
         let deadline = Instant::now() + PUBLISH_TIMEOUT;
         let mut backoff_step = 0;
@@ -342,7 +338,6 @@ impl<T> AnswerSlot<T> {
 
     /// Called only after `get` observes that this slot is pending.
     #[cold]
-    #[inline(never)]
     fn get_pending(&self) -> Option<&T> {
         let ptr = self.wait_for_publish()?;
         // SAFETY: `wait_for_publish` proved that the published pointer is
@@ -351,7 +346,6 @@ impl<T> AnswerSlot<T> {
     }
 
     /// Return the published value, waiting only when a writer already owns the slot.
-    #[inline]
     pub(crate) fn get(&self) -> Option<&T> {
         let ptr = self.ptr.load(Ordering::Acquire);
         if Self::is_pending(ptr) {
@@ -363,7 +357,6 @@ impl<T> AnswerSlot<T> {
         }
     }
 
-    #[inline]
     fn get_published(&self) -> &T {
         let ptr = self.ptr.load(Ordering::Acquire);
         assert!(!ptr.is_null(), "solution result is unpublished");
@@ -497,7 +490,6 @@ impl<T> AnswerSlot<T> {
 struct SolutionSlot<'a, T>(&'a AnswerSlot<T>);
 
 impl<'a, T> SolutionSlot<'a, T> {
-    #[inline]
     fn get(&self) -> &'a T {
         self.0.get_published()
     }
