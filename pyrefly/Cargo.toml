@@ -45,7 +45,7 @@ fuzzy-matcher = "0.3.7"
 fxhash = "0.2.1"
 indicatif = { version = "0.18.6", features = ["futures", "improved_unicode", "rayon", "tokio"] }
 itertools = "0.15.0"
-lsp-server = "0.9.0"
+lsp-server = "0.10.0"
 lsp-types = { git = "https://github.com/yangdanny97/lsp-types", rev = "395d6bfcd6c3696a64cfe9cd93b86f981fb85112" }
 num-traits = { version = "0.2.19", default-features = false }
 parse-display = "0.8.2"
