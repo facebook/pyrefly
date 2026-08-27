@@ -58,6 +58,7 @@ use crate::alt::class::class_field::ClassField;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
 use crate::alt::class::variance_inference::VarianceMap;
 use crate::alt::expr::ExprOptions;
+use crate::alt::traits::SolveResult;
 use crate::alt::types::abstract_class::AbstractClassMembers;
 use crate::alt::types::class_bases::ClassBases;
 use crate::alt::types::class_metadata::ClassDisjointBase;
@@ -2305,6 +2306,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<TypeInfo> {
+        self.solve_binding_result(binding, range, errors)
+            .into_answer(|target| Arc::new(self.get_idx(target).clone()))
+    }
+
+    pub(crate) fn solve_binding_result(
+        &self,
+        binding: &Binding,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> SolveResult<Key> {
         // Special case for forward, as we don't want to re-expand the type.
         // ForwardToFirstUse is handled here too: the partial answer shortcut
         // lives in get_idx (before push), so by the time we reach solve_binding
@@ -2313,10 +2324,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         | Binding::PatternCapture(fwd)
         | Binding::ForwardToFirstUse(fwd) = binding
         {
-            return self.get_idx_arc(*fwd);
+            // An alias shares the target slot's allocation, so it can only be
+            // recorded once that slot holds the answer. An answer the
+            // `AnswerScope` holds instead must be copied.
+            let (answer, published) = self.force_idx(*fwd);
+            return if published {
+                SolveResult::Alias(*fwd)
+            } else {
+                SolveResult::Answer(Arc::new(answer.clone()))
+            };
         }
         if let Binding::PromoteForward(fwd) = binding {
-            return Arc::new(self.resolve_promote_forward(*fwd));
+            return SolveResult::Answer(Arc::new(self.resolve_promote_forward(*fwd)));
         }
         // Inline first-use pinning for NameAssign.
         let mut type_info = if let Binding::NameAssign(na) = binding
@@ -2338,7 +2357,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.pin_all_placeholder_types(ty, true, range, errors);
             self.expand_mut(ty);
         });
-        Arc::new(type_info)
+        SolveResult::Answer(Arc::new(type_info))
     }
 
     /// Compute the TypeInfo for a NameAssign that participates in first-use pinning.
@@ -5417,6 +5436,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn resolve_promote_forward(&self, fwd: Idx<Key>) -> TypeInfo {
+        // This copies the source answer even when promotion is a no-op. Such
+        // results could preserve sharing by being represented as aliases.
         self.get_idx(fwd)
             .clone()
             .map_ty(|ty| ty.promote_shallow_implicit_literals(self.stdlib))

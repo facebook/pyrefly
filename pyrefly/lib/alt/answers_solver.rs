@@ -71,6 +71,7 @@ use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
 use crate::alt::answers::TraceSideEffects;
 use crate::alt::traits::Solve;
+use crate::alt::traits::SolveResult;
 use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
 use crate::binding::binding::AnyIdx;
 use crate::binding::binding::Binding;
@@ -2509,13 +2510,29 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
+        self.force_idx(idx).0
+    }
+
+    /// Calculate `idx` and report whether the returned answer is the one
+    /// published in its result slot.
+    ///
+    /// An answer that the `AnswerScope` holds instead has no slot of its own:
+    /// shortcut answers, depth-limit placeholders, and answers still local to a
+    /// running SCC. Callers that want to share the answer's storage, rather
+    /// than only read it, must take that distinction into account.
+    pub(crate) fn force_idx<K: Solve<Ans>>(&self, idx: Idx<K>) -> (&'answer K::Answer, bool)
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+    {
         // Check for a partial answer shortcut before pushing to the CalcStack.
         // This is used by ForwardToFirstUse during inline first-use pinning to
         // return the raw type without caching it in shared Answers and without
         // triggering cycle detection against the NameAssign's CalcStack frame.
         let binding = self.bindings().get(idx);
         if let Some(answer) = K::check_shortcut(self, binding) {
-            return self.answer_scope.hold_temporary(answer);
+            return (self.answer_scope.hold_temporary(answer), false);
         }
 
         let slot = self.get_answer_slot(idx);
@@ -2526,32 +2543,33 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // borrows, and SCC checks for the common case of re-reading an already-
         // solved binding.
         if let Some(v) = slot.get() {
-            return v;
+            return (v, true);
         }
 
         let current = CalcId(self.bindings().dupe(), K::to_anyidx(idx));
 
         // Check depth limit before any calculation
-        if let Some(config) = self.recursion_limit_config()
+        let borrowed = if let Some(config) = self.recursion_limit_config()
             && self.stack().len() > config.limit as usize
         {
-            return self.handle_depth_overflow(&current, idx, slot, config);
-        }
-
-        let frame = self.stack().push(self.answer_scope, &current);
-        let borrowed = match frame.action() {
-            BindingAction::Calculate => self.calculate_and_record_answer(&current, idx, slot),
-            BindingAction::SccLocalAnswer(type_erased) => type_erased
-                .downcast_ref::<Arc<K::Answer>>()
-                .expect("SccLocalAnswer downcast failed: type mismatch")
-                .as_ref(),
-            BindingAction::NeedsColdPlaceholder => {
-                self.attempt_to_unwind_cycle_from_here(&current, idx, slot)
+            self.handle_depth_overflow(&current, idx, slot, config)
+        } else {
+            let frame = self.stack().push(self.answer_scope, &current);
+            let borrowed = match frame.action() {
+                BindingAction::Calculate => self.calculate_and_record_answer(&current, idx, slot),
+                BindingAction::SccLocalAnswer(type_erased) => type_erased
+                    .downcast_ref::<Arc<K::Answer>>()
+                    .expect("SccLocalAnswer downcast failed: type mismatch")
+                    .as_ref(),
+                BindingAction::NeedsColdPlaceholder => {
+                    self.attempt_to_unwind_cycle_from_here(&current, idx, slot)
+                }
+            };
+            if let Some(scc) = frame.finish() {
+                self.iterative_resolve_scc(scc);
             }
+            borrowed
         };
-        if let Some(scc) = frame.finish() {
-            self.iterative_resolve_scc(scc);
-        }
         // After SCC iteration, the shared result slot may hold a newer answer
         // than what `calculate_and_record_answer` returned. This happens when
         // the current CalcId is an SCC member: in iterative mode, the answer
@@ -2561,21 +2579,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // the result slot, we must re-read it so that callers (like
         // KeyExport nodes that depend on SCC members) see the SCC's final
         // answer rather than the stale pre-iteration answer.
-        if let Some(answer) = slot.get() {
-            return answer;
+        //
+        // Reaching this read without a published answer is also what proves that
+        // `borrowed` is held by the `AnswerScope` rather than by the slot.
+        match slot.get() {
+            Some(answer) => (answer, true),
+            None => (borrowed, false),
         }
-        borrowed
-    }
-
-    pub(crate) fn get_idx_arc<K: Solve<Ans>>(&self, idx: Idx<K>) -> Arc<K::Answer>
-    where
-        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
-        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
-        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
-    {
-        self.get_answer_slot(idx)
-            .get_arc()
-            .unwrap_or_else(|| Arc::new(self.get_idx(idx).clone()))
     }
 
     /// Calculate the answer for a binding using `K::solve` and record it.
@@ -2640,7 +2650,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let range = K::range_with(idx, self.bindings());
 
         let local_errors = self.error_collector();
-        let raw_answer = K::solve(self, binding, range, &local_errors);
+        let solve_result = K::solve(self, binding, range, &local_errors);
 
         // Take accumulated traces.
         let trace_side_effects = if tracing_enabled {
@@ -2650,6 +2660,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
 
         if self.stack().is_scc_participant(current) {
+            // SCC iterations continue to own independent answers. Preserving
+            // aliases here would require identifying the fully forced target
+            // from the final generation and retaining that allocation.
+            let raw_answer =
+                solve_result.into_answer(|target| Arc::new(self.get_idx(target).clone()));
             // Became an SCC member during computation: an SCC was discovered by
             // a dependency chain during K::solve above, and this node is now in
             // the top SCC's node_state. Store the answer in SCC-local state for
@@ -2686,9 +2701,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // Not an SCC member even after computation: publish directly to
             // the result slot. No recursive placeholder can exist because
             // placeholders are stored only in SCC-local SccNodeState::HasPlaceholder.
-            self.sanitize_answer_vars::<K>(&raw_answer, range, &local_errors);
-            let raw_answer = self.force_exported_answer::<K>(raw_answer);
-            let (answer, did_write) = slot.record(raw_answer);
+            let (answer, did_write) = match solve_result {
+                SolveResult::Answer(raw_answer) => {
+                    self.sanitize_answer_vars::<K>(&raw_answer, range, &local_errors);
+                    let raw_answer = self.force_exported_answer::<K>(raw_answer);
+                    slot.record(raw_answer)
+                }
+                // The target was sanitized and forced when it was recorded, so
+                // sharing its answer needs neither step repeated.
+                SolveResult::Alias(target) => slot.record_alias(self.get_answer_slot(target)),
+            };
             if did_write {
                 self.base_errors.extend(local_errors);
                 // Publish trace side effects alongside errors.
@@ -2854,7 +2876,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             self.error_collector()
         };
-        let raw_answer = K::solve(self, binding, range, &local_errors);
+        // Alias metadata is intentionally discarded for SCC answers because
+        // each result is independently deep-forced before convergence comparison.
+        // Preserving sharing would require identifying the fully forced target
+        // from the final generation and keeping that allocation alive.
+        let raw_answer = K::solve(self, binding, range, &local_errors)
+            .into_answer(|target| Arc::new(self.get_idx(target).clone()));
 
         // Take accumulated traces. Discard during cold iteration (like errors).
         let trace_side_effects = if tracing_enabled {

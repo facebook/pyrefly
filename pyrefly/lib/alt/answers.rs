@@ -257,20 +257,6 @@ impl<T> AnswerSlot<T> {
         ptr
     }
 
-    /// Clone the `Arc` strong reference owned by a published slot.
-    ///
-    /// # Safety
-    ///
-    /// `ptr` must be the untagged pointer from `Arc::into_raw`, and the slot's
-    /// owning strong reference must remain live for the duration of this call.
-    unsafe fn clone_arc(ptr: *mut T) -> Arc<T> {
-        // SAFETY: The function contract guarantees that `ptr` came from
-        // `Arc::into_raw` and that the slot still owns a live strong reference.
-        unsafe { Arc::increment_strong_count(ptr) };
-        // SAFETY: The increment above created the strong reference returned here.
-        unsafe { Arc::from_raw(ptr) }
-    }
-
     /// Wait for a pending writer to publish its result. Returns `None` only if
     /// panic unwinding rolls back an SCC reservation before publication.
     #[cold]
@@ -337,16 +323,6 @@ impl<T> AnswerSlot<T> {
         Some(unsafe { &*ptr })
     }
 
-    /// Called only after `get_arc` observes that this slot is pending.
-    #[cold]
-    #[inline(never)]
-    fn get_pending_arc(&self) -> Option<Arc<T>> {
-        let ptr = self.wait_for_publish()?;
-        // SAFETY: `wait_for_publish` proved that `ptr` is published and retains
-        // the strong reference owned by this slot.
-        Some(unsafe { Self::clone_arc(ptr) })
-    }
-
     /// Return the published value, waiting only when a writer already owns the slot.
     #[inline]
     pub(crate) fn get(&self) -> Option<&T> {
@@ -357,21 +333,6 @@ impl<T> AnswerSlot<T> {
             // SAFETY: A non-null pointer is published and remains owned by this
             // slot for the lifetime of the returned reference.
             unsafe { ptr.as_ref() }
-        }
-    }
-
-    /// Clone the `Arc` owned by a published slot.
-    #[inline]
-    pub(crate) fn get_arc(&self) -> Option<Arc<T>> {
-        let ptr = self.ptr.load(Ordering::Acquire);
-        if Self::is_pending(ptr) {
-            self.get_pending_arc()
-        } else if ptr.is_null() {
-            None
-        } else {
-            // SAFETY: An untagged non-null pointer is published and retains the
-            // strong reference owned by this slot.
-            Some(unsafe { Self::clone_arc(ptr) })
         }
     }
 
@@ -415,6 +376,24 @@ impl<T> AnswerSlot<T> {
                 }
             }
         }
+    }
+
+    /// Publish the same allocation as an already-published target slot.
+    ///
+    /// The caller decides to record an alias by observing the target published,
+    /// and publication is permanent, so the target is still published here.
+    pub(crate) fn record_alias(&self, target: &Self) -> (&T, bool) {
+        let ptr = target.ptr.load(Ordering::Acquire);
+        assert!(
+            !ptr.is_null() && !Self::is_pending(ptr),
+            "alias target must be published"
+        );
+        // SAFETY: `target` remains live for this call and owns a strong
+        // reference to the published pointer.
+        unsafe { Arc::increment_strong_count(ptr) };
+        // SAFETY: The increment above created the strong reference transferred
+        // to `record`.
+        self.record(unsafe { Arc::from_raw(ptr) })
     }
 
     /// Reserve this result slot, waiting for a concurrent publisher.
@@ -1675,6 +1654,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 #[cfg(test)]
 mod tests {
     use std::sync::Barrier;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
     use std::thread;
 
     use super::*;
@@ -1747,6 +1728,25 @@ mod tests {
 
         drop(slot);
         assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn answer_slot_alias_drops_shared_answer() {
+        struct SetOnDrop<'a>(&'a AtomicBool);
+
+        impl Drop for SetOnDrop<'_> {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+
+        let dropped = AtomicBool::new(false);
+        {
+            let slots = [AnswerSlot::default(), AnswerSlot::default()];
+            let _ = slots[0].record(Arc::new(SetOnDrop(&dropped)));
+            let _ = slots[1].record_alias(&slots[0]);
+        }
+        assert!(dropped.load(Ordering::Relaxed));
     }
 
     #[test]
