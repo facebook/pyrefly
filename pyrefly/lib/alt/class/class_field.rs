@@ -766,74 +766,32 @@ impl ClassField {
 
     fn instantiate_for_class_tparams(
         &self,
-        heap: &TypeHeap,
         cls_tparams: Option<Arc<TParams>>,
         self_type: Type,
         ambiguous: &mut bool,
     ) -> Self {
-        let prepend_class_tparams_if_used = |f: &Function, tparams_opt: Option<&TParams>| {
-            let cls_tparams = cls_tparams.as_ref()?;
-            let mut qs = SmallSet::new();
-            f.visit(&mut |ty| ty.collect_quantifieds(&mut qs));
-            if cls_tparams.iter().any(|tp| qs.contains(tp)) {
-                match tparams_opt {
-                    None => Some(cls_tparams.dupe()),
-                    Some(tparams) => {
-                        let mut new_tparams = (**cls_tparams).clone();
-                        new_tparams.extend(tparams);
-                        Some(Arc::new(new_tparams))
-                    }
-                }
-            } else {
-                None
-            }
-        };
         self.instantiate_helper(&mut |ty| {
             ty.subst_self_type_mut(&self_type);
-            match ty {
-                Type::Function(func) => {
-                    if let Some(tparams) = prepend_class_tparams_if_used(func, None) {
-                        *ty = heap.mk_forall(Forall {
-                            tparams,
-                            body: Forallable::Function((**func).clone()),
-                        });
-                    }
-                }
-                Type::Forall(forall) => {
-                    let Forall { tparams, body } = &mut **forall;
-                    if let Forallable::Function(func) = body
-                        && let Some(new_tparams) =
-                            prepend_class_tparams_if_used(func, Some(tparams))
-                    {
-                        *tparams = new_tparams;
-                    }
-                }
-                Type::Overload(Overload { signatures, .. }) => {
-                    signatures.iter_mut().for_each(|sig| match sig {
-                        OverloadType::Function(body)
-                            if let Some(tparams) = prepend_class_tparams_if_used(body, None) =>
-                        {
-                            *sig = OverloadType::Forall(Forall {
-                                tparams,
-                                body: body.clone(),
-                            })
+            let transforms_tparams = ty.has_toplevel_func_metadata();
+            if transforms_tparams {
+                ty.transform_toplevel_callable_signatures(|callable, tparams| {
+                    let Some(cls_tparams) = &cls_tparams else {
+                        return;
+                    };
+                    let mut qs = SmallSet::new();
+                    callable.visit(&mut |ty| ty.collect_quantifieds(&mut qs));
+                    if cls_tparams.iter().any(|tp| qs.contains(tp)) {
+                        let mut new_tparams = (**cls_tparams).clone();
+                        if let Some(tparams) = tparams.as_deref() {
+                            new_tparams.extend(tparams);
                         }
-                        OverloadType::Forall(Forall { tparams, body })
-                            if let Some(new_tparams) =
-                                prepend_class_tparams_if_used(body, Some(tparams)) =>
-                        {
-                            *tparams = new_tparams;
-                        }
-                        _ => {}
-                    });
-                }
-                ty => {
-                    if let Some(cls_tparams) = &cls_tparams {
-                        let mut qs: SmallSet<&Quantified> = SmallSet::new();
-                        ty.collect_quantifieds(&mut qs);
-                        *ambiguous = cls_tparams.iter().any(|x| qs.contains(x));
+                        *tparams = Some(Arc::new(new_tparams));
                     }
-                }
+                });
+            } else if let Some(cls_tparams) = &cls_tparams {
+                let mut qs: SmallSet<&Quantified> = SmallSet::new();
+                ty.collect_quantifieds(&mut qs);
+                *ambiguous = cls_tparams.iter().any(|x| qs.contains(x));
             }
         })
     }
@@ -3355,52 +3313,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     /// Makes `ty` generic in `quantified` by wrapping in a `Forall`.
-    fn wrap_with_quantified(&self, ty: Type, quantified: Quantified) -> Type {
-        fn forall<T: Visit<Type>>(
-            body: T,
-            quantified: &Quantified,
-            existing_tparams: Option<&TParams>,
-        ) -> Option<Forall<T>> {
+    fn wrap_with_quantified(&self, mut ty: Type, quantified: Quantified) -> Type {
+        ty.transform_toplevel_callable_signatures(|callable, tparams| {
             let mut quantifieds = SmallSet::new();
-            body.visit(&mut |t| t.collect_quantifieds(&mut quantifieds));
-            let uses_quantified = quantifieds.contains(quantified);
-            drop(quantifieds);
-            if !uses_quantified {
-                return None;
+            callable.visit(&mut |ty| ty.collect_quantifieds(&mut quantifieds));
+            if quantifieds.contains(&quantified) {
+                let new_tparams = TParams::new(vec![quantified.clone()]);
+                if let Some(tparams) = tparams {
+                    Arc::make_mut(tparams).extend(&new_tparams);
+                } else {
+                    *tparams = Some(Arc::new(new_tparams));
+                }
             }
-            let new_tparams = TParams::new(vec![quantified.clone()]);
-            let tparams = if let Some(mut tparams) = existing_tparams.cloned() {
-                tparams.extend(&new_tparams);
-                tparams
-            } else {
-                new_tparams
-            };
-            Some(Forall {
-                tparams: Arc::new(tparams),
-                body,
-            })
-        }
-        match &ty {
-            Type::Function(func) => {
-                forall(Forallable::Function((**func).clone()), &quantified, None)
-                    .map_or(ty, |forall| self.heap.mk_forall(forall))
-            }
-            Type::Forall(f) => forall(f.body.clone(), &quantified, Some(&f.tparams))
-                .map_or(ty, |forall| self.heap.mk_forall(forall)),
-            Type::Overload(overload) => self.heap.mk_overload(Overload {
-                signatures: overload.signatures.clone().mapped(|sig| match &sig {
-                    OverloadType::Function(func) => {
-                        forall(func.clone(), &quantified, None).map_or(sig, OverloadType::Forall)
-                    }
-                    OverloadType::Forall(Forall { tparams, body }) => {
-                        forall(body.clone(), &quantified, Some(tparams))
-                            .map_or(sig, OverloadType::Forall)
-                    }
-                }),
-                metadata: overload.metadata.clone(),
-            }),
-            _ => ty,
-        }
+        });
+        ty
     }
 
     fn normalize_attr_ty(&self, mut ty: Type) -> Type {
@@ -3664,7 +3590,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Some(targs) => field.instantiate_for_class_targs(targs, self_type, &mut ambiguous),
             None => {
                 let tparams = self.get_class_tparams(cls.class_object()).map(Dupe::dupe);
-                field.instantiate_for_class_tparams(self.heap, tparams, self_type, &mut ambiguous)
+                field.instantiate_for_class_tparams(tparams, self_type, &mut ambiguous)
             }
         };
         match field.0 {

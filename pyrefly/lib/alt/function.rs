@@ -1907,26 +1907,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
 
         let new_tparams = Arc::new(TParams::new(relevant_tparams_vec));
-        match inferred_ty {
-            // Merge tparams from decoratee and inferred_ty.
-            Type::Forall(forall) => {
-                let mut merged_tparams = (*new_tparams).clone();
-                merged_tparams.extend(&forall.tparams);
-                forall.body.forall(Arc::new(merged_tparams))
-            }
-            // Wrap callable inferred_ty in a Forall with the decoratee tparams that appear in it.
-            Type::Function(f) => Forallable::Function(*f).forall(new_tparams),
-            Type::Callable(c) => Forallable::Callable(*c).forall(new_tparams),
+        if !inferred_ty.is_toplevel_callable() {
             // Convert any `Type::Quantified` from the original Forall to gradual types if
             // the type isn't callable.
-            ty => {
-                let substitution_map: SmallMap<_, _> = new_tparams
-                    .iter()
-                    .map(|p| (p, p.as_gradual_type()))
-                    .collect();
-                ty.subst(&substitution_map.iter().map(|(k, v)| (*k, v)).collect())
-            }
+            let substitution_map: SmallMap<_, _> = new_tparams
+                .iter()
+                .map(|p| (p, p.as_gradual_type()))
+                .collect();
+            return inferred_ty.subst(&substitution_map.iter().map(|(k, v)| (*k, v)).collect());
         }
+
+        let mut inferred_ty = inferred_ty;
+        inferred_ty.transform_toplevel_callable_signatures(|_, tparams| {
+            let mut merged_tparams = (*new_tparams).clone();
+            if let Some(tparams) = tparams.as_deref() {
+                merged_tparams.extend(tparams);
+            }
+            *tparams = Some(Arc::new(merged_tparams));
+        });
+        inferred_ty
     }
 
     fn apply_function_decorator(

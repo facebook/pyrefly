@@ -118,48 +118,33 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     /// For checking a dispatcher call only, widen the dispatch (first) parameter to `Any` so any
     /// dispatched argument is accepted; a parameter mentioning a type variable is left intact.
-    pub(crate) fn widen_singledispatch_dispatch_param(&self, ty: Type) -> Type {
-        // Returns the widened function if `f` is a singledispatch callback protocol whose dispatch
-        // parameter is concrete; `None` leaves the caller's type untouched.
-        let widened = |f: &Function| -> Option<Function> {
-            let FunctionKind::CallbackProtocol(cls) = &f.metadata.kind else {
-                return None;
-            };
-            if !Self::is_singledispatch_class(cls) {
-                return None;
-            }
-            let mut function = f.clone();
-            let Params::List(params) = &mut function.signature.params else {
-                return None;
+    pub(crate) fn widen_singledispatch_dispatch_param(&self, mut ty: Type) -> Type {
+        let is_dispatcher = ty.toplevel_func_metadata().is_some_and(|metadata| {
+            matches!(
+                &metadata.kind,
+                FunctionKind::CallbackProtocol(cls) if Self::is_singledispatch_class(cls)
+            )
+        });
+        if !is_dispatcher {
+            return ty;
+        }
+        ty.transform_toplevel_callable_signatures(|signature, _| {
+            let Params::List(params) = &mut signature.params else {
+                return;
             };
             let dispatch_ty = params.items_mut().iter_mut().find_map(|p| match p {
                 Param::PosOnly(_, t, _) | Param::Pos(_, t, _) | Param::Varargs(_, t) => Some(t),
                 _ => None,
-            })?;
+            });
+            let Some(dispatch_ty) = dispatch_ty else {
+                return;
+            };
             let mut mentions_tvar = false;
             dispatch_ty.for_each_quantified(&mut |_| mentions_tvar = true);
-            if mentions_tvar {
-                return None;
+            if !mentions_tvar {
+                *dispatch_ty = Type::any_implicit();
             }
-            *dispatch_ty = Type::any_implicit();
-            Some(function)
-        };
-        // A generic dispatcher is `Forall`-wrapped, so widen its inner function and re-wrap.
-        match &ty {
-            Type::Function(f) => {
-                if let Some(function) = widened(f) {
-                    return self.heap.mk_function(function);
-                }
-            }
-            Type::Forall(forall) => {
-                if let Forallable::Function(f) = &forall.body
-                    && let Some(function) = widened(f)
-                {
-                    return Forallable::Function(function).forall(forall.tparams.clone());
-                }
-            }
-            _ => {}
-        }
+        });
         ty
     }
 

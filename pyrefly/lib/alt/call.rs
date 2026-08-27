@@ -19,9 +19,7 @@ use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::CalleeKind;
-use pyrefly_types::types::Forall;
 use pyrefly_types::types::NNModuleType;
-use pyrefly_types::types::Overload;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use pyrefly_util::prelude::SliceExt;
@@ -2326,7 +2324,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .collect();
             return self.unions(members);
         }
-        ty.transform_toplevel_callable_signatures(|callable: &mut Callable, _| {
+        ty.transform_toplevel_callable_signatures(|callable: &mut Callable, tparams| {
             let mut parameter_tparams = SmallSet::new();
             callable
                 .params
@@ -2339,15 +2337,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .subst_mut_fn(&mut |candidate| (candidate == q).then(|| gradual.clone()));
                 }
             }
-        });
 
-        fn quantify<T: Visit<Type>>(
-            body: &T,
-            tparams: Option<&TParams>,
-            class_tparams: &TParams,
-        ) -> Arc<TParams> {
             let mut used = SmallSet::new();
-            body.visit(&mut |ty| ty.collect_quantifieds(&mut used));
+            callable.visit(&mut |ty| ty.collect_quantifieds(&mut used));
             let mut quantifieds = Vec::new();
             for q in tparams
                 .iter()
@@ -2358,46 +2350,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     quantifieds.push(q.clone());
                 }
             }
-            Arc::new(TParams::new(quantifieds))
-        }
-
-        match ty {
-            Type::Forall(forall) => {
-                let Forall { tparams, body } = *forall;
-                let tparams = quantify(&body, Some(&tparams), class_tparams);
-                body.forall(tparams)
-            }
-            Type::Overload(Overload {
-                signatures,
-                metadata,
-            }) => {
-                let signatures = signatures.mapped(|sig| {
-                    let (body, tparams) = match sig {
-                        OverloadType::Function(body) => (body, None),
-                        OverloadType::Forall(Forall { tparams, body }) => (body, Some(tparams)),
-                    };
-                    let tparams = quantify(&body, tparams.as_deref(), class_tparams);
-                    if tparams.is_empty() {
-                        OverloadType::Function(body)
-                    } else {
-                        OverloadType::Forall(Forall { tparams, body })
-                    }
-                });
-                self.heap.mk_overload(Overload {
-                    signatures,
-                    metadata,
-                })
-            }
-            Type::Function(body) => {
-                let tparams = quantify(&*body, None, class_tparams);
-                Forallable::Function(*body).forall(tparams)
-            }
-            Type::Callable(body) => {
-                let tparams = quantify(&*body, None, class_tparams);
-                Forallable::Callable(*body).forall(tparams)
-            }
-            ty => ty,
-        }
+            *tparams = (!quantifieds.is_empty()).then(|| Arc::new(TParams::new(quantifieds)));
+        });
+        ty
     }
 
     pub fn expr_call_infer(
