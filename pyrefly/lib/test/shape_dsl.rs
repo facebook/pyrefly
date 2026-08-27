@@ -9331,6 +9331,47 @@ def keyword(shape: IntTuple) -> IntTuple:
     return shape_helper(shape=shape)  # E: DSL helper calls accept only positional arguments
 
 @type_shape_dsl_function
+def invalid_index_arity(shape: IntTuple) -> IntTuple:
+    axes = (0, 1)
+    if axes.index() == 0:  # E: `.index` requires exactly one positional argument  # E: Missing positional
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def invalid_index_start(shape: IntTuple) -> IntTuple:
+    axes = (0, 1)
+    if axes.index(0, 1) == 0:  # E: `.index` requires exactly one positional argument
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def invalid_index_stop(shape: IntTuple) -> IntTuple:
+    axes = (0, 1)
+    if axes.index(0, 1, 2) == 0:  # E: `.index` requires exactly one positional argument
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def invalid_index_keyword(shape: IntTuple) -> IntTuple:
+    axes = (0, 1)
+    if axes.index(value=0) == 0:  # E: `.index` requires exactly one positional argument  # E: to be positional
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def invalid_index_item(shape: IntTuple) -> IntTuple:
+    axes = (0, 1)
+    if axes.index("zero") == 0:  # E: Flag integer expression is not supported
+        return shape
+    return shape
+
+@type_shape_dsl_function
+def invalid_index_receiver(shape: IntTuple) -> IntTuple:
+    if shape.index(0) == 0:  # E: Flag operation requires a compatible Flag parameter
+        return shape
+    return shape
+
+@type_shape_dsl_function
 def direct_recursive(shape: IntTuple) -> IntTuple:
     return direct_recursive(shape)  # E: recursive DSL helper calls are not supported
 "#,
@@ -9718,6 +9759,137 @@ def test[B: IntTuple](
     assert_type(apply_rank_zero(unpacked), Tensor[[10]])
     reveal_type(apply_rank_two(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
     reveal_type(apply_rank_three(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_flag_sequence_index,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+@type_shape_dsl_function
+def tuple_indices(shape: IntTuple) -> IntTuple:
+    values = (3, 7, 3)
+    singleton = (11,)
+    if values.index(7) == 1 and values.index(3) == 0 and singleton.index(11) == 0:
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def range_indices(shape: IntTuple) -> IntTuple:
+    positive = range(0, 12, 2)
+    negative = range(9, -10, -3)
+    singleton = range(5, 6)
+    large = range(0, 10000)
+    if positive.index(6) == 3 and negative.index(0) == 3 and singleton.index(5) == 0 and large.index(9999) == 9999:
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def assigned_index(shape: IntTuple, values: tuple[int, ...], value: int) -> IntTuple:
+    position = values.index(value)
+    shifted = position + 2
+    if shifted == 4:
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def inverse_permutation(shape: IntTuple, axes: tuple[int, ...]) -> IntTuple:
+    return dsl.IntTuple(shape[axes.index(axis)] for axis in range(len(shape)))
+
+@type_shape_dsl_function
+def indexed_helper(shape: IntTuple, values: tuple[int, ...], value: int) -> IntTuple:
+    if values.index(value) == 2:
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def helper_index(shape: IntTuple, values: tuple[int, ...], value: int) -> IntTuple:
+    return indexed_helper(shape, values, value)
+
+@type_shape_dsl_function
+def narrowed_index(
+    shape: IntTuple, values: int | tuple[int, ...] | None
+) -> IntTuple:
+    if values is None:
+        return shape
+    elif dsl.is_int_value(values):
+        return shape
+    elif values.index(7) == 1:
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def missing_index(shape: IntTuple) -> IntTuple:
+    values = (1, 2)
+    if values.index(3) == 0:
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def empty_range_index(shape: IntTuple) -> IntTuple:
+    values = range(5, 5)
+    if values.index(5) == 0:
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def misaligned_range_index(shape: IntTuple) -> IntTuple:
+    values = range(9, -10, -3)
+    if values.index(1) == 0:
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def budget_index(shape: IntTuple) -> IntTuple:
+    values = tuple(item for item in range(4097))
+    if values.index(4096) == 4096:
+        return dsl.IntTuple(())
+    return shape
+
+def apply_tuple[S: IntTuple](x: Tensor[S]) -> Tensor[tuple_indices(S)]: ...
+def apply_range[S: IntTuple](x: Tensor[S]) -> Tensor[range_indices(S)]: ...
+def apply_assigned[S: IntTuple, Values: Flag[tuple[int, ...]], Value: Flag[int]](
+    x: Tensor[S], values: Values, value: Value
+) -> Tensor[assigned_index(S, Values, Value)]: ...
+def apply_inverse[S: IntTuple, Axes: Flag[tuple[int, ...]]](
+    x: Tensor[S], axes: Axes
+) -> Tensor[inverse_permutation(S, Axes)]: ...
+def apply_helper[S: IntTuple, Values: Flag[tuple[int, ...]], Value: Flag[int]](
+    x: Tensor[S], values: Values, value: Value
+) -> Tensor[helper_index(S, Values, Value)]: ...
+def apply_broad_assigned(x: Tensor[[2, 3]]) -> Tensor[assigned_index(IntTuple[2, 3], tuple[int, ...], int)]: ...
+def apply_unknown_receiver(x: Tensor[[2, 3]]) -> Tensor[assigned_index(IntTuple[2, 3], tuple[int, ...], 5)]: ...
+def apply_unknown_value[S: IntTuple, Values: Flag[tuple[int, ...]]](
+    x: Tensor[S], values: Values, value: int
+) -> Tensor[assigned_index(S, Values, int)]: ...
+def apply_narrowed[S: IntTuple, Values: Flag[int | tuple[int, ...] | None]](
+    x: Tensor[S], values: Values
+) -> Tensor[narrowed_index(S, Values)]: ...
+def apply_missing[S: IntTuple](x: Tensor[S]) -> Tensor[missing_index(S)]: ...
+def apply_empty_range[S: IntTuple](x: Tensor[S]) -> Tensor[empty_range_index(S)]: ...
+def apply_misaligned_range[S: IntTuple](x: Tensor[S]) -> Tensor[misaligned_range_index(S)]: ...
+def apply_budget[S: IntTuple](x: Tensor[S]) -> Tensor[budget_index(S)]: ...
+
+def test(x: Tensor[[2, 3]], rank_three: Tensor[[2, 3, 5]]) -> None:
+    assert_type(apply_tuple(x), Tensor[[]])
+    assert_type(apply_range(x), Tensor[[]])
+    assert_type(apply_assigned(x, (1, 3, 5), 5), Tensor[[]])
+    assert_type(apply_inverse(rank_three, (2, 0, 1)), Tensor[[3, 5, 2]])
+    assert_type(apply_helper(x, (1, 3, 5), 5), Tensor[[]])
+    reveal_type(apply_broad_assigned(x))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_unknown_receiver(x))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_unknown_value(x, (1, 3, 5), 5))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_narrowed(x, (3, 7)), Tensor[[]])
+    assert_type(apply_narrowed(x, 7), Tensor[[2, 3]])
+    apply_missing(x)  # E: Flag sequence `.index` value `3` was not found
+    apply_empty_range(x)  # E: Flag sequence `.index` value `5` was not found
+    apply_misaligned_range(x)  # E: Flag sequence `.index` value `1` was not found
+    reveal_type(apply_budget(x))  # E: revealed type: Tensor[tuple[Unknown, ...]]
 "#,
 );
 

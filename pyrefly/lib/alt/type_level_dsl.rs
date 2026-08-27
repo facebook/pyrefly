@@ -547,6 +547,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslExpressionKind::FlagRange
                     | TypeShapeDslExpressionKind::FlagSequenceLength
                     | TypeShapeDslExpressionKind::FlagSequenceCount
+                    | TypeShapeDslExpressionKind::FlagSequenceIndex
                     | TypeShapeDslExpressionKind::FlagIntArithmetic(_)
                     | TypeShapeDslExpressionKind::DimensionArithmetic(_)
                     | TypeShapeDslExpressionKind::DimensionTuple

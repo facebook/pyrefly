@@ -1016,6 +1016,7 @@ pub enum TypeShapeDslExpressionKind {
     FlagRange,
     FlagSequenceLength,
     FlagSequenceCount,
+    FlagSequenceIndex,
     FlagIntArithmetic(TypeShapeDslArithmeticOp),
     DimensionArithmetic(TypeShapeDslArithmeticOp),
     Conditional,
@@ -2103,23 +2104,35 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             Expr::Call(call)
                 if matches!(
                     &*call.func,
-                    Expr::Attribute(attribute) if attribute.attr.id.as_str() == "count"
+                    Expr::Attribute(attribute)
+                        if matches!(attribute.attr.id.as_str(), "count" | "index")
                 ) =>
             {
                 let Expr::Attribute(attribute) = &*call.func else {
-                    unreachable!("guarded count call has an attribute callee")
+                    unreachable!("guarded sequence method call has an attribute callee")
+                };
+                let (kind, arity_message) = match attribute.attr.id.as_str() {
+                    "count" => (
+                        TypeShapeDslExpressionKind::FlagSequenceCount,
+                        "Flag sequence `.count` requires exactly one positional argument",
+                    ),
+                    "index" => (
+                        TypeShapeDslExpressionKind::FlagSequenceIndex,
+                        "Flag sequence `.index` requires exactly one positional argument",
+                    ),
+                    _ => unreachable!("guarded sequence method is `count` or `index`"),
                 };
                 if call.arguments.args.len() != 1 || !call.arguments.keywords.is_empty() {
                     return Err(TypeShapeDslDefinitionError {
                         range: call.arguments.range,
-                        message: "Flag sequence `.count` requires exactly one positional argument",
+                        message: arity_message,
                     });
                 }
                 self.validate_flag_sequence(&attribute.value, flow)?;
                 self.validate_flag_int(&call.arguments.args[0], flow)?;
                 self.expressions.push(TypeShapeDslExpression {
                     range: call.range(),
-                    kind: TypeShapeDslExpressionKind::FlagSequenceCount,
+                    kind,
                 });
                 Ok(())
             }
@@ -2811,7 +2824,8 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             Expr::Call(call)
                 if matches!(
                     &*call.func,
-                    Expr::Attribute(attribute) if attribute.attr.id.as_str() == "count"
+                    Expr::Attribute(attribute)
+                        if matches!(attribute.attr.id.as_str(), "count" | "index")
                 ) =>
             {
                 self.validate_flag_int(expression, flow)?;
@@ -4135,6 +4149,13 @@ enum DslFlagSequence {
     Range { start: i64, stop: i64, step: i64 },
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum DslFlagSequenceIndex {
+    Exact(i64),
+    Gradual,
+    NotFound,
+}
+
 #[derive(Clone)]
 enum DslOutcome {
     Value(DslValue),
@@ -5090,6 +5111,45 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     _ => unreachable!("validated count uses a Flag sequence and integer"),
                 }
             }
+            TypeShapeDslExpressionKind::FlagSequenceIndex => {
+                let Expr::Call(call) = expression else {
+                    unreachable!("validated index expression is a call")
+                };
+                let Expr::Attribute(attribute) = &*call.func else {
+                    unreachable!("validated index expression has an attribute callee")
+                };
+                let sequence = self.evaluate_expression(&attribute.value, environment, budget);
+                let item = self.evaluate_expression(&call.arguments.args[0], environment, budget);
+                match (sequence, item) {
+                    (DslOutcome::Invalid(error), _) | (_, DslOutcome::Invalid(error)) => {
+                        DslOutcome::Invalid(error)
+                    }
+                    (
+                        DslOutcome::Value(DslValue::FlagSequence(sequence)),
+                        DslOutcome::Value(DslValue::FlagInt(item)),
+                    ) => match sequence.index(item) {
+                        DslFlagSequenceIndex::Exact(index) => {
+                            DslOutcome::Value(DslValue::FlagInt(index))
+                        }
+                        DslFlagSequenceIndex::Gradual => DslOutcome::Value(DslValue::Unknown),
+                        DslFlagSequenceIndex::NotFound => {
+                            DslOutcome::Invalid(ShapeError::ShapeComputation {
+                                message: format!(
+                                    "Flag sequence `.index` value `{item}` was not found"
+                                ),
+                            })
+                        }
+                    },
+                    (DslOutcome::Value(DslValue::Unknown), _)
+                    | (_, DslOutcome::Value(DslValue::Unknown)) => {
+                        DslOutcome::Value(DslValue::Unknown)
+                    }
+                    (DslOutcome::ExplicitGradual, _) | (_, DslOutcome::ExplicitGradual) => {
+                        unreachable!("validated value expression cannot return gradual")
+                    }
+                    _ => unreachable!("validated index uses a Flag sequence and integer"),
+                }
+            }
             TypeShapeDslExpressionKind::FlagIntArithmetic(op) => {
                 let Expr::BinOp(binop) = expression else {
                     unreachable!("validated Flag arithmetic expression is a binary operation")
@@ -5980,6 +6040,26 @@ impl DslFlagSequence {
         }
     }
 
+    /// Returns the position of the first occurrence of a value. Range membership makes offset
+    /// division exact; positions outside the Flag integer domain yield `Gradual`.
+    fn index(&self, value: i64) -> DslFlagSequenceIndex {
+        match self {
+            Self::Values(values) => match values.iter().position(|candidate| *candidate == value) {
+                Some(index) => DslFlagSequenceIndex::Exact(
+                    i64::try_from(index).expect("materialized sequence index fits in i64"),
+                ),
+                None => DslFlagSequenceIndex::NotFound,
+            },
+            Self::Range { start, step, .. } => {
+                if !self.contains(value) {
+                    return DslFlagSequenceIndex::NotFound;
+                }
+                i64::try_from((i128::from(value) - i128::from(*start)) / i128::from(*step))
+                    .map_or(DslFlagSequenceIndex::Gradual, DslFlagSequenceIndex::Exact)
+            }
+        }
+    }
+
     fn len(&self) -> Option<i64> {
         match self {
             Self::Values(values) => i64::try_from(values.len()).ok(),
@@ -6050,6 +6130,96 @@ impl DslEnvironment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flag_sequence_index_finds_first_concrete_value() {
+        let values = DslFlagSequence::Values(vec![3, 7, 3]);
+        let singleton = DslFlagSequence::Values(vec![11]);
+        assert_eq!(values.index(3), DslFlagSequenceIndex::Exact(0));
+        assert_eq!(values.index(7), DslFlagSequenceIndex::Exact(1));
+        assert_eq!(values.index(9), DslFlagSequenceIndex::NotFound);
+        assert_eq!(singleton.index(11), DslFlagSequenceIndex::Exact(0));
+    }
+
+    #[test]
+    fn flag_sequence_index_uses_range_arithmetic() {
+        let positive = DslFlagSequence::Range {
+            start: 0,
+            stop: 10_000,
+            step: 2,
+        };
+        let negative = DslFlagSequence::Range {
+            start: 9,
+            stop: -10,
+            step: -3,
+        };
+        let singleton = DslFlagSequence::Range {
+            start: 5,
+            stop: 6,
+            step: 1,
+        };
+        let empty = DslFlagSequence::Range {
+            start: 5,
+            stop: 5,
+            step: 1,
+        };
+        assert_eq!(positive.index(9_998), DslFlagSequenceIndex::Exact(4_999));
+        assert_eq!(negative.index(0), DslFlagSequenceIndex::Exact(3));
+        assert_eq!(negative.index(1), DslFlagSequenceIndex::NotFound);
+        assert_eq!(negative.index(-10), DslFlagSequenceIndex::NotFound);
+        assert_eq!(singleton.index(5), DslFlagSequenceIndex::Exact(0));
+        assert_eq!(empty.index(5), DslFlagSequenceIndex::NotFound);
+    }
+
+    #[test]
+    fn flag_sequence_index_searches_materialized_values_without_a_budget() {
+        let mut items = vec![0; MAX_GENERATOR_STEPS + 1];
+        items[MAX_GENERATOR_STEPS] = 5;
+        let values = DslFlagSequence::Values(items);
+        assert_eq!(values.index(0), DslFlagSequenceIndex::Exact(0));
+        assert_eq!(
+            values.index(5),
+            DslFlagSequenceIndex::Exact(
+                i64::try_from(MAX_GENERATOR_STEPS).expect("test bound fits in i64")
+            )
+        );
+        assert_eq!(values.index(9), DslFlagSequenceIndex::NotFound);
+    }
+
+    #[test]
+    fn flag_sequence_index_is_gradual_when_range_offset_overflows() {
+        let oversized_index = DslFlagSequence::Range {
+            start: i64::MIN,
+            stop: i64::MAX,
+            step: 1,
+        };
+        let negative_endpoints = DslFlagSequence::Range {
+            start: i64::MAX,
+            stop: i64::MIN,
+            step: i64::MIN,
+        };
+        assert_eq!(
+            oversized_index.index(i64::MIN),
+            DslFlagSequenceIndex::Exact(0)
+        );
+        assert_eq!(
+            oversized_index.index(i64::MAX),
+            DslFlagSequenceIndex::NotFound
+        );
+        assert_eq!(
+            oversized_index.index(i64::MAX - 1),
+            DslFlagSequenceIndex::Gradual
+        );
+        assert_eq!(
+            negative_endpoints.index(i64::MAX),
+            DslFlagSequenceIndex::Exact(0)
+        );
+        assert_eq!(negative_endpoints.index(-1), DslFlagSequenceIndex::Exact(1));
+        assert_eq!(
+            negative_endpoints.index(i64::MIN),
+            DslFlagSequenceIndex::NotFound
+        );
+    }
 
     #[test]
     fn lower_bool_literal_for_union_flag_domain() {
