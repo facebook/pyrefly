@@ -67,7 +67,10 @@ impl ModuleErrors {
                 previous_range = x.range();
                 previous_start = self.items.len();
                 self.items.push(x);
-            } else if !self.items[previous_start..].contains(&x) {
+            } else if !self.items[previous_start..]
+                .iter_mut()
+                .any(|existing| existing.merge_if_same_diagnostic(&x))
+            {
                 self.items.push(x);
             }
         }
