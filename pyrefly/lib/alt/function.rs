@@ -10,6 +10,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use itertools::Itertools;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
@@ -2234,18 +2235,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if Self::is_singledispatch_dispatcher(ty) {
             return;
         }
-        let impl_tparams = match ty {
-            Type::Forall(forall) => Some(&forall.tparams),
-            _ => None,
-        };
-        let impl_sig = {
-            let sigs = ty.callable_signatures();
-            if sigs.len() != 1 {
-                // If this is somehow not a callable (len == 0), there's nothing to check.
-                // An overload's implementation can't be overloaded (len > 1).
-                return;
-            }
-            sigs[0]
+        let Ok((impl_sig, impl_tparams)) = ty.toplevel_callable_signatures().exactly_one() else {
+            // If this is somehow not a callable (len == 0), there's nothing to check.
+            // An overload's implementation can't be overloaded (len > 1).
+            return;
         };
         let all_tparams =
             |tparams: Option<&Arc<TParams>>| match (tparams, def.defining_cls.as_ref()) {
