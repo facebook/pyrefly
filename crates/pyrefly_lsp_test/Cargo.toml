@@ -12,7 +12,7 @@ license = "MIT"
 anstream = "0.6.11"
 anyhow = "1.0.104"
 crossbeam-channel = "0.5.16"
-lsp-server = "0.7.9"
+lsp-server = "0.8.0"
 lsp-types = { git = "https://github.com/yangdanny97/lsp-types", rev = "395d6bfcd6c3696a64cfe9cd93b86f981fb85112" }
 pretty_assertions = { version = "1.4.1", features = ["alloc"], default-features = false }
 pyrefly = { path = "../../pyrefly" }
