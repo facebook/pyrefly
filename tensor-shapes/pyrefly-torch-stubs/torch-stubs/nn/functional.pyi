@@ -12,9 +12,19 @@ import builtins
 from typing import Literal, overload
 
 import shape_extensions
-from shape_extensions import Elements, Flag, IntTuple, IntVar, uses_shape_dsl
+from shape_extensions import (
+    Elements,
+    Flag,
+    Int as _Int,
+    IntTuple,
+    IntVar,
+    uses_shape_dsl,
+)
 from torch._shapes import (
-    adaptive_pool_ir,
+    adaptive_pool1d_shape,
+    adaptive_pool2d_shape,
+    adaptive_pool3d_shape,
+    adaptive_pool_gradual_shape,
     classification_loss_shape,
     conv_shape,
     conv_transpose_shape,
@@ -363,50 +373,167 @@ def avg_pool3d(
     ...
 
 # Adaptive max pooling operations
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_max_pool1d(
-    self: Tensor, output_size: int | tuple[int], return_indices: bool = False
-) -> Tensor:
-    """1D adaptive max pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_max_pool1d"""
+@overload
+def adaptive_max_pool1d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape],
+    output_size: _Int[O],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool1d_shape(Shape, O)]:
+    """1D adaptive max pooling. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_max_pool2d(
-    self: Tensor,
-    output_size: int | tuple[int, int] | None,
-    return_indices: bool = False,
-) -> Tensor:
-    """2D adaptive max pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_max_pool2d"""
+@overload
+def adaptive_max_pool1d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape],
+    output_size: tuple[_Int[O]],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool1d_shape(Shape, O)]: ...
+@overload
+def adaptive_max_pool1d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int],
+    return_indices: Literal[True],
+) -> tuple[
+    Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+    Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+]: ...
+@overload
+def adaptive_max_pool1d[Shape: IntTuple](
+    input: Tensor[Shape], output_size: int | tuple[int], return_indices: bool
+) -> (
+    Tensor[adaptive_pool_gradual_shape(Shape, 1)]
+    | tuple[
+        Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+        Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+    ]
+): ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape],
+    output_size: _Int[O],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool2d_shape(Shape, O, O)]:
+    """2D adaptive max pooling. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_max_pool3d(
-    self: Tensor,
-    output_size: int | tuple[int, int, int] | None,
-    return_indices: bool = False,
-) -> Tensor:
-    """3D adaptive max pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_max_pool3d"""
+@overload
+def adaptive_max_pool2d[Shape: IntTuple, OH: IntVar, OW: IntVar](
+    input: Tensor[Shape],
+    output_size: tuple[_Int[OH], _Int[OW]],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool2d_shape(Shape, OH, OW)]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: tuple[int | None, int | None],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool_gradual_shape(Shape, 2)]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None],
+    return_indices: Literal[True],
+) -> tuple[
+    Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+    Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None],
+    return_indices: bool,
+) -> (
+    Tensor[adaptive_pool_gradual_shape(Shape, 2)]
+    | tuple[
+        Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+        Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+    ]
+): ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape],
+    output_size: _Int[O],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool3d_shape(Shape, O, O, O)]:
+    """3D adaptive max pooling. Shape inference via type-level DSL."""
     ...
+
+@overload
+def adaptive_max_pool3d[Shape: IntTuple, OD: IntVar, OH: IntVar, OW: IntVar](
+    input: Tensor[Shape],
+    output_size: tuple[_Int[OD], _Int[OH], _Int[OW]],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: tuple[int | None, int | None, int | None],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool_gradual_shape(Shape, 3)]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None, int | None],
+    return_indices: Literal[True],
+) -> tuple[
+    Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+    Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None, int | None],
+    return_indices: bool,
+) -> (
+    Tensor[adaptive_pool_gradual_shape(Shape, 3)]
+    | tuple[
+        Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+        Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+    ]
+): ...
 
 # Adaptive average pooling operations
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_avg_pool1d(self: Tensor, output_size: int | tuple[int]) -> Tensor:
-    """1D adaptive average pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_avg_pool1d"""
+@overload
+def adaptive_avg_pool1d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape], output_size: _Int[O]
+) -> Tensor[adaptive_pool1d_shape(Shape, O)]:
+    """1D adaptive average pooling. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_avg_pool2d(
-    self: Tensor, output_size: int | tuple[int, int] | None
-) -> Tensor:
-    """2D adaptive average pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_avg_pool2d"""
+@overload
+def adaptive_avg_pool1d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape], output_size: tuple[_Int[O]]
+) -> Tensor[adaptive_pool1d_shape(Shape, O)]: ...
+@overload
+def adaptive_avg_pool2d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape], output_size: _Int[O]
+) -> Tensor[adaptive_pool2d_shape(Shape, O, O)]:
+    """2D adaptive average pooling. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_avg_pool3d(
-    self: Tensor, output_size: int | tuple[int, int, int] | None
-) -> Tensor:
-    """3D adaptive average pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_avg_pool3d"""
+@overload
+def adaptive_avg_pool2d[Shape: IntTuple, OH: IntVar, OW: IntVar](
+    input: Tensor[Shape], output_size: tuple[_Int[OH], _Int[OW]]
+) -> Tensor[adaptive_pool2d_shape(Shape, OH, OW)]: ...
+@overload
+def adaptive_avg_pool2d[Shape: IntTuple](
+    input: Tensor[Shape], output_size: tuple[int | None, int | None]
+) -> Tensor[adaptive_pool_gradual_shape(Shape, 2)]: ...
+@overload
+def adaptive_avg_pool3d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape], output_size: _Int[O]
+) -> Tensor[adaptive_pool3d_shape(Shape, O, O, O)]:
+    """3D adaptive average pooling. Shape inference via type-level DSL."""
     ...
+
+@overload
+def adaptive_avg_pool3d[Shape: IntTuple, OD: IntVar, OH: IntVar, OW: IntVar](
+    input: Tensor[Shape], output_size: tuple[_Int[OD], _Int[OH], _Int[OW]]
+) -> Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)]: ...
+@overload
+def adaptive_avg_pool3d[Shape: IntTuple](
+    input: Tensor[Shape], output_size: tuple[int | None, int | None, int | None]
+) -> Tensor[adaptive_pool_gradual_shape(Shape, 3)]: ...
 
 # Interpolation/upsampling operations
 @uses_shape_dsl(interpolate_ir)

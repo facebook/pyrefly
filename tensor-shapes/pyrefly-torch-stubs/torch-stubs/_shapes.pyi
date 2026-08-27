@@ -844,12 +844,42 @@ def pool_ir(
         return [ShapedArray(shape=out), ShapedArray(shape=out)]
     return ShapedArray(shape=out)
 
-@shape_dsl_function
-def adaptive_pool_ir(
-    self: ShapedArray, output_size: int | symint | list[int | symint]
-) -> ShapedArray:
-    out_sizes = broadcast_int(output_size, len(self.shape) - 2)
-    return ShapedArray(shape=[self.shape[0], self.shape[1]] + out_sizes)
+@type_shape_dsl_function
+def adaptive_pool1d_shape(input_shape: IntTuple, output: Int) -> IntTuple:
+    if len(input_shape) != 2 and len(input_shape) != 3:
+        return dsl.Invalid("adaptive_pool1d requires 2D or 3D input")
+    return dsl.concat(input_shape[:-1], dsl.IntTuple((output,)))
+
+@type_shape_dsl_function
+def adaptive_pool2d_shape(input_shape: IntTuple, height: Int, width: Int) -> IntTuple:
+    if len(input_shape) != 3 and len(input_shape) != 4:
+        return dsl.Invalid("adaptive_pool2d requires 3D or 4D input")
+    return dsl.concat(input_shape[:-2], dsl.IntTuple((height, width)))
+
+@type_shape_dsl_function
+def adaptive_pool3d_shape(
+    input_shape: IntTuple, depth: Int, height: Int, width: Int
+) -> IntTuple:
+    if len(input_shape) != 4 and len(input_shape) != 5:
+        return dsl.Invalid("adaptive_pool3d requires 4D or 5D input")
+    return dsl.concat(input_shape[:-3], dsl.IntTuple((depth, height, width)))
+
+@type_shape_dsl_function
+def adaptive_pool_gradual_shape(
+    input_shape: IntTuple, spatial_dimensions: int
+) -> IntTuple:
+    if spatial_dimensions == 1:
+        if len(input_shape) != 2 and len(input_shape) != 3:
+            return dsl.Invalid("adaptive_pool1d requires 2D or 3D input")
+    elif spatial_dimensions == 2:
+        if len(input_shape) != 3 and len(input_shape) != 4:
+            return dsl.Invalid("adaptive_pool2d requires 3D or 4D input")
+    elif spatial_dimensions == 3:
+        if len(input_shape) != 4 and len(input_shape) != 5:
+            return dsl.Invalid("adaptive_pool3d requires 4D or 5D input")
+    else:
+        return dsl.Invalid("adaptive pooling supports one to three spatial dimensions")
+    return dsl.IntTuple.gradual()
 
 @shape_dsl_function
 def interpolate_ir(

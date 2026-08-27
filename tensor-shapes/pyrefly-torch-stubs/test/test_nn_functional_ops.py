@@ -140,3 +140,56 @@ def check_pad_gradual(
     assert_type(F.pad(concrete, dynamic_list), Tensor[IntTuple])
     assert_type(F.pad(concrete, [1, 2]), Tensor[IntTuple])
     assert_type(F.pad(concrete, [amount, amount]), Tensor[IntTuple])
+
+
+def test_adaptive_pool_shapes() -> None:
+    one_d = cast(Tensor[[2, 3, 12]], ...)
+    two_d = cast(Tensor[[2, 3, 12, 15]], ...)
+    three_d = cast(Tensor[[2, 3, 8, 12, 15]], ...)
+
+    assert_type(F.adaptive_avg_pool1d(one_d, 4), Tensor[[2, 3, 4]])
+    assert_type(F.adaptive_avg_pool1d(input=one_d, output_size=4), Tensor[[2, 3, 4]])
+    assert_type(F.adaptive_avg_pool2d(two_d, (4, 5)), Tensor[[2, 3, 4, 5]])
+    assert_type(F.adaptive_avg_pool3d(three_d, 4), Tensor[[2, 3, 4, 4, 4]])
+
+    assert_type(F.adaptive_max_pool1d(one_d, (5,)), Tensor[[2, 3, 5]])
+    assert_type(
+        F.adaptive_max_pool2d(two_d, (4, 5), return_indices=False),
+        Tensor[[2, 3, 4, 5]],
+    )
+    assert_type(
+        F.adaptive_max_pool3d(three_d, (4, 5, 6), return_indices=True),
+        tuple[Tensor, Tensor],
+    )
+
+
+def test_adaptive_pool_unbatched_shapes() -> None:
+    two_d = cast(Tensor[[3, 12, 15]], ...)
+    three_d = cast(Tensor[[3, 8, 12, 15]], ...)
+
+    assert_type(F.adaptive_avg_pool2d(two_d, 4), Tensor[[3, 4, 4]])
+    assert_type(F.adaptive_max_pool3d(three_d, (4, 5, 6)), Tensor[[3, 4, 5, 6]])
+
+
+def check_adaptive_pool_fallbacks(
+    exact: Tensor[[2, 3, 12, 15]],
+    open_rank: Tensor[IntTuple],
+    scalar: int,
+    pair: tuple[int, int],
+    return_indices: bool,
+) -> None:
+    assert_type(F.adaptive_avg_pool2d(exact, scalar), Tensor[[2, 3, int, int]])
+    assert_type(F.adaptive_avg_pool2d(exact, pair), Tensor[[2, 3, int, int]])
+    assert_type(F.adaptive_avg_pool2d(open_rank, (4, 5)), Tensor[IntTuple])
+    assert_type(F.adaptive_avg_pool2d(exact, (None, 5)), Tensor)
+    assert_type(
+        F.adaptive_max_pool2d(exact, (4, None), return_indices=True),
+        tuple[Tensor, Tensor],
+    )
+    three_d = cast(Tensor[[2, 3, 8, 12, 15]], ...)
+    assert_type(F.adaptive_avg_pool3d(three_d, (None, 5, None)), Tensor)
+    assert_type(F.adaptive_max_pool3d(three_d, (4, None, 6)), Tensor)
+    assert_type(
+        F.adaptive_max_pool2d(exact, (4, 5), return_indices=return_indices),
+        Tensor | tuple[Tensor, Tensor],
+    )
