@@ -989,6 +989,7 @@ pub enum TypeShapeDslExpressionKind {
     IntTupleLength {
         shape: usize,
         parameter_origins: Option<Box<[usize]>>,
+        domain: DslIntegerDomain,
     },
     GeneratorSourceSlot {
         slot: usize,
@@ -1376,10 +1377,28 @@ struct DslValidationFlow {
     kinds: Vec<DslStaticKind>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum DslIntegerDomain {
+/// Which integer domain an integer-valued expression is evaluated in.
+///
+/// This is public because it is embedded in `TypeShapeDslExpressionKind`.
+// `Copy` reflects that this is a small value enum; the comparison and hash traits are required by
+// `TypeShapeDslExpressionKind`'s derives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DslIntegerDomain {
     Flag,
     Dimension,
+}
+
+/// What a well-formed `len(...)` is applied to. Classification is domain-neutral: the caller
+/// decides whether the operand's cardinality is usable in the domain it needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DslLengthOperand<'a> {
+    /// An IntTuple whose length is a rank, usable as either a Flag integer or a dimension.
+    IntTuple {
+        slot: usize,
+        parameter_origins: Option<&'a [usize]>,
+    },
+    /// A Flag sequence, whose cardinality only exists in the Flag domain.
+    FlagSequence,
 }
 
 #[derive(Clone)]
@@ -1577,6 +1596,12 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         parameters,
                         expanded_deferred,
                     )
+            }
+            // `len(shape)` creates a new integer cardinality; the shape operand is not an
+            // integer-value dependency of that result. Other `len` operands are not
+            // domain-polymorphic deferred integers.
+            Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len) => {
+                self.length_has_int_tuple_operand(call, flow)
             }
             _ => !matches!(integer_literal(expression), IntegerLiteral::NotLiteral),
         }
@@ -1858,6 +1883,9 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 self.validate_int_tuple_product(call, flow)?;
                 TypeShapeDslExpressionKind::IntTupleProduct
             }
+            Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len) => {
+                self.validate_length(call, flow, DslIntegerDomain::Dimension)?
+            }
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: expression.range(),
@@ -2065,42 +2093,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 Ok(())
             }
             Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len) => {
-                if call.arguments.args.len() != 1 || !call.arguments.keywords.is_empty() {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: call.arguments.range,
-                        message: "`len` requires exactly one positional argument",
-                    });
-                }
-                let argument = &call.arguments.args[0];
-                let slot = self.slot(argument, flow)?;
-                match &flow.kinds[slot] {
-                    DslStaticKind::UnknownParameters(parameters) => {
-                        self.expressions.push(TypeShapeDslExpression {
-                            range: call.range(),
-                            kind: TypeShapeDslExpressionKind::IntTupleLength {
-                                shape: slot,
-                                parameter_origins: Some(parameters.clone()),
-                            },
-                        });
-                    }
-                    DslStaticKind::Flag { kinds, .. } if *kinds == FLAG_SEQUENCE => {
-                        self.validate_flag_slot(
-                            argument,
-                            flow,
-                            TypeShapeDslFlagValueKind::Sequence,
-                        )?;
-                        self.expressions.push(TypeShapeDslExpression {
-                            range: call.range(),
-                            kind: TypeShapeDslExpressionKind::FlagSequenceLength,
-                        });
-                    }
-                    _ => {
-                        return Err(TypeShapeDslDefinitionError {
-                            range: argument.range(),
-                            message: "`len` requires an IntTuple or Flag sequence",
-                        });
-                    }
-                }
+                let kind = self.validate_length(call, flow, DslIntegerDomain::Flag)?;
+                self.expressions.push(TypeShapeDslExpression {
+                    range: call.range(),
+                    kind,
+                });
                 Ok(())
             }
             Expr::Call(call)
@@ -2129,6 +2126,77 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             _ => Err(TypeShapeDslDefinitionError {
                 range: expression.range(),
                 message: "Flag integer expression is not supported",
+            }),
+        }
+    }
+
+    /// Classifies a `len` operand without recording anything, so that validation, deferred
+    /// integer resolution, and traceability all agree on which `len` calls are well formed.
+    fn length_operand<'b>(
+        &self,
+        call: &ExprCall,
+        flow: &'b DslValidationFlow,
+    ) -> Result<DslLengthOperand<'b>, TypeShapeDslDefinitionError> {
+        if call.arguments.args.len() != 1 || !call.arguments.keywords.is_empty() {
+            return Err(TypeShapeDslDefinitionError {
+                range: call.arguments.range,
+                message: "`len` requires exactly one positional argument",
+            });
+        }
+        let argument = &call.arguments.args[0];
+        let slot = self.slot(argument, flow)?;
+        match &flow.kinds[slot] {
+            DslStaticKind::UnknownParameters(parameters) => Ok(DslLengthOperand::IntTuple {
+                slot,
+                parameter_origins: Some(parameters),
+            }),
+            DslStaticKind::IntTuple { parameter_origins } => Ok(DslLengthOperand::IntTuple {
+                slot,
+                parameter_origins: parameter_origins.as_deref(),
+            }),
+            DslStaticKind::Flag {
+                kinds: FLAG_SEQUENCE,
+                ..
+            } => Ok(DslLengthOperand::FlagSequence),
+            _ => Err(TypeShapeDslDefinitionError {
+                range: argument.range(),
+                message: "`len` requires an IntTuple or Flag sequence",
+            }),
+        }
+    }
+
+    fn length_has_int_tuple_operand(&self, call: &ExprCall, flow: &DslValidationFlow) -> bool {
+        matches!(
+            self.length_operand(call, flow),
+            Ok(DslLengthOperand::IntTuple { .. })
+        )
+    }
+
+    fn validate_length(
+        &mut self,
+        call: &ExprCall,
+        flow: &DslValidationFlow,
+        domain: DslIntegerDomain,
+    ) -> Result<TypeShapeDslExpressionKind, TypeShapeDslDefinitionError> {
+        let operand = self.length_operand(call, flow)?;
+        // `length_operand` has already checked arity, so the sole argument exists.
+        let argument = &call.arguments.args[0];
+        match operand {
+            DslLengthOperand::IntTuple {
+                slot,
+                parameter_origins,
+            } => Ok(TypeShapeDslExpressionKind::IntTupleLength {
+                shape: slot,
+                parameter_origins: parameter_origins.map(Box::from),
+                domain,
+            }),
+            DslLengthOperand::FlagSequence if domain == DslIntegerDomain::Flag => {
+                self.validate_flag_slot(argument, flow, TypeShapeDslFlagValueKind::Sequence)?;
+                Ok(TypeShapeDslExpressionKind::FlagSequenceLength)
+            }
+            DslLengthOperand::FlagSequence => Err(TypeShapeDslDefinitionError {
+                range: argument.range(),
+                message: "Flag-sequence length cannot be used as a dimension",
             }),
         }
     }
@@ -2730,11 +2798,15 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 })
             }
             Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len) => {
-                self.validate_flag_int(expression, flow)?;
-                Ok(DslStaticKind::Flag {
-                    origins: None,
-                    kinds: FLAG_INT,
-                })
+                if self.is_deferred_integer_expression(expression, flow) {
+                    Ok(self.defer_integer(expression, flow))
+                } else {
+                    self.validate_flag_int(expression, flow)?;
+                    Ok(DslStaticKind::Flag {
+                        origins: None,
+                        kinds: FLAG_INT,
+                    })
+                }
             }
             Expr::Call(call)
                 if matches!(
@@ -2903,6 +2975,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 self.is_deferred_integer_expression(&binop.left, flow)
                     || self.is_deferred_integer_expression(&binop.right, flow)
             }
+            // Only an IntTuple-backed length is domain-polymorphic; a Flag sequence has no
+            // dimension reading, so it stays an ordinary Flag integer.
+            Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len) => {
+                self.length_has_int_tuple_operand(call, flow)
+            }
             _ => false,
         }
     }
@@ -2930,6 +3007,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             Expr::BinOp(binop) => {
                 self.is_traceable_integer_expression(&binop.left, flow)
                     && self.is_traceable_integer_expression(&binop.right, flow)
+            }
+            // An IntTuple-backed length is a rank: concrete whenever the shape is, so it is as
+            // traceable as a literal even though its operand is not an integer.
+            Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len) => {
+                self.length_has_int_tuple_operand(call, flow)
             }
             _ => !matches!(integer_literal(expression), IntegerLiteral::NotLiteral),
         }
@@ -3409,6 +3491,14 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     self.expressions.push(TypeShapeDslExpression {
                         range: call.range(),
                         kind: TypeShapeDslExpressionKind::IntTupleProduct,
+                    });
+                    TypeShapeDslReturnKind::Expression(TypeShapeDslDomain::Int)
+                }
+                Some(TypeShapeDslIntrinsic::Len) => {
+                    let kind = self.validate_length(call, flow, DslIntegerDomain::Dimension)?;
+                    self.expressions.push(TypeShapeDslExpression {
+                        range: call.range(),
+                        kind,
                     });
                     TypeShapeDslReturnKind::Expression(TypeShapeDslDomain::Int)
                 }
@@ -4813,7 +4903,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     }
                 }
             }
-            TypeShapeDslExpressionKind::IntTupleLength { shape, .. } => {
+            TypeShapeDslExpressionKind::IntTupleLength { shape, domain, .. } => {
                 let shape = match environment.value(shape) {
                     DslValue::Shape(shape) => shape,
                     DslValue::Unknown => return DslOutcome::Value(DslValue::Unknown),
@@ -4825,8 +4915,11 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     return DslOutcome::Value(DslValue::Unknown);
                 };
                 let length = i64::try_from(shape.len())
-                    .expect("concrete IntTuple length must fit in a Flag integer");
-                DslOutcome::Value(DslValue::FlagInt(length))
+                    .expect("concrete IntTuple length must fit in an i64");
+                DslOutcome::Value(match domain {
+                    DslIntegerDomain::Flag => DslValue::FlagInt(length),
+                    DslIntegerDomain::Dimension => DslValue::Dimension(Int::Literal(length)),
+                })
             }
             TypeShapeDslExpressionKind::GeneratorSourceSlot { slot, .. } => {
                 DslOutcome::Value(environment.value(slot).clone())

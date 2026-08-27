@@ -7198,6 +7198,216 @@ def test(x: Tensor[[2, 3]]) -> None:
 );
 
 testcase!(
+    test_type_shape_dsl_int_tuple_length_integer_domains,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Elements, Flag, Int, IntTuple, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import Literal, assert_type, reveal_type
+
+@type_shape_dsl_function
+def rank(shape: IntTuple) -> Int:
+    return len(shape)
+
+@type_shape_dsl_function
+def local_rank(shape: IntTuple) -> Int:
+    result = len(shape)
+    return result
+
+@type_shape_dsl_function
+def incremented_rank(shape: IntTuple) -> Int:
+    result = len(shape)
+    return result + 1
+
+@type_shape_dsl_function
+def rank_dimension(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((len(shape),))
+
+@type_shape_dsl_function
+def sliced_rank(shape: IntTuple) -> Int:
+    tail = shape[1:]
+    return len(tail)
+
+@type_shape_dsl_function
+def tail_is_pair(shape: IntTuple) -> IntTuple:
+    tail = shape[1:]
+    if len(tail) == 2:
+        return dsl.IntTuple((1,))
+    return dsl.IntTuple((0,))
+
+@type_shape_dsl_function
+def concatenated_rank(shape: IntTuple) -> Int:
+    extended = dsl.concat(shape, dsl.IntTuple((7,)))
+    return len(extended)
+
+@type_shape_dsl_function
+def copy_with_local_rank(shape: IntTuple) -> IntTuple:
+    rank = len(shape)
+    return dsl.IntTuple((shape[index] for index in range(rank)))
+
+@type_shape_dsl_function
+def branch_on_local_rank(shape: IntTuple) -> IntTuple:
+    rank = len(shape)
+    if rank == 2:
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def slice_with_local_rank(shape: IntTuple) -> IntTuple:
+    rank = len(shape)
+    return shape[:rank - 1]
+
+@type_shape_dsl_function
+def index_with_local_rank(shape: IntTuple) -> IntTuple:
+    rank = len(shape)
+    return dsl.IntTuple((shape[rank - 1],))
+
+@type_shape_dsl_function
+def add_one(value: Int) -> Int:
+    return value + 1
+
+@type_shape_dsl_function
+def helper_rank(shape: IntTuple) -> Int:
+    rank = len(shape)
+    return add_one(rank)
+
+@type_shape_dsl_function
+def add_one_flag(value: int) -> Int:
+    return value + 1
+
+@type_shape_dsl_function
+def flag_helper_rank(shape: IntTuple) -> Int:
+    rank = len(shape)
+    return add_one_flag(rank)
+
+@type_shape_dsl_function
+def branch_rank(shape: IntTuple, choose: bool) -> Int:
+    if choose:
+        result = len(shape)
+    else:
+        tail = shape[1:]
+        result = len(tail)
+    return result
+
+@type_shape_dsl_function
+def mixed_rank_use(shape: IntTuple) -> IntTuple:
+    rank = len(shape)  # E: an integer local cannot be used as both a dimension and a Flag value
+    if rank == 2:
+        return dsl.IntTuple((rank,))
+    return shape
+
+@type_shape_dsl_function
+def flag_sequence_dimension(shape: IntTuple) -> IntTuple:
+    axes = (0, 1)
+    return dsl.IntTuple((len(axes),))  # E: Flag-sequence length cannot be used as a dimension
+
+@type_shape_dsl_function
+def invalid_arity(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((len(shape, shape),))  # E: `len` requires exactly one positional argument  # E: Expected 1 positional argument
+
+@type_shape_dsl_function
+def invalid_keyword(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((len(obj=shape),))  # E: `len` requires exactly one positional argument  # E: Expected argument `obj` to be positional
+
+@type_shape_dsl_function
+def invalid_local_arity(shape: IntTuple) -> Int:
+    rank = len(shape, shape)  # E: `len` requires exactly one positional argument  # E: Expected 1 positional argument
+    return rank
+
+def apply_rank[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[[rank(Shape)]]: ...
+def apply_local[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[[local_rank(Shape)]]: ...
+def apply_incremented[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[[incremented_rank(Shape)]]: ...
+def apply_rank_dimension[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[rank_dimension(Shape)]: ...
+def apply_sliced[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[[sliced_rank(Shape)]]: ...
+def apply_tail_is_pair[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[tail_is_pair(Shape)]: ...
+def apply_concatenated[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[[concatenated_rank(Shape)]]: ...
+def apply_copy[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[copy_with_local_rank(Shape)]: ...
+def apply_branch[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[branch_on_local_rank(Shape)]: ...
+def apply_slice[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[slice_with_local_rank(Shape)]: ...
+def apply_index[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[index_with_local_rank(Shape)]: ...
+def apply_helper[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[[helper_rank(Shape)]]: ...
+def apply_flag_helper[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[[flag_helper_rank(Shape)]]: ...
+def apply_branch_rank[Shape: IntTuple, Choose: Flag[bool]](
+    x: Tensor[Shape], choose: Choose,
+) -> Tensor[[branch_rank(Shape, Choose)]]: ...
+
+def test[N: IntVar, Tail: IntTuple](
+    scalar: Tensor[[]],
+    pair: Tensor[[2, 3]],
+    concrete: Tensor[[2, 3, 4]],
+    symbolic: Tensor[[N, 3, 4]],
+    gradual: Tensor[IntTuple],
+    unpacked: Tensor[IntTuple[2, *Elements[Tail], 3]],
+) -> None:
+    assert_type(apply_rank(scalar), Tensor[tuple[Literal[0]]])
+    assert_type(apply_rank(concrete), Tensor[[3]])
+    assert_type(apply_rank(symbolic), Tensor[[3]])
+    assert_type(apply_local(concrete), Tensor[[3]])
+    assert_type(apply_incremented(concrete), Tensor[[4]])
+    assert_type(apply_rank_dimension(concrete), Tensor[[3]])
+    assert_type(apply_sliced(concrete), Tensor[[2]])
+    assert_type(apply_concatenated(concrete), Tensor[[4]])
+    assert_type(apply_copy(concrete), Tensor[[2, 3, 4]])
+    assert_type(apply_branch(concrete), Tensor[[]])
+    assert_type(apply_slice(concrete), Tensor[[2, 3]])
+    assert_type(apply_index(concrete), Tensor[[4]])
+    assert_type(apply_helper(concrete), Tensor[[4]])
+    assert_type(apply_flag_helper(concrete), Tensor[[4]])
+    assert_type(apply_branch_rank(concrete, True), Tensor[[3]])
+    assert_type(apply_branch_rank(concrete, False), Tensor[[2]])
+    assert_type(apply_tail_is_pair(concrete), Tensor[[1]])
+    assert_type(apply_tail_is_pair(pair), Tensor[tuple[Literal[0]]])
+    assert_type(apply_rank(gradual), Tensor[[int]])
+    assert_type(apply_rank(unpacked), Tensor[[int]])
+    assert_type(apply_incremented(unpacked), Tensor[[int]])
+    assert_type(apply_sliced(unpacked), Tensor[[int]])
+    reveal_type(apply_copy(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_slice(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_index(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_flag_helper(unpacked), Tensor[[int]])
+    reveal_type(apply_tail_is_pair(gradual))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_imported_int_tuple_length_helper,
+    {
+        let mut env = shape_dsl_tensor_env();
+        env.add(
+            "rank_helpers",
+            r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def successor(value: Int) -> Int:
+    return value + 1
+
+@type_shape_dsl_function
+def rank_plus_one(shape: IntTuple) -> Int:
+    rank = len(shape)
+    return successor(rank)
+"#,
+        );
+        env
+    },
+    r#"
+import rank_helpers
+from rank_helpers import rank_plus_one as imported_rank_plus_one
+from shape_extensions import IntTuple
+from torch import Tensor
+from typing import assert_type
+
+def qualified[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[[rank_helpers.rank_plus_one(Shape)]]: ...
+def imported[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[[imported_rank_plus_one(Shape)]]: ...
+
+def test(x: Tensor[[2, 3, 4]]) -> None:
+    assert_type(qualified(x), Tensor[[4]])
+    assert_type(imported(x), Tensor[[4]])
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_invalid_flag_value_regressions,
     shape_dsl_tensor_env(),
     r#"
