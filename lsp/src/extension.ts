@@ -11,6 +11,7 @@ import {ExtensionContext, workspace} from 'vscode';
 import * as vscode from 'vscode';
 import {execFile} from 'child_process';
 import {basename, dirname} from 'path';
+import {promisify} from 'util';
 import {
   CancellationToken,
   ConfigurationItem,
@@ -35,6 +36,8 @@ import {PythonEnvironment} from './python-environment';
 import {
   triggerMsPythonRefreshLanguageServersIfInstalled,
 } from './extension-interop';
+
+const execFileAsync = promisify(execFile);
 
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
@@ -96,6 +99,75 @@ function resolveLspPath(lspPath: string, cwd: vscode.Uri | undefined) {
   return lspPath;
 }
 
+// Activation blocks until the binary is resolved, so an interpreter that never
+// makes progress must not be able to stall it indefinitely.
+const FIND_PYREFLY_TIMEOUT_MS = 10_000;
+
+async function getPyreflyBinary(
+  extensionUri: vscode.Uri,
+  pythonEnv: PythonEnvironment,
+  logChannel: vscode.OutputChannel,
+): Promise<string> {
+  const executable = requireSetting<string>('pyrefly.pyreflyExecutable');
+
+  // There may be more than one URI due to multi-root workspaces, so just take the primary root.
+  const globalCwd: vscode.Uri | undefined = vscode.workspace.workspaceFolders?.[0]?.uri;
+
+  // Every case that does not produce a path falls through to the bundled binary.
+  switch (executable) {
+    case 'bundled':
+      break;
+    case 'lsp-path': {
+      const lspPath: string = resolveLspPath(requireSetting('pyrefly.lspPath'), globalCwd);
+      if (lspPath === '') {
+        vscode.window.showErrorMessage('Pyrefly executable set to `lsp-path`, but no lsp path provided');
+      } else {
+        return lspPath;
+      }
+      break;
+    }
+    case 'from-environment': {
+      const binaryFinder = vscode.Uri.joinPath(
+        extensionUri,
+        'resources',
+        'find_pyrefly.py',
+      );
+      const python = await pythonEnv.getInterpreterPath(globalCwd);
+      if (python) {
+        try {
+          const {stdout} = await execFileAsync(
+            python,
+            [binaryFinder.fsPath],
+            {encoding: 'utf8', timeout: FIND_PYREFLY_TIMEOUT_MS},
+          );
+          const foundBinary = stdout.trim();
+          if (foundBinary !== '') {
+            return foundBinary;
+          }
+        } catch (error) {
+          // A non-zero exit is the ordinary "no Pyrefly in this environment"
+          // answer as well as a genuine failure, so log rather than alert.
+          const message = error instanceof Error ? error.message : String(error);
+          logChannel.appendLine(`Could not find Pyrefly in the active Python environment: ${message}`);
+        }
+      }
+      break;
+    }
+    default:
+      vscode.window.showErrorMessage(
+        `Unrecognized \`pyrefly.pyreflyExecutable\` value "${executable}", using the bundled Pyrefly`,
+      );
+  }
+
+  const bundledPyreflyPath = vscode.Uri.joinPath(
+    extensionUri,
+    'bin',
+    // process.platform returns win32 on any windows CPU architecture
+    process.platform === 'win32' ? 'pyrefly.exe' : 'pyrefly',
+  );
+  return bundledPyreflyPath.fsPath;
+}
+
 export async function activate(context: ExtensionContext) {
   // Initialize the output channel if it doesn't exist
   if (!outputChannel) {
@@ -114,10 +186,14 @@ export async function activate(context: ExtensionContext) {
     inferOutputChannel = vscode.window.createOutputChannel('Pyrefly infer');
   }
 
-  // There may be more than one URI due to multi-root workspaces, so just take the primary root.
-  let globalCwd: vscode.Uri | undefined = vscode.workspace.workspaceFolders?.[0]?.uri;
+  const pythonEnv = new PythonEnvironment(context);
 
-  const lspPath: string = resolveLspPath(requireSetting('pyrefly.lspPath'), globalCwd);
+  const pyreflyPath: string = await getPyreflyBinary(
+    context.extensionUri,
+    pythonEnv,
+    outputChannel,
+  );
+
   // `pyrefly.lspArguments` resolves to an empty array in some environments
   // (notably dev containers / remote, where the `machine-overridable` default
   // of `["lsp"]` is not applied). Spawning the binary with no subcommand makes
@@ -126,16 +202,6 @@ export async function activate(context: ExtensionContext) {
   // `lsp` subcommand so the server always starts.
   const configuredArgs: string[] = requireSetting('pyrefly.lspArguments');
   const args: string[] = configuredArgs.length > 0 ? configuredArgs : ['lsp'];
-
-  const bundledPyreflyPath = vscode.Uri.joinPath(
-    context.extensionUri,
-    'bin',
-    // process.platform returns win32 on any windows CPU architecture
-    process.platform === 'win32' ? 'pyrefly.exe' : 'pyrefly',
-  );
-  const pyreflyPath = lspPath === '' ? bundledPyreflyPath.fsPath : lspPath;
-
-  const pythonEnv = new PythonEnvironment(context);
 
   // Otherwise to spawn the server
   let serverOptions: ServerOptions = {
