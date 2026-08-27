@@ -52,7 +52,7 @@ from torch._shapes import (
     reduce_shape_no_keep,
     repeat_interleave_input_ir,
     repeat_interleave_ir,
-    repeat_ir,
+    repeat_shape,
     replace_axis_extent,
     reshape_ir,
     select_shape,
@@ -62,7 +62,7 @@ from torch._shapes import (
     squeeze_shape,
     stack_ir,
     tensordot_shape,
-    tile_ir,
+    tile_shape,
     topk_shape,
     transpose_shape,
     unbind_shape,
@@ -340,15 +340,18 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Add dimension of size 1. Shape inference via meta-shape: torch.unsqueeze"""
         ...
 
-    @uses_shape_dsl(repeat_ir)
     @overload
-    def repeat(self: Tensor, *sizes: int) -> Tensor:
-        """Repeat tensor. Shape inference via meta-shape: torch.Tensor.repeat"""
+    def repeat[Shape: IntTuple, Sizes: IntTuple](
+        self: Tensor[Shape], *sizes: *Sizes
+    ) -> Tensor[repeat_shape(Shape, Sizes)]:
+        """Repeat tensor. Shape inference via type-level DSL."""
         ...
 
     @overload
-    def repeat(self: Tensor, sizes: tuple[int, ...]) -> Tensor:
-        """Repeat tensor. Shape inference via meta-shape: torch.Tensor.repeat"""
+    def repeat[Shape: IntTuple, Sizes: IntTuple](
+        self: Tensor[Shape], sizes: Sizes
+    ) -> Tensor[repeat_shape(Shape, Sizes)]:
+        """Repeat tensor. Shape inference via type-level DSL."""
         ...
 
     def t[M: IntVar, N: IntVar](self: Tensor[[M, N]]) -> Tensor[[N, M]]:
@@ -513,9 +516,10 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Returns tensor as a nested Python list."""
         ...
 
-    @uses_shape_dsl(tile_ir)
-    def tile(self: Tensor, dims: tuple[int, ...]) -> Tensor:
-        """Tile tensor. Shape inference via meta-shape: torch.Tensor.tile"""
+    def tile[Shape: IntTuple, Repeats: IntTuple](
+        self: Tensor[Shape], dims: Repeats
+    ) -> Tensor[tile_shape(Shape, Repeats)]:
+        """Tile tensor. Shape inference via type-level DSL."""
         ...
 
     def select[Shape: IntTuple, Dim: Flag[builtins.int]](
@@ -1759,9 +1763,10 @@ def broadcast_to[Shape: IntTuple](self: Tensor, shape: Shape) -> Tensor[Shape]:
     """Broadcast a tensor to `shape`."""
     ...
 
-@uses_shape_dsl(tile_ir)
-def tile(self: Tensor, dims: tuple[int, ...]) -> Tensor:
-    """Tile tensor by repeating. Shape inference via meta-shape: torch.tile"""
+def tile[Shape: IntTuple, Repeats: IntTuple](
+    input: Tensor[Shape], dims: Repeats
+) -> Tensor[tile_shape(Shape, Repeats)]:
+    """Tile tensor by repeating. Shape inference via type-level DSL."""
     ...
 
 def select[Shape: IntTuple, Dim: Flag[builtins.int]](

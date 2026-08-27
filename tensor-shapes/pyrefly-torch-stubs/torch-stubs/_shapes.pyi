@@ -294,9 +294,19 @@ def flatten_ir(self: ShapedArray, start_dim: int = 0, end_dim: int = -1) -> Shap
 def expand_ir(self: ShapedArray, sizes: list[int | symint]) -> ShapedArray:
     return ShapedArray(shape=[d if t == -1 else t for d, t in zip(self.shape, sizes)])
 
-@shape_dsl_function
-def repeat_ir(self: ShapedArray, sizes: list[int | symint]) -> ShapedArray:
-    return ShapedArray(shape=[d * r for d, r in zip(self.shape, sizes)])
+@type_shape_dsl_function
+def repeat_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:
+    if len(repeats) < len(shape):
+        return dsl.Invalid(
+            "Number of dimensions of repeat dims can not be smaller than number of dimensions of tensor"
+        )
+    extra = len(repeats) - len(shape)
+    return dsl.IntTuple(
+        (
+            repeats[index] if index < extra else shape[index - extra] * repeats[index]
+            for index in range(len(repeats))
+        )
+    )
 
 @shape_dsl_function
 def movedim_ir(
@@ -373,16 +383,17 @@ def stack_ir(tensors: list[ShapedArray], dim: int = 0) -> ShapedArray:
     d = normalize_dim(len(first.shape) + 1, dim)
     return ShapedArray(shape=insert_dim(first.shape, d, len(tensors)))
 
-@shape_dsl_function
-def tile_ir(self: ShapedArray, dims: list[int]) -> ShapedArray:
-    rank = len(self.shape)
-    if len(dims) > rank:
-        extra = len(dims) - rank
-        return ShapedArray(
-            shape=[r for r in dims[:extra]]
-            + [d * r for d, r in zip(self.shape, dims[extra:])]
+@type_shape_dsl_function
+def tile_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:
+    if len(repeats) >= len(shape):
+        return repeat_shape(shape, repeats)
+    extra = len(shape) - len(repeats)
+    return dsl.IntTuple(
+        (
+            shape[index] if index < extra else shape[index] * repeats[index - extra]
+            for index in range(len(shape))
         )
-    return ShapedArray(shape=[d * r for d, r in zip(self.shape, dims)])
+    )
 
 @type_shape_dsl_function
 def select_shape(shape: IntTuple, dim: int) -> IntTuple:

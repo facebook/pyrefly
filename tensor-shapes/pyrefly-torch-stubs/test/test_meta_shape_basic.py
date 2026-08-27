@@ -408,12 +408,33 @@ def test_broadcast_to_target_precedence[N: IntVar](n: Int[N], plain: int):
     assert_type(torch.broadcast_to(source, (n, plain)), Tensor[[N, int]])
 
 
-# Test 18: torch.tile
-def test_tile():
+# Test 18: torch.tile and Tensor.tile
+def test_tile[N: IntVar](n: Int[N]):
     x: Tensor[[2, 3]] = torch.randn(2, 3)
-    # Should infer: Tensor[[4, 9]] (tile 2x in dim 0, 3x in dim 1: 2*2=4, 3*3=9)
-    result = torch.tile(x, (2, 3))
-    assert_type(result, Tensor[[4, 9]])
+    assert_type(torch.tile(x, (2, 3)), Tensor[[4, 9]])
+    assert_type(torch.tile(input=x, dims=(2, 3)), Tensor[[4, 9]])
+
+    # Repeats align to the trailing input dimensions.
+    assert_type(x.tile((4,)), Tensor[[2, 12]])
+    assert_type(torch.tile(x, (4, 5, 6)), Tensor[[4, 10, 18]])
+
+    # Empty repeats are an identity; scalar inputs acquire the repeat shape.
+    assert_type(x.tile(()), Tensor[[2, 3]])
+    scalar: Tensor[[]] = torch.randn(())
+    assert_type(torch.tile(scalar, (2, 3)), Tensor[[2, 3]])
+
+    # Symbolic repeats participate in the output shape algebra.
+    symbolic: Tensor[[N, 3]] = torch.randn(n, 3)
+    assert_type(symbolic.tile((2, n)), Tensor[[N * 2, N * 3]])
+
+
+def test_tile_gradual(
+    open_input: Tensor[IntTuple],
+    concrete: Tensor[[2, 3]],
+    open_repeats: tuple[int, ...],
+) -> None:
+    assert_type(open_input.tile((2, 3)), Tensor[IntTuple])
+    assert_type(torch.tile(concrete, open_repeats), Tensor[IntTuple])
 
 
 # Test 19: x.view (method style)
@@ -677,11 +698,29 @@ def test_view_tuple_method():
 
 
 # Test 42M: x.repeat for tiling (method style)
-def test_repeat_method():
+def test_repeat_method[N: IntVar](n: Int[N]):
     x: Tensor[[2, 3]] = torch.randn(2, 3)
-    # Should infer: Tensor[[4, 9]] (repeat 2x in dim 0, 3x in dim 1: 2*2=4, 3*3=9)
-    result = x.repeat((2, 3))
-    assert_type(result, Tensor[[4, 9]])
+    assert_type(x.repeat(2, 3), Tensor[[4, 9]])
+    assert_type(x.repeat((2, 3)), Tensor[[4, 9]])
+
+    # Extra repeats create leading dimensions for implicit input dimensions of one.
+    assert_type(x.repeat((4, 5, 6)), Tensor[[4, 10, 18]])
+
+    scalar: Tensor[[]] = torch.randn(())
+    assert_type(scalar.repeat(), Tensor[[]])
+    assert_type(scalar.repeat((2, 3)), Tensor[[2, 3]])
+
+    symbolic: Tensor[[N, 3]] = torch.randn(n, 3)
+    assert_type(symbolic.repeat(2, n), Tensor[[N * 2, N * 3]])
+
+
+def test_repeat_gradual(
+    open_input: Tensor[IntTuple],
+    concrete: Tensor[[2, 3]],
+    open_repeats: tuple[int, ...],
+) -> None:
+    assert_type(open_input.repeat((2, 3)), Tensor[IntTuple])
+    assert_type(concrete.repeat(*open_repeats), Tensor[IntTuple])
 
 
 # Test 43M: Multiple reductions with different dims

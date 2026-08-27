@@ -3,6 +3,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from typing import reveal_type
+
 import torch
 from torch import Tensor
 from torch.nn import functional as F
@@ -100,3 +102,31 @@ def check_invalid_cosine_similarity_controls(
     F.cosine_similarity(scalar, scalar, dim=1)
     # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[3] with dimension Int[5] at position 1
     F.cosine_similarity(x, incompatible, dim=0)
+
+
+def check_invalid_tile_parameters(x: Tensor[[2, 3]]) -> None:
+    # PyTorch rejects negative repeats at runtime. The type-level DSL preserves
+    # the corresponding arithmetic until tuple-wide validation is available.
+    # E: revealed type: Tensor[[2, -3]]
+    reveal_type(torch.tile(x, (1, -1)))
+    # E: revealed type: Tensor[[2, 0]]
+    reveal_type(x.tile((1, 0)))
+    # E: `list[int]` is not assignable to upper bound `IntTuple` of type variable `Repeats`
+    torch.tile(x, [2, 3])
+    # E: Argument `tuple[Literal[2], float]` is not assignable to parameter `dims`
+    x.tile((2, 3.0))
+
+
+def check_invalid_repeat_parameters(x: Tensor[[2, 3]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: Number of dimensions of repeat dims can not be smaller than number of dimensions of tensor
+    x.repeat(2)
+
+    # PyTorch rejects negative repeats at runtime. As with tile, the type-level
+    # DSL preserves the corresponding arithmetic until validation is available.
+    # E: revealed type: Tensor[[2, -3]]
+    reveal_type(x.repeat((1, -1)))
+    # E: revealed type: Tensor[[2, 0]]
+    reveal_type(x.repeat(1, 0))
+
+    # E: No matching overload found for function `torch.Tensor.repeat`
+    x.repeat([2, 3])
