@@ -1785,39 +1785,38 @@ impl Type {
             .is_some_and(|meta| meta.flags.has_final_decoration)
     }
 
-    /// Apply `f` to this type if it is a callable. Note that we do *not* recurse into the type to
-    /// find nested callable types.
-    pub fn visit_toplevel_callable<'a>(&'a self, mut f: impl FnMut(&'a Callable)) {
-        match self {
-            Type::Callable(callable) => f(callable),
-            Type::Forall(forall) => match &forall.body {
-                Forallable::Callable(callable) => f(callable),
-                Forallable::Function(func) => f(&func.signature),
-                _ => {}
-            },
-            Type::Function(func) => f(&func.signature),
-            Type::BoundMethod(bm) => match &bm.func {
-                BoundMethodType::Function(func) => f(&func.signature),
-                BoundMethodType::Forall(forall) => f(&forall.body.signature),
-                BoundMethodType::Overload(overload) => {
-                    for x in overload.signatures.iter() {
-                        match x {
-                            OverloadType::Function(function) => f(&function.signature),
-                            OverloadType::Forall(forall) => f(&forall.body.signature),
-                        }
+    /// Get this type's signatures with type parameters if it is a callable. Note that we do *not*
+    /// recurse into the type to find nested callable types.
+    pub fn toplevel_callable_signatures(
+        &self,
+    ) -> impl Iterator<Item = (&Callable, Option<&Arc<TParams>>)> {
+        let (one, overloads): (Option<(&Callable, Option<&Arc<TParams>>)>, &[OverloadType]) =
+            match self {
+                Type::Callable(callable) => (Some((callable, None)), &[]),
+                Type::Forall(forall) => match &forall.body {
+                    Forallable::Callable(callable) => {
+                        (Some((callable, Some(&forall.tparams))), &[])
                     }
-                }
-            },
-            Type::Overload(overload) => {
-                for x in overload.signatures.iter() {
-                    match x {
-                        OverloadType::Function(function) => f(&function.signature),
-                        OverloadType::Forall(forall) => f(&forall.body.signature),
+                    Forallable::Function(func) => {
+                        (Some((&func.signature, Some(&forall.tparams))), &[])
                     }
-                }
-            }
-            _ => {}
-        }
+                    _ => (None, &[]),
+                },
+                Type::Function(func) => (Some((&func.signature, None)), &[]),
+                Type::BoundMethod(bm) => match &bm.func {
+                    BoundMethodType::Function(func) => (Some((&func.signature, None)), &[]),
+                    BoundMethodType::Forall(forall) => {
+                        (Some((&forall.body.signature, Some(&forall.tparams))), &[])
+                    }
+                    BoundMethodType::Overload(overload) => (None, overload.signatures.as_ref()),
+                },
+                Type::Overload(overload) => (None, overload.signatures.as_ref()),
+                _ => (None, &[]),
+            };
+        one.into_iter().chain(overloads.iter().map(|o| match o {
+            OverloadType::Function(func) => (&func.signature, None),
+            OverloadType::Forall(forall) => (&forall.body.signature, Some(&forall.tparams)),
+        }))
     }
 
     /// Transform this type if it is a callable. Note that we do *not* recurse into the type to
@@ -1856,18 +1855,15 @@ impl Type {
     }
 
     pub fn is_toplevel_callable(&self) -> bool {
-        let mut is_callable = false;
-        self.visit_toplevel_callable(&mut |_| is_callable = true);
-        is_callable
+        self.toplevel_callable_signatures().next().is_some()
     }
 
     // This doesn't handle generics currently
     pub fn callable_return_type(&self, heap: &TypeHeap) -> Option<Type> {
-        let mut rets = Vec::new();
-        let mut get_ret = |callable: &Callable| {
-            rets.push(callable.ret.clone());
-        };
-        self.visit_toplevel_callable(&mut get_ret);
+        let rets = self
+            .toplevel_callable_signatures()
+            .map(|(callable, _)| callable.ret.clone())
+            .collect::<Vec<_>>();
         if rets.is_empty() {
             None
         } else {
@@ -1876,13 +1872,10 @@ impl Type {
     }
 
     pub fn callable_first_param(&self, heap: &TypeHeap) -> Option<Type> {
-        let mut params = Vec::new();
-        let mut get_param = |callable: &Callable| {
-            if let Some(p) = callable.get_first_param() {
-                params.push(p.clone());
-            }
-        };
-        self.visit_toplevel_callable(&mut get_param);
+        let params = self
+            .toplevel_callable_signatures()
+            .filter_map(|(callable, _)| callable.get_first_param().cloned())
+            .collect::<Vec<_>>();
         if params.is_empty() {
             None
         } else {
@@ -1891,9 +1884,9 @@ impl Type {
     }
 
     pub fn callable_signatures(&self) -> Vec<&Callable> {
-        let mut sigs = Vec::new();
-        self.visit_toplevel_callable(&mut |sig| sigs.push(sig));
-        sigs
+        self.toplevel_callable_signatures()
+            .map(|(sig, _)| sig)
+            .collect::<Vec<_>>()
     }
 
     fn promote_one_implicit_literal(ty: &mut Type, stdlib: &Stdlib) {

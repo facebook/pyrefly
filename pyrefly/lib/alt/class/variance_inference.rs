@@ -795,8 +795,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             return;
         }
-        ty.visit_toplevel_callable(|callable| {
+        for (callable, _) in ty.toplevel_callable_signatures() {
             check_callable_variance(callable, field_range, violations);
-        });
+        }
     }
 }

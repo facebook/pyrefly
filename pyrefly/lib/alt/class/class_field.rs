@@ -828,12 +828,10 @@ impl ClassField {
 
     /// Given a `__set__(self, instance, value)` function, gets the type of `value`.
     fn get_descriptor_setter_value(heap: &TypeHeap, setter: &Type) -> Type {
-        let mut values = Vec::new();
-        setter.visit_toplevel_callable(|callable| {
-            if let Some(t) = callable.get_positional_param(2) {
-                values.push(t.clone());
-            }
-        });
+        let values = setter
+            .toplevel_callable_signatures()
+            .filter_map(|(callable, _)| callable.get_positional_param(2).cloned())
+            .collect::<Vec<_>>();
         if values.is_empty() {
             heap.mk_any_implicit()
         } else {
