@@ -13,6 +13,7 @@ extend that legacy path.
 """
 
 import builtins
+from collections.abc import Sequence
 from typing import Any, overload, Self, TYPE_CHECKING
 
 import shape_extensions
@@ -47,14 +48,15 @@ from torch._shapes import (
     movedim_ir,
     multinomial_shape,
     numel_shape,
-    permute_ir,
+    permute_shape,
     reduce_shape,
     reduce_shape_no_keep,
-    repeat_interleave_input_ir,
-    repeat_interleave_ir,
+    repeat_interleave_checked_shape,
+    repeat_interleave_output_shape,
+    repeat_interleave_shape,
     repeat_shape,
     replace_axis_extent,
-    reshape_ir,
+    reshape_shape,
     select_shape,
     size_dim_shape,
     slogdet_shape,
@@ -278,30 +280,38 @@ class Tensor[Shape: _Shape = _AnyShape]:
     # ==== Shape Manipulation Operations ====
     # Handled by meta-shape functions - simplified signatures
 
-    @uses_shape_dsl(reshape_ir)
     @overload
-    def reshape(self: Tensor, *shape: int) -> Tensor:
-        """Reshape tensor. Shape inference via meta-shape: torch.Tensor.reshape"""
+    def reshape[Shape: IntTuple, NewShape: IntTuple](
+        self: Tensor[Shape], *shape: *NewShape
+    ) -> Tensor[reshape_shape(Shape, NewShape)]:
+        """Reshape tensor. Shape inference via type-level DSL."""
         ...
 
-    @uses_shape_dsl(reshape_ir)
     @overload
-    def reshape(self: Tensor, shape: tuple[int, ...]) -> Tensor:
-        """Reshape tensor. Shape inference via meta-shape: torch.Tensor.reshape"""
+    def reshape[Shape: IntTuple, NewShape: IntTuple](
+        self: Tensor[Shape], shape: NewShape
+    ) -> Tensor[reshape_shape(Shape, NewShape)]:
+        """Reshape tensor. Shape inference via type-level DSL."""
         ...
 
-    @uses_shape_dsl(reshape_ir)
     @overload
-    def view(self: Tensor, *shape: int) -> Tensor:
-        """View (alias for reshape). Shape inference via meta-shape: torch.Tensor.view"""
+    def reshape(self, shape: Sequence[builtins.int]) -> Tensor: ...
+    @overload
+    def view[Shape: IntTuple, NewShape: IntTuple](
+        self: Tensor[Shape], *shape: *NewShape
+    ) -> Tensor[reshape_shape(Shape, NewShape)]:
+        """View tensor. Shape inference via type-level DSL."""
         ...
 
-    @uses_shape_dsl(reshape_ir)
     @overload
-    def view(self: Tensor, shape: tuple[int, ...]) -> Tensor:
-        """View (alias for reshape). Shape inference via meta-shape: torch.Tensor.view"""
+    def view[Shape: IntTuple, NewShape: IntTuple](
+        self: Tensor[Shape], shape: NewShape
+    ) -> Tensor[reshape_shape(Shape, NewShape)]:
+        """View tensor. Shape inference via type-level DSL."""
         ...
 
+    @overload
+    def view(self, shape: Sequence[builtins.int]) -> Tensor: ...
     @uses_shape_dsl(flatten_ir)
     def flatten(self: Tensor, start_dim: int = 0, end_dim: int = -1) -> Tensor:
         """Flatten dimensions. Shape inference via meta-shape: torch.flatten"""
@@ -317,17 +327,24 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Transpose two dimensions. Shape inference via meta-shape: torch.transpose"""
         ...
 
-    @uses_shape_dsl(permute_ir)
     @overload
-    def permute(self: Tensor, *dims: int) -> Tensor:
-        """Permute dimensions. Shape inference via meta-shape: torch.Tensor.permute"""
+    def permute[Shape: IntTuple, Dims: Flag[tuple[builtins.int, ...]]](
+        self: Tensor[Shape], *dims: *Dims
+    ) -> Tensor[permute_shape(Shape, Dims)]:
+        """Permute dimensions. Shape inference via type-level DSL."""
         ...
 
     @overload
-    def permute(self: Tensor, dims: tuple[int, ...]) -> Tensor:
-        """Permute dimensions. Shape inference via meta-shape: torch.Tensor.permute"""
+    def permute[Shape: IntTuple, Dims: Flag[tuple[builtins.int, ...]]](
+        self: Tensor[Shape], dims: Dims
+    ) -> Tensor[permute_shape(Shape, Dims)]:
+        """Permute dimensions. Shape inference via type-level DSL."""
         ...
 
+    @overload
+    def permute(self, *dims: builtins.int) -> Tensor: ...
+    @overload
+    def permute(self, dims: tuple[builtins.int, ...]) -> Tensor: ...
     def squeeze[Shape: IntTuple, Dim: Flag[builtins.int | None]](
         self: Tensor[Shape], dim: Dim = None
     ) -> Tensor[squeeze_shape(Shape, Dim)]:
@@ -376,22 +393,52 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Expand tensor to match the shape of `other`."""
         ...
 
-    @uses_shape_dsl(repeat_interleave_ir)
+    @overload
+    def repeat_interleave[
+        Shape: IntTuple,
+        Repeats: IntVar,
+        OutputSize: IntVar,
+        Dim: Flag[builtins.int | None],
+    ](
+        self: Tensor[Shape],
+        repeats: _Int[Repeats],
+        dim: Dim = None,
+        *,
+        output_size: _Int[OutputSize],
+    ) -> Tensor[repeat_interleave_checked_shape(Shape, Repeats, OutputSize, Dim)]: ...
+    @overload
+    def repeat_interleave[
+        Shape: IntTuple,
+        OutputSize: IntVar,
+        Dim: Flag[builtins.int | None],
+    ](
+        self: Tensor[Shape],
+        repeats: Tensor,
+        dim: Dim = None,
+        *,
+        output_size: _Int[OutputSize],
+    ) -> Tensor[repeat_interleave_output_shape(Shape, OutputSize, Dim)]: ...
+    @overload
+    def repeat_interleave[
+        Shape: IntTuple,
+        Repeats: IntVar,
+        Dim: Flag[builtins.int | None],
+    ](
+        self: Tensor[Shape],
+        repeats: _Int[Repeats],
+        dim: Dim = None,
+        *,
+        output_size: None = None,
+    ) -> Tensor[repeat_interleave_shape(Shape, Repeats, Dim)]: ...
+    @overload
     def repeat_interleave(
         self: Tensor,
-        repeats: int | Tensor,
-        dim: int | None = None,
+        repeats: builtins.int | Tensor,
+        dim: builtins.int | None = None,
         *,
-        output_size: int | None = None,
+        output_size: builtins.int | None = None,
     ) -> Tensor:
-        """Repeat elements along a dimension.
-
-        Shape inference via DSL (repeat_interleave_ir):
-        - dim=None: 1D output of size numel * repeats.
-        - dim=D, repeats=int: shape[D] *= repeats, others preserved.
-        - repeats=Tensor with output_size: shape[D] = output_size.
-        - repeats=Tensor without output_size: falls back to unrefined.
-        """
+        """Repeat elements along a dimension."""
         ...
 
     def contiguous(self) -> Self:
@@ -1478,11 +1525,15 @@ def flip[Shape: IntTuple](
     """Reverse tensor elements along dimensions. Shape-preserving."""
     ...
 
-@uses_shape_dsl(reshape_ir)
-def reshape(self: Tensor, shape: tuple[int, ...]) -> Tensor:
-    """Reshape tensor. Shape inference via meta-shape: torch.reshape"""
+@overload
+def reshape[Shape: IntTuple, NewShape: IntTuple](
+    self: Tensor[Shape], shape: NewShape
+) -> Tensor[reshape_shape(Shape, NewShape)]:
+    """Reshape tensor. Shape inference via type-level DSL."""
     ...
 
+@overload
+def reshape(self: Tensor, shape: Sequence[builtins.int]) -> Tensor: ...
 def squeeze[Shape: IntTuple, Dim: Flag[builtins.int | None]](
     self: Tensor[Shape], dim: Dim = None
 ) -> Tensor[squeeze_shape(Shape, Dim)]:
@@ -1495,15 +1546,48 @@ def unsqueeze[Shape: IntTuple, Dim: Flag[builtins.int]](
     """Add dimension of size 1. Shape inference via meta-shape: torch.unsqueeze"""
     ...
 
-@uses_shape_dsl(repeat_interleave_input_ir)
+@overload
+def repeat_interleave[
+    Shape: IntTuple,
+    Repeats: IntVar,
+    OutputSize: IntVar,
+    Dim: Flag[builtins.int | None],
+](
+    input: Tensor[Shape],
+    repeats: _Int[Repeats],
+    dim: Dim = None,
+    *,
+    output_size: _Int[OutputSize],
+) -> Tensor[repeat_interleave_checked_shape(Shape, Repeats, OutputSize, Dim)]: ...
+@overload
+def repeat_interleave[
+    Shape: IntTuple,
+    OutputSize: IntVar,
+    Dim: Flag[builtins.int | None],
+](
+    input: Tensor[Shape],
+    repeats: Tensor,
+    dim: Dim = None,
+    *,
+    output_size: _Int[OutputSize],
+) -> Tensor[repeat_interleave_output_shape(Shape, OutputSize, Dim)]: ...
+@overload
+def repeat_interleave[Shape: IntTuple, Repeats: IntVar, Dim: Flag[builtins.int | None]](
+    input: Tensor[Shape],
+    repeats: _Int[Repeats],
+    dim: Dim = None,
+    *,
+    output_size: None = None,
+) -> Tensor[repeat_interleave_shape(Shape, Repeats, Dim)]: ...
+@overload
 def repeat_interleave(
     input: Tensor,
-    repeats: int | Tensor,
-    dim: int | None = None,
+    repeats: builtins.int | Tensor,
+    dim: builtins.int | None = None,
     *,
-    output_size: int | None = None,
+    output_size: builtins.int | None = None,
 ) -> Tensor:
-    """Repeat tensor elements. Shape inference via meta-shape: torch.repeat_interleave"""
+    """Repeat tensor elements."""
     ...
 
 def segment_reduce(
@@ -1520,11 +1604,15 @@ def segment_reduce(
     """Reduce values by segment. Data-dependent shape."""
     ...
 
-@uses_shape_dsl(permute_ir)
-def permute(self: Tensor, dims: tuple[int, ...]) -> Tensor:
-    """Permute dimensions. Shape inference via meta-shape: torch.permute"""
+@overload
+def permute[Shape: IntTuple, Dims: Flag[tuple[builtins.int, ...]]](
+    self: Tensor[Shape], dims: Dims
+) -> Tensor[permute_shape(Shape, Dims)]:
+    """Permute dimensions. Shape inference via type-level DSL."""
     ...
 
+@overload
+def permute(self: Tensor, dims: tuple[builtins.int, ...]) -> Tensor: ...
 def sum[
     Shape: IntTuple,
     Dim: Flag[builtins.int | tuple[builtins.int, ...] | None],

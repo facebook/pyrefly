@@ -183,29 +183,49 @@ def conv_spatial_out(
 ) -> int | symint:
     return (input_dim + 2 * padding - dilation * (kernel - 1) - 1) // stride + 1
 
-@shape_dsl_function
-def reshape_ir(self: ShapedArray, shape: list[int | symint]) -> ShapedArray:
-    minus_one_count = len([d for d in shape if d == -1])
-    if minus_one_count > 1:
-        raise Error("can only specify one unknown dimension as -1")
-    has_bad_neg = len([d for d in shape if isinstance(d, int) and d < -1]) > 0
-    if has_bad_neg:
-        raise Error("invalid negative dimension value (only -1 is allowed)")
-    has_zero = len([d for d in shape if isinstance(d, int) and d == 0]) > 0
-    if has_zero:
-        raise Error("reshape dimensions cannot contain 0")
-    if minus_one_count > 0:
-        known = prod([d for d in shape if d != -1])
-        total = prod(self.shape)
-        if isinstance(total, int) and isinstance(known, int) and total % known != 0:
-            raise Error(
-                "could not infer size for dimension -1: expected "
-                + str(total)
-                + " to be divisible by "
-                + str(known)
-            )
-        return ShapedArray(shape=[total // known if d == -1 else d for d in shape])
-    return ShapedArray(shape=shape)
+@type_shape_dsl_function
+def reshape_shape(shape: IntTuple, target: IntTuple) -> IntTuple:
+    inferred = tuple(
+        (
+            1
+            for dimension in target
+            if dsl.is_concrete_int(dimension) and dimension == -1
+        )
+    )
+    if len(inferred) > 1:
+        return dsl.Invalid("can only specify one unknown dimension as -1")
+    if any(dsl.is_concrete_int(dimension) and dimension < -1 for dimension in target):
+        return dsl.Invalid("invalid negative dimension value (only -1 is allowed)")
+    # Element counts are the only facts both branches need, so each product is evaluated
+    # once here and shared: a `-1` target divides `total` by `known`, a fully specified
+    # target compares them. Both diagnostics below require concrete products, so a
+    # symbolic input keeps its dimensions and a fully open one recovers gradually.
+    known_shape = dsl.IntTuple(
+        (
+            dimension
+            for dimension in target
+            if not (dsl.is_concrete_int(dimension) and dimension == -1)
+        )
+    )
+    known = dsl.prod(known_shape)
+    total = dsl.prod(shape)
+    if len(inferred) == 0:
+        if dsl.is_concrete_int(total) and dsl.is_concrete_int(known) and total != known:
+            return dsl.Invalid("reshape target element count does not match the input")
+        return target
+    if dsl.is_concrete_int(known):
+        if known == 0:
+            return dsl.Invalid("could not infer size for dimension -1")
+        if dsl.is_concrete_int(total) and total % known != 0:
+            return dsl.Invalid("could not infer size for dimension -1")
+    return dsl.IntTuple(
+        (
+            total // known
+            if dsl.is_concrete_int(dimension) and dimension == -1
+            else dimension
+            for dimension in target
+        )
+    )
 
 @type_shape_dsl_function
 def squeeze_shape(shape: IntTuple, dim: int | None) -> IntTuple:
@@ -276,12 +296,24 @@ def transpose_shape(shape: IntTuple, dim0: int, dim1: int) -> IntTuple:
         )
     )
 
-@shape_dsl_function
-def permute_ir(self: ShapedArray, dims: list[int]) -> ShapedArray:
-    rank = len(self.shape)
-    if len(dims) != rank:
-        raise Error("permute: expected " + str(rank) + " dims, got " + str(len(dims)))
-    return ShapedArray(shape=[self.shape[normalize_dim(rank, d)] for d in dims])
+@type_shape_dsl_function
+def permute_shape(shape: IntTuple, dims: int | tuple[int, ...] | None) -> IntTuple:
+    if dims is None or dsl.is_int_value(dims):
+        return dsl.Invalid("permute dimensions must be a sequence")
+    if len(dims) != len(shape):
+        return dsl.Invalid("permute dimensions must match the input rank")
+    if any(dim < 0 - len(shape) or dim >= len(shape) for dim in dims):
+        return dsl.Invalid("permute dimension out of range")
+    normalized_dims = tuple((dim + len(shape) if dim < 0 else dim for dim in dims))
+    duplicate_offsets = tuple(
+        (
+            normalized_dims.index(dim) - position
+            for position, dim in zip(range(len(normalized_dims)), normalized_dims)
+        )
+    )
+    if any(offset != 0 for offset in duplicate_offsets):
+        return dsl.Invalid("permute dimensions must be unique")
+    return dsl.IntTuple((shape[dim] for dim in normalized_dims))
 
 @shape_dsl_function
 def flatten_ir(self: ShapedArray, start_dim: int = 0, end_dim: int = -1) -> ShapedArray:
@@ -599,33 +631,111 @@ def index_select_shape(shape: IntTuple, dim: int, index_shape: IntTuple) -> IntT
         )
     )
 
-@shape_dsl_function
-def repeat_interleave_ir(
-    self: ShapedArray,
-    repeats: int | symint | ShapedArray,
-    dim: int | None = None,
-    output_size: int | symint | None = None,
-) -> ShapedArray:
-    if output_size != None:
-        if dim == None:
-            return ShapedArray(shape=[output_size])
-        d = normalize_dim(len(self.shape), dim)
-        return ShapedArray(shape=replace_dim(self.shape, d, output_size))
-    if isinstance(repeats, ShapedArray):
-        return Unknown
-    if dim == None:
-        return ShapedArray(shape=[prod(self.shape) * repeats])
-    d = normalize_dim(len(self.shape), dim)
-    return ShapedArray(shape=replace_dim(self.shape, d, self.shape[d] * repeats))
+@type_shape_dsl_function
+def repeat_interleave_shape(shape: IntTuple, repeats: Int, dim: int | None) -> IntTuple:
+    # A concrete negative count has no valid extent, so it is rejected ahead of every
+    # multiplication below; a symbolic count has no decidable sign and stays exact. An
+    # Int dimension can only be compared against a literal as a tuple element, so the
+    # count is wrapped in a singleton before the sign test.
+    if any(
+        dsl.is_concrete_int(count) and count < 0 for count in dsl.IntTuple((repeats,))
+    ):
+        return dsl.Invalid("repeat_interleave repeats must be non-negative")
+    if dim is None:
+        return dsl.IntTuple((dsl.prod(shape) * repeats,))
+    if dsl.is_int_value(dim):
+        if len(shape) == 0:
+            # A rank-0 input still produces the rank-1 flattened result, and only 0 and
+            # -1 name that synthesized axis.
+            if dim == 0 or dim == -1:
+                return dsl.IntTuple((repeats,))
+            return dsl.Invalid("repeat_interleave dimension out of range")
+        if dim < 0 - len(shape) or dim >= len(shape):
+            return dsl.Invalid("repeat_interleave dimension out of range")
+        return dsl.IntTuple(
+            (
+                shape[index] * repeats
+                if index == (dim + len(shape) if dim < 0 else dim)
+                else shape[index]
+                for index in range(len(shape))
+            )
+        )
+    return dsl.IntTuple.gradual()
 
-@shape_dsl_function
-def repeat_interleave_input_ir(
-    input: ShapedArray,
-    repeats: int | symint | ShapedArray,
-    dim: int | None = None,
-    output_size: int | symint | None = None,
-) -> ShapedArray:
-    return repeat_interleave_ir(input, repeats, dim, output_size)
+@type_shape_dsl_function
+def repeat_interleave_checked_shape(
+    shape: IntTuple, repeats: Int, output_size: Int, dim: int | None
+) -> IntTuple:
+    if any(
+        dsl.is_concrete_int(count) and count < 0 for count in dsl.IntTuple((repeats,))
+    ):
+        return dsl.Invalid("repeat_interleave repeats must be non-negative")
+    if any(
+        dsl.is_concrete_int(size) and size < 0 for size in dsl.IntTuple((output_size,))
+    ):
+        return dsl.Invalid("repeat_interleave output_size must be non-negative")
+    if dim is None:
+        extent = dsl.prod(shape) * repeats
+        if (
+            dsl.is_concrete_int(extent)
+            and dsl.is_concrete_int(output_size)
+            and extent != output_size
+        ):
+            return dsl.Invalid(
+                "repeat_interleave output_size does not match the result"
+            )
+        return repeat_interleave_output_shape(shape, output_size, dim)
+    if dsl.is_int_value(dim):
+        if len(shape) == 0:
+            if dim == 0 or dim == -1:
+                if (
+                    dsl.is_concrete_int(repeats)
+                    and dsl.is_concrete_int(output_size)
+                    and repeats != output_size
+                ):
+                    return dsl.Invalid(
+                        "repeat_interleave output_size does not match the result"
+                    )
+            return repeat_interleave_output_shape(shape, output_size, dim)
+        if dim < 0 - len(shape) or dim >= len(shape):
+            return repeat_interleave_output_shape(shape, output_size, dim)
+        extent = shape[dim + len(shape) if dim < 0 else dim] * repeats
+        if (
+            dsl.is_concrete_int(extent)
+            and dsl.is_concrete_int(output_size)
+            and extent != output_size
+        ):
+            return dsl.Invalid(
+                "repeat_interleave output_size does not match the result"
+            )
+    return repeat_interleave_output_shape(shape, output_size, dim)
+
+@type_shape_dsl_function
+def repeat_interleave_output_shape(
+    shape: IntTuple, output_size: Int, dim: int | None
+) -> IntTuple:
+    if any(
+        dsl.is_concrete_int(size) and size < 0 for size in dsl.IntTuple((output_size,))
+    ):
+        return dsl.Invalid("repeat_interleave output_size must be non-negative")
+    if dim is None:
+        return dsl.IntTuple((output_size,))
+    if dsl.is_int_value(dim):
+        if len(shape) == 0:
+            if dim == 0 or dim == -1:
+                return dsl.IntTuple((output_size,))
+            return dsl.Invalid("repeat_interleave dimension out of range")
+        if dim < 0 - len(shape) or dim >= len(shape):
+            return dsl.Invalid("repeat_interleave dimension out of range")
+        return dsl.IntTuple(
+            (
+                output_size
+                if index == (dim + len(shape) if dim < 0 else dim)
+                else shape[index]
+                for index in range(len(shape))
+            )
+        )
+    return dsl.IntTuple.gradual()
 
 @type_shape_dsl_function
 def arange_extent(end: Int) -> Int:

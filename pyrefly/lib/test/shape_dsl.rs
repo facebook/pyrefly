@@ -9894,6 +9894,123 @@ def test(x: Tensor[[2, 3]], rank_three: Tensor[[2, 3, 5]]) -> None:
 );
 
 testcase!(
+    test_type_shape_dsl_permute_flag_sequence,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def permute(shape: IntTuple, dims: int | tuple[int, ...] | None) -> IntTuple:
+    if dims is None:
+        return dsl.Invalid("permute dimensions must be a sequence")
+    elif dsl.is_int_value(dims):
+        return dsl.Invalid("permute dimensions must be a sequence")
+    if len(dims) != len(shape):
+        return dsl.Invalid("permute dimensions must match the input rank")
+    if any(dim < 0 - len(shape) or dim >= len(shape) for dim in dims):
+        return dsl.Invalid("permute dimension out of range")
+    normalized = tuple(dim + len(shape) if dim < 0 else dim for dim in dims)
+    offsets = tuple(
+        normalized.index(dim) - position
+        for position, dim in zip(range(len(normalized)), normalized)
+    )
+    if any(offset != 0 for offset in offsets):
+        return dsl.Invalid("permute dimensions must be unique")
+    return dsl.IntTuple((shape[dim] for dim in normalized))
+
+def from_tuple[Shape: IntTuple, Dims: Flag[tuple[int, ...]]](
+    x: Tensor[Shape], dims: Dims
+) -> Tensor[permute(Shape, Dims)]: ...
+def from_args[Shape: IntTuple, Dims: Flag[tuple[int, ...]]](
+    x: Tensor[Shape], *dims: *Dims
+) -> Tensor[permute(Shape, Dims)]: ...
+
+def test(x: Tensor[[2, 3, 4]]) -> None:
+    assert_type(from_tuple(x, (-1, 0, 1)), Tensor[[4, 2, 3]])
+    assert_type(from_args(x, -1, 0, 1), Tensor[[4, 2, 3]])
+    from_args(x, 0, 0, 1)  # E: permute dimensions must be unique
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_repeat_interleave_output_hint,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, Int, IntTuple, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def repeat_interleave(
+    shape: IntTuple, repeats: Int, output_size: Int
+) -> IntTuple:
+    if any(
+        dsl.is_concrete_int(size) and size < 0
+        for size in dsl.IntTuple((output_size,))
+    ):
+        return dsl.Invalid("output_size must be non-negative")
+    extent = dsl.prod(shape) * repeats
+    if (
+        dsl.is_concrete_int(extent)
+        and dsl.is_concrete_int(output_size)
+        and extent != output_size
+    ):
+        return dsl.Invalid("output_size does not match the result")
+    return dsl.IntTuple((extent,))
+
+@type_shape_dsl_function
+def tensor_repeat_interleave(
+    shape: IntTuple, output_size: Int, dim: int | None
+) -> IntTuple:
+    if dim is None:
+        return dsl.IntTuple((output_size,))
+    if dsl.is_int_value(dim):
+        if dim < 0 - len(shape) or dim >= len(shape):
+            return dsl.Invalid("dimension out of range")
+        return dsl.IntTuple(
+            (
+                output_size
+                if index == (dim + len(shape) if dim < 0 else dim)
+                else shape[index]
+                for index in range(len(shape))
+            )
+        )
+    return dsl.IntTuple.gradual()
+
+def apply[
+    Shape: IntTuple,
+    Repeats: IntVar,
+    OutputSize: IntVar,
+](
+    x: Tensor[Shape], repeats: Int[Repeats], output_size: Int[OutputSize]
+) -> Tensor[repeat_interleave(Shape, Repeats, OutputSize)]: ...
+
+def apply_tensor[Shape: IntTuple, OutputSize: IntVar, Dim: Flag[int | None]](
+    x: Tensor[Shape], output_size: Int[OutputSize], dim: Dim
+) -> Tensor[tensor_repeat_interleave(Shape, OutputSize, Dim)]: ...
+
+
+def symbolic_tensor_output[OutputSize: IntVar](
+    x: Tensor[[2, 3, 4]], output_size: Int[OutputSize]
+) -> Tensor[[2, OutputSize, 4]]:
+    return apply_tensor(x, output_size, 1)
+
+
+def test(flat: Tensor[[3]], x: Tensor[[2, 3, 4]]) -> None:
+    assert_type(apply(flat, 2, 6), Tensor[[6]])
+    apply(flat, 2, 5)  # E: output_size does not match the result
+    apply(flat, 2, -1)  # E: output_size must be non-negative
+    assert_type(apply_tensor(x, 5, 1), Tensor[[2, 5, 4]])
+    assert_type(apply_tensor(x, 6, None), Tensor[[6]])
+    apply_tensor(x, 5, 3)  # E: dimension out of range
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_concat_and_slice,
     shape_dsl_tensor_env(),
     r#"

@@ -5,7 +5,7 @@
 
 """Test view/reshape validation errors"""
 
-from typing import assert_type, TYPE_CHECKING
+from typing import assert_type, reveal_type, TYPE_CHECKING
 
 import torch
 
@@ -24,8 +24,7 @@ def test_multiple_minus_ones():
 def test_incompatible_shape():
     """Incompatible shape with literal dimensions is rejected."""
     x: Tensor[[10, 20]] = torch.randn(10, 20)  # 200 elements
-    # E: could not infer size for dimension -1:
-    #    expected 200 to be divisible by 3
+    # E: could not infer size for dimension -1
     y = x.view(3, -1)
     assert_type(y, Tensor)
 
@@ -38,9 +37,27 @@ def test_invalid_dimension_value():
     assert_type(y, Tensor)
 
 
-def test_zero_dimension():
-    """Zero dimension is rejected."""
+def test_zero_dimension_with_nonempty_input():
+    """A zero target cannot hold a nonempty input."""
     x: Tensor[[100]] = torch.randn(100)
-    # E: reshape dimensions cannot contain 0
-    y = x.view(0, -1)
+    # E: reshape target element count does not match the input
+    y = x.view(0, 1)
     assert_type(y, Tensor)
+
+
+def test_mismatched_element_count():
+    """A fully specified target whose element count differs is rejected."""
+    x: Tensor[[6]] = torch.randn(6)
+    # E: reshape target element count does not match the input
+    y = x.reshape(4, 2)
+    assert_type(y, Tensor)
+    # E: reshape target element count does not match the input
+    torch.reshape(x, (2, 2))
+
+
+def test_zero_sized_inference():
+    empty = torch.empty(0, 3)
+    # E: revealed type: Tensor[[0]]
+    reveal_type(empty.reshape(-1))
+    # E: could not infer size for dimension -1
+    empty.reshape(0, -1)

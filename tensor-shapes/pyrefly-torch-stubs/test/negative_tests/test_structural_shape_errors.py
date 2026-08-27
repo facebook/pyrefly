@@ -6,6 +6,7 @@
 from typing import reveal_type
 
 import torch
+from shape_extensions import IntTuple
 from torch import Tensor
 from torch.nn import functional as F
 
@@ -89,6 +90,72 @@ def check_invalid_structural_controls(
     torch.diag_embed(x, dim1=1, dim2=-2)
     # E: Cannot evaluate type-level shape DSL call: diag_embed dimension out of range
     torch.diag_embed(x, dim1=-4)
+
+
+def check_invalid_permute_controls(x: Tensor[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: permute dimensions must match the input rank
+    x.permute(0, 1)
+    # E: Cannot evaluate type-level shape DSL call: permute dimension out of range
+    x.permute(0, 1, 3)
+    # E: Cannot evaluate type-level shape DSL call: permute dimensions must be unique
+    x.permute(0, 0, 1)
+    # E: Cannot evaluate type-level shape DSL call: permute dimensions must be unique
+    torch.permute(x, (0, -1, 2))
+
+
+def check_gradual_permute_controls[Shape: IntTuple, Dims: IntTuple](
+    x: Tensor[Shape], dims: Dims, broad: tuple[int, int, int]
+) -> None:
+    # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(x.permute(dims))
+    # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(torch.empty(2, 3, 4).permute(broad))
+
+
+def check_repeat_interleave_controls(broad_dim: int, broad_repeats: int) -> None:
+    concrete: Tensor[[2, 3]] = torch.empty(2, 3)
+
+    # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(concrete.repeat_interleave(2, broad_dim))
+    # E: revealed type: Tensor[[2, int]]
+    reveal_type(concrete.repeat_interleave(broad_repeats, dim=1))
+
+    # Zero repeats is an empty but valid result at runtime; a negative count is not.
+    # E: revealed type: Tensor[[2, 0]]
+    reveal_type(concrete.repeat_interleave(0, dim=1))
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave repeats must be non-negative
+    torch.repeat_interleave(concrete, -1, dim=-1)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave repeats must be non-negative
+    concrete.repeat_interleave(-2)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave output_size must be non-negative
+    concrete.repeat_interleave(2, dim=0, output_size=-1)
+    tensor_repeats = torch.tensor([2, 3])
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave output_size must be non-negative
+    concrete.repeat_interleave(tensor_repeats, dim=0, output_size=-1)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave output_size does not match the result
+    concrete.repeat_interleave(99, dim=1, output_size=5)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave output_size does not match the result
+    torch.repeat_interleave(concrete, 99, output_size=5)
+
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave dimension out of range
+    concrete.repeat_interleave(2, dim=2)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave dimension out of range
+    torch.repeat_interleave(concrete, 2, dim=-3)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave dimension out of range
+    concrete.repeat_interleave(tensor_repeats, dim=2, output_size=5)
+
+    # A rank-0 input only admits the synthesized axis named by dim 0 or -1.
+    scalar: Tensor[[]] = torch.tensor(1)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave dimension out of range
+    scalar.repeat_interleave(2, dim=1)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave dimension out of range
+    torch.repeat_interleave(scalar, 2, dim=-2, output_size=2)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave dimension out of range
+    torch.repeat_interleave(scalar, tensor_repeats, dim=-2, output_size=5)
+    # E: Cannot evaluate type-level shape DSL call: repeat_interleave output_size does not match the result
+    scalar.repeat_interleave(3, dim=0, output_size=4)
+
+    concrete.repeat_interleave(1.5)  # E: No matching overload
 
 
 def check_invalid_cosine_similarity_controls(

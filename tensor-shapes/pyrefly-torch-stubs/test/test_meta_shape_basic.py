@@ -269,9 +269,60 @@ def test_permute():
 # Test 7M: x.permute - permute dimensions (method style)
 def test_permute_method():
     x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
-    # Should infer: Tensor[[4, 2, 3]] (permute to [2, 0, 1])
-    result = x.permute((2, 0, 1))
-    assert_type(result, Tensor[[4, 2, 3]])
+    assert_type(x.permute((-1, 0, 1)), Tensor[[4, 2, 3]])
+
+    dims = (2, 0, 1)
+    assert_type(x.permute(*dims), Tensor[[4, 2, 3]])
+
+
+def test_permute_scalar():
+    x: Tensor[[]] = torch.tensor(1)
+    assert_type(x.permute(), Tensor[[]])
+    assert_type(torch.permute(x, ()), Tensor[[]])
+
+
+def test_repeat_interleave_shapes():
+    x: Tensor[[2, 3]] = torch.randn(2, 3)
+    repeats: Tensor[[2]] = torch.tensor([2, 3])
+
+    assert_type(x.repeat_interleave(2), Tensor[[12]])
+    assert_type(x.repeat_interleave(2, dim=0), Tensor[[4, 3]])
+    assert_type(torch.repeat_interleave(x, 2, dim=-1), Tensor[[2, 6]])
+    # A zero count stays valid; its result is checked in
+    # negative_tests/test_structural_shape_errors.py, since a `0` extent cannot be
+    # spelled in a Tensor annotation.
+
+    assert_type(x.repeat_interleave(repeats, dim=0), Tensor)
+    assert_type(x.repeat_interleave(repeats, dim=0, output_size=5), Tensor[[5, 3]])
+    assert_type(
+        torch.repeat_interleave(x, repeats, dim=None, output_size=7), Tensor[[7]]
+    )
+
+    # output_size records the runtime-validated result extent.
+    assert_type(x.repeat_interleave(99, dim=1, output_size=297), Tensor[[2, 297]])
+    assert_type(torch.repeat_interleave(x, 99, output_size=594), Tensor[[594]])
+
+
+def test_repeat_interleave_scalar():
+    # A rank-0 input has no axis of its own, so dim 0 and -1 both name the rank-1
+    # axis that the result synthesizes.
+    scalar: Tensor[[]] = torch.tensor(1)
+    assert_type(scalar.repeat_interleave(3), Tensor[[3]])
+    assert_type(scalar.repeat_interleave(3, dim=0), Tensor[[3]])
+    assert_type(scalar.repeat_interleave(3, dim=-1), Tensor[[3]])
+    assert_type(torch.repeat_interleave(scalar, 3, dim=0), Tensor[[3]])
+    assert_type(torch.repeat_interleave(scalar, 3, dim=-1), Tensor[[3]])
+    assert_type(scalar.repeat_interleave(3, dim=0, output_size=3), Tensor[[3]])
+    assert_type(torch.repeat_interleave(scalar, 3, dim=-1, output_size=3), Tensor[[3]])
+
+
+def repeat_interleave_union_fallbacks(
+    x: Tensor[[2, 3]],
+    repeats: int | Tensor,
+    output_size: int | None,
+) -> None:
+    assert_type(x.repeat_interleave(repeats), Tensor)
+    assert_type(torch.repeat_interleave(x, 2, output_size=output_size), Tensor)
 
 
 # Test 8: torch.mean - reduction operation
