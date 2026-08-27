@@ -1433,14 +1433,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             attr_name.clone(),
                         ));
                     }
-                    // Filter overloaded got-side methods by self-type so the subset
-                    // solver doesn't match an overload whose `self:` is incompatible
-                    // with the receiver.
-                    let filtered = self.filter_got_overloads_for_protocol(got_attr);
-                    let got_attr = filtered.as_ref().unwrap_or(got_attr);
-                    self.is_attribute_subset(got_attr, &want, &mut |got, want| {
-                        is_subset(got, want)
-                    })
+                    if matches!(got_attr, Attribute::GetAttr(..)) {
+                        let guard_key = (got.clone(), protocol.clone(), attr_name.clone());
+                        if self.enter_protocol_member_check(guard_key.clone()) {
+                            continue;
+                        }
+                        let res = self.is_attribute_subset(got_attr, &want, is_subset);
+                        self.exit_protocol_member_check(&guard_key);
+                        res
+                    } else {
+                        // Filter overloaded got-side methods by self-type so the subset
+                        // solver doesn't match an overload whose `self:` is incompatible
+                        // with the receiver.
+                        let filtered = self.filter_got_overloads_for_protocol(got_attr);
+                        let got_attr = filtered.as_ref().unwrap_or(got_attr);
+                        self.is_attribute_subset(got_attr, &want, is_subset)
+                    }
                     .map_err(|err| {
                         SubsetError::IncompatibleAttribute(Box::new((
                             protocol.name().clone(),
