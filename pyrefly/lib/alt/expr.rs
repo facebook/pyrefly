@@ -4605,7 +4605,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Vec<Type> {
-        if matches!(slice, Expr::Tuple(tuple) if tuple.parenthesized) {
+        if matches!(slice, Expr::Tuple(tuple) if tuple.parenthesized && !tuple.elts.is_empty()) {
             let ty = self.apply_special_form(
                 SpecialForm::Tuple,
                 slice,
