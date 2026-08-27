@@ -1686,6 +1686,7 @@ impl Type {
 
     /// Gets this type's function metadata if it is a function. Note that we
     /// do *not* recurse into the type to find nested function types.
+    /// Keep in sync with `Type::toplevel_func_metadata_mut`.
     pub fn toplevel_func_metadata(&self) -> Option<&FuncMetadata> {
         match self {
             Type::Function(func) => Some(&func.metadata),
@@ -1699,6 +1700,24 @@ impl Type {
                 BoundMethodType::Overload(overload) => Some(&*overload.metadata),
             },
             Type::Overload(overload) => Some(&*overload.metadata),
+            _ => None,
+        }
+    }
+
+    /// Keep in sync with `Type::toplevel_func_metadata`.
+    pub fn toplevel_func_metadata_mut(&mut self) -> Option<&mut FuncMetadata> {
+        match self {
+            Type::Function(func) => Some(&mut func.metadata),
+            Type::Forall(forall) => match &mut forall.body {
+                Forallable::Function(func) => Some(&mut func.metadata),
+                _ => None,
+            },
+            Type::BoundMethod(bm) => match &mut bm.func {
+                BoundMethodType::Function(func) => Some(&mut func.metadata),
+                BoundMethodType::Forall(forall) => Some(&mut forall.body.metadata),
+                BoundMethodType::Overload(overload) => Some(&mut *overload.metadata),
+            },
+            Type::Overload(overload) => Some(&mut *overload.metadata),
             _ => None,
         }
     }
@@ -1736,18 +1755,18 @@ impl Type {
 
     pub fn without_property_metadata(&self) -> Type {
         let mut clone = self.clone();
-        clone.transform_toplevel_func_metadata(|meta| {
+        if let Some(meta) = clone.toplevel_func_metadata_mut() {
             meta.flags.property_metadata = None;
-        });
+        }
         clone
     }
 
     /// Returns `true` if the metadata was successfully set (i.e., the type is function-like).
     pub fn set_property_metadata(&mut self, metadata: PropertyMetadata) -> bool {
         let mut metadata = Some(metadata);
-        self.transform_toplevel_func_metadata(|meta| {
+        if let Some(meta) = self.toplevel_func_metadata_mut() {
             meta.flags.property_metadata = metadata.take();
-        });
+        }
         metadata.is_none()
     }
 
@@ -1764,39 +1783,6 @@ impl Type {
     pub fn has_final_decoration(&self) -> bool {
         self.toplevel_func_metadata()
             .is_some_and(|meta| meta.flags.has_final_decoration)
-    }
-
-    /// Transforms this type's function metadata, if it is a function. Note that we do *not*
-    /// recurse into the type to find nested function types.
-    pub fn transform_toplevel_func_metadata(&mut self, mut f: impl FnMut(&mut FuncMetadata)) {
-        let func: Option<&mut Function> = match self {
-            Type::Function(func) => Some(func),
-            Type::Forall(forall) => match &mut forall.body {
-                Forallable::Function(func) => Some(func),
-                _ => None,
-            },
-            Type::BoundMethod(bm) => match &mut bm.func {
-                BoundMethodType::Function(func) => Some(func),
-                BoundMethodType::Forall(forall) => Some(&mut forall.body),
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some(func) = func {
-            f(&mut func.metadata);
-            return;
-        }
-        let overload: Option<&mut Overload> = match self {
-            Type::Overload(overload) => Some(overload),
-            Type::BoundMethod(bm) => match &mut bm.func {
-                BoundMethodType::Overload(overload) => Some(overload),
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some(overload) = overload {
-            f(&mut overload.metadata);
-        }
     }
 
     /// Apply `f` to this type if it is a callable. Note that we do *not* recurse into the type to

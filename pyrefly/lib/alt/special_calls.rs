@@ -12,7 +12,6 @@
  */
 
 use pyrefly_python::dunder;
-use pyrefly_types::function::FuncMetadata;
 use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
@@ -780,10 +779,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // Try to apply the decorator to arg_ty. Does nothing if the decorator does not have known
             // typing effects or if arg_ty is not a function.
             let mut applied = false;
-            arg_ty.transform_toplevel_func_metadata(|meta: &mut FuncMetadata| {
+            if let Some(meta) = arg_ty.toplevel_func_metadata_mut() {
                 applied |=
                     self.set_flag_from_special_decorator(&mut meta.flags, &special_decorator);
-            });
+            };
             if applied { Some(arg_ty) } else { None }
         } else {
             None

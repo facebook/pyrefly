@@ -5959,14 +5959,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         None
     }
 
-    fn callable_params_and_flags(mut ty: Type) -> Option<(ParamList, FuncFlags)> {
-        let mut flags = None;
-        ty.transform_toplevel_func_metadata(|meta| {
-            if flags.is_none() {
-                flags = Some(meta.flags.clone());
-            }
-        });
-        let flags = flags?;
+    fn callable_params_and_flags(ty: Type) -> Option<(ParamList, FuncFlags)> {
+        let flags = ty.toplevel_func_metadata()?.flags.clone();
         let params = match ty.callable_signatures().as_slice() {
             [sig] if let Params::List(list) = &sig.params => Some(list.clone()),
             _ => None,

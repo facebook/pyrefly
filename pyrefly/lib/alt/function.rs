@@ -436,11 +436,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .setter
                 .clone()
                 .unwrap_or_else(|| metadata.getter.clone());
-            ty.transform_toplevel_func_metadata(|meta| {
-                if let Some(property) = &mut meta.flags.property_metadata {
-                    property.has_deleter = true;
-                }
-            });
+            if let Some(meta) = ty.toplevel_func_metadata_mut()
+                && let Some(property) = &mut meta.flags.property_metadata
+            {
+                property.has_deleter = true;
+            };
         }
 
         if matches!(
@@ -448,26 +448,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             BodyKind::Ellipsis | BodyKind::Trivial
         ) && self.module().path().style() != ModuleStyle::Interface
             && undecorated.metadata.flags.is_in_protocol_class
+            && let Some(meta) = ty.toplevel_func_metadata_mut()
         {
-            ty.transform_toplevel_func_metadata(|meta| {
-                meta.flags.is_abstract_method = true;
-            });
+            meta.flags.is_abstract_method = true;
         }
 
         let sanitized = ty.without_property_metadata();
-        ty.transform_toplevel_func_metadata(|meta| {
-            if let Some(property) = &mut meta.flags.property_metadata {
-                match property.role {
-                    PropertyRole::Getter => {
-                        property.getter = sanitized.clone();
-                    }
-                    PropertyRole::Setter => {
-                        property.setter = Some(sanitized.clone());
-                    }
-                    _ => {}
+        if let Some(meta) = ty.toplevel_func_metadata_mut()
+            && let Some(property) = &mut meta.flags.property_metadata
+        {
+            match property.role {
+                PropertyRole::Getter => {
+                    property.getter = sanitized.clone();
                 }
+                PropertyRole::Setter => {
+                    property.setter = Some(sanitized.clone());
+                }
+                _ => {}
             }
-        });
+        };
 
         ty
     }
@@ -1823,12 +1822,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                 });
                 if let Some(mut call_attr) = call_attr {
-                    call_attr.transform_toplevel_func_metadata(|m| {
+                    if let Some(m) = call_attr.toplevel_func_metadata_mut() {
                         *m = FuncMetadata::new(
                             FunctionKind::CallbackProtocol(Box::new(cls.clone())),
                             metadata.flags.clone(),
                         );
-                    });
+                    };
                     call_attr
                 } else {
                     self.heap.mk_class_type(cls)

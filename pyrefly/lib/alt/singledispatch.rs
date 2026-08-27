@@ -278,10 +278,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             )
             && cls.name().as_str() == "_SingleDispatchCallable"
             && let Some(first) = Self::first_positional_param_type(&f.signature)
+            && let Some(m) = ty.toplevel_func_metadata_mut()
         {
-            ty.transform_toplevel_func_metadata(|m| {
-                m.kind = FunctionKind::SingleDispatchRegister(Box::new(first.clone()));
-            });
+            m.kind = FunctionKind::SingleDispatchRegister(Box::new(first.clone()));
         }
         ty
     }
