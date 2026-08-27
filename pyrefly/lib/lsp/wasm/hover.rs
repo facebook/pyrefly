@@ -642,7 +642,8 @@ fn class_display_type(solver: &AnswersSolver<TransactionHandle<'_>>, type_: &Typ
         },
         _ => None,
     }?;
-    constructor.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(solver, c));
+    constructor
+        .transform_toplevel_callable_signatures(|c, _| expand_callable_kwargs_for_hover(solver, c));
     Some(solver.for_display(constructor))
 }
 
@@ -1038,7 +1039,7 @@ pub fn get_hover_with_verbosity(
                 {
                     class_type
                 } else {
-                    cloned.transform_toplevel_callable(|c| {
+                    cloned.transform_toplevel_callable_signatures(|c, _| {
                         expand_callable_kwargs_for_hover(&solver, c)
                     });
                     cloned

@@ -1368,7 +1368,7 @@ fn make_bound_method(heap: &TypeHeap, instance: &Instance, attr: Type) -> Result
     let should_bind =
         |meta: &FuncMetadata| !meta.flags.is_staticmethod && !meta.flags.is_classmethod;
     make_bound_method_helper(heap, instance.to_type(heap), attr, &should_bind).map(|mut method| {
-        method.transform_toplevel_callable(|callable| {
+        method.transform_toplevel_callable_signatures(|callable, _| {
             if let InstanceKind::TypeVar(q) = &instance.kind &&
             matches!(q.restriction(), Restriction::Constraints(_)) &&
             matches!(&callable.ret, Type::ClassType(cls) if cls.class_object() == instance.class && cls.targs() == instance.targs) {
@@ -4260,7 +4260,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     } else {
                         any_implicit
                     };
-                    ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
+                    ty.transform_toplevel_callable_signatures(|callable: &mut Callable, _| {
                         callable.ret = relaxed_ret.clone();
                     });
                 };

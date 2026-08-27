@@ -305,7 +305,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let sig = match &tparams {
             None => {
                 let mut callee = target_ty.clone();
-                callee.transform_toplevel_callable(&mut |c: &mut Callable| {
+                callee.transform_toplevel_callable_signatures(|c: &mut Callable, _| {
                     self.expand_unpack_kwargs(c);
                     make_params_optional(c);
                 });
@@ -329,7 +329,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .zip(tparams.iter().cloned())
                     .collect();
                 let mut callee = self.heap.mk_callable_from(inst.clone());
-                callee.transform_toplevel_callable(&mut |c: &mut Callable| {
+                callee.transform_toplevel_callable_signatures(|c: &mut Callable, _| {
                     self.expand_unpack_kwargs(c);
                     make_params_optional(c);
                 });

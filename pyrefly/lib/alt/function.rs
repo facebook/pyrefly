@@ -2554,7 +2554,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let bound = if let Type::BoundMethod(m) = &t {
             let mut func_type = m.func.clone().as_type();
             // For each callable, set its return type to its first param's type (i.e. `self`).
-            func_type.transform_toplevel_callable(&mut |c: &mut Callable| {
+            func_type.transform_toplevel_callable_signatures(|c: &mut Callable, _| {
                 if let Some(self_type) = c.get_first_param() {
                     c.ret = self_type.clone();
                 }
@@ -2569,7 +2569,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let ret_type = t
                 .callable_first_param(self.heap)
                 .unwrap_or_else(|| self.heap.mk_class_type(cls.clone()));
-            t.transform_toplevel_callable(&mut |c: &mut Callable| c.ret = ret_type.clone());
+            t.transform_toplevel_callable_signatures(|c: &mut Callable, _| {
+                c.ret = ret_type.clone()
+            });
             t
         })
     }

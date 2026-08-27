@@ -2326,7 +2326,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .collect();
             return self.unions(members);
         }
-        ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
+        ty.transform_toplevel_callable_signatures(|callable: &mut Callable, _| {
             let mut parameter_tparams = SmallSet::new();
             callable
                 .params

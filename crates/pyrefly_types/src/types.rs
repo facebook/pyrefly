@@ -11,6 +11,7 @@ use std::fmt;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::mem;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -423,6 +424,29 @@ pub enum CalleeKind {
     Class(ClassKind),
 }
 
+/// Small helper for `transform_toplevel_callable_signatures`
+enum FunctionTransform {
+    Function(Function),
+    Forall(Forall<Function>),
+}
+
+impl FunctionTransform {
+    fn transform(self, f: &mut impl FnMut(&mut Callable, &mut Option<Arc<TParams>>)) -> Self {
+        let (mut function, mut tparams) = match self {
+            Self::Function(function) => (function, None),
+            Self::Forall(forall) => (forall.body, Some(forall.tparams)),
+        };
+        f(&mut function.signature, &mut tparams);
+        match tparams {
+            Some(tparams) => Self::Forall(Forall {
+                tparams,
+                body: function,
+            }),
+            None => Self::Function(function),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct BoundMethod {
@@ -558,6 +582,29 @@ impl BoundMethodType {
             Self::Overload(overload) => overload.is_typeis(),
         }
     }
+
+    fn transform(self, f: &mut impl FnMut(&mut Callable, &mut Option<Arc<TParams>>)) -> Self {
+        match self {
+            BoundMethodType::Function(function) => {
+                match FunctionTransform::Function(function).transform(f) {
+                    FunctionTransform::Function(function) => BoundMethodType::Function(function),
+                    FunctionTransform::Forall(forall) => BoundMethodType::Forall(forall),
+                }
+            }
+            BoundMethodType::Forall(forall) => {
+                match FunctionTransform::Forall(forall).transform(f) {
+                    FunctionTransform::Function(function) => BoundMethodType::Function(function),
+                    FunctionTransform::Forall(forall) => BoundMethodType::Forall(forall),
+                }
+            }
+            BoundMethodType::Overload(mut overload) => {
+                overload.signatures = overload
+                    .signatures
+                    .mapped(|signature| signature.transform(f));
+                BoundMethodType::Overload(overload)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -612,6 +659,17 @@ impl OverloadType {
         match self {
             Self::Function(f) => f.signature.is_typeis(),
             Self::Forall(forall) => forall.body.signature.is_typeis(),
+        }
+    }
+
+    fn transform(self, f: &mut impl FnMut(&mut Callable, &mut Option<Arc<TParams>>)) -> Self {
+        let transform = match self {
+            Self::Function(function) => FunctionTransform::Function(function),
+            Self::Forall(forall) => FunctionTransform::Forall(forall),
+        };
+        match transform.transform(f) {
+            FunctionTransform::Function(function) => Self::Function(function),
+            FunctionTransform::Forall(forall) => Self::Forall(forall),
         }
     }
 }
@@ -688,6 +746,28 @@ impl Forallable {
             Self::Function(func) => func.signature.is_typeis(),
             Self::Callable(callable) => callable.is_typeis(),
             Self::TypeAlias(_) => false,
+        }
+    }
+
+    fn transform(
+        self,
+        mut tparams: Option<Arc<TParams>>,
+        f: &mut impl FnMut(&mut Callable, &mut Option<Arc<TParams>>),
+    ) -> Type {
+        let body = match self {
+            Self::Function(mut function) => {
+                f(&mut function.signature, &mut tparams);
+                Self::Function(function)
+            }
+            Self::Callable(mut callable) => {
+                f(&mut callable, &mut tparams);
+                Self::Callable(callable)
+            }
+            body @ Self::TypeAlias(_) => body,
+        };
+        match tparams {
+            Some(tparams) => body.forall(tparams),
+            None => body.as_type(),
         }
     }
 }
@@ -1787,6 +1867,7 @@ impl Type {
 
     /// Get this type's signatures with type parameters if it is a callable. Note that we do *not*
     /// recurse into the type to find nested callable types.
+    /// Keep in sync with `Type::transform_toplevel_callable_signatures`.
     pub fn toplevel_callable_signatures(
         &self,
     ) -> impl Iterator<Item = (&Callable, Option<&Arc<TParams>>)> {
@@ -1821,37 +1902,30 @@ impl Type {
 
     /// Transform this type if it is a callable. Note that we do *not* recurse into the type to
     /// find nested callable types.
-    pub fn transform_toplevel_callable<'a>(&'a mut self, mut f: impl FnMut(&'a mut Callable)) {
-        match self {
-            Type::Callable(callable) => f(callable),
-            Type::Forall(forall) => match &mut forall.body {
-                Forallable::Callable(callable) => f(callable),
-                Forallable::Function(func) => f(&mut func.signature),
-                _ => {}
-            },
-            Type::Function(func) => f(&mut func.signature),
-            Type::BoundMethod(bm) => match &mut bm.func {
-                BoundMethodType::Function(func) => f(&mut func.signature),
-                BoundMethodType::Forall(forall) => f(&mut forall.body.signature),
-                BoundMethodType::Overload(overload) => {
-                    for x in overload.signatures.iter_mut() {
-                        match x {
-                            OverloadType::Function(function) => f(&mut function.signature),
-                            OverloadType::Forall(forall) => f(&mut forall.body.signature),
-                        }
-                    }
-                }
-            },
-            Type::Overload(overload) => {
-                for x in overload.signatures.iter_mut() {
-                    match x {
-                        OverloadType::Function(function) => f(&mut function.signature),
-                        OverloadType::Forall(forall) => f(&mut forall.body.signature),
-                    }
-                }
+    /// Keep in sync with `Type::toplevel_callable_signatures`.
+    pub fn transform_toplevel_callable_signatures(
+        &mut self,
+        mut f: impl FnMut(&mut Callable, &mut Option<Arc<TParams>>),
+    ) {
+        // Temporarily swap `self` with a placeholder so we can run an owning transformation on it
+        // without cloning.
+        let transformed = match mem::replace(self, Type::None) {
+            Type::Callable(callable) => Forallable::Callable(*callable).transform(None, &mut f),
+            Type::Function(function) => Forallable::Function(*function).transform(None, &mut f),
+            Type::Forall(forall) => forall.body.transform(Some(forall.tparams), &mut f),
+            Type::BoundMethod(mut method) => {
+                method.func = method.func.transform(&mut f);
+                Type::BoundMethod(method)
             }
-            _ => {}
-        }
+            Type::Overload(mut overload) => {
+                overload.signatures = overload
+                    .signatures
+                    .mapped(|signature| signature.transform(&mut f));
+                Type::Overload(overload)
+            }
+            ty => ty,
+        };
+        *self = transformed;
     }
 
     pub fn is_toplevel_callable(&self) -> bool {
@@ -2149,7 +2223,7 @@ impl Type {
                     _ => {}
                 }
             }
-            ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
+            ty.transform_toplevel_callable_signatures(|callable: &mut Callable, _| {
                 if matches!(callable.params, Params::Ellipsis) {
                     callable.params = Params::Materialization;
                 }
