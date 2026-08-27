@@ -1092,6 +1092,9 @@ pub enum TypeShapeDslConditionKind {
     },
 }
 
+// These bits are flow facts recorded before parameter annotations are resolved. `FlagDomain`
+// represents declared domains after solver integration; `flag_domain_from_kinds` is the boundary
+// between the two representations.
 const FLAG_INT: u8 = 1;
 const FLAG_SEQUENCE: u8 = 2;
 const FLAG_NONE: u8 = 4;
@@ -1144,7 +1147,7 @@ fn flag_domain_from_kinds(kinds: u8) -> Option<FlagDomain> {
     }
     let mut members = [
         (FLAG_INT, FlagMember::Int),
-        (FLAG_SEQUENCE, FlagMember::Tuple),
+        (FLAG_SEQUENCE, FlagMember::IntTuple),
         (FLAG_NONE, FlagMember::NoneType),
         (FLAG_BOOL, FlagMember::Bool),
         (FLAG_STRING, FlagMember::Str),
@@ -1607,7 +1610,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok(parameters.into_boxed_slice())
     }
 
-    fn finalize_helper_deferred_domains(&mut self) {
+    fn finalize_helper_deferred_domains(&mut self) -> Result<(), TypeShapeDslDefinitionError> {
         let domains = self
             .helper_calls
             .iter()
@@ -1618,9 +1621,12 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             })
             .map(|index| {
                 let (root, domain) = self.deferred_integer_domain(index);
-                (index, (root, domain))
+                Ok((
+                    index,
+                    (root, domain, self.deferred_integer_parameters(root)?),
+                ))
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<Result<HashMap<_, _>, TypeShapeDslDefinitionError>>()?;
         for argument in self
             .helper_calls
             .iter_mut()
@@ -1628,14 +1634,15 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         {
             let TypeShapeDslHelperArgumentProvenance::DeferredInteger {
                 index,
+                parameters,
                 resolved_domain,
-                ..
             } = &mut argument.provenance
             else {
                 continue;
             };
-            let (root, domain) = domains[index];
-            *index = root;
+            let (root, domain, final_parameters) = &domains[index];
+            *index = *root;
+            *parameters = final_parameters.clone();
             *resolved_domain = domain.map(|domain| match domain {
                 DslIntegerDomain::Dimension => {
                     TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
@@ -1645,6 +1652,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 }
             });
         }
+        Ok(())
     }
 
     fn resolve_deferred_integer(
@@ -3912,7 +3920,7 @@ impl ParsedTypeShapeDslFunction {
         }
         // Helper signatures can determine the domain of otherwise-unconstrained integer locals,
         // so preserve their unresolved state before defaulting integers that have no such use.
-        validator.finalize_helper_deferred_domains();
+        validator.finalize_helper_deferred_domains()?;
         validator.resolve_unused_deferred_integers()?;
         let DslValidator {
             returns,

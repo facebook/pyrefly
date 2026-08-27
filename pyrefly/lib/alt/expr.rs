@@ -4065,7 +4065,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     _ => return None,
                 };
                 let int_type = self.stdlib.int().clone().to_type();
-                Self::is_int_tuple_carrier_bound(&upper_bound, &int_type)
+                Self::is_int_tuple_bound(&upper_bound, &int_type)
                     .then(|| IntTuple::unpacked(Vec::new(), shape_arg.clone(), Vec::new()))
             })
     }
@@ -4643,7 +4643,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     if param.kind() == QuantifiedKind::TypeVar
                         && let Expr::List(ExprList { elts, .. }) = arg
-                        && Self::is_int_tuple_carrier_bound(
+                        && Self::is_int_tuple_bound(
                             &param.upper_bound(self.stdlib, self.heap),
                             &int_type,
                         )
@@ -4659,12 +4659,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .collect()
     }
 
-    /// Returns whether `ty` is the normalized upper bound for a bare `IntTuple`
-    /// carrier `TypeVar`.
+    /// Returns whether `ty` is the normalized upper bound for an `IntTuple`-bounded `TypeVar`.
     ///
     /// Other tuple bounds are ordinary type bounds and must not enable compact
     /// shape-list parsing.
-    fn is_int_tuple_carrier_bound(ty: &Type, int_type: &Type) -> bool {
+    fn is_int_tuple_bound(ty: &Type, int_type: &Type) -> bool {
         match ty {
             Type::IntTuple(_) => true,
             Type::Tuple(Tuple::Unbounded(inner)) => inner.as_ref() == int_type,
@@ -4674,9 +4673,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     /// Returns whether `ty` can legally be the argument inside `Elements[...]`.
     ///
-    /// Valid carriers are concrete tuple types, type aliases (which normalize to
+    /// Valid arguments are concrete tuple types, type aliases (which normalize to
     /// tuples), and `TypeVar`s whose upper bound is an `IntTuple` (i.e., a tuple type).
-    fn is_int_tuple_elements_carrier(&self, ty: &Type) -> bool {
+    fn is_int_tuple_elements_argument(&self, ty: &Type) -> bool {
         let upper_bound = match ty {
             Type::Tuple(_) | Type::IntTuple(_) | Type::UntypedAlias(_) => return true,
             Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
@@ -4684,14 +4683,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             _ => return false,
         };
         let int_type = self.stdlib.int().clone().to_type();
-        Self::is_int_tuple_carrier_bound(&upper_bound, &int_type)
+        Self::is_int_tuple_bound(&upper_bound, &int_type)
     }
 
     fn is_shape_elements_class(&self, cls: &Class) -> bool {
         cls.has_toplevel_qname("shape_extensions", "Elements")
     }
 
-    /// Parse `Elements[S]` in `*Elements[S]`, returning the bare `S` carrier.
+    /// Parse `Elements[S]` in `*Elements[S]`, returning the bare `S` argument.
     ///
     /// `Elements` is the conceptual inverse of `tuple[Unpack[Ts]]`: whereas
     /// `tuple[Unpack[Ts]]` wraps a `TypeVarTuple` into a concrete tuple type,
@@ -4717,8 +4716,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
         match Ast::unpack_slice(&subscript.slice) {
             [arg] => {
-                let carrier = self.expr_untype(arg, TypeFormContext::type_argument(), errors);
-                match carrier {
+                let argument = self.expr_untype(arg, TypeFormContext::type_argument(), errors);
+                match argument {
                     Type::IntTuple(shape) => match shape.view() {
                         IntTupleView::Concrete(_) => Ok(Some(shape_to_tuple_carrier(&shape))),
                         IntTupleView::Gradual => Ok(Some(self.bare_int_tuple_carrier())),
@@ -4727,21 +4726,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 errors,
                                 arg.range(),
                                 ErrorKind::InvalidAnnotation,
-                                "`Elements[...]` only supports concrete `IntTuple[...]` values or shape carriers"
+                                "`Elements[...]` cannot expand a symbolic-rank `IntTuple[...]` value"
                                     .to_owned(),
                             );
                             Err(())
                         }
                     },
-                    carrier if self.is_int_tuple_elements_carrier(&carrier) => Ok(Some(carrier)),
-                    carrier => {
+                    argument if self.is_int_tuple_elements_argument(&argument) => {
+                        Ok(Some(argument))
+                    }
+                    argument => {
                         self.error(
                             errors,
                             arg.range(),
                             ErrorKind::InvalidAnnotation,
                             format!(
-                                "`Elements[...]` requires an `IntTuple` carrier, got `{}`",
-                                self.for_display(carrier)
+                                "`Elements[...]` requires an `IntTuple` or integer tuple, got `{}`",
+                                self.for_display(argument)
                             ),
                         );
                         Err(())

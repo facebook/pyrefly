@@ -44,7 +44,7 @@ pub enum FlagMember {
     Int,
     Bool,
     Str,
-    Tuple,
+    IntTuple,
     NoneType,
 }
 
@@ -112,7 +112,7 @@ impl FlagMember {
         Self::Int,
         Self::Bool,
         Self::Str,
-        Self::Tuple,
+        Self::IntTuple,
         Self::NoneType,
     ];
 
@@ -124,7 +124,7 @@ impl FlagMember {
             Self::Int => "builtins.int",
             Self::Bool => "builtins.bool",
             Self::Str => "builtins.str",
-            Self::Tuple => "builtins.tuple",
+            Self::IntTuple => "builtins.tuple",
             Self::NoneType => "types.NoneType",
         }
     }
@@ -135,7 +135,7 @@ impl FlagMember {
             Self::Int => "int",
             Self::Bool => "bool",
             Self::Str => "str",
-            Self::Tuple => "tuple[int, ...]",
+            Self::IntTuple => "tuple[int, ...]",
             Self::NoneType => "None",
         }
     }
@@ -173,7 +173,7 @@ impl FlagMember {
             Self::Int => stdlib.int().clone().to_type(),
             Self::Bool => stdlib.bool().clone().to_type(),
             Self::Str => stdlib.str().clone().to_type(),
-            Self::Tuple => stdlib.tuple(stdlib.int().clone().to_type()).to_type(),
+            Self::IntTuple => stdlib.tuple(stdlib.int().clone().to_type()).to_type(),
             Self::NoneType => stdlib.none_type().clone().to_type(),
         }
     }
@@ -329,7 +329,7 @@ impl FlagDomain {
             }
             Type::Union(union) => union.members.iter().all(|member| self.accepts(member)),
             _ => self.members().any(|member| match member {
-                FlagMember::Tuple => self.tuple.accepts(ty),
+                FlagMember::IntTuple => self.tuple.accepts(ty),
                 _ => member.accepts(ty),
             }),
         }
@@ -385,7 +385,7 @@ impl FlagDomain {
             FlagMember::Int => domain.integer = true,
             FlagMember::Bool => domain.boolean = true,
             FlagMember::Str => domain.string = true,
-            FlagMember::Tuple => domain.tuple = FlagTuple::Unbounded,
+            FlagMember::IntTuple => domain.tuple = FlagTuple::Unbounded,
             FlagMember::NoneType => domain.none = true,
         }
         domain
@@ -444,7 +444,7 @@ impl FlagDomain {
             FlagMember::Int => self.integer,
             FlagMember::Bool => self.boolean,
             FlagMember::Str => self.string,
-            FlagMember::Tuple => self.tuple != FlagTuple::Absent,
+            FlagMember::IntTuple => self.tuple != FlagTuple::Absent,
             FlagMember::NoneType => self.none,
         }
     }
@@ -459,7 +459,7 @@ impl FlagDomain {
     pub fn types(self, stdlib: &Stdlib) -> Vec<Type> {
         self.members()
             .map(|member| match (member, self.tuple) {
-                (FlagMember::Tuple, FlagTuple::Fixed(arity)) => {
+                (FlagMember::IntTuple, FlagTuple::Fixed(arity)) => {
                     Type::Tuple(Tuple::Concrete(vec![stdlib.int().clone().to_type(); arity]))
                 }
                 _ => member.as_type(stdlib),
@@ -491,8 +491,8 @@ impl Display for FlagDomain {
                 write!(f, " | ")?;
             }
             match (member, self.tuple) {
-                (FlagMember::Tuple, FlagTuple::Fixed(0)) => f.write_str("tuple[()]")?,
-                (FlagMember::Tuple, FlagTuple::Fixed(arity)) => {
+                (FlagMember::IntTuple, FlagTuple::Fixed(0)) => f.write_str("tuple[()]")?,
+                (FlagMember::IntTuple, FlagTuple::Fixed(arity)) => {
                     f.write_str("tuple[")?;
                     for index in 0..arity {
                         if index > 0 {
@@ -530,7 +530,7 @@ mod tests {
             (FlagMember::Int, "int", "builtins.int"),
             (FlagMember::Bool, "bool", "builtins.bool"),
             (FlagMember::Str, "str", "builtins.str"),
-            (FlagMember::Tuple, "tuple[int, ...]", "builtins.tuple"),
+            (FlagMember::IntTuple, "tuple[int, ...]", "builtins.tuple"),
             (FlagMember::NoneType, "None", "types.NoneType"),
         ] {
             let domain = FlagDomain::of(member);
@@ -547,7 +547,7 @@ mod tests {
     fn flag_join_is_deterministic() {
         let members = [
             FlagMember::NoneType,
-            FlagMember::Tuple,
+            FlagMember::IntTuple,
             FlagMember::Str,
             FlagMember::Bool,
             FlagMember::Int,
@@ -582,19 +582,19 @@ mod tests {
 
     #[test]
     fn flag_tuple_membership() {
-        let tuple_only = FlagDomain::of(FlagMember::Tuple);
+        let tuple_only = FlagDomain::of(FlagMember::IntTuple);
         assert_eq!(tuple_only.class_names(), vec!["builtins.tuple"]);
         assert!(!tuple_only.contains(FlagMember::Int));
 
         let scalar_only = FlagDomain::of(FlagMember::Int);
-        assert!(!scalar_only.contains(FlagMember::Tuple));
-        assert!(scalar_only.join(tuple_only).contains(FlagMember::Tuple));
+        assert!(!scalar_only.contains(FlagMember::IntTuple));
+        assert!(scalar_only.join(tuple_only).contains(FlagMember::IntTuple));
     }
 
     #[test]
     fn flag_subset_covers_scalars_and_tuples() {
         let int = FlagDomain::of(FlagMember::Int);
-        let tuple = FlagDomain::of(FlagMember::Tuple);
+        let tuple = FlagDomain::of(FlagMember::IntTuple);
         let both = int.join(tuple);
 
         assert!(int.is_subset_of(both));
@@ -609,7 +609,7 @@ mod tests {
     fn flag_fixed_tuple_arities_are_incomparable() {
         let pair = FlagDomain::fixed_tuple(2);
         let triple = FlagDomain::fixed_tuple(3);
-        let any_tuple = FlagDomain::of(FlagMember::Tuple);
+        let any_tuple = FlagDomain::of(FlagMember::IntTuple);
 
         assert!(pair.is_subset_of(pair));
         assert!(!pair.is_subset_of(triple));
@@ -623,7 +623,7 @@ mod tests {
     fn flag_fixed_tuple_metadata() {
         for arity in [0, 1, 2, 3] {
             let domain = FlagDomain::fixed_tuple(arity);
-            assert!(domain.contains(FlagMember::Tuple));
+            assert!(domain.contains(FlagMember::IntTuple));
             assert!(!domain.contains(FlagMember::Int));
             assert_eq!(domain.class_names(), vec!["builtins.tuple"]);
         }

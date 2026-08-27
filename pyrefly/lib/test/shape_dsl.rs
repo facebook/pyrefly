@@ -4031,7 +4031,7 @@ def f(bad: Array[[2, *tuple[int, ...]], int]) -> None: ...  # E: Unpacked type i
 );
 
 testcase!(
-    test_shaped_array_compact_list_elements_rejects_non_inttuple_carrier,
+    test_shaped_array_compact_list_elements_rejects_non_inttuple_argument,
     shaped_array_env(),
     r#"
 from shape_extensions import Elements, shaped_array
@@ -4039,7 +4039,7 @@ from shape_extensions import Elements, shaped_array
 @shaped_array(shape="Shape")
 class Array[Shape, DType]: ...
 
-def f(bad: Array[[2, *Elements[int]], int]) -> None: ...  # E: `Elements[...]` requires an `IntTuple` carrier, got `int`
+def f(bad: Array[[2, *Elements[int]], int]) -> None: ...  # E: `Elements[...]` requires an `IntTuple` or integer tuple, got `int`
 "#,
 );
 

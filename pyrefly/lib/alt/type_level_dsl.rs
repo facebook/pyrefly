@@ -61,7 +61,7 @@ impl TypeFormContext<'_> {
 /// validated separately against `Flag[bool]`.
 fn type_shape_dsl_narrowable_flag_domain() -> FlagDomain {
     FlagDomain::of(FlagMember::Int)
-        .join(FlagDomain::of(FlagMember::Tuple))
+        .join(FlagDomain::of(FlagMember::IntTuple))
         .join(FlagDomain::of(FlagMember::NoneType))
 }
 
@@ -481,7 +481,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                     domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
                                 }
                                 TypeShapeDslInputDomain::Flag(domain) => {
-                                    domain.is_subset_of(FlagDomain::of(FlagMember::Tuple))
+                                    domain.is_subset_of(FlagDomain::of(FlagMember::IntTuple))
                                 }
                                 _ => false,
                             }
@@ -515,7 +515,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                         domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
                                     }
                                     TypeShapeDslFlagValueKind::Sequence => {
-                                        domain.is_subset_of(FlagDomain::of(FlagMember::Tuple))
+                                        domain.is_subset_of(FlagDomain::of(FlagMember::IntTuple))
                                     }
                                 },
                                 _ => false,
