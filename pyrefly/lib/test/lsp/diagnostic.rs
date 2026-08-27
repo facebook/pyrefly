@@ -301,14 +301,29 @@ def main():
 #[test]
 fn test_pytest_tracebackhide_not_reported_as_unused() {
     let code = r#"
+import pytest
+
 def helper() -> None:
     __tracebackhide__ = True
     unused_var = True
 "#;
-    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let (handles, state) =
+        mk_multi_file_state(&[("main", code), ("pytest", "")], Require::Exports, true);
     let handle = handles.get("main").unwrap();
     let report = get_unused_variable_diagnostics(&state, handle);
     assert_eq!(report, "Variable `unused_var` is unused");
+}
+
+#[test]
+fn test_tracebackhide_reported_as_unused_without_pytest_import() {
+    let code = r#"
+def helper() -> None:
+    __tracebackhide__ = True
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "Variable `__tracebackhide__` is unused");
 }
 
 #[test]

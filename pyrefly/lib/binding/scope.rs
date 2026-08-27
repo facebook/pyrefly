@@ -1995,8 +1995,7 @@ impl Scopes {
         variables
             .into_iter()
             .filter_map(|(name, usage)| {
-                // Pytest reads this local implicitly when formatting tracebacks.
-                if usage.used || name.as_str() == "__tracebackhide__" {
+                if usage.used {
                     None
                 } else {
                     Some(UnusedVariable {

@@ -306,6 +306,7 @@ pub struct BindingsBuilder<'a> {
     semantic_checker: SemanticSyntaxChecker,
     semantic_syntax_errors: RefCell<Vec<SemanticSyntaxError>>,
     pytest_info: Option<crate::binding::pytest::PytestBindingInfo>,
+    has_pytest_import: bool,
     /// BoundName lookups deferred until after AST traversal
     deferred_bound_names: Vec<DeferredBoundName>,
     /// Yield and yield-from indices for lambdas that contain yields.
@@ -634,6 +635,19 @@ impl Bindings {
         infer_return_types: InferReturnTypes,
         treat_all_caps_as_final: bool,
     ) -> Self {
+        let has_pytest_import = x.body.iter().any(|stmt| match stmt {
+            Stmt::Import(import_stmt) => import_stmt
+                .names
+                .iter()
+                .any(|alias| alias.name.id == "pytest" || alias.name.id.starts_with("pytest.")),
+            Stmt::ImportFrom(import_stmt) => {
+                import_stmt.level == 0
+                    && import_stmt.module.as_ref().is_some_and(|module| {
+                        module.id == "pytest" || module.id.starts_with("pytest.")
+                    })
+            }
+            _ => false,
+        });
         let pytest_info = PytestBindingInfo::from_module(&x);
         // Compute module ranges from the AST before consuming it. These are
         // needed later for error collection, which runs after the AST may
@@ -663,6 +677,7 @@ impl Bindings {
             semantic_checker: SemanticSyntaxChecker::new(),
             semantic_syntax_errors: RefCell::new(Vec::new()),
             pytest_info,
+            has_pytest_import,
             deferred_bound_names: Vec::new(),
             lambda_yield_keys: Vec::new(),
             next_lambda_param_id: 0,
@@ -1049,7 +1064,10 @@ impl<'a> BindingsBuilder<'a> {
         self.unused_imports.extend(unused);
     }
 
-    pub fn record_unused_variables(&mut self, unused: Vec<UnusedVariable>) {
+    pub fn record_unused_variables(&mut self, mut unused: Vec<UnusedVariable>) {
+        if self.has_pytest_import {
+            unused.retain(|unused| unused.name.as_str() != "__tracebackhide__");
+        }
         self.unused_variables.extend(unused);
     }
 
