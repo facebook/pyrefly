@@ -15,17 +15,17 @@ use pyrefly_types::function::FunctionKind;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_types::type_level_dsl::ResolvedTypeShapeDslFunction;
+use pyrefly_types::type_level_dsl::StructurallyValidatedTypeShapeDslFunction;
 use pyrefly_types::type_level_dsl::TypeLevelDslCall;
+use pyrefly_types::type_level_dsl::TypeShapeDslComparisonOp;
 use pyrefly_types::type_level_dsl::TypeShapeDslConditionKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslExpressionKind;
-use pyrefly_types::type_level_dsl::TypeShapeDslFlagIntComparisonOp;
 use pyrefly_types::type_level_dsl::TypeShapeDslFlagValueKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslInputDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslIntrinsic;
 use pyrefly_types::type_level_dsl::TypeShapeDslProgramError;
 use pyrefly_types::type_level_dsl::TypeShapeDslReturnKind;
-use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_types::type_var::FlagDomain;
 use pyrefly_types::type_var::FlagMember;
 use pyrefly_types::type_var::Restriction;
@@ -133,7 +133,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn resolve_type_shape_dsl_function(
         &self,
         func_id: &Arc<FuncDefId>,
-        definition: Arc<ValidatedTypeShapeDslFunction>,
+        definition: Arc<StructurallyValidatedTypeShapeDslFunction>,
         parameter_domains: Vec<TypeShapeDslInputDomain>,
         result_domain: TypeShapeDslDomain,
         function_range: TextRange,
@@ -324,16 +324,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     ) {
                         Some(TypeShapeDslSlotComparisonDomain::Dimension) => (!matches!(
                             op,
-                            TypeShapeDslFlagIntComparisonOp::Equal
-                                | TypeShapeDslFlagIntComparisonOp::NotEqual
-                                | TypeShapeDslFlagIntComparisonOp::LessThan
+                            TypeShapeDslComparisonOp::Equal
+                                | TypeShapeDslComparisonOp::NotEqual
+                                | TypeShapeDslComparisonOp::LessThan
                         ))
                         .then_some("`@type_shape_dsl_function` `Int` comparisons support only `==`, `!=`, and `<`"),
                         Some(TypeShapeDslSlotComparisonDomain::FlagInt) => None,
                         Some(TypeShapeDslSlotComparisonDomain::FlagString) => (!matches!(
                             op,
-                            TypeShapeDslFlagIntComparisonOp::Equal
-                                | TypeShapeDslFlagIntComparisonOp::NotEqual
+                            TypeShapeDslComparisonOp::Equal
+                                | TypeShapeDslComparisonOp::NotEqual
                         ))
                         .then_some("`@type_shape_dsl_function` Flag string comparisons support only `==` and `!=`"),
                         None => Some("`@type_shape_dsl_function` comparison operands must both be annotated as `Int` or both be `Flag[int]`; string equality also accepts compatible Flag string values"),
@@ -657,30 +657,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         );
                         valid_body = false;
                     }
-                    TypeShapeDslReturnKind::IntTupleExpression
-                        if result != TypeShapeDslDomain::IntTuple =>
-                    {
-                        self.error(
-                            errors,
-                            return_.range(),
-                            ErrorKind::InvalidArgument,
-                            "`@type_shape_dsl_function` returned shape expression requires an `IntTuple` result"
-                                .to_owned(),
-                        );
-                        valid_body = false;
-                    }
-                    TypeShapeDslReturnKind::IntTupleProduct
-                        if result != TypeShapeDslDomain::Int =>
-                    {
-                        self.error(
-                            errors,
-                            return_.range(),
-                            ErrorKind::InvalidArgument,
-                            "`@type_shape_dsl_function` returned `IntTuple` product requires an `Int` result"
-                                .to_owned(),
-                        );
-                        valid_body = false;
-                    }
                     TypeShapeDslReturnKind::Expression(domain) if *domain != result => {
                         self.error(
                             errors,
@@ -697,8 +673,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslReturnKind::Local { .. }
                     | TypeShapeDslReturnKind::AliasedParameter { .. }
                     | TypeShapeDslReturnKind::Broadcast { .. }
-                    | TypeShapeDslReturnKind::IntTupleExpression
-                    | TypeShapeDslReturnKind::IntTupleProduct
                     | TypeShapeDslReturnKind::Expression(_)
                     | TypeShapeDslReturnKind::Invalid
                     | TypeShapeDslReturnKind::HelperCall(_)

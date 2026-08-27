@@ -8040,7 +8040,7 @@ def wrong_element_domain(shape: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def wrong_result(dim: Int) -> Int:
-    return dsl.IntTuple((dim,))  # E: returned shape expression requires an `IntTuple` result  # E: Returned type
+    return dsl.IntTuple((dim,))  # E: returned expression requires a result in the `IntTuple` domain  # E: Returned type
 
 @type_shape_dsl_function
 def invalid_message(shape: IntTuple, message: str) -> IntTuple:
@@ -9741,7 +9741,7 @@ def wrong_operand(left: Int, right: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def wrong_result(left: IntTuple, right: IntTuple) -> Int:
-    return dsl.concat(left, right)  # E: returned shape expression requires an `IntTuple` result  # E: Returned type
+    return dsl.concat(left, right)  # E: returned expression requires a result in the `IntTuple` domain  # E: Returned type
 
 @type_shape_dsl_function
 def incompatible_local_return(shape: IntTuple, dimension: Int, choose_shape: bool) -> IntTuple:
@@ -9955,7 +9955,7 @@ def wrong_domain(dimension: Int) -> Int:
 
 @type_shape_dsl_function
 def wrong_result(shape: IntTuple) -> IntTuple:
-    return official_prod(shape)  # E: returned `IntTuple` product requires an `Int` result  # E: Returned type
+    return official_prod(shape)  # E: returned expression requires a result in the `Int` domain  # E: Returned type
 
 def ordinary_prod(shape: IntTuple) -> Int: ...
 

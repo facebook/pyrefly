@@ -256,7 +256,7 @@ impl ResolvedTypeShapeDslNodeId {
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 struct ResolvedTypeShapeDslNode {
     id: Arc<FuncDefId>,
-    definition: Arc<ValidatedTypeShapeDslFunction>,
+    definition: Arc<StructurallyValidatedTypeShapeDslFunction>,
     parameter_domains: Vec<TypeShapeDslInputDomain>,
     result_domain: TypeShapeDslDomain,
     /// Targets correspond positionally to `definition.helper_calls`.
@@ -332,7 +332,7 @@ impl ResolvedTypeShapeDslFunction {
     /// and on parameter lowering mapping unsupported runtime values to `DslValue::Unknown`.
     pub fn try_new(
         id: Arc<FuncDefId>,
-        definition: Arc<ValidatedTypeShapeDslFunction>,
+        definition: Arc<StructurallyValidatedTypeShapeDslFunction>,
         parameter_domains: Vec<TypeShapeDslInputDomain>,
         result_domain: TypeShapeDslDomain,
         helpers: Vec<(Arc<FuncDefId>, Arc<Self>)>,
@@ -759,14 +759,15 @@ pub struct ParsedTypeShapeDslFunction {
     definition: Arc<StmtFunctionDef>,
 }
 
-/// An owned function AST whose restricted declaration syntax and body have been validated.
+/// An owned function AST whose restricted declaration syntax and body have been structurally
+/// validated.
 /// Future evaluation may interpret the definition relying on these invariants.
 ///
 /// Identity is derived from the parsed program's pointer identity plus the resolved metadata. The
 /// latter is required because resolving an intrinsic depends on imports outside this AST, so an
 /// unedited declaration whose gradual constructor now resolves to a different domain is unequal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ValidatedTypeShapeDslFunction {
+pub struct StructurallyValidatedTypeShapeDslFunction {
     parsed: ParsedTypeShapeDslFunction,
     // These source-keyed facts are validation invariants for the retained AST, not a body IR.
     returns: SourceRangeTable<TypeShapeDslReturn>,
@@ -857,8 +858,9 @@ impl SourceRangeKey for TypeShapeDslAssignment {
     }
 }
 
-/// The validated source of a type-level shape DSL function's return value. Resolving this depends
-/// on more than the AST, so it participates in `ValidatedTypeShapeDslFunction` identity.
+/// The structurally validated source of a type-level shape DSL function's return value.
+/// Resolving this depends on more than the AST, so it participates in
+/// `StructurallyValidatedTypeShapeDslFunction` identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslReturnKind {
     /// Return the parameter at the given zero-based position.
@@ -879,11 +881,7 @@ pub enum TypeShapeDslReturnKind {
         left_parameters: Box<[usize]>,
         right_parameters: Box<[usize]>,
     },
-    /// Evaluate a validated `IntTuple` expression from the retained AST.
-    IntTupleExpression,
-    /// Evaluate a validated `IntTuple` product from the retained AST.
-    IntTupleProduct,
-    /// Evaluate another validated expression in the declared result domain.
+    /// Evaluate a structurally validated expression in the required result domain.
     Expression(TypeShapeDslDomain),
     /// Return an invalid shape computation with a source-provided message.
     Invalid,
@@ -893,7 +891,7 @@ pub enum TypeShapeDslReturnKind {
     HelperCall(usize),
 }
 
-/// The arithmetic a validated dimension or Flag expression applies. Reached through
+/// The arithmetic a structurally validated dimension or Flag expression applies. Reached through
 /// `TypeShapeDslReturnKind` and `TypeShapeDslExpressionKind`, so it shares their identity
 /// requirements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -905,10 +903,10 @@ pub enum TypeShapeDslArithmeticOp {
     Modulo,
 }
 
-/// The comparison a validated Flag condition applies. `CmpOp` has no total order, so the DSL
-/// records its own closed operator set, which also keeps the evaluator's match exhaustive.
+/// The comparison a structurally validated DSL condition applies. `CmpOp` has no total order, so
+/// the DSL records its own closed operator set and keeps evaluator matching exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TypeShapeDslFlagIntComparisonOp {
+pub enum TypeShapeDslComparisonOp {
     Equal,
     NotEqual,
     LessThan,
@@ -917,7 +915,7 @@ pub enum TypeShapeDslFlagIntComparisonOp {
     GreaterThanOrEqual,
 }
 
-impl TypeShapeDslFlagIntComparisonOp {
+impl TypeShapeDslComparisonOp {
     fn from_cmp_op(op: CmpOp) -> Option<Self> {
         match op {
             CmpOp::Eq => Some(Self::Equal),
@@ -960,8 +958,9 @@ pub enum TypeShapeDslIntrinsic {
     Zip,
 }
 
-/// What a validated DSL value expression computes. Like `TypeShapeDslReturnKind` this depends on
-/// intrinsic resolution, so it participates in `ValidatedTypeShapeDslFunction` identity.
+/// What a structurally validated DSL value expression computes. Like `TypeShapeDslReturnKind`,
+/// this depends on intrinsic resolution, so it participates in
+/// `StructurallyValidatedTypeShapeDslFunction` identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslExpressionKind {
     IntTupleSlot {
@@ -1045,8 +1044,9 @@ pub enum TypeShapeDslFlagValueKind {
     Sequence,
 }
 
-/// What a validated DSL condition tests. Like `TypeShapeDslReturnKind` this depends on intrinsic
-/// resolution, so it participates in `ValidatedTypeShapeDslFunction` identity.
+/// What a structurally validated DSL condition tests. Like `TypeShapeDslReturnKind`, this depends
+/// on intrinsic resolution, so it participates in `StructurallyValidatedTypeShapeDslFunction`
+/// identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslConditionKind {
     Any {
@@ -1057,12 +1057,12 @@ pub enum TypeShapeDslConditionKind {
         right: usize,
         left_parameters: Option<Box<[usize]>>,
         right_parameters: Option<Box<[usize]>>,
-        op: TypeShapeDslFlagIntComparisonOp,
+        op: TypeShapeDslComparisonOp,
     },
     DimensionEquality {
         negated: bool,
     },
-    GeneratorElementSelfCompare(TypeShapeDslFlagIntComparisonOp),
+    GeneratorElementSelfCompare(TypeShapeDslComparisonOp),
     IsConcreteInt {
         slot: usize,
         parameter_origins: Option<Box<[usize]>>,
@@ -1075,7 +1075,7 @@ pub enum TypeShapeDslConditionKind {
         slot: usize,
         parameter_origins: Option<Box<[usize]>>,
     },
-    FlagIntCompare(TypeShapeDslFlagIntComparisonOp),
+    FlagIntCompare(TypeShapeDslComparisonOp),
     BoolSlot {
         slot: usize,
         parameter_origins: Option<Box<[usize]>>,
@@ -1388,6 +1388,9 @@ struct DeferredInteger {
     validated: bool,
 }
 
+// TODO(stroxler): Isolate deferred integer union-find state and AST revalidation behind a
+// dedicated abstraction. They remain on `DslValidator` while evaluation consumes the retained AST;
+// compiling to a typed IR should remove the need to revisit expressions after resolving domains.
 struct DslValidator<'a, F> {
     parameters: &'a Parameters,
     intrinsic: &'a F,
@@ -3144,7 +3147,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             });
             return Ok((flow.clone(), flow.clone()));
         }
-        let Some(comparison_op) = TypeShapeDslFlagIntComparisonOp::from_cmp_op(op) else {
+        let Some(comparison_op) = TypeShapeDslComparisonOp::from_cmp_op(op) else {
             return Err(TypeShapeDslDefinitionError {
                 range: compare.range,
                 message: "comparison operator is not supported",
@@ -3391,7 +3394,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 }
                 Some(TypeShapeDslIntrinsic::IntTuple | TypeShapeDslIntrinsic::Concat) => {
                     self.validate_int_tuple_expression(returned, flow)?;
-                    TypeShapeDslReturnKind::IntTupleExpression
+                    TypeShapeDslReturnKind::Expression(TypeShapeDslDomain::IntTuple)
                 }
                 Some(TypeShapeDslIntrinsic::Prod) => {
                     self.validate_int_tuple_product(call, flow)?;
@@ -3399,7 +3402,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         range: call.range(),
                         kind: TypeShapeDslExpressionKind::IntTupleProduct,
                     });
-                    TypeShapeDslReturnKind::IntTupleProduct
+                    TypeShapeDslReturnKind::Expression(TypeShapeDslDomain::Int)
                 }
                 Some(TypeShapeDslIntrinsic::Invalid) => {
                     if call.arguments.args.len() != 1
@@ -3516,7 +3519,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 if matches!(subscript.slice.as_ref(), Expr::Slice(_)) =>
             {
                 self.validate_int_tuple_expression(returned, flow)?;
-                TypeShapeDslReturnKind::IntTupleExpression
+                TypeShapeDslReturnKind::Expression(TypeShapeDslDomain::IntTuple)
             }
             Some(Expr::BinOp(_)) => {
                 self.validate_dimension(
@@ -3731,13 +3734,13 @@ impl TypeEqTrait for ParsedTypeShapeDslFunction {
 // type nodes that derive `Ord`; it must not be used for stable output. The metadata tables order
 // themselves canonically and `helper_calls` is ordered by its offsets because `TextRange` has no
 // total order, so this stays consistent with the derived `Eq` above.
-impl PartialOrd for ValidatedTypeShapeDslFunction {
+impl PartialOrd for StructurallyValidatedTypeShapeDslFunction {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for ValidatedTypeShapeDslFunction {
+impl Ord for StructurallyValidatedTypeShapeDslFunction {
     fn cmp(&self, other: &Self) -> Ordering {
         fn offsets(range: TextRange) -> (TextSize, TextSize) {
             (range.start(), range.end())
@@ -3793,27 +3796,27 @@ impl Ord for ValidatedTypeShapeDslFunction {
     }
 }
 
-impl Visit<Type> for ValidatedTypeShapeDslFunction {
+impl Visit<Type> for StructurallyValidatedTypeShapeDslFunction {
     const RECURSE_CONTAINS: bool = false;
     fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
 
-impl VisitMut<Type> for ValidatedTypeShapeDslFunction {
+impl VisitMut<Type> for StructurallyValidatedTypeShapeDslFunction {
     const RECURSE_CONTAINS: bool = false;
     fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
 }
 
-impl Visit<Type> for Arc<ValidatedTypeShapeDslFunction> {
+impl Visit<Type> for Arc<StructurallyValidatedTypeShapeDslFunction> {
     const RECURSE_CONTAINS: bool = false;
     fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
 
-impl VisitMut<Type> for Arc<ValidatedTypeShapeDslFunction> {
+impl VisitMut<Type> for Arc<StructurallyValidatedTypeShapeDslFunction> {
     const RECURSE_CONTAINS: bool = false;
     fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
 }
 
-impl TypeEqTrait for ValidatedTypeShapeDslFunction {
+impl TypeEqTrait for StructurallyValidatedTypeShapeDslFunction {
     fn type_eq(&self, other: &Self, _ctx: &mut TypeEqCtx) -> bool {
         self == other
     }
@@ -3893,7 +3896,7 @@ impl ParsedTypeShapeDslFunction {
     pub fn validate(
         &self,
         intrinsic: impl Fn(&Expr) -> Option<TypeShapeDslIntrinsic>,
-    ) -> Result<ValidatedTypeShapeDslFunction, TypeShapeDslDefinitionError> {
+    ) -> Result<StructurallyValidatedTypeShapeDslFunction, TypeShapeDslDefinitionError> {
         let parameters = &self.definition.parameters;
         // `DslValidator::intrinsic` suppresses resolution for any name bound by a slot, which
         // seeds with every parameter, so shadowing needs no separate check here.
@@ -3921,7 +3924,7 @@ impl ParsedTypeShapeDslFunction {
             ..
         } = validator;
         let slot_count = declared_local_kinds.len();
-        Ok(ValidatedTypeShapeDslFunction {
+        Ok(StructurallyValidatedTypeShapeDslFunction {
             parsed: self.clone(),
             returns: SourceRangeTable::new("return", returns),
             conditions: SourceRangeTable::new("condition", conditions),
@@ -3974,7 +3977,7 @@ impl ParsedTypeShapeDslFunction {
     }
 }
 
-impl ValidatedTypeShapeDslFunction {
+impl StructurallyValidatedTypeShapeDslFunction {
     pub fn name(&self) -> &Name {
         self.parsed.name()
     }
@@ -4238,9 +4241,7 @@ impl ResolvedTypeShapeDslProgram {
                             environment.value(left_slot),
                             environment.value(right_slot),
                         ),
-                        TypeShapeDslReturnKind::IntTupleExpression
-                        | TypeShapeDslReturnKind::IntTupleProduct
-                        | TypeShapeDslReturnKind::Expression(_) => {
+                        TypeShapeDslReturnKind::Expression(_) => {
                             let expression = return_stmt
                                 .value
                                 .as_deref()
@@ -4358,7 +4359,7 @@ impl ResolvedTypeShapeDslProgram {
     }
 }
 
-impl ValidatedTypeShapeDslFunction {
+impl StructurallyValidatedTypeShapeDslFunction {
     fn expression_kind(&self, expression: &Expr) -> TypeShapeDslExpressionKind {
         self.expressions
             .get(expression.range())
@@ -5177,25 +5178,21 @@ impl ValidatedTypeShapeDslFunction {
         }
     }
 
-    fn compare_dimensions(
-        left: &Int,
-        right: &Int,
-        op: TypeShapeDslFlagIntComparisonOp,
-    ) -> DslCondition {
+    fn compare_dimensions(left: &Int, right: &Int, op: TypeShapeDslComparisonOp) -> DslCondition {
         match op {
-            TypeShapeDslFlagIntComparisonOp::Equal => Self::dimension_equality(left, right),
-            TypeShapeDslFlagIntComparisonOp::NotEqual => {
+            TypeShapeDslComparisonOp::Equal => Self::dimension_equality(left, right),
+            TypeShapeDslComparisonOp::NotEqual => {
                 Self::negate_condition(Self::dimension_equality(left, right))
             }
-            TypeShapeDslFlagIntComparisonOp::LessThan => match (left, right) {
+            TypeShapeDslComparisonOp::LessThan => match (left, right) {
                 (left, right) if left == right && !matches!(left, Int::Int) => DslCondition::False,
                 (Int::Literal(left), Int::Literal(right)) if left < right => DslCondition::True,
                 (Int::Literal(_), Int::Literal(_)) => DslCondition::False,
                 _ => DslCondition::Unknown,
             },
-            TypeShapeDslFlagIntComparisonOp::LessThanOrEqual
-            | TypeShapeDslFlagIntComparisonOp::GreaterThan
-            | TypeShapeDslFlagIntComparisonOp::GreaterThanOrEqual => {
+            TypeShapeDslComparisonOp::LessThanOrEqual
+            | TypeShapeDslComparisonOp::GreaterThan
+            | TypeShapeDslComparisonOp::GreaterThanOrEqual => {
                 unreachable!("validated Int comparison uses only `==`, `!=`, or `<`")
             }
         }
@@ -5443,12 +5440,12 @@ impl ValidatedTypeShapeDslFunction {
             } => {
                 let equality_condition = |equal: bool| {
                     let result = match op {
-                        TypeShapeDslFlagIntComparisonOp::Equal => equal,
-                        TypeShapeDslFlagIntComparisonOp::NotEqual => !equal,
-                        TypeShapeDslFlagIntComparisonOp::LessThan
-                        | TypeShapeDslFlagIntComparisonOp::LessThanOrEqual
-                        | TypeShapeDslFlagIntComparisonOp::GreaterThan
-                        | TypeShapeDslFlagIntComparisonOp::GreaterThanOrEqual => {
+                        TypeShapeDslComparisonOp::Equal => equal,
+                        TypeShapeDslComparisonOp::NotEqual => !equal,
+                        TypeShapeDslComparisonOp::LessThan
+                        | TypeShapeDslComparisonOp::LessThanOrEqual
+                        | TypeShapeDslComparisonOp::GreaterThan
+                        | TypeShapeDslComparisonOp::GreaterThanOrEqual => {
                             unreachable!("validated Flag string comparisons use equality operators")
                         }
                     };
@@ -5460,12 +5457,12 @@ impl ValidatedTypeShapeDslFunction {
                 };
                 if left == right {
                     match op {
-                        TypeShapeDslFlagIntComparisonOp::Equal
-                        | TypeShapeDslFlagIntComparisonOp::LessThanOrEqual
-                        | TypeShapeDslFlagIntComparisonOp::GreaterThanOrEqual => DslCondition::True,
-                        TypeShapeDslFlagIntComparisonOp::NotEqual
-                        | TypeShapeDslFlagIntComparisonOp::LessThan
-                        | TypeShapeDslFlagIntComparisonOp::GreaterThan => DslCondition::False,
+                        TypeShapeDslComparisonOp::Equal
+                        | TypeShapeDslComparisonOp::LessThanOrEqual
+                        | TypeShapeDslComparisonOp::GreaterThanOrEqual => DslCondition::True,
+                        TypeShapeDslComparisonOp::NotEqual
+                        | TypeShapeDslComparisonOp::LessThan
+                        | TypeShapeDslComparisonOp::GreaterThan => DslCondition::False,
                     }
                 } else {
                     match (environment.value(left), environment.value(right)) {
@@ -5495,12 +5492,12 @@ impl ValidatedTypeShapeDslFunction {
                 }
             }
             TypeShapeDslConditionKind::GeneratorElementSelfCompare(op) => match op {
-                TypeShapeDslFlagIntComparisonOp::Equal
-                | TypeShapeDslFlagIntComparisonOp::LessThanOrEqual
-                | TypeShapeDslFlagIntComparisonOp::GreaterThanOrEqual => DslCondition::True,
-                TypeShapeDslFlagIntComparisonOp::NotEqual
-                | TypeShapeDslFlagIntComparisonOp::LessThan
-                | TypeShapeDslFlagIntComparisonOp::GreaterThan => DslCondition::False,
+                TypeShapeDslComparisonOp::Equal
+                | TypeShapeDslComparisonOp::LessThanOrEqual
+                | TypeShapeDslComparisonOp::GreaterThanOrEqual => DslCondition::True,
+                TypeShapeDslComparisonOp::NotEqual
+                | TypeShapeDslComparisonOp::LessThan
+                | TypeShapeDslComparisonOp::GreaterThan => DslCondition::False,
             },
             TypeShapeDslConditionKind::LengthEqualLiteral { slot, literal } => {
                 if literal < 0 {
