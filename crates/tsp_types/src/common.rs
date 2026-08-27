@@ -10,6 +10,7 @@
 use lsp_server::ErrorCode;
 use lsp_server::Request;
 use lsp_server::ResponseError;
+use lsp_server::ResponseKind;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -97,12 +98,13 @@ pub fn error_response(
 ) -> lsp_server::Response {
     lsp_server::Response {
         id,
-        result: None,
-        error: Some(ResponseError {
-            code,
-            message,
-            data: None,
-        }),
+        response_kind: ResponseKind::Err {
+            error: ResponseError {
+                code,
+                message,
+                data: None,
+            },
+        },
     }
 }
 
