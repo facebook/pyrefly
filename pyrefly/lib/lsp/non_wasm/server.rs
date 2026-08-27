@@ -4797,17 +4797,17 @@ impl Server {
                 actions.push(action);
             }
             record_code_action_telemetry("move_symbol_new_file", start);
+            let start = Instant::now();
+            if let Some(action) = safe_delete_file_code_action(
+                &self.initialize_params.capabilities,
+                &self.state,
+                transaction,
+                uri,
+            ) {
+                actions.push(action);
+            }
+            record_code_action_telemetry("safe_delete_file", start);
         }
-        let start = Instant::now();
-        if let Some(action) = safe_delete_file_code_action(
-            &self.initialize_params.capabilities,
-            &self.state,
-            transaction,
-            uri,
-        ) {
-            actions.push(action);
-        }
-        record_code_action_telemetry("safe_delete_file", start);
         Ok((!actions.is_empty()).then_some(actions))
     }
 
