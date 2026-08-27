@@ -59,8 +59,8 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
+use crate::alt::answers::AnswerBox;
 use crate::alt::answers::AnswerEntry;
-use crate::alt::answers::AnswerSlot;
 use crate::alt::answers::AnswerTable;
 use crate::alt::answers::Answers;
 use crate::alt::answers::AnyAnswer;
@@ -357,7 +357,7 @@ impl AnswerScope {
 
     fn hold_temporary<'answer, K: Keyed>(
         &'answer self,
-        answer: Arc<K::Answer>,
+        answer: AnswerBox<K::Answer>,
     ) -> &'answer K::Answer {
         self.hold_erased(AnyAnswer::new::<K>(answer))
             .downcast_ref::<K::Answer>()
@@ -1641,13 +1641,13 @@ impl Scc {
     /// Returns the canonical answer. If the node was already Done, returns the
     /// pre-existing answer without overwriting. Otherwise, stores and returns
     /// the provided answer.
-    fn on_calculation_finished(
-        &mut self,
+    fn on_calculation_finished<'a>(
+        &'a mut self,
         current: &CalcId,
         answer: AnyAnswer,
         errors: Option<Arc<ErrorCollector>>,
         traces: Option<TraceSideEffects>,
-    ) -> GenerationAnswer {
+    ) -> GenerationAnswer<'a> {
         let state = self
             .node_state
             .get_mut(current)
@@ -1672,12 +1672,12 @@ impl Scc {
     /// records is borrowed from its generation; a node that does not
     /// participate in this SCC keeps the caller's own, handed back as an `Err`
     /// because it has no generation to borrow from.
-    fn on_placeholder_recorded(
-        &mut self,
+    fn on_placeholder_recorded<'a>(
+        &'a mut self,
         current: &CalcId,
         var: Var,
         answer: AnyAnswer,
-    ) -> Result<GenerationAnswer<'_>, AnyAnswer> {
+    ) -> Result<GenerationAnswer<'a>, AnyAnswer> {
         let Some(state) = self.node_state.get_mut(current) else {
             return Err(answer);
         };
@@ -2535,17 +2535,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // triggering cycle detection against the NameAssign's CalcStack frame.
         let binding = self.bindings().get(idx);
         if let Some(answer) = K::check_shortcut(self, binding) {
-            return (self.answer_scope.hold_temporary::<K>(answer), false);
+            return (
+                self.answer_scope
+                    .hold_temporary::<K>(AnswerBox::new(answer)),
+                false,
+            );
         }
-
-        let slot = self.get_answer_slot(idx);
 
         // Fast path: if the value is already calculated, return it immediately
         // without constructing a CalcId or touching the CalcStack. This avoids
         // the CalcId Arc increment, position_of hash map insert/remove, RefCell
         // borrows, and SCC checks for the common case of re-reading an already-
         // solved binding.
-        if let Some(v) = slot.get() {
+        if let Some(v) = self.current().get_idx(idx) {
             return (v, true);
         }
 
@@ -2555,16 +2557,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let borrowed = if let Some(config) = self.recursion_limit_config()
             && self.stack().len() > config.limit as usize
         {
-            self.handle_depth_overflow(&current, idx, slot, config)
+            self.handle_depth_overflow(&current, idx, config)
         } else {
             let frame = self.stack().push(self.answer_scope, &current);
             let borrowed = match frame.action() {
-                BindingAction::Calculate => self.calculate_and_record_answer(&current, idx, slot),
+                BindingAction::Calculate => self.calculate_and_record_answer(&current, idx),
                 BindingAction::SccLocalAnswer(type_erased) => type_erased
                     .downcast_ref::<K::Answer>()
                     .expect("SccLocalAnswer downcast failed: type mismatch"),
                 BindingAction::NeedsColdPlaceholder => {
-                    self.attempt_to_unwind_cycle_from_here(&current, idx, slot)
+                    self.attempt_to_unwind_cycle_from_here(&current, idx)
                 }
             };
             if let Some(scc) = frame.finish() {
@@ -2584,7 +2586,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         //
         // Reaching this read without a published answer is also what proves that
         // `borrowed` is held by the `AnswerScope` rather than by the slot.
-        match slot.get() {
+        match self.current().get_idx(idx) {
             Some(answer) => (answer, true),
             None => (borrowed, false),
         }
@@ -2622,7 +2624,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         current: &CalcId,
         idx: Idx<K>,
-        slot: &'answer AnswerSlot<K::Answer>,
     ) -> &'answer K::Answer
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -2681,10 +2682,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 raw_answer
             };
             self.sanitize_answer_vars::<K>(&answer, range, &local_errors);
-            let answer = Arc::new(self.force_exported_answer::<K>(answer));
+            let answer = self.force_exported_answer::<K>(answer);
             // Also store in SccNodeState::Done for SCC-local isolation (the SCC
             // uses these answers via SccLocalAnswer without touching shared slots).
-            let answer_erased = AnyAnswer::new::<K>(answer);
+            let answer_erased = AnyAnswer::new::<K>(AnswerBox::new(answer));
             let canonical_erased = self.stack().on_calculation_finished(
                 self.answer_scope,
                 current,
@@ -2705,11 +2706,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 SolveResult::Answer(raw_answer) => {
                     self.sanitize_answer_vars::<K>(&raw_answer, range, &local_errors);
                     let raw_answer = self.force_exported_answer::<K>(raw_answer);
-                    slot.record(Arc::new(raw_answer))
+                    self.current().record(idx, AnswerBox::new(raw_answer))
                 }
                 // The target was sanitized and forced when it was recorded, so
                 // sharing its answer needs neither step repeated.
-                SolveResult::Alias(target) => slot.record_alias(self.get_answer_slot(target)),
+                SolveResult::Alias(target) => self.current().record_alias(idx, target),
             };
             if did_write {
                 self.base_errors.extend(local_errors);
@@ -2822,7 +2823,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // invariant that all iterative answers are deep-forced.
                 let mut forced = prior_answer.clone();
                 forced.visit_mut(&mut |x| self.current.solver().force_mut(x));
-                let answer = Arc::new(forced);
+                let answer = AnswerBox::new(forced);
 
                 let answer_erased = AnyAnswer::new::<Key>(answer);
 
@@ -2908,10 +2909,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // answers can appear different due to unresolved Var IDs.
         let mut forced = answer;
         forced.visit_mut(&mut |x| self.current.solver().force_mut(x));
-        let answer = Arc::new(forced);
 
-        // Type-erase the answer for storage in iteration state.
-        let answer_erased = AnyAnswer::new::<K>(answer);
+        let answer_erased = AnyAnswer::new::<K>(AnswerBox::new(forced));
 
         // Compare to the previous iteration's answer (if any) to detect
         // convergence. If the answer has changed, the fixpoint has not yet
@@ -2986,8 +2985,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     {
         let answer = answer
             .downcast::<K::Answer>()
-            .expect("reserve_same_module: type mismatch in batch commit");
-        self.get_answer_slot(idx).reserve(answer)
+            .unwrap_or_else(|_| panic!("reserve_same_module: type mismatch in batch commit"));
+        self.current().reserve(idx, answer)
     }
 
     /// Publish a result slot previously reserved by this SCC.
@@ -3006,6 +3005,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// # Safety
+    ///
+    /// The caller must own the reservation for `idx`'s slot, which a
+    /// `&mut ReservedSlot` proves.
     unsafe fn publish_reserved_same_module<K: Solve<Ans>>(
         &self,
         idx: Idx<K>,
@@ -3025,8 +3028,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.current().merge_trace_side_effects(traces);
         }
         // SAFETY: The caller derives `idx` from its exclusive `&mut ReservedSlot`,
-        // which proves ownership of this pending reservation.
-        unsafe { self.get_answer_slot(idx).publish_reserved() }
+        // which proves ownership of the reservation.
+        unsafe { self.current().publish_reserved(idx) }
     }
 
     /// Roll back a reservation if it is still pending.
@@ -3048,6 +3051,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// # Safety
+    ///
+    /// The caller must own the reservation for `idx`'s slot, which a
+    /// `&mut ReservedSlot` proves.
     unsafe fn rollback_reserved_if_pending_same_module<K: Solve<Ans>>(&self, idx: Idx<K>) -> bool
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -3055,8 +3062,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         // SAFETY: The caller derives `idx` from its exclusive `&mut ReservedSlot`,
-        // which proves ownership of this pending reservation.
-        unsafe { self.get_answer_slot(idx).rollback_reserved_if_pending() }
+        // which proves ownership of the reservation.
+        unsafe { self.current().rollback_reserved_if_pending(idx) }
     }
 
     /// Commit final answers from an iteratively-solved SCC
@@ -3361,23 +3368,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         current: &CalcId,
         idx: Idx<K>,
-        slot: &'answer AnswerSlot<K::Answer>,
     ) -> &'answer K::Answer
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         // Check if another thread already committed a final answer.
-        if let Some(answer) = slot.get() {
+        if let Some(answer) = self.current().get_idx(idx) {
             return answer;
         }
         // Create a recursive placeholder and store it only in SCC-local state.
         let binding = self.bindings().get(idx);
         let rec = K::create_recursive(self, binding);
-        let answer = Arc::new(K::promote_recursive(self.heap, rec));
-        let answer_erased = AnyAnswer::new::<K>(answer);
+        let answer = AnswerBox::new(K::promote_recursive(self.heap, rec));
         self.stack()
-            .set_iteration_placeholder(self.answer_scope, current, rec, answer_erased)
+            .set_iteration_placeholder(self.answer_scope, current, rec, AnyAnswer::new::<K>(answer))
             .downcast_ref::<K::Answer>()
             .expect("placeholder answer type must match its binding key")
     }
@@ -3387,16 +3393,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         current: &CalcId,
         idx: Idx<K>,
-        slot: &'answer AnswerSlot<K::Answer>,
         config: RecursionLimitConfig,
     ) -> &'answer K::Answer
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         match config.handler {
             RecursionOverflowHandler::BreakWithPlaceholder => {
-                self.handle_depth_overflow_break_with_placeholder(current, idx, slot, config.limit)
+                self.handle_depth_overflow_break_with_placeholder(current, idx, config.limit)
             }
             RecursionOverflowHandler::PanicWithDebugInfo => {
                 self.handle_depth_overflow_panic_with_debug_info(idx, config.limit)
@@ -3409,12 +3415,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         current: &CalcId,
         idx: Idx<K>,
-        slot: &'answer AnswerSlot<K::Answer>,
         limit: u32,
     ) -> &'answer K::Answer
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
         let range = K::range_with(idx, self.bindings());
         self.base_errors
@@ -3427,8 +3433,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 ),
             )
             .emit();
-        // Return recursive placeholder (same pattern as cycle handling)
-        self.attempt_to_unwind_cycle_from_here(current, idx, slot)
+        // Break the recursion the same way a cycle does, so that a node already
+        // participating in an SCC records its placeholder there rather than
+        // receiving a second one that the SCC does not know about.
+        self.attempt_to_unwind_cycle_from_here(current, idx)
     }
 
     /// PanicWithDebugInfo handler: dump debug info to stderr and panic.
@@ -3971,7 +3979,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     /// Type-specialized answer comparison. Downcasts both type-erased answers
-    /// to `Arc<K::Answer>` and compares using `TypeEq`, which correctly handles
+    /// and compares using `TypeEq`, which correctly handles
     /// identity-based equality for `Unique`, `TypeVar`, etc.
     fn answers_equal_typed<K: Solve<Ans>>(
         &self,
@@ -4115,8 +4123,8 @@ mod scc_tests {
 
     /// A distinguishable `Key` answer, so tests erase and recover values through
     /// the same API production uses.
-    fn test_answer(n: i64) -> Arc<TypeInfo> {
-        Arc::new(TypeInfo::of_ty(Lit::Int(LitInt::new(n)).to_implicit_type()))
+    fn test_answer(n: i64) -> TypeInfo {
+        TypeInfo::of_ty(Lit::Int(LitInt::new(n)).to_implicit_type())
     }
 
     /// Helper to create a test Scc with given parameters.
@@ -4132,7 +4140,10 @@ mod scc_tests {
         let answers = SccAnswers::new();
         for (calc_id, state) in &node_state {
             if matches!(state, SccNodeState::Done { .. }) {
-                answers.insert_current(calc_id, AnyAnswer::new::<Key>(test_answer(0)));
+                answers.insert_current(
+                    calc_id,
+                    AnyAnswer::new::<Key>(AnswerBox::new(test_answer(0))),
+                );
             }
         }
         Scc {
@@ -4212,7 +4223,7 @@ mod scc_tests {
         assert!(calc_stack.take_top_scc_for_driver(SccDriver(0)).is_none());
         assert_eq!(calc_stack.scc_stack.borrow()[0].owner, SccOwner::Caller(0));
 
-        let answer = AnyAnswer::new::<Key>(test_answer(42));
+        let answer = AnyAnswer::new::<Key>(AnswerBox::new(test_answer(42)));
         let answer_scope = AnswerScope::new();
         calc_stack.set_iteration_node_done(&answer_scope, &member, answer, None, None);
         let mut completed = calc_stack
@@ -4241,7 +4252,10 @@ mod scc_tests {
         let b = CalcId::for_test("m", 1);
         let generation = |calc_id: &CalcId, value| {
             let generation = Rc::new(AnswerGeneration::new());
-            generation.insert(calc_id, AnyAnswer::new::<Key>(test_answer(value)));
+            generation.insert(
+                calc_id,
+                AnyAnswer::new::<Key>(AnswerBox::new(test_answer(value))),
+            );
             generation
         };
         let first = SccAnswers::Single {
@@ -4260,36 +4274,36 @@ mod scc_tests {
                 .get_current(&a)
                 .expect("merged current answer for a")
                 .downcast_ref::<TypeInfo>(),
-            Some(&*test_answer(1)),
+            Some(&test_answer(1)),
         );
         assert_eq!(
             merged
                 .get_previous(&a)
                 .expect("merged previous answer for a")
                 .downcast_ref::<TypeInfo>(),
-            Some(&*test_answer(2)),
+            Some(&test_answer(2)),
         );
         assert_eq!(
             merged
                 .get_current(&b)
                 .expect("merged current answer for b")
                 .downcast_ref::<TypeInfo>(),
-            Some(&*test_answer(3)),
+            Some(&test_answer(3)),
         );
         assert_eq!(
             merged
                 .get_previous(&b)
                 .expect("merged previous answer for b")
                 .downcast_ref::<TypeInfo>(),
-            Some(&*test_answer(4)),
+            Some(&test_answer(4)),
         );
-        merged.insert_current(&b, AnyAnswer::new::<Key>(test_answer(5)));
+        merged.insert_current(&b, AnyAnswer::new::<Key>(AnswerBox::new(test_answer(5))));
         assert_eq!(
             merged
                 .get_current(&b)
                 .expect("updated merged current answer for b")
                 .downcast_ref::<TypeInfo>(),
-            Some(&*test_answer(5)),
+            Some(&test_answer(5)),
             "recording a completed result must replace an earlier current answer",
         );
     }
@@ -4300,27 +4314,37 @@ mod scc_tests {
         let mut scc = make_test_scc(fresh_nodes(&[id.dupe()]), id.dupe(), 0);
 
         let first = scc
-            .on_calculation_finished(&id, AnyAnswer::new::<Key>(test_answer(1)), None, None)
+            .on_calculation_finished(
+                &id,
+                AnyAnswer::new::<Key>(AnswerBox::new(test_answer(1))),
+                None,
+                None,
+            )
             .get()
             .downcast_ref::<TypeInfo>()
             .expect("first answer should have the test type")
             .clone();
         let second = scc
-            .on_calculation_finished(&id, AnyAnswer::new::<Key>(test_answer(2)), None, None)
+            .on_calculation_finished(
+                &id,
+                AnyAnswer::new::<Key>(AnswerBox::new(test_answer(2))),
+                None,
+                None,
+            )
             .get()
             .downcast_ref::<TypeInfo>()
             .expect("second answer should have the test type")
             .clone();
 
-        assert_eq!(first, *test_answer(1));
-        assert_eq!(second, *test_answer(1));
+        assert_eq!(first, test_answer(1));
+        assert_eq!(second, test_answer(1));
         assert_eq!(
             scc.iterative
                 .answers
                 .get_current(&id)
                 .expect("Done SCC node must retain its current answer")
                 .downcast_ref::<TypeInfo>(),
-            Some(&*test_answer(1)),
+            Some(&test_answer(1)),
         );
     }
 
@@ -4331,10 +4355,10 @@ mod scc_tests {
         let mut scc = make_test_scc(fresh_nodes(&[a.dupe(), b.dupe()]), a.dupe(), 0);
         scc.iterative
             .answers
-            .insert_current(&a, AnyAnswer::new::<Key>(test_answer(1)));
+            .insert_current(&a, AnyAnswer::new::<Key>(AnswerBox::new(test_answer(1))));
         scc.iterative
             .answers
-            .insert_current(&b, AnyAnswer::new::<Key>(test_answer(2)));
+            .insert_current(&b, AnyAnswer::new::<Key>(AnswerBox::new(test_answer(2))));
         let generation = match &scc.iterative.answers {
             SccAnswers::Single { current, .. } => Rc::downgrade(current),
             SccAnswers::NeedsDemotion { .. } => {
@@ -4364,8 +4388,8 @@ mod scc_tests {
                     .take_top_scc_for_driver(driver)
                     .expect("test driver should take the SCC"),
             );
-            assert_eq!(answer_a.downcast_ref::<TypeInfo>(), Some(&*test_answer(1)));
-            assert_eq!(answer_b.downcast_ref::<TypeInfo>(), Some(&*test_answer(2)));
+            assert_eq!(answer_a.downcast_ref::<TypeInfo>(), Some(&test_answer(1)));
+            assert_eq!(answer_b.downcast_ref::<TypeInfo>(), Some(&test_answer(2)));
             assert!(
                 generation.upgrade().is_some(),
                 "the scope should retain the generation after the SCC is dropped",
@@ -4596,8 +4620,8 @@ mod scc_tests {
         *calc_stack.pending_completed_scc.borrow_mut() = Some(already_pending);
 
         let answer_scope = AnswerScope::new();
-        let answer = AnyAnswer::new::<Key>(test_answer(42));
-        let _ = calc_stack.on_calculation_finished(&answer_scope, &a, answer, None, None);
+        let answer = AnyAnswer::new::<Key>(AnswerBox::new(test_answer(42)));
+        calc_stack.on_calculation_finished(&answer_scope, &a, answer, None, None);
     }
 
     #[test]
@@ -4610,8 +4634,8 @@ mod scc_tests {
         calc_stack.scc_stack.borrow_mut().push(scc);
 
         let answer_scope = AnswerScope::new();
-        let answer = AnyAnswer::new::<Key>(test_answer(42));
-        let _ = calc_stack.on_calculation_finished(&answer_scope, &a, answer, None, None);
+        let answer = AnyAnswer::new::<Key>(AnswerBox::new(test_answer(42)));
+        calc_stack.on_calculation_finished(&answer_scope, &a, answer, None, None);
 
         assert_eq!(calc_stack.borrow_scc_stack().len(), 1);
         assert!(calc_stack.pending_completed_scc.borrow().is_none());

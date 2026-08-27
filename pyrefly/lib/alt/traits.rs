@@ -153,7 +153,7 @@ pub trait Solve<Ans: LookupAnswer>: Keyed {
     fn check_shortcut(
         _answers: &AnswersSolver<Ans>,
         _binding: &Self::Value,
-    ) -> Option<Arc<Self::Answer>> {
+    ) -> Option<Self::Answer> {
         None
     }
 }
@@ -184,15 +184,17 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
         answer.map_ty(|ty| answers.record_recursive(ty, recursive))
     }
 
-    fn check_shortcut(answers: &AnswersSolver<Ans>, binding: &Binding) -> Option<Arc<TypeInfo>> {
+    fn check_shortcut(answers: &AnswersSolver<Ans>, binding: &Binding) -> Option<TypeInfo> {
         match binding {
             Binding::ForwardToFirstUse(fwd) => {
                 let def_idx = answers.def_idx_for_forward_to_first_use(*fwd)?;
-                answers.check_partial_answer(def_idx)
+                answers
+                    .check_partial_answer(def_idx)
+                    .map(|answer| answer.as_ref().clone())
             }
             Binding::LambdaParameter(id, owner) => {
                 let ty = answers.resolve_lambda_param_type(*id, *owner);
-                Some(Arc::new(TypeInfo::of_ty(ty)))
+                Some(TypeInfo::of_ty(ty))
             }
             _ => None,
         }
