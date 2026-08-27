@@ -1595,11 +1595,14 @@ impl<'a> Transaction<'a> {
                     changed
                 );
             }
+            // The pysa and cinderx reports read the Ast at `Step::Solutions`, so with either
+            // of them enabled eviction is deferred from `Step::Answers` until then. Both
+            // sites stay gated on `require.keep_ast()`, which is what callers that read Asts
+            // after the whole check finishes (such as the Glean report) rely on.
+            let reporter_reads_ast =
+                self.data.pysa_reporter.is_some() || self.data.cinderx_reporter.is_some();
             if todo == Step::Answers {
-                if !require.keep_ast()
-                    && self.data.pysa_reporter.is_none()
-                    && self.data.cinderx_reporter.is_none()
-                {
+                if !require.keep_ast() && !reporter_reads_ast {
                     // We have captured the Ast, and must have already built Exports (we do it serially),
                     // so won't need the Ast again.
                     post.evict_ast();
@@ -1613,7 +1616,7 @@ impl<'a> Transaction<'a> {
                 if let Some(pysa_reporter) = self.data.pysa_reporter.as_ref() {
                     pysa_reporter.report_module(&module_data.handle, self);
                 }
-                if self.data.pysa_reporter.is_some() || self.data.cinderx_reporter.is_some() {
+                if !require.keep_ast() && reporter_reads_ast {
                     post.evict_ast();
                 }
                 if let Some(hook) = &self.data.solutions_hook {

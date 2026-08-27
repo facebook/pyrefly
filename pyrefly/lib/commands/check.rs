@@ -2100,13 +2100,19 @@ mod tests {
         }
     }
 
-    fn incremental_checker(root: &Path, initial_files: Vec<PathBuf>) -> IncrementalChecker {
+    /// A config finder that resolves everything under `root` without querying an
+    /// interpreter, so tests do not depend on the machine's Python environment.
+    fn test_config_finder(root: &Path) -> ConfigFinder {
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
         config.interpreters.skip_interpreter_query = true;
         config.search_path_from_file = vec![root.to_path_buf()];
         config.disable_search_path_heuristics = true;
         config.configure();
+        ConfigFinder::new_constant(ArcId::new(config))
+    }
+
+    fn incremental_checker(root: &Path, initial_files: Vec<PathBuf>) -> IncrementalChecker {
         IncrementalChecker::new(
             RequireLevels {
                 specified: Require::Errors,
@@ -2116,7 +2122,7 @@ mod tests {
                 root: root.to_path_buf(),
                 initial_files,
             }),
-            ConfigFinder::new_constant(ArcId::new(config)),
+            test_config_finder(root),
             ThreadCount::Inline,
         )
         .unwrap()
@@ -2153,6 +2159,70 @@ mod tests {
             Vec::new(),
             ErrorKind::BadAssignment,
         )
+    }
+
+    /// Asking for two reports in one run must produce both of them in full.
+    /// See https://github.com/facebook/pyrefly/issues/4683: the CinderX report
+    /// dropped the ASTs that the Glean report reads once the check is done, so
+    /// the run died partway through writing its output.
+    #[test]
+    fn check_writes_cinderx_and_glean_reports_together() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let module = root.join("main.py");
+        fs::write(
+            &module,
+            r#"class Widget:
+    def apply(self, n: int) -> int:
+        return n + 1
+
+
+def go(w: Widget) -> int:
+    return w.apply(1)
+"#,
+        )
+        .unwrap();
+        let cinderx_dir = temp.path().join("cinderx");
+        let glean_dir = temp.path().join("glean");
+
+        let args = CheckArgs::parse_from([
+            "check",
+            "--report-cinderx",
+            cinderx_dir.to_str().unwrap(),
+            "--report-glean",
+            glean_dir.to_str().unwrap(),
+        ]);
+        let (status, errors, _) = args
+            .run_once(
+                "test",
+                Box::new(TestIncludes {
+                    root: root.clone(),
+                    initial_files: vec![module],
+                }),
+                test_config_finder(&root),
+                UpsellDecision::Skip,
+                ThreadCount::Inline,
+            )
+            .unwrap();
+        assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
+        assert!(matches!(status, CommandExitStatus::Success));
+
+        // The CinderX report is only complete with its two project-level files
+        // beside `types/`; a consumer that sees `types/` alone cannot tell a
+        // truncated report from a report over a smaller codebase.
+        assert!(cinderx_dir.join("types").join("main.json").is_file());
+        assert!(cinderx_dir.join("index.json").is_file());
+        assert!(cinderx_dir.join("class_metadata.json").is_file());
+
+        // Glean names each file after a hash of the module path, so look for
+        // any non-empty file rather than a fixed name.
+        let glean_files: Vec<_> = fs::read_dir(&glean_dir)
+            .expect("glean output directory should exist")
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(glean_files.len(), 1, "expected one Glean file per module");
+        assert!(fs::metadata(&glean_files[0]).unwrap().len() > 0);
     }
 
     #[test]
