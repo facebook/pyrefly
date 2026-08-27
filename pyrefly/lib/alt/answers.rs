@@ -208,6 +208,33 @@ pub struct Answers {
     trace: Option<Mutex<Traces>>,
 }
 
+/// An answer whose key type has been erased, mirroring `std::any::Any`.
+///
+/// Construction names the key that produced the answer, while downcasts name
+/// its answer type. How answers are allocated stays private to this module.
+#[derive(Clone, Dupe)]
+pub struct AnyAnswer(Arc<dyn Any + Send + Sync>);
+
+impl Debug for AnyAnswer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AnyAnswer").finish_non_exhaustive()
+    }
+}
+
+impl AnyAnswer {
+    pub(crate) fn new<K: Keyed>(answer: Arc<K::Answer>) -> Self {
+        Self(answer)
+    }
+
+    pub(crate) fn downcast_ref<T: Any + Send + Sync>(&self) -> Option<&T> {
+        self.0.downcast_ref::<T>()
+    }
+
+    pub(crate) fn downcast<T: Any + Send + Sync>(self) -> Result<Arc<T>, Self> {
+        self.0.downcast::<T>().map_err(Self)
+    }
+}
+
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PUBLISH_BACKOFF_STEP: u32 = 6;
 const PENDING_TAG: usize = 1;
@@ -1032,11 +1059,7 @@ pub trait LookupAnswer: Sized {
     /// Returns the target Answers when reserved so the slot remains reachable
     /// until publication or rollback. The default implementation returns
     /// `None` (not supported).
-    fn reserve_in_module(
-        &self,
-        _calc_id: &CalcId,
-        _answer: Arc<dyn Any + Send + Sync>,
-    ) -> Option<Arc<Answers>> {
+    fn reserve_in_module(&self, _calc_id: &CalcId, _answer: AnyAnswer) -> Option<Arc<Answers>> {
         None
     }
 
@@ -1330,11 +1353,7 @@ impl Answers {
     }
 
     /// Reserve a result slot for SCC batch publication.
-    pub fn reserve_preliminary(
-        &self,
-        any_idx: &AnyIdx,
-        answer: Arc<dyn Any + Send + Sync>,
-    ) -> bool {
+    pub fn reserve_preliminary(&self, any_idx: &AnyIdx, answer: AnyAnswer) -> bool {
         dispatch_anyidx!(any_idx, self, reserve_typed, answer)
     }
 
@@ -1358,16 +1377,14 @@ impl Answers {
         unsafe { dispatch_anyidx!(&any_idx, self, rollback_reserved_if_pending_typed) }
     }
 
-    fn reserve_typed<K: Keyed>(&self, idx: Idx<K>, answer: Arc<dyn Any + Send + Sync>) -> bool
+    fn reserve_typed<K: Keyed>(&self, idx: Idx<K>, answer: AnyAnswer) -> bool
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        let typed_answer: Arc<K::Answer> = Arc::unwrap_or_clone(
-            answer
-                .downcast::<Arc<K::Answer>>()
-                .expect("Answers::reserve_typed: type mismatch"),
-        );
+        let typed_answer = answer
+            .downcast::<K::Answer>()
+            .expect("Answers::reserve_typed: type mismatch");
         self.answer_slot(idx).reserve(typed_answer)
     }
 

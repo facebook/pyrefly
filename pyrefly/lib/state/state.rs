@@ -5,7 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::any::Any;
 use std::cell::RefCell;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -73,6 +72,7 @@ use web_time::Instant;
 use crate::alt::answers::AnswerEntry;
 use crate::alt::answers::AnswerTable;
 use crate::alt::answers::Answers;
+use crate::alt::answers::AnyAnswer;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
 use crate::alt::answers::SolutionsEntry;
@@ -3199,11 +3199,7 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         }
     }
 
-    fn reserve_in_module(
-        &self,
-        calc_id: &CalcId,
-        answer: Arc<dyn Any + Send + Sync>,
-    ) -> Option<Arc<Answers>> {
+    fn reserve_in_module(&self, calc_id: &CalcId, answer: AnyAnswer) -> Option<Arc<Answers>> {
         let CalcId(_, ref any_idx) = *calc_id;
         match self.lookup_target_answers(calc_id) {
             TargetAnswers::ModuleNotFound => None,
