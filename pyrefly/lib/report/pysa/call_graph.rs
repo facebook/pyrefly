@@ -4089,7 +4089,7 @@ impl<'a> CallGraphVisitor<'a> {
                     let return_type = self
                         .module_answers_context
                         .answers
-                        .get_idx_ref(idx)
+                        .get_idx(idx)
                         .unwrap()
                         .callable_return_type(self.module_answers_context.answers.heap())
                         .map_or(ScalarTypeProperties::none(), |type_| {

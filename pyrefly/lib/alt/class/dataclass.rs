@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_python::dunder;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::TypedDict;
@@ -80,14 +78,14 @@ impl ReplaceKind {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Gets dataclass fields for an `@dataclass`-decorated class. attrs with
     /// `auto_attribs=False` collects only `attr.ib()`/`field()` assignments;
     /// every other kind is annotation-driven.
     pub fn get_dataclass_fields(
         &self,
         cls: &Class,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         kind: &DataclassKind,
     ) -> SmallSet<Name> {
         let attrs_initializer_only = matches!(
@@ -149,7 +147,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.check_attrs_default_decorator_return_types(cls, dataclass, errors);
         if dataclass.kws.init {
             let init_method = if let Some((root_model_type, has_strict)) =
-                self.get_pydantic_root_model_type_via_mro(cls, &metadata)
+                self.get_pydantic_root_model_type_via_mro(cls, metadata)
             {
                 self.get_pydantic_root_model_init(cls, root_model_type, has_strict)
             } else if metadata.is_pydantic_model() {
@@ -727,7 +725,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         dataclass_metadata: &DataclassMetadata,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         is_from_dataclass_transform: bool,
         errors: &ErrorCollector,
     ) {

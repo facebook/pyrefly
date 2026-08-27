@@ -501,7 +501,7 @@ impl<'a> ExpressionCollector<'a> {
                 && let Some(key) = self.try_find_key_for_name(name)
                 && let Some(type_info) = self.answers.get_idx(self.bindings.key_to_idx(&key))
                 && type_info.has_facets()
-                && has_facet_narrow_in_chain(&type_info, &chain)
+                && has_facet_narrow_in_chain(type_info, &chain)
             {
                 // Some level in the chain has a facet narrow.
                 // Re-resolve the full chain on the unnarrowed base type.

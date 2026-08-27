@@ -101,7 +101,7 @@ const JAXTYPING_WRAPPERS: &[&str] = &[
     "Inexact",
 ];
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Check if an expression resolves to one of jaxtyping's public dtype wrappers.
     pub fn is_jaxtyping_wrapper_expr(&self, expr: &Expr) -> bool {
         match expr {

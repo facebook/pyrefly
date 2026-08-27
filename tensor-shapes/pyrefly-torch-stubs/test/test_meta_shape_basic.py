@@ -402,6 +402,12 @@ def test_broadcast_to():
     assert_type(result, Tensor[[2, 3]])
 
 
+def test_broadcast_to_target_precedence[N: IntVar](n: Int[N], plain: int):
+    source: Tensor[[2, 3]] = torch.randn(2, 3)
+    assert_type(torch.broadcast_to(source, (4, 5)), Tensor[[4, 5]])
+    assert_type(torch.broadcast_to(source, (n, plain)), Tensor[[N, int]])
+
+
 # Test 18: torch.tile
 def test_tile():
     x: Tensor[[2, 3]] = torch.randn(2, 3)
@@ -588,6 +594,32 @@ def test_empty():
 def test_full():
     # Should infer: Tensor[[2, 3]] (filled with value)
     assert_type(torch.full((2, 3), 5.0), Tensor[[2, 3]])
+
+
+def test_creation_shapes[N: IntVar](n: Int[N], plain: int):
+    assert_type(torch.randn(2, 3), Tensor[[2, 3]])
+    assert_type(torch.randn((2, 3)), Tensor[[2, 3]])
+    assert_type(torch.randn(n, plain), Tensor[[N, int]])
+    assert_type(torch.rand((2, 3), dtype=None), Tensor[[2, 3]])
+    assert_type(torch.zeros(2, 3), Tensor[[2, 3]])
+    assert_type(torch.ones((2, 3)), Tensor[[2, 3]])
+    assert_type(torch.randint(-100, -1, (n, plain)), Tensor[[N, int]])
+
+
+def test_creation_open_shapes(
+    unbounded: tuple[int, ...],
+    unpacked: tuple[Literal[1], *tuple[int, ...], Literal[3]],
+) -> None:
+    assert_type(torch.randn(unbounded), Tensor[IntTuple])
+    assert_type(
+        torch.randn(*unpacked),
+        Tensor[IntTuple[1, *Elements[IntTuple], 3]],
+    )
+    assert_type(torch.full(unbounded, 1.0), Tensor[IntTuple])
+
+
+def test_creation_list_splat(dims: list[int]) -> None:
+    assert_type(torch.zeros(*dims), Tensor[IntTuple])
 
 
 # Test 37: torch.arange

@@ -204,7 +204,7 @@ impl ModuleAnswersContext {
     pub fn undecorated_function(&self, idx: Idx<KeyDecoratedFunction>) -> &UndecoratedFunction {
         let binding = self.bindings.get(idx);
         self.answers
-            .get_idx_ref(binding.undecorated_idx)
+            .get_idx(binding.undecorated_idx)
             .expect("undecorated function must be solved before building Pysa solutions")
     }
 }

@@ -8,7 +8,6 @@
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
-use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
@@ -63,6 +62,8 @@ use crate::types::types::Type;
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, Default, Visit, VisitMut)]
 pub struct VarianceMap(SmallMap<Name, Variance>);
 
+static EMPTY_VARIANCE_MAP: VarianceMap = VarianceMap(SmallMap::new());
+
 impl Display for VarianceMap {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
         write!(f, "{{")?;
@@ -74,6 +75,10 @@ impl Display for VarianceMap {
 }
 
 impl VarianceMap {
+    pub fn empty() -> &'static Self {
+        &EMPTY_VARIANCE_MAP
+    }
+
     pub fn get(&self, parameter: &Name) -> Variance {
         self.0
             .get(parameter)
@@ -380,13 +385,13 @@ fn on_method_impl(
     }
 }
 
-fn on_class(
+fn on_class<'s>(
     class: &Class,
     heap: &TypeHeap,
     on_edge: &mut impl FnMut(&Class) -> InferenceMap,
     on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
-    get_class_bases: &impl Fn(&Class) -> Arc<ClassBases>,
-    get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
+    get_class_bases: &impl Fn(&Class) -> &'s ClassBases,
+    get_fields: &impl Fn(&Class) -> SmallMap<Name, &'s ClassField>,
 ) {
     fn is_private_field(name: &Name) -> bool {
         let starts_with_underscore = name.starts_with('_');
@@ -538,81 +543,56 @@ fn pre_to_post_variance(pre_variance: PreInferenceVariance) -> Variance {
     }
 }
 
-fn initialize_environment_impl<'a>(
-    class: &'a Class,
-    heap: &TypeHeap,
+fn initialize_environment_impl<Ans: LookupAnswer>(
+    class: &Class,
+    solver: &AnswersSolver<'_, '_, Ans>,
     environment: &mut VarianceEnv,
-    get_class_bases: &impl Fn(&Class) -> Arc<ClassBases>,
-    get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
-    get_tparams: &impl Fn(&Class) -> Option<Arc<TParams>>,
 ) -> InferenceMap {
     if let Some(params) = environment.get(class) {
         return params.clone();
     }
 
-    let tparams = get_tparams(class);
-    let params = initial_inference_map(tparams.as_deref());
+    let params = initial_inference_map(solver.get_class_tparams(class).map(|t| &**t));
 
     environment.insert(class.dupe(), params.clone());
     let mut on_var = |_name: &Name, _variance: Variance, _inj: bool, _: PreInferenceVariance| {};
 
     // get the variance results of a given class c
-    let mut on_edge = |c: &Class| {
-        initialize_environment_impl(
-            c,
-            heap,
-            environment,
-            get_class_bases,
-            get_fields,
-            get_tparams,
-        )
-    };
+    let mut on_edge = |c: &Class| initialize_environment_impl(c, solver, environment);
 
     on_class(
         class,
-        heap,
+        solver.heap,
         &mut on_edge,
         &mut on_var,
-        get_class_bases,
-        get_fields,
+        &|c| solver.get_base_types_for_class(c),
+        &|c| solver.get_class_field_map(c),
     );
 
     params
 }
 
-fn initialize_environment<'a>(
-    class: &'a Class,
-    heap: &TypeHeap,
+fn initialize_environment<Ans: LookupAnswer>(
+    class: &Class,
+    solver: &AnswersSolver<'_, '_, Ans>,
     environment: &mut VarianceEnv,
-    get_class_bases: &impl Fn(&Class) -> Arc<ClassBases>,
-    get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
-    get_tparams: &impl Fn(&Class) -> Option<Arc<TParams>>,
 ) {
     let mut on_var = |_name: &Name, _variance: Variance, _inj: bool, _: PreInferenceVariance| {};
-    let mut on_edge = |c: &Class| {
-        initialize_environment_impl(
-            c,
-            heap,
-            environment,
-            get_class_bases,
-            get_fields,
-            get_tparams,
-        )
-    };
+    let mut on_edge = |c: &Class| initialize_environment_impl(c, solver, environment);
     on_class(
         class,
-        heap,
+        solver.heap,
         &mut on_edge,
         &mut on_var,
-        get_class_bases,
-        get_fields,
+        &|c| solver.get_base_types_for_class(c),
+        &|c| solver.get_class_field_map(c),
     );
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn compute_variance_env(&self, class: &Class) -> VarianceEnv {
-        let tparams = self.get_class_tparams(class);
-        let initial_inference_map_for_class = initial_inference_map(tparams.as_deref());
+        let initial_inference_map_for_class =
+            initial_inference_map(self.get_class_tparams(class).map(|t| &**t));
         let need_inference = initial_inference_map_for_class
             .iter()
             .any(|(_, status)| status.specified_variance.is_none());
@@ -630,14 +610,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn infer_variance_env(&self, class: &Class, inference_map: InferenceMap) -> VarianceEnv {
         let mut environment = VarianceEnv::new();
         environment.insert(class.dupe(), inference_map);
-        initialize_environment(
-            class,
-            self.heap,
-            &mut environment,
-            &|c| self.get_base_types_for_class(c),
-            &|c| self.get_class_field_map(c),
-            &|c| self.get_class_tparams(c),
-        );
+        initialize_environment(class, self, &mut environment);
         self.fixpoint(environment)
     }
 
@@ -751,7 +724,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         class: &Class,
         class_bases: &ClassBases,
-        field_map: &SmallMap<Name, Arc<ClassField>>,
+        field_map: &SmallMap<Name, &ClassField>,
     ) -> Vec<VarianceViolation> {
         let mut violations = Vec::new();
 
@@ -761,10 +734,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 |name: &Name, variance: Variance, _inj: bool, declared: PreInferenceVariance| {
                     check_typevar(name, variance, declared, range, &mut violations);
                 };
-            let mut on_edge = |c: &Class| {
-                let tparams = self.get_class_tparams(c);
-                initial_inference_map(tparams.as_deref())
-            };
+            let mut on_edge =
+                |c: &Class| initial_inference_map(self.get_class_tparams(c).map(|t| &**t));
             on_type(
                 Variance::Covariant,
                 true,

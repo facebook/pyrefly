@@ -40,7 +40,7 @@ pub const VALUE_PROP: Name = Name::new_static("value");
 
 pub const GENERATE_NEXT_VALUE: Name = Name::new_static("_generate_next_value_");
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Suggest an enum member when a raw literal matches exactly one expected enum value.
     pub fn suggest_enum_member_for_value(&self, got: &Type, want: &Type) -> Option<String> {
         match want {
@@ -71,7 +71,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn get_enum_member(&self, cls: &Class, name: &Name) -> Option<Lit> {
         self.get_field_from_current_class_only(cls, name)
-            .and_then(|field| self.as_enum_member(&field, cls))
+            .and_then(|field| self.as_enum_member(field, cls))
     }
 
     pub fn get_enum_members(&self, cls: &Class) -> SmallSet<Lit> {

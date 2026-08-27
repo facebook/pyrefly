@@ -17,12 +17,25 @@ from typing import Any, overload, Self, TYPE_CHECKING
 
 import shape_extensions
 from shape_extensions import broadcast, Elements, Flag, IntTuple, IntVar, uses_shape_dsl
+
+# `Generator` is not defined anywhere in this package, and resolving it relies
+# on how a partial stub package is looked up. The `py.typed` file here contains
+# the word `partial`, which tells the type checker this package covers only some
+# of `torch`: for a submodule the package does not define, the checker falls
+# back to the real torch stubs. `torch._C` is one of those, so `Generator` comes
+# from torch itself.
+#
+# That fallback is per-module rather than per-name. A module this package does
+# define shadows torch's version of it outright, so every name belonging at
+# `torch.<name>` must be declared in this file or it will not exist for any code
+# that depends on these stubs, however unrelated to shapes it is.
+from torch._C import Generator
 from torch._shapes import (
-    arange_ir,
-    broadcast_to_ir,
+    arange_extent,
+    arange_step_extent,
     cat_ir,
     chunk_ir,
-    diag_embed_ir,
+    diag_embed_shape,
     dim_ir,
     eig_shape,
     einsum_ir,
@@ -30,14 +43,11 @@ from torch._shapes import (
     flatten_ir,
     index_select_shape,
     item_ir,
-    matmul_ir,
+    matmul_shape,
     movedim_ir,
     multinomial_shape,
-    normal_ir,
     numel_shape,
     permute_ir,
-    randint_ir,
-    randn_ir,
     reduce_shape,
     reduce_shape_no_keep,
     repeat_interleave_input_ir,
@@ -51,12 +61,12 @@ from torch._shapes import (
     split_ir,
     squeeze_shape,
     stack_ir,
-    tensordot_ir,
+    tensordot_shape,
     tile_ir,
     topk_shape,
     transpose_shape,
     unbind_shape,
-    unfold_ir,
+    unfold_shape,
     unsqueeze_shape,
 )
 
@@ -74,6 +84,9 @@ type _AnyShape = tuple[Any, ...]
 
 class device:
     """Represents the device on which a Tensor is or will be allocated."""
+
+    type: str
+    index: builtins.int | None
     def __init__(self, type: str, index: int = 0) -> None: ...
 
 # Dtype constants
@@ -143,8 +156,9 @@ class Tensor[Shape: _Shape = _AnyShape]:
     # ==== Matrix Multiplication ====
     # Uses meta-shape for shape inference
 
-    @uses_shape_dsl(matmul_ir)
-    def __matmul__(self: Tensor, other: Tensor) -> Tensor:
+    def __matmul__[Left: IntTuple, Right: IntTuple](
+        self: Tensor[Left], other: Tensor[Right]
+    ) -> Tensor[matmul_shape(Left, Right)]:
         """Matrix multiplication (@). Shape inference via meta-shape: torch.Tensor.matmul"""
         ...
 
@@ -232,6 +246,34 @@ class Tensor[Shape: _Shape = _AnyShape]:
     ) -> Tensor[broadcast(Shape, OtherShape)]: ...
     @overload
     def __ge__(self, other: float | int) -> Self: ...
+
+    # ==== Bitwise Operations ====
+    # Elementwise on integer and boolean tensors, broadcasting exactly as the
+    # comparison operators do. Combining masks with `&` and `|` is the common
+    # case, and those masks come from the comparisons above.
+
+    @overload
+    def __and__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...
+    @overload
+    def __and__(self, other: bool | int) -> Self: ...
+    @overload
+    def __or__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...
+    @overload
+    def __or__(self, other: bool | int) -> Self: ...
+    @overload
+    def __xor__[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]: ...
+    @overload
+    def __xor__(self, other: bool | int) -> Self: ...
+    def __rand__(self, other: bool | int) -> Self: ...
+    def __ror__(self, other: bool | int) -> Self: ...
+    def __rxor__(self, other: bool | int) -> Self: ...
+    def __invert__(self) -> Self: ...
 
     # ==== Shape Manipulation Operations ====
     # Handled by meta-shape functions - simplified signatures
@@ -572,8 +614,14 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Alias for movedim. Shape inference via meta-shape: torch.Tensor.moveaxis"""
         ...
 
-    @uses_shape_dsl(unfold_ir)
-    def unfold(self: Tensor, dimension: int, size: int, step: int) -> Tensor:
+    def unfold[
+        Shape: IntTuple,
+        Dimension: Flag[builtins.int],
+        Size: Flag[builtins.int],
+        Step: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], dimension: Dimension, size: Size, step: Step
+    ) -> Tensor[unfold_shape(Shape, Dimension, Size, Step)]:
         """Returns sliding window view. Shape inference via meta-shape: torch.Tensor.unfold"""
         ...
 
@@ -819,10 +867,14 @@ class Tensor[Shape: _Shape = _AnyShape]:
 
     # ==== Phase 1.3: Tensor Creation Operations (Methods) ====
 
-    @uses_shape_dsl(diag_embed_ir)
-    def diag_embed(
-        self: Tensor, offset: int = 0, dim1: int = -2, dim2: int = -1
-    ) -> Tensor:
+    def diag_embed[
+        Shape: IntTuple,
+        Offset: Flag[builtins.int],
+        Dim1: Flag[builtins.int],
+        Dim2: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], offset: Offset = 0, dim1: Dim1 = -2, dim2: Dim2 = -1
+    ) -> Tensor[diag_embed_shape(Shape, Offset, Dim1, Dim2)]:
         """Create diagonal tensor. Shape inference via meta-shape: torch.Tensor.diag_embed"""
         ...
 
@@ -836,8 +888,9 @@ class Tensor[Shape: _Shape = _AnyShape]:
 
     # ==== Phase 1.4: Basic Linear Algebra Operations (Methods) ====
 
-    @uses_shape_dsl(matmul_ir)
-    def matmul(self: Tensor, other: Tensor) -> Tensor:
+    def matmul[Left: IntTuple, Right: IntTuple](
+        self: Tensor[Left], other: Tensor[Right]
+    ) -> Tensor[matmul_shape(Left, Right)]:
         """Matrix multiplication. Shape inference via meta-shape: torch.Tensor.matmul"""
         ...
 
@@ -1053,6 +1106,14 @@ class Tensor[Shape: _Shape = _AnyShape]:
 
     def clip(self, min: float | None = None, max: float | None = None) -> Self:
         """Alias for clamp. Shape inference via generic fixture signature."""
+        ...
+
+    def clamp_min(self, min: float) -> Self:
+        """Clamp tensor values from below. Shape inference via generic fixture signature."""
+        ...
+
+    def clamp_max(self, max: float) -> Self:
+        """Clamp tensor values from above. Shape inference via generic fixture signature."""
         ...
 
     # Additional mathematical methods
@@ -1366,8 +1427,9 @@ class Tensor[Shape: _Shape = _AnyShape]:
 # Module-level Functions
 # ============================================================================
 
-@uses_shape_dsl(matmul_ir)
-def matmul(self: Tensor, other: Tensor) -> Tensor:
+def matmul[Left: IntTuple, Right: IntTuple](
+    self: Tensor[Left], other: Tensor[Right]
+) -> Tensor[matmul_shape(Left, Right)]:
     """Matrix multiplication function. Shape inference via meta-shape: torch.matmul"""
     ...
 
@@ -1566,81 +1628,102 @@ def flatten(self: Tensor, start_dim: int = 0, end_dim: int = -1) -> Tensor:
 
 # ==== Tensor Creation Functions ====
 
-@uses_shape_dsl(randn_ir)
 @overload
-def randn(*size: int, dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor with random values. Shape inference via meta-shape: torch.randn"""
+def randn[Shape: IntTuple](
+    *size: *Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor with random values. Shape is inferred from `size`."""
     ...
 
 @overload
-def randn(size: tuple[int, ...], dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor with random values (tuple size). Shape inference via meta-shape: torch.randn"""
-    ...
-
-@uses_shape_dsl(randn_ir)
-@overload
-def rand(*size: int, dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor with random values [0, 1). Shape inference via meta-shape: torch.rand"""
+def randn[Shape: IntTuple](
+    size: Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor with random values. Shape is inferred from `size`."""
     ...
 
 @overload
-def rand(size: tuple[int, ...], dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor with random values (tuple size). Shape inference via meta-shape: torch.rand"""
-    ...
-
-@uses_shape_dsl(randn_ir)
-@overload
-def zeros(*size: int, dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor filled with zeros. Shape inference via meta-shape: torch.zeros"""
+def rand[Shape: IntTuple](
+    *size: *Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor with random values [0, 1). Shape is inferred from `size`."""
     ...
 
 @overload
-def zeros(size: tuple[int, ...], dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor filled with zeros (tuple size). Shape inference via meta-shape: torch.zeros"""
-    ...
-
-@uses_shape_dsl(randn_ir)
-@overload
-def ones(*size: int, dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor filled with ones. Shape inference via meta-shape: torch.ones"""
+def rand[Shape: IntTuple](
+    size: Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor with random values [0, 1). Shape is inferred from `size`."""
     ...
 
 @overload
-def ones(size: tuple[int, ...], dtype: Any = None, device: Any = None) -> Tensor:
-    """Create tensor filled with ones (tuple size). Shape inference via meta-shape: torch.ones"""
-    ...
-
-@uses_shape_dsl(randn_ir)
-@overload
-def empty(*size: int, dtype: Any = None, device: Any = None) -> Tensor:
-    """Create uninitialized tensor. Shape inference via meta-shape: torch.empty"""
+def zeros[Shape: IntTuple](
+    *size: *Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor filled with zeros. Shape is inferred from `size`."""
     ...
 
 @overload
-def empty(size: tuple[int, ...], dtype: Any = None, device: Any = None) -> Tensor:
-    """Create uninitialized tensor (tuple size). Shape inference via meta-shape: torch.empty"""
+def zeros[Shape: IntTuple](
+    size: Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor filled with zeros. Shape is inferred from `size`."""
     ...
 
-@uses_shape_dsl(randn_ir)
-def full(size: tuple[int, ...], fill_value: float) -> Tensor:
-    """Create tensor filled with value. Shape inference via meta-shape: torch.full"""
-    ...
-
-# arange overloads - Int is compatible with int, so meta-shape handles both
-@uses_shape_dsl(arange_ir)
 @overload
-def arange(end: int) -> Tensor:
+def ones[Shape: IntTuple](
+    *size: *Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor filled with ones. Shape is inferred from `size`."""
+    ...
+
+@overload
+def ones[Shape: IntTuple](
+    size: Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create tensor filled with ones. Shape is inferred from `size`."""
+    ...
+
+@overload
+def empty[Shape: IntTuple](
+    *size: *Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create uninitialized tensor. Shape is inferred from `size`."""
+    ...
+
+@overload
+def empty[Shape: IntTuple](
+    size: Shape, dtype: Any = None, device: Any = None
+) -> Tensor[Shape]:
+    """Create uninitialized tensor. Shape is inferred from `size`."""
+    ...
+
+def full[Shape: IntTuple](size: Shape, fill_value: float) -> Tensor[Shape]:
+    """Create tensor filled with a value. Shape is inferred from `size`."""
+    ...
+
+@overload
+def arange[End: IntVar](
+    end: _Int[End], *, dtype: int | None = None, device: Any = None
+) -> Tensor[[arange_extent(End)]]:
     """Create 1D tensor with range [0, end). Shape inference via meta-shape: torch.arange"""
     ...
 
 @overload
-def arange(end: int, *, dtype: int | None = None, device: Any = None) -> Tensor:
-    """Create 1D tensor with range [0, end). Shape inference via meta-shape: torch.arange"""
-    ...
-
-@overload
-def arange(start: int, end: int, step: int = 1) -> Tensor:
+def arange[Start: IntVar, End: IntVar, Step: Flag[builtins.int]](
+    start: _Int[Start],
+    end: _Int[End],
+    step: Step = 1,
+    *,
+    dtype: int | None = None,
+    device: Any = None,
+) -> Tensor[[arange_step_extent(Start, End, Step)]]:
     """Create 1D tensor with range [start, end) with step. Shape inference via meta-shape: torch.arange"""
+    ...
+
+@overload
+def arange(end: int, *, dtype: int | None = None, device: Any = None) -> Tensor[[int]]:
+    """Create 1D tensor with a gradual bound."""
     ...
 
 @overload
@@ -1651,8 +1734,8 @@ def arange(
     *,
     dtype: int | None = None,
     device: Any = None,
-) -> Tensor:
-    """Create 1D tensor with range [start, end) with step. Shape inference via meta-shape: torch.arange"""
+) -> Tensor[[int]]:
+    """Create 1D tensor with gradual bounds or step."""
     ...
 
 def linspace[Steps: IntVar](
@@ -1672,9 +1755,8 @@ def eye[N: IntVar](n: _Int[N]) -> Tensor[[N, N]]:
 
 # ==== Shape Manipulation Functions ====
 
-@uses_shape_dsl(broadcast_to_ir)
-def broadcast_to(self: Tensor, shape: tuple[int, ...]) -> Tensor:
-    """Broadcast tensor to shape. Shape inference via meta-shape: torch.broadcast_to"""
+def broadcast_to[Shape: IntTuple](self: Tensor, shape: Shape) -> Tensor[Shape]:
+    """Broadcast a tensor to `shape`."""
     ...
 
 @uses_shape_dsl(tile_ir)
@@ -1766,8 +1848,14 @@ def moveaxis(
     """Alias for movedim. Shape inference via meta-shape: torch.moveaxis"""
     ...
 
-@uses_shape_dsl(unfold_ir)
-def unfold(self: Tensor, dimension: int, size: int, step: int) -> Tensor:
+def unfold[
+    Shape: IntTuple,
+    Dimension: Flag[builtins.int],
+    Size: Flag[builtins.int],
+    Step: Flag[builtins.int],
+](
+    self: Tensor[Shape], dimension: Dimension, size: Size, step: Step
+) -> Tensor[unfold_shape(Shape, Dimension, Size, Step)]:
     """Returns sliding window view. Shape inference via meta-shape: torch.unfold"""
     ...
 
@@ -2000,8 +2088,14 @@ def randn_like[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Create random normal tensor with same shape. Shape inference via generic fixture signature."""
     ...
 
-@uses_shape_dsl(diag_embed_ir)
-def diag_embed(self: Tensor, offset: int = 0, dim1: int = -2, dim2: int = -1) -> Tensor:
+def diag_embed[
+    Shape: IntTuple,
+    Offset: Flag[builtins.int],
+    Dim1: Flag[builtins.int],
+    Dim2: Flag[builtins.int],
+](
+    self: Tensor[Shape], offset: Offset = 0, dim1: Dim1 = -2, dim2: Dim2 = -1
+) -> Tensor[diag_embed_shape(Shape, Offset, Dim1, Dim2)]:
     """Create diagonal tensor. Shape inference via meta-shape: torch.diag_embed"""
     ...
 
@@ -2342,10 +2436,15 @@ def fmin[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
 # ==============================================================================
 
 # Advanced matmul operations
-@uses_shape_dsl(tensordot_ir)
-def tensordot(
-    self: Tensor, other: Tensor, dims: int | tuple[list[int], list[int]] = 2
-) -> Tensor:
+@overload
+def tensordot[Left: IntTuple, Right: IntTuple, Dims: Flag[builtins.int]](
+    self: Tensor[Left], other: Tensor[Right], dims: Dims = 2
+) -> Tensor[tensordot_shape(Left, Right, Dims)]:
+    """Tensor contraction over specified dimensions. Shape inference via meta-shape: torch.tensordot"""
+    ...
+
+@overload
+def tensordot(self: Tensor, other: Tensor, dims: tuple[list[int], list[int]]) -> Tensor:
     """Tensor contraction over specified dimensions. Shape inference via meta-shape: torch.tensordot"""
     ...
 
@@ -2526,25 +2625,26 @@ def multinomial[Shape: IntTuple, NumSamples: IntVar](
     """Sample from multinomial distribution. Shape inference via meta-shape: torch.multinomial"""
     ...
 
-@uses_shape_dsl(normal_ir)
 @overload
-def normal(mean: Tensor, std: Tensor) -> Tensor:
-    """Sample from normal distribution (tensor mean, tensor std). Shape inference via meta-shape: torch.normal"""
+def normal[MeanShape: IntTuple](
+    mean: Tensor[MeanShape], std: Tensor
+) -> Tensor[MeanShape]:
+    """Sample from a normal distribution. The output has the mean tensor's shape."""
     ...
 
 @overload
-def normal(mean: Tensor, std: float) -> Tensor:
-    """Sample from normal distribution (tensor mean, scalar std). Shape inference via meta-shape: torch.normal"""
+def normal[Shape: IntTuple](mean: Tensor[Shape], std: float) -> Tensor[Shape]:
+    """Sample from a normal distribution. The output has the mean tensor's shape."""
     ...
 
 @overload
-def normal(mean: float, std: Tensor) -> Tensor:
-    """Sample from normal distribution (scalar mean, tensor std). Shape inference via meta-shape: torch.normal"""
+def normal[Shape: IntTuple](mean: float, std: Tensor[Shape]) -> Tensor[Shape]:
+    """Sample from a normal distribution. The output has the standard-deviation tensor's shape."""
     ...
 
 @overload
-def normal(mean: float, std: float, size: tuple[int, ...]) -> Tensor:
-    """Sample from normal distribution (scalar mean/std, explicit size). Shape inference via meta-shape: torch.normal"""
+def normal[Shape: IntTuple](mean: float, std: float, size: Shape) -> Tensor[Shape]:
+    """Sample from a normal distribution. Shape is inferred from `size`."""
     ...
 
 def poisson[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
@@ -2587,17 +2687,16 @@ def tensor(
     """Create tensor from data. Returns shapeless tensor (shape depends on input data)."""
     ...
 
-@uses_shape_dsl(randint_ir)
-def randint(
+def randint[Shape: IntTuple](
     low: int,
     high: int,
-    size: tuple[int, ...],
+    size: Shape,
     *,
     dtype: Any = None,
     device: Any = None,
     requires_grad: bool = False,
-) -> Tensor:
-    """Create tensor of random integers. Returns shapeless tensor (shape depends on size arg)."""
+) -> Tensor[Shape]:
+    """Create a tensor of random integers. Shape is inferred from `size`."""
     ...
 
 # ==============================================================================
@@ -2701,4 +2800,32 @@ def meshgrid(*tensors: Tensor, indexing: str = "ij") -> tuple[Tensor, ...]:
     For N input tensors, returns N tensors each with N dimensions.
     Shape inference depends on input tensor shapes; returns shapeless tuple.
     """
+    ...
+
+# The functions below carry no shape information. They are declared because this
+# module shadows torch's own `__init__`, as described at the `torch._C` import
+# above, so omitting them removes them from `torch` for every dependent target.
+def manual_seed(seed: int) -> Generator:
+    """Set the seed for generating random numbers on all devices."""
+    ...
+
+def save(
+    obj: object,
+    f: Any,
+    pickle_module: Any = ...,
+    pickle_protocol: int = ...,
+    _use_new_zipfile_serialization: bool = True,
+) -> None:
+    """Save an object to a file."""
+    ...
+
+def load(
+    f: Any,
+    map_location: Any = None,
+    pickle_module: Any = None,
+    *,
+    weights_only: bool | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Load an object saved with `torch.save`."""
     ...

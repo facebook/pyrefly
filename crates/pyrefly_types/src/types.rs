@@ -120,6 +120,14 @@ impl Display for TParamsSource {
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct TParams(Vec<Quantified>);
 
+static EMPTY_TPARAMS: TParams = TParams(Vec::new());
+
+impl TParams {
+    pub fn empty_ref() -> &'static Self {
+        &EMPTY_TPARAMS
+    }
+}
+
 /// Implement `VisitMut` for `Arc<TParams>` as a no-op.
 ///
 /// This is not technically correct, because TParams can contain types inside

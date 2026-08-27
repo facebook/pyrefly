@@ -3148,3 +3148,39 @@ del f.real_method.test  # E: has no attribute `test`
 name: str = f.real_method.__name__
 "#,
 );
+
+testcase!(
+    test_getattr_self_awaitable_recursion,
+    r#"
+from collections.abc import Awaitable
+
+class C:
+    def __getattr__(self: Awaitable, name: str):
+        pass
+
+C().a  # E: Argument `C` is not assignable to parameter `self` with type `Awaitable[Unknown]` in function `C.__getattr__`
+"#,
+);
+
+testcase!(
+    test_getattr_self_protocol_generic_cache_order,
+    r#"
+from typing import Protocol, TypeVar
+
+T = TypeVar("T", covariant=True)
+
+class P(Protocol[T]):
+    @property
+    def x(self) -> T: ...
+
+class C:
+    def __getattr__(self: "P[str]", name: str) -> int:
+        return 0
+
+def f_int(x: P[int]) -> None: ...
+def f_str(x: P[str]) -> None: ...
+
+f_int(C())
+f_str(C())  # E: Argument `C` is not assignable to parameter `x` with type `P[str]` in function `f_str`
+"#,
+);

@@ -91,6 +91,23 @@ def test_diag_embed_method():
     assert_type(result, Tensor[[4, 4]])
 
 
+def test_diag_embed_offsets_and_dims():
+    x: Tensor[[2, 3]] = torch.randn(2, 3)
+    assert_type(torch.diag_embed(x, offset=2), Tensor[[2, 5, 5]])
+    assert_type(x.diag_embed(offset=-2), Tensor[[2, 5, 5]])
+    assert_type(torch.diag_embed(x, dim1=0, dim2=1), Tensor[[3, 3, 2]])
+    assert_type(torch.diag_embed(x, dim1=2, dim2=0), Tensor[[3, 2, 3]])
+    assert_type(x.diag_embed(dim1=-1, dim2=-3), Tensor[[3, 2, 3]])
+
+
+def test_diag_embed_shapeless(x: Tensor):
+    assert_type(torch.diag_embed(x, offset=1), Tensor)
+
+
+def test_diag_embed_gradual_dims(x: Tensor[[2, 3]], dim1: int, dim2: int):
+    assert_type(torch.diag_embed(x, dim1=dim1, dim2=dim2), Tensor)
+
+
 # ==== Triangular Operations (preserve shape) ====
 
 

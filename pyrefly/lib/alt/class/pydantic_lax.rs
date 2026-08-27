@@ -27,7 +27,7 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn lax_display_name_for_class(&self, cls: &ClassType) -> Name {
         Name::new(format!(
             "{}{}",

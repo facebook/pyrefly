@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::fmt;
 use std::fmt::Display;
 use std::iter;
@@ -1388,11 +1389,17 @@ impl<T> WithDefiningClass<T> {
 }
 
 /// The result of processing a raw dataclass member (any annotated assignment in its body).
-pub enum DataclassMember {
+pub enum DataclassMember<'a> {
     /// A dataclass field
-    Field(WithDefiningClass<Arc<ClassField>>, DataclassFieldKeywords),
+    Field(
+        WithDefiningClass<Cow<'a, ClassField>>,
+        DataclassFieldKeywords,
+    ),
     /// A pseudo-field that only appears as a constructor argument
-    InitVar(WithDefiningClass<Arc<ClassField>>, DataclassFieldKeywords),
+    InitVar(
+        WithDefiningClass<Cow<'a, ClassField>>,
+        DataclassFieldKeywords,
+    ),
     /// A pseudo-field annotated with KW_ONLY
     KwOnlyMarker,
     /// Anything else
@@ -1462,7 +1469,7 @@ struct OverrideError {
     diff_lines: Vec<String>,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn validate_dataclass_transform_defaults(
         &self,
         call: &ExprCall,
@@ -1551,7 +1558,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let metadata = self.get_metadata_for_class(class);
         if metadata.is_typed_dict() {
             return self.calculate_typed_dict_field(
-                &metadata,
+                metadata,
                 name,
                 range,
                 field_definition,
@@ -1604,7 +1611,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             ..
                         },
                         ..,
-                    ) = &*parent_field.value
+                    ) = parent_field.value.as_ref()
                     && let Some(child_ty) = direct_annotation.as_ref().and_then(|a| a.ty.as_ref())
                     && self.is_subset_eq(child_ty, &Type::ClassType(parent_cls.clone()))
                 {
@@ -1619,7 +1626,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     // This may not be fully sound since the parent's initial value doesn't
                     // match the child's declared type. Consider whether we should warn or
                     // error in this case.
-                    return Arc::unwrap_or_clone(parent_field.value);
+                    return parent_field.value.into_owned();
                 }
 
                 let initialization = if class.module_path().is_interface()
@@ -1629,7 +1636,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 {
                     ClassFieldInitialization::Magic
                 } else if let Some(flags) =
-                    self.extract_pydantic_field_from_annotation(*annot, name, &metadata)
+                    self.extract_pydantic_field_from_annotation(*annot, name, metadata)
                 {
                     ClassFieldInitialization::ClassBody(Some(Box::new(flags)))
                 } else {
@@ -1854,7 +1861,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         name,
                         &|cls, name| self.get_field_from_current_class_only(cls, name),
                     ) {
-                        match &*parent_field.value {
+                        match parent_field.value.as_ref() {
                             ClassField(
                                 ClassFieldInner::Property { .. }
                                 | ClassFieldInner::Descriptor { .. },
@@ -1863,7 +1870,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 // The child is using the inherited property/descriptor setter,
                                 // not redefining the field. Return the parent's field with
                                 // IsInherited::No so the override check skips it.
-                                let ClassField(inner, _) = Arc::unwrap_or_clone(parent_field.value);
+                                let ClassField(inner, _) = parent_field.value.into_owned();
                                 return ClassField(inner, IsInherited::No);
                             }
                             _ => {
@@ -1997,7 +2004,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if let Some(annotation) = direct_annotation.as_ref() {
             self.validate_direct_annotation(
                 annotation,
-                &metadata,
+                metadata,
                 &initialization,
                 name,
                 range,
@@ -2008,7 +2015,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let read_only_reason = self.determine_read_only_reason(
             name,
             annotation.as_ref(),
-            &metadata,
+            metadata,
             field_definition,
             &initialization,
         );
@@ -2878,7 +2885,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .find_map(|parent| {
                 let parent_field =
                     self.get_field_from_current_class_only(parent.class_object(), name)?;
-                match &*parent_field {
+                match parent_field {
                     ClassField(ClassFieldInner::Property { ty, .. }, ..) => {
                         if found_field.is_none() {
                             found_field =
@@ -3191,7 +3198,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// This is used for dataclass field synthesis; when accessing attributes on dataclass instances,
     /// use `get_instance_attribute` or `get_class_attribute`
-    pub fn get_dataclass_member(&self, cls: &Class, name: &Name) -> DataclassMember {
+    pub fn get_dataclass_member(&self, cls: &Class, name: &Name) -> DataclassMember<'_> {
         // Even though we check that the class member exists before calling this function,
         // it can be None if the class has an invalid MRO.
         let Some(member) = self.get_non_synthesized_dataclass_member_impl(cls, name) else {
@@ -3209,7 +3216,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             return DataclassMember::NotAField;
         }
-        let field = &*member.value;
+        let field = member.value.as_ref();
         // A field with type KW_ONLY is a sentinel value that indicates that the remaining
         // fields should be keyword-only params in the generated `__init__`.
         if field.is_dataclass_kwonly_marker() {
@@ -3555,7 +3562,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 if Self::is_ordinary_instance_method_type(ty)
                         ) =>
                     {
-                        self.as_instance_attribute(&target, &target_field, instance)
+                        self.as_instance_attribute(&target, target_field.as_ref(), instance)
                     }
                     _ => ClassAttribute::no_access(NoAccessReason::ProxyMethodTargetInvalid {
                         class: instance.class.dupe(),
@@ -3646,7 +3653,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let field = match cls.targs() {
             Some(targs) => field.instantiate_for_class_targs(targs, self_type, &mut ambiguous),
             None => {
-                let tparams = self.get_class_tparams(cls.class_object());
+                let tparams = self.get_class_tparams(cls.class_object()).map(Dupe::dupe);
                 field.instantiate_for_class_tparams(self.heap, tparams, self_type, &mut ambiguous)
             }
         };
@@ -3909,7 +3916,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn should_check_field_for_override_consistency(
         &self,
         field_name: &Name,
-        class_metadata: &Arc<ClassMetadata>,
+        class_metadata: &ClassMetadata,
         is_explicit_override: bool,
     ) -> bool {
         // Object construction (`__new__`, `__init__`, `__init_subclass__`) should not participate
@@ -4041,7 +4048,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         if !self.should_check_field_for_override_consistency(
             field_name,
-            &metadata,
+            metadata,
             is_explicit_override,
         ) {
             return;
@@ -4053,7 +4060,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut parent_attr_requires_override = false;
         let mut parent_attr_is_from_object = false;
         let mut parent_has_any = false;
-        let is_typed_dict_field = self.is_typed_dict_field(metadata.as_ref(), field_name);
+        let is_typed_dict_field = self.is_typed_dict_field(metadata, field_name);
         let is_named_tuple_element = metadata
             .named_tuple_metadata()
             .is_some_and(|named_tuple| named_tuple.elements.contains(field_name));
@@ -4109,7 +4116,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if want_field.defining_class.is_builtin("object") {
                 parent_attr_is_from_object = true;
             }
-            let want_class_field = Arc::unwrap_or_clone(want_field.value);
+            let want_class_field = want_field.value;
             parent_attr_requires_override = parent_attr_requires_override
                 || (!parent_metadata.is_protocol() && !want_class_field.is_abstract());
             if want_class_field.is_final() {
@@ -4156,7 +4163,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     continue;
                 }
             }
-            if is_typed_dict_field != self.is_typed_dict_field(&parent_metadata, field_name) {
+            if is_typed_dict_field != self.is_typed_dict_field(parent_metadata, field_name) {
                 // TypedDict fields are actually dict keys, so we want to check them against other
                 // keys but not regular fields.
                 continue;
@@ -4164,12 +4171,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             if is_typed_dict_field
                 && !self.validate_typed_dict_field_override(
                     cls,
-                    metadata.as_ref(),
+                    metadata,
                     parent_cls,
-                    parent_metadata.as_ref(),
+                    parent_metadata,
                     field_name,
                     class_field,
-                    &want_class_field,
+                    want_class_field.as_ref(),
                     range,
                     errors,
                 )
@@ -4194,11 +4201,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let mut attr = if should_compare_as_class_attributes {
                     self.as_class_attribute(
                         field_name,
-                        &want_class_field,
+                        want_class_field.as_ref(),
                         &parent_instance.to_class_base(),
                     )
                 } else {
-                    self.as_instance_attribute(field_name, &want_class_field, &parent_instance)
+                    self.as_instance_attribute(
+                        field_name,
+                        want_class_field.as_ref(),
+                        &parent_instance,
+                    )
                 };
                 // Relax the parent return type for the override-consistency check when the parent
                 // function's body is a `raise NotImplementedError(...)` placeholder *and* the
@@ -4458,10 +4469,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// For classes with multiple inheritance, check that fields inherited from multiple base classes are consistent.
     pub fn check_consistent_multiple_inheritance(&self, cls: &Class, errors: &ErrorCollector) {
-        struct InheritedFieldInfo {
+        struct InheritedFieldInfo<'a> {
             class: Class,
-            metadata: Arc<ClassMetadata>,
-            field: ClassField,
+            metadata: &'a ClassMetadata,
+            field: Cow<'a, ClassField>,
             ty: Type,
             read_only: bool,
         }
@@ -4481,7 +4492,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             for parent_field_name in parent_class_fields.names() {
                 if !self.should_check_field_for_override_consistency(
                     parent_field_name,
-                    &current_class_metadata,
+                    current_class_metadata,
                     false,
                 ) {
                     continue;
@@ -4489,13 +4500,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if current_class_fields.is_some_and(|f| f.contains(parent_field_name)) {
                     continue;
                 }
-                if let Some(parent_field_arc) =
+                if let Some(parent_field) =
                     self.get_class_member(parent_class_object, parent_field_name)
                 {
-                    let parent_field = Arc::unwrap_or_clone(parent_field_arc.clone());
                     let class_attr = self.as_instance_attribute(
                         parent_field_name,
-                        &parent_field,
+                        parent_field.as_ref(),
                         &Instance::of_protocol(parent_class, self.instantiate(cls)),
                     );
                     let read_only = class_attr.is_read_only();
@@ -4519,7 +4529,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .or_default()
                         .push(InheritedFieldInfo {
                             class: parent_class_object.dupe(),
-                            metadata: parent_metadata.clone(),
+                            metadata: parent_metadata,
                             field: parent_field,
                             ty,
                             read_only,
@@ -4577,38 +4587,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
 
-                if let Some(child_field_arc) = self.get_class_member(cls, field_name) {
-                    let child_field = Arc::unwrap_or_clone(child_field_arc.clone());
-                    if self
+                if let Some(child_field) = self.get_class_member(cls, field_name)
+                    && self
                         .typed_dict_field_info(
-                            current_class_metadata.as_ref(),
+                            current_class_metadata,
                             field_name,
-                            &child_field,
+                            child_field.as_ref(),
                         )
                         .is_some()
-                    {
-                        for info in inherited_field_infos_by_ancestor {
-                            if self
-                                .typed_dict_field_info(
-                                    info.metadata.as_ref(),
-                                    field_name,
-                                    &info.field,
-                                )
-                                .is_some()
-                                && !self.validate_typed_dict_field_override(
-                                    cls,
-                                    current_class_metadata.as_ref(),
-                                    &info.class,
-                                    info.metadata.as_ref(),
-                                    field_name,
-                                    &child_field,
-                                    &info.field,
-                                    cls.range(),
-                                    errors,
-                                )
-                            {
-                                continue;
-                            }
+                {
+                    for info in inherited_field_infos_by_ancestor {
+                        if self
+                            .typed_dict_field_info(info.metadata, field_name, info.field.as_ref())
+                            .is_some()
+                            && !self.validate_typed_dict_field_override(
+                                cls,
+                                current_class_metadata,
+                                &info.class,
+                                info.metadata,
+                                field_name,
+                                child_field.as_ref(),
+                                info.field.as_ref(),
+                                cls.range(),
+                                errors,
+                            )
+                        {
+                            continue;
                         }
                     }
                 }
@@ -4620,7 +4624,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         name: &Name,
-    ) -> Option<Arc<ClassField>> {
+    ) -> Option<&ClassField> {
         if self.get_class_fields(cls).is_some_and(|f| f.contains(name))
             && let Some(field) = self.get_from_class(cls, &KeyClassField(cls.index(), name.clone()))
         {
@@ -4630,15 +4634,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn get_field_from_ancestors(
-        &self,
+    fn get_field_from_ancestors<'s>(
+        &'s self,
         cls: &Class,
-        mut ancestors: impl Iterator<Item = &'a ClassType>,
+        mut ancestors: impl Iterator<Item = &'s ClassType>,
         name: &Name,
-        get_field: &impl Fn(&Class, &Name) -> Option<Arc<ClassField>>,
-    ) -> Option<WithDefiningClass<Arc<ClassField>>> {
+        get_field: &impl Fn(&Class, &Name) -> Option<&'s ClassField>,
+    ) -> Option<WithDefiningClass<Cow<'s, ClassField>>> {
         ancestors.find_map(|ancestor| {
-            if ancestor.is_builtin("object")
+            let field = if ancestor.is_builtin("object")
                 && [dunder::NEW, dunder::INIT].contains(name)
                 && self.extends_any(cls)
             {
@@ -4651,30 +4655,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // While it would be safer to assume that the `Any` ancestor could appear first in
                 // the MRO, we choose to instead return a more precise attribute type if we can find
                 // one on a non-`Any` ancestor.
-                Some(Arc::new(ClassField::new_synthesized(
-                    self.heap.mk_any_implicit(),
-                )))
+                Cow::Owned(ClassField::new_synthesized(self.heap.mk_any_implicit()))
             } else {
-                get_field(ancestor.class_object(), name)
-            }
-            .map(|field| WithDefiningClass {
-                value: Arc::new(
+                Cow::Borrowed(get_field(ancestor.class_object(), name)?)
+            };
+            let field = if ancestor.targs().is_empty() {
+                field
+            } else {
+                Cow::Owned(
                     field.instantiate_helper(&mut |ty| ancestor.targs().substitute_into_mut(ty)),
-                ),
+                )
+            };
+            Some(WithDefiningClass {
+                value: field,
                 defining_class: ancestor.class_object().dupe(),
             })
         })
     }
 
-    fn get_field_from_mro(
-        &self,
+    fn get_field_from_mro<'s>(
+        &'s self,
         cls: &Class,
         name: &Name,
-        get_field: &impl Fn(&Class, &Name) -> Option<Arc<ClassField>>,
-    ) -> Option<WithDefiningClass<Arc<ClassField>>> {
+        get_field: &impl Fn(&Class, &Name) -> Option<&'s ClassField>,
+    ) -> Option<WithDefiningClass<Cow<'s, ClassField>>> {
         get_field(cls, name)
             .map(|field| WithDefiningClass {
-                value: field,
+                value: Cow::Borrowed(field),
                 defining_class: cls.dupe(),
             })
             .or_else(|| {
@@ -4693,7 +4700,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         name: &Name,
-    ) -> Option<Arc<ClassField>> {
+    ) -> Option<Cow<'_, ClassField>> {
         self.get_non_synthesized_class_member_and_defining_class(cls, name)
             .map(|x| x.value)
     }
@@ -4702,7 +4709,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         name: &Name,
-    ) -> Option<WithDefiningClass<Arc<ClassField>>> {
+    ) -> Option<WithDefiningClass<Cow<'_, ClassField>>> {
         self.get_field_from_mro(cls, name, &|cls, name| {
             self.get_non_synthesized_field_from_current_class_only(cls, name)
                 .filter(|field| !field.is_init_var())
@@ -4713,12 +4720,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         name: &Name,
-    ) -> Option<Arc<ClassField>> {
+    ) -> Option<&ClassField> {
         Some(
             self.get_from_class(cls, &KeyClassSynthesizedFields(cls.index()))?
                 .get(name)?
                 .inner
-                .dupe(),
+                .as_ref(),
         )
     }
 
@@ -4727,7 +4734,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         name: &Name,
-    ) -> Option<Arc<ClassField>> {
+    ) -> Option<&ClassField> {
         self.get_non_synthesized_field_from_current_class_only(cls, name)
             .or_else(|| self.get_synthesized_field_from_current_class_only(cls, name))
     }
@@ -4736,7 +4743,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         name: &Name,
-    ) -> Option<WithDefiningClass<Arc<ClassField>>> {
+    ) -> Option<WithDefiningClass<Cow<'_, ClassField>>> {
         self.get_field_from_mro(cls, name, &|cls, name| {
             self.get_field_from_current_class_only(cls, name)
         })
@@ -4746,7 +4753,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         name: &Name,
-    ) -> Option<WithDefiningClass<Arc<ClassField>>> {
+    ) -> Option<WithDefiningClass<Cow<'_, ClassField>>> {
         self.get_field_from_mro(cls, name, &|cls, name| {
             let field = self.get_non_synthesized_field_from_current_class_only(cls, name)?;
             if matches!(
@@ -4775,7 +4782,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         name: &Name,
-    ) -> Option<WithDefiningClass<Arc<ClassField>>> {
+    ) -> Option<WithDefiningClass<Cow<'_, ClassField>>> {
         if let Some(member) = self.get_class_member_impl(cls, name)
             && !member.value.is_init_var()
         {
@@ -4785,19 +4792,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    pub(crate) fn get_class_member(&self, cls: &Class, name: &Name) -> Option<Arc<ClassField>> {
+    pub(crate) fn get_class_member(&self, cls: &Class, name: &Name) -> Option<Cow<'_, ClassField>> {
         self.get_class_member_with_defining_class(cls, name)
             .map(|member| member.value)
     }
 
     pub fn get_instance_attribute(&self, cls: &ClassType, name: &Name) -> Option<ClassAttribute> {
         self.get_class_member(cls.class_object(), name)
-            .map(|field| self.as_instance_attribute(name, &field, &Instance::of_class(cls)))
+            .map(|field| self.as_instance_attribute(name, field.as_ref(), &Instance::of_class(cls)))
     }
 
     pub fn get_self_attribute(&self, cls: &ClassType, name: &Name) -> Option<ClassAttribute> {
         self.get_class_member(cls.class_object(), name)
-            .map(|field| self.as_instance_attribute(name, &field, &Instance::of_self_type(cls)))
+            .map(|field| {
+                self.as_instance_attribute(name, field.as_ref(), &Instance::of_self_type(cls))
+            })
     }
 
     /// Look up an attribute on a shaped-array instance, substituting Self with the full type.
@@ -4808,7 +4817,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<ClassAttribute> {
         self.get_class_member(shaped_array.base_class.class_object(), name)
             .map(|field| {
-                self.as_instance_attribute(name, &field, &Instance::of_shaped_array(shaped_array))
+                self.as_instance_attribute(
+                    name,
+                    field.as_ref(),
+                    &Instance::of_shaped_array(shaped_array),
+                )
             })
     }
 
@@ -4820,7 +4833,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<ClassAttribute> {
         self.get_class_member(cls.class_object(), name)
             .map(|field| {
-                self.as_instance_attribute(name, &field, &Instance::of_protocol(cls, self_type))
+                self.as_instance_attribute(
+                    name,
+                    field.as_ref(),
+                    &Instance::of_protocol(cls, self_type),
+                )
             })
     }
 
@@ -4854,7 +4871,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let attr = self.get_class_member(metaclass.class_object(), name)?;
         let attr = self.as_instance_attribute(
             name,
-            &attr,
+            attr.as_ref(),
             &Instance::of_metaclass(cls.clone(), metaclass),
         );
         if name == &dunder::CALL
@@ -4893,7 +4910,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_literal_string_attribute(&self, name: &Name) -> Option<ClassAttribute> {
         self.get_class_member(self.stdlib.str().class_object(), name)
             .map(|field| {
-                self.as_instance_attribute(name, &field, &Instance::literal_string(self.stdlib))
+                self.as_instance_attribute(
+                    name,
+                    field.as_ref(),
+                    &Instance::literal_string(self.stdlib),
+                )
             })
     }
 
@@ -4907,7 +4928,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .map(|field| {
                 self.as_instance_attribute(
                     name,
-                    &field,
+                    field.as_ref(),
                     &Instance::of_type_var(quantified, upper_bound),
                 )
             })
@@ -4942,11 +4963,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 })
                 .map(|member| {
-                    self.as_instance_attribute(name, &member.value, &Instance::of_typed_dict(td))
+                    self.as_instance_attribute(
+                        name,
+                        member.value.as_ref(),
+                        &Instance::of_typed_dict(td),
+                    )
                 });
         }
-        self.get_class_member(td.class_object(), name)
-            .map(|field| self.as_instance_attribute(name, &field, &Instance::of_typed_dict(td)))
+        self.get_class_member(td.class_object(), name).map(|field| {
+            self.as_instance_attribute(name, field.as_ref(), &Instance::of_typed_dict(td))
+        })
     }
 
     /// Compute the instantiated type of a TypedDict field from an already-resolved class member,
@@ -4967,7 +4993,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         cls: &Class,
         start_lookup_cls: Option<&ClassType>,
         name: &Name,
-    ) -> Option<WithDefiningClass<Arc<ClassField>>> {
+    ) -> Option<WithDefiningClass<Cow<'_, ClassField>>> {
         // Skip ancestors in the MRO until we find the class we want to start at
         let metadata = self.get_mro_for_class(cls);
         let ancestors = metadata.ancestors(self.stdlib).skip_while(|ancestor| {
@@ -4999,7 +5025,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         self.as_instance_attribute(
                             name,
-                            &member.value,
+                            member.value.as_ref(),
                             &Instance::of_self_type(obj),
                         )
                     }
@@ -5012,7 +5038,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     } else {
                         self.as_class_attribute(
                             name,
-                            &member.value,
+                            member.value.as_ref(),
                             &ClassBase::SelfType(obj.clone()),
                         )
                     }
@@ -5022,7 +5048,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn super_method_needs_impl_reason(
         &self,
-        member: &WithDefiningClass<Arc<ClassField>>,
+        member: &WithDefiningClass<Cow<'_, ClassField>>,
     ) -> Option<NoAccessReason> {
         let lacks_runtime_impl = member
             .value
@@ -5054,7 +5080,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// type contains a class-scoped type parameter - e.g., `class A[T]: x: T`.
     pub fn get_class_attribute(&self, cls: &ClassBase, name: &Name) -> Option<ClassAttribute> {
         self.get_class_member(cls.class_object(), name)
-            .map(|field| self.as_class_attribute(name, &field, cls))
+            .map(|field| self.as_class_attribute(name, field.as_ref(), cls))
     }
 
     pub fn get_bounded_quantified_class_attribute(
@@ -5067,7 +5093,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .map(|field| {
                 self.as_class_attribute(
                     name,
-                    &field,
+                    field.as_ref(),
                     &ClassBase::Quantified(quantified, class.clone()),
                 )
             })
@@ -5120,7 +5146,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 Instance::of_class(cls)
             };
-            let new_ty = Arc::unwrap_or_clone(new_member.value)
+            let new_ty = new_member
+                .value
                 .as_raw_special_method_type(self.heap, &instance)?;
             Some(new_ty)
         }
@@ -5148,7 +5175,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let init_method =
             self.get_class_member_with_defining_class(instance.class, &dunder::INIT)?;
         if get_object_init || !init_method.is_defined_on("builtins", "object") {
-            Arc::unwrap_or_clone(init_method.value).as_special_method_type(self.heap, instance)
+            init_method
+                .value
+                .as_special_method_type(self.heap, instance)
         } else {
             None
         }
@@ -5175,7 +5204,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if field.is_init_var() {
             return None;
         }
-        Arc::unwrap_or_clone(field)
+        field
             .as_raw_special_method_type(self.heap, &Instance::of_class(cls))
             .map(|ty| {
                 match make_bound_classmethod(self.heap, &ClassBase::ClassType(cls.clone()), ty) {
@@ -5222,7 +5251,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             None
         } else {
             let instance = Instance::of_metaclass(ClassBase::ClassType(cls.clone()), metaclass);
-            Arc::unwrap_or_clone(attr.value)
+            attr.value
                 .as_raw_special_method_type(self.heap, &instance)
                 .and_then(|ty| make_bound_method(self.heap, &instance, ty).ok())
         }
@@ -5834,7 +5863,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Option<Type> {
         if let Some(getter) = self.get_class_member(cls.class_object(), &dunder::GET) {
-            let attr = self.as_instance_attribute(&dunder::GET, &getter, &Instance::of_class(cls));
+            let attr =
+                self.as_instance_attribute(&dunder::GET, getter.as_ref(), &Instance::of_class(cls));
             // `__get__` is bound and called like a method, never re-fed through the
             // descriptor protocol. If it is itself a descriptor, recursing here would
             // loop forever, so report no usable getter.
@@ -5870,8 +5900,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if x.setter
             && let Some(setter) = self.get_class_member(x.cls.class_object(), &dunder::SET)
         {
-            let attr =
-                self.as_instance_attribute(&dunder::SET, &setter, &Instance::of_class(&x.cls));
+            let attr = self.as_instance_attribute(
+                &dunder::SET,
+                setter.as_ref(),
+                &Instance::of_class(&x.cls),
+            );
             Some(
                 self.resolve_get_class_attr(attr_name, attr, x.range, errors, None)
                     .unwrap_or_else(|e| {

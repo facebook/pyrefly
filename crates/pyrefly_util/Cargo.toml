@@ -39,7 +39,6 @@ serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = { version = "1.0.151", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 starlark_map = "0.14.2"
 static_interner = { version = "0.1.3", features = ["dupe"] }
-strsim = "0.11.1"
 thin-vec = "0.2.19"
 tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "registry"], default-features = false }
@@ -51,6 +50,7 @@ yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 [dev-dependencies]
 pyrefly_derive = { path = "../pyrefly_derive" }
 static_assertions = "1.1.0"
+strsim = "0.11.1"
 tempfile = "3.27.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

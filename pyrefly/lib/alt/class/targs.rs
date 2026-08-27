@@ -62,7 +62,7 @@ fn format_generic_entity(noun: &str, name: &Name, tparams: &TParams) -> String {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Silently promotes a Class to a ClassType, using default type arguments. It is up to the
     /// caller to ensure they are not calling this method on a TypedDict class, which should be
     /// promoted to TypedDict instead of ClassType.
@@ -71,7 +71,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             cls.dupe(),
             self.get_class_tparams(cls)
                 .map_or_else(TArgs::default, |tparams| {
-                    self.create_default_targs(tparams, None)
+                    self.create_default_targs(tparams.dupe(), None)
                 }),
         )
     }
@@ -88,7 +88,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> ClassType {
         let targs = match self.get_class_tparams(cls) {
-            Some(tparams) => self.create_targs(cls.name(), tparams, targs, range, true, errors),
+            Some(tparams) => {
+                self.create_targs(cls.name(), tparams.dupe(), targs, range, true, errors)
+            }
             None => self.reject_targs_without_tparams(cls.name(), &targs, range, errors),
         };
         ClassType::new(cls.dupe(), targs)
@@ -103,7 +105,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let metadata = self.get_metadata_for_class(cls);
-        let tparams = self.get_class_tparams(cls);
+        let tparams = self.get_class_tparams(cls).dupe();
 
         // We didn't find any type parameters for this class, but it may have ones we don't know about if:
         // - the class inherits from Any, or
@@ -119,7 +121,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             match tparams {
                 Some(tparams) => self.create_targs(
                     cls.name(),
-                    tparams,
+                    tparams.dupe(),
                     targs,
                     range,
                     validate_restriction,
@@ -211,7 +213,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// promote(list) == list[Any]
     /// instantiate(list) == list[T]
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
-        let Some(tparams) = self.get_class_tparams(cls) else {
+        let Some(tparams) = self.get_class_tparams(cls).map(Dupe::dupe) else {
             return self.type_of_instance(cls, TArgs::default());
         };
         let tparams_for_error = tparams.dupe();
@@ -258,7 +260,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let targs = self
             .get_class_tparams(cls)
             .map_or_else(TArgs::default, |tparams| {
-                self.create_default_targs(tparams, None)
+                self.create_default_targs(tparams.dupe(), None)
             });
         self.type_of_instance(cls, targs)
     }
@@ -355,7 +357,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn instantiate_fresh_class(&self, cls: &Class) -> (QuantifiedHandle, Type) {
         let ty = self.instantiate(cls);
         match self.get_class_tparams(cls) {
-            Some(tparams) => self.solver().fresh_quantified(&tparams, ty, self.uniques),
+            Some(tparams) => self.solver().fresh_quantified(tparams, ty, self.uniques),
             None => (QuantifiedHandle::empty(), ty),
         }
     }

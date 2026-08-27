@@ -53,6 +53,29 @@ def test_matmul_3d_3d():
     assert_type(result, Tensor[[2, 3, 5]])
 
 
+def test_matmul_mixed_and_broadcast_batch_ranks():
+    vector: Tensor[[4]] = torch.randn(4)
+    matrix: Tensor[[3, 4]] = torch.randn(3, 4)
+    batched: Tensor[[2, 4, 5]] = torch.randn(2, 4, 5)
+    assert_type(matrix @ batched, Tensor[[2, 3, 5]])
+    assert_type(vector @ batched, Tensor[[2, 5]])
+
+    contractible: Tensor[[5, 4]] = torch.randn(5, 4)
+    assert_type(batched.matmul(contractible), Tensor[[2, 4, 4]])
+    right_vector: Tensor[[5]] = torch.randn(5)
+    assert_type(batched.matmul(right_vector), Tensor[[2, 4]])
+
+    left: Tensor[[7, 1, 3, 4]] = torch.randn(7, 1, 3, 4)
+    right: Tensor[[5, 4, 6]] = torch.randn(5, 4, 6)
+    assert_type(torch.matmul(left, right), Tensor[[7, 5, 3, 6]])
+
+
+def test_matmul_preserves_permissive_v1_batch_merge():
+    left: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    right: Tensor[[5, 4, 6]] = torch.randn(5, 4, 6)
+    assert_type(torch.matmul(left, right), Tensor[[2, 3, 6]])
+
+
 # Test: matmul - Tensor method version
 def test_matmul_method():
     a: Tensor[[3, 4]] = torch.randn(3, 4)

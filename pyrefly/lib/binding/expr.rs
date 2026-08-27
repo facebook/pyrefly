@@ -41,6 +41,7 @@ use crate::binding::binding::BindingDecorator;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingYield;
 use crate::binding::binding::BindingYieldFrom;
+use crate::binding::binding::ClassBodyUnknownName;
 use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecorator;
@@ -294,7 +295,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_builder: Option<&mut LegacyTParamCollector>,
     ) -> Idx<Key> {
-        self.ensure_name_in_type(name, usage, tparams_builder, false)
+        self.ensure_name_in_type(name, usage, tparams_builder, false, false)
     }
 
     fn ensure_name_in_type(
@@ -303,6 +304,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_builder: Option<&mut LegacyTParamCollector>,
         is_runtime_evaluated_annotation: bool,
+        allow_class_body_forward_reference: bool,
     ) -> Idx<Key> {
         self.ensure_name_impl(
             name,
@@ -310,6 +312,7 @@ impl<'a> BindingsBuilder<'a> {
             tparams_builder
                 .map(|tparams_builder| (tparams_builder, LegacyTParamId::Name(name.clone()))),
             is_runtime_evaluated_annotation,
+            allow_class_body_forward_reference,
         )
     }
 
@@ -326,6 +329,7 @@ impl<'a> BindingsBuilder<'a> {
             tparams_builder.map(|tparams_builder| {
                 (tparams_builder, LegacyTParamId::Attr(value.clone(), attrs))
             }),
+            false,
             false,
         )
     }
@@ -357,6 +361,7 @@ impl<'a> BindingsBuilder<'a> {
         usage: &mut Usage,
         tparams_lookup: Option<(&mut LegacyTParamCollector, LegacyTParamId)>,
         is_runtime_evaluated_annotation: bool,
+        allow_class_body_forward_reference: bool,
     ) -> Idx<Key> {
         let key = Key::BoundName(ShortIdentifier::new(name));
         if name.is_empty() {
@@ -441,7 +446,6 @@ impl<'a> BindingsBuilder<'a> {
                 if self.scopes.is_definitely_unreachable() {
                     return self.insert_binding(key, Binding::Any(AnyStyle::Implicit));
                 }
-                let suggestion = self.suggest_similar_name(&name.id, name.range.start());
                 if is_special_name(name.id.as_str()) {
                     self.error(
                         name.range,
@@ -455,23 +459,30 @@ impl<'a> BindingsBuilder<'a> {
                 } else if self.scopes.in_class_body()
                     && let Some(cls) = self.scopes.current_class_key()
                 {
+                    let suggestion = self.suggest_similar_name(&name.id);
                     self.insert_binding(
                         key,
-                        Binding::ClassBodyUnknownName(Box::new((cls, name.clone(), suggestion))),
+                        Binding::ClassBodyUnknownName(Box::new(ClassBodyUnknownName {
+                            class_key: cls,
+                            name: name.clone(),
+                            suggestion,
+                            allow_class_body_forward_reference,
+                        })),
                     )
                 } else {
-                    // Record a type error and fall back to `Any`.
-                    let header = format!("Could not find name `{name}`");
-                    if let Some(suggestion) = suggestion {
-                        self.error_with_detail(
-                            name.range,
-                            ErrorKind::UnknownName,
-                            header,
-                            format!("Did you mean `{suggestion}`?"),
-                        );
-                    } else {
-                        self.error(name.range, ErrorKind::UnknownName, header);
-                    }
+                    // Record a type error and fall back to `Any`. Searching the
+                    // scope for a near-miss is the expensive part of reporting
+                    // this, and it is worth nothing unless the error is kept, so
+                    // it waits until the builder knows that.
+                    self.error_with_detail_from(
+                        name.range,
+                        ErrorKind::UnknownName,
+                        format!("Could not find name `{name}`"),
+                        || {
+                            self.suggest_similar_name(&name.id)
+                                .map(|suggestion| format!("Did you mean `{suggestion}`?"))
+                        },
+                    );
                     self.insert_binding(key, Binding::Any(AnyStyle::Error))
                 }
             }
@@ -1297,6 +1308,9 @@ impl<'a> BindingsBuilder<'a> {
                     usage,
                     tparams_builder,
                     check_runtime_name && !in_string_literal,
+                    in_string_literal
+                        || self.scopes.has_future_annotations()
+                        || self.sys_info.version().at_least(3, 14),
                 );
             }
             Expr::Subscript(ExprSubscript { value, .. })

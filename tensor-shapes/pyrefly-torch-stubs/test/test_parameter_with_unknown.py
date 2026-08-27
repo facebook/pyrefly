@@ -21,12 +21,12 @@ assert_type(p1, Tensor[[10, 20]])
 
 # Test 2: Parameter with unknown shape (from runtime value)
 def create_param(ndim: int):
-    # torch.ones returns Tensor (unknown shape)
+    # The rank is known, but the runtime dimension remains gradual.
     t = torch.ones(ndim)
-    assert_type(t, Tensor)
+    assert_type(t, Tensor[[int]])
 
     p = nn.Parameter(t)
-    assert_type(p, Tensor)
+    assert_type(p, Tensor[[int]])
 
     return p
 

@@ -176,6 +176,30 @@ def test() -> None:
 "#,
 );
 
+// A protocol-member guard can be entered outside a `Subset` while checking for unsafe overlap.
+// The nested protocol result must not be cached because it depends on that guard.
+testcase!(
+    test_getattr_coinductive_protocol_cache_soundness,
+    r#"
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class P(Protocol):
+    @property
+    def x(self) -> str: ...
+
+class C:
+    def __getattr__(self: P, name: str) -> int:
+        return 0
+
+def check(x: C) -> None:
+    isinstance(x, P)  # E: Runtime checkable protocol `P` has an unsafe overlap with type `C`
+
+def use(x: P) -> None: ...
+use(C())  # E: Argument `C` is not assignable to parameter `x` with type `P` in function `use`
+"#,
+);
+
 // SCC restarts must not retain protocol results computed from recursive Answer fallbacks.
 testcase!(
     test_protocol_cache_ignores_answers_scc,

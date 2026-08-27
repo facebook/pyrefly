@@ -56,7 +56,7 @@ enum EqualityCompatibilityGroup {
     Str,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn callable_dunder_helper(
         &self,
         method_type: Type,
@@ -751,7 +751,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         });
         // If we're assigning to something with an annotation, make sure the produced value is assignable to it
         if let Some(ann) = ann.map(|k| self.get_idx(k)) {
-            self.check_final_reassignment(&ann, x.range(), errors);
+            self.check_final_reassignment(ann, x.range(), errors);
             if let Some(ann_ty) = ann.ty(self.heap, self.stdlib) {
                 if result.is_any() {
                     // Any provides no useful narrowing information, so preserve

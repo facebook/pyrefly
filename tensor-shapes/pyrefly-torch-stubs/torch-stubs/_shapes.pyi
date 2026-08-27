@@ -306,13 +306,55 @@ def movedim_ir(
         shape=move_dims(self.shape, source, destination, len(self.shape))
     )
 
-@shape_dsl_function
-def unfold_ir(
-    self: ShapedArray, dimension: int, size: int | symint, step: int = 1
-) -> ShapedArray:
-    d = normalize_dim(len(self.shape), dimension)
-    new_dim = (self.shape[d] - size) // step + 1
-    return ShapedArray(shape=replace_dim(self.shape, d, new_dim) + [size])
+@type_shape_dsl_function
+def unfold_checked_shape(
+    shape: IntTuple,
+    dimension_size: Int,
+    normalized: int,
+    window_size: Int,
+    step: int,
+) -> IntTuple:
+    # A symbolic extent cannot prove this ordering invalid, so preserve its formula.
+    if dsl.is_concrete_int(dimension_size):
+        if dsl.is_concrete_int(window_size):
+            if dimension_size < window_size:
+                return dsl.Invalid("unfold size must not exceed the selected dimension")
+    window_count = (dimension_size - window_size) // step + 1
+    replaced = dsl.IntTuple(
+        (
+            window_count if index == normalized else shape[index]
+            for index in range(len(shape))
+        )
+    )
+    return dsl.concat(replaced, dsl.IntTuple((window_size,)))
+
+@type_shape_dsl_function
+def unfold_shape(shape: IntTuple, dimension: int, size: int, step: int) -> IntTuple:
+    # Binding the rank lets both branches assign the normalized Flag value consistently.
+    rank = len(shape)
+    if rank == 0:
+        if dimension != 0 and dimension != -1:
+            return dsl.Invalid("unfold dimension out of range")
+        if size < 0:
+            return dsl.Invalid("unfold size must be non-negative")
+        if size > 1:
+            return dsl.Invalid("unfold size must not exceed the selected dimension")
+        if step < 1:
+            return dsl.Invalid("unfold step must be greater than zero")
+        return dsl.IntTuple((size + 0,))
+    if dimension < 0:
+        normalized = dimension + rank
+    else:
+        normalized = dimension + 0
+    if normalized < 0 or normalized >= rank:
+        return dsl.Invalid("unfold dimension out of range")
+    if size < 0:
+        return dsl.Invalid("unfold size must be non-negative")
+    if step < 1:
+        return dsl.Invalid("unfold step must be greater than zero")
+    window_size = size + 0
+    dimension_size = shape[normalized]
+    return unfold_checked_shape(shape, dimension_size, normalized, window_size, step)
 
 @shape_dsl_function
 def cat_ir(tensors: list[ShapedArray], dim: int = 0) -> ShapedArray:
@@ -330,10 +372,6 @@ def stack_ir(tensors: list[ShapedArray], dim: int = 0) -> ShapedArray:
     first = tensors[0]
     d = normalize_dim(len(first.shape) + 1, dim)
     return ShapedArray(shape=insert_dim(first.shape, d, len(tensors)))
-
-@shape_dsl_function
-def broadcast_to_ir(self: ShapedArray, shape: list[int | symint]) -> ShapedArray:
-    return ShapedArray(shape=shape)
 
 @shape_dsl_function
 def tile_ir(self: ShapedArray, dims: list[int]) -> ShapedArray:
@@ -538,76 +576,127 @@ def repeat_interleave_input_ir(
 ) -> ShapedArray:
     return repeat_interleave_ir(input, repeats, dim, output_size)
 
-@shape_dsl_function
-def randn_ir(size: list[int | symint]) -> ShapedArray:
-    return ShapedArray(shape=size)
+@type_shape_dsl_function
+def arange_extent(end: Int) -> Int:
+    # Construct zero in the `Int` domain so it can be passed as the starting dimension.
+    origin = end - end
+    unit_step = 1
+    return arange_step_extent(origin, end, unit_step)
 
-@shape_dsl_function
-def randint_ir(low: int, high: int, size: list[int | symint]) -> ShapedArray:
-    return ShapedArray(shape=size)
+@type_shape_dsl_function
+def arange_step_extent(start: Int, end: Int, step: int) -> Int:
+    # `step` is a Flag value because its sign determines the rounding direction. Symbolic bounds
+    # use the truncating expression, which is exact when the step divides the range.
+    if step == 0:
+        return dsl.Invalid("arange step must be nonzero")
+    difference = end - start
+    if dsl.is_concrete_int(start):
+        if dsl.is_concrete_int(end):
+            if step > 0:
+                if end < start:
+                    return dsl.Invalid("arange bounds are inconsistent with step")
+                return (difference + step - 1) // step
+            if start < end:
+                return dsl.Invalid("arange bounds are inconsistent with step")
+            negative_step = 0 - step
+            return ((0 - difference) + negative_step - 1) // negative_step
+    return difference // step
 
-@shape_dsl_function
-def arange_ir(
-    start: int | symint | None = None,
-    end: int | symint | None = None,
-    step: int | symint | None = None,
-) -> ShapedArray:
-    if start != None and end != None and step != None:
-        return ShapedArray(shape=[(end - start) // step])
-    if start != None and end != None:
-        return ShapedArray(shape=[end - start])
-    if end != None:
-        return ShapedArray(shape=[end])
-    if start != None:
-        return ShapedArray(shape=[start])
-    return Unknown
-
-@shape_dsl_function
-def normal_ir(
-    mean: ShapedArray | None = None,
-    std: ShapedArray | None = None,
-    size: list[int] | None = None,
-) -> ShapedArray:
-    if size != None:
-        return ShapedArray(shape=[s for s in size])
-    if mean != None:
-        return ShapedArray(shape=mean.shape)
-    if std != None:
-        return ShapedArray(shape=std.shape)
-    return Unknown
-
-@shape_dsl_function
-def diag_embed_ir(self: ShapedArray, offset: int = 0) -> ShapedArray:
-    new_dim = self.shape[-1] + (offset if offset >= 0 else -offset)
-    return ShapedArray(shape=self.shape[:-1] + [new_dim, new_dim])
-
-@shape_dsl_function
-def matmul_ir(self: ShapedArray, other: ShapedArray) -> ShapedArray:
-    r1 = len(self.shape)
-    r2 = len(other.shape)
-    if r1 == 1 and r2 == 1:
-        return ShapedArray(shape=[])
-    if r1 == 1 and r2 == 2:
-        return ShapedArray(shape=[other.shape[1]])
-    if r1 == 2 and r2 == 1:
-        return ShapedArray(shape=[self.shape[0]])
-    if r1 == 2 and r2 == 2:
-        return ShapedArray(shape=[self.shape[0], other.shape[1]])
-    if r1 == 2 and r2 >= 3:
-        return ShapedArray(shape=other.shape[:-2] + [self.shape[0]] + [other.shape[-1]])
-    if r1 >= 3 and r2 == 2:
-        return ShapedArray(shape=self.shape[:-2] + [self.shape[-2]] + [other.shape[1]])
-    if r1 >= 3 and r2 >= 3:
-        return ShapedArray(
-            shape=broadcast(self.shape[:-2], other.shape[:-2])
-            + [self.shape[-2]]
-            + [other.shape[-1]]
+@type_shape_dsl_function
+def diag_embed_shape(shape: IntTuple, offset: int, dim1: int, dim2: int) -> IntTuple:
+    if len(shape) == 0:
+        return dsl.Invalid("diag_embed input must have at least one dimension")
+    output_rank = len(shape) + 1
+    if dim1 < 0:
+        normalized_dim1 = dim1 + output_rank
+    else:
+        normalized_dim1 = dim1 + 0
+    if dim2 < 0:
+        normalized_dim2 = dim2 + output_rank
+    else:
+        normalized_dim2 = dim2 + 0
+    if (
+        normalized_dim1 < 0
+        or normalized_dim1 >= output_rank
+        or normalized_dim2 < 0
+        or normalized_dim2 >= output_rank
+    ):
+        return dsl.Invalid("diag_embed dimension out of range")
+    if normalized_dim1 == normalized_dim2:
+        return dsl.Invalid("diag_embed dimensions must be different")
+    if offset < 0:
+        extent = shape[-1] - offset
+    else:
+        extent = shape[-1] + offset
+    return dsl.IntTuple(
+        (
+            extent
+            if index == normalized_dim1 or index == normalized_dim2
+            else shape[
+                index
+                - (1 if normalized_dim1 < index else 0)
+                - (1 if normalized_dim2 < index else 0)
+            ]
+            for index in range(output_rank)
         )
-    return Unknown
+    )
 
-@shape_dsl_function
-def tensordot_ir(self: ShapedArray, other: ShapedArray, dims: int) -> ShapedArray:
-    return ShapedArray(shape=self.shape[: len(self.shape) - dims] + other.shape[dims:])
+@type_shape_dsl_function
+def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
+    r1 = len(left)
+    r2 = len(right)
+    if r1 == 1 and r2 == 1:
+        return dsl.IntTuple(())
+    if r1 == 1 and r2 >= 2:
+        return dsl.concat(right[:-2], right[-1:])
+    if r1 >= 2 and r2 == 1:
+        return left[:-1]
+    if r1 == 2 and r2 == 2:
+        return dsl.IntTuple((left[0], right[1]))
+    if r1 == 2 and r2 >= 3:
+        return dsl.concat(right[:-2], dsl.IntTuple((left[0], right[-1])))
+    if r1 >= 3 and r2 == 2:
+        return dsl.concat(left[:-2], dsl.IntTuple((left[-2], right[1])))
+    if r1 >= 3 and r2 >= 3:
+        # Batch dimensions prefer a non-unit dimension and otherwise the left operand.
+        if r1 < r2:
+            extra = r2 - r1
+            batch = dsl.IntTuple(
+                (
+                    right[i]
+                    if i < extra
+                    else left[i - extra]
+                    if left[i - extra] == right[i]
+                    else right[i]
+                    if left[i - extra] == 1
+                    else left[i - extra]
+                    for i in range(r2 - 2)
+                )
+            )
+        else:
+            extra = r1 - r2
+            batch = dsl.IntTuple(
+                (
+                    left[i]
+                    if i < extra or left[i] == right[i - extra]
+                    else right[i - extra]
+                    if left[i] == 1
+                    else left[i]
+                    for i in range(r1 - 2)
+                )
+            )
+        return dsl.concat(batch, dsl.IntTuple((left[-2], right[-1])))
+    return dsl.IntTuple.gradual()
+
+@type_shape_dsl_function
+def tensordot_shape(left: IntTuple, right: IntTuple, dims: int) -> IntTuple:
+    if dims < 0:
+        return dsl.Invalid("tensordot dims must be non-negative")
+    if dims > len(left) or dims > len(right):
+        return dsl.Invalid("tensordot dims exceeds input rank")
+    # TODO(stroxler): Validate contracted dimensions pairwise. This rule currently validates only
+    # ranks.
+    return dsl.concat(left[: len(left) - dims], right[dims:])
 
 @shape_dsl_function
 def apply_einsum(
@@ -631,60 +720,105 @@ def einsum_ir(spec: str, operands: list[ShapedArray] | None = None) -> ShapedArr
         return apply_einsum(output_map, check_pairs, operands)
     return Unknown
 
-@shape_dsl_function
-def conv_ir(
-    self: ShapedArray,
-    weight: ShapedArray,
-    stride: int | list[int] = 1,
-    padding: int | list[int] = 0,
-    dilation: int | list[int] = 1,
-) -> ShapedArray:
-    spatial_dims = len(self.shape) - 2
-    stride_list = broadcast_int(stride, spatial_dims)
-    padding_list = broadcast_int(padding, spatial_dims)
-    dilation_list = broadcast_int(dilation, spatial_dims)
-    return ShapedArray(
-        shape=[self.shape[0], weight.shape[0]]
-        + [
-            conv_spatial_out(s, k, st, p, dil)
+@type_shape_dsl_function
+def conv_shape(
+    input_shape: IntTuple,
+    weight_shape: IntTuple,
+    stride: int | tuple[int, ...] | None,
+    padding: int | tuple[int, ...] | None,
+    dilation: int | tuple[int, ...] | None,
+) -> IntTuple:
+    # `zip` stops at the shortest input, so unequal ranks would silently drop
+    # trailing spatial dimensions instead of reporting the mismatch.
+    if len(input_shape) != len(weight_shape):
+        return dsl.Invalid("convolution input and weight must have the same rank")
+    spatial_rank = len(input_shape) - 2
+    if stride is None:
+        return dsl.Invalid("convolution stride cannot be None")
+    elif dsl.is_int_value(stride):
+        strides = tuple(stride for _ in range(spatial_rank))
+    else:
+        strides = stride
+    if padding is None:
+        return dsl.Invalid("convolution padding cannot be None")
+    elif dsl.is_int_value(padding):
+        paddings = tuple(padding for _ in range(spatial_rank))
+    else:
+        paddings = padding
+    if dilation is None:
+        return dsl.Invalid("convolution dilation cannot be None")
+    elif dsl.is_int_value(dilation):
+        dilations = tuple(dilation for _ in range(spatial_rank))
+    else:
+        dilations = dilation
+    input_spatial = input_shape[2:]
+    weight_spatial = weight_shape[2:]
+    spatial = dsl.IntTuple(
+        (
+            (s + 2 * p - dil * (k - 1) - 1) // st + 1
             for s, k, st, p, dil in zip(
-                self.shape[2:],
-                weight.shape[2:],
-                stride_list,
-                padding_list,
-                dilation_list,
+                input_spatial,
+                weight_spatial,
+                strides,
+                paddings,
+                dilations,
             )
-        ]
+        )
     )
+    return dsl.concat(dsl.IntTuple((input_shape[0], weight_shape[0])), spatial)
 
-@shape_dsl_function
-def conv_transpose_ir(
-    self: ShapedArray,
-    weight: ShapedArray,
-    stride: int | list[int] = 1,
-    padding: int | list[int] = 0,
-    output_padding: int | list[int] = 0,
-    dilation: int | list[int] = 1,
-) -> ShapedArray:
-    spatial_dims = len(self.shape) - 2
-    stride_list = broadcast_int(stride, spatial_dims)
-    padding_list = broadcast_int(padding, spatial_dims)
-    outpad_list = broadcast_int(output_padding, spatial_dims)
-    dilation_list = broadcast_int(dilation, spatial_dims)
-    return ShapedArray(
-        shape=[self.shape[0], weight.shape[1]]
-        + [
+@type_shape_dsl_function
+def conv_transpose_shape(
+    input_shape: IntTuple,
+    weight_shape: IntTuple,
+    stride: int | tuple[int, ...] | None,
+    padding: int | tuple[int, ...] | None,
+    output_padding: int | tuple[int, ...] | None,
+    dilation: int | tuple[int, ...] | None,
+    groups: int,
+) -> IntTuple:
+    spatial_rank = len(input_shape) - 2
+    if stride is None:
+        return dsl.Invalid("convolution stride cannot be None")
+    elif dsl.is_int_value(stride):
+        strides = tuple(stride for _ in range(spatial_rank))
+    else:
+        strides = stride
+    if padding is None:
+        return dsl.Invalid("convolution padding cannot be None")
+    elif dsl.is_int_value(padding):
+        paddings = tuple(padding for _ in range(spatial_rank))
+    else:
+        paddings = padding
+    if output_padding is None:
+        return dsl.Invalid("convolution output_padding cannot be None")
+    elif dsl.is_int_value(output_padding):
+        output_paddings = tuple(output_padding for _ in range(spatial_rank))
+    else:
+        output_paddings = output_padding
+    if dilation is None:
+        return dsl.Invalid("convolution dilation cannot be None")
+    elif dsl.is_int_value(dilation):
+        dilations = tuple(dilation for _ in range(spatial_rank))
+    else:
+        dilations = dilation
+    input_spatial = input_shape[2:]
+    weight_spatial = weight_shape[2:]
+    spatial = dsl.IntTuple(
+        (
             (s - 1) * st - 2 * p + dil * (k - 1) + op + 1
             for s, k, st, p, op, dil in zip(
-                self.shape[2:],
-                weight.shape[2:],
-                stride_list,
-                padding_list,
-                outpad_list,
-                dilation_list,
+                input_spatial,
+                weight_spatial,
+                strides,
+                paddings,
+                output_paddings,
+                dilations,
             )
-        ]
+        )
     )
+    # Transposed convolution stores per-group output channels in `weight_shape[1]`.
+    return dsl.concat(dsl.IntTuple((input_shape[0], weight_shape[1] * groups)), spatial)
 
 @shape_dsl_function
 def pool_ir(
@@ -753,23 +887,87 @@ def pad_ir(self: ShapedArray, pad: list[int]) -> ShapedArray:
     ]
     return ShapedArray(shape=[d + offsets[i] for i, d in enumerate(self.shape)])
 
-@shape_dsl_function
-def rfft_ir(
-    self: ShapedArray, n: int | symint | None = None, dim: int = -1
-) -> ShapedArray:
-    d = normalize_dim(len(self.shape), dim)
-    if n != None:
-        return ShapedArray(shape=replace_dim(self.shape, d, n // 2 + 1))
-    return ShapedArray(shape=replace_dim(self.shape, d, self.shape[d] // 2 + 1))
+# The `+ 0` branches below keep normalized axes in one deferred integer domain.
+@type_shape_dsl_function
+def rfft_shape(shape: IntTuple, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    extent = shape[axis] // 2 + 1
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
 
-@shape_dsl_function
-def irfft_ir(
-    self: ShapedArray, n: int | symint | None = None, dim: int = -1
-) -> ShapedArray:
-    d = normalize_dim(len(self.shape), dim)
-    if n != None:
-        return ShapedArray(shape=replace_dim(self.shape, d, n))
-    return ShapedArray(shape=replace_dim(self.shape, d, 2 * (self.shape[d] - 1)))
+@type_shape_dsl_function
+def rfft_literal_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    extent = n // 2 + 1
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def rfft_n_shape(shape: IntTuple, n: Int, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((n // 2 + 1,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def irfft_shape(shape: IntTuple, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    extent = 2 * (shape[axis] - 1)
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def irfft_literal_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    # Arithmetic converts the `Flag[int]` length to an `Int` dimension.
+    extent = n + 0
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def irfft_n_shape(shape: IntTuple, n: Int, dim: int) -> IntTuple:
+    rank = len(shape)
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT dimension out of range")
+    return dsl.concat(dsl.concat(shape[:axis], dsl.IntTuple((n,))), shape[axis + 1 :])
 
 @type_shape_dsl_function
 def size_dim_shape(shape: IntTuple, dim: int) -> Int:

@@ -366,49 +366,6 @@ impl IntTuple {
         }
     }
 
-    /// Return a prefix slice, falling back to a shapeless tuple when symbolic bounds cannot be
-    /// represented by one variadic middle.
-    pub(crate) fn prefix_slice(&self, stop: i64) -> Self {
-        match self.view() {
-            IntTupleView::Concrete(dimensions) => {
-                let length = i128::try_from(dimensions.len())
-                    .expect("concrete IntTuple length fits in i128");
-                let stop = i128::from(stop);
-                let stop = if stop < 0 {
-                    (length + stop).max(0)
-                } else {
-                    stop.min(length)
-                };
-                let stop = usize::try_from(stop)
-                    .expect("clamped concrete IntTuple slice stop fits in usize");
-                Self::new(dimensions[..stop].to_vec())
-            }
-            _ if stop == 0 => Self::new(Vec::new()),
-            IntTupleView::Unpacked { prefix, .. }
-                if stop > 0 && usize::try_from(stop).is_ok_and(|stop| stop <= prefix.len()) =>
-            {
-                Self::new(prefix[..stop as usize].to_vec())
-            }
-            IntTupleView::Unpacked {
-                prefix,
-                middle,
-                suffix,
-            } if stop < 0
-                && usize::try_from(stop.unsigned_abs())
-                    .is_ok_and(|removed| removed <= suffix.len()) =>
-            {
-                let removed = usize::try_from(stop.unsigned_abs())
-                    .expect("validated suffix slice count fits in usize");
-                Self::unpacked(
-                    prefix.to_vec(),
-                    middle.clone(),
-                    suffix[..suffix.len() - removed].to_vec(),
-                )
-            }
-            IntTupleView::Gradual | IntTupleView::Unpacked { .. } => Self::shapeless(),
-        }
-    }
-
     /// Concatenate shapes, falling back to a shapeless tuple when the result would require two
     /// variadic middles.
     pub(crate) fn concat(&self, other: &Self) -> Self {
@@ -1138,7 +1095,8 @@ pub fn shape_to_tuple_carrier_arg(shape: &IntTuple) -> Type {
 ///
 /// `tuple[T, ...]` (including `tuple[int, ...]` and `tuple[Any, ...]`)
 /// intentionally canonicalizes to the shapeless / unknown-rank shape: an
-/// unbounded carrier conveys no recoverable per-dimension information.
+/// unbounded carrier conveys no recoverable per-dimension information. Its
+/// element must still be a dimension, so `tuple[str, ...]` is not a carrier.
 pub fn tuple_carrier_to_shape(carrier: &Type) -> Option<IntTuple> {
     match carrier {
         Type::Tuple(Tuple::Concrete(elts)) => {
@@ -1158,14 +1116,18 @@ pub fn tuple_carrier_to_shape(carrier: &Type) -> Option<IntTuple> {
                 .iter()
                 .map(carrier_element_to_dim)
                 .collect::<Option<Vec<_>>>()?;
-            if matches!(middle, Type::Tuple(Tuple::Unbounded(_))) {
+            if let Type::Tuple(Tuple::Unbounded(elt)) = middle {
+                carrier_element_to_dim(elt)?;
                 return Some(IntTuple::unpacked(prefix, gradual_shape_middle(), suffix));
             }
             validate_tuple_carrier_unpacked_middle(middle)?;
             let middle = recover_unbounded_tuple_carrier_middle(middle.clone());
             Some(IntTuple::unpacked(prefix, middle, suffix))
         }
-        Type::Tuple(Tuple::Unbounded(_)) => Some(shapeless_shape()),
+        Type::Tuple(Tuple::Unbounded(elt)) => {
+            carrier_element_to_dim(elt)?;
+            Some(shapeless_shape())
+        }
         _ if is_tuple_carrier_shape_middle(carrier) => {
             Some(IntTuple::unpacked(Vec::new(), carrier.clone(), Vec::new()))
         }
@@ -1208,7 +1170,7 @@ fn validate_tuple_carrier_unpacked_middle(middle: &Type) -> Option<()> {
                 .collect::<Option<Vec<_>>>()?;
             validate_tuple_carrier_unpacked_middle(middle)
         }
-        Type::Tuple(Tuple::Unbounded(_)) => Some(()),
+        Type::Tuple(Tuple::Unbounded(elt)) => carrier_element_to_dim(elt).map(|_| ()),
         middle if is_unresolved_shape_middle(middle) => Some(()),
         Type::IntTuple(_) => Some(()),
         _ => None,
@@ -2059,31 +2021,6 @@ mod tests {
 
     fn concrete_carrier(elts: Vec<Type>) -> Type {
         Type::Tuple(Tuple::Concrete(elts))
-    }
-
-    #[test]
-    fn int_tuple_prefix_slice_preserves_known_edges() {
-        let middle = gradual_shape_middle();
-        let unpacked =
-            IntTuple::unpacked(vec![dim(1), dim(2)], middle.clone(), vec![dim(3), dim(4)]);
-
-        assert_eq!(
-            IntTuple::new(vec![dim(1), dim(2), dim(3)]).prefix_slice(-1),
-            IntTuple::new(vec![dim(1), dim(2)]),
-        );
-        assert_eq!(
-            unpacked.prefix_slice(2),
-            IntTuple::new(vec![dim(1), dim(2)]),
-        );
-        assert_eq!(
-            unpacked.prefix_slice(-2),
-            IntTuple::unpacked(vec![dim(1), dim(2)], middle, Vec::new()),
-        );
-        assert_eq!(unpacked.prefix_slice(3), IntTuple::shapeless());
-        assert_eq!(
-            IntTuple::shapeless().prefix_slice(-1),
-            IntTuple::shapeless(),
-        );
     }
 
     #[test]
@@ -3608,9 +3545,34 @@ mod tests {
     }
 
     #[test]
+    fn invalid_unbounded_carriers_fail() {
+        // Canonicalizing to shapeless would hide the invalid element, so an
+        // unbounded carrier is only a carrier when its element is a dimension.
+        let direct = Type::Tuple(Tuple::Unbounded(Box::new(Type::ClassType(
+            fake_class_type("builtins", "str"),
+        ))));
+        assert_eq!(tuple_carrier_to_shape(&direct), None);
+
+        let unpacked = Type::Tuple(Tuple::unpacked(
+            vec![literal(1)],
+            direct.clone(),
+            Vec::new(),
+        ));
+        assert_eq!(tuple_carrier_to_shape(&unpacked), None);
+
+        // The same holds for an unbounded tuple nested inside an unpacked middle.
+        let nested = Type::Tuple(Tuple::unpacked(
+            vec![literal(1)],
+            Type::Tuple(Tuple::unpacked(vec![literal(2)], direct, Vec::new())),
+            vec![literal(3)],
+        ));
+        assert_eq!(tuple_carrier_to_shape(&nested), None);
+    }
+
+    #[test]
     fn unbounded_carriers_canonicalize_to_shapeless() {
         // Unbounded carriers have no recoverable rank or per-dimension values,
-        // regardless of their element type.
+        // whatever dimension their element is.
         let any_unbounded = Type::any_tuple();
         let internal_unbounded = Type::Tuple(Tuple::Unbounded(Box::new(size(5))));
         let int_unbounded = Type::Tuple(Tuple::Unbounded(Box::new(Type::ClassType(

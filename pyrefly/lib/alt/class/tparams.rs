@@ -5,10 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::ops::Deref;
 use std::sync::Arc;
 
-use dupe::Dupe;
 use pyrefly_graph::index::Idx;
 use pyrefly_types::class::PrecomputedTParams;
 use ruff_python_ast::Identifier;
@@ -31,7 +29,7 @@ use crate::types::types::TParams;
 use crate::types::types::TParamsSource;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Calculate class type parameters in the case where we were able to predetermine
     /// syntactically (from looking at the base class expressions) that there are no legacy type variables.
     pub fn calculate_class_tparams_no_legacy(
@@ -55,7 +53,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let scoped_tparams = self.scoped_type_params(scoped_type_params, errors);
         let legacy_tparams = legacy
             .iter()
-            .filter_map(|key| self.get_idx(*key).deref().parameter().cloned())
+            .filter_map(|key| self.get_idx(*key).parameter().cloned())
             .collect::<SmallSet<_>>();
         let legacy_map = legacy_tparams
             .iter()
@@ -161,13 +159,16 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     /// The type parameters of a class, or `None` when it has none.
-    pub fn get_class_tparams(&self, class: &Class) -> Option<Arc<TParams>> {
+    ///
+    /// Returns the shared `Arc` rather than its contents, so a caller needing
+    /// ownership can `dupe` it without the answer being cloned.
+    pub fn get_class_tparams<'b>(&'b self, class: &'b Class) -> Option<&'b Arc<TParams>> {
         match class.precomputed_tparams() {
             PrecomputedTParams::NotGeneric => None,
             PrecomputedTParams::FromBinding => {
                 self.get_from_class(class, &KeyTParams(class.index()))
             }
-            PrecomputedTParams::Precomputed(tparams) => Some(tparams.dupe()),
+            PrecomputedTParams::Precomputed(tparams) => Some(tparams),
         }
     }
 }

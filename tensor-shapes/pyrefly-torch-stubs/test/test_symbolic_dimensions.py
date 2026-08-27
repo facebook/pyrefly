@@ -13,7 +13,7 @@ import torch
 import torch.fft
 import torch.linalg
 import torch.nn.functional as F
-from shape_extensions import Int, IntVar
+from shape_extensions import Int, IntTuple, IntVar
 from torch import Tensor
 
 # ==== Week 2: Symbolic Dimension Tests ====
@@ -1121,6 +1121,27 @@ def test_diag_embed[B: IntVar, N: IntVar](x: Tensor[[B, N]]):
     y = torch.diag_embed(x)
     # Creates diagonal matrix: [B, N] → [B, N, N]
     assert_type(y, Tensor[[B, N, N]])
+
+
+def test_diag_embed_offset_symbolic[B: IntVar, N: IntVar](x: Tensor[[B, N]]):
+    assert_type(torch.diag_embed(x, offset=-2), Tensor[[B, N + 2, N + 2]])
+
+
+def test_unfold_symbolic[N: IntVar](x: Tensor[[N]]):
+    assert_type(torch.unfold(x, 0, 3, 2), Tensor[[(N - 3) // 2 + 1, 3]])
+
+
+# A symbolic argument cannot bind a `Flag` value, so it reaches the evaluator as a
+# gradual input and the result stays unresolved. These assertions keep that boundary
+# visible; a later capability diff should make them precise.
+def test_unfold_symbolic_size[N: IntVar, M: IntVar](x: Tensor[[N]], size: Int[M]):
+    assert_type(torch.unfold(x, 0, size, 2), Tensor[IntTuple])
+
+
+def test_diag_embed_symbolic_offset[B: IntVar, N: IntVar, O: IntVar](
+    x: Tensor[[B, N]], offset: Int[O]
+):
+    assert_type(torch.diag_embed(x, offset=offset), Tensor[IntTuple])
 
 
 def test_norm_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):

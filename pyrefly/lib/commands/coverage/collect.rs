@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
@@ -562,10 +561,10 @@ fn parse_variables(
 }
 
 /// The MRO of `class`, or `Cyclic` if unresolved.
-fn class_mro(bindings: &Bindings, answers: &Answers, class: &Class) -> Arc<ClassMro> {
+fn class_mro<'a>(bindings: &Bindings, answers: &'a Answers, class: &Class) -> &'a ClassMro {
     answers
         .get_idx(bindings.key_to_idx(&KeyClassMro(class.index())))
-        .unwrap_or_else(|| Arc::new(ClassMro::Cyclic))
+        .unwrap_or(&ClassMro::Cyclic)
 }
 
 /// Slots for `field_name` from the nearest base class annotating it in `class_idx`'s MRO (gh-3997).

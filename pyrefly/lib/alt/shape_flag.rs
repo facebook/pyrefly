@@ -46,7 +46,7 @@ pub(crate) fn shape_flag_vars(tparams: &TParams, vars: &[Var]) -> Option<Arc<Sma
     (!vars.is_empty()).then(|| Arc::new(vars))
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
     pub(crate) fn reject_legacy_shape_flag_bound(
         &self,
         bound: &Type,
@@ -90,7 +90,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             domain.range(),
                             ErrorKind::InvalidTypeVar,
                             format!(
-                                "`Flag` domain must resolve to `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these, got `{domain_ty}`"
+                                "`Flag` domain must resolve to a nonempty union of `int`, `bool`, `str`, `None`, and integer tuples of one fixed arity or `tuple[int, ...]`, got `{domain_ty}`"
                             ),
                         );
                         Restriction::Unrestricted

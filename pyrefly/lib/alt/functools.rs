@@ -44,7 +44,7 @@ use crate::types::types::Overload;
 use crate::types::types::OverloadType;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Handle a `functools.partial(func, ...)` call, synthesizing the residual signature instead of
     /// deferring to the typeshed stub.
     pub fn call_functools_partial(

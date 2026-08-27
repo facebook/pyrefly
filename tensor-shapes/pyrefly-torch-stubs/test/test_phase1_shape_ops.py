@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Phase 1.1: Missing shape operations tests
-from typing import assert_type
+from typing import assert_type, reveal_type
 
 import torch
 from torch import Tensor
@@ -95,3 +95,32 @@ def test_unfold_3d():
     # Output shape: [2, 5, 6, 3]
     result = x.unfold(dimension=2, size=3, step=1)
     assert_type(result, Tensor[[2, 5, 6, 3]])
+
+
+def test_unfold_negative_dimension():
+    x: Tensor[[8, 5]] = torch.randn(8, 5)
+    result = torch.unfold(x, dimension=-2, size=3, step=2)
+    assert_type(result, Tensor[[3, 5, 3]])
+
+
+def test_unfold_zero_size():
+    x: Tensor[[5]] = torch.randn(5)
+    reveal_type(
+        torch.unfold(x, dimension=0, size=0, step=2)
+    )  # revealed type: Tensor[[3, 0]]
+    empty = torch.randn(0)
+    reveal_type(
+        empty.unfold(dimension=0, size=0, step=2)
+    )  # revealed type: Tensor[[1, 0]]
+
+
+def test_unfold_scalar():
+    scalar: Tensor[[]] = torch.tensor(1)
+    reveal_type(torch.unfold(scalar, 0, 0, 2))  # revealed type: Tensor[[0]]
+    reveal_type(scalar.unfold(-1, 0, 2))  # revealed type: Tensor[[0]]
+    assert_type(torch.unfold(scalar, 0, 1, 2), Tensor[[1]])
+    assert_type(scalar.unfold(-1, 1, 2), Tensor[[1]])
+
+
+def test_unfold_shapeless(x: Tensor):
+    assert_type(x.unfold(dimension=0, size=3, step=1), Tensor)

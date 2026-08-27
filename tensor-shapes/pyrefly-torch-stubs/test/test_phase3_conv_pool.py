@@ -10,6 +10,7 @@ from typing import assert_type
 import torch
 import torch.nn
 import torch.nn.functional
+from shape_extensions import IntVar
 from torch import Tensor
 
 # ==== 1D Convolution Operations ====
@@ -92,6 +93,33 @@ def test_conv3d_basic():
     assert_type(result, Tensor[[1, 8, 14, 30, 30]])
 
 
+def test_convolution_mixed_scalar_and_tuple_parameters():
+    input2: Tensor[[2, 3, 10, 20]] = torch.randn(2, 3, 10, 20)
+    weight2: Tensor[[4, 3, 3, 5]] = torch.randn(4, 3, 3, 5)
+    result2 = torch.nn.functional.conv2d(
+        input2, weight2, stride=2, padding=(1, 2), dilation=(2, 1)
+    )
+    assert_type(result2, Tensor[[2, 4, 4, 10]])
+
+
+def test_convolution_symbolic_and_permissive_inputs[N: IntVar](
+    symbolic: Tensor[[2, 3, N]], gradual: Tensor, gradual_weight: Tensor
+) -> None:
+    weight: Tensor[[4, 3, 3]] = torch.randn(4, 3, 3)
+    assert_type(torch.nn.functional.conv1d(symbolic, weight), Tensor[[2, 4, N - 2]])
+    assert_type(torch.nn.functional.conv2d(gradual, gradual_weight), Tensor)
+
+    low_rank: Tensor[[5]] = torch.randn(5)
+    low_rank_weight: Tensor[[7]] = torch.randn(7)
+    assert_type(torch.nn.functional.conv1d(low_rank, low_rank_weight), Tensor[[5, 7]])
+
+    mismatched_weight: Tensor[[4, 99, 3]] = torch.randn(4, 99, 3)
+    assert_type(
+        torch.nn.functional.conv1d(symbolic, mismatched_weight, groups=7),
+        Tensor[[2, 4, N - 2]],
+    )
+
+
 # ==== Transposed Convolution Operations (Deconvolution) ====
 
 
@@ -125,6 +153,44 @@ def test_conv_transpose3d():
     # D_out = H_out = W_out = (n - 1) * 2 - 2*1 + 1*(4-1) + 0 + 1
     result = torch.nn.functional.conv_transpose3d(input, weight, stride=2, padding=1)
     assert_type(result, Tensor[[1, 16, 8, 16, 16]])
+
+
+def test_transposed_convolution_mixed_scalar_and_tuple_parameters():
+    input2: Tensor[[2, 4, 5, 7]] = torch.randn(2, 4, 5, 7)
+    weight2: Tensor[[4, 3, 3, 4]] = torch.randn(4, 3, 3, 4)
+    result2 = torch.nn.functional.conv_transpose2d(
+        input2,
+        weight2,
+        stride=(2, 3),
+        padding=(1, 2),
+        output_padding=(1, 2),
+        dilation=(2, 1),
+    )
+    assert_type(result2, Tensor[[2, 3, 12, 20]])
+
+
+def test_transposed_convolution_permissive_inputs(
+    gradual: Tensor, gradual_weight: Tensor
+) -> None:
+    assert_type(torch.nn.functional.conv_transpose2d(gradual, gradual_weight), Tensor)
+
+    low_rank: Tensor[[5]] = torch.randn(5)
+    low_rank_weight: Tensor[[7, 11]] = torch.randn(7, 11)
+    assert_type(
+        torch.nn.functional.conv_transpose1d(low_rank, low_rank_weight),
+        Tensor[[5, 11]],
+    )
+
+    input: Tensor[[2, 4, 5]] = torch.randn(2, 4, 5)
+    weight: Tensor[[99, 3, 3]] = torch.randn(99, 3, 3)
+    assert_type(
+        torch.nn.functional.conv_transpose1d(input, weight, groups=7),
+        Tensor[[2, 21, 7]],
+    )
+    assert_type(
+        torch.nn.functional.conv_transpose1d(input, weight, stride=0),
+        Tensor[[2, 3, 3]],
+    )
 
 
 # ==== Max Pooling Operations ====
