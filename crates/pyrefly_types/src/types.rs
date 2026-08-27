@@ -1883,12 +1883,6 @@ impl Type {
         }
     }
 
-    pub fn callable_signatures(&self) -> Vec<&Callable> {
-        self.toplevel_callable_signatures()
-            .map(|(sig, _)| sig)
-            .collect::<Vec<_>>()
-    }
-
     fn promote_one_implicit_literal(ty: &mut Type, stdlib: &Stdlib) {
         match &*ty {
             Type::Literal(lit) if lit.style == LitStyle::Implicit => {

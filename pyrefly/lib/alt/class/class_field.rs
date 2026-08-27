@@ -12,6 +12,7 @@ use std::iter;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use itertools::Itertools;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
@@ -4344,12 +4345,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         // lists (e.g., a lambda whose `self` wasn't stripped by
                         // method binding). In that case, fall through to BadOverride
                         // so we get the signature diff.
-                        let got_sigs = got.callable_signatures();
-                        let want_sigs = want.callable_signatures();
-                        got_sigs.len() == 1
-                            && want_sigs.len() == 1
-                            && got_sigs[0].arg_counts().positional.max
-                                == want_sigs[0].arg_counts().positional.max
+                        let got_sigs = got.toplevel_callable_signatures();
+                        let want_sigs = want.toplevel_callable_signatures();
+                        if let Ok((got_sig, _)) = got_sigs.exactly_one()
+                            && let Ok((want_sig, _)) = want_sigs.exactly_one()
+                        {
+                            got_sig.arg_counts().positional.max
+                                == want_sig.arg_counts().positional.max
+                        } else {
+                            false
+                        }
                     } =>
                 {
                     Some(OverrideError {
@@ -4377,9 +4382,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | AttrSubsetError::Invariant { got, want, .. }
                     | AttrSubsetError::Contravariant { got, want, .. } = &*error
                     {
-                        let got_sigs = got.callable_signatures();
-                        let want_sigs = want.callable_signatures();
-                        if got_sigs.len() == 1 && want_sigs.len() == 1 {
+                        let got_sigs = got.toplevel_callable_signatures();
+                        let want_sigs = want.toplevel_callable_signatures();
+                        if got_sigs.exactly_one().is_ok() && want_sigs.exactly_one().is_ok() {
                             let mut ctx = TypeDisplayContext::new(&[got, want]);
                             ctx.set_lsp_display_mode(LspDisplayMode::SignatureHelp);
                             let got_sig = ctx.display(got).to_string();
@@ -5727,9 +5732,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     // child's ReadWrite type can accept everything the parent's
                     // setter promises to accept.
                     // Property setters are always a single function (never an
-                    // overload), so callable_signatures() returns exactly one.
-                    let setter_sigs = want_setter.callable_signatures();
-                    if let Some(setter_sig) = setter_sigs.first()
+                    // overload), so toplevel_callable_signatures() returns exactly one.
+                    if let Some((setter_sig, _)) = want_setter.toplevel_callable_signatures().next()
                         && let Some(rest) = setter_sig.strip_first_param()
                         && let Some(setter_value_type) = rest.get_first_param()
                     {
@@ -5970,8 +5974,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     fn callable_params_and_flags(ty: Type) -> Option<(ParamList, FuncFlags)> {
         let flags = ty.toplevel_func_metadata()?.flags.clone();
-        let params = match ty.callable_signatures().as_slice() {
-            [sig] if let Params::List(list) = &sig.params => Some(list.clone()),
+        let params = match ty.toplevel_callable_signatures().exactly_one() {
+            Ok((sig, _)) if let Params::List(list) = &sig.params => Some(list.clone()),
             _ => None,
         }?;
         Some((params, flags))

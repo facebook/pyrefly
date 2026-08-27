@@ -2902,9 +2902,8 @@ impl<'a> CallGraphVisitor<'a> {
 
         // Extract parameter types from the callee's callable signature.
         // Only filter when there's exactly one signature (no overloads).
-        let signatures = callee_type.callable_signatures();
-        let params = match signatures.as_slice() {
-            [sig] => match &sig.params {
+        let params = match callee_type.toplevel_callable_signatures().exactly_one() {
+            Ok((sig, _)) => match &sig.params {
                 Params::List(param_list) => param_list.items(),
                 _ => return higher_order_parameters,
             },

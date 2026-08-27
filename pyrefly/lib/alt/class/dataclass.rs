@@ -376,12 +376,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) -> Option<Type> {
         let get_ty = self.descriptor_member_type(descriptor_cls, &dunder::GET)?;
         let instance_ty = self.instantiate(cls);
-        // `callable_signatures` yields the unbound member signatures, so the parameters are
+        // `toplevel_callable_signatures` yields the unbound member signatures, so the parameters are
         // `__get__(self, obj, cls)` - the `obj` param is at index 1
         let instance_returns = get_ty
-            .callable_signatures()
-            .iter()
-            .filter_map(|sig| {
+            .toplevel_callable_signatures()
+            .filter_map(|(sig, _)| {
                 let obj_ty = sig.get_positional_param(1)?;
                 self.is_subset_eq(&instance_ty, obj_ty)
                     .then(|| sig.ret.clone())
@@ -458,9 +457,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .descriptor_member_type(&descriptor_cls, &dunder::SET)
                     .and_then(|set_ty| {
                         set_ty
-                            .callable_signatures()
-                            .first()
-                            .and_then(|sig| sig.get_positional_param(2).cloned())
+                            .toplevel_callable_signatures()
+                            .next()
+                            .and_then(|(sig, _)| sig.get_positional_param(2).cloned())
                     });
 
                 if let (Some(get_ty), Some(set_ty)) = (get_return_ty, set_value_ty) {
@@ -938,17 +937,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // `__init__`. This mirrors how Pyright handles `field_specifiers` per PEP 681.
         let constructor_callable = self.constructor_to_callable_distributed(func);
         let func = constructor_callable.as_ref().unwrap_or(func);
-        let sigs = func.callable_signatures();
+        let sigs = func.toplevel_callable_signatures().collect::<Vec<_>>();
         let sig = if sigs.len() == 1 {
-            sigs[0].clone()
+            sigs[0].0.clone()
         } else if sigs.len() > 1
             && let Type::Overload(overload) = func
         {
             // Overloaded function. Call it to see which signature is actually used.
-            // TODO: sigs could contain unbound type parameters, because `callable_signatures`
+            // TODO: sigs could contain unbound type parameters, because `toplevel_callable_signatures`
             // looks through foralls. Overload selection might fail spuriously.
             self.call_overloads(
-                Vec1::try_from_vec(sigs.map(|x| {
+                Vec1::try_from_vec(sigs.map(|(x, _)| {
                     TargetWithTParams(
                         None,
                         Function {
@@ -1058,10 +1057,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // Only overloads callable with a single positional argument contribute an input type;
             // an overload requiring a second positional arg can't be the converter.
             let inputs: Vec<Type> = ty
-                .callable_signatures()
-                .iter()
-                .filter(|sig| sig.accepts_single_positional_arg())
-                .filter_map(|sig| sig.get_first_param())
+                .toplevel_callable_signatures()
+                .filter(|(sig, _)| sig.accepts_single_positional_arg())
+                .filter_map(|(sig, _)| sig.get_first_param())
                 .cloned()
                 .collect();
             if inputs.is_empty() {

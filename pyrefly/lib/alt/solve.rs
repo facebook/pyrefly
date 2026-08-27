@@ -6112,9 +6112,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         // does not, since the user did not opt in to erasing the class.
                         !decorator_ty.toplevel_func_metadata().is_some_and(|meta| meta.flags.is_return_inferred)
                             && decorator_ty
-                                .callable_signatures()
-                                .iter()
-                                .any(|c| matches!(&c.ret, Type::Type(inner) if matches!(&**inner, Type::Any(AnyStyle::Explicit))))
+                                .toplevel_callable_signatures()
+                                .any(|(c, _)| matches!(&c.ret, Type::Type(inner) if matches!(&**inner, Type::Any(AnyStyle::Explicit))))
                     });
                     if erases_class {
                         self.heap.mk_type(self.heap.mk_any_explicit())

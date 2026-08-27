@@ -272,7 +272,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         decorators.iter().rev().find_map(|(decorator_ty, _)| {
             decorator_ty
                 .callable_first_param(self.heap)
-                .and_then(|param_ty| param_ty.callable_signatures().into_iter().next().cloned())
+                .and_then(|param_ty| {
+                    param_ty
+                        .toplevel_callable_signatures()
+                        .next()
+                        .map(|(sig, _)| sig.clone())
+                })
                 .and_then(DecoratorParamHints::from_callable)
         })
     }
@@ -1936,8 +1941,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // the impl's own type so direct calls to the registered function are type-checked, rather
         // than the stub `register`'s erased `Callable[..., _T]` return.
         if let Some(fallback_first) = Self::singledispatch_register_first(&decorator) {
-            // `callable_signatures` recognizes overloaded and generic impls.
-            if let [sig, ..] = decoratee.callable_signatures().as_slice()
+            // `toplevel_callable_signatures` recognizes overloaded and generic impls.
+            if let Some((sig, _)) = decoratee.toplevel_callable_signatures().next()
                 && let Some(dispatch_ty) = Self::first_positional_param_type(sig)
             {
                 self.check_singledispatch_register(&dispatch_ty, &fallback_first, range, errors);

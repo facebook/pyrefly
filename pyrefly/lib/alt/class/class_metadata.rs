@@ -2274,18 +2274,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return false;
         };
 
-        let setitem_sigs = setitem_ty.callable_signatures();
-        let getitem_sigs = getitem_ty.callable_signatures();
+        let setitem_sigs = setitem_ty
+            .toplevel_callable_signatures()
+            .collect::<Vec<_>>();
+        let getitem_sigs = getitem_ty
+            .toplevel_callable_signatures()
+            .collect::<Vec<_>>();
         if setitem_sigs.is_empty() || getitem_sigs.is_empty() {
             return false;
         }
 
-        let candidate = &getitem_sigs[0].ret;
+        let candidate = &getitem_sigs[0].0.ret;
         let all_getters_match = getitem_sigs
             .iter()
-            .all(|sig| self.is_equivalent(&sig.ret, candidate));
+            .all(|(sig, _)| self.is_equivalent(&sig.ret, candidate));
         // Bound `__setitem__` has params `[key, value]`; we want `value` at index 1.
-        let all_setters_match = setitem_sigs.iter().all(|sig| {
+        let all_setters_match = setitem_sigs.iter().all(|(sig, _)| {
             matches!(&sig.params, Params::List(params)
                 if params.items().get(1)
                     .is_some_and(|p| self.is_equivalent(p.as_type(), candidate)))

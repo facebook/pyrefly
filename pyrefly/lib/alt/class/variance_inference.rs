@@ -175,11 +175,12 @@ fn on_type(
     on_edge: &mut impl FnMut(&Class) -> InferenceMap,
     on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
 ) {
-    let sigs = typ.callable_signatures();
-    if !sigs.is_empty() {
-        for callable in sigs {
-            on_callable(variance, inj, callable, false, on_edge, on_var);
-        }
+    let mut is_callable = false;
+    for (callable, _) in typ.toplevel_callable_signatures() {
+        on_callable(variance, inj, callable, false, on_edge, on_var);
+        is_callable = true;
+    }
+    if is_callable {
         return;
     }
 

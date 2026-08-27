@@ -316,7 +316,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             && arguments.args.len() == 1
             && arguments.keywords.is_empty()
             && let Some(impl_ty) = &arg_ty
-            && let [sig, ..] = impl_ty.callable_signatures().as_slice()
+            && let Some((sig, _)) = impl_ty.toplevel_callable_signatures().next()
         {
             if let Some(dispatch_ty) = Self::first_positional_param_type(sig) {
                 self.check_singledispatch_register(
@@ -366,7 +366,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) -> Type {
         let impl_ty = self.expr_infer(impl_arg, errors);
         // A non-callable argument is left to normal call checking.
-        if impl_ty.callable_signatures().is_empty() {
+        if impl_ty.toplevel_callable_signatures().next().is_none() {
             self.freeform_call_infer(
                 register_ty.clone(),
                 args,
