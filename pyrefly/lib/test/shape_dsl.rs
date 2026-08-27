@@ -10070,6 +10070,23 @@ def all_ones(shape: IntTuple) -> Int:
 def zero_overflow(shape: IntTuple) -> Int:
     return imported_prod(DslIntTuple((0, 9223372036854775807, 2)))
 
+@type_shape_dsl_function
+def filtered_quotient(numerator: IntTuple, factor: Int) -> Int:
+    factors = DslIntTuple((1, factor, -1))
+    filtered = DslIntTuple(
+        (
+            dimension
+            for dimension in factors
+            if not (qualified_dsl.is_concrete_int(dimension) and dimension == -1)
+        )
+    )
+    return imported_prod(numerator) // imported_prod(filtered)
+
+@type_shape_dsl_function
+def product_self_quotient(shape: IntTuple) -> Int:
+    product = imported_prod(shape)
+    return product // product
+
 def apply_qualified[S: IntTuple](x: Tensor[S]) -> Tensor[[qualified(S)]]: ...
 def apply_module[S: IntTuple](x: Tensor[S]) -> Tensor[[module_qualified(S)]]: ...
 def apply_imported[S: IntTuple](x: Tensor[S]) -> Tensor[[imported(S)]]: ...
@@ -10086,8 +10103,17 @@ def all_ones_result() -> Tensor[[all_ones(IntTuple[7])]]: ...
 def zero_overflow_result() -> Tensor[[zero_overflow(IntTuple[7])]]: ...
 def literal_overflow() -> Tensor[[qualified(IntTuple[9223372036854775807, 2])]]: ...
 def symbolic_overflow[N: IntVar](n: Int[N]) -> Tensor[[qualified(IntTuple[9223372036854775807, N, 2])]]: ...
+def apply_filtered_subtractive[N: IntVar, M: IntVar](
+    n: Int[N], m: Int[M],
+) -> Tensor[[filtered_quotient(IntTuple[2 * N - 1, M], Int[2 * N - 1])]]: ...
+def apply_filtered_additive[N: IntVar, C: IntVar](
+    n: Int[N], c: Int[C],
+) -> Tensor[[filtered_quotient(IntTuple[2 * N + 1, C], Int[2 * N + 1])]]: ...
+def apply_product_self_quotient[Shape: IntTuple](
+    shape: Tensor[Shape],
+) -> Tensor[[product_self_quotient(Shape)]]: ...
 
-def test[S: IntTuple, N: IntVar, M: IntVar](
+def test[S: IntTuple, N: IntVar, M: IntVar, K: IntVar, C: IntVar](
     concrete: Tensor[[2, 3]],
     symbolic: Tensor[[2, N, 3]],
     triple: Tensor[[2, 3, 5]],
@@ -10097,12 +10123,18 @@ def test[S: IntTuple, N: IntVar, M: IntVar](
     subtract: Tensor[[(N - 1)]],
     floor_divide: Tensor[[(N // 2)]],
     power: Tensor[[(N ** 2)]],
-    multi_factor_computed_awaits_checked_canonicalization: Tensor[[(N + 1), M]],
-    computed_and_literal_await_checked_canonicalization: Tensor[[(N + 1), 2]],
-    subtract_fallback: Tensor[[(N - 1), M]],
-    floor_divide_fallback: Tensor[[(N // 2), M]],
-    power_fallback: Tensor[[(N ** 2), M]],
+    additive_product: Tensor[[(N + 1), M]],
+    additive_literal_product: Tensor[[(N + 1), 2]],
+    subtractive_product: Tensor[[(N - 1), M]],
+    linear_additive_product: Tensor[[(N + M + 1), K]],
+    bounded_multiplicative_product: Tensor[[(N + 1), (M + 1)]],
+    floor_divide_product: Tensor[[(N // 2), M]],
+    power_product: Tensor[[(N ** 2), M]],
+    multi_additive_product: Tensor[[(N + 1), (M + 1), (K + 1)]],
     n: Int[N],
+    m: Int[M],
+    c: Int[C],
+    wrapped_max: Int[9223372036854775807],
 ) -> None:
     assert_type(apply_qualified(concrete), Tensor[[6]])
     assert_type(apply_module(concrete), Tensor[[6]])
@@ -10126,13 +10158,20 @@ def test[S: IntTuple, N: IntVar, M: IntVar](
     reveal_type(apply_identity_padded(power))  # E: revealed type: Tensor[[(N ** 2)]]
     reveal_type(all_ones_result())  # E: revealed type: Tensor[[1]]
     reveal_type(apply_qualified(unpacked))  # E: revealed type: Tensor[[int]]
-    reveal_type(apply_qualified(multi_factor_computed_awaits_checked_canonicalization))  # E: revealed type: Tensor[[int]]
-    reveal_type(apply_qualified(computed_and_literal_await_checked_canonicalization))  # E: revealed type: Tensor[[int]]
-    reveal_type(apply_qualified(subtract_fallback))  # E: revealed type: Tensor[[int]]
-    reveal_type(apply_qualified(floor_divide_fallback))  # E: revealed type: Tensor[[int]]
-    reveal_type(apply_qualified(power_fallback))  # E: revealed type: Tensor[[int]]
+    assert_type(apply_qualified(additive_product), Tensor[[M + M * N]])
+    assert_type(apply_qualified(additive_literal_product), Tensor[[2 + 2 * N]])
+    assert_type(apply_qualified(subtractive_product), Tensor[[-1 * M + M * N]])
+    assert_type(apply_qualified(linear_additive_product), Tensor[[K + K * M + K * N]])
+    assert_type(apply_qualified(bounded_multiplicative_product), Tensor[[1 + M + N + M * N]])
+    reveal_type(apply_qualified(floor_divide_product))  # E: revealed type: Tensor[[(M * (N // 2))]]
+    reveal_type(apply_qualified(power_product))  # E: revealed type: Tensor[[(M * (N ** 2))]]
+    assert_type(apply_filtered_subtractive(n, m), Tensor[[M]])
+    assert_type(apply_filtered_additive(n, c), Tensor[[C]])
+    assert_type(apply_qualified(multi_additive_product), Tensor[[int]])
+    assert_type(apply_product_self_quotient(multi_additive_product), Tensor[[int]])
     reveal_type(literal_overflow())  # E: revealed type: Tensor[[int]]
     reveal_type(symbolic_overflow(n))  # E: revealed type: Tensor[[int]]
+    reveal_type(symbolic_overflow(wrapped_max))  # E: revealed type: Tensor[[int]]
 "#,
 );
 

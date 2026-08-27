@@ -439,28 +439,34 @@ impl IntTuple {
             return Int::Literal(0);
         }
 
-        // Substitution can expose factors that were not canonical when the shape was built.
-        let factors = dimensions
+        let Some(factors) = dimensions
             .iter()
-            .map(|dimension| canonicalize_int_dim(dimension.clone()))
-            .filter(|dimension| !matches!(dimension, Int::Literal(1)))
+            .map(|dimension| {
+                product_canonicalization_term_count(dimension).map(|terms| (dimension, terms))
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Int::Int;
+        };
+        let factors = factors
+            .into_iter()
+            .filter(|(dimension, _)| !product_factor_is_definitely_one(dimension))
             .collect::<Vec<_>>();
         match factors.as_slice() {
             [] => Int::Literal(1),
-            [factor] => factor.clone(),
+            [(factor, _)] => canonicalize_int_dim((*factor).clone()),
             factors => {
-                if factors
-                    .iter()
-                    .try_fold(1_i64, |product, factor| {
-                        checked_product_factor(factor, product)
-                    })
-                    .is_none()
-                {
+                let expansion_terms = factors.iter().fold(1_usize, |terms, (_, factor_terms)| {
+                    terms
+                        .saturating_mul(*factor_terms)
+                        .min(MAX_PRODUCT_CANONICAL_TERMS + 1)
+                });
+                if expansion_terms > MAX_PRODUCT_CANONICAL_TERMS {
                     return Int::Int;
                 }
                 let product = factors
                     .iter()
-                    .cloned()
+                    .map(|(factor, _)| canonicalize_int_dim((*factor).clone()))
                     .fold(Int::Literal(1), |left, right| {
                         Int::mul(Type::Int(left), Type::Int(right))
                     });
@@ -907,23 +913,96 @@ fn product_factor_is_definitely_zero(dimension: &Int) -> bool {
     }
 }
 
-/// Accumulate concrete literal factors, rejecting unsupported forms and overflow. Symbolic
-/// variables do not change the concrete accumulator.
-fn checked_product_factor(dimension: &Int, product: i64) -> Option<i64> {
+fn product_factor_is_definitely_one(dimension: &Int) -> bool {
     match dimension {
-        Int::Literal(value) => product.checked_mul(*value),
-        Int::Mul(left, right) => checked_product_factor(left, product)
-            .and_then(|product| checked_product_factor(right, product)),
+        Int::Pow(_, exponent) if product_factor_is_definitely_zero(exponent) => true,
         Int::Symbolic(ty) => match ty.as_ref() {
-            Type::Int(dimension) => checked_product_factor(dimension, product),
+            Type::Int(dimension) => product_factor_is_definitely_one(dimension),
             Type::Literal(literal) => match &literal.value {
-                Lit::Int(value) => value.as_i64().and_then(|value| product.checked_mul(value)),
-                _ => unreachable!("validated Int dimension cannot contain a non-integer literal"),
+                Lit::Int(value) => value.as_i64() == Some(1),
+                _ => unreachable!("an Int dimension cannot contain a non-integer literal"),
             },
-            _ => Some(product),
+            _ => false,
         },
-        Int::Int => Some(product),
-        Int::Add(_, _) | Int::Sub(_, _) | Int::FloorDiv(_, _) | Int::Pow(_, _) => None,
+        Int::Literal(_)
+        | Int::Int
+        | Int::Add(_, _)
+        | Int::Sub(_, _)
+        | Int::Mul(_, _)
+        | Int::FloorDiv(_, _)
+        | Int::Pow(_, _) => {
+            product_factor_is_constant(dimension)
+                && matches!(canonicalize_int_dim(dimension.clone()), Int::Literal(1))
+        }
+    }
+}
+
+fn product_factor_is_constant(dimension: &Int) -> bool {
+    match dimension {
+        Int::Literal(_) => true,
+        Int::Int => false,
+        Int::Symbolic(ty) => match ty.as_ref() {
+            Type::Int(dimension) => product_factor_is_constant(dimension),
+            Type::Literal(literal) => match &literal.value {
+                Lit::Int(_) => true,
+                _ => unreachable!("an Int dimension cannot contain a non-integer literal"),
+            },
+            _ => false,
+        },
+        Int::Add(left, right)
+        | Int::Sub(left, right)
+        | Int::Mul(left, right)
+        | Int::FloorDiv(left, right)
+        | Int::Pow(left, right) => {
+            product_factor_is_constant(left) && product_factor_is_constant(right)
+        }
+    }
+}
+
+// Four terms admit two binomial factors while rejecting a third additive factor.
+const MAX_PRODUCT_CANONICAL_TERMS: usize = 4;
+
+/// Count terms that may be exposed to an enclosing product after canonicalization. Division may
+/// expose its numerator through cancellation, and power may expose its base when the exponent
+/// becomes one. Operands whose terms remain wrapped are still visited for validation. `None` means
+/// a nested symbolic integer literal is outside the representable `i64` dimension domain.
+fn product_canonicalization_term_count(dimension: &Int) -> Option<usize> {
+    let bounded_add = |left: usize, right: usize| {
+        left.saturating_add(right)
+            .min(MAX_PRODUCT_CANONICAL_TERMS + 1)
+    };
+    let bounded_mul = |left: usize, right: usize| {
+        left.saturating_mul(right)
+            .min(MAX_PRODUCT_CANONICAL_TERMS + 1)
+    };
+    match dimension {
+        Int::Add(left, right) | Int::Sub(left, right) => Some(bounded_add(
+            product_canonicalization_term_count(left)?,
+            product_canonicalization_term_count(right)?,
+        )),
+        Int::Mul(left, right) => Some(bounded_mul(
+            product_canonicalization_term_count(left)?,
+            product_canonicalization_term_count(right)?,
+        )),
+        Int::FloorDiv(numerator, denominator) => {
+            let numerator_terms = product_canonicalization_term_count(numerator)?;
+            let _ = product_canonicalization_term_count(denominator)?;
+            Some(numerator_terms)
+        }
+        Int::Pow(base, exponent) => {
+            let base_terms = product_canonicalization_term_count(base)?;
+            let _ = product_canonicalization_term_count(exponent)?;
+            Some(base_terms)
+        }
+        Int::Symbolic(ty) => match ty.as_ref() {
+            Type::Int(dimension) => product_canonicalization_term_count(dimension),
+            Type::Literal(literal) => match &literal.value {
+                Lit::Int(value) => value.as_i64().map(|_| 1),
+                _ => unreachable!("an Int dimension cannot contain a non-integer literal"),
+            },
+            _ => Some(1),
+        },
+        Int::Literal(_) | Int::Int => Some(1),
     }
 }
 
@@ -1984,13 +2063,15 @@ mod tests {
     use crate::shaped_array::IntTuple;
     use crate::shaped_array::IntTupleRepr;
     use crate::shaped_array::IntTupleView;
+    use crate::shaped_array::MAX_PRODUCT_CANONICAL_TERMS;
     use crate::shaped_array::ShapedArrayType;
     use crate::shaped_array::broadcast_dim;
     use crate::shaped_array::broadcast_shapes;
-    use crate::shaped_array::checked_product_factor;
     use crate::shaped_array::gradual_shape_middle;
     use crate::shaped_array::index_shape_multi;
     use crate::shaped_array::is_tuple_carrier_shape_middle;
+    use crate::shaped_array::product_canonicalization_term_count;
+    use crate::shaped_array::product_factor_is_definitely_one;
     use crate::shaped_array::shape_to_tuple_carrier;
     use crate::shaped_array::shape_to_tuple_carrier_arg;
     use crate::shaped_array::tuple_carrier_to_shape;
@@ -3734,21 +3815,180 @@ mod tests {
     }
 
     #[test]
-    fn int_tuple_product_checks_literals_inside_symbolic_wrappers() {
-        let wrapped_max = Int::Symbolic(Box::new(Type::Int(Int::Literal(i64::MAX))));
-        let literal_product = checked_product_factor(&wrapped_max, 1)
-            .expect("the maximum i64 literal is representable");
+    fn int_tuple_product_overflow_is_gradual() {
+        let symbolic = Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+        let mut shape = IntTuple::new(vec![symbolic, Int::Literal(2)]);
+        let mut replacements = 0;
+        shape.visit_mut(&mut |ty: &mut Type| {
+            *ty = Type::Int(Int::Literal(i64::MAX));
+            replacements += 1;
+        });
 
-        assert_eq!(literal_product, i64::MAX);
-        assert_eq!(
-            checked_product_factor(&Int::Literal(2), literal_product),
-            None
-        );
+        assert_eq!(replacements, 1);
+        assert_eq!(shape.product(), Int::Int);
+    }
 
+    #[test]
+    fn int_tuple_product_rejects_unrepresentable_symbolic_literals() {
         let too_large = Int::Symbolic(Box::new(
             Lit::Int(LitInt::from_ast(&AstInt::from(i64::MAX as u64 + 1))).to_implicit_type(),
         ));
-        assert_eq!(checked_product_factor(&too_large, 1), None);
+        let nested = Int::FloorDiv(Box::new(too_large), Box::new(Int::Literal(2)));
+
+        assert_eq!(IntTuple::new(vec![nested]).product(), Int::Int);
+    }
+
+    #[test]
+    fn int_tuple_product_bounds_expanded_term_count() {
+        let atom = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+        let binomial = || Int::Add(Box::new(atom()), Box::new(Int::Literal(1)));
+        let trinomial = Int::Add(Box::new(binomial()), Box::new(Int::Literal(1)));
+        let four_terms = Int::Mul(Box::new(binomial()), Box::new(binomial()));
+        let five_terms = Int::Add(Box::new(trinomial.clone()), Box::new(binomial()));
+        let six_terms = Int::Mul(Box::new(trinomial), Box::new(binomial()));
+
+        let allowed = product_canonicalization_term_count(&four_terms)
+            .expect("four representable terms have a finite expansion");
+        let rejected = product_canonicalization_term_count(&five_terms)
+            .expect("five representable terms have a finite expansion");
+        let multiplicative = product_canonicalization_term_count(&six_terms)
+            .expect("six representable terms have a finite expansion");
+
+        assert_eq!(allowed, 4);
+        assert_eq!(rejected, 5);
+        assert_eq!(multiplicative, MAX_PRODUCT_CANONICAL_TERMS + 1);
+        assert!(allowed <= MAX_PRODUCT_CANONICAL_TERMS);
+        assert!(rejected > MAX_PRODUCT_CANONICAL_TERMS);
+        assert!(multiplicative > MAX_PRODUCT_CANONICAL_TERMS);
+    }
+
+    #[test]
+    fn int_tuple_product_preserves_single_complex_factor_after_substitution() {
+        let mut shape = IntTuple::new(vec![Int::Symbolic(Box::new(Type::Var(Var::ZERO)))]);
+        let mut replacements = 0;
+        shape.visit_mut(&mut |ty: &mut Type| {
+            let atom = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+            let binomial = || Int::Add(Box::new(atom()), Box::new(Int::Literal(1)));
+            *ty = Type::Int(Int::Mul(
+                Box::new(Int::Add(Box::new(binomial()), Box::new(Int::Literal(1)))),
+                Box::new(binomial()),
+            ));
+            replacements += 1;
+        });
+
+        assert_eq!(replacements, 1);
+        assert_ne!(shape.product(), Int::Int);
+    }
+
+    #[test]
+    fn int_tuple_product_ignores_unit_factors_before_bounding_expansion() {
+        let symbolic = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+        let mut shape = IntTuple::new(vec![
+            symbolic(),
+            symbolic(),
+            symbolic(),
+            symbolic(),
+            symbolic(),
+            symbolic(),
+            symbolic(),
+        ]);
+        let mut replacements = 0;
+        shape.visit_mut(&mut |ty: &mut Type| {
+            let atom = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+            let binomial = || Int::Add(Box::new(atom()), Box::new(Int::Literal(1)));
+            *ty = Type::Int(match replacements {
+                0 => Int::Mul(
+                    Box::new(Int::Add(Box::new(binomial()), Box::new(Int::Literal(1)))),
+                    Box::new(binomial()),
+                ),
+                1 => Int::Literal(1),
+                2 => Int::Sub(Box::new(Int::Literal(2)), Box::new(Int::Literal(1))),
+                3 => Int::Mul(Box::new(Int::Literal(1)), Box::new(Int::Literal(1))),
+                4 => Int::Pow(Box::new(Int::Literal(-1)), Box::new(Int::Literal(2))),
+                5 => Int::FloorDiv(Box::new(Int::Literal(-3)), Box::new(Int::Literal(-2))),
+                6 => Int::Pow(Box::new(atom()), Box::new(Int::Literal(0))),
+                _ => unreachable!("the test shape has exactly seven symbolic dimensions"),
+            });
+            replacements += 1;
+        });
+
+        assert_eq!(replacements, 7);
+        let IntTupleView::Concrete(dimensions) = shape.view() else {
+            panic!("the test shape is concrete")
+        };
+        assert!(
+            dimensions[1..].iter().all(product_factor_is_definitely_one),
+            "all trailing factors should canonicalize to one: {:?}",
+            &dimensions[1..]
+        );
+        assert_ne!(shape.product(), Int::Int);
+    }
+
+    #[test]
+    fn int_tuple_product_accounts_for_wrapped_expansion() {
+        let atom = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+        let binomial = || Int::Add(Box::new(atom()), Box::new(Int::Literal(1)));
+        let five_terms = || {
+            Int::Add(
+                Box::new(Int::Add(Box::new(binomial()), Box::new(Int::Literal(1)))),
+                Box::new(binomial()),
+            )
+        };
+        let divided_by_one = Int::FloorDiv(Box::new(five_terms()), Box::new(Int::Literal(1)));
+        let raised_to_one = Int::Pow(Box::new(five_terms()), Box::new(Int::Literal(1)));
+        let denominator = atom();
+        let canceling_division = Int::FloorDiv(
+            Box::new(Int::Mul(
+                Box::new(Int::Add(Box::new(binomial()), Box::new(Int::Literal(1)))),
+                Box::new(denominator.clone()),
+            )),
+            Box::new(denominator),
+        );
+        let computed_exponent = Int::Pow(
+            Box::new(Int::Add(Box::new(binomial()), Box::new(Int::Literal(1)))),
+            Box::new(Int::Add(
+                Box::new(Int::Literal(0)),
+                Box::new(Int::Literal(1)),
+            )),
+        );
+
+        assert_eq!(
+            product_canonicalization_term_count(&divided_by_one),
+            Some(MAX_PRODUCT_CANONICAL_TERMS + 1)
+        );
+        assert_eq!(
+            product_canonicalization_term_count(&raised_to_one),
+            Some(MAX_PRODUCT_CANONICAL_TERMS + 1)
+        );
+        assert_eq!(
+            product_canonicalization_term_count(&canceling_division),
+            Some(3)
+        );
+        assert_eq!(
+            product_canonicalization_term_count(&computed_exponent),
+            Some(3)
+        );
+        for (wrapped, other) in [
+            (divided_by_one, atom()),
+            (raised_to_one, atom()),
+            (canceling_division, binomial()),
+            (computed_exponent, binomial()),
+        ] {
+            let symbolic = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+            let mut shape = IntTuple::new(vec![symbolic(), symbolic()]);
+            let mut replacements = 0;
+            shape.visit_mut(&mut |ty: &mut Type| {
+                *ty = if replacements == 0 {
+                    Type::Int(wrapped.clone())
+                } else {
+                    Type::Int(other.clone())
+                };
+                replacements += 1;
+            });
+
+            assert_eq!(replacements, 2);
+            assert_eq!(shape.product(), Int::Int);
+        }
     }
 
     #[test]
