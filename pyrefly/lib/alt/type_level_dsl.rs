@@ -29,6 +29,7 @@ use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
 use pyrefly_types::type_var::FlagDomain;
 use pyrefly_types::type_var::FlagMember;
 use pyrefly_types::type_var::Restriction;
+use pyrefly_types::types::AnyStyle;
 use pyrefly_types::types::CalleeKind;
 use pyrefly_types::types::Type;
 use pyrefly_util::display::pluralize;
@@ -64,10 +65,21 @@ fn type_shape_dsl_narrowable_flag_domain() -> FlagDomain {
         .join(FlagDomain::of(FlagMember::NoneType))
 }
 
+fn type_shape_dsl_representable_flag_domain() -> FlagDomain {
+    type_shape_dsl_narrowable_flag_domain()
+        .join(FlagDomain::of(FlagMember::Bool))
+        .join(FlagDomain::of(FlagMember::Str))
+}
+
+fn type_shape_dsl_optional_flag_domain(member: FlagMember) -> FlagDomain {
+    FlagDomain::of(member).join(FlagDomain::of(FlagMember::NoneType))
+}
+
 #[derive(Clone, Copy)]
 enum TypeShapeDslSlotComparisonDomain {
     Dimension,
     FlagInt,
+    FlagString,
 }
 
 fn type_shape_dsl_slot_comparison_domain(
@@ -87,21 +99,28 @@ fn type_shape_dsl_slot_comparison_domain(
             .then_some(TypeShapeDslSlotComparisonDomain::Dimension);
     }
 
-    // Parameter provenance starts from singleton slots and merges only preserve or add origins.
-    let first = domains
-        .next()
-        .expect("unresolved comparison operands retain parameter origins");
-    if !domains.all(|domain| domain == first) {
-        return None;
+    let domains = domains.collect::<Vec<_>>();
+    if domains.is_empty() {
+        unreachable!("a parameter-backed slot comparison has at least one parameter")
     }
-    match first {
-        TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => {
-            Some(TypeShapeDslSlotComparisonDomain::Dimension)
-        }
-        TypeShapeDslInputDomain::Flag(domain) if domain == FlagDomain::of(FlagMember::Int) => {
-            Some(TypeShapeDslSlotComparisonDomain::FlagInt)
-        }
-        _ => None,
+    if domains
+        .iter()
+        .all(|domain| *domain == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int))
+    {
+        Some(TypeShapeDslSlotComparisonDomain::Dimension)
+    } else if domains
+        .iter()
+        .all(|domain| *domain == TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Int)))
+    {
+        Some(TypeShapeDslSlotComparisonDomain::FlagInt)
+    } else if domains.iter().all(|domain| {
+        matches!(domain, TypeShapeDslInputDomain::Flag(domain)
+            if domain.contains(FlagMember::Str)
+                && domain.is_subset_of(type_shape_dsl_optional_flag_domain(FlagMember::Str)))
+    }) {
+        Some(TypeShapeDslSlotComparisonDomain::FlagString)
+    } else {
+        None
     }
 }
 
@@ -311,10 +330,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ))
                         .then_some("`@type_shape_dsl_function` `Int` comparisons support only `==`, `!=`, and `<`"),
                         Some(TypeShapeDslSlotComparisonDomain::FlagInt) => None,
-                        None => Some("`@type_shape_dsl_function` comparison operands must both be annotated as `Int` or both be `Flag[int]`"),
+                        Some(TypeShapeDslSlotComparisonDomain::FlagString) => (!matches!(
+                            op,
+                            TypeShapeDslFlagIntComparisonOp::Equal
+                                | TypeShapeDslFlagIntComparisonOp::NotEqual
+                        ))
+                        .then_some("`@type_shape_dsl_function` Flag string comparisons support only `==` and `!=`"),
+                        None => Some("`@type_shape_dsl_function` comparison operands must both be annotated as `Int` or both be `Flag[int]`; string equality also accepts compatible Flag string values"),
                     },
                     TypeShapeDslConditionKind::Any { .. }
                     | TypeShapeDslConditionKind::DimensionEquality { .. }
+                    | TypeShapeDslConditionKind::StringEquality { .. }
                     | TypeShapeDslConditionKind::GeneratorElementSelfCompare(_) => None,
                     TypeShapeDslConditionKind::IsConcreteInt {
                         parameter_origins,
@@ -328,26 +354,37 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }),
                     TypeShapeDslConditionKind::IsIntValue {
                         parameter_origins, ..
-                    }
-                    | TypeShapeDslConditionKind::IsNone {
-                        parameter_origins, ..
                     } => parameter_origins.as_deref().and_then(|parameters| {
                         (!parameters.iter().all(|parameter| matches!(
                             parameter_domains[*parameter],
                             TypeShapeDslInputDomain::Flag(domain)
                                 if domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
                         )))
-                        .then_some("`@type_shape_dsl_function` control-flow narrowing requires a Flag[int | tuple[int, ...] | None] value")
+                        .then_some("`@type_shape_dsl_function` `is_int_value` requires a Flag[int | tuple[int, ...] | None] value")
+                    }),
+                    TypeShapeDslConditionKind::IsNone {
+                        parameter_origins, ..
+                    } => parameter_origins.as_deref().and_then(|parameters| {
+                        (!parameters.iter().all(|parameter| matches!(
+                            parameter_domains[*parameter],
+                            TypeShapeDslInputDomain::Flag(domain)
+                                if domain.is_subset_of(type_shape_dsl_representable_flag_domain())
+                        )))
+                        .then_some("`@type_shape_dsl_function` `is None` requires a supported Flag value")
                     }),
                     TypeShapeDslConditionKind::BoolSlot {
                         parameter_origins,
                         ..
                     } => parameter_origins.as_deref().and_then(|parameters| {
                         (!parameters.iter().all(|parameter| {
-                            parameter_domains[*parameter]
-                                == TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Bool))
+                            matches!(
+                                parameter_domains[*parameter],
+                                TypeShapeDslInputDomain::Flag(domain)
+                                    if domain.contains(FlagMember::Bool)
+                                        && domain.is_subset_of(type_shape_dsl_optional_flag_domain(FlagMember::Bool))
+                            )
                         }))
-                        .then_some("`@type_shape_dsl_function` a name used directly as a condition requires a `Flag[bool]` value")
+                        .then_some("`@type_shape_dsl_function` a name used directly as a condition requires a boolean Flag value")
                     }),
                     TypeShapeDslConditionKind::FlagIntCompare(_)
                     | TypeShapeDslConditionKind::Membership { .. }
@@ -461,12 +498,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     } => {
                         let valid = parameters.iter().all(|parameter| {
                             match parameter_domains[*parameter] {
-                                TypeShapeDslInputDomain::Flag(domain) if *narrowed => {
-                                    domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
-                                }
                                 TypeShapeDslInputDomain::Flag(domain) => match required {
+                                    TypeShapeDslFlagValueKind::Int if *narrowed => {
+                                        domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
+                                    }
                                     TypeShapeDslFlagValueKind::Int => {
                                         domain == FlagDomain::of(FlagMember::Int)
+                                    }
+                                    TypeShapeDslFlagValueKind::String => {
+                                        domain.contains(FlagMember::Str)
+                                            && domain.is_subset_of(type_shape_dsl_optional_flag_domain(
+                                                FlagMember::Str,
+                                            ))
+                                    }
+                                    TypeShapeDslFlagValueKind::Sequence if *narrowed => {
+                                        domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
                                     }
                                     TypeShapeDslFlagValueKind::Sequence => {
                                         domain.is_subset_of(FlagDomain::of(FlagMember::Tuple))
@@ -494,6 +540,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslExpressionKind::Slot(_)
                     | TypeShapeDslExpressionKind::FlagValueSlot { .. }
                     | TypeShapeDslExpressionKind::FlagIntLiteral(_)
+                    | TypeShapeDslExpressionKind::FlagStringLiteral
                     | TypeShapeDslExpressionKind::FlagBool(_)
                     | TypeShapeDslExpressionKind::FlagNone
                     | TypeShapeDslExpressionKind::FlagTuple
@@ -1007,6 +1054,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Restriction::Unrestricted => false,
         }
     }
+
     fn is_type_shape_dsl_argument(&self, ty: &Type, domain: TypeShapeDslInputDomain) -> bool {
         match domain {
             TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => match ty {
@@ -1020,7 +1068,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple) => {
                 self.is_int_tuple_dsl_argument(ty)
             }
-            TypeShapeDslInputDomain::Flag(domain) => domain.accepts(ty),
+            TypeShapeDslInputDomain::Flag(domain) => {
+                if matches!(ty, Type::Any(AnyStyle::Error)) {
+                    return false;
+                }
+                domain.accepts_with_str_subclasses(ty, |member| match member {
+                    Type::ClassType(cls) | Type::SelfType(cls) => {
+                        self.has_superclass(cls.class_object(), self.stdlib.str().class_object())
+                    }
+                    _ => false,
+                })
+            }
         }
     }
 }

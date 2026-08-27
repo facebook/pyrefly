@@ -18,6 +18,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::Arc;
 
+use compact_str::CompactString;
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
@@ -120,6 +121,10 @@ enum TypeShapeDslHelperArgumentProvenance {
         parameters: Box<[usize]>,
         domain: TypeShapeDslInputDomain,
     },
+    NarrowedParameters {
+        parameters: Box<[usize]>,
+        domain: TypeShapeDslInputDomain,
+    },
     Exact(TypeShapeDslInputDomain),
     DeferredInteger {
         index: usize,
@@ -169,6 +174,23 @@ impl TypeShapeDslHelperCall {
                     .all(|parameter| caller_domains[*parameter] == *domain)
                     .then_some(*domain)
                     .filter(|domain| compatible(*domain, *expected)),
+                TypeShapeDslHelperArgumentProvenance::NarrowedParameters {
+                    parameters,
+                    domain,
+                } => match (domain, expected) {
+                    (
+                        TypeShapeDslInputDomain::Flag(required),
+                        TypeShapeDslInputDomain::Flag(expected),
+                    ) => parameters
+                        .iter()
+                        .all(|parameter| {
+                            matches!(caller_domains[*parameter], TypeShapeDslInputDomain::Flag(actual)
+                                if actual.intersection(*required)
+                                    .is_some_and(|actual| actual.is_subset_of(*expected)))
+                        })
+                        .then_some(TypeShapeDslInputDomain::Flag(*expected)),
+                    _ => None,
+                },
                 TypeShapeDslHelperArgumentProvenance::Parameters(parameters) => {
                     let mut domains = parameters
                         .iter()
@@ -987,6 +1009,7 @@ pub enum TypeShapeDslExpressionKind {
         narrowed: bool,
     },
     FlagIntLiteral(Option<i64>),
+    FlagStringLiteral,
     FlagBool(bool),
     FlagNone,
     FlagTuple,
@@ -1018,6 +1041,7 @@ enum TypeShapeDslGeneratorSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslFlagValueKind {
     Int,
+    String,
     Sequence,
 }
 
@@ -1056,6 +1080,9 @@ pub enum TypeShapeDslConditionKind {
         slot: usize,
         parameter_origins: Option<Box<[usize]>>,
     },
+    StringEquality {
+        negated: bool,
+    },
     Membership {
         negated: bool,
     },
@@ -1069,10 +1096,12 @@ const FLAG_INT: u8 = 1;
 const FLAG_SEQUENCE: u8 = 2;
 const FLAG_NONE: u8 = 4;
 const FLAG_BOOL: u8 = 8;
-// Control-flow narrowing can distinguish these non-boolean Flag values.
+const FLAG_STRING: u8 = 16;
+// Integer/sequence narrowing predicates can distinguish these Flag values.
 const FLAG_NARROWABLE: u8 = FLAG_INT | FLAG_SEQUENCE | FLAG_NONE;
 // Every Flag value the validator and evaluator can represent.
-const FLAG_REPRESENTABLE: u8 = FLAG_NARROWABLE | FLAG_BOOL;
+const FLAG_REPRESENTABLE: u8 = FLAG_NARROWABLE | FLAG_BOOL | FLAG_STRING;
+const FLAG_NOT_NONE: u8 = FLAG_REPRESENTABLE & !FLAG_NONE;
 const MAX_GENERATOR_STEPS: usize = 4096;
 
 /// Bounds the total generator iterations performed by one public DSL evaluation.
@@ -1118,6 +1147,7 @@ fn flag_domain_from_kinds(kinds: u8) -> Option<FlagDomain> {
         (FLAG_SEQUENCE, FlagMember::Tuple),
         (FLAG_NONE, FlagMember::NoneType),
         (FLAG_BOOL, FlagMember::Bool),
+        (FLAG_STRING, FlagMember::Str),
     ]
     .into_iter()
     .filter_map(|(bit, member)| (kinds & bit != 0).then_some(member));
@@ -1881,6 +1911,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         let slot = self.slot(expression, flow)?;
         let expected = match required {
             TypeShapeDslFlagValueKind::Int => FLAG_INT,
+            TypeShapeDslFlagValueKind::String => FLAG_STRING,
             TypeShapeDslFlagValueKind::Sequence => FLAG_SEQUENCE,
         };
         if let DslStaticKind::DeferredInteger(index) = flow.kinds[slot] {
@@ -1902,11 +1933,25 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 });
                 return Ok(());
             }
-            DslStaticKind::Flag { origins, kinds } if *kinds != 0 && kinds & !expected == 0 => {
+            DslStaticKind::Flag { origins, kinds }
+                if *kinds != 0
+                    && (kinds & !expected == 0
+                        || (required == TypeShapeDslFlagValueKind::String
+                            && kinds & FLAG_STRING != 0
+                            && kinds & !(FLAG_STRING | FLAG_NONE) == 0)) =>
+            {
                 origins.as_ref().map_or((None, false), |origins| {
                     let (parameters, narrowed) = origins.clone_parameters_with_narrowing();
                     (Some(parameters), narrowed)
                 })
+            }
+            DslStaticKind::Flag {
+                origins: Some(DslFlagOrigins::Narrowed(parameters)),
+                kinds,
+            } if required == TypeShapeDslFlagValueKind::String
+                && (*kinds == FLAG_NOT_NONE || *kinds == FLAG_NONE) =>
+            {
+                (Some(parameters.clone()), true)
             }
             _ => {
                 return Err(TypeShapeDslDefinitionError {
@@ -1925,6 +1970,29 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             },
         });
         Ok(())
+    }
+
+    fn validate_flag_string(
+        &mut self,
+        expression: &Expr,
+        flow: &DslValidationFlow,
+    ) -> Result<(), TypeShapeDslDefinitionError> {
+        match expression {
+            Expr::StringLiteral(literal) if Lit::from_string_literal(literal).is_some() => {
+                self.expressions.push(TypeShapeDslExpression {
+                    range: expression.range(),
+                    kind: TypeShapeDslExpressionKind::FlagStringLiteral,
+                });
+                Ok(())
+            }
+            Expr::Name(_) => {
+                self.validate_flag_slot(expression, flow, TypeShapeDslFlagValueKind::String)
+            }
+            _ => Err(TypeShapeDslDefinitionError {
+                range: expression.range(),
+                message: "Flag string expressions support only literals and immutable aliases",
+            }),
+        }
     }
 
     fn validate_flag_int(
@@ -2569,6 +2637,13 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     kinds: FLAG_BOOL,
                 })
             }
+            Expr::StringLiteral(literal) if Lit::from_string_literal(literal).is_some() => {
+                self.validate_flag_string(expression, flow)?;
+                Ok(DslStaticKind::Flag {
+                    origins: None,
+                    kinds: FLAG_STRING,
+                })
+            }
             Expr::NumberLiteral(_) | Expr::UnaryOp(_)
                 if !matches!(integer_literal(expression), IntegerLiteral::NotLiteral) =>
             {
@@ -2711,11 +2786,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok(())
     }
 
-    fn narrow_flag(kind: DslStaticKind, mask: u8) -> DslStaticKind {
+    fn narrow_flag(kind: DslStaticKind, unknown_kinds: u8, mask: u8) -> DslStaticKind {
         match kind {
             DslStaticKind::UnknownParameters(parameters) => DslStaticKind::Flag {
                 origins: Some(DslFlagOrigins::Narrowed(parameters)),
-                kinds: FLAG_NARROWABLE & mask,
+                kinds: unknown_kinds & mask,
             },
             DslStaticKind::Flag { origins, kinds } => DslStaticKind::Flag {
                 origins: origins
@@ -2740,6 +2815,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         &mut self,
         expression: &Expr,
         flow: &DslValidationFlow,
+        allowed: u8,
         message: &'static str,
     ) -> Result<(usize, Option<Box<[usize]>>), TypeShapeDslDefinitionError> {
         let slot = self.slot(expression, flow)?;
@@ -2749,15 +2825,17 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         }
         let parameter_origins = match &flow.kinds[slot] {
             DslStaticKind::UnknownParameters(parameters) => Some(parameters.clone()),
-            DslStaticKind::Flag { origins, kinds }
-                if *kinds != 0 && kinds & !FLAG_NARROWABLE == 0 =>
-            {
+            DslStaticKind::Flag { origins, kinds } if *kinds != 0 && kinds & !allowed == 0 => {
                 origins
                     .as_ref()
                     .map(DslFlagOrigins::parameters)
                     .map(<[usize]>::to_vec)
                     .map(Vec::into_boxed_slice)
             }
+            DslStaticKind::Flag {
+                origins: Some(DslFlagOrigins::Narrowed(parameters)),
+                ..
+            } => Some(parameters.clone()),
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: expression.range(),
@@ -2913,6 +2991,10 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     .map(DslFlagOrigins::parameters)
                     .map(<[usize]>::to_vec)
                     .map(Vec::into_boxed_slice),
+                DslStaticKind::Flag {
+                    origins: Some(DslFlagOrigins::Narrowed(parameters)),
+                    kinds: FLAG_NOT_NONE,
+                } => Some(parameters.clone()),
                 _ => {
                     return Err(TypeShapeDslDefinitionError {
                         range: condition.range(),
@@ -2939,13 +3021,15 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             let (slot, origins) = self.validate_flag_narrowing_operand(
                 &compare.left,
                 flow,
-                "`is None` requires a `Flag[int | tuple[int, ...] | None]` value",
+                FLAG_REPRESENTABLE,
+                "`is None` requires a Flag value",
             )?;
             let mut when_true = flow.clone();
             let mut when_false = flow.clone();
-            when_true.kinds[slot] = Self::narrow_flag(flow.kinds[slot].clone(), FLAG_NONE);
+            when_true.kinds[slot] =
+                Self::narrow_flag(flow.kinds[slot].clone(), FLAG_REPRESENTABLE, FLAG_NONE);
             when_false.kinds[slot] =
-                Self::narrow_flag(flow.kinds[slot].clone(), FLAG_INT | FLAG_SEQUENCE);
+                Self::narrow_flag(flow.kinds[slot].clone(), FLAG_REPRESENTABLE, FLAG_NOT_NONE);
             self.conditions.push(TypeShapeDslCondition {
                 range: compare.range,
                 kind: TypeShapeDslConditionKind::IsNone {
@@ -2988,11 +3072,16 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 let (slot, parameter_origins) = self.validate_flag_narrowing_operand(
                     &call.arguments.args[0],
                     flow,
+                    FLAG_NARROWABLE,
                     "`is_int_value` requires a `Flag[int | tuple[int, ...] | None]` value",
                 )?;
-                when_true.kinds[slot] = Self::narrow_flag(flow.kinds[slot].clone(), FLAG_INT);
-                when_false.kinds[slot] =
-                    Self::narrow_flag(flow.kinds[slot].clone(), FLAG_SEQUENCE | FLAG_NONE);
+                when_true.kinds[slot] =
+                    Self::narrow_flag(flow.kinds[slot].clone(), FLAG_NARROWABLE, FLAG_INT);
+                when_false.kinds[slot] = Self::narrow_flag(
+                    flow.kinds[slot].clone(),
+                    FLAG_NARROWABLE,
+                    FLAG_SEQUENCE | FLAG_NONE,
+                );
                 TypeShapeDslConditionKind::IsIntValue {
                     slot,
                     parameter_origins,
@@ -3033,7 +3122,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         let Expr::Compare(compare) = condition else {
             return Err(TypeShapeDslDefinitionError {
                 range: condition.range(),
-                message: "condition may use only boolean Flag values, `and`, `or`, `not`, `any(...)`, `is None`, `is_concrete_int(...)`, `is_int_value(...)`, integer comparisons, and Flag sequence membership",
+                message: "condition may use only boolean Flag values, `and`, `or`, `not`, `any(...)`, `is None`, `is_concrete_int(...)`, `is_int_value(...)`, integer or string comparisons, and Flag sequence membership",
             });
         };
         if compare.ops.len() != 1 || compare.comparators.len() != 1 {
@@ -3062,6 +3151,34 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             });
         };
 
+        let string_operand = |expression: &Expr| {
+            matches!(expression, Expr::StringLiteral(literal) if Lit::from_string_literal(literal).is_some())
+                || matches!(expression, Expr::Name(name)
+                if self.slots.get(&name.id).is_some_and(|slot| matches!(
+                    flow.kinds[*slot],
+                    DslStaticKind::Flag { kinds, .. }
+                        if kinds & FLAG_STRING != 0
+                            && kinds & !(FLAG_STRING | FLAG_NONE) == 0
+                )))
+        };
+        if string_operand(&compare.left) || string_operand(right) {
+            if !matches!(op, CmpOp::Eq | CmpOp::NotEq) {
+                return Err(TypeShapeDslDefinitionError {
+                    range: compare.range,
+                    message: "Flag strings support only `==` and `!=`",
+                });
+            }
+            self.validate_flag_string(&compare.left, flow)?;
+            self.validate_flag_string(right, flow)?;
+            self.conditions.push(TypeShapeDslCondition {
+                range: compare.range,
+                kind: TypeShapeDslConditionKind::StringEquality {
+                    negated: op == CmpOp::NotEq,
+                },
+            });
+            return Ok((flow.clone(), flow.clone()));
+        }
+
         let slot_comparison = match (&*compare.left, right) {
             (Expr::Name(_), Expr::Name(_)) => {
                 let left = self.slot(&compare.left, flow)?;
@@ -3071,15 +3188,19 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         comparison_op,
                     ))
                 } else {
-                    let dimension_parameters = |kind: &DslStaticKind| match kind {
+                    let comparison_parameters = |kind: &DslStaticKind| match kind {
                         DslStaticKind::UnknownParameters(parameters) => {
                             Some(Some(parameters.clone()))
                         }
                         DslStaticKind::Dimension => Some(None),
+                        DslStaticKind::Flag {
+                            origins: Some(DslFlagOrigins::Narrowed(parameters)),
+                            kinds: FLAG_NOT_NONE | FLAG_NONE,
+                        } => Some(Some(parameters.clone())),
                         _ => None,
                     };
-                    dimension_parameters(&flow.kinds[left])
-                        .zip(dimension_parameters(&flow.kinds[right]))
+                    comparison_parameters(&flow.kinds[left])
+                        .zip(comparison_parameters(&flow.kinds[right]))
                         .map(|(left_parameters, right_parameters)| {
                             TypeShapeDslConditionKind::SlotCompare {
                                 left,
@@ -3354,13 +3475,18 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                                 let domain = TypeShapeDslInputDomain::Flag(domain);
                                 match origins {
                                     Some(DslFlagOrigins::Inferred(parameters)) => {
-                                        let parameters = parameters.clone();
                                         TypeShapeDslHelperArgumentProvenance::ParametersWithRequiredDomain {
-                                            parameters,
+                                            parameters: parameters.clone(),
                                             domain,
                                         }
                                     }
-                                    _ => TypeShapeDslHelperArgumentProvenance::Exact(domain),
+                                    Some(DslFlagOrigins::Narrowed(parameters)) => {
+                                        TypeShapeDslHelperArgumentProvenance::NarrowedParameters {
+                                            parameters: parameters.clone(),
+                                            domain,
+                                        }
+                                    }
+                                    None => TypeShapeDslHelperArgumentProvenance::Exact(domain),
                                 }
                             }
                             DslStaticKind::GeneratorElement => {
@@ -3896,6 +4022,7 @@ enum DslValue {
     Shape(IntTuple),
     FlagInt(i64),
     FlagBool(bool),
+    FlagString(CompactString),
     FlagNone,
     FlagSequence(DslFlagSequence),
     DimensionTuple(Vec<Int>),
@@ -4717,6 +4844,17 @@ impl ValidatedTypeShapeDslFunction {
                 .map_or(DslOutcome::Value(DslValue::Unknown), |literal| {
                     DslOutcome::Value(DslValue::FlagInt(literal))
                 }),
+            TypeShapeDslExpressionKind::FlagStringLiteral => {
+                let Expr::StringLiteral(literal) = expression else {
+                    unreachable!("validated Flag string literal is a string literal")
+                };
+                let Lit::Str(value) = Lit::from_string_literal(literal)
+                    .expect("validated Flag string literal fits the literal size limit")
+                else {
+                    unreachable!("string literal lowering produces a string value")
+                };
+                DslOutcome::Value(DslValue::FlagString(value))
+            }
             TypeShapeDslExpressionKind::FlagBool(value) => {
                 DslOutcome::Value(DslValue::FlagBool(value))
             }
@@ -5135,10 +5273,10 @@ impl ValidatedTypeShapeDslFunction {
             }
             TypeShapeDslConditionKind::BoolSlot { slot, .. } => match environment.value(slot) {
                 DslValue::FlagBool(true) => DslCondition::True,
-                DslValue::FlagBool(false) => DslCondition::False,
+                DslValue::FlagBool(false) | DslValue::FlagNone => DslCondition::False,
                 DslValue::Unknown => DslCondition::Unknown,
                 DslValue::FlagInt(_)
-                | DslValue::FlagNone
+                | DslValue::FlagString(_)
                 | DslValue::FlagSequence(_)
                 | DslValue::Dimension(_)
                 | DslValue::Shape(_)
@@ -5162,6 +5300,7 @@ impl ValidatedTypeShapeDslFunction {
                 DslValue::FlagNone | DslValue::FlagSequence(_) => DslCondition::False,
                 DslValue::Unknown => DslCondition::Unknown,
                 DslValue::FlagBool(_)
+                | DslValue::FlagString(_)
                 | DslValue::Dimension(_)
                 | DslValue::Shape(_)
                 | DslValue::DimensionTuple(_) => {
@@ -5170,16 +5309,57 @@ impl ValidatedTypeShapeDslFunction {
             },
             TypeShapeDslConditionKind::IsNone { slot, .. } => match environment.value(slot) {
                 DslValue::FlagNone => DslCondition::True,
-                DslValue::FlagInt(_) | DslValue::FlagSequence(_) => DslCondition::False,
+                DslValue::FlagInt(_)
+                | DslValue::FlagBool(_)
+                | DslValue::FlagString(_)
+                | DslValue::FlagSequence(_) => DslCondition::False,
                 DslValue::Unknown => DslCondition::Unknown,
-                DslValue::FlagBool(_)
-                | DslValue::Dimension(_)
-                | DslValue::Shape(_)
-                | DslValue::DimensionTuple(_) => {
+                DslValue::Dimension(_) | DslValue::Shape(_) | DslValue::DimensionTuple(_) => {
                     // Function-level domain validation rejects non-Flag parameter origins.
                     unreachable!("validated `is None` operand is a Flag value")
                 }
             },
+            TypeShapeDslConditionKind::StringEquality { negated } => {
+                let Expr::Compare(compare) = condition else {
+                    unreachable!("validated Flag string equality is a comparison")
+                };
+                let left = self.evaluate_expression(&compare.left, environment, budget);
+                let right = self.evaluate_expression(&compare.comparators[0], environment, budget);
+                let equality = match (left, right) {
+                    (
+                        DslOutcome::Value(DslValue::FlagString(left)),
+                        DslOutcome::Value(DslValue::FlagString(right)),
+                    ) => match left == right {
+                        true => DslCondition::True,
+                        false => DslCondition::False,
+                    },
+                    (
+                        DslOutcome::Value(DslValue::FlagNone),
+                        DslOutcome::Value(DslValue::FlagNone),
+                    ) => DslCondition::True,
+                    (
+                        DslOutcome::Value(DslValue::FlagNone),
+                        DslOutcome::Value(DslValue::FlagString(_)),
+                    )
+                    | (
+                        DslOutcome::Value(DslValue::FlagString(_)),
+                        DslOutcome::Value(DslValue::FlagNone),
+                    ) => DslCondition::False,
+                    (DslOutcome::Invalid(error), _) | (_, DslOutcome::Invalid(error)) => {
+                        return Err(error);
+                    }
+                    (DslOutcome::Value(DslValue::Unknown), _)
+                    | (_, DslOutcome::Value(DslValue::Unknown)) => DslCondition::Unknown,
+                    _ => {
+                        unreachable!("validated Flag string equality operands are strings or None")
+                    }
+                };
+                if negated {
+                    Self::negate_condition(equality)
+                } else {
+                    equality
+                }
+            }
             TypeShapeDslConditionKind::FlagIntCompare(op) => {
                 let Expr::Compare(compare) = condition else {
                     unreachable!("validated Flag comparison is a comparison")
@@ -5261,6 +5441,23 @@ impl ValidatedTypeShapeDslFunction {
             TypeShapeDslConditionKind::SlotCompare {
                 left, right, op, ..
             } => {
+                let equality_condition = |equal: bool| {
+                    let result = match op {
+                        TypeShapeDslFlagIntComparisonOp::Equal => equal,
+                        TypeShapeDslFlagIntComparisonOp::NotEqual => !equal,
+                        TypeShapeDslFlagIntComparisonOp::LessThan
+                        | TypeShapeDslFlagIntComparisonOp::LessThanOrEqual
+                        | TypeShapeDslFlagIntComparisonOp::GreaterThan
+                        | TypeShapeDslFlagIntComparisonOp::GreaterThanOrEqual => {
+                            unreachable!("validated Flag string comparisons use equality operators")
+                        }
+                    };
+                    if result {
+                        DslCondition::True
+                    } else {
+                        DslCondition::False
+                    }
+                };
                 if left == right {
                     match op {
                         TypeShapeDslFlagIntComparisonOp::Equal
@@ -5281,6 +5478,14 @@ impl ValidatedTypeShapeDslFunction {
                             } else {
                                 DslCondition::False
                             }
+                        }
+                        (DslValue::FlagString(left), DslValue::FlagString(right)) => {
+                            equality_condition(left == right)
+                        }
+                        (DslValue::FlagNone, DslValue::FlagNone) => equality_condition(true),
+                        (DslValue::FlagNone, DslValue::FlagString(_))
+                        | (DslValue::FlagString(_), DslValue::FlagNone) => {
+                            equality_condition(false)
                         }
                         (DslValue::Unknown, _) | (_, DslValue::Unknown) => DslCondition::Unknown,
                         _ => unreachable!(
@@ -5465,6 +5670,7 @@ fn lower_parameter(ty: &Type, domain: TypeShapeDslInputDomain) -> DslValue {
                 Type::Literal(literal) => match &literal.value {
                     Lit::Int(value) => value.as_i64().map_or(DslValue::Unknown, DslValue::FlagInt),
                     Lit::Bool(value) => DslValue::FlagBool(*value),
+                    Lit::Str(value) => DslValue::FlagString(value.clone()),
                     _ => DslValue::Unknown,
                 },
                 Type::Tuple(Tuple::Concrete(elements)) => {
@@ -5704,6 +5910,7 @@ impl DslValue {
             Self::Unknown => unreachable!("unknown DSL values project through the fallback"),
             Self::FlagInt(_)
             | Self::FlagBool(_)
+            | Self::FlagString(_)
             | Self::FlagNone
             | Self::FlagSequence(_)
             | Self::DimensionTuple(_) => {

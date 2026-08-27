@@ -3687,7 +3687,14 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 }
             }
             Restriction::Flag(domain) if is_shape_flag_binding_source => {
-                let specialization_error = if !domain.accepts(t1) {
+                let accepted = domain.accepts_with_str_subclasses(t1, |member| match member {
+                    Type::ClassType(cls) | Type::SelfType(cls) => self.type_order.has_superclass(
+                        cls.class_object(),
+                        self.type_order.stdlib().str().class_object(),
+                    ),
+                    _ => false,
+                });
+                let specialization_error = if !accepted {
                     Some(TypeVarSpecializationError::BadFlagSpecialization {
                         name: q.name().clone(),
                         got: t1.clone(),

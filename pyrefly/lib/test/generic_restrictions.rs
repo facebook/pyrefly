@@ -121,6 +121,66 @@ direct(mixed)  # E: `int | str` is not a valid `Flag[int]` value for type variab
 "#,
 );
 
+// A `str` domain has to admit `str` subclasses, which are indistinguishable from `str` for the
+// literal preservation a Flag parameter performs, while still rejecting unrelated scalars.
+testcase!(
+    test_flag_string_assignability,
+    flag_env(),
+    r#"
+from typing import Any, Literal, LiteralString, assert_type, overload
+from shape_extensions import Flag
+
+class Mode(str): ...
+
+def carry[K: Flag[str]](value: K) -> K: ...
+def optional[K: Flag[str | None]](value: K) -> K: ...
+def string_or_int[K: Flag[str | int]](value: K) -> K: ...
+
+@overload
+def rollback[K: Flag[str | None]](value: K, branch: Literal[0]) -> tuple[K]: ...
+@overload
+def rollback[K: Flag[str | int]](value: K, branch: Literal[1]) -> list[K]: ...
+def rollback(value: str | int | None, branch: int) -> object: ...
+
+assert_type(carry("literal"), Literal["literal"])
+assert_type(optional("literal"), Literal["literal"])
+assert_type(optional(None), None)
+assert_type(string_or_int("literal"), Literal["literal"])
+assert_type(string_or_int(1), Literal[1])
+
+broad: str = "broad"
+literal_string: LiteralString = "literal string"
+mode = Mode()
+dynamic: Any = "dynamic"
+string_union: str | Mode = "union"
+optional_mode: Mode | None = mode
+mode_or_int: Mode | int = mode
+
+assert_type(carry(broad), str)
+assert_type(carry(literal_string), LiteralString)
+assert_type(carry(mode), Mode)
+assert_type(carry(dynamic), Any)
+assert_type(carry(string_union), str | Mode)
+assert_type(optional(broad), str)
+assert_type(optional(literal_string), LiteralString)
+assert_type(optional(mode), Mode)
+assert_type(optional(optional_mode), Mode | None)
+assert_type(string_or_int(broad), str)
+assert_type(string_or_int(literal_string), LiteralString)
+assert_type(string_or_int(mode), Mode)
+assert_type(string_or_int(mode_or_int), Mode | int)
+assert_type(rollback(mode_or_int, 1), list[Mode | int])
+
+carry(1)  # E: not a valid `Flag[str]` value
+nonstr_union: str | int = 1
+carry(nonstr_union)  # E: not a valid `Flag[str]` value
+optional(1.5)  # E: not a valid `Flag[str | None]` value
+optional(True)  # E: not a valid `Flag[str | None]` value
+string_or_int(1.5)  # E: not a valid `Flag[int | str]` value
+string_or_int(True)  # E: not a valid `Flag[int | str]` value
+"#,
+);
+
 testcase!(
     test_flag_single_direct_binding_source,
     flag_env(),

@@ -7568,6 +7568,410 @@ def test[Batch: IntTuple](
 );
 
 testcase!(
+    test_type_shape_dsl_optional_bool_flags,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import Any, reveal_type
+
+@type_shape_dsl_function
+def choose(shape: IntTuple, keep: bool | None) -> IntTuple:
+    if keep is None:
+        return dsl.IntTuple((9,))
+    if not keep:
+        return shape
+    return dsl.IntTuple((1,))
+
+@type_shape_dsl_function
+def direct(shape: IntTuple, keep: bool | None) -> IntTuple:
+    if keep:
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def required_bool_helper(shape: IntTuple, keep: bool) -> IntTuple:
+    if keep:
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def optional_bool_to_required(shape: IntTuple, keep: bool | None) -> IntTuple:
+    if keep is None:
+        return dsl.IntTuple((9,))
+    return required_bool_helper(shape, keep)
+
+# `is None` narrowing records only that the Flag value is no longer `None`, so a truthiness test on
+# the false branch is accepted by the body validator and rejected against the declared domain.
+# The helper is applied below to show the rejected declaration never reaches evaluation.
+@type_shape_dsl_function
+def wrong(shape: IntTuple, keep: int | None) -> IntTuple:
+    if keep is None:
+        return shape
+    if keep:  # E: requires a boolean Flag value
+        return dsl.IntTuple((1,))
+    return shape
+
+def apply[Shape: IntTuple, Keep: Flag[bool | None]](
+    x: Tensor[Shape], keep: Keep,
+) -> Tensor[choose(Shape, Keep)]: ...
+
+def apply_direct[Shape: IntTuple, Keep: Flag[bool | None]](
+    x: Tensor[Shape], keep: Keep,
+) -> Tensor[direct(Shape, Keep)]: ...
+
+def apply_helper[Shape: IntTuple, Keep: Flag[bool | None]](
+    x: Tensor[Shape], keep: Keep,
+) -> Tensor[optional_bool_to_required(Shape, Keep)]: ...
+
+def apply_wrong[Shape: IntTuple, Keep: Flag[int | None]](
+    x: Tensor[Shape], keep: Keep,
+) -> Tensor[wrong(Shape, Keep)]: ...  # E: Expected a type-level DSL function
+
+def test(x: Tensor[[2, 3]], broad: bool | None, dynamic: Any) -> None:
+    reveal_type(apply(x, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply(x, False))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply(x, None))  # E: revealed type: Tensor[[9]]
+    reveal_type(apply(x, broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply(x, dynamic))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_direct(x, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_direct(x, False))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_direct(x, None))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_direct(x, broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_helper(x, True))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_helper(x, False))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_helper(x, None))  # E: revealed type: Tensor[[9]]
+    reveal_type(apply_wrong(x, 1))  # E: revealed type: Unknown
+"#,
+);
+
+fn type_shape_dsl_string_env() -> TestEnv {
+    let mut env = shape_dsl_tensor_env();
+    env.add(
+        "string_helpers",
+        r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def imported_choice(shape: IntTuple, mode: str) -> IntTuple:
+    if mode == "keep":
+        return shape
+    return dsl.IntTuple(())
+"#,
+    );
+    env
+}
+
+testcase!(
+    test_type_shape_dsl_string_flags,
+    type_shape_dsl_string_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, type_shape_dsl_function
+from string_helpers import imported_choice
+from torch import Tensor
+from typing import Any, LiteralString, reveal_type
+
+class StringSubclass(str): ...
+
+@type_shape_dsl_function
+def choose(shape: IntTuple, mode: str) -> IntTuple:
+    alias = mode
+    none = "none"
+    if alias == none:
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def choose_not_equal(shape: IntTuple, mode: str) -> IntTuple:
+    if "none" != mode:
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def same_mode(shape: IntTuple, left: str, right: str) -> IntTuple:
+    if left == right:
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def reflexive(shape: IntTuple, mode: str) -> IntTuple:
+    if mode != mode:
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
+def local_literal(shape: IntTuple) -> IntTuple:
+    mode = "none"
+    if mode == "none":
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def invalid_mode(shape: IntTuple, mode: str) -> IntTuple:
+    if mode == "bad":
+        return dsl.Invalid("bad mode")
+    return shape
+
+def apply[Shape: IntTuple, Mode: Flag[str]](
+    x: Tensor[Shape], mode: Mode = "none",
+) -> Tensor[choose(Shape, Mode)]: ...
+def apply_not_equal[Shape: IntTuple, Mode: Flag[str]](
+    x: Tensor[Shape], mode: Mode,
+) -> Tensor[choose_not_equal(Shape, Mode)]: ...
+def apply_same[Shape: IntTuple, Left: Flag[str], Right: Flag[str]](
+    x: Tensor[Shape], left: Left, right: Right,
+) -> Tensor[same_mode(Shape, Left, Right)]: ...
+def apply_reflexive[Shape: IntTuple, Mode: Flag[str]](
+    x: Tensor[Shape], mode: Mode,
+) -> Tensor[reflexive(Shape, Mode)]: ...
+def apply_local[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[local_literal(Shape)]: ...
+def apply_imported[Shape: IntTuple, Mode: Flag[str]](
+    x: Tensor[Shape], mode: Mode,
+) -> Tensor[imported_choice(Shape, Mode)]: ...
+def apply_invalid[Shape: IntTuple, Mode: Flag[str]](
+    x: Tensor[Shape], mode: Mode,
+) -> Tensor[invalid_mode(Shape, Mode)]: ...
+
+def check(
+    x: Tensor[[2, 3]],
+    broad: str,
+    literal_string: LiteralString,
+    subclass: StringSubclass,
+    dynamic: Any,
+) -> None:
+    reveal_type(apply(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply(x, "none"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply(x, "mean"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_not_equal(x, "none"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_not_equal(x, "mean"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_same(x, "a", "a"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_same(x, "a", "b"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_reflexive(x, broad))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_local(x))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_imported(x, "keep"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_imported(x, "drop"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply(x, broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply(x, literal_string))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply(x, subclass))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply(x, dynamic))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_invalid(x, "good"))  # E: revealed type: Tensor[[2, 3]]
+    apply_invalid(x, "bad")  # E: bad mode
+    reveal_type(apply_invalid(x, broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    apply(x, 1)  # E: not a valid `Flag[str]` value
+
+@type_shape_dsl_function
+def reject_order(shape: IntTuple, mode: str) -> IntTuple:
+    if mode < "none":  # E: Flag strings support only `==` and `!=`
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def reject_mixed(shape: IntTuple, mode: str) -> IntTuple:
+    if mode == 1:  # E: Flag operation requires a compatible Flag parameter
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def reject_mixed_flags(shape: IntTuple, mode: str, keep: bool) -> IntTuple:
+    if mode == keep:  # E: comparison operands must both be annotated as `Int`
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def reject_concat(shape: IntTuple, mode: str) -> IntTuple:
+    if mode + "x" == "none":  # E: Flag string expressions support only literals and immutable aliases
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def reject_membership(shape: IntTuple, mode: str) -> IntTuple:
+    if mode in ("none",):  # E: Flag integer expression is not supported
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def reject_len(shape: IntTuple, mode: str) -> IntTuple:
+    if len(mode) == 4:  # E: `len` of a Flag value requires control-flow narrowing
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def reject_truthiness(shape: IntTuple, mode: str) -> IntTuple:
+    if mode:  # E: requires a boolean Flag value
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def reject_chained(shape: IntTuple, mode: str) -> IntTuple:
+    if "a" == mode == "b":  # E: comparison must be exactly one binary comparison
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def reject_return(mode: str) -> str:  # E: Flag values are input-only
+    return mode
+"#,
+);
+
+// Optional string Flag values support equality directly, and `is None` also narrows them for
+// subsequent string operations.
+testcase!(
+    test_type_shape_dsl_optional_string_flags,
+    shape_dsl_tensor_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, type_shape_dsl_function
+from torch import Tensor
+from typing import reveal_type
+
+@type_shape_dsl_function
+def optional_choice(shape: IntTuple, mode: str | None) -> IntTuple:
+    if mode is None:
+        return dsl.IntTuple((7,))
+    if mode == "keep":
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def unnarrowed(shape: IntTuple, mode: str | None) -> IntTuple:
+    if mode == "keep":
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def compare_optional(shape: IntTuple, left: str | None, right: str | None) -> IntTuple:
+    if left is None:
+        return dsl.IntTuple((1,))
+    if right is None:
+        return dsl.IntTuple((2,))
+    if left == right:
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def compare_optional_not_equal(
+    shape: IntTuple, left: str | None, right: str | None
+) -> IntTuple:
+    if left != right:
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def nested_none_equal(
+    shape: IntTuple, left: str | None, right: str | None
+) -> IntTuple:
+    if left is None:
+        if right is None:
+            if left == right:
+                return shape
+            return dsl.IntTuple((1,))
+        if left == right:
+            return dsl.IntTuple((2,))
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def nested_none_not_equal(
+    shape: IntTuple, left: str | None, right: str | None
+) -> IntTuple:
+    if left is None:
+        if right is None:
+            if left != right:
+                return dsl.IntTuple((1,))
+            return shape
+        if left != right:
+            return dsl.IntTuple((2,))
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def narrowed_none_literal_comparisons(shape: IntTuple, mode: str | None) -> IntTuple:
+    if mode is None:
+        if mode == "keep":
+            return dsl.IntTuple((1,))
+        if mode != "keep":
+            return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def compare_mixed(shape: IntTuple, mode: str, optional: str | None) -> IntTuple:
+    if optional is None:
+        return dsl.IntTuple((3,))
+    if mode == optional:
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def compare_unnarrowed(shape: IntTuple, mode: str, optional: str | None) -> IntTuple:
+    if mode == optional:
+        return shape
+    return dsl.IntTuple(())
+
+def apply_optional[Shape: IntTuple, Mode: Flag[str | None]](
+    x: Tensor[Shape], mode: Mode = None,
+) -> Tensor[optional_choice(Shape, Mode)]: ...
+def apply_unnarrowed[Shape: IntTuple, Mode: Flag[str | None]](
+    x: Tensor[Shape], mode: Mode,
+) -> Tensor[unnarrowed(Shape, Mode)]: ...
+def apply_compare[Shape: IntTuple, Left: Flag[str | None], Right: Flag[str | None]](
+    x: Tensor[Shape], left: Left, right: Right,
+) -> Tensor[compare_optional(Shape, Left, Right)]: ...
+def apply_compare_not_equal[Shape: IntTuple, Left: Flag[str | None], Right: Flag[str | None]](
+    x: Tensor[Shape], left: Left, right: Right,
+) -> Tensor[compare_optional_not_equal(Shape, Left, Right)]: ...
+def apply_nested_none_equal[Shape: IntTuple, Left: Flag[str | None], Right: Flag[str | None]](
+    x: Tensor[Shape], left: Left, right: Right,
+) -> Tensor[nested_none_equal(Shape, Left, Right)]: ...
+def apply_nested_none_not_equal[Shape: IntTuple, Left: Flag[str | None], Right: Flag[str | None]](
+    x: Tensor[Shape], left: Left, right: Right,
+) -> Tensor[nested_none_not_equal(Shape, Left, Right)]: ...
+def apply_narrowed_none_literal_comparisons[Shape: IntTuple, Mode: Flag[str | None]](
+    x: Tensor[Shape], mode: Mode,
+) -> Tensor[narrowed_none_literal_comparisons(Shape, Mode)]: ...
+def apply_mixed[Shape: IntTuple, Mode: Flag[str], Optional: Flag[str | None]](
+    x: Tensor[Shape], mode: Mode, optional: Optional,
+) -> Tensor[compare_mixed(Shape, Mode, Optional)]: ...
+def apply_compare_unnarrowed[Shape: IntTuple, Mode: Flag[str], Optional: Flag[str | None]](
+    x: Tensor[Shape], mode: Mode, optional: Optional,
+) -> Tensor[compare_unnarrowed(Shape, Mode, Optional)]: ...
+
+def check(x: Tensor[[2, 3]], broad: str | None, broad_mode: str) -> None:
+    reveal_type(apply_optional(x))  # E: revealed type: Tensor[[7]]
+    reveal_type(apply_optional(x, None))  # E: revealed type: Tensor[[7]]
+    reveal_type(apply_optional(x, "keep"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_optional(x, "drop"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_optional(x, broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_unnarrowed(x, "keep"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_unnarrowed(x, None))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_compare(x, "a", "a"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_compare(x, "a", "b"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_compare(x, None, "a"))  # E: revealed type: Tensor[[1]]
+    reveal_type(apply_compare(x, "a", None))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_compare(x, broad, "a"))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_compare(x, "a", broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_compare_not_equal(x, "a", "a"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_compare_not_equal(x, "a", "b"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_compare_not_equal(x, None, None))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_compare_not_equal(x, None, "a"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_compare_not_equal(x, "a", None))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_nested_none_equal(x, None, None))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_nested_none_equal(x, None, "a"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_nested_none_not_equal(x, None, None))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_nested_none_not_equal(x, None, "a"))  # E: revealed type: Tensor[[2]]
+    reveal_type(apply_narrowed_none_literal_comparisons(x, None))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_narrowed_none_literal_comparisons(x, "keep"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_mixed(x, "a", "a"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_mixed(x, "a", "b"))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_mixed(x, "a", None))  # E: revealed type: Tensor[[3]]
+    reveal_type(apply_compare_unnarrowed(x, "a", "a"))  # E: revealed type: Tensor[[2, 3]]
+    reveal_type(apply_compare_unnarrowed(x, "a", None))  # E: revealed type: Tensor[[]]
+    reveal_type(apply_mixed(x, broad_mode, "a"))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    reveal_type(apply_mixed(x, "a", broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_invalid_int_tuple_values,
     shape_dsl_tensor_env(),
     r#"
@@ -8443,6 +8847,18 @@ def axes_helper(shape: IntTuple, axes: tuple[int, ...]) -> IntTuple:
     return shape
 
 @type_shape_dsl_function
+def required_string_helper(shape: IntTuple, mode: str) -> IntTuple:
+    if mode == "keep":
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def optional_string_helper(shape: IntTuple, mode: str | None) -> IntTuple:
+    if mode == "keep":
+        return shape
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
 def unknown(shape: IntTuple) -> IntTuple:
     return dsl.IntTuple.gradual()
 
@@ -8456,7 +8872,7 @@ def invalid(shape: IntTuple) -> IntTuple:
     r#"
 import dsl_helpers as qualified
 import shape_extensions.dsl as dsl
-from dsl_helpers import axes_helper, axis_helper, identity, int_leaf, invalid, leaf as imported_leaf, unknown
+from dsl_helpers import axes_helper, axis_helper, identity, int_leaf, invalid, leaf as imported_leaf, optional_string_helper, required_string_helper, unknown
 from shape_extensions import Flag, Int, IntTuple, type_shape_dsl_function
 from torch import Tensor
 from typing import assert_type, reveal_type
@@ -8506,6 +8922,25 @@ def narrowed_union(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTu
     return axis_without_none(shape, axis)
 
 @type_shape_dsl_function
+def narrowed_optional_to_required(shape: IntTuple, mode: str | None) -> IntTuple:
+    if mode is None:
+        return shape
+    return required_string_helper(shape, mode)
+
+@type_shape_dsl_function
+def narrowed_value_to_optional(shape: IntTuple, mode: str | None) -> IntTuple:
+    if mode is None:
+        return shape
+    return optional_string_helper(shape, mode)
+
+@type_shape_dsl_function
+def inferred_optional_to_required(
+    shape: IntTuple, mode: str | None, choose: bool
+) -> IntTuple:
+    selected = mode if choose else "keep"
+    return required_string_helper(shape, selected)  # E: DSL helper argument domains must exactly match  # E: is not assignable to parameter
+
+@type_shape_dsl_function
 def diamond(shape: IntTuple, choice: int) -> IntTuple:
     if choice < 1:
         return imported(shape)
@@ -8535,6 +8970,8 @@ def apply_parameter_flag(x: Tensor[[2, 3]]) -> Tensor[parameter_flag(IntTuple[2,
 def apply_local_flag(x: Tensor[[2, 3]]) -> Tensor[local_flag(IntTuple[2, 3])]: ...
 def apply_fixed_tuple_flag[Axes: Flag[tuple[int, int]]](axes: Axes) -> Tensor[fixed_tuple_flag(IntTuple[2, 3], Axes)]: ...
 def apply_narrowed_union(x: Tensor[[2, 3]]) -> Tensor[narrowed_union(IntTuple[2, 3], 0)]: ...
+def apply_narrowed_optional_to_required() -> Tensor[narrowed_optional_to_required(IntTuple[2, 3], "keep")]: ...
+def apply_narrowed_value_to_optional() -> Tensor[narrowed_value_to_optional(IntTuple[2, 3], "keep")]: ...
 def apply_diamond(x: Tensor[[2, 3]]) -> Tensor[diamond(IntTuple[2, 3], 0)]: ...
 def apply_joined_first(x: Tensor[[2, 3]]) -> Tensor[joined_argument(IntTuple[2, 3], IntTuple[4, 5], 0)]: ...
 def apply_joined_second(x: Tensor[[2, 3]]) -> Tensor[joined_argument(IntTuple[2, 3], IntTuple[4, 5], 1)]: ...
@@ -8552,6 +8989,8 @@ def test(x: Tensor[[2, 3]], broad_axes: tuple[int, int]) -> None:
     reveal_type(apply_fixed_tuple_flag(broad_axes))  # E: revealed type: Tensor[tuple[Unknown, ...]]
     apply_fixed_tuple_flag((0,))  # E: not a valid `Flag[tuple[int, int]]` value
     assert_type(apply_narrowed_union(x), Tensor[[2]])
+    assert_type(apply_narrowed_optional_to_required(), Tensor[[2, 3]])
+    assert_type(apply_narrowed_value_to_optional(), Tensor[[2, 3]])
     assert_type(apply_diamond(x), Tensor[[2]])
     assert_type(apply_joined_first(x), Tensor[[2]])
     assert_type(apply_joined_second(x), Tensor[[4]])
@@ -8712,7 +9151,7 @@ def conditional_helper(shape: IntTuple, keep: bool, choose_branch: bool) -> IntT
 @type_shape_dsl_function
 def bool_local_is_not_none(shape: IntTuple) -> IntTuple:
     local = True
-    if local is None:  # E: `is None` requires a `Flag[int | tuple[int, ...] | None]` value  # E: Identity comparison
+    if local is None:  # E: Identity comparison
         return dsl.IntTuple((1,))
     return shape
 
@@ -8728,7 +9167,7 @@ def joined_non_bool_is_not_bool(
     shape: IntTuple, candidate: tuple[int, ...], choose_branch: bool,
 ) -> IntTuple:
     local = candidate if choose_branch else False
-    if local:  # E: a name used directly as a condition requires a `Flag[bool]` value
+    if local:  # E: requires a boolean Flag value
         return dsl.IntTuple((1,))
     return shape
 
@@ -8744,7 +9183,7 @@ def joined_bool_is_not_int_comparison(
 
 @type_shape_dsl_function
 def wrong_condition(shape: IntTuple, axis: int) -> IntTuple:
-    if axis:  # E: a name used directly as a condition requires a `Flag[bool]` value
+    if axis:  # E: requires a boolean Flag value
         return dsl.IntTuple((1,))
     return shape
 
@@ -8758,7 +9197,7 @@ def bool_is_not_int(shape: IntTuple) -> IntTuple:
 # A parameter's Flag domain is checked after the function body has been validated.
 @type_shape_dsl_function
 def bool_parameter_is_not_int(shape: IntTuple, keep: bool) -> IntTuple:
-    if dsl.is_int_value(keep):  # E: control-flow narrowing requires a Flag[int | tuple[int, ...] | None] value
+    if dsl.is_int_value(keep):  # E: `is_int_value` requires a Flag[int | tuple[int, ...] | None] value
         return dsl.IntTuple((1,))
     return shape
 

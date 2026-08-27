@@ -163,6 +163,7 @@ impl FlagMember {
             (Self::Int, Type::Literal(lit)) => matches!(lit.value, Lit::Int(_)),
             (Self::Bool, Type::Literal(lit)) => matches!(lit.value, Lit::Bool(_)),
             (Self::Str, Type::Literal(lit)) => matches!(lit.value, Lit::Str(_)),
+            (Self::Str, Type::LiteralString(_)) => true,
             _ => false,
         }
     }
@@ -218,6 +219,18 @@ impl FlagTuple {
             (Self::Fixed(left), Self::Fixed(right)) if left == right => Self::Fixed(left),
             (Self::Fixed(_), Self::Fixed(_) | Self::Unbounded)
             | (Self::Unbounded, Self::Fixed(_) | Self::Unbounded) => Self::Unbounded,
+        }
+    }
+
+    fn intersection(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Absent, _) | (_, Self::Absent) => Self::Absent,
+            (Self::Fixed(left), Self::Fixed(right)) if left == right => Self::Fixed(left),
+            (Self::Fixed(arity), Self::Unbounded) | (Self::Unbounded, Self::Fixed(arity)) => {
+                Self::Fixed(arity)
+            }
+            (Self::Unbounded, Self::Unbounded) => Self::Unbounded,
+            (Self::Fixed(_), Self::Fixed(_)) => Self::Absent,
         }
     }
 
@@ -322,6 +335,30 @@ impl FlagDomain {
         }
     }
 
+    /// Accepts the declared domain, treating subclasses of `str` like `str` values.
+    ///
+    /// The caller supplies the ordinary subtype check so this shape-specific representation does
+    /// not depend on solver internals. The callback is never invoked for domains without `str`.
+    pub fn accepts_with_str_subclasses(
+        self,
+        ty: &Type,
+        mut is_str_subclass: impl FnMut(&Type) -> bool,
+    ) -> bool {
+        if self.accepts(ty) {
+            return true;
+        }
+        if !self.contains(FlagMember::Str) {
+            return false;
+        }
+        let members = match ty {
+            Type::Union(union) => union.members.as_slice(),
+            _ => slice::from_ref(ty),
+        };
+        members
+            .iter()
+            .all(|member| self.accepts(member) || is_str_subclass(member))
+    }
+
     /// Accepts a literal scalar, `None`, or a tuple of integer literals.
     pub fn accepts_literal(self, ty: &Type) -> bool {
         match ty {
@@ -374,6 +411,23 @@ impl FlagDomain {
             tuple: self.tuple.join(other.tuple),
             none: self.none || other.none,
         }
+    }
+
+    /// Greatest lower bound, or `None` when the domains are disjoint.
+    pub fn intersection(self, other: Self) -> Option<Self> {
+        let intersection = Self {
+            integer: self.integer && other.integer,
+            boolean: self.boolean && other.boolean,
+            string: self.string && other.string,
+            tuple: self.tuple.intersection(other.tuple),
+            none: self.none && other.none,
+        };
+        (intersection.integer
+            || intersection.boolean
+            || intersection.string
+            || intersection.tuple != FlagTuple::Absent
+            || intersection.none)
+            .then_some(intersection)
     }
 
     /// Whether everything this domain admits is also admitted by `other`.
