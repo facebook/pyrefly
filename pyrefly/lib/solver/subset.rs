@@ -677,8 +677,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
         // Save coinductive state so we can detect if any coinductive assumptions
         // were used during this protocol check.
-        let prev_coinductive = self.coinductive_assumptions_used;
+        let prev_coinductive =
+            self.coinductive_assumptions_used || self.type_order.coinductive_assumptions_used();
         self.coinductive_assumptions_used = false;
+        self.type_order.set_coinductive_assumptions_used(false);
 
         // For class-level coinductive reasoning: if the `got` type's type arguments
         // contain Vars, we're likely in a recursive pattern (e.g., checking method return
@@ -713,7 +715,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         // 2. No coinductive assumptions were used during this check
         //    (otherwise the result may be contingent on an assumption
         //    that could be invalidated by rollback)
-        let used_coinductive = self.coinductive_assumptions_used;
+        let used_coinductive =
+            self.coinductive_assumptions_used || self.type_order.coinductive_assumptions_used();
         if has_no_vars && !used_coinductive {
             self.solver
                 .store_protocol_cache(&got, &want, &res, self.type_order);
@@ -721,6 +724,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
         // Restore: propagate any coinductive usage upward
         self.coinductive_assumptions_used = prev_coinductive || used_coinductive;
+        self.type_order
+            .set_coinductive_assumptions_used(prev_coinductive || used_coinductive);
 
         res
     }
@@ -1035,7 +1040,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         }
     }
 
-    fn is_subset_tuple_to_int_tuple(
+    pub(crate) fn is_subset_tuple_to_int_tuple(
         &mut self,
         got: &Tuple,
         want: &IntTuple,
@@ -1050,7 +1055,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             return Err(SubsetError::Other);
         }
         if Self::int_tuple_has_carrier_middle(want) {
-            self.bind_tensor_dimensions(&IntTuple::from_tuple(got.clone()), want)
+            // Dimension binding recovers non-size elements to gradual dimensions, so
+            // validate the actual structurally first. This must not bind anything:
+            // the carrier is still unsolved, and callers can roll this attempt back.
+            let Some(got) = tuple_carrier_to_shape(&Type::Tuple(got.clone())) else {
+                return Err(SubsetError::Other);
+            };
+            self.bind_tensor_dimensions(&got, want)
         } else {
             self.is_subset_eq(&Type::Tuple(got.clone()), &want.to_tuple_type())
         }
@@ -1254,15 +1265,20 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         // Save coinductive state so we can detect if any coinductive assumptions
         // were used during field comparisons (e.g., a field with a protocol type
         // that recursively references this TypedDict).
-        let prev_coinductive = self.coinductive_assumptions_used;
+        let prev_coinductive =
+            self.coinductive_assumptions_used || self.type_order.coinductive_assumptions_used();
         self.coinductive_assumptions_used = false;
+        self.type_order.set_coinductive_assumptions_used(false);
         let res = self.is_subset_typed_dict_inner(got, want);
-        let used_coinductive = self.coinductive_assumptions_used;
+        let used_coinductive =
+            self.coinductive_assumptions_used || self.type_order.coinductive_assumptions_used();
         if cacheable && !used_coinductive {
             self.solver
                 .store_typed_dict_cache(got, want, &res, self.type_order);
         }
         self.coinductive_assumptions_used = prev_coinductive || used_coinductive;
+        self.type_order
+            .set_coinductive_assumptions_used(prev_coinductive || used_coinductive);
         res
     }
 
@@ -2539,7 +2555,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 self.is_subset_eq(&got, want)
             }
             (Type::ClassType(got), Type::SelfType(want))
-                if got == want && self.type_order.is_final(got.class_object()) =>
+                if got == want && !self.type_order.is_subclassable(got.class_object()) =>
             {
                 Ok(())
             }

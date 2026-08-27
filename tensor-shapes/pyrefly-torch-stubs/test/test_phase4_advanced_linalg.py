@@ -495,6 +495,26 @@ def test_tensordot_multiple_dims():
     assert_type(c, Tensor[[2, 3, 6, 7]])
 
 
+def test_tensordot_integer_boundaries():
+    a: Tensor[[2, 3]] = torch.randn(2, 3)
+    b: Tensor[[2, 3]] = torch.randn(2, 3)
+    assert_type(torch.tensordot(a, b, dims=0), Tensor[[2, 3, 2, 3]])
+    assert_type(torch.tensordot(a, b, dims=2), Tensor[[]])
+
+
+def test_tensordot_mismatched_contracted_dimensions_are_not_checked():
+    a: Tensor[[2, 3]] = torch.randn(2, 3)
+    b: Tensor[[4, 5]] = torch.randn(4, 5)
+    # TODO(stroxler): PyTorch rejects this call because (2, 3) != (4, 5).
+    assert_type(torch.tensordot(a, b, dims=2), Tensor[[]])
+
+
+def test_tensordot_axis_lists_are_gradual():
+    a: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    b: Tensor[[4, 5, 3]] = torch.randn(4, 5, 3)
+    assert_type(torch.tensordot(a, b, dims=([1, 2], [2, 0])), Tensor)
+
+
 # ==== torch.einsum ====
 
 

@@ -29,7 +29,8 @@ use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::gas::Gas;
-use pyrefly_util::suggest::best_suggestion;
+use pyrefly_util::suggest::Candidate;
+use pyrefly_util::suggest::Search;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::Identifier;
@@ -1090,32 +1091,24 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn suggest_builtin_name(&self, missing: &Name) -> Option<Name> {
-        // Hold the wildcard sets so `best_suggestion` can borrow their names; only the chosen
-        // suggestion is cloned, not every builtin candidate.
+    pub fn suggest_similar_name(&self, missing: &Name) -> Option<Name> {
+        // Hold the wildcard sets so their names can be borrowed for the search;
+        // only the chosen suggestion is cloned, not every builtin candidate.
         let wildcards: Vec<_> = fallback_builtin_modules(self.module_info.name())
             .filter_map(|module| self.lookup.get_wildcard(module))
             .collect();
-        best_suggestion(
-            missing,
-            wildcards
-                .iter()
-                .flat_map(|wildcard| wildcard.iter())
-                .map(|candidate| (candidate, 0)),
-        )
-    }
-
-    pub fn suggest_similar_name(&self, missing: &Name, position: TextSize) -> Option<Name> {
-        let scope_suggestion = self.scopes.suggest_similar_name(missing, position);
-        let builtin_suggestion = self.suggest_builtin_name(missing);
-        let mut candidates = Vec::new();
-        if let Some(scope_suggestion) = &scope_suggestion {
-            candidates.push((scope_suggestion, 0));
-        }
-        if let Some(builtin_suggestion) = &builtin_suggestion {
-            candidates.push((builtin_suggestion, 1));
-        }
-        best_suggestion(missing, candidates)
+        // Builtins are the outermost scope there is, so they are searched in the
+        // same pass and lose every tie to a name that is actually in scope.
+        // Sharing one pass also lets a close match found anywhere tighten the
+        // bound for everything after it.
+        let builtins = wildcards
+            .iter()
+            .flat_map(|wildcard| wildcard.iter())
+            .map(|candidate| Candidate::measured(candidate, usize::MAX));
+        let mut search = Search::new(missing);
+        self.scopes
+            .fold_suggestion_candidates(&mut search, builtins);
+        search.finish()
     }
 
     /// Materialize a lazily-discovered implicit builtin as an entry in the module's static
@@ -1450,6 +1443,22 @@ impl<'a> BindingsBuilder<'a> {
         self.errors
             .error_builder(range, kind, header)
             .with_detail(detail)
+            .emit();
+    }
+
+    /// Like [`Self::error_with_detail`], but for a detail that costs something
+    /// to work out. Modules loaded below `Require::Errors` discard everything
+    /// they collect, so for them the detail is never computed at all.
+    pub fn error_with_detail_from(
+        &self,
+        range: TextRange,
+        kind: ErrorKind,
+        header: String,
+        detail: impl FnOnce() -> Option<String>,
+    ) {
+        self.errors
+            .error_builder(range, kind, header)
+            .with_detail_from(detail)
             .emit();
     }
 

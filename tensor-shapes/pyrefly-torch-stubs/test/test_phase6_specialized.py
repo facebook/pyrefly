@@ -10,6 +10,7 @@ import torch
 import torch.fft
 import torch.nn
 import torch.nn.functional
+from shape_extensions import Int, IntVar
 from torch import Tensor
 
 # ==== Loss Functions ====
@@ -161,6 +162,26 @@ def test_irfft():
     assert_type(result, Tensor[[10]])
 
 
+def test_real_fft_axes_and_lengths():
+    x: Tensor[[4, 10, 6]] = torch.randn(4, 10, 6)
+    assert_type(torch.fft.rfft(x, dim=-2), Tensor[[4, 6, 6]])
+    assert_type(torch.fft.rfft(x, n=8, dim=0), Tensor[[5, 10, 6]])
+    assert_type(torch.fft.irfft(x, n=12, dim=1), Tensor[[4, 12, 6]])
+    assert_type(torch.fft.hfft(x, dim=0), Tensor[[6, 10, 6]])
+    assert_type(torch.fft.ihfft(x, dim=1), Tensor[[4, 6, 6]])
+
+
+def test_real_fft_symbolic_n[N: IntVar](x: Tensor[[3, 7]], n: Int[N]):
+    assert_type(torch.fft.rfft(x, n=n, dim=0), Tensor[[N // 2 + 1, 7]])
+    assert_type(torch.fft.irfft(x, n=n, dim=-1), Tensor[[3, N]])
+
+
+def test_real_fft_gradual(x: Tensor, n: int):
+    assert_type(torch.fft.rfft(x), Tensor)
+    assert_type(torch.fft.rfft(x, dim=0), Tensor)
+    assert_type(torch.fft.irfft(x, n=n), Tensor)
+
+
 def test_fftshift():
     """FFT shift"""
     x: Tensor[[3, 4]] = torch.randn(3, 4)
@@ -277,6 +298,12 @@ def test_normal_tensor_tensor():
     assert_type(result, Tensor[[3, 4]])
 
 
+def test_normal_tensor_tensor_mean_shape():
+    mean: Tensor[[2, 3]] = torch.randn(2, 3)
+    std: Tensor[[6]] = torch.randn(6)
+    assert_type(torch.normal(mean, std), Tensor[[2, 3]])
+
+
 def test_normal_tensor_scalar():
     """Normal with tensor mean, scalar std"""
     mean: Tensor[[2, 5]] = torch.randn(2, 5)
@@ -295,3 +322,8 @@ def test_normal_scalar_scalar_size():
     """Normal with scalar mean/std and size parameter"""
     result = torch.normal(0.0, 1.0, size=(3, 4))
     assert_type(result, Tensor[[3, 4]])
+
+
+def test_normal_scalar_scalar_shape[N: IntVar](n: Int[N], plain: int):
+    assert_type(torch.normal(0.0, 1.0, size=()), Tensor[[]])
+    assert_type(torch.normal(0.0, 1.0, size=(n, plain)), Tensor[[N, int]])

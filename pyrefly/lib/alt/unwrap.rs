@@ -66,7 +66,7 @@ impl<'a, 'b> HintRef<'a, 'b> {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn fresh_var(&self) -> Var {
         self.solver().fresh_unwrap(self.uniques)
     }

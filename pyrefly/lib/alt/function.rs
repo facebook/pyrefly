@@ -7,7 +7,6 @@
 
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -264,7 +263,7 @@ impl DecoratorParamHints {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn decorator_param_hints(
         &self,
         decorators: &[(Type, TextRange)],
@@ -395,7 +394,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 ));
             }
             acc.reverse();
-            self.check_decorator_consistency_with_implementation(&acc, &undecorated, errors);
+            self.check_decorator_consistency_with_implementation(&acc, undecorated, errors);
             if let Ok(defs) = Vec1::try_from_vec(acc) {
                 if defs.len() == 1 {
                     self.error(
@@ -415,7 +414,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         defs,
                         errors,
                     );
-                    self.check_signature_consistency(&sigs, &def_ty, &undecorated, errors);
+                    self.check_signature_consistency(&sigs, def_ty, undecorated, errors);
                     Type::Overload(Overload {
                         signatures: sigs.mapped(|(_, sig)| sig),
                         metadata: Box::new(metadata),
@@ -516,7 +515,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let decorators = Box::from_iter(decorators.iter().filter_map(|k| {
             let decorator = self.get_idx(*k);
             let range = self.bindings().idx_to_key(*k).range();
-            let keep = match self.get_special_decorator(&decorator) {
+            let keep = match self.get_special_decorator(decorator) {
                 // Filter `@disjoint_base` out before generic decorator application,
                 // otherwise it would produce a misleading bad-specialization error.
                 Some(SpecialDecorator::DisjointBase) => {
@@ -641,7 +640,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut tparams = self.scoped_type_params(def.type_params.as_deref(), errors);
         let legacy_tparams = legacy_tparams
             .iter()
-            .filter_map(|key| self.get_idx(*key).deref().parameter().cloned());
+            .filter_map(|key| self.get_idx(*key).parameter().cloned());
         tparams.extend(legacy_tparams);
         let tparams = self.validated_tparams(def.range, tparams, TParamsSource::Function, errors);
         let func_id = Arc::new(FuncDefId {
@@ -677,7 +676,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Resolve the IR function reference from @uses_shape_dsl(ir_fn) and
         // populate `flags.shape_transform` with the DSL function it points to.
         if let Some(ir_identifier) = uses_shape_dsl_ir_name {
-            let ir_type = self.get(&Key::BoundName(ir_identifier)).arc_clone_ty();
+            let ir_type = self.get(&Key::BoundName(ir_identifier)).ty().clone();
             if let Type::Function(func) = &ir_type
                 && let FunctionKind::ShapeDsl(_, dsl_fn, fn_closure) = &func.metadata.kind
             {
@@ -722,7 +721,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Arc<Type> {
         let ret = self
             .get(&Key::ReturnType(ShortIdentifier::new(&stmt.name)))
-            .arc_clone_ty();
+            .ty()
+            .clone();
         // `stmt.returns` is always set to None because the binding step calls `mem::take` on it
         let has_return_annotation = self.bindings().function_has_return_annotation(&stmt.name);
         let display_ret = has_return_annotation
@@ -816,7 +816,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     stmt,
                     &def.defining_cls,
                     def.metadata.flags.is_staticmethod,
-                    ty_narrow,
+                    ty_narrow.as_ref(),
                     errors,
                 );
             }
@@ -979,7 +979,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         Arc::new(ty)
     }
 
-    pub fn get_special_decorator(
+    pub fn get_special_decorator<'a>(
         &'a self,
         decorator: &'a Decorator,
     ) -> Option<SpecialDecorator<'a>> {
@@ -2249,11 +2249,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             |tparams: Option<&Arc<TParams>>| match (tparams, def.defining_cls.as_ref()) {
                 (None, None) => None,
                 (Some(_), None) => tparams.cloned(),
-                (None, Some(cls)) => self.get_class_tparams(cls),
+                (None, Some(cls)) => self.get_class_tparams(cls).map(Dupe::dupe),
                 (Some(tparams), Some(cls)) => match self.get_class_tparams(cls) {
                     Some(class_tparams) => {
                         let mut all_tparams = (**tparams).clone();
-                        all_tparams.extend(&class_tparams);
+                        all_tparams.extend(class_tparams);
                         Some(Arc::new(all_tparams))
                     }
                     None => Some((*tparams).dupe()),

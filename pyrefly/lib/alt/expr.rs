@@ -48,6 +48,7 @@ use pyrefly_types::types::Forallable;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
@@ -394,7 +395,7 @@ fn classify_shaped_array_index_type(ty: &Type) -> Option<IndexOp> {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn synthesized_functional_class_type(&self, call: &ExprCall) -> Option<Type> {
         let anon_key = Key::Anon(call.range);
         let idx = self
@@ -490,7 +491,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     let result = self
                         .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                        .arc_clone();
+                        .clone();
                     // Complements PromoteForward for seeded captures.
                     if self.bindings().should_promote_at_range(x.range) {
                         result.map_ty(|ty| ty.promote_shallow_implicit_literals(self.stdlib))
@@ -523,7 +524,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::Named(x) => match &*x.target {
                 Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => self
                     .get(&Key::Definition(ShortIdentifier::expr_name(name)))
-                    .arc_clone(),
+                    .clone(),
                 _ => self.expr_infer_impl(&x.value, hint, errors, type_form_context),
             },
             // All other expressions operate at the `Type` level only, so we avoid the overhead of
@@ -1433,7 +1434,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 );
                 if let Some(suggestion) = best_suggestion(
                     field_name,
-                    mapped_fields.iter().map(|candidate| (candidate, 0usize)),
+                    mapped_fields
+                        .iter()
+                        .map(|candidate| Candidate::measured(candidate, 0)),
                 ) {
                     builder = builder.with_detail(format!("Did you mean `{suggestion}`?"));
                 }
@@ -3751,7 +3754,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         let fields = self.typed_dict_fields(&typed_dict);
                                         if let Some(suggestion) = best_suggestion(
                                             &key_name,
-                                            fields.keys().map(|candidate| (candidate, 0usize)),
+                                            fields
+                                                .keys()
+                                                .map(|candidate| Candidate::measured(candidate, 0)),
                                         ) {
                                             builder = builder.with_detail(format!(
                                                 "Did you mean `{suggestion}`?"
@@ -4038,8 +4043,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub(crate) fn shaped_array_shape_arg_index(&self, cls: &ClassType) -> Option<usize> {
         let shape_param = self.shaped_array_shape_for_class_type(cls)?;
-        self.get_class_tparams(cls.class_object())
-            .as_deref()?
+        self.get_class_tparams(cls.class_object())?
             .iter()
             .position(|param| param == &shape_param)
     }
@@ -4590,7 +4594,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Vec<Type> {
         let tparams = self.get_class_tparams(cls);
-        let tparams: &[Quantified] = tparams.as_deref().map_or(&[], |tparams| tparams.as_vec());
+        let tparams: &[Quantified] = tparams.map_or(&[], |tparams| tparams.as_vec());
         self.parse_type_args_for_tparams(args, tparams, type_form_context, errors)
     }
 

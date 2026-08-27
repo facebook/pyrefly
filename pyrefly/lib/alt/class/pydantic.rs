@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::dunder;
@@ -101,7 +99,7 @@ enum PydanticParamKey {
     Name(Name),
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn get_pydantic_root_model_type_via_mro(
         &self,
         class: &Class,
@@ -190,7 +188,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// dataclass parents whose config values (e.g. strict) may have different defaults.
     fn find_inherited_keyword_value<T>(
         &self,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         extractor: impl Fn(&DataclassMetadata) -> T,
     ) -> Option<T> {
         bases_with_metadata
@@ -234,7 +232,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let metadata = self.get_metadata_for_class(cls.class_object());
                 if matches!(metadata.pydantic_model_kind(), Some(RootModel))
                     && let Some((root_type, _)) =
-                        self.get_pydantic_root_model_type_via_mro(cls.class_object(), &metadata)
+                        self.get_pydantic_root_model_type_via_mro(cls.class_object(), metadata)
                 {
                     // Recursively expand if the inner type is also a RootModel
                     // Return union of immediate inner type AND recursive expansion
@@ -252,10 +250,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn pydantic_config(
         &self,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         pydantic_config_dict: &PydanticConfigDict,
         keywords: &[(Name, Annotation)],
-        decorators: &[(Arc<Decorator>, TextRange)],
+        decorators: &[(&Decorator, TextRange)],
         errors: &ErrorCollector,
         range: TextRange,
     ) -> Option<PydanticConfig> {
@@ -490,7 +488,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         keywords: &[(Name, Annotation)],
         value_from_config_dict: Option<bool>,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         extract_from_metadata: impl Fn(&DataclassMetadata) -> bool,
         default: bool,
     ) -> bool {
@@ -510,7 +508,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         name: &Name,
         keywords: &[(Name, Annotation)],
         value_from_config_dict: Option<bool>,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         extract_from_metadata: impl Fn(&DataclassMetadata) -> Option<bool>,
     ) -> Option<bool> {
         self.extract_bool_flag(keywords, name)

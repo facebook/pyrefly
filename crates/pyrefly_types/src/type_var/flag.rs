@@ -48,9 +48,15 @@ pub enum FlagMember {
     NoneType,
 }
 
-/// Whether every element of `tuple` is an integer. `Type::Int` covers symbolic `Int[N]`
-/// dimensions, which are legitimate entries in a shape-derived tuple.
-fn is_int_tuple(tuple: &Tuple) -> bool {
+/// The known lower bound and exactness of an integer tuple's length.
+struct IntTupleLength {
+    minimum: usize,
+    exact: bool,
+}
+
+/// The length of `tuple`, if every element is an integer. `Type::Int` covers symbolic
+/// `Int[N]` dimensions, which are legitimate entries in a shape-derived tuple.
+fn int_tuple_length(tuple: &Tuple) -> Option<IntTupleLength> {
     fn is_int(ty: &Type) -> bool {
         match ty {
             Type::Any(_) | Type::Int(_) => true,
@@ -68,17 +74,35 @@ fn is_int_tuple(tuple: &Tuple) -> bool {
     }
 
     match tuple {
-        Tuple::Concrete(elements) => elements.iter().all(is_int),
-        Tuple::Unbounded(element) => is_int(element),
+        Tuple::Concrete(elements) => elements.iter().all(is_int).then_some(IntTupleLength {
+            minimum: elements.len(),
+            exact: true,
+        }),
+        Tuple::Unbounded(element) => is_int(element).then_some(IntTupleLength {
+            minimum: 0,
+            exact: false,
+        }),
         Tuple::Unpacked(unpacked) => {
             let (prefix, middle, suffix) = unpacked.parts();
-            prefix.iter().all(is_int)
-                && suffix.iter().all(is_int)
-                && match middle {
-                    Type::Any(_) => true,
-                    Type::Tuple(tuple) => is_int_tuple(tuple),
-                    _ => false,
-                }
+            if !prefix.iter().all(is_int) || !suffix.iter().all(is_int) {
+                return None;
+            }
+            let middle = match middle {
+                Type::Any(_) => IntTupleLength {
+                    minimum: 0,
+                    exact: false,
+                },
+                Type::Tuple(tuple) => int_tuple_length(tuple)?,
+                _ => return None,
+            };
+            Some(IntTupleLength {
+                minimum: prefix
+                    .len()
+                    .checked_add(suffix.len())
+                    .and_then(|outer| outer.checked_add(middle.minimum))
+                    .expect("a tuple's element count fits in a `usize`"),
+                exact: middle.exact,
+            })
         }
     }
 }
@@ -116,27 +140,24 @@ impl FlagMember {
         }
     }
 
-    /// The member this type spells, when written as a `Flag[...]` domain member.
+    /// The scalar member this type spells in a `Flag[...]` domain. Tuple spellings are
+    /// parsed separately because they can carry a fixed arity.
     fn from_type(ty: &Type) -> Option<Self> {
         match ty {
             Type::ClassType(cls) if cls.is_builtin("int") => Some(Self::Int),
             Type::ClassType(cls) if cls.is_builtin("bool") => Some(Self::Bool),
             Type::ClassType(cls) if cls.is_builtin("str") => Some(Self::Str),
             Type::None => Some(Self::NoneType),
-            Type::Tuple(Tuple::Unbounded(element)) if matches!(element.as_ref(), Type::ClassType(cls) if cls.is_builtin("int")) => {
-                Some(Self::Tuple)
-            }
             _ => None,
         }
     }
 
+    /// Accepts this scalar member exactly rather than applying Python subtyping.
     fn accepts(self, ty: &Type) -> bool {
         match (self, ty) {
             (Self::Int, Type::ClassType(cls)) => cls.is_builtin("int"),
             (Self::Bool, Type::ClassType(cls)) => cls.is_builtin("bool"),
             (Self::Str, Type::ClassType(cls)) => cls.is_builtin("str"),
-            (Self::Tuple, Type::ClassType(cls)) => cls.is_builtin("tuple"),
-            (Self::Tuple, Type::Tuple(tuple)) => is_int_tuple(tuple),
             (Self::NoneType, Type::None) => true,
             (Self::Int, Type::Int(_)) => true,
             (Self::Int, Type::Literal(lit)) => matches!(lit.value, Lit::Int(_)),
@@ -157,6 +178,81 @@ impl FlagMember {
     }
 }
 
+/// The integer-tuple portion of a `Flag` domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
+enum FlagTuple {
+    Absent,
+    Fixed(usize),
+    Unbounded,
+}
+
+impl FlagTuple {
+    fn from_type(ty: &Type) -> Option<Self> {
+        match ty {
+            Type::Tuple(Tuple::Unbounded(element)) if matches!(element.as_ref(), Type::ClassType(cls) if cls.is_builtin("int")) => {
+                Some(Self::Unbounded)
+            }
+            Type::Tuple(Tuple::Concrete(elements))
+                if elements.iter().all(
+                    |element| matches!(element, Type::ClassType(cls) if cls.is_builtin("int")),
+                ) =>
+            {
+                Some(Self::Fixed(elements.len()))
+            }
+            _ => None,
+        }
+    }
+
+    fn is_subset_of(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Absent, _) | (_, Self::Unbounded) => true,
+            (Self::Fixed(left), Self::Fixed(right)) => left == right,
+            (Self::Fixed(_) | Self::Unbounded, Self::Absent)
+            | (Self::Unbounded, Self::Fixed(_)) => false,
+        }
+    }
+
+    fn join(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Absent, tuple) | (tuple, Self::Absent) => tuple,
+            (Self::Fixed(left), Self::Fixed(right)) if left == right => Self::Fixed(left),
+            (Self::Fixed(_), Self::Fixed(_) | Self::Unbounded)
+            | (Self::Unbounded, Self::Fixed(_) | Self::Unbounded) => Self::Unbounded,
+        }
+    }
+
+    fn accepts_length(self, length: usize) -> bool {
+        match self {
+            Self::Absent => false,
+            Self::Fixed(arity) => arity == length,
+            Self::Unbounded => true,
+        }
+    }
+
+    fn accepts(self, ty: &Type) -> bool {
+        let length = match ty {
+            Type::ClassType(cls) if cls.is_builtin("tuple") => IntTupleLength {
+                minimum: 0,
+                exact: false,
+            },
+            Type::Tuple(tuple) => match int_tuple_length(tuple) {
+                Some(length) => length,
+                None => return false,
+            },
+            _ => return false,
+        };
+        if length.exact {
+            self.accepts_length(length.minimum)
+        } else {
+            match self {
+                Self::Absent => false,
+                Self::Fixed(arity) => length.minimum <= arity,
+                Self::Unbounded => true,
+            }
+        }
+    }
+}
+
 impl Display for FlagMember {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.source_spelling())
@@ -169,23 +265,41 @@ impl Display for FlagMember {
 /// yield at least one member, so materialization may assume a member exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 pub struct FlagDomain {
-    /// Bitset indexed by `FlagMember` discriminant. Iteration
-    /// order comes from `FlagMember::ALL`, never from construction order.
-    members: u8,
+    integer: bool,
+    boolean: bool,
+    string: bool,
+    tuple: FlagTuple,
+    none: bool,
 }
 
 impl FlagDomain {
-    /// Parses a nonempty union of supported `Flag` domain members.
+    /// Parses a nonempty union of supported `Flag` domain members. Distinct fixed tuple
+    /// arities require an explicit `tuple[int, ...]` member rather than implicit widening.
     pub fn from_type(ty: &Type) -> Option<Self> {
         let members = match ty {
             Type::Union(union) => union.members.as_slice(),
             _ => slice::from_ref(ty),
         };
-        let mut members = members.iter();
-        let first = Self::of(FlagMember::from_type(members.next()?)?);
-        members.try_fold(first, |domain, member| {
-            FlagMember::from_type(member).map(|member| domain.join(Self::of(member)))
-        })
+        let mut domain: Option<Self> = None;
+        let mut has_explicit_unbounded_tuple = false;
+        for member in members {
+            let member = match FlagTuple::from_type(member) {
+                Some(tuple) => {
+                    has_explicit_unbounded_tuple |= tuple == FlagTuple::Unbounded;
+                    Self {
+                        integer: false,
+                        boolean: false,
+                        string: false,
+                        tuple,
+                        none: false,
+                    }
+                }
+                None => Self::of(FlagMember::from_type(member)?),
+            };
+            domain = Some(domain.map_or(member, |domain| domain.join(member)));
+        }
+        let domain = domain?;
+        (has_explicit_unbounded_tuple || domain.tuple != FlagTuple::Unbounded).then_some(domain)
     }
 
     /// Accepts the declared domain exactly, rather than applying Python subtyping.
@@ -201,7 +315,10 @@ impl FlagDomain {
                 matches!(tv.restriction(), Restriction::Flag(x) if x.is_subset_of(self))
             }
             Type::Union(union) => union.members.iter().all(|member| self.accepts(member)),
-            _ => self.members().any(|member| member.accepts(ty)),
+            _ => self.members().any(|member| match member {
+                FlagMember::Tuple => self.tuple.accepts(ty),
+                _ => member.accepts(ty),
+            }),
         }
     }
 
@@ -210,7 +327,7 @@ impl FlagDomain {
         match ty {
             Type::Literal(_) | Type::None => self.accepts(ty),
             Type::Tuple(Tuple::Concrete(elements)) => {
-                self.contains(FlagMember::Tuple)
+                self.tuple.accepts_length(elements.len())
                     && elements.iter().all(|element| {
                         matches!(element, Type::Literal(lit) if matches!(lit.value, Lit::Int(_)))
                     })
@@ -219,26 +336,63 @@ impl FlagDomain {
         }
     }
 
-    pub const fn of(member: FlagMember) -> Self {
+    pub fn of(member: FlagMember) -> Self {
+        let mut domain = Self {
+            integer: false,
+            boolean: false,
+            string: false,
+            tuple: FlagTuple::Absent,
+            none: false,
+        };
+        match member {
+            FlagMember::Int => domain.integer = true,
+            FlagMember::Bool => domain.boolean = true,
+            FlagMember::Str => domain.string = true,
+            FlagMember::Tuple => domain.tuple = FlagTuple::Unbounded,
+            FlagMember::NoneType => domain.none = true,
+        }
+        domain
+    }
+
+    /// A domain admitting exactly integer tuples of `arity` elements.
+    pub fn fixed_tuple(arity: usize) -> Self {
         Self {
-            members: 1 << member as u8,
+            integer: false,
+            boolean: false,
+            string: false,
+            tuple: FlagTuple::Fixed(arity),
+            none: false,
         }
     }
 
     /// Least upper bound: the domain admitting everything either side admits.
     pub fn join(self, other: Self) -> Self {
         Self {
-            members: self.members | other.members,
+            integer: self.integer || other.integer,
+            boolean: self.boolean || other.boolean,
+            string: self.string || other.string,
+            tuple: self.tuple.join(other.tuple),
+            none: self.none || other.none,
         }
     }
 
     /// Whether everything this domain admits is also admitted by `other`.
     pub fn is_subset_of(self, other: Self) -> bool {
-        self.members & !other.members == 0
+        (!self.integer || other.integer)
+            && (!self.boolean || other.boolean)
+            && (!self.string || other.string)
+            && self.tuple.is_subset_of(other.tuple)
+            && (!self.none || other.none)
     }
 
     pub fn contains(self, member: FlagMember) -> bool {
-        self.members & (1 << member as u8) != 0
+        match member {
+            FlagMember::Int => self.integer,
+            FlagMember::Bool => self.boolean,
+            FlagMember::Str => self.string,
+            FlagMember::Tuple => self.tuple != FlagTuple::Absent,
+            FlagMember::NoneType => self.none,
+        }
     }
 
     fn members(self) -> impl Iterator<Item = FlagMember> {
@@ -247,10 +401,15 @@ impl FlagDomain {
             .filter(move |member| self.contains(*member))
     }
 
-    /// The domain's members as class types, in canonical order. Never empty.
+    /// The domain's members as types, in canonical order. Never empty.
     pub fn types(self, stdlib: &Stdlib) -> Vec<Type> {
         self.members()
-            .map(|member| member.as_type(stdlib))
+            .map(|member| match (member, self.tuple) {
+                (FlagMember::Tuple, FlagTuple::Fixed(arity)) => {
+                    Type::Tuple(Tuple::Concrete(vec![stdlib.int().clone().to_type(); arity]))
+                }
+                _ => member.as_type(stdlib),
+            })
             .collect()
     }
 
@@ -277,7 +436,20 @@ impl Display for FlagDomain {
             if i > 0 {
                 write!(f, " | ")?;
             }
-            write!(f, "{member}")?;
+            match (member, self.tuple) {
+                (FlagMember::Tuple, FlagTuple::Fixed(0)) => f.write_str("tuple[()]")?,
+                (FlagMember::Tuple, FlagTuple::Fixed(arity)) => {
+                    f.write_str("tuple[")?;
+                    for index in 0..arity {
+                        if index > 0 {
+                            f.write_str(", ")?;
+                        }
+                        f.write_str("int")?;
+                    }
+                    f.write_str("]")?;
+                }
+                _ => write!(f, "{member}")?,
+            }
         }
         Ok(())
     }
@@ -354,9 +526,8 @@ mod tests {
         );
     }
 
-    /// Tuple membership uses the same representation as every other domain member.
     #[test]
-    fn flag_tuple_is_an_atom() {
+    fn flag_tuple_membership() {
         let tuple_only = FlagDomain::of(FlagMember::Tuple);
         assert_eq!(tuple_only.class_names(), vec!["builtins.tuple"]);
         assert!(!tuple_only.contains(FlagMember::Int));
@@ -378,5 +549,40 @@ mod tests {
         assert!(!both.is_subset_of(int));
         assert!(!tuple.is_subset_of(int));
         assert!(!int.is_subset_of(tuple));
+    }
+
+    #[test]
+    fn flag_fixed_tuple_arities_are_incomparable() {
+        let pair = FlagDomain::fixed_tuple(2);
+        let triple = FlagDomain::fixed_tuple(3);
+        let any_tuple = FlagDomain::of(FlagMember::Tuple);
+
+        assert!(pair.is_subset_of(pair));
+        assert!(!pair.is_subset_of(triple));
+        assert!(!triple.is_subset_of(pair));
+        assert!(pair.is_subset_of(any_tuple));
+        assert!(!any_tuple.is_subset_of(pair));
+        assert_eq!(pair.join(triple), any_tuple);
+    }
+
+    #[test]
+    fn flag_fixed_tuple_metadata() {
+        for arity in [0, 1, 2, 3] {
+            let domain = FlagDomain::fixed_tuple(arity);
+            assert!(domain.contains(FlagMember::Tuple));
+            assert!(!domain.contains(FlagMember::Int));
+            assert_eq!(domain.class_names(), vec!["builtins.tuple"]);
+        }
+        assert_eq!(FlagDomain::fixed_tuple(0).to_string(), "tuple[()]");
+        assert_eq!(FlagDomain::fixed_tuple(1).to_string(), "tuple[int]");
+        assert_eq!(
+            FlagDomain::fixed_tuple(3).to_string(),
+            "tuple[int, int, int]"
+        );
+
+        let mixed = FlagDomain::of(FlagMember::NoneType)
+            .join(FlagDomain::fixed_tuple(2))
+            .join(FlagDomain::of(FlagMember::Int));
+        assert_eq!(mixed.to_string(), "int | tuple[int, int] | None");
     }
 }

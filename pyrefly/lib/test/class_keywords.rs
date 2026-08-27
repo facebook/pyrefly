@@ -5,13 +5,12 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_build::handle::Handle;
 
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::binding::binding::KeyClassMetadata;
 use crate::state::state::State;
+use crate::state::state::StateReader;
 use crate::test::util::get_class;
 use crate::test::util::mk_state;
 use crate::testcase;
@@ -19,11 +18,16 @@ use crate::types::class::ClassType;
 use crate::types::literal::Lit;
 use crate::types::types::Type;
 
-pub fn get_class_metadata(name: &str, handle: &Handle, state: &State) -> Arc<ClassMetadata> {
-    let solutions = state.transaction().get_solutions(handle).unwrap();
-
-    let cls = get_class(name, handle, state);
-    solutions.get_arc(&KeyClassMetadata(cls.index()))
+pub fn get_class_metadata<'a>(
+    name: &str,
+    handle: &Handle,
+    reader: &'a StateReader<'_>,
+) -> &'a ClassMetadata {
+    let cls = get_class(name, handle, reader);
+    reader
+        .get_solutions(handle)
+        .unwrap()
+        .get(&KeyClassMetadata(cls.index()))
 }
 
 fn get_class_keywords(
@@ -32,7 +36,8 @@ fn get_class_keywords(
     handle: &Handle,
     state: &State,
 ) -> Vec<Type> {
-    get_class_metadata(class_name, handle, state)
+    let reader = state.reader();
+    get_class_metadata(class_name, handle, &reader)
         .keywords()
         .iter()
         .filter(|(name, _type)| name.as_str() == keyword_name)
@@ -41,7 +46,8 @@ fn get_class_keywords(
 }
 
 fn get_metaclass(class_name: &str, handle: &Handle, state: &State) -> Option<ClassType> {
-    get_class_metadata(class_name, handle, state)
+    let reader = state.reader();
+    get_class_metadata(class_name, handle, &reader)
         .custom_metaclass()
         .cloned()
 }
@@ -51,6 +57,7 @@ fn test_look_up_class_keywords() {
     let (handle, state) = mk_state(
         r#"
 class A(foo=True): pass
+class B(**{"foo": True, "bar": 1}): pass
 "#,
     );
     assert_eq!(
@@ -58,6 +65,8 @@ class A(foo=True): pass
         vec![Lit::Bool(true).to_implicit_type()],
     );
     assert_eq!(get_class_keywords("A", "bar", &handle, &state), vec![]);
+    assert_eq!(get_class_keywords("B", "foo", &handle, &state).len(), 1);
+    assert_eq!(get_class_keywords("B", "bar", &handle, &state).len(), 1);
 }
 
 #[test]
@@ -168,10 +177,19 @@ class E(metaclass=D):
 );
 
 testcase!(
-    test_illegal_unpacking,
+    test_class_keyword_unpacking,
     r#"
-def f() -> dict: ...
-class A(**f):  # E: Unpacking is not supported in class header
+from typing import Any
+
+meta: dict[str, Any] = {}
+class A(**meta, tag="A"):
+    pass
+
+class B(**1):  # E: Expected argument after ** to be a mapping, got: Literal[1]
+    pass
+
+bad_keys: dict[int, str] = {}
+class C(**bad_keys):  # E: Expected argument after ** to have `str` keys, got: int
     pass
     "#,
 );

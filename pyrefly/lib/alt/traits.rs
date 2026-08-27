@@ -345,12 +345,12 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyTParams {
         binding: &BindingTParams,
         _range: TextRange,
         errors: &ErrorCollector,
-    ) -> Arc<TParams> {
-        answers.solve_tparams(binding, errors)
+    ) -> Arc<Arc<TParams>> {
+        Arc::new(answers.solve_tparams(binding, errors))
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        TParams::default()
+        Arc::new(TParams::default())
     }
 }
 
@@ -460,7 +460,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassMetadata {
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        ClassMetadata::recursive()
+        ClassMetadata::recursive().clone()
     }
 }
 
@@ -475,7 +475,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassMro {
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        ClassMro::recursive()
+        ClassMro::recursive().clone()
     }
 }
 
@@ -490,7 +490,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassDisjointBase {
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        ClassDisjointBase::recursive()
+        ClassDisjointBase::recursive().clone()
     }
 }
 
@@ -504,12 +504,12 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyAbstractClassCheck {
         if let Some(cls) = &answers.get_idx(binding.class_idx).0 {
             answers.solve_abstract_members(cls, errors)
         } else {
-            Arc::new(AbstractClassMembers::recursive())
+            Arc::new(AbstractClassMembers::recursive().clone())
         }
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        AbstractClassMembers::recursive()
+        AbstractClassMembers::recursive().clone()
     }
 }
 

@@ -384,6 +384,18 @@ impl ErrorBuilder<'_> {
         self
     }
 
+    /// Append a detail line that is only worth working out if the error will be
+    /// kept. Modules loaded below `Require::Errors` collect with
+    /// [`ErrorStyle::Never`], so for them this never runs at all.
+    pub fn with_detail_from(mut self, msg: impl FnOnce() -> Option<String>) -> Self {
+        if self.active
+            && let Some(msg) = msg()
+        {
+            self.details.push(msg);
+        }
+        self
+    }
+
     /// Convenience method to append multiple detail lines.
     pub fn with_details(mut self, details: Vec<String>) -> Self {
         if self.active {

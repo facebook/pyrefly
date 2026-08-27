@@ -12,6 +12,7 @@ use pyrefly_types::simplify::unions_with_literals;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDictInner;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::name::Name;
@@ -74,7 +75,7 @@ const VALUES_METHOD: Name = Name::new_static("values");
 pub(crate) const REQUIRED_KEYS: Name = Name::new_static("__required_keys__");
 pub(crate) const OPTIONAL_KEYS: Name = Name::new_static("__optional_keys__");
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn check_dict_items_against_typed_dict(
         &self,
         dict_items: &Vec<&DictItem>,
@@ -150,7 +151,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                             if let Some(suggestion) = best_suggestion(
                                 &key_name,
-                                fields.keys().map(|candidate| (candidate, 0usize)),
+                                fields
+                                    .keys()
+                                    .map(|candidate| Candidate::measured(candidate, 0)),
                             ) {
                                 builder =
                                     builder.with_detail(format!("Did you mean `{suggestion}`?"));
@@ -249,7 +252,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         is_total: bool,
     ) -> Option<TypedDictField> {
         let member = self.get_non_synthesized_class_member(typed_dict.class_object(), name)?;
-        let instantiated_ty = self.instantiate_typed_dict_field_type(typed_dict, name, &member)?;
+        let instantiated_ty =
+            self.instantiate_typed_dict_field_type(typed_dict, name, member.as_ref())?;
         let mut typed_dict_field = member.as_typed_dict_field_info(is_total)?;
         typed_dict_field.ty = instantiated_ty;
         Some(typed_dict_field)

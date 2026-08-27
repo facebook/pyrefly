@@ -15,8 +15,8 @@ import shape_extensions
 from shape_extensions import Elements, Flag, IntTuple, IntVar, uses_shape_dsl
 from torch._shapes import (
     adaptive_pool_ir,
-    conv_ir,
-    conv_transpose_ir,
+    conv_shape,
+    conv_transpose_shape,
     cosine_similarity_shape,
     interpolate_ir,
     loss_ir,
@@ -107,85 +107,133 @@ __all__ = [
 # ====================================================================
 
 # Convolution operations
-@uses_shape_dsl(conv_ir)
-def conv1d(
-    self: Tensor,
-    weight: Tensor,
+def conv1d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int]],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int] = 1,
-    padding: int | tuple[int] = 0,
-    dilation: int | tuple[int] = 1,
+    stride: Stride = 1,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
     groups: int = 1,
-) -> Tensor:
+) -> Tensor[conv_shape(InputShape, WeightShape, Stride, Padding, Dilation)]:
     """1D convolution. Shape inference via meta-shape: torch.nn.functional.conv1d"""
     ...
 
-@uses_shape_dsl(conv_ir)
-def conv2d(
-    self: Tensor,
-    weight: Tensor,
+def conv2d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int, int] = 1,
-    padding: int | tuple[int, int] = 0,
-    dilation: int | tuple[int, int] = 1,
+    stride: Stride = 1,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
     groups: int = 1,
-) -> Tensor:
+) -> Tensor[conv_shape(InputShape, WeightShape, Stride, Padding, Dilation)]:
     """2D convolution. Shape inference via meta-shape: torch.nn.functional.conv2d"""
     ...
 
-@uses_shape_dsl(conv_ir)
-def conv3d(
-    self: Tensor,
-    weight: Tensor,
+def conv3d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int, int, int] = 1,
-    padding: int | tuple[int, int, int] = 0,
-    dilation: int | tuple[int, int, int] = 1,
+    stride: Stride = 1,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
     groups: int = 1,
-) -> Tensor:
+) -> Tensor[conv_shape(InputShape, WeightShape, Stride, Padding, Dilation)]:
     """3D convolution. Shape inference via meta-shape: torch.nn.functional.conv3d"""
     ...
 
 # Transposed convolution operations
-@uses_shape_dsl(conv_transpose_ir)
-def conv_transpose1d(
-    self: Tensor,
-    weight: Tensor,
+def conv_transpose1d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    OutputPadding: Flag[builtins.int | tuple[builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int]],
+    Groups: Flag[builtins.int],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int] = 1,
-    padding: int | tuple[int] = 0,
-    output_padding: int | tuple[int] = 0,
-    dilation: int | tuple[int] = 1,
-    groups: int = 1,
-) -> Tensor:
+    stride: Stride = 1,
+    padding: Padding = 0,
+    output_padding: OutputPadding = 0,
+    dilation: Dilation = 1,
+    groups: Groups = 1,
+) -> Tensor[
+    conv_transpose_shape(
+        InputShape, WeightShape, Stride, Padding, OutputPadding, Dilation, Groups
+    )
+]:
     """1D transposed convolution. Shape inference via meta-shape: torch.nn.functional.conv_transpose1d"""
     ...
 
-@uses_shape_dsl(conv_transpose_ir)
-def conv_transpose2d(
-    self: Tensor,
-    weight: Tensor,
+def conv_transpose2d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    OutputPadding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Groups: Flag[builtins.int],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int, int] = 1,
-    padding: int | tuple[int, int] = 0,
-    output_padding: int | tuple[int, int] = 0,
-    dilation: int | tuple[int, int] = 1,
-    groups: int = 1,
-) -> Tensor:
+    stride: Stride = 1,
+    padding: Padding = 0,
+    output_padding: OutputPadding = 0,
+    dilation: Dilation = 1,
+    groups: Groups = 1,
+) -> Tensor[
+    conv_transpose_shape(
+        InputShape, WeightShape, Stride, Padding, OutputPadding, Dilation, Groups
+    )
+]:
     """2D transposed convolution. Shape inference via meta-shape: torch.nn.functional.conv_transpose2d"""
     ...
 
-@uses_shape_dsl(conv_transpose_ir)
-def conv_transpose3d(
-    self: Tensor,
-    weight: Tensor,
+def conv_transpose3d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    OutputPadding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Groups: Flag[builtins.int],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int, int, int] = 1,
-    padding: int | tuple[int, int, int] = 0,
-    output_padding: int | tuple[int, int, int] = 0,
-    dilation: int | tuple[int, int, int] = 1,
-    groups: int = 1,
-) -> Tensor:
+    stride: Stride = 1,
+    padding: Padding = 0,
+    output_padding: OutputPadding = 0,
+    dilation: Dilation = 1,
+    groups: Groups = 1,
+) -> Tensor[
+    conv_transpose_shape(
+        InputShape, WeightShape, Stride, Padding, OutputPadding, Dilation, Groups
+    )
+]:
     """3D transposed convolution. Shape inference via meta-shape: torch.nn.functional.conv_transpose3d"""
     ...
 

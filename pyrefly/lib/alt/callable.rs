@@ -717,7 +717,7 @@ enum NameOrigin<'a> {
     UnpackedKwargs(Option<&'a Name>),
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Flag a call argument whose type is an implicit `Any` (unknown). Emitted into
     /// `arg_errors` (not `call_errors`), which is not used to decide overload/hint
     /// matches.

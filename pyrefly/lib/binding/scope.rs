@@ -19,7 +19,9 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_util::suggest::best_suggestion;
+use pyrefly_util::suggest::Candidate;
+use pyrefly_util::suggest::Search;
+use pyrefly_util::suggest::char_mask;
 use ruff_python_ast::AtomicNodeIndex;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
@@ -231,6 +233,14 @@ struct StaticInfo {
     /// The range of the textually last assignment to this name. Used to check
     /// whether a captured variable is reassigned after a nested function definition.
     last_range: TextRange,
+    /// What the "did you mean" search needs in order to reject this name
+    /// without reading it: its length in characters and its
+    /// [`char_mask`](pyrefly_util::suggest::char_mask). Recorded here because
+    /// that search scans every name in scope once per unresolved name, so
+    /// computing either at the point of use would repeat it thousands of times.
+    /// Both fit in padding `StaticInfo` already had, so they cost nothing.
+    char_len: u32,
+    char_mask: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -410,6 +420,18 @@ pub(crate) fn is_constant_name(name: &Name) -> bool {
             .all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit())
 }
 
+/// One pass over the name for both values the suggestion search filters on.
+///
+/// The length saturates so it can stay narrow. A name long enough to saturate is
+/// far past any suggestible edit distance, so clamping only ever makes the length
+/// filter reject it, which is the right answer.
+fn suggestion_keys(name: &Name) -> (u32, u32) {
+    let (len, mask) = name.as_str().chars().fold((0u32, 0u32), |(len, mask), c| {
+        (len.saturating_add(1), mask | char_mask(c))
+    });
+    (len, mask)
+}
+
 impl Static {
     fn upsert(
         &mut self,
@@ -418,12 +440,15 @@ impl Static {
         style: StaticStyle,
         last_range: TextRange,
     ) {
+        let (char_len, char_mask) = suggestion_keys(name.key());
         match self.0.entry_hashed(name) {
             Entry::Vacant(e) => {
                 e.insert(StaticInfo {
                     range,
                     style,
                     last_range,
+                    char_len,
+                    char_mask,
                 });
             }
             Entry::Occupied(mut e) => {
@@ -1282,6 +1307,55 @@ struct ScopeView<'a> {
     scope: &'a Scope,
     flow_barrier: FlowBarrier,
     static_barrier: bool,
+}
+
+/// The scopes a name lookup should consider, innermost first, each paired with
+/// the barriers that have accumulated between it and the current scope.
+///
+/// Python's scoping rules are applied here rather than by callers. From
+/// <https://docs.python.org/3/reference/executionmodel.html#resolution-of-names>:
+/// the scope of names defined in a class block is limited to that block and
+/// does not extend to the code blocks of methods, including comprehensions and
+/// generator expressions. Annotation scopes and PEP 695 type alias scopes are
+/// the exception and can see their enclosing class scope.
+struct ScopeViews<I> {
+    scopes: I,
+    flow_barrier: FlowBarrier,
+    static_barrier: bool,
+    /// Whether the scope the lookup starts from is one of the two kinds that
+    /// can see an enclosing class body.
+    from_annotation_like_scope: bool,
+}
+
+impl<'a, I: Iterator<Item = (usize, &'a Scope)>> Iterator for ScopeViews<I> {
+    type Item = ScopeView<'a>;
+
+    fn next(&mut self) -> Option<ScopeView<'a>> {
+        loop {
+            let (lookup_depth, scope) = self.scopes.next()?;
+            if matches!(scope.kind, ScopeKind::Class(_))
+                && !(lookup_depth == 0 || (self.from_annotation_like_scope && lookup_depth == 1))
+            {
+                // Class body scopes always have `flow_barrier =
+                // AllowFlowChecked`, so skipping the update below is harmless.
+                continue;
+            }
+            let view = ScopeView {
+                lookup_depth,
+                scope,
+                flow_barrier: self.flow_barrier,
+                static_barrier: self.static_barrier,
+            };
+            // The barriers describe what lies between the *next* scope and the
+            // current one, so they are advanced after the view is built.
+            self.flow_barrier = max(self.flow_barrier, scope.flow_barrier);
+            // Static type information is hidden by an intervening class
+            // annotation scope.
+            self.static_barrier |=
+                matches!(scope.kind, ScopeKind::Annotation { class_scope: true });
+            return Some(view);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -3127,51 +3201,42 @@ impl Scopes {
     }
 
     /// Helper for iterating over scopes in a way that respects class body visibility rules.
-    fn visit_scopes<'a, T>(
-        &'a self,
-        mut visitor: impl FnMut(ScopeView<'a>) -> Option<T>,
-    ) -> Option<T> {
-        let mut flow_barrier = FlowBarrier::AllowFlowChecked;
-        let mut static_barrier = false;
-        // Annotation scopes and type alias scopes (PEP 695) can see their enclosing class scope.
-        let is_current_scope_annotation_like = matches!(
-            self.current().kind,
-            ScopeKind::Annotation { .. } | ScopeKind::TypeAlias
-        );
-        for (lookup_depth, scope) in self.iter_rev().enumerate() {
-            // From https://docs.python.org/3/reference/executionmodel.html#resolution-of-names:
-            //   The scope of names defined in a class block is limited to the
-            //   class block; it does not extend to the code blocks of
-            //   methods. This includes comprehensions and generator
-            //   expressions, but it does not include annotation scopes, which
-            //   have access to their enclosing class scopes.
-            // Type alias scopes (PEP 695) also have access to enclosing class scopes.
-            if matches!(scope.kind, ScopeKind::Class(_))
-                && !((lookup_depth == 0) || (is_current_scope_annotation_like && lookup_depth == 1))
-            {
-                // Note: class body scopes have `flow_barrier = AllowFlowChecked`, so skipping the flow_barrier update is okay.
-                continue;
-            }
-
-            if let Some(result) = visitor(ScopeView {
-                lookup_depth,
-                scope,
-                flow_barrier,
-                static_barrier,
-            }) {
-                return Some(result);
-            }
-
-            flow_barrier = max(flow_barrier, scope.flow_barrier);
-            // Static type information is hidden by an intervening class annotation scope.
-            static_barrier |= matches!(scope.kind, ScopeKind::Annotation { class_scope: true });
+    fn scope_views(&self) -> impl Iterator<Item = ScopeView<'_>> {
+        ScopeViews {
+            scopes: self.iter_rev().enumerate(),
+            flow_barrier: FlowBarrier::AllowFlowChecked,
+            static_barrier: false,
+            from_annotation_like_scope: matches!(
+                self.current().kind,
+                ScopeKind::Annotation { .. } | ScopeKind::TypeAlias
+            ),
         }
-        None
     }
 
-    pub fn suggest_similar_name(&self, missing: &Name, position: TextSize) -> Option<Name> {
-        let mut candidates: Vec<(&Name, usize)> = Vec::new();
+    fn visit_scopes<'a, T>(&'a self, visitor: impl FnMut(ScopeView<'a>) -> Option<T>) -> Option<T> {
+        self.scope_views().find_map(visitor)
+    }
 
+    /// Fold every name that could be what `search` is looking for into it,
+    /// innermost scope first so that a nearer name wins a tie, and `trailing`
+    /// last -- the builtins are the outermost scope there is, so they are
+    /// searched in the same pass and lose every tie to a name actually in
+    /// scope.
+    ///
+    /// Every scope kind is treated the same way: take the names it declares,
+    /// and where the flow is still being walked, keep only the ones it has
+    /// bound. Across a function boundary the order of execution is unknowable,
+    /// so everything the scope declares counts.
+    ///
+    /// The search is asked about each candidate before the flow is, because the
+    /// bound it holds has been narrowed by everything already matched and
+    /// dismisses nearly every candidate for the cost of a comparison. A probe
+    /// of the flow map is only worth making for what survives that.
+    pub fn fold_suggestion_candidates<'b>(
+        &self,
+        search: &mut Search,
+        trailing: impl Iterator<Item = Candidate<'b>>,
+    ) {
         self.visit_scopes(
             |ScopeView {
                  lookup_depth,
@@ -3179,31 +3244,32 @@ impl Scopes {
                  flow_barrier,
                  static_barrier: _,
              }| {
-                let is_class = matches!(scope.kind, ScopeKind::Class(_));
-
-                if flow_barrier < FlowBarrier::BlockFlow {
-                    for candidate in scope.flow.info.keys() {
-                        if let Some(static_info) = scope.stat.0.get(candidate)
-                            && static_info.range.start() >= position
-                        {
-                            continue;
-                        }
-                        candidates.push((candidate, lookup_depth));
-                    }
-                }
-
-                if !is_class {
-                    for (candidate, static_info) in scope.stat.0.iter() {
-                        if static_info.range.start() < position {
-                            candidates.push((candidate, lookup_depth));
-                        }
-                    }
+                let flow_checked = flow_barrier == FlowBarrier::AllowFlowChecked;
+                for (name, static_info) in scope.stat.0.iter_hashed() {
+                    // Ask the two keys the static map recorded first, against
+                    // a bound anything already matched has tightened. The name
+                    // itself is never read to decide this, and nearly every
+                    // candidate in a large scope dies here. Asking the flow is
+                    // the expensive part, so it goes behind them: `offer_if`
+                    // only consults it for a candidate still in the running,
+                    // and the static map hands back the hash it stored, so that
+                    // costs a probe rather than a rehash of the name.
+                    search.offer_if(
+                        Candidate::new(
+                            name.into_key(),
+                            static_info.char_len as usize,
+                            static_info.char_mask,
+                            lookup_depth,
+                        ),
+                        || !flow_checked || scope.flow.get_info_hashed(name).is_some(),
+                    );
                 }
                 None::<()>
             },
         );
-
-        best_suggestion(missing, candidates)
+        for candidate in trailing {
+            search.offer(candidate);
+        }
     }
 
     /// Look up the information needed to create a binding for a read of a name
@@ -3388,10 +3454,13 @@ impl Scopes {
                 .map_or_else(
                     || {
                         builtin_module_for_name(lookup, current_module, name.key()).map(|module| {
+                            let (char_len, char_mask) = suggestion_keys(name.key());
                             Ok(Box::new(StaticInfo {
                                 range: TextRange::default(),
                                 style: StaticStyle::ImplicitBuiltinImport(module),
                                 last_range: TextRange::default(),
+                                char_len,
+                                char_mask,
                             }))
                         })
                     },

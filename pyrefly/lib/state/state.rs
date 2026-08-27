@@ -77,6 +77,8 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
 use crate::alt::answers::SolutionsEntry;
 use crate::alt::answers::SolutionsTable;
+use crate::alt::answers_solver::AnswerProvider;
+use crate::alt::answers_solver::AnswerScope;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::CalcId;
 use crate::alt::answers_solver::ReservedSlot;
@@ -1775,6 +1777,7 @@ impl<'a> Transaction<'a> {
         name: &Name,
         thread_state: &ThreadState,
     ) -> Option<(Class, Option<Arc<TParams>>)> {
+        let answer_scope = AnswerScope::new();
         let module_data = self.get_module(handle);
         if !self
             .lookup_export(module_data)
@@ -1793,8 +1796,13 @@ impl<'a> Transaction<'a> {
             return None;
         }
 
-        let t = self.lookup_answer(module_data, &KeyExport(name.clone()), thread_state);
-        let class = match t.as_deref() {
+        let t = self.lookup_answer(
+            module_data,
+            &KeyExport(name.clone()),
+            thread_state,
+            &answer_scope,
+        );
+        let class = match t {
             Some(Type::ClassDef(cls)) => Some(cls.dupe()),
             ty => {
                 self.add_error(
@@ -1813,9 +1821,14 @@ impl<'a> Transaction<'a> {
         class.map(|class| {
             let tparams = match class.precomputed_tparams() {
                 PrecomputedTParams::NotGeneric => None,
-                PrecomputedTParams::FromBinding => {
-                    self.lookup_answer(module_data, &KeyTParams(class.index()), thread_state)
-                }
+                PrecomputedTParams::FromBinding => self
+                    .lookup_answer(
+                        module_data,
+                        &KeyTParams(class.index()),
+                        thread_state,
+                        &answer_scope,
+                    )
+                    .map(Dupe::dupe),
                 PrecomputedTParams::Precomputed(tparams) => Some(tparams.dupe()),
             };
             (class, tparams)
@@ -1856,12 +1869,13 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn lookup_answer<'b, K: Solve<TransactionHandle<'b>> + Exported>(
+    fn lookup_answer<'answer, 'b, K: Solve<TransactionHandle<'b>> + Exported>(
         &'b self,
         module_data: &'b ArcId<ModuleDataMut>,
         key: &K,
-        thread_state: &ThreadState,
-    ) -> Option<Arc<<K as Keyed>::Answer>>
+        thread_state: &'answer ThreadState,
+        answer_scope: &'answer AnswerScope,
+    ) -> Option<&'answer <K as Keyed>::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
@@ -1871,24 +1885,26 @@ impl<'a> Transaction<'a> {
 
         // Ensure answers (or solutions) are computed. Cheap if already done.
         self.demand(module_data, Step::Answers);
-
-        // Load answers via Guard to avoid Arc refcount operations.
-        // The Guard borrows from the ArcSwap without incrementing the refcount.
-        let answers_guard = module_data.state.load_answers();
-        let Some(answers) = answers_guard.as_ref() else {
-            // If answers is None, solutions must exist.
-            let solutions = module_data
-                .state
-                .get_solutions()
-                .expect("answers evicted implies solutions exist");
-            return solutions.get_hashed_arc_opt(key);
+        let provider =
+            answer_scope.retain_module(module_data, || match module_data.state.get_answers() {
+                Some(answers) => AnswerProvider::Answers(answers),
+                None => AnswerProvider::Solutions(
+                    module_data
+                        .state
+                        .get_solutions()
+                        .expect("answers evicted implies solutions exist"),
+                ),
+            });
+        let (bindings, answers) = match provider {
+            AnswerProvider::Answers(answers) => (&answers.0, answers.1.as_ref()),
+            AnswerProvider::Solutions(solutions) => return solutions.get_hashed_opt(key),
         };
 
         // Fast path: check if the answer is already computed in the
         // result slot. This avoids constructing
         // a TransactionHandle when the value is cached.
-        if let Some(idx) = answers.0.key_to_idx_hashed_opt(key)
-            && let Some(v) = answers.1.get_idx(idx)
+        if let Some(idx) = bindings.key_to_idx_hashed_opt(key)
+            && let Some(v) = answers.get_idx(idx)
         {
             return Some(v);
         }
@@ -1897,15 +1913,16 @@ impl<'a> Transaction<'a> {
         let load = module_data.state.get_load().unwrap();
         let stdlib = self.get_stdlib(&module_data.handle);
         let lookup = self.lookup(module_data);
-        answers.1.solve_exported_key(
+        answers.solve_exported_key(
             &lookup,
             &lookup,
-            &answers.0,
+            bindings,
             &load.errors,
             &stdlib,
             &self.data.state.uniques,
             key,
             thread_state,
+            answer_scope,
         )
     }
 
@@ -2242,6 +2259,7 @@ impl<'a> Transaction<'a> {
         let recurser = VarRecurser::new();
         let config = module_data.config.read();
         let thread_state = ThreadState::new(config.recursion_limit_config());
+        let answer_scope = AnswerScope::new();
         let jaxtyping_dims = RefCell::default();
         let solver = AnswersSolver::new(
             &lookup,
@@ -2253,6 +2271,7 @@ impl<'a> Transaction<'a> {
             &recurser,
             &stdlib,
             &thread_state,
+            &answer_scope,
             answers.1.heap(),
             &jaxtyping_dims,
         );
@@ -3099,13 +3118,14 @@ impl<'a> LookupExport for TransactionHandle<'a> {
 }
 
 impl<'a> LookupAnswer for TransactionHandle<'a> {
-    fn get<K: Solve<Self> + Exported>(
+    fn get<'answer, K: Solve<Self> + Exported>(
         &self,
         module: ModuleName,
         path: Option<&ModulePath>,
         k: &K,
-        thread_state: &ThreadState,
-    ) -> Option<Arc<K::Answer>>
+        thread_state: &'answer ThreadState,
+        answer_scope: &'answer AnswerScope,
+    ) -> Option<&'answer K::Answer>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
@@ -3123,7 +3143,9 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         let _demand_span =
             self.transaction
                 .enter_demand_answer_span(self.module_data.handle.module(), module, k);
-        let res = self.transaction.lookup_answer(module_data, k, thread_state);
+        let res = self
+            .transaction
+            .lookup_answer(module_data, k, thread_state, answer_scope);
         if res.is_none() {
             let msg = format!(
                 "LookupAnswer::get failed to find key, {module} {k:?} (concurrent changes?)"
@@ -3139,7 +3161,12 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         res
     }
 
-    fn solve_idx_erased(&self, calc_id: &CalcId, thread_state: &ThreadState) -> bool {
+    fn solve_idx_erased(
+        &self,
+        calc_id: &CalcId,
+        thread_state: &ThreadState,
+        answer_scope: &AnswerScope,
+    ) -> bool {
         let CalcId(_, ref any_idx) = *calc_id;
         match self.lookup_target_answers(calc_id) {
             TargetAnswers::ModuleNotFound => false,
@@ -3165,6 +3192,7 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
                     &stdlib,
                     &self.transaction.data.state.uniques,
                     thread_state,
+                    answer_scope,
                 );
                 true
             }
@@ -3189,7 +3217,7 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
         }
     }
 
-    fn publish_reserved_in_module(&self, reserved: &mut ReservedSlot<'_, '_, Self>) -> bool {
+    fn publish_reserved_in_module(&self, reserved: &mut ReservedSlot<'_, '_, '_, Self>) -> bool {
         let calc_id = reserved.calc_id().dupe();
         match self.lookup_target_answers(&calc_id) {
             TargetAnswers::ModuleNotFound => false,
@@ -3211,7 +3239,8 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
                 if let Some(traces) = traces {
                     answers.merge_trace_side_effects(traces);
                 }
-                answers.publish_reserved_preliminary(reserved)
+                answers.publish_reserved_preliminary(reserved);
+                true
             }
         }
     }
@@ -3322,6 +3351,30 @@ pub struct State {
     committing_transaction_lock: Mutex<()>,
 }
 
+/// A stable read view of committed state.
+///
+/// The reader holds the state read lock for its whole lifetime, so everything
+/// it returns comes from one snapshot and can be borrowed rather than cloned.
+/// For the same reason, a caller must not take another lock on the state, such
+/// as by opening a `Transaction`, while a reader is alive.
+pub struct StateReader<'a> {
+    readable: RwLockReadGuard<'a, StateData>,
+}
+
+impl StateReader<'_> {
+    /// The solutions for a module, or `None` if the state has no such module or
+    /// has not solved it.
+    pub fn get_solutions(&self, handle: &Handle) -> Option<&Solutions> {
+        self.readable
+            .modules
+            .get(handle)?
+            .state
+            .steps
+            .solutions
+            .as_deref()
+    }
+}
+
 impl State {
     pub fn new(config_finder: ConfigFinder, thread_count: ThreadCount) -> Self {
         Self {
@@ -3336,6 +3389,14 @@ impl State {
 
     pub fn config_finder(&self) -> &ConfigFinder {
         &self.config_finder
+    }
+
+    /// Open a read view of the committed state. See `StateReader` for the
+    /// locking this implies.
+    pub fn reader(&self) -> StateReader<'_> {
+        StateReader {
+            readable: self.state.read(),
+        }
     }
 
     /// Run `op` on the state's thread pool, which has an increased stack size.

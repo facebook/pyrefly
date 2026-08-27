@@ -20,6 +20,7 @@ use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Var;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
@@ -581,7 +582,7 @@ impl ClassBase {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Compute the get (i.e. read) type of an attribute. If the attribute cannot be found or read,
     /// error and return `Any`. Use this to infer the type of a direct attribute fetch.
     pub fn type_of_attr_get(
@@ -745,7 +746,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         best_suggestion(
             missing,
-            common_candidates.iter().map(|candidate| (candidate, 0)),
+            common_candidates
+                .iter()
+                .map(|candidate| Candidate::measured(candidate, 0)),
         )
     }
 
@@ -1430,14 +1433,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             attr_name.clone(),
                         ));
                     }
-                    // Filter overloaded got-side methods by self-type so the subset
-                    // solver doesn't match an overload whose `self:` is incompatible
-                    // with the receiver.
-                    let filtered = self.filter_got_overloads_for_protocol(got_attr);
-                    let got_attr = filtered.as_ref().unwrap_or(got_attr);
-                    self.is_attribute_subset(got_attr, &want, &mut |got, want| {
-                        is_subset(got, want)
-                    })
+                    if matches!(got_attr, Attribute::GetAttr(..)) {
+                        let guard_key = (got.clone(), protocol.clone(), attr_name.clone());
+                        if self.enter_protocol_member_check(guard_key.clone()) {
+                            continue;
+                        }
+                        let res = self.is_attribute_subset(got_attr, &want, is_subset);
+                        self.exit_protocol_member_check(&guard_key);
+                        res
+                    } else {
+                        // Filter overloaded got-side methods by self-type so the subset
+                        // solver doesn't match an overload whose `self:` is incompatible
+                        // with the receiver.
+                        let filtered = self.filter_got_overloads_for_protocol(got_attr);
+                        let got_attr = filtered.as_ref().unwrap_or(got_attr);
+                        self.is_attribute_subset(got_attr, &want, is_subset)
+                    }
                     .map_err(|err| {
                         SubsetError::IncompatibleAttribute(Box::new((
                             protocol.name().clone(),
@@ -1659,7 +1670,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Normal class instance attribute lookup
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let attr_lookup_result =
-                    self.get_enum_or_instance_attribute(class, &metadata, attr_name);
+                    self.get_enum_or_instance_attribute(class, metadata, attr_name);
                 match attr_lookup_result {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
@@ -1679,7 +1690,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AttributeBase1::EnumLiteral(lit @ LitEnum { class, .. }) => {
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let attr_lookup_result =
-                    self.get_enum_literal_or_instance_attribute(lit, &metadata, attr_name);
+                    self.get_enum_literal_or_instance_attribute(lit, metadata, attr_name);
                 match attr_lookup_result {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
@@ -2217,7 +2228,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         if let Some(attr) = self.try_get_from_export(module_name, attr_name.clone()) {
-            Some(Attribute::simple(attr.arc_clone()))
+            Some(Attribute::simple(attr.clone()))
         } else if self
             .exports
             .is_submodule_imported_implicitly(module_name, attr_name)
@@ -2559,13 +2570,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Restriction::Flag(domain) => {
-                    // Every domain member is a builtin `ClassType`, so it always has an
-                    // attribute base. Neither the generic `object` fallback nor an empty
-                    // result would be correct here, so assert the invariant instead.
+                    // Every materialized Flag domain member has an attribute base. Neither the
+                    // generic `object` fallback nor an empty result would be correct here.
                     for ty in domain.types(self.stdlib) {
                         let base = self
                             .as_attribute_base(ty)
-                            .expect("Flag domain members are builtin class types");
+                            .expect("Flag domain members have attribute bases");
                         for base1 in base.0 {
                             acc.push(
                                 self.attribute_base_for_bounded_quantified(
@@ -2721,13 +2731,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 }
                 Restriction::Flag(domain) => {
-                    // Every domain member is a builtin `ClassType`, so it always has a
-                    // class-instance base. Neither the generic `object` fallback nor an
-                    // empty result would be correct here, so assert the invariant instead.
+                    // Every materialized Flag domain member has a class-instance base. Neither
+                    // the generic `object` fallback nor an empty result would be correct here.
                     for ty in domain.types(self.stdlib) {
                         let base = self
                             .as_attribute_base(ty)
-                            .expect("Flag domain members are builtin class types");
+                            .expect("Flag domain members have attribute bases");
                         for base1 in base.0 {
                             let cls = self
                                 .quantified_bound_class(base1)
@@ -2953,8 +2962,8 @@ pub struct AttrInfo {
     pub is_reexport: bool,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    fn completions_mro<T>(
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    fn completions_mro<'a, T>(
         &self,
         mro: T,
         expected_attribute_name: Option<&Name>,

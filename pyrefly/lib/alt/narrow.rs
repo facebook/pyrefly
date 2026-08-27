@@ -119,7 +119,7 @@ enum IntersectFallback {
     Right,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // Get the union of all members of an enum, minus the specified member
     fn subtract_enum_member(&self, instance: Instance, name: &Name) -> Type {
         if self
@@ -875,8 +875,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// with the type. We allow negative narrowing as long as it is not definitely unsafe - that
     /// is, if we're unsure, we allow it.
     fn expr_as_class_info(&self, e: &Expr, errors: &ErrorCollector) -> Vec<(Type, bool)> {
-        fn f<'a, Ans: LookupAnswer>(
-            me: &AnswersSolver<'a, Ans>,
+        fn f<Ans: LookupAnswer>(
+            me: &AnswersSolver<'_, '_, Ans>,
             e: &Expr,
             res: &mut Vec<(Type, bool)>,
             errors: &ErrorCollector,
@@ -2315,7 +2315,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
-        let subject_info = self.with_type_for_exhaustiveness_check(&self.get_idx(*subject_idx));
+        let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
         if !self.solver().check_all_matches
             && !self.should_check_exhaustiveness_by_default(subject_info.ty())
         {
@@ -2380,7 +2380,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !Self::is_match_case_reachability_op(op) {
             return;
         }
-        let subject_info = self.with_type_for_exhaustiveness_check(&self.get_idx(*subject_idx));
+        let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
         let subject_ty = subject_info.ty().clone();
         if subject_ty.is_any()
             || matches!(&subject_ty, Type::ClassType(cls) if cls.is_builtin("object"))

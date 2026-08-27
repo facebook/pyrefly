@@ -44,7 +44,7 @@ pub(crate) struct DispatcherDef<'a> {
     pub is_staticmethod: bool,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Whether `ct` is a `@singledispatch` dispatcher class (`_SingleDispatchCallable`)
     fn is_singledispatch_class(ct: &ClassType) -> bool {
         ct.has_qname("functools", "_SingleDispatchCallable")

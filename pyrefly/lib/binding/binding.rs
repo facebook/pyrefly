@@ -42,6 +42,7 @@ use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprYield;
 use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Keyword;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::StmtAugAssign;
 use ruff_python_ast::StmtClassDef;
@@ -500,7 +501,7 @@ impl Keyed for KeyClass {
 impl Keyed for KeyTParams {
     const EXPORTED: bool = true;
     type Value = BindingTParams;
-    type Answer = TParams;
+    type Answer = Arc<TParams>;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyTParams(idx)
     }
@@ -2328,6 +2329,15 @@ pub struct ImportFallback {
     pub is_unreachable: bool,
 }
 
+/// Data for a name in a class body that wasn't found in the static scope.
+#[derive(Clone, Debug)]
+pub struct ClassBodyUnknownName {
+    pub class_key: Idx<KeyClass>,
+    pub name: Identifier,
+    pub suggestion: Option<Name>,
+    pub allow_class_body_forward_reference: bool,
+}
+
 #[derive(Clone, Debug)]
 pub enum Binding {
     /// An expression, optionally with a Key saying what the type must be.
@@ -2499,8 +2509,9 @@ pub enum Binding {
     Delete(Box<Expr>),
     /// A name in the class body that wasn't found in the static scope
     /// It could either be an unbound name or a reference to an inherited attribute
-    /// We'll find out which when we solve the class
-    ClassBodyUnknownName(Box<(Idx<KeyClass>, Identifier, Option<Name>)>),
+    /// We'll find out which when we solve the class. The boolean records whether a postponed or
+    /// quoted annotation may also resolve an attribute declared later in the same class body.
+    ClassBodyUnknownName(Box<ClassBodyUnknownName>),
     /// A match statement or if/elif chain that may be type-exhaustive.
     /// Resolves to Never if ANY narrow entry narrows to Never, None otherwise.
     Exhaustive(Box<ExhaustiveBinding>),
@@ -2804,12 +2815,18 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::Delete(x) => write!(f, "Delete({})", m.display(x)),
             Self::ClassBodyUnknownName(x) => {
-                let (class_key, name, suggestion) = x.as_ref();
+                let ClassBodyUnknownName {
+                    class_key,
+                    name,
+                    suggestion,
+                    allow_class_body_forward_reference,
+                } = x.as_ref();
                 write!(
                     f,
-                    "ClassBodyUnknownName({}, {}",
+                    "ClassBodyUnknownName({}, {}, allow_class_body_forward_reference={}",
                     m.display(ctx.idx_to_key(*class_key)),
                     name,
+                    allow_class_body_forward_reference,
                 )?;
                 if let Some(suggestion) = suggestion {
                     write!(f, ", {suggestion}")?;
@@ -3369,7 +3386,7 @@ pub struct BindingClassMetadata {
     /// The class keywords (these are keyword args that appear in the base class list, the
     /// Python runtime will dispatch most of them to the metaclass, but the metaclass
     /// itself can also potentially be one of these).
-    pub keywords: Box<[(Identifier, Expr)]>,
+    pub keywords: Box<[Keyword]>,
     /// The class decorators.
     pub decorators: Box<[Idx<KeyDecorator>]>,
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.
