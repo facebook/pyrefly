@@ -470,6 +470,66 @@ impl FromStr for ErrorOutput {
 }
 
 impl OutputArgs {
+    fn has_custom_options(&self) -> bool {
+        let Self {
+            output,
+            output_format,
+            debug_info,
+            report_binding_memory,
+            report_trace,
+            dependency_graph,
+            report_timings,
+            report_glean,
+            report_pysa,
+            report_pysa_format,
+            report_demand_tree,
+            report_cinderx,
+            cinderx_include_readable,
+            cinderx_include_deps,
+            count_errors,
+            summarize_errors,
+            only,
+            summary,
+            no_progress_bar,
+            progress_bar,
+            relative_to,
+            baseline,
+            baseline_error_level,
+            update_baseline,
+            prune_baseline,
+            error_stale_baseline,
+            min_severity,
+        } = self;
+
+        !output.is_empty()
+            || output_format.is_some()
+            || debug_info.is_some()
+            || report_binding_memory.is_some()
+            || report_trace.is_some()
+            || dependency_graph.is_some()
+            || report_timings.is_some()
+            || report_glean.is_some()
+            || report_pysa.is_some()
+            || !matches!(report_pysa_format, report::pysa::PysaFormat::Capnp)
+            || report_demand_tree.is_some()
+            || report_cinderx.is_some()
+            || *cinderx_include_readable
+            || *cinderx_include_deps
+            || count_errors.is_some()
+            || summarize_errors.is_some()
+            || only.is_some()
+            || !matches!(summary, Summary::Default)
+            || *no_progress_bar
+            || progress_bar.is_some()
+            || relative_to.is_some()
+            || baseline.is_some()
+            || baseline_error_level.is_some()
+            || *update_baseline
+            || *prune_baseline
+            || *error_stale_baseline
+            || min_severity.is_some()
+    }
+
     /// Validate invariants across all requested output destinations.
     fn validate_outputs(&self) -> anyhow::Result<()> {
         let mut has_stdout = false;
@@ -574,6 +634,19 @@ struct BehaviorArgs {
         default_missing_value = "pyrefly"
     )]
     remove_unused_ignores: Option<UnusedIgnoreKind>,
+}
+
+impl BehaviorArgs {
+    fn has_custom_options(&self) -> bool {
+        let Self {
+            check_all,
+            suppress_errors,
+            expectations,
+            remove_unused_ignores,
+        } = self;
+
+        *check_all || *suppress_errors || *expectations || remove_unused_ignores.is_some()
+    }
 }
 
 fn write_errors_to_file(
@@ -1403,6 +1476,11 @@ struct PreparedCliRun {
 }
 
 impl CheckArgs {
+    /// Whether the invocation customizes check behavior or output.
+    pub fn has_custom_options(&self) -> bool {
+        self.output.has_custom_options() || self.behavior.has_custom_options()
+    }
+
     /// Run a one-shot type check. Returns the exit status, the CLI-visible errors,
     /// and a `CheckResult` suitable for telemetry logging.
     pub fn run_once(
