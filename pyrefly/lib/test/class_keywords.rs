@@ -141,7 +141,7 @@ class A(B0, B1):  # E:  Class `A` has metaclass `M0` from base class `B0` which 
 testcase!(
     test_duplicate_class_keyword,
     r#"
-class A(foo="x" + 5, foo=True):  # E: Parse error: Duplicate keyword argument "foo"  # E: `+` is not supported between `Literal['x']` and `Literal[5]`
+class A(foo="x" + 5, foo=True):  # E: Duplicate keyword argument `foo`  # E: `+` is not supported between `Literal['x']` and `Literal[5]`
     pass
 "#,
 );

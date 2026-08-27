@@ -806,6 +806,7 @@ impl Bindings {
             | SemanticSyntaxErrorKind::LateFutureImport
             | SemanticSyntaxErrorKind::ReboundComprehensionVariable
             | SemanticSyntaxErrorKind::DuplicateParameter(_)
+            | SemanticSyntaxErrorKind::DuplicateKeywordArgument(_)
             | SemanticSyntaxErrorKind::NonlocalDeclarationAtModuleLevel
             | SemanticSyntaxErrorKind::MultipleCaseAssignment(_)
             | SemanticSyntaxErrorKind::DuplicateMatchKey(_)
@@ -842,7 +843,8 @@ impl Bindings {
             | SemanticSyntaxErrorKind::NamedExpressionInClassBodyComprehension
             | SemanticSyntaxErrorKind::TypeParameterDefaultOrder(_)
             | SemanticSyntaxErrorKind::MultipleStarredNamesInSequencePattern
-            | SemanticSyntaxErrorKind::ReturnInGenerator => false,
+            | SemanticSyntaxErrorKind::ReturnInGenerator
+            | SemanticSyntaxErrorKind::NonlocalParameter(_) => false,
         }
     }
 }
