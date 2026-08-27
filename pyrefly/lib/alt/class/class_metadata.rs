@@ -1213,7 +1213,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         for (decorator, decorator_range) in decorators {
             // `@foo` where `foo` is decorated with `@dataclass_transform(...)`
-            if let Some(defaults) = decorator.ty.dataclass_transform_metadata() {
+            if let Some(defaults) = decorator
+                .ty
+                .toplevel_func_metadata()
+                .and_then(|meta| meta.flags.dataclass_transform_metadata.as_ref())
+            {
                 let mut kws =
                     DataclassKeywords::from_type_map(&TypeMap::new(), defaults, strict_default);
                 if kws.auto_attribs.is_none() {

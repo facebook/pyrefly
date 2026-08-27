@@ -200,7 +200,8 @@ impl HoverValue {
 
         // For methods, search in parent class; for constructors, use the return type
         let search_type = context_type
-            .visit_toplevel_func_metadata(&|meta| {
+            .toplevel_func_metadata()
+            .and_then(|meta| {
                 let symbol = meta.kind.to_func_symbol()?;
                 let class = symbol.cls.as_ref()?;
                 Some(Type::ClassType(ClassType::new(
@@ -426,7 +427,9 @@ fn position_is_in_docstring(ast: Option<&ModModule>, position: TextSize) -> bool
 /// type metadata knows about the callable. This primarily handles third-party stubs
 /// where we only have typeshed information.
 fn fallback_hover_name_from_type(type_: &Type) -> Option<String> {
-    let name = type_.visit_toplevel_func_metadata(&|meta| Some(meta.kind.function_name()));
+    let name = type_
+        .toplevel_func_metadata()
+        .map(|meta| meta.kind.function_name());
     if let Some(name) = name {
         return Some(name.to_string());
     }

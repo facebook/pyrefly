@@ -267,7 +267,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let is_pydantic_dataclass = decorators.iter().any(|(decorator, _)| {
             decorator
                 .ty
-                .visit_toplevel_func_metadata(&is_pydantic_dataclass_metadata)
+                .toplevel_func_metadata()
+                .is_some_and(&is_pydantic_dataclass_metadata)
                 || matches!(&decorator.ty, Type::KwCall(call)
                     if is_pydantic_dataclass_metadata(&call.func_metadata))
         });

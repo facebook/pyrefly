@@ -1131,9 +1131,9 @@ impl ClassField {
 
     fn calls_super_method(&self) -> bool {
         match &self.0 {
-            ClassFieldInner::Method { ty, .. } => {
-                ty.visit_toplevel_func_metadata(&|meta| meta.flags.calls_super_method)
-            }
+            ClassFieldInner::Method { ty, .. } => ty
+                .toplevel_func_metadata()
+                .is_some_and(|meta| meta.flags.calls_super_method),
             _ => false,
         }
     }
@@ -2680,12 +2680,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn is_ordinary_instance_method_type(ty: &Type) -> bool {
-        ty.visit_toplevel_func_metadata(&|metadata: &FuncMetadata| {
-            !metadata.flags.is_staticmethod
-                && !metadata.flags.is_classmethod
-                && metadata.flags.property_metadata.is_none()
-                && !metadata.flags.is_cached_property
-        })
+        ty.toplevel_func_metadata()
+            .is_some_and(&|metadata: &FuncMetadata| {
+                !metadata.flags.is_staticmethod
+                    && !metadata.flags.is_classmethod
+                    && metadata.flags.property_metadata.is_none()
+                    && !metadata.flags.is_cached_property
+            })
     }
 
     fn parse_proxy_method_target(
@@ -3023,7 +3024,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         // Inherit the previous type of the attribute if the only declaration-like
                         // thing the current class does is assign to the attribute in a method.
                         // If the attribute is a method, bind it to the current class.
-                        if inherited_ty.visit_toplevel_func_metadata(&|m| m.flags.is_classmethod) {
+                        if inherited_ty
+                            .toplevel_func_metadata()
+                            .is_some_and(|m| m.flags.is_classmethod)
+                        {
                             make_bound_classmethod(
                                 self.heap,
                                 &ClassBase::ClassDef(self.as_class_type_unchecked(class)),
@@ -4223,13 +4227,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // "defer to other operand" signal).
                 let relax_ty = |ty: &mut Type| {
                     let (placeholder_kind, is_async, is_return_inferred) = ty
-                        .visit_toplevel_func_metadata(&|meta| {
+                        .toplevel_func_metadata()
+                        .map(|meta| {
                             (
                                 meta.flags.body_kind,
                                 meta.flags.is_async,
                                 meta.flags.is_return_inferred,
                             )
-                        });
+                        })
+                        .unwrap_or_default();
                     if placeholder_kind != BodyKind::RaiseNotImplementedError || !is_return_inferred
                     {
                         return;
@@ -5049,7 +5055,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let lacks_runtime_impl = member
             .value
             .ty()
-            .visit_toplevel_func_metadata::<bool>(&|meta| {
+            .toplevel_func_metadata()
+            .is_some_and(|meta| {
                 matches!(meta.flags.body_kind, BodyKind::Ellipsis | BodyKind::Trivial)
                     && meta.flags.module_style == ModuleStyle::Executable
             });
@@ -5163,9 +5170,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             && new_member
                 .value
                 .ty()
-                .visit_toplevel_func_metadata::<bool>(&|meta| {
-                    meta.flags.has_gradual_variadic_params
-                })
+                .toplevel_func_metadata()
+                .is_some_and(|meta| meta.flags.has_gradual_variadic_params)
     }
     fn get_dunder_init_helper(&self, instance: &Instance, get_object_init: bool) -> Option<Type> {
         let init_method =
@@ -5391,7 +5397,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 );
             }
             ClassAttribute::Property(getter, None, cls) => {
-                let is_cached_property = getter.is_cached_property();
+                let is_cached_property = getter
+                    .toplevel_func_metadata()
+                    .is_some_and(|meta| meta.flags.is_cached_property);
                 if is_cached_property {
                     let attr_ty = self.call_property_getter(getter, range, errors, context);
                     self.check_set_read_write_and_infer_narrow(

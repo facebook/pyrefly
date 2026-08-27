@@ -402,7 +402,7 @@ pub(crate) fn attribute_symbol_kind_from_type(ty: &Type) -> SymbolKind {
             // function. Overloads and bound dunder methods (e.g. `__getitem__`, an
             // overloaded operator) carry no directly resolvable definition metadata, so they
             // must default to method rather than function.
-            let is_function = ty.visit_toplevel_func_metadata(&|meta| {
+            let is_function = ty.toplevel_func_metadata().is_some_and(|meta| {
                 meta.kind
                     .to_func_symbol()
                     .is_some_and(|symbol| symbol.cls.is_none())
@@ -3255,8 +3255,9 @@ impl<'a> Transaction<'a> {
             // signature and report the classes of the parameter types, which are never
             // the type of this expression. A non-function type visits to `None`, as
             // does a function with no `def`, and both fall through as before.
-            if let Some(def) =
-                t.visit_toplevel_func_metadata(&|m| self.function_def_location(handle, m))
+            if let Some(def) = t
+                .toplevel_func_metadata()
+                .and_then(|m| self.function_def_location(handle, m))
             {
                 return Ok(vec![def?]);
             }

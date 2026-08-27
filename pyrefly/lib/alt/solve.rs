@@ -6104,7 +6104,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         // Only an explicit `-> type[Any]` return annotation counts; a return
                         // type inferred from the body (e.g. `return cls` where `cls: type[Any]`)
                         // does not, since the user did not opt in to erasing the class.
-                        !decorator_ty.visit_toplevel_func_metadata(&|meta| meta.flags.is_return_inferred)
+                        !decorator_ty.toplevel_func_metadata().is_some_and(|meta| meta.flags.is_return_inferred)
                             && decorator_ty
                                 .callable_signatures()
                                 .iter()

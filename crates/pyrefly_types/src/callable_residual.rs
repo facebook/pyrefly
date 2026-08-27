@@ -278,7 +278,8 @@ impl Type {
     /// Returns `None` if any branch type cannot be converted to an overload signature.
     fn try_combine_reconstructed_overload(&self, reconstructed: &[Type]) -> Option<Type> {
         let metadata = self
-            .visit_toplevel_func_metadata(&|metadata| Some(metadata.clone()))
+            .toplevel_func_metadata()
+            .cloned()
             .unwrap_or_else(|| FuncMetadata::new(FunctionKind::Overload, FuncFlags::default()));
         let signatures = reconstructed
             .iter()

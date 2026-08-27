@@ -2475,7 +2475,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         hint,
                         errors,
                     ),
-                _ if ty.is_assert_shape() => self
+                _ if ty.toplevel_func_metadata().is_some_and(|meta| {
+                    meta.flags.is_assert_shape || meta.kind == FunctionKind::AssertShape
+                }) => self
                     .call_assert_shape(
                         &x.arguments.args,
                         &x.arguments.keywords,

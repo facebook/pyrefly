@@ -2014,7 +2014,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     /// Return the positional index of `flags` for `re` functions that accept a pattern.
     fn regex_flags_position(&self, callee_ty: &Type) -> Option<usize> {
-        callee_ty.visit_toplevel_func_metadata(&|metadata| {
+        callee_ty.toplevel_func_metadata().and_then(|metadata| {
             if metadata.kind.module_name().as_str() != "re" {
                 return None;
             }

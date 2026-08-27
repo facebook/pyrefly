@@ -52,7 +52,6 @@ use crate::function::FunctionKind;
 use crate::function::PropertyMetadata;
 use crate::function::PropertyRole;
 use crate::heap::TypeHeap;
-use crate::keywords::DataclassTransformMetadata;
 use crate::keywords::KwCall;
 use crate::literal::Lit;
 use crate::literal::LitStyle;
@@ -1537,12 +1536,6 @@ impl Type {
         }
     }
 
-    pub fn is_assert_shape(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| {
-            meta.flags.is_assert_shape || meta.kind == FunctionKind::AssertShape
-        })
-    }
-
     pub fn is_none(&self) -> bool {
         matches!(self, Type::None)
     }
@@ -1691,60 +1684,42 @@ impl Type {
         seen
     }
 
-    /// Calls a `visit` function on this type's function metadata if it is a function. Note that we
+    /// Gets this type's function metadata if it is a function. Note that we
     /// do *not* recurse into the type to find nested function types.
-    pub fn visit_toplevel_func_metadata<'a, T: Default>(
-        &'a self,
-        visit: &dyn Fn(&'a FuncMetadata) -> T,
-    ) -> T {
-        let func: Option<&Function> = match self {
-            Type::Function(func) => Some(func),
+    pub fn toplevel_func_metadata(&self) -> Option<&FuncMetadata> {
+        match self {
+            Type::Function(func) => Some(&func.metadata),
             Type::Forall(forall) => match &forall.body {
-                Forallable::Function(func) => Some(func),
+                Forallable::Function(func) => Some(&func.metadata),
                 _ => None,
             },
             Type::BoundMethod(bm) => match &bm.func {
-                BoundMethodType::Function(func) => Some(func),
-                BoundMethodType::Forall(forall) => Some(&forall.body),
-                _ => None,
+                BoundMethodType::Function(func) => Some(&func.metadata),
+                BoundMethodType::Forall(forall) => Some(&forall.body.metadata),
+                BoundMethodType::Overload(overload) => Some(&*overload.metadata),
             },
+            Type::Overload(overload) => Some(&*overload.metadata),
             _ => None,
-        };
-        if let Some(func) = func {
-            return visit(&func.metadata);
         }
-        let overload: Option<&Overload> = match self {
-            Type::Overload(overload) => Some(overload),
-            Type::BoundMethod(bm) => match &bm.func {
-                BoundMethodType::Overload(overload) => Some(overload),
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some(overload) = overload {
-            return visit(&overload.metadata);
-        }
-        T::default()
     }
 
     pub fn has_toplevel_func_metadata(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|_| true)
+        self.toplevel_func_metadata().is_some()
     }
 
     pub fn is_abstract_method(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.is_abstract_method)
+        self.toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.is_abstract_method)
     }
 
     pub fn is_override(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.is_override)
-    }
-
-    pub fn has_enum_member_decoration(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.has_enum_member_decoration)
+        self.toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.is_override)
     }
 
     pub fn property_metadata(&self) -> Option<&PropertyMetadata> {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.property_metadata.as_ref())
+        self.toplevel_func_metadata()
+            .and_then(|meta| meta.flags.property_metadata.as_ref())
     }
 
     pub fn is_property_getter(&self) -> bool {
@@ -1752,25 +1727,9 @@ impl Type {
             .is_some_and(|meta| matches!(meta.role, PropertyRole::Getter))
     }
 
-    pub fn is_cached_property(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.is_cached_property)
-    }
-
-    pub fn is_property_setter_decorator(&self) -> bool {
-        self.property_metadata()
-            .is_some_and(|meta| matches!(meta.role, PropertyRole::SetterDecorator))
-    }
-
     pub fn is_property_setter_with_getter(&self) -> Option<Type> {
         self.property_metadata().and_then(|meta| match meta.role {
             PropertyRole::Setter => Some(meta.getter.clone()),
-            _ => None,
-        })
-    }
-
-    pub fn property_deleter_metadata(&self) -> Option<&PropertyMetadata> {
-        self.property_metadata().and_then(|meta| match meta.role {
-            PropertyRole::DeleterDecorator => Some(meta),
             _ => None,
         })
     }
@@ -1793,19 +1752,18 @@ impl Type {
     }
 
     pub fn is_overload(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.is_overload)
+        self.toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.is_overload)
     }
 
     pub fn function_deprecation(&self) -> Option<&Deprecation> {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.deprecation.as_ref())
+        self.toplevel_func_metadata()
+            .and_then(|meta| meta.flags.deprecation.as_ref())
     }
 
     pub fn has_final_decoration(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.has_final_decoration)
-    }
-
-    pub fn dataclass_transform_metadata(&self) -> Option<&DataclassTransformMetadata> {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.dataclass_transform_metadata.as_ref())
+        self.toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.has_final_decoration)
     }
 
     /// Transforms this type's function metadata, if it is a function. Note that we do *not*
@@ -2197,7 +2155,7 @@ impl Type {
 
     /// Return the FunctionKind if this type corresponds to a function or method.
     pub fn to_func_kind(&self) -> Option<&FunctionKind> {
-        self.visit_toplevel_func_metadata(&|meta| Some(&meta.kind))
+        self.toplevel_func_metadata().map(|meta| &meta.kind)
     }
 
     pub fn materialize(&self) -> Self {

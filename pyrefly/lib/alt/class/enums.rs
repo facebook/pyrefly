@@ -116,7 +116,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return false;
         }
         // Methods decorated with @enum.member are always enum members.
-        if ty.has_enum_member_decoration() {
+        if ty
+            .toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.has_enum_member_decoration)
+        {
             return true;
         }
         // Only values assigned or defined in the class body can be enum members.
