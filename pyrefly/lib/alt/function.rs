@@ -1723,8 +1723,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let bound_receiver_type = |ty: &Type| match ty {
             Type::SelfType(cls) => Some(self.heap.mk_class_type(cls.clone())),
             Type::Quantified(q)
-                if q.identity().origin == QuantifiedOrigin::SyntheticSelf
-                    && let Restriction::Bound(bound) = q.restriction() =>
+                if matches!(
+                    q.identity().origin,
+                    QuantifiedOrigin::Synthetic { is_self: true }
+                ) && let Restriction::Bound(bound) = q.restriction() =>
             {
                 Some(bound.clone())
             }

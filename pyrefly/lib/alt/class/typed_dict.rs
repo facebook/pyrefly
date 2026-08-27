@@ -502,11 +502,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         ty: Type,
     ) -> OverloadType {
         // Synthetic `_T` quantified used internally for the default parameter type.
-        // Anchored to the TypedDict class definition range with SyntheticCallableResidual origin.
+        // Anchored to the TypedDict class definition range with Synthetic origin.
         let identity = QuantifiedIdentity::new(
             self.module().name(),
             AnchorIndex::first(cls.range()),
-            QuantifiedOrigin::SyntheticCallableResidual,
+            QuantifiedOrigin::synthetic(),
         );
         let q = Quantified::type_var(
             Name::new("_T"),

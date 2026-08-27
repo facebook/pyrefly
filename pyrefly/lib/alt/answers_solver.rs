@@ -2220,7 +2220,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let identity = QuantifiedIdentity::new(
                     self.module().name(),
                     AnchorIndex::new(TextRange::default(), ordinal),
-                    QuantifiedOrigin::SyntheticCallableResidual,
+                    QuantifiedOrigin::synthetic(),
                 );
                 match kind {
                     QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(
@@ -2260,7 +2260,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let identity = QuantifiedIdentity::new(
                     self.module().name(),
                     AnchorIndex::new(TextRange::default(), ordinal),
-                    QuantifiedOrigin::SyntheticCallableResidual,
+                    QuantifiedOrigin::synthetic(),
                 );
                 match kind {
                     QuantifiedKind::TypeVar | QuantifiedKind::IntVar => Quantified::new(

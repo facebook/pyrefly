@@ -4486,7 +4486,7 @@ mod tests {
             QuantifiedIdentity::new(
                 ModuleName::from_str("test"),
                 AnchorIndex::new(TextRange::default(), index),
-                QuantifiedOrigin::SyntheticCallableResidual,
+                QuantifiedOrigin::synthetic(),
             ),
             Name::new(match kind {
                 QuantifiedKind::IntVar => "S",

@@ -3328,7 +3328,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let identity = QuantifiedIdentity::new(
             self.module().name(),
             AnchorIndex::first(class.range()),
-            QuantifiedOrigin::SyntheticSelf,
+            QuantifiedOrigin::Synthetic { is_self: true },
         );
         Quantified::new(
             identity,
