@@ -23,7 +23,6 @@ use lsp_types::Url;
 use lsp_types::WorkspaceEdit;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::PYTHON_EXTENSIONS;
-use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
@@ -93,21 +92,21 @@ pub(crate) fn safe_delete_file_code_actions(
     if module_name == ModuleName::unknown() {
         return None;
     }
-    let usage_locations = collect_import_usage_locations(transaction, &handle, module_name, &path);
-    if !usage_locations.is_empty() {
-        return Some(vec![
-            find_usages_code_action(&file_name, uri, usage_locations),
-            delete_file_code_action(format!("Delete file `{file_name}` anyway"), uri),
-        ]);
+    let rdeps = transaction.get_rdeps(&handle);
+    if rdeps.is_empty() {
+        return Some(vec![delete_file_code_action(
+            format!("Safe delete file `{file_name}`"),
+            uri,
+        )]);
     }
-    if transaction.is_depended_on_by_anything(&handle) {
+    let usage_locations = collect_import_usage_locations(transaction, rdeps, module_name);
+    if usage_locations.is_empty() {
         return None;
     }
-
-    Some(vec![delete_file_code_action(
-        format!("Safe delete file `{file_name}`"),
-        uri,
-    )])
+    Some(vec![
+        find_usages_code_action(&file_name, uri, usage_locations),
+        delete_file_code_action(format!("Delete file `{file_name}` anyway"), uri),
+    ])
 }
 
 fn delete_file_code_action(title: String, uri: &Url) -> CodeActionOrCommand {
@@ -153,11 +152,9 @@ fn find_usages_code_action(
 
 fn collect_import_usage_locations(
     transaction: &Transaction<'_>,
-    handle: &Handle,
+    rdeps: HashSet<Handle>,
     target_module: ModuleName,
-    target_path: &std::path::Path,
 ) -> Vec<Location> {
-    let rdeps = transaction.get_transitive_rdeps(handle.clone());
     let mut seen = HashSet::new();
     let mut locations = Vec::new();
     for rdep_handle in rdeps {
@@ -167,16 +164,15 @@ fn collect_import_usage_locations(
         let Some(module_info) = transaction.get_module_info(&rdep_handle) else {
             continue;
         };
-        if module_info.path().as_path() == target_path {
-            continue;
-        }
         if !matches!(
             module_info.path().details(),
             ModulePathDetails::FileSystem(_) | ModulePathDetails::Memory(_)
         ) {
             continue;
         }
-        let ast = Ast::parse(module_info.contents(), module_info.source_type()).0;
+        let Some(ast) = transaction.get_ast(&rdep_handle) else {
+            continue;
+        };
         let mut visitor = ImportUsageVisitor {
             target_module,
             current_module: module_info.name(),
