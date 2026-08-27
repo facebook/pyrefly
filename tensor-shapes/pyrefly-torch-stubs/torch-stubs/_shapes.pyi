@@ -956,17 +956,35 @@ def kl_div_loss_shape(
         return dsl.IntTuple(())
     return loss_shape(input_shape, reduction, size_average, reduce)
 
-@shape_dsl_function
-def pad_ir(self: ShapedArray, pad: list[int]) -> ShapedArray:
-    rank = len(self.shape)
-    num_pad_dims = len(pad) // 2
-    offsets = [
-        pad[(rank - 1 - i) * 2] + pad[(rank - 1 - i) * 2 + 1]
-        if i >= rank - num_pad_dims
-        else 0
-        for i in range(rank)
-    ]
-    return ShapedArray(shape=[d + offsets[i] for i, d in enumerate(self.shape)])
+# `padding` holds `(before, after)` amounts for trailing dimensions, innermost pair
+# first, so dimension `i` picks up the pair at offset `(rank - 1 - i) * 2`.
+@type_shape_dsl_function
+def _pad_shape(shape: IntTuple, padding: IntTuple) -> IntTuple:
+    rank = len(shape)
+    if len(padding) == 0:
+        return shape
+    num_pad_dims = len(padding) // 2
+    if num_pad_dims * 2 != len(padding):
+        return dsl.Invalid("pad must have an even number of entries")
+    if rank == 0:
+        return dsl.Invalid("pad does not support scalar input")
+    if num_pad_dims > rank:
+        return dsl.Invalid("pad has more padding pairs than input dimensions")
+    return dsl.IntTuple(
+        (
+            shape[i] + padding[(rank - 1 - i) * 2] + padding[(rank - 1 - i) * 2 + 1]
+            if i >= rank - num_pad_dims
+            else shape[i]
+            for i in range(rank)
+        )
+    )
+
+# `len` and indexing need an `IntTuple` parameter, so the Flag tuple value is
+# rebuilt as one before `_pad_shape` can inspect it.
+@type_shape_dsl_function
+def pad_shape(shape: IntTuple, pad: tuple[int, ...]) -> IntTuple:
+    padding = dsl.IntTuple((item for item in pad))
+    return _pad_shape(shape, padding)
 
 # The `+ 0` branches below keep normalized axes in one deferred integer domain.
 @type_shape_dsl_function

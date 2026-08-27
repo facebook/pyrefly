@@ -23,7 +23,7 @@ from torch._shapes import (
     interpolate_ir,
     kl_div_loss_shape,
     loss_shape,
-    pad_ir,
+    pad_shape,
     pairwise_distance_shape,
     pool_ir,
 )
@@ -978,11 +978,25 @@ def hinge_embedding_loss[
     ...
 
 # Padding operation
-@uses_shape_dsl(pad_ir)
+@overload
+def pad[Shape: IntTuple, Pad: Flag[tuple[builtins.int, ...]]](
+    input: Tensor[Shape],
+    pad: Pad,
+    mode: str = "constant",
+    value: float = 0.0,
+) -> Tensor[pad_shape(Shape, Pad)]:
+    """Pad tensor. Shape inference via type-level DSL."""
+    ...
+
+@overload
 def pad(
-    self: Tensor, pad: tuple[int, ...], mode: str = "constant", value: float = 0.0
-) -> Tensor:
-    """Pad tensor. Shape inference via meta-shape: torch.nn.functional.pad"""
+    input: Tensor,
+    pad: list[builtins.int],
+    mode: str = "constant",
+    value: float = 0.0,
+) -> Tensor[IntTuple]:
+    """Pad tensor by a list of amounts. A list carries no element literals, so the
+    padded shape stays gradual."""
     ...
 
 # Softmax activation

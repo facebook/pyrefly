@@ -101,3 +101,42 @@ def check_cosine_similarity_gradual(
     assert_type(F.cosine_similarity(x, y, dim=dim), Tensor[IntTuple])
     assert_type(F.cosine_similarity(bare, x, dim=-1), Tensor[IntTuple])
     assert_type(F.cosine_similarity(open_rank, x, dim=0), Tensor[IntTuple])
+
+
+def test_pad_shapes() -> None:
+    vector = cast(Tensor[[10]], ...)
+    matrix = cast(Tensor[[3, 4]], ...)
+    rank_three = cast(Tensor[[2, 3, 5]], ...)
+
+    assert_type(F.pad(vector, (2, 3)), Tensor[[15]])
+    assert_type(F.pad(input=vector, pad=(2, 3)), Tensor[[15]])
+    assert_type(F.pad(vector, ()), Tensor[[10]])
+    assert_type(F.pad(cast(Tensor[[]], ...), ()), Tensor[[]])
+    assert_type(F.pad(matrix, (1, 2, 3, 4)), Tensor[[10, 7]])
+    assert_type(F.pad(rank_three, (1, 2, 3, 4)), Tensor[[2, 10, 8]])
+    assert_type(F.pad(rank_three, (-1, -2, 3, -1)), Tensor[[2, 5, 2]])
+    assert_type(
+        F.pad(matrix, (1, 2, 3, 4), mode="reflect", value=2.5),
+        Tensor[[10, 7]],
+    )
+
+
+def check_pad_symbolic[N: IntVar](x: Tensor[[N, 5]]) -> None:
+    assert_type(F.pad(x, (1, 2, 3, 4)), Tensor[[N + 7, 8]])
+
+
+def check_pad_gradual(
+    open_rank: Tensor[IntTuple],
+    concrete: Tensor[[2, 3]],
+    dynamic_pad: tuple[int, ...],
+    dynamic_pair: tuple[int, int],
+    dynamic_list: list[int],
+    amount: int,
+) -> None:
+    assert_type(F.pad(open_rank, (1, 2)), Tensor[IntTuple])
+    assert_type(F.pad(concrete, dynamic_pad), Tensor[IntTuple])
+    assert_type(F.pad(concrete, dynamic_pair), Tensor[IntTuple])
+    # A list is accepted, but carries no element literals to pad with.
+    assert_type(F.pad(concrete, dynamic_list), Tensor[IntTuple])
+    assert_type(F.pad(concrete, [1, 2]), Tensor[IntTuple])
+    assert_type(F.pad(concrete, [amount, amount]), Tensor[IntTuple])
