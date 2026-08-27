@@ -6745,6 +6745,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // we'll fall back to builtins.type. We can add more cases here as-needed.
     pub fn type_of(&self, ty: Type) -> Type {
         match ty {
+            // A protocol value's runtime class is an unknown concrete implementation.
+            Type::ClassType(cls) if cls.class_object().is_protocol() => {
+                self.heap.mk_type_of(Type::ClassType(cls))
+            }
             Type::ClassType(cls) => self.heap.mk_class_def(cls.class_object().clone()),
             Type::SelfType(_) => self.heap.mk_type(ty),
             Type::Literal(lit) => self.heap.mk_class_def(
