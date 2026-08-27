@@ -23,8 +23,10 @@ use pyrefly_util::display::number_thousands;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lined_buffer::LinedBuffer;
+use ruff_annotate_snippets::Annotation;
+use ruff_annotate_snippets::AnnotationKind;
+use ruff_annotate_snippets::Group;
 use ruff_annotate_snippets::Level;
-use ruff_annotate_snippets::Message;
 use ruff_annotate_snippets::Renderer;
 use ruff_annotate_snippets::Snippet;
 use ruff_text_size::Ranged;
@@ -225,8 +227,8 @@ impl<W: Write> ErrorRenderer<W> {
         }
     }
 
-    fn write_snippet<'a>(&mut self, snippet: Message<'a>) -> io::Result<()> {
-        writeln!(self.writer, "{}", self.snippets.render(snippet))
+    fn write_snippet<'a>(&mut self, snippet: Group<'a>) -> io::Result<()> {
+        writeln!(self.writer, "{}", self.snippets.render(&[snippet]))
     }
 }
 
@@ -242,7 +244,7 @@ impl Error {
         }
     }
 
-    fn get_source_snippet<'a>(&'a self, origin: &'a str) -> Message<'a> {
+    fn get_source_snippet<'a>(&'a self, origin: &'a str) -> Group<'a> {
         // Maximum number of lines to show in a single snippet. Annotations further apart
         // than this are shown as separate snippets rather than dumping all lines in between.
         // The primary span is also capped to this many lines for very large multi-line spans.
@@ -282,10 +284,10 @@ impl Error {
         }
 
         let level = match self.severity {
-            Severity::Error => Level::Error,
-            Severity::Warn => Level::Warning,
-            Severity::Info => Level::Info,
-            Severity::Ignore => Level::None,
+            Severity::Error => Level::ERROR,
+            Severity::Warn => Level::WARNING,
+            Severity::Info => Level::INFO,
+            Severity::Ignore => Level::NOTE.no_name(),
         };
 
         // Primary snippet with nearby annotations inline.
@@ -293,16 +295,16 @@ impl Error {
             origin,
             start_line,
             end_line,
-            Some((self.range, level)),
+            Some(self.range),
             &nearby_annotations,
         );
 
         // Distant annotations each get their own snippet covering their full span.
-        let mut message = Level::None.title("").snippet(primary_snippet);
+        let mut message = Group::with_level(level).element(primary_snippet);
         for (ann, ann_display) in &distant_annotations {
             let ann_start_line = ann_display.start.line_within_file();
             let ann_end_line = ann_display.end.line_within_file();
-            message = message.snippet(self.make_snippet(
+            message = message.element(self.make_snippet(
                 origin,
                 ann_start_line,
                 ann_end_line,
@@ -320,9 +322,9 @@ impl Error {
         origin: &'a str,
         from_line: LineNumber,
         to_line: LineNumber,
-        primary: Option<(TextRange, Level)>,
+        primary: Option<TextRange>,
         annotations: &[&'a SecondaryAnnotation],
-    ) -> Snippet<'a> {
+    ) -> Snippet<'a, Annotation<'a>> {
         // Warning: The SourceRange is char indexed, while the snippet is byte indexed.
         let source = self
             .module
@@ -335,11 +337,15 @@ impl Error {
             .start
             .line_within_cell()
             .get() as usize;
-        let mut snippet = Snippet::source(source).line_start(cell_line).origin(origin);
-        if let Some((range, lvl)) = primary {
+        let mut snippet = Snippet::source(source).line_start(cell_line).path(origin);
+        if let Some(range) = primary {
             let start = (range.start() - line_start).to_usize();
             let end = cmp::min(start + range.len().to_usize(), source.len());
-            snippet = snippet.annotation(lvl.span(start..end));
+            let primary_annotation_kind = match self.severity {
+                Severity::Error | Severity::Warn | Severity::Ignore => AnnotationKind::Primary,
+                Severity::Info => AnnotationKind::Context,
+            };
+            snippet = snippet.annotation(primary_annotation_kind.span(start..end));
         }
         for ann in annotations {
             let start = ann
@@ -349,7 +355,8 @@ impl Error {
                 .saturating_sub(line_start.to_usize());
             let end = cmp::min(start + ann.range.len().to_usize(), source.len());
             if start <= end && end <= source.len() {
-                snippet = snippet.annotation(Level::Warning.span(start..end).label(&ann.label));
+                snippet =
+                    snippet.annotation(AnnotationKind::Context.span(start..end).label(&*ann.label));
             }
         }
         snippet
@@ -630,7 +637,6 @@ mod tests {
   |
 2 |     return x
   |     ^^^^^^^^
-  |
 "#,
         );
     }
@@ -688,15 +694,10 @@ mod tests {
  2 | | X
  3 | | X
  4 | | X
- 5 | | X
- 6 | | X
- 7 | | X
- 8 | | X
- 9 | | X
+...  |
 10 | | X
 11 | | X
    | |__^
-   |
 "#,
         );
     }
@@ -739,7 +740,6 @@ mod tests {
   | |     |
   | |     has type `int`
   | has type `int | str`
-  |
 "#,
         );
     }

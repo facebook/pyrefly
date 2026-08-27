@@ -7,6 +7,8 @@
 
 use std::ops::Range;
 
+use ruff_annotate_snippets::AnnotationKind;
+use ruff_annotate_snippets::Group;
 use ruff_annotate_snippets::Level as SnippetLevel;
 use ruff_annotate_snippets::Renderer as SnippetRenderer;
 use ruff_annotate_snippets::Snippet as SnippetBlock;
@@ -157,7 +159,7 @@ pub fn render_signature_diff(expected: &str, found: &str) -> Option<Vec<String>>
         &found[found_params.clone()],
     ) {
         annotations.push(
-            SnippetLevel::Error
+            AnnotationKind::Primary
                 .span(
                     (expected_prefix.len() + expected_params.start + exp_span.start)
                         ..(expected_prefix.len() + expected_params.start + exp_span.end),
@@ -165,7 +167,7 @@ pub fn render_signature_diff(expected: &str, found: &str) -> Option<Vec<String>>
                 .label("parameters"),
         );
         annotations.push(
-            SnippetLevel::Error
+            AnnotationKind::Primary
                 .span(
                     (found_offset + found_prefix.len() + found_params.start + found_span.start)
                         ..(found_offset + found_prefix.len() + found_params.start + found_span.end),
@@ -177,7 +179,7 @@ pub fn render_signature_diff(expected: &str, found: &str) -> Option<Vec<String>>
         diff_ranges(&expected[expected_ret.clone()], &found[found_ret.clone()])
     {
         annotations.push(
-            SnippetLevel::Error
+            AnnotationKind::Primary
                 .span(
                     (expected_prefix.len() + expected_ret.start + exp_span.start)
                         ..(expected_prefix.len() + expected_ret.start + exp_span.end),
@@ -185,7 +187,7 @@ pub fn render_signature_diff(expected: &str, found: &str) -> Option<Vec<String>>
                 .label("return type"),
         );
         annotations.push(
-            SnippetLevel::Error
+            AnnotationKind::Primary
                 .span(
                     (found_offset + found_prefix.len() + found_ret.start + found_span.start)
                         ..(found_offset + found_prefix.len() + found_ret.start + found_span.end),
@@ -202,8 +204,8 @@ pub fn render_signature_diff(expected: &str, found: &str) -> Option<Vec<String>>
     for ann in annotations {
         snippet = snippet.annotation(ann);
     }
-    let message = SnippetLevel::None.title("").snippet(snippet);
-    let rendered = SnippetRenderer::plain().render(message).to_string();
+    let message = [Group::with_level(SnippetLevel::ERROR.no_name()).element(snippet)];
+    let rendered = SnippetRenderer::plain().render(&message).to_string();
     let mut lines: Vec<String> = Vec::new();
     lines.push("Signature mismatch:".to_owned());
     for line in rendered.lines() {

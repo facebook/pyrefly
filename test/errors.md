@@ -57,7 +57,6 @@ ERROR `+` is not supported * (glob)
   | |   |
   | |   has type `Literal['2']`
   | has type `Literal[1]`
-  |
   Argument * is not assignable * (glob)
 [1]
 ```
@@ -103,7 +102,6 @@ ERROR `Literal[0]` is not assignable to `str` [bad-assignment]
   |    ---   ^
   |    |
   |    declared type
-  |
 ::error file=*/bad_combined.py,line=1,col=10,endLine=1,endColumn=11,title=Pyrefly bad-assignment::`Literal[0]` is not assignable to `str` (glob)
 [1]
 ```
@@ -119,7 +117,6 @@ ERROR Argument `float` is not assignable * (glob)
   |
 2 | f(0.0)
   |   ^^^
-  |
 [1]
 ```
 
@@ -134,7 +131,6 @@ ERROR Argument `Literal[0]` is not assignable * (glob)
   |
 3 | f(λ)
   |   ^
-  |
 [1]
 ```
 
