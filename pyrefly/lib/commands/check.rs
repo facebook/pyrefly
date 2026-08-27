@@ -1282,6 +1282,11 @@ impl IncrementalChecker {
             })
     }
 
+    /// Return the number of configured files checked by this checker.
+    pub fn checked_file_count(&self) -> usize {
+        self.handles.len()
+    }
+
     fn prepare_check(&mut self, events: &CategorizedEvents) -> IncrementalCheckTransaction<'_> {
         let mut transaction = self
             .state
