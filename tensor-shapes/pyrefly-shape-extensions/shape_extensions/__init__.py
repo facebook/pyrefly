@@ -15,6 +15,23 @@ don't crash when evaluated by Python.
 import typing
 from dataclasses import dataclass
 
+__all__ = [
+    "D",
+    "Elements",
+    "Int",
+    "IntTuple",
+    "IntVar",
+    "ProxyMethod",
+    "SymbolicArithExpr",
+    "TypeVarTuple",
+    "assert_shape",
+    "broadcast",
+    "defines_assert_shape",
+    "shaped_array",
+    "type_shape_dsl_function",
+    "uses_shape_dsl",
+]
+
 
 def _return_class(cls, params):
     return cls
@@ -130,16 +147,6 @@ class ProxyMethod[T]:
     """Type-checker marker for method forwarding annotations."""
 
     pass
-
-
-def enable_torchscript_runtime_compat() -> None:
-    """Erase shape-only runtime annotations to types TorchScript understands.
-
-    This is a one-way, process-global compatibility mode for legacy TorchScript
-    paths. It intentionally has no disable API for production callers.
-    """
-
-    Int.__class_getitem__ = classmethod(_return_int)
 
 
 @dataclass(frozen=True)

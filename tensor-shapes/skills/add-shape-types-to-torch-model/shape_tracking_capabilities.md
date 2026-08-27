@@ -148,8 +148,12 @@ The `shape_extensions` package is what your port imports. Its public exports:
   `Tensor[[*Elements[Bs], D]]` with `Bs: IntTuple`.
 - **`assert_shape`** — runtime shape assertion (companion to compile-time
   `assert_type`).
-- **`enable_torchscript_runtime_compat`** — call once to make shape annotations
-  survive TorchScript compilation.
+- **`shape_extensions.torchscript`** — import this module instead of
+  `shape_extensions` to make shape annotations survive TorchScript compilation.
+  It re-exports everything `shape_extensions` does, and importing it enables
+  compatibility mode. It must be an import rather than a call because
+  TorchScript reads class attribute annotations out of `__annotations__`, so
+  the mode has to be on before an annotated class body is evaluated.
 - **`shaped_array`** — `@shaped_array(shape=...)` class decorator for non-torch
   array types (numpy-style).
 - **`uses_shape_dsl`**, **`ProxyMethod`**, **`TypeVarTuple`** — stub-authoring
