@@ -31,6 +31,7 @@ use pyrefly_util::telemetry::TelemetryEventKind;
 use tracing::debug;
 use tracing::info;
 
+use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::Server;
@@ -65,6 +66,13 @@ pub enum LspEvent {
     InvalidateConfigFind,
     LspResponse(Response),
     LspRequest(Request),
+    /// A request from an extra TSP connection. It shares the main connection's
+    /// queue so every TSP request is served by one loop, and carries the
+    /// channel its response goes back on.
+    TspExtraRequest {
+        request: Request,
+        response_sender: Sender<Message>,
+    },
     Exit,
 }
 
@@ -129,6 +137,9 @@ impl LspEvent {
             Self::DidSaveNotebookDocument(_) => "DidSaveNotebookDocument".to_owned(),
             Self::LspResponse(_) => "LspResponse".to_owned(),
             Self::LspRequest(request) => format!("LspRequest({})", request.method,),
+            Self::TspExtraRequest { request, .. } => {
+                format!("TspExtraRequest({})", request.method)
+            }
             Self::Exit => "Exit".to_owned(),
         }
     }
@@ -173,7 +184,9 @@ impl LspEvent {
             | Self::DidChangeNotebookDocument(_)
             | Self::InvalidateConfigFind
             | Self::Exit => LspEventKind::Mutation,
-            Self::LspResponse(_) | Self::LspRequest(_) => LspEventKind::Query,
+            Self::LspResponse(_) | Self::LspRequest(_) | Self::TspExtraRequest { .. } => {
+                LspEventKind::Query
+            }
         }
     }
 }
