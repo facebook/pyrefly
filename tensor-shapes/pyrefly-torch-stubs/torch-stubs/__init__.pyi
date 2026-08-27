@@ -17,6 +17,19 @@ from typing import Any, overload, Self, TYPE_CHECKING
 
 import shape_extensions
 from shape_extensions import broadcast, Elements, Flag, IntTuple, IntVar, uses_shape_dsl
+
+# `Generator` is not defined anywhere in this package, and resolving it relies
+# on how a partial stub package is looked up. The `py.typed` file here contains
+# the word `partial`, which tells the type checker this package covers only some
+# of `torch`: for a submodule the package does not define, the checker falls
+# back to the real torch stubs. `torch._C` is one of those, so `Generator` comes
+# from torch itself.
+#
+# That fallback is per-module rather than per-name. A module this package does
+# define shadows torch's version of it outright, so every name belonging at
+# `torch.<name>` must be declared in this file or it will not exist for any code
+# that depends on these stubs, however unrelated to shapes it is.
+from torch._C import Generator
 from torch._shapes import (
     arange_extent,
     arange_step_extent,
@@ -71,6 +84,9 @@ type _AnyShape = tuple[Any, ...]
 
 class device:
     """Represents the device on which a Tensor is or will be allocated."""
+
+    type: str
+    index: builtins.int | None
     def __init__(self, type: str, index: int = 0) -> None: ...
 
 # Dtype constants
@@ -1090,6 +1106,14 @@ class Tensor[Shape: _Shape = _AnyShape]:
 
     def clip(self, min: float | None = None, max: float | None = None) -> Self:
         """Alias for clamp. Shape inference via generic fixture signature."""
+        ...
+
+    def clamp_min(self, min: float) -> Self:
+        """Clamp tensor values from below. Shape inference via generic fixture signature."""
+        ...
+
+    def clamp_max(self, max: float) -> Self:
+        """Clamp tensor values from above. Shape inference via generic fixture signature."""
         ...
 
     # Additional mathematical methods
@@ -2776,4 +2800,32 @@ def meshgrid(*tensors: Tensor, indexing: str = "ij") -> tuple[Tensor, ...]:
     For N input tensors, returns N tensors each with N dimensions.
     Shape inference depends on input tensor shapes; returns shapeless tuple.
     """
+    ...
+
+# The functions below carry no shape information. They are declared because this
+# module shadows torch's own `__init__`, as described at the `torch._C` import
+# above, so omitting them removes them from `torch` for every dependent target.
+def manual_seed(seed: int) -> Generator:
+    """Set the seed for generating random numbers on all devices."""
+    ...
+
+def save(
+    obj: object,
+    f: Any,
+    pickle_module: Any = ...,
+    pickle_protocol: int = ...,
+    _use_new_zipfile_serialization: bool = True,
+) -> None:
+    """Save an object to a file."""
+    ...
+
+def load(
+    f: Any,
+    map_location: Any = None,
+    pickle_module: Any = None,
+    *,
+    weights_only: bool | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Load an object saved with `torch.save`."""
     ...
