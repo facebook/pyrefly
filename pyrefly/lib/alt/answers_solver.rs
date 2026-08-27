@@ -1643,7 +1643,7 @@ impl Scc {
         answer: Arc<dyn Any + Send + Sync>,
         errors: Option<Arc<ErrorCollector>>,
         traces: Option<TraceSideEffects>,
-    ) -> GenerationAnswer {
+    ) -> GenerationAnswer<'_> {
         let state = self
             .node_state
             .get_mut(current)
