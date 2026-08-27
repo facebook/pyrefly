@@ -3122,7 +3122,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) -> Option<DataclassFieldKeywords> {
         let ExprCall {
             node_index: _,
-            range: _,
+            range_start: _,
             func,
             arguments,
         } = call;

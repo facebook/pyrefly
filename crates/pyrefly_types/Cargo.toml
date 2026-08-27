@@ -18,8 +18,8 @@ parse-display = "0.8.2"
 pyrefly_derive = { path = "../pyrefly_derive" }
 pyrefly_python = { path = "../pyrefly_python" }
 pyrefly_util = { path = "../pyrefly_util" }
-ruff_python_ast = "0.0.8"
-ruff_text_size = "0.0.8"
+ruff_python_ast = "0.0.9"
+ruff_text_size = "0.0.9"
 starlark_map = "0.14.2"
 static_assertions = "1.1.0"
 vec1 = { version = "1.12.1", features = ["serde"] }

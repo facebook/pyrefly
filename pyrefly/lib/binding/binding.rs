@@ -124,9 +124,9 @@ assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
 assert_words!(Binding, 4);
-assert_words!(BindingExpect, 14);
+assert_words!(BindingExpect, 13);
 assert_words!(BindingTypeAlias, 6);
-assert_words!(BindingAnnotation, 13);
+assert_words!(BindingAnnotation, 12);
 assert_words!(BindingClass, 10);
 assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
@@ -142,7 +142,7 @@ assert_bytes!(BindingClassSynthesizedFields, 4);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
-assert_words!(BindingDecorator, 11);
+assert_words!(BindingDecorator, 10);
 assert_bytes!(BindingDecoratedFunction, 20);
 assert_words!(BindingUndecoratedFunction, 18);
 

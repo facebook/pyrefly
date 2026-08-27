@@ -2416,7 +2416,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         {
             let input_ty = self.expr_infer(&x.arguments.args[0], errors);
             if let Some(result) =
-                self.try_nn_sequential_chain_forward(cls, input_ty, x.range, errors)
+                self.try_nn_sequential_chain_forward(cls, input_ty, x.range(), errors)
             {
                 return result;
             }
@@ -2428,7 +2428,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // Because we have to construct a binding for super in order to fill in implicit arguments,
             // we can't handle things like local aliases to super. If we hit a case where the binding
             // wasn't constructed, fall back to `Any`.
-            self.get_hashed_opt(Hashed::new(&Key::SuperInstance(x.range)))
+            self.get_hashed_opt(Hashed::new(&Key::SuperInstance(x.range())))
                 .map_or_else(
                     || self.heap.mk_any_implicit(),
                     |type_info| type_info.ty().clone(),

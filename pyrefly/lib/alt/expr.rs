@@ -397,7 +397,7 @@ fn classify_shaped_array_index_type(ty: &Type) -> Option<IndexOp> {
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn synthesized_functional_class_type(&self, call: &ExprCall) -> Option<Type> {
-        let anon_key = Key::Anon(call.range);
+        let anon_key = Key::Anon(call.range());
         let idx = self
             .bindings()
             .key_to_idx_hashed_opt(Hashed::new(&anon_key))?;
@@ -917,7 +917,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     if type_form_context != TypeFormContext::BaseClassList {
                         return self.error(
                             errors,
-                            x.range,
+                            x.range(),
                             ErrorKind::InvalidAnnotation,
                             "Function call cannot be used in annotations".to_owned(),
                         );
@@ -1058,7 +1058,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.check_pytorch_redundant_to_call(x, &callee_ty, errors);
         self.check_sqlalchemy_update_values_call(x, errors);
         if let Some(d) = self.call_to_dict(&callee_ty, &x.arguments) {
-            self.dict_infer(&d, hint, x.range, errors)
+            self.dict_infer(&d, hint, x.range(), errors)
         } else if let Some(ty) = self
             .anonymous_typed_dict_get_or_setdefault_with_literal(
                 &x.func,
@@ -1088,7 +1088,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 self.subscript_infer_for_type_with_key_present(
                     obj_ty.ty(),
                     key_expr,
-                    x.range,
+                    x.range(),
                     errors,
                     true,
                     TypeFormContext::TypeExpression,
@@ -2641,7 +2641,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidSentinel,
                 "Sentinel requires a name as the first argument".to_owned(),
             );
@@ -2719,7 +2719,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if lit.value.to_str() != name.id.as_str() {
                     self.error(
                         errors,
-                        x.range,
+                        x.range(),
                         ErrorKind::InvalidTypeVar,
                         format!(
                             "{construct} must be assigned to a variable named `{}`",
@@ -2839,7 +2839,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if !arg_name {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeVar,
                 "Missing `name` argument".to_owned(),
             );
@@ -2850,7 +2850,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeVar,
                 format!(
                     "Expected at least 2 constraints in {construct} `{}`, got {}",
@@ -2899,7 +2899,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if lit.value.to_str() != name.id.as_str() {
                     self.error(
                         errors,
-                        x.range,
+                        x.range(),
                         ErrorKind::InvalidParamSpec,
                         format!(
                             "ParamSpec must be assigned to a variable named `{}`",
@@ -2967,7 +2967,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if !arg_name {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidParamSpec,
                 "Missing `name` argument".to_owned(),
             );
@@ -2998,7 +2998,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if lit.value.to_str() != name.id.as_str() {
                     self.error(
                         errors,
-                        x.range,
+                        x.range(),
                         ErrorKind::InvalidTypeVarTuple,
                         format!(
                             "TypeVarTuple must be assigned to a variable named `{}`",
@@ -3076,7 +3076,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if !arg_name {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeVarTuple,
                 "Missing `name` argument".to_owned(),
             );

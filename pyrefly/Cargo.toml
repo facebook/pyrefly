@@ -62,12 +62,12 @@ pyrefly_types = { path = "../crates/pyrefly_types" }
 pyrefly_util = { path = "../crates/pyrefly_util" }
 rayon = "1.11.0"
 regex = "1.13.1"
-ruff_annotate_snippets = { package = "ruff_annotate_snippets", version = "0.0.8" }
-ruff_notebook = "0.0.8"
-ruff_python_ast = { version = "0.0.8", features = ["serde"] }
-ruff_python_parser = "0.0.8"
-ruff_source_file = "0.0.8"
-ruff_text_size = "0.0.8"
+ruff_annotate_snippets = { package = "ruff_annotate_snippets", version = "0.0.9" }
+ruff_notebook = "0.0.9"
+ruff_python_ast = { version = "0.0.9", features = ["serde"] }
+ruff_python_parser = "0.0.9"
+ruff_source_file = "0.0.9"
+ruff_text_size = "0.0.9"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = { version = "1.0.151", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 serde_repr = "0.1.21"

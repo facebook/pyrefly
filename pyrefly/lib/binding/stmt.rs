@@ -499,7 +499,7 @@ impl<'a> BindingsBuilder<'a> {
             if let Expr::StringLiteral(lit) = arg {
                 if lit.value.to_str() != name.as_str() {
                     self.error(
-                        x.range,
+                        x.range(),
                         ErrorKind::InvalidTypeAlias,
                         format!(
                             "TypeAliasType must be assigned to a variable named `{}`",
@@ -586,7 +586,7 @@ impl<'a> BindingsBuilder<'a> {
         }
         if !arg_name {
             self.error(
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeAlias,
                 "Missing `name` argument".to_owned(),
             );
@@ -595,7 +595,7 @@ impl<'a> BindingsBuilder<'a> {
             (Some(value), type_params.unwrap_or_default())
         } else {
             self.error(
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeAlias,
                 "Missing `value` argument".to_owned(),
             );
@@ -1674,7 +1674,7 @@ impl<'a> BindingsBuilder<'a> {
                 let Expr::Call(call) = *stmt_expr.value else {
                     unreachable!("guarded by matches! above")
                 };
-                let call_range = call.range;
+                let call_range = call.range();
                 let args = call.arguments.args;
                 let (test, msg) = if args.len() == 1 {
                     (args[0].clone(), None)

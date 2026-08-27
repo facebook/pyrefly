@@ -4784,7 +4784,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         {
             // Validate the annotation but always preserve the special TypeVarTuple type,
             // so that solve_legacy_tparam can recognize it downstream.
-            self.check_type(&ty, want, x.range, errors, &|| {
+            self.check_type(&ty, want, x.range(), errors, &|| {
                 TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(target))
             });
         }
@@ -5996,7 +5996,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 {
                     // Validate the annotation but always preserve the special TypeVar type,
                     // so that solve_legacy_tparam can recognize it downstream.
-                    self.check_type(&ty, want, call.range, errors, &|| {
+                    self.check_type(&ty, want, call.range(), errors, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(target))
                     });
                 }
@@ -6015,7 +6015,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 {
                     // Validate the annotation but always preserve the special ParamSpec type,
                     // so that solve_legacy_tparam can recognize it downstream.
-                    self.check_type(&ty, want, call.range, errors, &|| {
+                    self.check_type(&ty, want, call.range(), errors, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(target))
                     });
                 }
@@ -6198,7 +6198,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     } = self.get_idx(*k)
                 {
                     // Validate the annotation already on assigned name
-                    self.check_type(&ty, want, call.range, errors, &|| {
+                    self.check_type(&ty, want, call.range(), errors, &|| {
                         TypeCheckContext::of_kind(TypeCheckKind::from_annotation_target(target))
                     });
                 }

@@ -1997,7 +1997,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 match &flow.kinds[slot] {
                     DslStaticKind::UnknownParameters(parameters) => {
                         self.expressions.push(TypeShapeDslExpression {
-                            range: call.range,
+                            range: call.range(),
                             kind: TypeShapeDslExpressionKind::IntTupleLength {
                                 shape: slot,
                                 parameter_origins: Some(parameters.clone()),
@@ -2011,7 +2011,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                             TypeShapeDslFlagValueKind::Sequence,
                         )?;
                         self.expressions.push(TypeShapeDslExpression {
-                            range: call.range,
+                            range: call.range(),
                             kind: TypeShapeDslExpressionKind::FlagSequenceLength,
                         });
                     }
@@ -2042,7 +2042,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 self.validate_flag_sequence(&attribute.value, flow)?;
                 self.validate_flag_int(&call.arguments.args[0], flow)?;
                 self.expressions.push(TypeShapeDslExpression {
-                    range: call.range,
+                    range: call.range(),
                     kind: TypeShapeDslExpressionKind::FlagSequenceCount,
                 });
                 Ok(())
@@ -2094,7 +2094,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     self.validate_flag_int(argument, flow)?;
                 }
                 self.expressions.push(TypeShapeDslExpression {
-                    range: call.range,
+                    range: call.range(),
                     kind: TypeShapeDslExpressionKind::FlagRange,
                 });
                 Ok(())
@@ -2117,7 +2117,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 let (binder, binders) =
                     self.validate_generator(generator, flow, GeneratorValidationKind::FlagValue)?;
                 self.expressions.push(TypeShapeDslExpression {
-                    range: call.range,
+                    range: call.range(),
                     kind: TypeShapeDslExpressionKind::FlagGenerator { binder, binders },
                 });
                 Ok(())
@@ -2181,7 +2181,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     self.validate_generator_source(argument, flow, false)?;
                 }
                 self.expressions.push(TypeShapeDslExpression {
-                    range: call.range,
+                    range: call.range(),
                     kind: TypeShapeDslExpressionKind::GeneratorZip {
                         sources: call.arguments.args.len(),
                     },
@@ -2383,7 +2383,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 kind: TypeShapeDslExpressionKind::DimensionGenerator { binder, binders },
             });
             self.expressions.push(TypeShapeDslExpression {
-                range: call.range,
+                range: call.range(),
                 kind: TypeShapeDslExpressionKind::IntTupleConstructor,
             });
             return Ok(());
@@ -2408,7 +2408,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             kind: TypeShapeDslExpressionKind::DimensionTuple,
         });
         self.expressions.push(TypeShapeDslExpression {
-            range: call.range,
+            range: call.range(),
             kind: TypeShapeDslExpressionKind::IntTupleConstructor,
         });
         Ok(())
@@ -2504,7 +2504,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 let left = self.validate_int_tuple_expression(&call.arguments.args[0], flow)?;
                 let right = self.validate_int_tuple_expression(&call.arguments.args[1], flow)?;
                 self.expressions.push(TypeShapeDslExpression {
-                    range: call.range,
+                    range: call.range(),
                     kind: TypeShapeDslExpressionKind::IntTupleConcat,
                 });
                 merge_parameter_origins(left, right)
@@ -2626,7 +2626,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Prod) => {
                 self.validate_int_tuple_product(call, flow)?;
                 self.expressions.push(TypeShapeDslExpression {
-                    range: call.range,
+                    range: call.range(),
                     kind: TypeShapeDslExpressionKind::IntTupleProduct,
                 });
                 Ok(DslStaticKind::Dimension)
@@ -2869,7 +2869,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             let (binder, _) =
                 self.validate_generator(generator, flow, GeneratorValidationKind::Condition)?;
             self.conditions.push(TypeShapeDslCondition {
-                range: call.range,
+                range: call.range(),
                 kind: TypeShapeDslConditionKind::Any { binder },
             });
             return Ok((flow.clone(), flow.clone()));
@@ -3024,7 +3024,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 }
             };
             self.conditions.push(TypeShapeDslCondition {
-                range: call.range,
+                range: call.range(),
                 kind,
             });
             return Ok((when_true, when_false));
@@ -3275,7 +3275,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 Some(TypeShapeDslIntrinsic::Prod) => {
                     self.validate_int_tuple_product(call, flow)?;
                     self.expressions.push(TypeShapeDslExpression {
-                        range: call.range,
+                        range: call.range(),
                         kind: TypeShapeDslExpressionKind::IntTupleProduct,
                     });
                     TypeShapeDslReturnKind::IntTupleProduct

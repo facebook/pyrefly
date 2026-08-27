@@ -809,7 +809,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if !call.arguments.keywords.is_empty() {
             return self.error(
                 errors,
-                call.range,
+                call.range(),
                 ErrorKind::InvalidAnnotation,
                 format!("`{name}` does not accept keyword arguments"),
             );
@@ -831,7 +831,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if call.arguments.args.len() != parameter_domains.len() {
             return self.error(
                 errors,
-                call.range,
+                call.range(),
                 ErrorKind::InvalidAnnotation,
                 format!(
                     "Expected {} {} for `{name}`, got {}",
@@ -938,7 +938,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if !call.arguments.keywords.is_empty() {
             return self.error(
                 errors,
-                call.range,
+                call.range(),
                 ErrorKind::InvalidAnnotation,
                 "`broadcast` does not accept keyword arguments".to_owned(),
             );
@@ -946,7 +946,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if call.arguments.args.len() != 2 {
             return self.error(
                 errors,
-                call.range,
+                call.range(),
                 ErrorKind::InvalidAnnotation,
                 format!(
                     "Expected 2 arguments for `broadcast`, got {}",

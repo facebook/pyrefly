@@ -674,7 +674,7 @@ impl<'a> BindingsBuilder<'a> {
             _ => unreachable!("caller only passes CollectionsNamedTuple or TypingNamedTuple"),
         };
         Some(self.insert_binding(
-            Key::Anon(call.range),
+            Key::Anon(call.range()),
             Binding::ClassDef(class_idx, Box::new([])),
         ))
     }
@@ -932,7 +932,7 @@ impl<'a> BindingsBuilder<'a> {
                 // binding-variant choice — it drives a demand edge to
                 // `target::Exports`.
                 let special = self.as_special_export(&call.func);
-                let call_range = call.range;
+                let call_range = call.range();
                 match special {
                     Some(
                         SpecialExport::CollectionsNamedTuple | SpecialExport::TypingNamedTuple,
