@@ -11,6 +11,7 @@ use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Required;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::type_var::FlagDomain;
+use pyrefly_types::type_var::FlagMember;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::TParamsSource;
@@ -207,11 +208,20 @@ impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
                         param,
                         Param::PosOnly(..) | Param::Pos(..) | Param::KwOnly(..)
                     );
-                    match parameter.annotation() {
-                        Some(Expr::Name(name))
+                    // Scalar sources require direct syntax. Unpacked sources use the resolved type
+                    // so equivalent `Unpack` spellings are treated identically.
+                    match (parameter.annotation(), param) {
+                        (Some(Expr::Name(name)), _)
                             if single_value_parameter && name.id == *tparam.name() =>
                         {
-                            Some((index, name.range()))
+                            Some((index, name.range(), false))
+                        }
+                        (
+                            Some(annotation),
+                            Param::Varargs(_, Type::Unpack(inner)),
+                        ) if matches!(&**inner, Type::Quantified(q) if q.as_ref() == tparam) =>
+                        {
+                            Some((index, annotation.range(), true))
                         }
                         _ => None,
                     }
@@ -230,7 +240,19 @@ impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
                 );
                 continue;
             }
-            let (source_index, source_range) = sources[0];
+            let (source_index, source_range, unpacked) = sources[0];
+            if unpacked && !domain.contains(FlagMember::IntTuple) {
+                self.error(
+                    errors,
+                    source_range,
+                    ErrorKind::InvalidTypeVar,
+                    format!(
+                        "Unpacked parameter binding `Flag[{domain}]` type parameter `{}` requires a domain containing an integer tuple",
+                        tparam.name(),
+                    ),
+                );
+                continue;
+            }
             let runtime_default = match &params[source_index] {
                 Param::PosOnly(_, _, Required::Optional(default))
                 | Param::Pos(_, _, Required::Optional(default))

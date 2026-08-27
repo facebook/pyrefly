@@ -3677,12 +3677,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             TypeCheckCallContext::NoCall => None,
         };
-        let flag_source_context = match (want, call_context) {
-            (Type::Var(var), Some(call_context)) if call_context.is_shape_flag_var_type(want) => {
-                Some(call_context.clone().with_shape_flag_binding_source(*var))
-            }
-            _ => None,
-        };
+        let flag_source_context =
+            call_context.and_then(|context| context.for_shape_flag_binding_source(want));
         let subset_result = self.solver().is_subset_eq(
             got,
             want,

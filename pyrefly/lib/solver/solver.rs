@@ -3261,15 +3261,18 @@ impl<'subset> CallContext<'subset> {
         )
     }
 
-    pub(crate) fn with_shape_flag_binding_source(mut self, var: Var) -> Self {
-        assert!(
-            self.shape_flag_vars
-                .as_ref()
-                .is_some_and(|vars| vars.contains(&var)),
-            "Flag binding source must be a precomputed Flag variable"
-        );
-        self.shape_flag_binding_source = Some(var);
-        self
+    pub(crate) fn for_shape_flag_binding_source(&self, ty: &Type) -> Option<Self> {
+        let Type::Var(var) = ty else {
+            return None;
+        };
+        self.shape_flag_vars
+            .as_ref()
+            .is_some_and(|vars| vars.contains(var))
+            .then(|| {
+                let mut context = self.clone();
+                context.shape_flag_binding_source = Some(*var);
+                context
+            })
     }
 
     fn is_shape_flag_binding_source(&self, var: Var) -> bool {

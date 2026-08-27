@@ -1147,6 +1147,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Type::Tuple(Tuple::Concrete(variadic_collected)),
             );
         }
+        let has_matched_unpacked_vararg = unpacked_vararg.is_some();
         if let Some((unpacked_name, unpacked_param_ty)) = unpacked_vararg {
             let mut prefix = Vec::new();
             let mut middle = Vec::new();
@@ -1231,20 +1232,33 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let unpacked_param_tuple =
                 self.heap
                     .mk_unpacked_tuple(Vec::new(), unpacked_param_ty.clone(), Vec::new());
-            self.check_type_as_call_argument(
-                &unpacked_args_ty,
-                &unpacked_param_tuple,
-                arguments_range,
-                call_errors,
-                &|| {
-                    TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
-                        true,
-                        unpacked_name.cloned(),
-                        callable_name.cloned(),
-                    ))
-                    .with_context(context.map(|ctx| ctx()))
-                },
-            );
+            let check_context = || {
+                TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
+                    true,
+                    unpacked_name.cloned(),
+                    callable_name.cloned(),
+                ))
+                .with_context(context.map(|ctx| ctx()))
+            };
+            if let Some(flag_source_context) =
+                call_context.for_shape_flag_binding_source(unpacked_param_ty)
+            {
+                self.check_type_with_options(
+                    &unpacked_args_ty,
+                    &unpacked_param_tuple,
+                    arguments_range,
+                    TypeCheckOptions::new(call_errors, &check_context)
+                        .with_call_context(&flag_source_context),
+                );
+            } else {
+                self.check_type_as_call_argument(
+                    &unpacked_args_ty,
+                    &unpacked_param_tuple,
+                    arguments_range,
+                    call_errors,
+                    &check_context,
+                );
+            }
         }
         // Missing positional-only arguments, split by whether the corresponding parameters
         // in the callable have names. E.g., functions declared with `def` have named posonly
@@ -1301,9 +1315,34 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     Required::Optional(None) => {}
                 },
-                Param::Varargs(_, Type::Unpack(unpacked)) => {
-                    // If we have a TypeVarTuple *args with no matched arguments, resolve it to empty tuple
-                    self.is_subset_eq(unpacked, &self.heap.mk_concrete_tuple(Vec::new()));
+                Param::Varargs(name, Type::Unpack(unpacked)) => {
+                    // An unmatched Flag vararg still has an authoritative empty-tuple source;
+                    // matched varargs and ordinary TypeVarTuples retain their existing path.
+                    if !has_matched_unpacked_vararg
+                        && let Some(flag_source_context) =
+                            call_context.for_shape_flag_binding_source(unpacked)
+                    {
+                        self.check_type_with_options(
+                            &self.heap.mk_concrete_tuple(Vec::new()),
+                            &self.heap.mk_unpacked_tuple(
+                                Vec::new(),
+                                unpacked.as_ref().clone(),
+                                Vec::new(),
+                            ),
+                            arguments_range,
+                            TypeCheckOptions::new(call_errors, &|| {
+                                TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
+                                    true,
+                                    name.clone(),
+                                    callable_name.cloned(),
+                                ))
+                                .with_context(context.map(|ctx| ctx()))
+                            })
+                            .with_call_context(&flag_source_context),
+                        );
+                    } else {
+                        self.is_subset_eq(unpacked, &self.heap.mk_concrete_tuple(Vec::new()));
+                    }
                 }
                 Param::Varargs(..) => {}
                 Param::Pos(name, ty, required) | Param::KwOnly(name, ty, required) => {

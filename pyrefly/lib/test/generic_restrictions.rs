@@ -31,6 +31,10 @@ from shape_extensions import Flag as ReexportedFlag
         "shape_extensions.torchscript",
         "from shape_extensions import Flag\n",
     );
+    env.add(
+        "unpack_reexport",
+        "from typing import Unpack as ReexportedUnpack\n",
+    );
     env
 }
 
@@ -196,12 +200,87 @@ def wrapped[K: Flag[int]](x: Carrier[K]) -> K: ...  # E: `Flag` type parameter `
 def union_wrapped[K: Flag[int]](x: K | None) -> K: ...  # E: `Flag` type parameter `K` must directly annotate exactly one function parameter, found 0
 def variadic[K: Flag[int]](*args: K) -> K: ...  # E: `Flag` type parameter `K` must directly annotate exactly one function parameter, found 0
 def keywords[K: Flag[int]](**kwargs: K) -> K: ...  # E: `Flag` type parameter `K` must directly annotate exactly one function parameter, found 0
+def invalid_unpacked[K: Flag[int]](*args: *K) -> K: ...  # E: requires a domain containing an integer tuple
+
+def variadic_tuple[Ks: Flag[tuple[int, ...]]](*args: *Ks) -> Ks: ...
+def fixed_tuple[Ks: Flag[tuple[int, int]]](*args: *Ks) -> Ks: ...
+def mixed_domain[Ks: Flag[int | tuple[int, ...]]](*args: *Ks) -> Ks: ...
+
+invalid_unpacked(1, 2)  # E: not a valid `Flag[int]` value
+assert_type(variadic_tuple(), tuple[()])
+assert_type(variadic_tuple(1, 2), tuple[Literal[1], Literal[2]])
+dimensions: tuple[Literal[3], Literal[4]] = (3, 4)
+assert_type(variadic_tuple(*dimensions), tuple[Literal[3], Literal[4]])
+assert_type(fixed_tuple(5, 6), tuple[Literal[5], Literal[6]])
+assert_type(fixed_tuple(), tuple[()])  # E: not a valid `Flag[tuple[int, int]]` value
+assert_type(fixed_tuple(5), tuple[Literal[5]])  # E: not a valid `Flag[tuple[int, int]]` value
+assert_type(fixed_tuple(5, 6, 7), tuple[Literal[5], Literal[6], Literal[7]])  # E: not a valid `Flag[tuple[int, int]]` value
+assert_type(mixed_domain(7, 8), tuple[Literal[7], Literal[8]])
 
 assert_type(multiple(True, True), Literal[True])
 multiple(True, False)  # E: Argument `Literal[False]` is not assignable to parameter `y` with type `Literal[True]`
 
 class Invalid[K: Flag[int]]: ...  # E: `Flag` type parameters are currently supported only on functions
 type InvalidAlias[K: Flag[int]] = K  # E: `Flag` type parameters are currently supported only on functions
+"#,
+);
+
+testcase!(
+    test_non_flag_unpacked_varargs_uses_normal_call_check,
+    flag_env(),
+    r#"
+from shape_extensions import Flag
+from typing import assert_type
+
+def ordinary[*Ts](*args: *Ts) -> tuple[*Ts]: ...
+def ordinary_with_flag[K: Flag[int], *Ts](control: K, *args: *Ts) -> tuple[*Ts]: ...
+
+assert_type(ordinary(1, "x"), tuple[int, str])
+values: tuple[int, str] = (1, "x")
+assert_type(ordinary(*values), tuple[int, str])
+assert_type(ordinary_with_flag(1, "x", 2.0), tuple[str, float])
+"#,
+);
+
+testcase!(
+    test_flag_unpacked_source_is_authoritative,
+    flag_env(),
+    r#"
+from shape_extensions import Flag
+from typing import Literal, assert_type
+
+def variadic_with_witness[Ks: Flag[tuple[int, ...]]](
+    *args: *Ks, witness: list[Ks]
+) -> Ks: ...
+
+matching: list[tuple[Literal[1], Literal[2]]] = [(1, 2)]
+assert_type(
+    variadic_with_witness(1, 2, witness=matching),
+    tuple[Literal[1], Literal[2]],
+)
+
+conflicting: list[tuple[Literal[1], Literal[2], Literal[3]]] = [(1, 2, 3)]
+variadic_with_witness(1, 2, witness=conflicting)  # E: is not assignable to parameter `witness` with type `list[tuple[Literal[1], Literal[2]]]`
+"#,
+);
+
+testcase!(
+    test_flag_explicit_unpack_source_uses_resolved_type,
+    flag_reexport_env(),
+    r#"
+from flag_reexport import ReexportedFlag
+from unpack_reexport import ReexportedUnpack
+from typing import Literal, Unpack, assert_type
+
+def builtin_unpack[Ks: ReexportedFlag[tuple[int, ...]]](
+    *args: Unpack[Ks],
+) -> Ks: ...
+def reexported_unpack[Ks: ReexportedFlag[tuple[int, ...]]](
+    *args: ReexportedUnpack[Ks],
+) -> Ks: ...
+
+assert_type(builtin_unpack(1, 2), tuple[Literal[1], Literal[2]])
+assert_type(reexported_unpack(3, 4), tuple[Literal[3], Literal[4]])
 "#,
 );
 
