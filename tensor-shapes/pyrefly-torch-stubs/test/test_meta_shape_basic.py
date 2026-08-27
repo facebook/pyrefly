@@ -47,7 +47,7 @@ def test_unrefined_stub_surface():
     x: Tensor[[2, 3]] = torch.randn(2, 3)
     lengths: Tensor[[2]] = torch.randn(2)
 
-    assert_type(F.mse_loss(input=x, target=x), Tensor)
+    assert_type(F.mse_loss(input=x, target=x), Tensor[[]])
     assert_type(torch.equal(x, x), bool)
     assert_type(int(x[0][0]), int)
     assert_type(len(x), int)

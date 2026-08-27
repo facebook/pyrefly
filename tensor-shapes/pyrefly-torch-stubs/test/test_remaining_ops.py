@@ -77,12 +77,9 @@ def test_cross_entropy[N: IntVar, C: IntVar](
 def test_cross_entropy_no_reduction[N: IntVar, C: IntVar](
     input: Tensor[[N, C]], target: Tensor[[N]]
 ):
-    """Cross entropy with no reduction preserves self shape"""
+    """Cross entropy with no reduction scores the class dimension away"""
     loss = F.cross_entropy(input, target, reduction="none")
-    # reduction="none" preserves the input (self) shape.
-    # PyTorch actually returns Tensor[[N]] for cross_entropy, but our meta-shape
-    # uses a single loss_ir for all loss functions and preserves self's shape.
-    assert_type(loss, Tensor[[N, C]])
+    assert_type(loss, Tensor[[N]])
 
 
 def test_nll_loss[N: IntVar, C: IntVar](input: Tensor[[N, C]], target: Tensor[[N]]):

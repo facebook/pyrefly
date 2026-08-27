@@ -869,11 +869,92 @@ def interpolate_ir(
         )
     raise Error("interpolate requires either 'size' or 'scale_factor' argument")
 
-@shape_dsl_function
-def loss_ir(self: ShapedArray, reduction: str = "mean") -> ShapedArray:
-    if reduction == "none":
-        return ShapedArray(shape=self.shape)
-    return ShapedArray(shape=[])
+# Reduction precedence shared by every `torch.nn.functional` loss: the legacy
+# `reduce`/`size_average` flags override `reduction`, in that order. `unreduced_shape`
+# is the loss family's result before reduction; it is not necessarily the input shape.
+@type_shape_dsl_function
+def loss_shape(
+    unreduced_shape: IntTuple,
+    reduction: str,
+    size_average: bool | None,
+    reduce: bool | None,
+) -> IntTuple:
+    if reduce is None:
+        if size_average is None:
+            if reduction == "none":
+                return unreduced_shape
+            if reduction == "mean" or reduction == "sum":
+                return dsl.IntTuple(())
+            return dsl.Invalid("loss reduction must be 'none', 'mean', or 'sum'")
+        return dsl.IntTuple(())
+    if not reduce:
+        return unreduced_shape
+    return dsl.IntTuple(())
+
+# NLL and cross-entropy score one class dimension away: `(N, C, *D)` becomes `(N, *D)`,
+# and an unbatched `(C,)` input becomes a scalar.
+@type_shape_dsl_function
+def classification_loss_shape(
+    input_shape: IntTuple,
+    reduction: str,
+    size_average: bool | None,
+    reduce: bool | None,
+) -> IntTuple:
+    if len(input_shape) == 0:
+        return dsl.Invalid("classification loss requires a class dimension")
+    if len(input_shape) == 1:
+        scalar = dsl.IntTuple(())
+        return loss_shape(scalar, reduction, size_average, reduce)
+    scored = dsl.concat(input_shape[:1], input_shape[2:])
+    return loss_shape(scored, reduction, size_average, reduce)
+
+# Pairwise distance broadcasts its operands, then removes the trailing feature dimension.
+@type_shape_dsl_function
+def pairwise_distance_shape(
+    left_shape: IntTuple, right_shape: IntTuple, broadcast_shape: IntTuple
+) -> IntTuple:
+    if len(left_shape) == 0:
+        return dsl.Invalid("triplet_margin_loss requires at least 1D input")
+    if len(left_shape) != len(right_shape):
+        return dsl.Invalid("triplet_margin_loss inputs must have the same rank")
+    return broadcast_shape[:-1]
+
+# Cosine-embedding loss accepts either two vectors with a scalar target or two
+# matrices with a one-dimensional target.
+@type_shape_dsl_function
+def cosine_embedding_score_shape(
+    input1_shape: IntTuple,
+    input2_shape: IntTuple,
+    broadcast_shape: IntTuple,
+    target_shape: IntTuple,
+) -> IntTuple:
+    if len(input1_shape) != len(input2_shape):
+        return dsl.Invalid("cosine_embedding_loss inputs must have the same rank")
+    if len(input1_shape) == 1:
+        if len(target_shape) != 0:
+            return dsl.Invalid(
+                "cosine_embedding_loss requires a scalar target for 1D inputs"
+            )
+    elif len(input1_shape) == 2:
+        if len(target_shape) != 1:
+            return dsl.Invalid(
+                "cosine_embedding_loss requires a 1D target for 2D inputs"
+            )
+    else:
+        return dsl.Invalid("cosine_embedding_loss requires 1D or 2D inputs")
+    return broadcast_shape[:-1]
+
+# KL divergence adds `batchmean`, which is always a scalar.
+@type_shape_dsl_function
+def kl_div_loss_shape(
+    input_shape: IntTuple,
+    reduction: str,
+    size_average: bool | None,
+    reduce: bool | None,
+) -> IntTuple:
+    if reduce is None and size_average is None and reduction == "batchmean":
+        return dsl.IntTuple(())
+    return loss_shape(input_shape, reduction, size_average, reduce)
 
 @shape_dsl_function
 def pad_ir(self: ShapedArray, pad: list[int]) -> ShapedArray:

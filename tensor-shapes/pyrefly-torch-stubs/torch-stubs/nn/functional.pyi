@@ -15,12 +15,16 @@ import shape_extensions
 from shape_extensions import Elements, Flag, IntTuple, IntVar, uses_shape_dsl
 from torch._shapes import (
     adaptive_pool_ir,
+    classification_loss_shape,
     conv_shape,
     conv_transpose_shape,
+    cosine_embedding_score_shape,
     cosine_similarity_shape,
     interpolate_ir,
-    loss_ir,
+    kl_div_loss_shape,
+    loss_shape,
     pad_ir,
+    pairwise_distance_shape,
     pool_ir,
 )
 
@@ -646,190 +650,331 @@ def logsigmoid[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
 # Phase 6: Loss Functions
 # ==============================================================================
 
-@uses_shape_dsl(loss_ir)
-@overload
-def mse_loss(
-    self: Tensor,
-    target: Tensor,
-    size_average: bool | None = None,
-    reduce: bool | None = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Mean squared error loss. Shape inference via meta-shape: torch.nn.functional.mse_loss"""
+def mse_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Mean squared error loss. Shape inference via type-level DSL."""
     ...
 
-@overload
-def mse_loss(
-    *,
-    input: Tensor,
-    target: Tensor,
-    size_average: bool | None = None,
-    reduce: bool | None = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Mean squared error loss. Keyword form is accepted but not shape-refined."""
+def l1_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """L1 loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def l1_loss(
-    self: Tensor,
+def nll_loss[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
     target: Tensor,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """L1 loss. Shape inference via meta-shape: torch.nn.functional.l1_loss"""
-    ...
-
-@uses_shape_dsl(loss_ir)
-def nll_loss(
-    self: Tensor,
-    target: Tensor,
-    weight: Tensor = None,
-    size_average: bool = None,
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
     ignore_index: int = -100,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Negative log likelihood loss. Shape inference via meta-shape: torch.nn.functional.nll_loss"""
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[classification_loss_shape(InputShape, Reduction, SizeAverage, Reduce)]:
+    """Negative log likelihood loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def cross_entropy(
-    self: Tensor,
+def cross_entropy[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
     target: Tensor,
-    weight: Tensor = None,
-    size_average: bool = None,
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
     ignore_index: int = -100,
-    reduce: bool = None,
-    reduction: str = "mean",
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
     label_smoothing: float = 0.0,
-) -> Tensor:
-    """Cross entropy loss. Shape inference via meta-shape: torch.nn.functional.cross_entropy"""
+) -> Tensor[classification_loss_shape(InputShape, Reduction, SizeAverage, Reduce)]:
+    """Cross entropy loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def binary_cross_entropy(
-    self: Tensor,
-    target: Tensor,
-    weight: Tensor = None,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Binary cross entropy loss. Shape inference via meta-shape: torch.nn.functional.binary_cross_entropy"""
+def binary_cross_entropy[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[InputShape],
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[loss_shape(InputShape, Reduction, SizeAverage, Reduce)]:
+    """Binary cross entropy loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def binary_cross_entropy_with_logits(
-    self: Tensor,
-    target: Tensor,
-    weight: Tensor = None,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-    pos_weight: Tensor = None,
-) -> Tensor:
-    """Binary cross entropy with logits. Shape inference via meta-shape: torch.nn.functional.binary_cross_entropy_with_logits"""
+def binary_cross_entropy_with_logits[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[InputShape],
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+    pos_weight: Tensor | None = None,
+) -> Tensor[loss_shape(InputShape, Reduction, SizeAverage, Reduce)]:
+    """Binary cross entropy with logits. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def kl_div(
-    self: Tensor,
-    target: Tensor,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
+def kl_div[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
     log_target: bool = False,
-) -> Tensor:
-    """KL divergence loss. Shape inference via meta-shape: torch.nn.functional.kl_div"""
+) -> Tensor[
+    kl_div_loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """KL divergence loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def smooth_l1_loss(
-    self: Tensor,
-    target: Tensor,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
+def smooth_l1_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
     beta: float = 1.0,
-) -> Tensor:
-    """Smooth L1 loss. Shape inference via meta-shape: torch.nn.functional.smooth_l1_loss"""
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Smooth L1 loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def huber_loss(
-    self: Tensor, target: Tensor, reduction: str = "mean", delta: float = 1.0
-) -> Tensor:
-    """Huber loss. Shape inference via meta-shape: torch.nn.functional.huber_loss"""
+def huber_loss[InputShape: IntTuple, TargetShape: IntTuple, Reduction: Flag[str]](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    reduction: Reduction = "mean",
+    delta: float = 1.0,
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape), Reduction, None, None
+    )
+]:
+    """Huber loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def poisson_nll_loss(
-    self: Tensor,
-    target: Tensor,
+def poisson_nll_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
     log_input: bool = True,
     full: bool = False,
-    size_average: bool = None,
+    size_average: SizeAverage = None,
     eps: float = 1e-8,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Poisson NLL loss. Shape inference via meta-shape: torch.nn.functional.poisson_nll_loss"""
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Poisson NLL loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def cosine_embedding_loss(
-    self: Tensor,
-    input2: Tensor,
-    target: Tensor,
+def cosine_embedding_loss[
+    Input1Shape: IntTuple,
+    Input2Shape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input1: Tensor[Input1Shape],
+    input2: Tensor[Input2Shape],
+    target: Tensor[TargetShape],
     margin: float = 0.0,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Cosine embedding loss. Shape inference via meta-shape: torch.nn.functional.cosine_embedding_loss"""
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(
+            cosine_embedding_score_shape(
+                Input1Shape,
+                Input2Shape,
+                shape_extensions.broadcast(Input1Shape, Input2Shape),
+                TargetShape,
+            ),
+            TargetShape,
+        ),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Cosine embedding loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def margin_ranking_loss(
-    self: Tensor,
-    input2: Tensor,
-    target: Tensor,
+def margin_ranking_loss[
+    Input1Shape: IntTuple,
+    Input2Shape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input1: Tensor[Input1Shape],
+    input2: Tensor[Input2Shape],
+    target: Tensor[TargetShape],
     margin: float = 0.0,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Margin ranking loss. Shape inference via meta-shape: torch.nn.functional.margin_ranking_loss"""
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(
+            shape_extensions.broadcast(Input1Shape, Input2Shape), TargetShape
+        ),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Margin ranking loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def triplet_margin_loss(
-    self: Tensor,
-    positive: Tensor,
-    negative: Tensor,
+def triplet_margin_loss[
+    AnchorShape: IntTuple,
+    PositiveShape: IntTuple,
+    NegativeShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    anchor: Tensor[AnchorShape],
+    positive: Tensor[PositiveShape],
+    negative: Tensor[NegativeShape],
     margin: float = 1.0,
     p: float = 2.0,
     eps: float = 1e-6,
     swap: bool = False,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Triplet margin loss. Shape inference via meta-shape: torch.nn.functional.triplet_margin_loss"""
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(
+            pairwise_distance_shape(
+                AnchorShape,
+                PositiveShape,
+                shape_extensions.broadcast(AnchorShape, PositiveShape),
+            ),
+            pairwise_distance_shape(
+                AnchorShape,
+                NegativeShape,
+                shape_extensions.broadcast(AnchorShape, NegativeShape),
+            ),
+        ),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Triplet margin loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def hinge_embedding_loss(
-    self: Tensor,
-    target: Tensor,
+def hinge_embedding_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
     margin: float = 1.0,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Hinge embedding loss. Shape inference via meta-shape: torch.nn.functional.hinge_embedding_loss"""
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Hinge embedding loss. Shape inference via type-level DSL."""
     ...
 
 # Padding operation
