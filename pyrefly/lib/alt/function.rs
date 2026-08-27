@@ -488,7 +488,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         type_shape_dsl_def: Option<Arc<ParsedTypeShapeDslFunction>>,
         uses_shape_dsl_ir_name: Option<ShortIdentifier>,
         errors: &ErrorCollector,
-    ) -> Arc<UndecoratedFunction> {
+    ) -> UndecoratedFunction {
         let defining_cls = class_key.and_then(|k| self.get_idx(*k).0.dupe());
         let is_top_level_function = defining_cls.is_none();
         let mut self_type = defining_cls
@@ -642,7 +642,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .iter()
             .filter_map(|key| self.get_idx(*key).parameter().cloned());
         tparams.extend(legacy_tparams);
-        let tparams = self.validated_tparams(def.range, tparams, TParamsSource::Function, errors);
+        let tparams =
+            Arc::new(self.validated_tparams(def.range, tparams, TParamsSource::Function, errors));
         let func_id = Arc::new(FuncDefId {
             qname: QName::new(def.name.clone(), parent.dupe(), self.module().dupe()),
             cls: defining_cls.clone(),
@@ -698,7 +699,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         flags.has_gradual_variadic_params = params_are_gradual_variadic(&params);
         let metadata = FuncMetadata::new(kind, flags);
 
-        Arc::new(UndecoratedFunction {
+        UndecoratedFunction {
             def_index,
             identifier: ShortIdentifier::new(&def.name),
             metadata,
@@ -710,7 +711,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             defining_cls,
             type_shape_dsl_def,
             resolved_param_types,
-        })
+        }
     }
 
     pub fn decorated_function_type(
@@ -718,7 +719,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         def: &UndecoratedFunction,
         stmt: &FunctionDefData,
         errors: &ErrorCollector,
-    ) -> Arc<Type> {
+    ) -> Type {
         let ret = self
             .get(&Key::ReturnType(ShortIdentifier::new(&stmt.name)))
             .ty()
@@ -976,7 +977,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             },
             errors,
         );
-        Arc::new(ty)
+        ty
     }
 
     pub fn get_special_decorator<'a>(

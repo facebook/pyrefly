@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::is_python_identifier;
 use pyrefly_types::callable::Callable;
@@ -603,7 +601,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         binding: &BindingDjangoRelations,
         _range: TextRange,
         _errors: &ErrorCollector,
-    ) -> Arc<DjangoReverseRelationIndex> {
+    ) -> DjangoReverseRelationIndex {
         let mut per_class = SmallMap::new();
 
         for candidate_class in &binding.classes {
@@ -669,7 +667,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             reverse_relations.insert_hashed(class, ClassSynthesizedFields::new(fields));
         }
 
-        Arc::new(DjangoReverseRelationIndex::new(reverse_relations))
+        DjangoReverseRelationIndex::new(reverse_relations)
     }
 
     fn django_relation_kind(&self, expr: &Expr) -> Option<DjangoRelationKind> {

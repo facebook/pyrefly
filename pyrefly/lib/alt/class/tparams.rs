@@ -37,7 +37,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         name: &Identifier,
         scoped_type_params: Option<&TypeParams>,
         errors: &ErrorCollector,
-    ) -> Arc<TParams> {
+    ) -> TParams {
         let scoped_tparams = self.scoped_type_params(scoped_type_params, errors);
         self.validated_tparams(name.range, scoped_tparams, TParamsSource::Class, errors)
     }
@@ -49,7 +49,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         generic_bases: &[BaseClassGeneric],
         legacy: &[Idx<KeyLegacyTypeParam>],
         errors: &ErrorCollector,
-    ) -> Arc<TParams> {
+    ) -> TParams {
         let scoped_tparams = self.scoped_type_params(scoped_type_params, errors);
         let legacy_tparams = legacy
             .iter()

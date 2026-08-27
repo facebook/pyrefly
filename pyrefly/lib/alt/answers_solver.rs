@@ -2663,8 +2663,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // SCC iterations continue to own independent answers. Preserving
             // aliases here would require identifying the fully forced target
             // from the final generation and retaining that allocation.
-            let raw_answer =
-                solve_result.into_answer(|target| Arc::new(self.get_idx(target).clone()));
+            let raw_answer = solve_result.into_answer(|target| self.get_idx(target).clone());
             // Became an SCC member during computation: an SCC was discovered by
             // a dependency chain during K::solve above, and this node is now in
             // the top SCC's node_state. Store the answer in SCC-local state for
@@ -2680,7 +2679,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 raw_answer
             };
             self.sanitize_answer_vars::<K>(&answer, range, &local_errors);
-            let answer = self.force_exported_answer::<K>(answer);
+            let answer = Arc::new(self.force_exported_answer::<K>(answer));
             // Also store in SccNodeState::Done for SCC-local isolation (the SCC
             // uses these answers via SccLocalAnswer without touching shared slots).
             let answer_erased: Arc<dyn Any + Send + Sync> = Arc::new(answer);
@@ -2705,7 +2704,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 SolveResult::Answer(raw_answer) => {
                     self.sanitize_answer_vars::<K>(&raw_answer, range, &local_errors);
                     let raw_answer = self.force_exported_answer::<K>(raw_answer);
-                    slot.record(raw_answer)
+                    slot.record(Arc::new(raw_answer))
                 }
                 // The target was sanitized and forced when it was recorded, so
                 // sharing its answer needs neither step repeated.
@@ -2722,14 +2721,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    fn force_exported_answer<K: Solve<Ans>>(&self, answer: Arc<K::Answer>) -> Arc<K::Answer> {
+    fn force_exported_answer<K: Solve<Ans>>(&self, mut answer: K::Answer) -> K::Answer {
         if K::EXPORTED {
-            let mut forced = Arc::unwrap_or_clone(answer);
-            forced.visit_mut(&mut |ty| self.current.solver().force_mut(ty));
-            Arc::new(forced)
-        } else {
-            answer
+            answer.visit_mut(&mut |ty| self.current.solver().force_mut(ty));
         }
+        answer
     }
 
     fn sanitize_answer_vars<K: Solve<Ans>>(
@@ -2881,7 +2877,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Preserving sharing would require identifying the fully forced target
         // from the final generation and keeping that allocation alive.
         let raw_answer = K::solve(self, binding, range, &local_errors)
-            .into_answer(|target| Arc::new(self.get_idx(target).clone()));
+            .into_answer(|target| self.get_idx(target).clone());
 
         // Take accumulated traces. Discard during cold iteration (like errors).
         let trace_side_effects = if tracing_enabled {
@@ -2912,7 +2908,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Deep-force the answer to resolve all type variables. This is required
         // for convergence comparisons: without forcing, structurally identical
         // answers can appear different due to unresolved Var IDs.
-        let mut forced = Arc::unwrap_or_clone(answer);
+        let mut forced = answer;
         forced.visit_mut(&mut |x| self.current.solver().force_mut(x));
         let answer = Arc::new(forced);
 
@@ -3365,11 +3361,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ///   some kinds of cycles, particularly those coming from LoopPhi
     /// - force the recursive var if necessary; we skip Var::ZERO (which is an unforcable
     ///   placeholder used by some kinds of bindings that aren't Types) in this step.
-    fn finalize_recursive_answer<K: Solve<Ans>>(
-        &self,
-        var: Var,
-        answer: Arc<K::Answer>,
-    ) -> Arc<K::Answer>
+    fn finalize_recursive_answer<K: Solve<Ans>>(&self, var: Var, answer: K::Answer) -> K::Answer
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,

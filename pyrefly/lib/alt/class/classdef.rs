@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::sync::Arc;
+
 use dupe::Dupe;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_types::callable::Callable;
@@ -81,7 +83,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if tparams.is_empty() {
                 PrecomputedTParams::NotGeneric
             } else {
-                PrecomputedTParams::Precomputed(tparams)
+                PrecomputedTParams::Precomputed(Arc::new(tparams))
             }
         };
         Class::new(

@@ -95,7 +95,7 @@ use crate::types::types::Type;
 use crate::types::types::Var;
 
 pub enum SolveResult<K: Keyed> {
-    Answer(Arc<K::Answer>),
+    Answer(K::Answer),
     /// The same answer as another binding, whose result slot already holds it.
     /// Constructing this variant requires having observed that publication, so
     /// the answer can be shared instead of copied.
@@ -103,10 +103,7 @@ pub enum SolveResult<K: Keyed> {
 }
 
 impl<K: Keyed> SolveResult<K> {
-    pub(crate) fn into_answer(
-        self,
-        resolve_alias: impl FnOnce(Idx<K>) -> Arc<K::Answer>,
-    ) -> Arc<K::Answer> {
+    pub(crate) fn into_answer(self, resolve_alias: impl FnOnce(Idx<K>) -> K::Answer) -> K::Answer {
         match self {
             Self::Answer(answer) => answer,
             Self::Alias(target) => resolve_alias(target),
@@ -139,9 +136,9 @@ pub trait Solve<Ans: LookupAnswer>: Keyed {
     /// Record that recursive value along with the answer.
     fn record_recursive(
         _answers: &AnswersSolver<Ans>,
-        answer: Arc<Self::Answer>,
+        answer: Self::Answer,
         _recursive: Var,
-    ) -> Arc<Self::Answer> {
+    ) -> Self::Answer {
         answer
     }
 
@@ -181,13 +178,10 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
 
     fn record_recursive(
         answers: &AnswersSolver<Ans>,
-        answer: Arc<TypeInfo>,
+        answer: TypeInfo,
         recursive: Var,
-    ) -> Arc<TypeInfo> {
-        let ty_info = answer
-            .arc_clone()
-            .map_ty(|ty| answers.record_recursive(ty, recursive));
-        Arc::new(ty_info)
+    ) -> TypeInfo {
+        answer.map_ty(|ty| answers.record_recursive(ty, recursive))
     }
 
     fn check_shortcut(answers: &AnswersSolver<Ans>, binding: &Binding) -> Option<Arc<TypeInfo>> {
@@ -264,9 +258,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
                 Binding::AnnotatedType(*ann, Box::new(Binding::Forward(*idx)))
             }
         };
-        SolveResult::Answer(Arc::new(
-            answers.solve_binding(&inner, range, errors).arc_clone_ty(),
-        ))
+        SolveResult::Answer(answers.solve_binding(&inner, range, errors).into_ty())
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
@@ -338,7 +330,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyUndecoratedFunctionRange {
         _range: TextRange,
         _errors: &ErrorCollector,
     ) -> SolveResult<Self> {
-        SolveResult::Answer(Arc::new(UndecoratedFunctionRangeAnswer(binding.0)))
+        SolveResult::Answer(UndecoratedFunctionRangeAnswer(binding.0))
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
@@ -526,7 +518,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyAbstractClassCheck {
         let answer = if let Some(cls) = &answers.get_idx(binding.class_idx).0 {
             answers.solve_abstract_members(cls, errors)
         } else {
-            Arc::new(AbstractClassMembers::recursive().clone())
+            AbstractClassMembers::recursive().clone()
         };
         SolveResult::Answer(answer)
     }
@@ -544,9 +536,9 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassSubscriptSymmetry {
         _errors: &ErrorCollector,
     ) -> SolveResult<Self> {
         let answer = if let Some(cls) = &answers.get_idx(binding.class_idx).0 {
-            Arc::new(answers.calculate_subscript_symmetry(cls))
+            answers.calculate_subscript_symmetry(cls)
         } else {
-            Arc::new(true)
+            true
         };
         SolveResult::Answer(answer)
     }

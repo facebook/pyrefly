@@ -1930,8 +1930,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let initialization = ClassFieldInitialization::ClassBody(None);
                 // Evaluate the binding directly without analyzing inherited annotations
                 let binding = Binding::Forward(*definition);
-                let value_ty =
-                    Arc::unwrap_or_clone(self.solve_binding(&binding, range, errors)).into_ty();
+                let value_ty = self.solve_binding(&binding, range, errors).into_ty();
                 if let Binding::Function { decorated_idx, .. } = self.bindings().get(*definition) {
                     let binding = self.bindings().get(*decorated_idx);
                     descriptor_is_override = self
@@ -1953,8 +1952,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // Evaluate the binding directly without analyzing inherited annotations
                 let initialization = ClassFieldInitialization::ClassBody(None);
                 let binding = Binding::Forward(*definition);
-                let value_ty =
-                    Arc::unwrap_or_clone(self.solve_binding(&binding, range, errors)).into_ty();
+                let value_ty = self.solve_binding(&binding, range, errors).into_ty();
                 (
                     initialization,
                     false,
@@ -3068,9 +3066,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     _ => self.attribute_expr_infer(e, inherited_annotation.as_ref(), name, errors),
                 }
             }
-            ExprOrBinding::Binding(b) => {
-                Arc::unwrap_or_clone(self.solve_binding(b, range, errors)).into_ty()
-            }
+            ExprOrBinding::Binding(b) => self.solve_binding(b, range, errors).into_ty(),
         };
         // Note that we use `final_annotation`'s `ty` rather than `inherited_ty`
         // because we only want to override the `inferred_ty` when there's an inherited
