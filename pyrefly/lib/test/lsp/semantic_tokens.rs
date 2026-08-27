@@ -6,10 +6,12 @@
  */
 
 use pretty_assertions::assert_eq;
+use pyrefly_python::sys_info::PythonVersion;
 
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
-use crate::test::util::mk_multi_file_state_assert_no_errors;
+use crate::test::util::TestEnv;
+use crate::test::util::mk_multi_file_state_with_env;
 
 fn utf16_to_byte_index(line: &str, utf16_offset: usize) -> usize {
     if utf16_offset == 0 {
@@ -37,7 +39,21 @@ fn assert_full_semantic_tokens_with_syntax(
     include_syntax_tokens: bool,
     expected: &str,
 ) {
-    let (handles, state) = mk_multi_file_state_assert_no_errors(files, Require::Exports);
+    assert_full_semantic_tokens_with_syntax_and_env(
+        files,
+        include_syntax_tokens,
+        TestEnv::new(),
+        expected,
+    );
+}
+
+fn assert_full_semantic_tokens_with_syntax_and_env(
+    files: &[(&'static str, &str)],
+    include_syntax_tokens: bool,
+    test_env: TestEnv,
+    expected: &str,
+) {
+    let (handles, state) = mk_multi_file_state_with_env(test_env, files, Require::Exports, true);
     let mut report = String::new();
     for (name, code) in files {
         report.push_str("# ");
@@ -203,6 +219,179 @@ token-type: string
 }
 
 #[test]
+fn string_kind_syntax_tokens_test() {
+    let code = r#"b"bytes"
+r"raw"
+br"raw bytes"
+u"unicode"
+f"value:{1}"
+rf"raw value:{1}"
+"plain" "concatenated"
+f"""first
+{1}
+last"""
+"#;
+    assert_full_semantic_tokens_with_syntax(
+        &[("main", code)],
+        true,
+        r#"
+# main.py
+line: 0, column: 0, length: 1, text: b
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 0, column: 1, length: 7, text: "bytes"
+token-type: string, token-modifiers: [byteString]
+
+line: 1, column: 0, length: 1, text: r
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 1, column: 1, length: 5, text: "raw"
+token-type: string, token-modifiers: [rawString]
+
+line: 2, column: 0, length: 2, text: br
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 2, column: 2, length: 11, text: "raw bytes"
+token-type: string, token-modifiers: [byteStringrawString]
+
+line: 3, column: 0, length: 1, text: u
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 3, column: 1, length: 9, text: "unicode"
+token-type: string
+
+line: 4, column: 0, length: 1, text: f
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 4, column: 1, length: 1, text: "
+token-type: string, token-modifiers: [formatString]
+
+line: 4, column: 2, length: 6, text: value:
+token-type: string, token-modifiers: [formatString]
+
+line: 4, column: 8, length: 1, text: {
+token-type: operator
+
+line: 4, column: 9, length: 1, text: 1
+token-type: number
+
+line: 4, column: 10, length: 1, text: }
+token-type: operator
+
+line: 4, column: 11, length: 1, text: "
+token-type: string, token-modifiers: [formatString]
+
+line: 5, column: 0, length: 2, text: rf
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 5, column: 2, length: 1, text: "
+token-type: string, token-modifiers: [formatStringrawString]
+
+line: 5, column: 3, length: 10, text: raw value:
+token-type: string, token-modifiers: [formatStringrawString]
+
+line: 5, column: 13, length: 1, text: {
+token-type: operator
+
+line: 5, column: 14, length: 1, text: 1
+token-type: number
+
+line: 5, column: 15, length: 1, text: }
+token-type: operator
+
+line: 5, column: 16, length: 1, text: "
+token-type: string, token-modifiers: [formatStringrawString]
+
+line: 6, column: 0, length: 7, text: "plain"
+token-type: string
+
+line: 6, column: 8, length: 14, text: "concatenated"
+token-type: string
+
+line: 7, column: 0, length: 1, text: f
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 7, column: 1, length: 3, text: """
+token-type: string, token-modifiers: [formatString]
+
+line: 7, column: 4, length: 5, text: first
+token-type: string, token-modifiers: [formatString]
+
+line: 8, column: 0, length: 1, text: {
+token-type: operator
+
+line: 8, column: 1, length: 1, text: 1
+token-type: number
+
+line: 8, column: 2, length: 1, text: }
+token-type: operator
+
+line: 9, column: 0, length: 4, text: last
+token-type: string, token-modifiers: [formatString]
+
+line: 9, column: 4, length: 3, text: """
+token-type: string, token-modifiers: [formatString]
+"#,
+    );
+}
+
+#[test]
+fn template_string_kind_syntax_tokens_test() {
+    let code = r#"t"value:{1}"
+tr"raw:{1}"
+"#;
+    assert_full_semantic_tokens_with_syntax_and_env(
+        &[("main", code)],
+        true,
+        TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+        r#"
+# main.py
+line: 0, column: 0, length: 1, text: t
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 0, column: 1, length: 1, text: "
+token-type: string, token-modifiers: [templateString]
+
+line: 0, column: 2, length: 6, text: value:
+token-type: string, token-modifiers: [templateString]
+
+line: 0, column: 8, length: 1, text: {
+token-type: operator
+
+line: 0, column: 9, length: 1, text: 1
+token-type: number
+
+line: 0, column: 10, length: 1, text: }
+token-type: operator
+
+line: 0, column: 11, length: 1, text: "
+token-type: string, token-modifiers: [templateString]
+
+line: 1, column: 0, length: 2, text: tr
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 1, column: 2, length: 1, text: "
+token-type: string, token-modifiers: [rawStringtemplateString]
+
+line: 1, column: 3, length: 4, text: raw:
+token-type: string, token-modifiers: [rawStringtemplateString]
+
+line: 1, column: 7, length: 1, text: {
+token-type: operator
+
+line: 1, column: 8, length: 1, text: 1
+token-type: number
+
+line: 1, column: 9, length: 1, text: }
+token-type: operator
+
+line: 1, column: 10, length: 1, text: "
+token-type: string, token-modifiers: [rawStringtemplateString]
+"#,
+    );
+}
+
+#[test]
 fn soft_keyword_syntax_tokens_test() {
     let code = r#"match = 1
 case = match
@@ -260,6 +449,72 @@ token-type: operator
 
 line: 5, column: 8, length: 4, text: pass
 token-type: keyword
+"#,
+    );
+}
+
+#[test]
+fn pattern_capture_test() {
+    let code = r#"
+class Foo:
+    child: int
+def unpack(value):
+    match value:
+        case [head, *tail]:
+            return head, tail
+        case Foo(child=c):
+            return c
+        case [_, *_]:
+            return value
+"#;
+    // Capture names (`head`, `tail`, `c`) are plain variables. The class-pattern keyword
+    // `child` (the matched attribute name) and the wildcards `_` / `*_` produce no tokens,
+    // while the class name `Foo` in a pattern is tokenized as a class.
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 6, length: 3, text: Foo
+token-type: class
+
+line: 2, column: 4, length: 5, text: child
+token-type: variable
+
+line: 2, column: 11, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 3, column: 4, length: 6, text: unpack
+token-type: function
+
+line: 3, column: 11, length: 5, text: value
+token-type: parameter
+
+line: 4, column: 10, length: 5, text: value
+token-type: parameter
+
+line: 5, column: 14, length: 4, text: head
+token-type: variable
+
+line: 5, column: 21, length: 4, text: tail
+token-type: variable
+
+line: 6, column: 19, length: 4, text: head
+token-type: variable
+
+line: 6, column: 25, length: 4, text: tail
+token-type: variable
+
+line: 7, column: 13, length: 3, text: Foo
+token-type: class
+
+line: 7, column: 23, length: 1, text: c
+token-type: variable
+
+line: 8, column: 19, length: 1, text: c
+token-type: variable
+
+line: 10, column: 19, length: 5, text: value
+token-type: parameter
 "#,
     );
 }
@@ -347,6 +602,121 @@ token-type: class
 
 line: 12, column: 13, length: 3, text: bar
 token-type: method
+"#,
+    );
+}
+
+#[test]
+fn type_aware_union_method_test() {
+    let code = r#"
+class A:
+    def foo(self) -> None:
+        pass
+
+class B:
+    def foo(self) -> None:
+        pass
+
+def f(x: A | B) -> None:
+    x.foo()
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 6, length: 1, text: A
+token-type: class
+
+line: 2, column: 8, length: 3, text: foo
+token-type: method
+
+line: 2, column: 12, length: 4, text: self
+token-type: parameter, token-modifiers: [selfParameter]
+
+line: 5, column: 6, length: 1, text: B
+token-type: class
+
+line: 6, column: 8, length: 3, text: foo
+token-type: method
+
+line: 6, column: 12, length: 4, text: self
+token-type: parameter, token-modifiers: [selfParameter]
+
+line: 9, column: 4, length: 1, text: f
+token-type: function
+
+line: 9, column: 6, length: 1, text: x
+token-type: parameter
+
+line: 9, column: 9, length: 1, text: A
+token-type: class
+
+line: 9, column: 13, length: 1, text: B
+token-type: class
+
+line: 10, column: 4, length: 1, text: x
+token-type: parameter
+
+line: 10, column: 6, length: 3, text: foo
+token-type: method
+"#,
+    );
+}
+
+#[test]
+fn type_aware_union_mixed_method_attribute_test() {
+    // `foo` is a method on `A` but a plain attribute on `B`; the union members
+    // disagree, so the access should fall back to `property`, not `method`.
+    let code = r#"
+class A:
+    def foo(self) -> None:
+        pass
+
+class B:
+    foo: int = 0
+
+def f(x: A | B) -> None:
+    x.foo
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 6, length: 1, text: A
+token-type: class
+
+line: 2, column: 8, length: 3, text: foo
+token-type: method
+
+line: 2, column: 12, length: 4, text: self
+token-type: parameter, token-modifiers: [selfParameter]
+
+line: 5, column: 6, length: 1, text: B
+token-type: class
+
+line: 6, column: 4, length: 3, text: foo
+token-type: variable
+
+line: 6, column: 9, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 8, column: 4, length: 1, text: f
+token-type: function
+
+line: 8, column: 6, length: 1, text: x
+token-type: parameter
+
+line: 8, column: 9, length: 1, text: A
+token-type: class
+
+line: 8, column: 13, length: 1, text: B
+token-type: class
+
+line: 9, column: 4, length: 1, text: x
+token-type: parameter
+
+line: 9, column: 6, length: 3, text: foo
+token-type: property
 "#,
     );
 }
@@ -675,7 +1045,8 @@ token-type: method
 fn with_name_test() {
     let code = r#"
 with open("foo.txt") as f1, open("bar.txt") as f2:
-    pass
+    f1.read()
+    f2.read()
 "#;
     assert_full_semantic_tokens(
         &[("main", code)],
@@ -692,6 +1063,18 @@ token-type: function, token-modifiers: [defaultLibrary]
 
 line: 1, column: 47, length: 2, text: f2
 token-type: variable
+
+line: 2, column: 4, length: 2, text: f1
+token-type: variable
+
+line: 2, column: 7, length: 4, text: read
+token-type: method
+
+line: 3, column: 4, length: 2, text: f2
+token-type: variable
+
+line: 3, column: 7, length: 4, text: read
+token-type: method
 "#,
     );
 }
@@ -702,7 +1085,7 @@ fn exception_handler_name_test() {
 try:
     pass
 except Exception as e:
-    pass
+    e
 "#;
     assert_full_semantic_tokens(
         &[("main", code)],
@@ -712,6 +1095,9 @@ line: 3, column: 7, length: 9, text: Exception
 token-type: class, token-modifiers: [defaultLibrary]
 
 line: 3, column: 20, length: 1, text: e
+token-type: variable
+
+line: 4, column: 4, length: 1, text: e
 token-type: variable
 "#,
     );

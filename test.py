@@ -4,7 +4,6 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-# pyre-strict
 
 """
 Test that everything works well
@@ -47,6 +46,7 @@ class TestFlags:
     run_fmt: bool
     run_lint: bool
     run_test: bool
+    run_tensor_shapes: bool
     run_conformance: bool
     run_jsonschema: bool
 
@@ -117,6 +117,10 @@ class Executor(abc.ABC):
         raise NotImplementedError()
 
     @abc.abstractmethod
+    def tensor_shapes(self) -> None:
+        raise NotImplementedError()
+
+    @abc.abstractmethod
     def conformance(self) -> None:
         raise NotImplementedError()
 
@@ -133,7 +137,21 @@ class CargoExecutor(Executor):
         os.chdir(str(script_dir))
 
     def rustfmt(self) -> None:
-        run(["cargo", "fmt"])
+        # rustfmt.toml's import options are nightly-only; use nightly when present to
+        # apply them and avoid stable rustfmt's "unstable features" warnings.
+        try:
+            # @lint-ignore FIXIT1 NoUnsafeExecRule
+            has_nightly = (
+                subprocess.run(
+                    ["cargo", "+nightly", "fmt", "--version"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                ).returncode
+                == 0
+            )
+        except OSError:
+            has_nightly = False
+        run(["cargo", "+nightly", "fmt"] if has_nightly else ["cargo", "fmt"])
 
     def clippy(self) -> None:
         run(["cargo", "clippy"])
@@ -141,32 +159,43 @@ class CargoExecutor(Executor):
     def test(self) -> None:
         run(["cargo", "build"])
         run(["cargo", "test"])
-        script_dir = SCRIPT_PATH.absolute()
         scrut_path = shutil.which("scrut")
-        jq_path = shutil.which("jq")
-        if scrut_path is not None:
-            run(
-                [scrut_path, "test", "test"],
-                env={
-                    "PYREFLY": str(script_dir / "target" / "debug" / "pyrefly"),
-                    "TYPESHED_ROOT": str(
-                        script_dir / "crates" / "pyrefly_bundled" / "third_party"
-                    ),
-                    "JQ": jq_path if jq_path else "",
-                    "TEST_PY": str(script_dir / "test.py"),
-                    "PYREFLY_PY": str(script_dir / "pyrefly" / "python"),
-                    "TENSOR_SHAPES_ROOT": str(script_dir / "tensor-shapes"),
-                    "TENSOR_TEST_ROOT": str(script_dir / "test" / "tensor_shapes"),
-                    "JAXTYPING_TEST_ROOT": str(script_dir / "test" / "tensor_shapes"),
-                    "PATH": os.environ.get("PATH", ""),
-                },
-            )
-        else:
+        if scrut_path is None:
             print(
                 Colors.WARNING.value
                 + "Scrut is not installed, skipping scrut tests."
                 + Colors.ENDC.value
             )
+            return
+        script_dir = SCRIPT_PATH.absolute()
+        cargo_target_dir = Path(
+            os.environ.get("CARGO_TARGET_DIR", script_dir / "target")
+        )
+        pyrefly = (
+            cargo_target_dir
+            / "debug"
+            / ("pyrefly.exe" if os.name == "nt" else "pyrefly")
+        )
+        jq_path = shutil.which("jq")
+        run(
+            [scrut_path, "test", "test"],
+            env={
+                "PYREFLY": str(pyrefly),
+                "TYPESHED_ROOT": str(
+                    script_dir / "crates" / "pyrefly_bundled" / "third_party"
+                ),
+                "JQ": jq_path if jq_path else "",
+                "TEST_PY": str(script_dir / "test.py"),
+                "PYREFLY_PY": str(script_dir / "pyrefly" / "python"),
+                "PATH": os.environ.get("PATH", ""),
+            },
+        )
+
+    def tensor_shapes(self) -> None:
+        run(["cargo", "build"])
+        # Static only, so that `test.py` needs no virtualenv. The runner
+        # resolves the debug pyrefly itself, so we don't pass `--pyrefly`.
+        run([sys.executable, "tensor-shapes/run_tests.py", "--static-only"])
 
     def conformance(self) -> None:
         cargo_target_dir = os.environ.get("CARGO_TARGET_DIR", "target")
@@ -182,6 +211,7 @@ class CargoExecutor(Executor):
 
     def jsonschema(self) -> None:
         run(["python3", "schemas/validate_schemas.py"])
+        run(["python3", "test/sarif/validate_sarif.py"])
 
 
 @final
@@ -217,13 +247,23 @@ class BuckExecutor(Executor):
         )
         tests = [line.strip() for line in res.stdout.splitlines()] + [
             "test/...",
-            "tensor-shapes/...",
         ]
         run(
             ["buck2", "test"]
             + tests
             + ["--", "--run-disabled", "--return-zero-on-skips"]
         )
+
+    def tensor_shapes(self) -> None:
+        if "SANDCASTLE_NONCE" in os.environ:
+            print(
+                "Skipping tensor shape tests on CI because they're already scheduled."
+            )
+            return
+        # Same runner and same scope as the Cargo path; `--buck` only changes
+        # where the Pyrefly binary comes from. Runtime tests are left to CI so
+        # that `test.py` does not require a bootstrapped virtualenv.
+        run([sys.executable, "tensor-shapes/run_tests.py", "--static-only", "--buck"])
 
     def conformance(self) -> None:
         run(
@@ -243,6 +283,7 @@ class BuckExecutor(Executor):
                 "test",
                 "--reuse-current-config",
                 "schemas:test",
+                "test:sarif-schema",
             ]
         )
 
@@ -262,6 +303,11 @@ def run_tests(executor: Executor, test_flags: TestFlags) -> None:
         print_running("tests")
         with timing():
             executor.test()
+
+    if test_flags.run_tensor_shapes:
+        print_running("tensor shape tests")
+        with timing():
+            executor.tensor_shapes()
 
     if test_flags.run_conformance:
         print_running("conformance tests")
@@ -318,6 +364,12 @@ def invoke_main() -> None:
         help="Whether to run testing or not",
     )
     parser.add_argument(
+        "--tensor-shapes",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Whether to run tensor shape tests or not",
+    )
+    parser.add_argument(
         "--conformance",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -337,6 +389,7 @@ def invoke_main() -> None:
                 run_fmt=args.fmt,
                 run_lint=args.lint,
                 run_test=args.test,
+                run_tensor_shapes=args.tensor_shapes,
                 run_conformance=args.conformance,
                 run_jsonschema=args.jsonschema,
             ),

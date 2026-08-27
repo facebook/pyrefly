@@ -39,6 +39,7 @@ struct IncrementalData(Arc<Mutex<SmallMap<ModuleName, Arc<String>>>>);
 /// Helper for writing incrementality tests.
 struct Incremental {
     data: IncrementalData,
+    files: Vec<String>,
     require: Option<Require>,
     state: State,
     to_set: Vec<(String, String)>,
@@ -74,13 +75,17 @@ impl Incremental {
     const USER_FILES: &[&str] = &["main", "foo", "bar", "baz"];
 
     fn new() -> Self {
+        Self::with_files(Self::USER_FILES.map(|x| (*x).to_owned()))
+    }
+
+    fn with_files(files: Vec<String>) -> Self {
         init_test();
         let data = IncrementalData::default();
 
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
-        for file in Self::USER_FILES {
+        for file in &files {
             sourcedb.insert(
                 ModuleName::from_str(file),
                 ModulePath::memory(PathBuf::from(file)),
@@ -92,6 +97,7 @@ impl Incremental {
 
         Self {
             data: data.dupe(),
+            files,
             require: None,
             state: State::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT),
             to_set: Vec::new(),
@@ -141,7 +147,11 @@ impl Incremental {
             None,
             None,
         );
-        let loaded = Self::USER_FILES.map(|x| self.handle(x));
+        let loaded = self
+            .files
+            .iter()
+            .map(|x| self.handle(x))
+            .collect::<Vec<_>>();
         let errors = self.state.transaction().get_errors(&loaded);
         let project_root = PathBuf::new();
         print_errors(project_root.as_path(), &errors.collect_display_errors());
@@ -177,6 +187,251 @@ impl Incremental {
         res.check_recompute(recompute);
         res
     }
+}
+
+#[test]
+fn test_type_shape_dsl_body_edit_invalidates_importer() {
+    let mut i = Incremental::with_files(vec![
+        "foo".to_owned(),
+        "main".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "foo",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def identity(x: Int) -> Int:
+    return x  # version 1
+"#,
+    );
+    i.set("main", "from foo import identity as identity");
+    i.check(&["main"], &["foo", "main", "shape_extensions"]);
+
+    i.set(
+        "foo",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def identity(x: Int) -> Int:
+    return (x)  # version 2
+"#,
+    );
+    i.check(&["main"], &["foo", "main"]);
+}
+
+#[test]
+fn test_type_shape_dsl_helper_edit_invalidates_caller() {
+    let mut i = Incremental::with_files(vec![
+        "helpers".to_owned(),
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+from typing import Callable
+
+class Int: pass
+class IntTuple: pass
+def shaped_array[T](*, shape: str) -> Callable[[type[T]], type[T]]: ...
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def leaf(first: Int, second: Int) -> Int:
+    return first
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from helpers import leaf
+from shape_extensions import Int, IntTuple, shaped_array, type_shape_dsl_function
+
+@shaped_array(shape="Shape")
+class Tensor[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def middle(first: Int, second: Int) -> Int:
+    return leaf(first, second)
+
+@type_shape_dsl_function
+def root(first: Int, second: Int) -> Int:
+    return middle(first, second)
+
+def chosen() -> Tensor[[root(Int[2], Int[3])]]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import Tensor, chosen
+
+result: Tensor[[2]] = chosen()
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def leaf(first: Int, second: Int) -> Int:
+    return second
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "helpers", "main"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].msg().contains("not assignable to `Tensor[[2]]`"));
+}
+
+#[test]
+fn test_type_shape_dsl_cross_module_helper_cycle_is_rejected() {
+    let mut i = Incremental::with_files(vec![
+        "left".to_owned(),
+        "right".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "left",
+        r#"
+from right import right
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def left(x: Int) -> Int:
+    return right(x)
+"#,
+    );
+    i.set(
+        "right",
+        r#"
+from left import left
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def right(x: Int) -> Int:
+    return left(x)
+"#,
+    );
+
+    let result = i.unchecked(&["left"]);
+    let errors = result.errors.collect_display_errors();
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one cycle diagnostic, got {errors:?}"
+    );
+    // Neither side of a helper cycle can become a validated DSL function, so cycles surface at
+    // the ordinary helper-validation boundary rather than through an evaluator-specific error.
+    assert!(
+        errors[0]
+            .msg()
+            .contains("DSL helper callee must be a validated"),
+        "expected the cross-module helper cycle to be rejected, got {errors:?}"
+    );
+}
+
+#[test]
+fn test_type_shape_dsl_gradual_reexport_target_invalidates_importer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "reexport".to_owned(),
+        "shape_extensions".to_owned(),
+        "shape_extensions.dsl".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+class IntTuple: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "shape_extensions.dsl",
+        r#"
+from typing import Any
+class Int:
+    @staticmethod
+    def gradual() -> Any: ...
+class IntTuple:
+    @staticmethod
+    def gradual() -> Any: ...
+"#,
+    );
+    i.set(
+        "reexport",
+        "from shape_extensions.dsl import Int as Gradual\n",
+    );
+    i.set(
+        "main",
+        r#"
+from reexport import Gradual
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def gradual(x: Int) -> Int:
+    return Gradual.gradual()
+"#,
+    );
+    i.check(
+        &["main"],
+        &[
+            "main",
+            "reexport",
+            "shape_extensions",
+            "shape_extensions.dsl",
+        ],
+    );
+
+    i.set(
+        "reexport",
+        "from shape_extensions.dsl import IntTuple as Gradual\n",
+    );
+    let changed = i.unchecked(&["main"]);
+    changed.check_recompute(&["main", "reexport"]);
+    assert!(changed.errors.collect_display_errors().iter().any(|error| {
+        error
+            .msg()
+            .contains("declares return domain `Int`, but `shape_extensions.dsl.IntTuple.gradual()` returns `IntTuple`")
+    }));
+
+    // The restore leg covers re-resolving the intrinsic after an edit outside the declaration,
+    // and that changing then restoring the reexport invalidates and recovers the importer result.
+    i.set(
+        "reexport",
+        "from shape_extensions.dsl import Int as Gradual\n",
+    );
+    i.check(&["main"], &["main", "reexport"]);
 }
 
 #[test]
@@ -490,47 +745,77 @@ fn test_stale_typed_dict() {
 }
 
 #[test]
-fn test_dueling_typevar() {
-    // TypeVar (and ParamSpec, TypeVarTuple) are implemented in a way that means
-    // grabbing the same value from different modules in conjunction with incremental
-    // updates can lead to equal TypeVar's being considered non-equal.
-    //
-    // Is that a problem? Yes. Is it a real problem? Perhaps no? If you write code
-    // that relies on the equality of a single TypeVar imported through two routes,
-    // you are really confusing the users.
-    //
-    // Why does it occur? Because TypeVar has equality via ArcId, so each created
-    // TypeVar is different from all others. To check for interface stability
-    // we try and find a mapping for equivalent TypeVar values, using TypeEq.
-    // So even though your TypeVar changes, it doesn't invalidate your interface.
-    // But that means you can construct an example where someone else exports
-    // your TypeVar, and they don't invalidate, and then you can have a third
-    // module import both and see a discrepancy.
-    //
-    // How to fix it? Stop TypeVar using ArcId and instead make it identified by
-    // an index within the module and the QName, just like we did for class.
-    //
-    // Should we make that fix? Maybe? But it's not high on the priority list.
-    // And the new generic syntax makes it even less important.
+fn test_type_shape_dsl_body_edit_invalidates_consumer() {
+    let mut i = Incremental::with_files(vec![
+        "definitions".to_owned(),
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+class IntTuple: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "definitions",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
 
-    let mut i = Incremental::new();
-    i.set("foo", "from typing import TypeVar\nT = TypeVar('T')");
-    i.set("bar", "from foo import T");
+@type_shape_dsl_function
+def select(first: Int, second: Int) -> Int:
+    return first
+"#,
+    );
     i.set(
         "main",
-        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x  # E: Type variable `T` is not in scope  # E: Type variable `T` is not in scope",
+        r#"
+from definitions import select
+from shape_extensions import Int, IntTuple
+
+class Tensor[Shape: IntTuple]: ...
+def result() -> Tensor[[select(Int[2], Int[3])]]: ...
+"#,
     );
-    i.check(&["main"], &["main", "foo", "bar"]);
-
-    i.set("foo", "from typing import TypeVar\nT = TypeVar('T') #");
-    i.check(&["main"], &["foo"]);
-
-    // Observe that foo.T and bar.T are no longer equal.
     i.set(
-        "main",
-        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x  # E: `TypeVar[T]` is not assignable to `TypeVar[T]`  # E: Type variable `T` is not in scope  # E: Type variable `T` is not in scope",
+        "consumer",
+        r#"
+from main import Tensor, result
+
+expected: Tensor[[2]] = result()
+"#,
     );
-    i.check(&["main"], &["main"]);
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "definitions",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def select(first: Int, second: Int) -> Int:
+    return second
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "definitions", "main"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one consumer mismatch, got {errors:?}"
+    );
+    assert_eq!(errors[0].module().name(), ModuleName::from_str("consumer"),);
+    assert!(
+        errors[0]
+            .msg()
+            .contains("not assignable to `Tensor[IntTuple[2]]`"),
+        "expected a consumer assignment mismatch, got {errors:?}",
+    );
 }
 
 #[test]
@@ -868,6 +1153,64 @@ fn test_overlapping_exports_cycle_detected() {
     // Both modules should be recomputed to reach stable state
     assert!(res.changed.contains(&"foo".to_owned()));
     assert!(res.changed.contains(&"bar".to_owned()));
+}
+
+// Synthetic defense-in-depth reproducer for https://github.com/facebook/pyrefly/issues/4171.
+#[test]
+#[should_panic(expected = "Transaction has uncommitted changes")]
+fn test_deep_scc_chain_stabilizes_after_epoch_cap() {
+    const LEVELS: usize = 208;
+
+    let mut files = vec!["leaf".to_owned(), "main".to_owned()];
+    for level in 0..LEVELS {
+        files.push(format!("a_{level}"));
+        files.push(format!("b_{level}"));
+    }
+    let mut i = Incremental::with_files(files);
+
+    i.set("leaf", "value: int = 0");
+    for level in 0..LEVELS {
+        let previous = if level == 0 {
+            "leaf".to_owned()
+        } else {
+            format!("a_{}", level - 1)
+        };
+        i.set(
+            &format!("a_{level}"),
+            &format!(
+                "from typing import TYPE_CHECKING\nfrom {previous} import value as value\nif TYPE_CHECKING:\n    from b_{level} import Marker\n"
+            ),
+        );
+        i.set(
+            &format!("b_{level}"),
+            &format!(
+                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from a_{level} import value\nclass Marker: pass\n"
+            ),
+        );
+    }
+    i.set(
+        "main",
+        &format!(
+            "from a_{} import value\nobserved: int = value\n",
+            LEVELS - 1
+        ),
+    );
+
+    let initial = i.unchecked(&["main"]);
+    assert_eq!(initial.errors.collect_display_errors().len(), 0);
+
+    i.set("leaf", "value: str = 'changed'");
+    let changed = i.unchecked(&["main"]);
+    let errors = changed
+        .errors
+        .collect_display_errors()
+        .map(|error| error.msg().to_owned());
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected final importer error, got {errors:?}"
+    );
+    assert!(errors[0].contains("not assignable to `int`"), "{errors:?}");
 }
 
 /// Test a more complex non-overlapping case with a chain of re-exports.
@@ -2055,7 +2398,7 @@ fn test_class_deprecation_metadata_change_invalidates() {
 
 /// Test that when an export changes from direct definition to re-export, dependents are invalidated.
 ///
-/// This tests the `is_reexport` metadata dependency. When an export changes from being
+/// This tests the `reexport_source` metadata dependency. When an export changes from being
 /// defined in this module to being re-exported from another module, dependents should
 /// be recomputed.
 #[test]

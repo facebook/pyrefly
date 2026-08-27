@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyrefly-numpy-stubs"
+description = "NumPy type stubs with array-shape tracking, maintained by Pyrefly"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+version = "0.0.0"
+keywords = ["typechecker", "typechecking", "stubs", "numpy"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Typing :: Stubs Only",
+]
+dependencies = [
+  "pyrefly-shape-extensions==0.0.0",
+]
+
+[project.urls]
+homepage = "https://pyrefly.org"
+documentation = "https://pyrefly.org/en/docs/"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["numpy-stubs"]
+
+[tool.hatch.build.targets.sdist]
+include = ["numpy-stubs/", "README.md", "LICENSE"]

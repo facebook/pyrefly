@@ -1,0 +1,8 @@
+search_path = [
+    ".",
+    "../pyrefly-shape-extensions",
+]
+
+python_version = "3.13"
+
+tensor-shapes = true

@@ -5,11 +5,10 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use dupe::Dupe;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_types::callable::Callable;
+use pyrefly_types::class::PrecomputedTParams;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::special_form::SpecialForm;
 use ruff_python_ast::Identifier;
@@ -42,7 +41,7 @@ use crate::types::class::ClassType;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // Given a constructor (__new__ or metaclass __call__) that returns `ty`, return true if the type is:
     // - SelfType or ClassType representing some subclass of `class`
     // - union only containing the aforementioned types
@@ -67,14 +66,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def_index: ClassDefIndex,
         x: &ClassDefData,
         parent: &NestingContext,
+        is_protocol: bool,
         tparams_require_binding: bool,
         errors: &ErrorCollector,
     ) -> Class {
-        let name = &x.name;
+        // Legacy type variables can produce a cycle, so their tparams are left to
+        // the class's `KeyTParams` binding. Everything else is computed here, and
+        // a class that turns out to declare nothing records no tparams at all.
         let precomputed_tparams = if tparams_require_binding {
-            None
+            PrecomputedTParams::FromBinding
         } else {
-            Some(self.calculate_class_tparams_no_legacy(name, x.type_params.as_deref(), errors))
+            let tparams =
+                self.calculate_class_tparams_no_legacy(&x.name, x.type_params.as_deref(), errors);
+            if tparams.is_empty() {
+                PrecomputedTParams::NotGeneric
+            } else {
+                PrecomputedTParams::Precomputed(tparams)
+            }
         };
         Class::new(
             def_index,
@@ -82,6 +90,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             parent.dupe(),
             self.module().dupe(),
             precomputed_tparams,
+            is_protocol,
         )
     }
 
@@ -96,13 +105,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             name.clone(),
             parent.dupe(),
             self.module().dupe(),
-            Some(Arc::new(TParams::default())),
+            PrecomputedTParams::NotGeneric,
+            false,
         )
     }
 
-    pub fn get_metadata_for_class(&self, cls: &Class) -> Arc<ClassMetadata> {
+    pub fn get_metadata_for_class(&self, cls: &Class) -> &ClassMetadata {
         self.get_from_class(cls, &KeyClassMetadata(cls.index()))
-            .unwrap_or_else(|| Arc::new(ClassMetadata::recursive()))
+            .unwrap_or(ClassMetadata::recursive())
     }
 
     pub fn shaped_array_shape_for_class(&self, cls: &Class) -> Option<Quantified> {
@@ -116,32 +126,33 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.shaped_array_shape_for_class(cls.class_object())
     }
 
-    pub fn get_abstract_members_for_class(&self, cls: &Class) -> Arc<AbstractClassMembers> {
+    pub fn get_abstract_members_for_class(&self, cls: &Class) -> &AbstractClassMembers {
         self.get_from_class(cls, &KeyAbstractClassCheck(cls.index()))
-            .unwrap_or_else(|| Arc::new(AbstractClassMembers::recursive()))
+            .unwrap_or(AbstractClassMembers::recursive())
     }
 
-    pub fn get_subscript_symmetry_for_class(&self, cls: &Class) -> Arc<bool> {
+    pub fn get_subscript_symmetry_for_class(&self, cls: &Class) -> bool {
         self.get_from_class(cls, &KeyClassSubscriptSymmetry(cls.index()))
-            .unwrap_or_else(|| Arc::new(true))
+            .copied()
+            .unwrap_or(true)
     }
 
-    pub fn get_base_types_for_class(&self, cls: &Class) -> Arc<ClassBases> {
+    pub fn get_base_types_for_class(&self, cls: &Class) -> &ClassBases {
         self.get_from_class(cls, &KeyClassBaseType(cls.index()))
-            .unwrap_or_else(|| Arc::new(ClassBases::recursive()))
+            .unwrap_or(ClassBases::recursive())
     }
 
-    pub fn get_mro_for_class(&self, cls: &Class) -> Arc<ClassMro> {
+    pub fn get_mro_for_class(&self, cls: &Class) -> &ClassMro {
         self.get_from_class(cls, &KeyClassMro(cls.index()))
-            .unwrap_or_else(|| Arc::new(ClassMro::recursive()))
+            .unwrap_or(ClassMro::recursive())
     }
 
-    pub fn get_disjoint_base_for_class(&self, cls: &Class) -> Arc<ClassDisjointBase> {
+    pub fn get_disjoint_base_for_class(&self, cls: &Class) -> &ClassDisjointBase {
         self.get_from_class(cls, &KeyClassDisjointBase(cls.index()))
-            .unwrap_or_else(|| Arc::new(ClassDisjointBase::recursive()))
+            .unwrap_or(ClassDisjointBase::recursive())
     }
 
-    pub fn get_class_field_map(&self, cls: &Class) -> SmallMap<Name, Arc<ClassField>> {
+    pub fn get_class_field_map(&self, cls: &Class) -> SmallMap<Name, &ClassField> {
         let Some(class_fields) = self.get_class_fields(cls) else {
             return SmallMap::new();
         };
@@ -163,7 +174,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn unwrap_class_object_silently(&self, ty: &Type) -> Option<(TParams, Type)> {
         match ty {
             Type::ClassDef(c) if c.is_builtin("tuple") => Some(self.instantiate_unbounded_tuple()),
-            Type::ClassDef(c) => Some(((*self.get_class_tparams(c)).clone(), self.instantiate(c))),
+            Type::ClassDef(c) => Some((
+                self.get_class_tparams(c)
+                    .map_or_else(TParams::default, |tparams| (**tparams).clone()),
+                self.instantiate(c),
+            )),
             Type::TypeAlias(ta) => {
                 self.unwrap_class_object_silently(&self.get_type_alias(ta).as_value(self.stdlib))
             }

@@ -23,14 +23,14 @@ use pyrefly_util::uniques::UniqueFactory;
 use ruff_python_ast::name::Name;
 
 use crate::callable::Callable;
-use crate::callable::Function;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
 use crate::callable::PrefixParam;
 use crate::class::Class;
 use crate::class::ClassType;
-use crate::dimension::SizeExpr;
+use crate::dimension::Int;
+use crate::function::Function;
 use crate::keywords::KwCall;
 use crate::literal::LitStyle;
 use crate::literal::Literal;
@@ -38,6 +38,7 @@ use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
 use crate::sentinel::Sentinel;
+use crate::shaped_array::IntTuple;
 use crate::shaped_array::ShapedArrayType;
 use crate::special_form::SpecialForm;
 use crate::tuple::Tuple;
@@ -415,11 +416,6 @@ impl TypeHeap {
         Type::Kwargs(Box::new(quantified))
     }
 
-    /// Create a `Type::Ellipsis`.
-    pub fn mk_ellipsis(&self) -> Type {
-        Type::Ellipsis
-    }
-
     /// Create a `Type::TypeAlias` from a TypeAliasData.
     pub fn mk_type_alias(&self, type_alias: TypeAliasData) -> Type {
         Type::TypeAlias(Box::new(type_alias))
@@ -440,19 +436,19 @@ impl TypeHeap {
         Type::Never(style)
     }
 
-    /// Create a `Type::Dim` wrapping an inner type.
-    pub fn mk_dim(&self, inner: Type) -> Type {
-        Type::Dim(Box::new(inner))
-    }
-
-    /// Create a `Type::Size` from a SizeExpr.
-    pub fn mk_size(&self, size_expr: SizeExpr) -> Type {
-        Type::Size(size_expr)
+    /// Create a `Type::Int` from a symbolic integer expression.
+    pub fn mk_int(&self, symint: Int) -> Type {
+        Type::Int(symint)
     }
 
     /// Create a `Type::ShapedArray` from a ShapedArrayType.
     pub fn mk_shaped_array(&self, shaped_array: ShapedArrayType) -> Type {
         Type::ShapedArray(Box::new(shaped_array))
+    }
+
+    /// Create a `Type::IntTuple` from a IntTuple.
+    pub fn mk_int_tuple(&self, int_tuple: IntTuple) -> Type {
+        Type::IntTuple(Box::new(int_tuple))
     }
 
     /// Create a `Type::NNModule` from an NNModuleType.

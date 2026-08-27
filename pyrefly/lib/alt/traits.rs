@@ -22,6 +22,7 @@ use crate::alt::types::class_metadata::ClassDisjointBase;
 use crate::alt::types::class_metadata::ClassMetadata;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
+use crate::alt::types::class_metadata::DjangoReverseRelationIndex;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
 use crate::alt::types::legacy_lookup::LegacyTypeParameterLookup;
@@ -44,6 +45,7 @@ use crate::binding::binding::BindingClassSubscriptSymmetry;
 use crate::binding::binding::BindingClassSynthesizedFields;
 use crate::binding::binding::BindingDecoratedFunction;
 use crate::binding::binding::BindingDecorator;
+use crate::binding::binding::BindingDjangoRelations;
 use crate::binding::binding::BindingExpect;
 use crate::binding::binding::BindingExport;
 use crate::binding::binding::BindingLegacyTypeParam;
@@ -69,6 +71,7 @@ use crate::binding::binding::KeyClassSubscriptSymmetry;
 use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyDecorator;
+use crate::binding::binding::KeyDjangoRelations;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
@@ -174,10 +177,8 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
                 answers.check_partial_answer(def_idx)
             }
             Binding::LambdaParameter(id, owner) => {
-                let var = answers.resolve_lambda_param_var(*id, *owner);
-                Some(Arc::new(TypeInfo::of_ty(
-                    answers.solver().expand_unwrap(var),
-                )))
+                let ty = answers.resolve_lambda_param_type(*id, *owner);
+                Some(Arc::new(TypeInfo::of_ty(ty)))
             }
             _ => None,
         }
@@ -344,12 +345,12 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyTParams {
         binding: &BindingTParams,
         _range: TextRange,
         errors: &ErrorCollector,
-    ) -> Arc<TParams> {
-        answers.solve_tparams(binding, errors)
+    ) -> Arc<Arc<TParams>> {
+        Arc::new(answers.solve_tparams(binding, errors))
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        TParams::default()
+        Arc::new(TParams::default())
     }
 }
 
@@ -400,6 +401,21 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassSynthesizedFields {
     }
 }
 
+impl<Ans: LookupAnswer> Solve<Ans> for KeyDjangoRelations {
+    fn solve(
+        answers: &AnswersSolver<Ans>,
+        binding: &BindingDjangoRelations,
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> Arc<DjangoReverseRelationIndex> {
+        answers.solve_django_reverse_relations(binding, range, errors)
+    }
+
+    fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
+        DjangoReverseRelationIndex::default()
+    }
+}
+
 impl<Ans: LookupAnswer> Solve<Ans> for KeyVariance {
     fn solve(
         answers: &AnswersSolver<Ans>,
@@ -444,7 +460,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassMetadata {
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        ClassMetadata::recursive()
+        ClassMetadata::recursive().clone()
     }
 }
 
@@ -459,7 +475,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassMro {
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        ClassMro::recursive()
+        ClassMro::recursive().clone()
     }
 }
 
@@ -474,7 +490,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyClassDisjointBase {
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        ClassDisjointBase::recursive()
+        ClassDisjointBase::recursive().clone()
     }
 }
 
@@ -488,12 +504,12 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyAbstractClassCheck {
         if let Some(cls) = &answers.get_idx(binding.class_idx).0 {
             answers.solve_abstract_members(cls, errors)
         } else {
-            Arc::new(AbstractClassMembers::recursive())
+            Arc::new(AbstractClassMembers::recursive().clone())
         }
     }
 
     fn promote_recursive(_heap: &TypeHeap, _: Var) -> Self::Answer {
-        AbstractClassMembers::recursive()
+        AbstractClassMembers::recursive().clone()
     }
 }
 

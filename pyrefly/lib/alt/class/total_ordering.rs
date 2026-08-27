@@ -13,7 +13,6 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::types::class_metadata::ClassSynthesizedField;
 use crate::alt::types::class_metadata::ClassSynthesizedFields;
-use crate::binding::binding::KeyClassField;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::class::Class;
@@ -25,7 +24,7 @@ const GT_CONVERSION_ORDER: &[Name; 3] = &[dunder::LT, dunder::GE, dunder::LE];
 const LE_CONVERSION_ORDER: &[Name; 3] = &[dunder::GE, dunder::LT, dunder::GT];
 const GE_CONVERSION_ORDER: &[Name; 3] = &[dunder::LE, dunder::GT, dunder::LT];
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn synthesize_rich_cmp(&self, cls: &Class, cmp: &Name) -> ClassSynthesizedField {
         let conversion_order = if cmp == &dunder::LT {
             LT_CONVERSION_ORDER
@@ -39,14 +38,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             unreachable!("Unexpected rich comparison method: {}", cmp);
         };
         // The first field in the conversion order is the one that we will use to synthesize the method.
-        let class_fields = self.get_class_fields(cls);
         for other_cmp in conversion_order {
-            let has_field = class_fields.is_some_and(|f| f.contains(other_cmp));
-            if has_field
-                && let Some(other_cmp_field) =
-                    self.get_from_class(cls, &KeyClassField(cls.index(), other_cmp.clone()))
+            if let Some(other_cmp_field) = self
+                .get_non_synthesized_class_member_and_defining_class(cls, other_cmp)
+                .filter(|field| !field.defining_class.is_builtin("object"))
             {
-                let ty = other_cmp_field.as_named_tuple_type();
+                let ty = other_cmp_field.value.as_named_tuple_type();
                 return ClassSynthesizedField::new(ty);
             }
         }
@@ -62,12 +59,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !metadata.is_total_ordering() {
             return None;
         }
-        let class_fields = self.get_class_fields(cls);
         // The class must have one of the rich comparison dunder methods defined
-        if !class_fields.is_some_and(|f| {
-            f.names().any(|f| {
-                *f == dunder::LT || *f == dunder::LE || *f == dunder::GT || *f == dunder::GE
-            })
+        if !dunder::RICH_CMPS_TOTAL_ORDERING.iter().any(|cmp| {
+            self.get_non_synthesized_class_member_and_defining_class(cls, cmp)
+                .is_some_and(|field| !field.defining_class.is_builtin("object"))
         }) {
             let total_ordering_metadata = metadata.total_ordering_metadata().unwrap();
             self.error(
@@ -83,7 +78,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let rich_cmps_to_synthesize: Vec<_> = dunder::RICH_CMPS_TOTAL_ORDERING
             .iter()
-            .filter(|cmp| !class_fields.is_some_and(|f| f.contains(cmp)))
+            .filter(|cmp| {
+                self.get_non_synthesized_class_member_and_defining_class(cls, cmp)
+                    .is_none_or(|field| field.defining_class.is_builtin("object"))
+            })
             .collect();
         let mut fields = SmallMap::with_capacity(rich_cmps_to_synthesize.len());
         for cmp in rich_cmps_to_synthesize {
