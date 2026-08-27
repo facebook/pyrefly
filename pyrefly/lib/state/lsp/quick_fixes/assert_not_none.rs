@@ -15,10 +15,12 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
 use crate::ModuleInfo;
+use crate::config::error_kind::ErrorKind;
 use crate::error::error::Error;
 use crate::error::error::ErrorQuickFix;
 use crate::state::lsp::quick_fixes::extract_shared::find_enclosing_statement_range;
 use crate::state::lsp::quick_fixes::extract_shared::line_indent_and_start;
+use crate::state::lsp::quick_fixes::extract_shared::reference_in_disallowed_scope;
 
 /// Insert an assertion before a standalone statement that uses an optional name.
 pub(crate) fn assert_not_none_code_action(
@@ -38,13 +40,17 @@ pub(crate) fn assert_not_none_code_action(
         .find_map(|node| match node {
             AnyNodeRef::ExprName(name) if name.range().contains_range(error.range()) => Some(name),
             AnyNodeRef::ExprAttribute(attribute)
-                if attribute.range().contains_range(error.range())
+                if error.error_kind() == ErrorKind::MissingAttribute
+                    && attribute.range().contains_range(error.range())
                     && let Expr::Name(name) = attribute.value.as_ref() =>
             {
                 Some(name)
             }
             _ => None,
         })?;
+    if reference_in_disallowed_scope(ast, name.range()) {
+        return None;
+    }
     let statement = find_enclosing_statement_range(ast, error.range())?;
     let source = module_info.contents().as_str();
     let (indent, line_start) = line_indent_and_start(source, statement.start())?;

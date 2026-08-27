@@ -1133,6 +1133,71 @@ def f(x: T | None) -> None:
 }
 
 #[test]
+fn quickfix_narrow_optional_attribute_value_not_offered() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"class T:
+    y: int | None
+
+def g(y: int) -> None: ...
+def f(x: T) -> None:
+    g(x.y)
+#     ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        !report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_comprehension_variable_not_offered() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"def g(y: int) -> int:
+    return y
+
+def f(xs: list[int | None]) -> list[int]:
+    return [g(x) for x in xs]
+#             ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        !report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_lambda_parameter_not_offered() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"from typing import Callable
+
+def g(y: int) -> int:
+    return y
+
+f: Callable[[int | None], int] = lambda x: g(x)
+#                                              ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        !report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+}
+
+#[test]
 fn quickfix_narrow_optional_attribute_augmented_assignment() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
