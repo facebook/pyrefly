@@ -1080,6 +1080,30 @@ impl<'a> Transaction<'a> {
         self.get_load(handle).map(|x| x.module_info.dupe())
     }
 
+    /// Whether any other module depends on this one.
+    ///
+    /// A dependency edge means the depending module's result was computed from
+    /// this file's contents, which is exactly the question safe deletion asks,
+    /// and answering it from the graph costs nothing. Note the edge is recorded
+    /// for a module reached indirectly as well as one named outright, which is
+    /// the conservative direction and the correct one: a file can matter to a
+    /// module that never names it.
+    ///
+    /// It is only as complete as what has been checked. A module Pyrefly has
+    /// not looked at contributes no edge, whether or not it depends on this
+    /// one, so "safe" here means "nothing we have checked needs it". Pass a
+    /// filesystem handle: as with `get_transitive_rdeps`, the rdeps of an
+    /// in-memory handle contain only itself, which would make any file an IDE
+    /// has open look unused.
+    pub fn is_depended_on_by_anything(&self, handle: &Handle) -> bool {
+        let path = handle.path().as_path();
+        self.get_module(handle)
+            .rdeps
+            .lock()
+            .iter()
+            .any(|rdep| rdep.path().as_path() != path)
+    }
+
     /// Compute transitive dependency closure for the given handle.
     /// Note that for IDE services, if the given handle is an in-memory one, then you are probably
     /// not getting what you want, because the set of rdeps of in-memory file for IDE service will
