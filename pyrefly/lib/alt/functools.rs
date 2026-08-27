@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use itertools::Itertools;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
@@ -38,7 +39,6 @@ use crate::types::callable::Params;
 use crate::types::callable::PrefixParam;
 use crate::types::callable::Required;
 use crate::types::function::Function;
-use crate::types::types::BoundMethodType;
 use crate::types::types::Forallable;
 use crate::types::types::Overload;
 use crate::types::types::OverloadType;
@@ -252,30 +252,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // in the residual and are re-scoped into a `Forall` below, so a partial over a generic
         // function (including decorator use) preserves its genericity instead of leaking a residual
         // through the stub. Class objects, bound methods, and unions defer.
-        let (tparams, mut sig) = match &target_ty {
-            Type::Callable(c) => (None, (**c).clone()),
-            Type::Function(f) => (None, f.signature.clone()),
+        let Ok((sig, tparams)) = target_ty.toplevel_callable_signatures().exactly_one() else {
+            return fallback(self);
+        };
+        let mut sig = if matches!(target_ty, Type::BoundMethod(_)) {
             // Strip the already-bound `self`/`cls` so the residual is the remaining parameters;
             // bound-argument checking against `target_ty` still binds the receiver as usual.
-            Type::BoundMethod(bm) => match &bm.func {
-                BoundMethodType::Function(f) => match f.signature.strip_first_param() {
-                    Some(sig) => (None, sig),
-                    None => return fallback(self),
-                },
-                BoundMethodType::Forall(forall) => {
-                    match forall.body.signature.strip_first_param() {
-                        Some(sig) => (Some(forall.tparams.clone()), sig),
-                        None => return fallback(self),
-                    }
-                }
-                BoundMethodType::Overload(_) => return fallback(self),
-            },
-            Type::Forall(forall) => match &forall.body {
-                Forallable::Function(f) => (Some(forall.tparams.clone()), f.signature.clone()),
-                Forallable::Callable(c) => (Some(forall.tparams.clone()), c.clone()),
-                Forallable::TypeAlias(_) => return fallback(self),
-            },
-            _ => return fallback(self),
+            match sig.strip_first_param() {
+                Some(stripped_sig) => stripped_sig,
+                None => return fallback(self),
+            }
+        } else {
+            sig.clone()
         };
         // Only plain type variables are re-scoped correctly; a `ParamSpec` or `TypeVarTuple` target
         // needs structural residual handling we don't do, so defer it to the stub.
@@ -423,7 +411,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let callable = Callable::partial(residual, ret);
         match tparams {
             None => self.heap.mk_callable_from(callable),
-            Some(tparams) => restore_partial_generics(self.heap, callable, &tparams),
+            Some(tparams) => restore_partial_generics(self.heap, callable, tparams),
         }
     }
 
