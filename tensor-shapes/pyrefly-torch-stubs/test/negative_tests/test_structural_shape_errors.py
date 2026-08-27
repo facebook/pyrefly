@@ -130,3 +130,31 @@ def check_invalid_repeat_parameters(x: Tensor[[2, 3]]) -> None:
 
     # E: No matching overload found for function `torch.Tensor.repeat`
     x.repeat([2, 3])
+
+
+def check_invalid_expand_controls(x: Tensor[[2, 3]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: expand target rank cannot be smaller than input rank
+    x.expand(2)
+    # E: Cannot evaluate type-level shape DSL call: expand target rank cannot be smaller than input rank
+    x.expand()
+    # E: Cannot evaluate type-level shape DSL call: expand cannot use -1 for a new leading dimension
+    x.expand(-1, 2, 3)
+
+    # E: Cannot evaluate type-level shape DSL call: expand target dimension cannot be less than -1
+    x.expand(-2, 3)
+    # E: Cannot evaluate type-level shape DSL call: expand target dimension cannot be less than -1
+    x.expand((-2, 3))
+    # E: Cannot evaluate type-level shape DSL call: expand cannot resize a non-singleton dimension
+    x.expand(4, 3)
+
+    # Zero-size dimensions are preserved, although explicit zero shape
+    # annotations are rejected elsewhere.
+    # E: revealed type: Tensor[[0, 4]]
+    reveal_type(torch.empty(0, 1).expand(0, 4))
+
+    # E: No matching overload found for function `torch.Tensor.expand`
+    x.expand([2, 3])
+    # E: No matching overload found for function `torch.Tensor.expand`
+    x.expand((2, 3.0))
+    # E: No matching overload found for function `torch.Tensor.expand`
+    x.expand((True, 2))

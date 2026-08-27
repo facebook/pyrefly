@@ -292,9 +292,45 @@ def flatten_ir(self: ShapedArray, start_dim: int = 0, end_dim: int = -1) -> Shap
         shape=self.shape[:s] + [prod(self.shape[s : e + 1])] + self.shape[e + 1 :]
     )
 
-@shape_dsl_function
-def expand_ir(self: ShapedArray, sizes: list[int | symint]) -> ShapedArray:
-    return ShapedArray(shape=[d if t == -1 else t for d, t in zip(self.shape, sizes)])
+@type_shape_dsl_function
+def expand_shape(shape: IntTuple, sizes: IntTuple) -> IntTuple:
+    if len(sizes) < len(shape):
+        return dsl.Invalid("expand target rank cannot be smaller than input rank")
+    extra = len(sizes) - len(shape)
+    leading = sizes[:extra]
+    if any(dsl.is_concrete_int(size) and size == -1 for size in leading):
+        return dsl.Invalid("expand cannot use -1 for a new leading dimension")
+    if any(dsl.is_concrete_int(size) and size < -1 for size in sizes):
+        return dsl.Invalid("expand target dimension cannot be less than -1")
+    # A target only contradicts its source when both are concrete: a singleton source
+    # broadcasts to any target and a -1 target copies the source, so every other pairing
+    # (in particular any symbolic dimension) stays gradual. `any` cannot bind a `zip`,
+    # so the paired verdicts are materialized as flags first.
+    aligned = sizes[extra:]
+    conflicts = dsl.IntTuple(
+        (
+            1
+            if dsl.is_concrete_int(source)
+            and dsl.is_concrete_int(target)
+            and source != 1
+            and target != -1
+            and source != target
+            else 0
+            for source, target in zip(shape, aligned)
+        )
+    )
+    if any(conflict == 1 for conflict in conflicts):
+        return dsl.Invalid("expand cannot resize a non-singleton dimension")
+    expanded = dsl.IntTuple(
+        (
+            source
+            if (dsl.is_concrete_int(source) and source != 1)
+            or (dsl.is_concrete_int(target) and target == -1)
+            else target
+            for source, target in zip(shape, aligned)
+        )
+    )
+    return dsl.concat(leading, expanded)
 
 @type_shape_dsl_function
 def repeat_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:
@@ -1137,9 +1173,9 @@ def numel_shape(shape: IntTuple) -> Int:
     # instead of returning a gradual `Int` when the dimension representation can express them.
     return dsl.prod(shape)
 
-@shape_dsl_function
-def dim_ir(self: ShapedArray) -> int:
-    return len(self.shape)
+@type_shape_dsl_function
+def dim_shape(shape: IntTuple) -> Int:
+    return len(shape)
 
 @shape_dsl_function
 def item_ir(self: ShapedArray) -> ShapedArray:

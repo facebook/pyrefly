@@ -9,9 +9,9 @@ These operations must work with symbolic dimensions like Int[N] returned from x.
 Previously failed when iter_shape_dims() filtered out Type::Quantified dimensions.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import assert_type, cast, TYPE_CHECKING
 
-from shape_extensions import IntVar
+from shape_extensions import Elements, IntTuple, IntVar
 
 
 if TYPE_CHECKING:
@@ -46,10 +46,45 @@ def test_expand_symbolic[N: IntVar](x: Tensor[[N, 1]]):
 
 
 def test_expand_runtime_values[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
-    """Expand with multiple symbolic dimensions from size()"""
+    """Expand with multiple symbolic dimensions from size(), and with -1 targets"""
     n = x.size(0)
     m = x.size(1)
 
-    # Use -1 to keep original dimension, and symbolic m for second dim
-    y = x.expand(n, m)
-    assert_type(y, Tensor[[N, M]])
+    assert_type(x.expand(n, m), Tensor[[N, M]])
+    # -1 keeps the original dimension instead of naming it symbolically.
+    assert_type(x.expand(-1, m), Tensor[[N, M]])
+
+
+def test_expand_literal_tuple_and_vararg_parity():
+    x = cast(Tensor[[2, 1, 4]], ...)
+    assert_type(x.expand(2, 5, 4), Tensor[[2, 5, 4]])
+    assert_type(x.expand((2, 5, 4)), Tensor[[2, 5, 4]])
+    assert_type(x.expand(-1, -1, -1), Tensor[[2, 1, 4]])
+
+
+def test_expand_leading_dimensions_and_scalar():
+    x = cast(Tensor[[2, 3]], ...)
+    scalar = cast(Tensor[[]], ...)
+    assert_type(x.expand(4, -1, -1), Tensor[[4, 2, 3]])
+    assert_type(scalar.expand(), Tensor[[]])
+    assert_type(scalar.expand(2, 3), Tensor[[2, 3]])
+
+
+def check_expand_gradual(
+    concrete: Tensor[[2, 1]],
+    open_rank: Tensor[IntTuple],
+    bare: Tensor,
+    broad_size: int,
+    broad_tuple: tuple[int, ...],
+) -> None:
+    assert_type(concrete.expand(broad_size, 3), Tensor[[2, 3]])
+    assert_type(concrete.expand(broad_tuple), Tensor[IntTuple])
+    assert_type(open_rank.expand(2, 3), Tensor[IntTuple])
+    assert_type(bare.expand(2, 3), Tensor)
+
+
+def check_expand_partially_known_shape[Batch: IntTuple](
+    x: Tensor[[*Elements[Batch], 2]],
+) -> None:
+    # Tuple unpacking currently loses the partial carrier before the DSL runs.
+    assert_type(x.expand(x.size()), Tensor[IntTuple])

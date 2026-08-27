@@ -36,10 +36,10 @@ from torch._shapes import (
     cat_ir,
     chunk_ir,
     diag_embed_shape,
-    dim_ir,
+    dim_shape,
     eig_shape,
     einsum_ir,
-    expand_ir,
+    expand_shape,
     flatten_ir,
     index_select_shape,
     item_ir,
@@ -358,9 +358,18 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Transpose 2D tensor. Swaps dimensions."""
         ...
 
-    @uses_shape_dsl(expand_ir)
-    def expand(self: Tensor, *sizes: int) -> Tensor:
-        """Expand tensor. Shape inference via meta-shape: torch.Tensor.expand"""
+    @overload
+    def expand[Shape: IntTuple, Sizes: IntTuple](
+        self: Tensor[Shape], *sizes: *Sizes
+    ) -> Tensor[expand_shape(Shape, Sizes)]:
+        """Expand tensor. Shape inference via type-level DSL."""
+        ...
+
+    @overload
+    def expand[Shape: IntTuple, Sizes: IntTuple](
+        self: Tensor[Shape], sizes: Sizes
+    ) -> Tensor[expand_shape(Shape, Sizes)]:
+        """Expand tensor. Shape inference via type-level DSL."""
         ...
 
     def expand_as[S: IntTuple](self: Tensor, other: Tensor[S]) -> Tensor[S]:
@@ -1420,9 +1429,8 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Return the number of elements."""
         ...
 
-    @uses_shape_dsl(dim_ir)
-    def dim(self: Tensor) -> int:
-        """Number of dimensions. Shape inference via meta-shape: torch.Tensor.dim"""
+    def dim(self: Tensor[Shape]) -> _Int[dim_shape(Shape)]:
+        """Number of dimensions. Shape inference via type-level DSL."""
         ...
 
     def nelement(self: Tensor[Shape]) -> _Int[numel_shape(Shape)]:
