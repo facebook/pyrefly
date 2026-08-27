@@ -110,6 +110,9 @@ pub enum AtomicNarrowOp {
     /// (func, args) for a function call that may narrow the type of its first argument.
     Call(Box<Expr>, Arguments),
     NotCall(Box<Expr>, Arguments),
+    /// The predicate call in `all(predicate(x) for x in subject)`.
+    AllCall(Box<Expr>, Arguments),
+    NotAllCall(Box<Expr>, Arguments),
     /// A narrow op applies to a name; these operations mean we are narrowing to the case
     /// when that name evaluates to a truthy or falsy value.
     IsTruthy,
@@ -225,6 +228,18 @@ impl DisplayWith<ModuleInfo> for AtomicNarrowOp {
                 expr.display_with(ctx),
                 arguments.display_with(ctx)
             ),
+            AtomicNarrowOp::AllCall(expr, arguments) => write!(
+                f,
+                "AllCall({}, {})",
+                expr.display_with(ctx),
+                arguments.display_with(ctx)
+            ),
+            AtomicNarrowOp::NotAllCall(expr, arguments) => write!(
+                f,
+                "NotAllCall({}, {})",
+                expr.display_with(ctx),
+                arguments.display_with(ctx)
+            ),
             AtomicNarrowOp::IsTruthy => write!(f, "IsTruthy"),
             AtomicNarrowOp::IsFalsy => write!(f, "IsFalsy"),
             AtomicNarrowOp::PolarsColumnMutation(kind) => {
@@ -335,6 +350,16 @@ impl AtomicNarrowOp {
                 let args = snippet(arguments.range()).unwrap_or_default();
                 Some(format!("not {func}{args}"))
             }
+            Self::AllCall(expr, arguments) => {
+                let func = snippet(expr.range())?;
+                let args = snippet(arguments.range()).unwrap_or_default();
+                Some(format!("all({func}{args} for ... in {subject})"))
+            }
+            Self::NotAllCall(expr, arguments) => {
+                let func = snippet(expr.range())?;
+                let args = snippet(arguments.range()).unwrap_or_default();
+                Some(format!("not all({func}{args} for ... in {subject})"))
+            }
             Self::IsTruthy => Some(subject.to_owned()),
             Self::IsFalsy => Some(format!("not {subject}")),
             Self::PolarsColumnMutation(_) => None,
@@ -395,6 +420,8 @@ impl AtomicNarrowOp {
             Self::TypeNotEq(v) => Self::TypeEq(v.clone()),
             Self::Call(f, args) => Self::NotCall(f.clone(), args.clone()),
             Self::NotCall(f, args) => Self::Call(f.clone(), args.clone()),
+            Self::AllCall(f, args) => Self::NotAllCall(f.clone(), args.clone()),
+            Self::NotAllCall(f, args) => Self::AllCall(f.clone(), args.clone()),
             Self::IsTruthy => Self::IsFalsy,
             Self::IsFalsy => Self::IsTruthy,
             Self::PolarsColumnMutation(kind) => Self::PolarsColumnMutation(kind.clone()),
@@ -1148,6 +1175,32 @@ impl NarrowOps {
                     test.range(),
                 )
             }
+            Expr::Call(
+                test @ ExprCall {
+                    func, arguments, ..
+                },
+            ) if builder.as_special_export(func) == Some(SpecialExport::All)
+                && arguments.args.len() == 1
+                && arguments.keywords.is_empty()
+                && let Expr::Generator(generator) = &arguments.args[0]
+                && let [comprehension] = generator.generators.as_slice()
+                && !comprehension.is_async
+                && comprehension.ifs.is_empty()
+                && let Expr::Name(target) = &comprehension.target
+                && let Expr::Call(ExprCall {
+                    func: predicate,
+                    arguments: predicate_args,
+                    ..
+                }) = &*generator.elt
+                && let Some(Expr::Name(first_arg)) = predicate_args.args.first()
+                && first_arg.id == target.id =>
+            {
+                Self::from_single_narrow_op(
+                    &comprehension.iter,
+                    AtomicNarrowOp::AllCall(predicate.clone(), predicate_args.clone()),
+                    test.range(),
+                )
+            }
             e @ Expr::Call(call) if dict_get_subject_for_call_expr(call).is_some() => {
                 // When the guard is something like `x.get("key")`, we narrow it like `x["key"]` if `x` resolves to a dict
                 // in the answers step.
@@ -1277,6 +1330,8 @@ impl NarrowOps {
                 // as still valid, but we need to allow this for `isinstance` and friends to work.
                 | AtomicNarrowOp::Call(..)
                 | AtomicNarrowOp::NotCall(..)
+                | AtomicNarrowOp::AllCall(..)
+                | AtomicNarrowOp::NotAllCall(..)
                 // The only objects that have different truthy and falsy types
                 // (True vs. False, empty vs. non-empty tuple, etc.) are immutable.
                 | AtomicNarrowOp::IsTruthy
