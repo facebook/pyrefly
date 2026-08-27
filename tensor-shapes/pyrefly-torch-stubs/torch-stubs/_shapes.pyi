@@ -16,6 +16,8 @@ from shape_extensions.dsl import (
     Unknown,
 )
 
+# TODO(stroxler): Use `IntTuple` slicing here once it preserves the symbolic-rank cases covered by
+# these generators, then share the common rank validation among the three helpers.
 @type_shape_dsl_function
 def eig_shape(shape: IntTuple) -> IntTuple:
     if len(shape) < 2:
@@ -340,6 +342,8 @@ def unfold_checked_shape(
 
 @type_shape_dsl_function
 def unfold_shape(shape: IntTuple, dimension: int, size: int, step: int) -> IntTuple:
+    # TODO(stroxler): Preserve symbolic configuration values instead of returning a gradual shape
+    # when the DSL can represent their arithmetic and range constraints.
     # Binding the rank lets both branches assign the normalized Flag value consistently.
     rank = len(shape)
     if rank == 0:
@@ -596,8 +600,8 @@ def arange_extent(end: Int) -> Int:
 
 @type_shape_dsl_function
 def arange_step_extent(start: Int, end: Int, step: int) -> Int:
-    # `step` is a Flag value because its sign determines the rounding direction. Symbolic bounds
-    # use the truncating expression, which is exact when the step divides the range.
+    # TODO(stroxler): Implement symbolic ceiling division. The truncating fallback is exact only
+    # when `step` divides the range.
     if step == 0:
         return dsl.Invalid("arange step must be nonzero")
     difference = end - start
@@ -615,6 +619,8 @@ def arange_step_extent(start: Int, end: Int, step: int) -> Int:
 
 @type_shape_dsl_function
 def diag_embed_shape(shape: IntTuple, offset: int, dim1: int, dim2: int) -> IntTuple:
+    # TODO(stroxler): Preserve symbolic offset and dimension values instead of returning gradual
+    # when the DSL can represent their ordering constraints.
     if len(shape) == 0:
         return dsl.Invalid("diag_embed input must have at least one dimension")
     output_rank = len(shape) + 1
@@ -1028,6 +1034,8 @@ def pad_shape(shape: IntTuple, pad: tuple[int, ...]) -> IntTuple:
     return _pad_shape(shape, padding)
 
 # The `+ 0` branches below keep normalized axes in one deferred integer domain.
+# TODO(stroxler): Factor the repeated FFT axis normalization and dimension replacement once DSL
+# helper calls can be used as expressions rather than only as direct return values.
 @type_shape_dsl_function
 def rfft_shape(shape: IntTuple, dim: int) -> IntTuple:
     rank = len(shape)
@@ -1125,6 +1133,8 @@ def size_dim_shape(shape: IntTuple, dim: int) -> Int:
 
 @type_shape_dsl_function
 def numel_shape(shape: IntTuple) -> Int:
+    # TODO(stroxler): Preserve products of symbolic-rank shapes and derived symbolic dimensions
+    # instead of returning a gradual `Int` when the dimension representation can express them.
     return dsl.prod(shape)
 
 @shape_dsl_function

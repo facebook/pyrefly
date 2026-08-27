@@ -14,18 +14,20 @@ Shape tracking uses three complementary mechanisms:
 
 1. **Fixture stubs**: `.pyi` files with shape-generic type signatures. These
    cover modules like `nn.Linear`, `nn.Conv2d`, and functions like `torch.mm`.
-2. **Shape DSL functions**: shape transforms written in a small Python subset in
-   `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`, decorated with
-   `@shape_dsl_function`, and attached to stubs with `@uses_shape_dsl(...)`.
-   These cover operations with computed shape logic like `reshape`, `cat`,
-   pooling, convolution, and interpolation.
+2. **Type-level shape DSL functions**: shape transforms written in a small
+   Python subset in `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`,
+   decorated with `@type_shape_dsl_function`, and called directly from public
+   return annotations. These cover operations with computed shape logic like
+   reductions, padding, pooling, and convolution.
 3. **Special handlers**: Pyrefly implementation logic for constructs that need
    deeper type system integration, like `nn.Sequential` chaining, `.shape`,
    `.size()`, `assert_shape`, and decorator interpretation.
 
 The first two mechanisms live in `tensor-shapes/` and are the normal way to add
-or improve shape coverage. Special handlers require Pyrefly implementation
-changes and should be treated as kernel work.
+or improve shape coverage. Some stubs still use the older
+`@shape_dsl_function` and `@uses_shape_dsl(...)` mechanism while they are being
+migrated. Do not add new V1 rules. Special handlers require Pyrefly
+implementation changes and should be treated as kernel work.
 
 ## Fixture Stubs
 
@@ -110,31 +112,45 @@ DSL functions live in:
 tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi
 ```
 
-Stubs attach a DSL function with `@uses_shape_dsl(...)`. For example, a stub may
-declare a broad return type like `Tensor` and let the DSL refine the result shape
-at call sites:
+Public stubs call a type-level DSL function directly in their return annotation.
+For example:
 
 ```python
-from shape_extensions import uses_shape_dsl
-from torch._shapes import reshape_ir
+from shape_extensions import IntTuple, type_shape_dsl_function
+import shape_extensions.dsl as dsl
 
-@uses_shape_dsl(reshape_ir)
-def reshape(self: Tensor, shape: tuple[int, ...]) -> Tensor: ...
+@type_shape_dsl_function
+def repeat_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:
+    if len(repeats) < len(shape):
+        return dsl.Invalid("repeat dimensions cannot be shorter than the input rank")
+    extra = len(repeats) - len(shape)
+    return dsl.IntTuple(
+        repeats[i] if i < extra else shape[i - extra] * repeats[i]
+        for i in range(len(repeats))
+    )
+
+def repeat[Shape: IntTuple, Repeats: IntTuple](
+    self: Tensor[Shape], *sizes: *Repeats
+) -> Tensor[repeat_shape(Shape, Repeats)]: ...
 ```
 
 ### The DSL Subset
 
-The DSL is intentionally small. It supports common shape computation patterns,
-including:
+The DSL is intentionally small. Its main value domains are `Int` for one shape
+dimension and `IntTuple` for a complete shape. Runtime configuration values are
+connected through `Flag[...]` type parameters on public signatures. `IntVar`
+names a symbolic dimension, while `Int[N]` connects a runtime integer parameter
+to it; for example, `def zeros[N: IntVar](n: Int[N]) -> Tensor[[N]]: ...`.
+The body language supports common shape computations, including:
 
-- `ShapedArray(shape=[...])` to construct result shapes
-- `self.shape` and other shaped-array argument shapes
-- Lists, slices, indexing, and comprehensions
-- Arithmetic such as `+`, `-`, `*`, `//`, `%`, and `**`
+- `dsl.IntTuple(...)` to construct result shapes
+- `len`, indexing, slicing, and bounded generator expressions
+- Arithmetic such as `+`, `-`, `*`, `//`, and `%`
 - `if` / `else`
-- Helper calls to other `@shape_dsl_function` functions
-- DSL helpers from `shape_extensions.dsl`, such as `prod`, `sum`, `Unknown`,
-  and `Error`
+- Single-assignment local variables
+- Direct returns from other `@type_shape_dsl_function` helpers
+- DSL operations such as `dsl.concat`, `dsl.prod`, `dsl.Invalid`, and gradual
+  `Int` or `IntTuple` results
 
 Keep DSL functions simple and algebraic. They are analyzed by Pyrefly; they are
 not normal runtime implementations of PyTorch operations.
@@ -153,31 +169,45 @@ before writing one, because neither is guessable:
   body that rejects `None`. Both `conv_shape` in the Torch stubs and
   `reshape_shape` in the JAX stubs do this.
 
-### Example: `torch.cat`
+### Example: reduction
 
 ```python
-@shape_dsl_function
-def cat_ir(tensors: list[ShapedArray], dim: int = 0) -> ShapedArray:
-    first = tensors[0]
-    d = normalize_dim(len(first.shape), dim)
-    return ShapedArray(
-        shape=[
-            sum([t.shape[i] for t in tensors]) if i == d else dim_val
-            for i, dim_val in enumerate(first.shape)
-        ]
+@type_shape_dsl_function
+def reduce_shape(shape: IntTuple, dim: int, keepdim: bool) -> IntTuple:
+    axis = dim % len(shape)
+    return dsl.IntTuple(
+        1 if keepdim and i == axis else shape[i]
+        for i in range(len(shape))
+        if keepdim or i != axis
     )
 ```
 
-This sums shapes along the concatenation dimension and preserves all others.
+The public stub binds its input shape and runtime options to type parameters,
+then calls `reduce_shape(...)` in the return annotation.
 
 ### Adding a New DSL Function
 
 1. Write the shape transform in `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`.
-2. Decorate it with `@shape_dsl_function`.
-3. Attach it to the public stub with `@uses_shape_dsl(...)`.
-4. Add positive tests that assert the computed shape.
+2. Decorate it with `@type_shape_dsl_function`.
+3. Bind the relevant public arguments with `IntVar`, `IntTuple`, or `Flag[...]`
+   type parameters and call the DSL function from the return annotation.
+4. Add positive tests that use `assert_type` to check the computed shape.
 5. Add negative tests with `# E:` expectations if the DSL should reject invalid
    shapes or report shape errors.
+
+The older decorator-based DSL remains only for rules that have not yet been
+migrated. Avoid combining V1 and V2 logic in new rules; if V2 cannot yet express
+the operation, document the gap rather than adding new V1 surface area.
+
+### Current Limitations
+
+The type-level DSL uses a small, composable language and does not model every
+shape behavior precisely. Current known limitations include symbolic
+`arange` rounding, symbolic configuration values for `unfold` and `diag_embed`,
+structured `tensordot` axis lists, products of symbolic-rank shapes or derived
+symbolic dimensions, and list-based padding. Keep these cases gradual where
+necessary, add focused tests, and leave a `TODO(stroxler)` at the affected rule
+so the loss of precision remains visible.
 
 ## Ported Models
 

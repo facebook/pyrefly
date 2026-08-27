@@ -6,10 +6,10 @@
 """
 Comprehensive type stubs for PyTorch with shape inference.
 
-Shape inference is expressed through type-level functions such as `broadcast(...)` in
-annotations or through `@uses_shape_dsl(ir_fn)` decorators. Decorator IR functions are defined
-in `torch/_shapes.pyi` and evaluated by the DSL interpreter in
-`crates/pyrefly_types/src/meta_shape_dsl.rs`.
+New shape inference rules use `@type_shape_dsl_function` definitions from
+`torch/_shapes.pyi`, called directly from public return annotations. Some existing rules still use
+the older `@uses_shape_dsl(...)` decorator while the stub library is migrated; new rules should not
+extend that legacy path.
 """
 
 import builtins
@@ -629,6 +629,8 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Returns sliding window view. Shape inference via meta-shape: torch.Tensor.unfold"""
         ...
 
+    # TODO(stroxler): Preserve the V1 `tuple[int, ...]` fallback for a bare `Tensor` if that
+    # distinction remains useful after the V2 migration is complete.
     @overload
     def size[Shape: IntTuple](self: Tensor[Shape]) -> Shape: ...
     @overload
@@ -2450,7 +2452,10 @@ def tensordot[Left: IntTuple, Right: IntTuple, Dims: Flag[builtins.int]](
 
 @overload
 def tensordot(self: Tensor, other: Tensor, dims: tuple[list[int], list[int]]) -> Tensor:
-    """Tensor contraction over specified dimensions. Shape inference via meta-shape: torch.tensordot"""
+    """Tensor contraction over explicit axis lists.
+
+    TODO(stroxler): Preserve the result shape once the V2 DSL accepts structured axis lists.
+    """
     ...
 
 @uses_shape_dsl(einsum_ir)

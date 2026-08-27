@@ -1123,7 +1123,11 @@ def pad(
     value: float = 0.0,
 ) -> Tensor[IntTuple]:
     """Pad tensor by a list of amounts. A list carries no element literals, so the
-    padded shape stays gradual."""
+    padded shape stays gradual.
+
+    TODO(stroxler): Preserve list element literals when mutable sequence arguments can carry
+    shape values into the type-level DSL.
+    """
     ...
 
 # Softmax activation
