@@ -47,6 +47,7 @@ use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::polars_specials::polars_degrade_for_mutation;
+use crate::alt::solve::Iterable;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::instance::Instance;
 use crate::binding::binding::Key;
@@ -1832,6 +1833,47 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     ty.clone()
                 }
             }
+            AtomicNarrowOp::AllCall(func, args) => {
+                let resolved = self.resolve_narrowing_call(func, args, errors);
+                if let Some(resolved_op @ AtomicNarrowOp::IsInstance(..)) = resolved {
+                    self.distribute_over_union(ty, |member| {
+                        let errors = self.error_swallower();
+                        // Retain a correlated container alternative only when narrowing does not
+                        // change any of its element types.
+                        let element_satisfies = |element: &Type| {
+                            self.atomic_narrow(element, &resolved_op, range, &errors) == *element
+                        };
+                        let all_elements_satisfy = self
+                            .iterate(member, range, &errors, None)
+                            .into_iter()
+                            .any(|iterable| match iterable {
+                                Iterable::OfType(element) => element_satisfies(&element),
+                                Iterable::FixedLen(elements) => {
+                                    elements.iter().all(element_satisfies)
+                                }
+                                Iterable::Unpacked {
+                                    prefix,
+                                    middle,
+                                    suffix,
+                                } => prefix
+                                    .iter()
+                                    .chain([&middle])
+                                    .chain(&suffix)
+                                    .all(element_satisfies),
+                                Iterable::OfTypeVarTuple(_) => true,
+                            });
+                        if all_elements_satisfy {
+                            member.clone()
+                        } else {
+                            self.heap.mk_never()
+                        }
+                    })
+                } else {
+                    ty.clone()
+                }
+            }
+            // A failed `all` check does not identify which element failed.
+            AtomicNarrowOp::NotAllCall(..) => ty.clone(),
         }
     }
 

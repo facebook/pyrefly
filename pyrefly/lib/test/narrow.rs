@@ -3002,6 +3002,40 @@ class C:
 );
 
 testcase!(
+    test_all_isinstance_generator_narrows_iterable_union,
+    r#"
+from dataclasses import dataclass
+from typing import assert_type
+
+@dataclass
+class Something:
+    name: str
+
+def test(xs: list[str] | list[Something]) -> list[str]:
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, list[str])
+        return xs
+    assert all(isinstance(x, Something) for x in xs)
+    assert_type(xs, list[Something])
+    return [x.name for x in xs]
+
+def unrelated_predicate(xs: list[str] | list[Something], value: object) -> None:
+    if all(isinstance(value, str) for _ in xs):
+        assert_type(xs, list[str] | list[Something])
+
+def filtered_generator(xs: list[str] | list[Something]) -> None:
+    if all(isinstance(x, str) for x in xs if x):
+        assert_type(xs, list[str] | list[Something])
+
+def shadowed_all(xs: list[str] | list[Something]) -> None:
+    def all(value: object) -> bool:
+        return True
+    if all(isinstance(x, str) for x in xs):
+        assert_type(xs, list[str] | list[Something])
+"#,
+);
+
+testcase!(
     test_while_try_except,
     r#"
 from typing import assert_type
