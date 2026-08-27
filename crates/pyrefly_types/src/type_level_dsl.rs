@@ -4628,7 +4628,14 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 self.evaluate_expression(&generator.elt, &iteration, budget),
             ) {
                 (_, invalid @ DslOutcome::Invalid(_)) => return invalid,
-                (_, DslOutcome::Value(DslValue::Unknown)) => unknown = true,
+                (GeneratorResultKind::Dimensions, DslOutcome::Value(DslValue::Unknown)) => {
+                    // The source cardinality and filter membership already determine the rank.
+                    dimensions.push(Int::Int)
+                }
+                (GeneratorResultKind::FlagValues, DslOutcome::Value(DslValue::Unknown)) => {
+                    // Flag sequences have no gradual element representation.
+                    unknown = true
+                }
                 (
                     GeneratorResultKind::Dimensions,
                     DslOutcome::Value(DslValue::Dimension(value)),
@@ -4782,17 +4789,30 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 let Expr::Subscript(subscript) = expression else {
                     unreachable!("validated IntTuple index expression is a subscript")
                 };
-                let index = match self.evaluate_expression(&subscript.slice, environment, budget) {
-                    DslOutcome::Value(DslValue::FlagInt(index)) => index,
-                    DslOutcome::Value(DslValue::Unknown) => {
-                        return DslOutcome::Value(DslValue::Unknown);
+                let index = match integer_literal(&subscript.slice) {
+                    IntegerLiteral::Unrepresentable { negative } => {
+                        if negative {
+                            i64::MIN
+                        } else {
+                            i64::MAX
+                        }
                     }
-                    DslOutcome::ExplicitGradual => {
-                        unreachable!("validated Flag integer index cannot be explicitly gradual")
-                    }
-                    invalid @ DslOutcome::Invalid(_) => return invalid,
-                    DslOutcome::Value(_) => {
-                        unreachable!("validated IntTuple index evaluates to a Flag integer")
+                    IntegerLiteral::NotLiteral | IntegerLiteral::Value(_) => {
+                        match self.evaluate_expression(&subscript.slice, environment, budget) {
+                            DslOutcome::Value(DslValue::FlagInt(index)) => index,
+                            DslOutcome::Value(DslValue::Unknown) => {
+                                return DslOutcome::Value(DslValue::Unknown);
+                            }
+                            DslOutcome::ExplicitGradual => {
+                                unreachable!(
+                                    "validated Flag integer index cannot be explicitly gradual"
+                                )
+                            }
+                            invalid @ DslOutcome::Invalid(_) => return invalid,
+                            DslOutcome::Value(_) => {
+                                unreachable!("validated IntTuple index evaluates to a Flag integer")
+                            }
+                        }
                     }
                 };
                 let shape = match environment.value(shape) {
@@ -4844,13 +4864,12 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     unreachable!("validated dimension tuple expression is a tuple")
                 };
                 let mut dimensions = Vec::with_capacity(tuple.elts.len());
-                let mut unknown = false;
                 for element in &tuple.elts {
                     match self.evaluate_expression(element, environment, budget) {
                         DslOutcome::Value(DslValue::Dimension(dimension)) => {
                             dimensions.push(dimension)
                         }
-                        DslOutcome::Value(DslValue::Unknown) => unknown = true,
+                        DslOutcome::Value(DslValue::Unknown) => dimensions.push(Int::Int),
                         DslOutcome::ExplicitGradual => {
                             unreachable!("validated value expression cannot return gradual")
                         }
@@ -4860,11 +4879,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
                         }
                     }
                 }
-                if unknown {
-                    DslOutcome::Value(DslValue::Unknown)
-                } else {
-                    DslOutcome::Value(DslValue::DimensionTuple(dimensions))
-                }
+                DslOutcome::Value(DslValue::DimensionTuple(dimensions))
             }
             TypeShapeDslExpressionKind::IntTupleConstructor => {
                 let Expr::Call(call) = expression else {

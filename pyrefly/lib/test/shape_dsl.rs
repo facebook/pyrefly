@@ -2453,7 +2453,7 @@ testcase!(
 import shape_extensions.dsl as dsl
 from shape_extensions import Flag, Int, IntTuple, IntVar, type_shape_dsl_function
 from torch import Tensor
-from typing import reveal_type
+from typing import Literal, assert_type, reveal_type
 
 @type_shape_dsl_function
 def add_multiply(n: Int, k: int) -> Int:
@@ -2785,7 +2785,7 @@ def test(one: Tensor[[6]], concrete: Tensor[[6, 8]], broad: int) -> None:
     reveal_type(multiply_overflow_reversed())  # E: revealed type: Tensor[[int]]
     reveal_type(divide_overflow())  # E: revealed type: Tensor[[int]]
     reveal_type(modulo_min_by_negative_one())  # E: revealed type: Tensor[[0]]
-    reveal_type(tuple_overflow())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(tuple_overflow(), Tensor[tuple[int, Literal[4]]])
     apply_flag_floor(broad, 0)  # E: dimension integer division by zero
     apply_flag_modulo(broad, 0)  # E: dimension integer modulo by zero
 
@@ -7193,7 +7193,7 @@ def test(x: Tensor[[2, 3]]) -> None:
     assert_type(apply_dimension(x, 1), Tensor[[3]])
     assert_type(apply_flag(x, 0), Tensor[[2]])
     assert_type(apply_flag(x, 1), Tensor[[3]])
-    reveal_type(broad())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(broad(), Tensor[tuple[int]])
 "#,
 );
 
@@ -7364,7 +7364,7 @@ def test[N: IntVar, Tail: IntTuple](
     assert_type(apply_sliced(unpacked), Tensor[[int]])
     reveal_type(apply_copy(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
     reveal_type(apply_slice(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
-    reveal_type(apply_index(unpacked))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_index(unpacked), Tensor[tuple[int]])
     assert_type(apply_flag_helper(unpacked), Tensor[[int]])
     reveal_type(apply_tail_is_pair(gradual))  # E: revealed type: Tensor[tuple[Unknown, ...]]
 "#,
@@ -7737,7 +7737,7 @@ def test[N: IntVar, S: IntTuple](concrete: Tensor[[2, 3, 4]], symbolic: Tensor[[
     assert_type(apply_empty(concrete), Tensor[[]])
     assert_type(apply_reorder(gradual), Tensor[IntTuple])
     assert_type(apply_rank_two_prefix(gradual), Tensor[IntTuple])
-    assert_type(apply_first_dimension(gradual), Tensor[IntTuple])
+    assert_type(apply_first_dimension(gradual), Tensor[[int]])
     assert_type(apply_rank_two_prefix(unpacked), Tensor[IntTuple])
     assert_type(apply_first_dimension(unpacked), Tensor[[2]])
     assert_type(apply_unknown(concrete), Tensor[IntTuple])
@@ -8369,6 +8369,42 @@ def captured_dimension(shape: IntTuple, dimension: Int) -> IntTuple:
     return dsl.IntTuple(dimension for index in range(1))
 
 @type_shape_dsl_function
+def partial_unknown(shape: IntTuple) -> IntTuple:
+    unknown = dsl.prod(shape)
+    return dsl.IntTuple((unknown if index == 0 else 7 if index == 1 else 11 for index in range(3)))
+
+@type_shape_dsl_function
+def literal_partial_unknown(shape: IntTuple) -> IntTuple:
+    unknown = dsl.prod(shape)
+    return dsl.IntTuple((unknown, 7, 11))
+
+@type_shape_dsl_function
+def all_unknown(shape: IntTuple) -> IntTuple:
+    unknown = dsl.prod(shape)
+    return dsl.IntTuple((unknown for index in range(3)))
+
+@type_shape_dsl_function
+def consume_partial_unknown(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((len(shape), shape[1], shape[0]))
+
+@type_shape_dsl_function
+def unknown_value_and_filter(shape: IntTuple, axis: int) -> IntTuple:
+    unknown = dsl.prod(shape)
+    return dsl.IntTuple((unknown for index in range(3) if index == axis))
+
+@type_shape_dsl_function
+def unknown_then_invalid(shape: IntTuple) -> IntTuple:
+    unknown = dsl.prod(shape)
+    return dsl.IntTuple((unknown if index == 0 else 1 // (index - 1) for index in range(2)))
+
+@type_shape_dsl_function
+def unknown_flag_sequence(shape: IntTuple, axis: int) -> IntTuple:
+    axes = tuple(axis for index in range(1))
+    if 0 in axes:
+        return dsl.IntTuple(())
+    return shape
+
+@type_shape_dsl_function
 def flags(shape: IntTuple) -> IntTuple:
     axes = tuple(index for index in range(len(shape)) if index != 0)
     if 1 in axes:
@@ -8395,6 +8431,20 @@ def narrowed_flag_source(
 @type_shape_dsl_function
 def empty(shape: IntTuple) -> IntTuple:
     return dsl.IntTuple(index for index in range(0))
+
+@type_shape_dsl_function
+def unknown_range_length(count: int) -> IntTuple:
+    return dsl.IntTuple((index for index in range(count)))
+
+@type_shape_dsl_function
+def zipped_partial_unknown(shape: IntTuple) -> IntTuple:
+    unknown = dsl.prod(shape)
+    return dsl.IntTuple(unknown if index == 0 else value for index, value in zip(range(2), (7, 11)))
+
+@type_shape_dsl_function
+def truncated_partial_unknown(shape: IntTuple) -> IntTuple:
+    unknown = dsl.prod(shape)
+    return dsl.IntTuple(unknown if index == 0 else 7 for index in range(4097))
 
 @type_shape_dsl_function
 def bounded_fallback(shape: IntTuple) -> IntTuple:
@@ -8495,7 +8545,16 @@ def apply_dimension_flags[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[dimension
 def apply_narrowed_source[Axis: Flag[int | tuple[int, ...] | None]](
     axis: Axis,
 ) -> Tensor[narrowed_flag_source(IntTuple[2, 3], Axis)]: ...
+def apply_partial_unknown[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[partial_unknown(Shape)]: ...
+def apply_literal_partial_unknown[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[literal_partial_unknown(Shape)]: ...
+def apply_all_unknown[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[all_unknown(Shape)]: ...
+def apply_consumed_partial_unknown[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[consume_partial_unknown(partial_unknown(Shape))]: ...
+def apply_unknown_filter[Shape: IntTuple, Axis: Flag[int]](x: Tensor[Shape], axis: Axis) -> Tensor[unknown_value_and_filter(Shape, Axis)]: ...
+def apply_unknown_invalid[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[unknown_then_invalid(Shape)]: ...
 def apply_empty[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[empty(Shape)]: ...
+def apply_unknown_length[Count: Flag[int]](count: Count) -> Tensor[unknown_range_length(Count)]: ...
+def apply_zipped_partial_unknown[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[zipped_partial_unknown(Shape)]: ...
+def apply_truncated_partial_unknown[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[truncated_partial_unknown(Shape)]: ...
 def apply_bounded[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[bounded_fallback(Shape)]: ...
 def anonymous_gradual(x: Tensor[[int, 3]]) -> Tensor[copy_shape(IntTuple[int, 3])]: ...
 def lazy_fallback(x: Tensor[[2]]) -> Tensor[lazy_unknown_filter(IntTuple[2], int)]: ...
@@ -8516,43 +8575,61 @@ def apply_zipped_flag[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[zipped_flag_a
 
 def broad() -> Tensor[captured_filter(IntTuple[2, 3], int)]: ...
 def broad_dimension(x: Tensor[[2]]) -> Tensor[captured_dimension(IntTuple[2], Int)]: ...
+def broad_flag_sequence(x: Tensor[[2]]) -> Tensor[unknown_flag_sequence(IntTuple[2], int)]: ...
+def accept_rank_three(x: Tensor[[int, int, int]]) -> None: ...
+def accept_rank_two(x: Tensor[[int, int]]) -> None: ...
+def accept_partial(x: Tensor[[int, 7, 11]]) -> None: ...
 
-def test[N: IntVar](concrete: Tensor[[2, 3, 4]], symbolic: Tensor[[N, 3]], one_dim: Tensor[[N]], literal: Tensor[[2]], anonymous: Tensor[[int, 3]], gradual: Tensor[IntTuple]) -> None:
+def test[N: IntVar](concrete: Tensor[[2, 3, 4]], symbolic: Tensor[[N, 3]], one_dim: Tensor[[N]], literal: Tensor[[2]], anonymous: Tensor[[int, 3]], gradual: Tensor[IntTuple], concrete_partial: Tensor[[5, 7, 11]], broad_axis: int) -> None:
     assert_type(apply_copy(concrete), Tensor[[2, 3, 4]])
     assert_type(apply_copy(symbolic), Tensor[[N, 3]])
     assert_type(apply_reflexive(symbolic), Tensor[[N, 3]])
-    reveal_type(apply_copy(gradual))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_copy(gradual), Tensor[IntTuple])
     assert_type(apply_range(concrete), Tensor[[7, 2]])
     assert_type(apply_sequence(concrete), Tensor[[2, 5]])
     reveal_type(apply_capture(concrete, 1))  # E: revealed type: Tensor[[0, 2]]
-    reveal_type(broad())  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(broad(), Tensor[IntTuple])
     assert_type(apply_flags(concrete), Tensor[[2]])
     assert_type(apply_dimension(one_dim), Tensor[[N]])
     assert_type(broad_dimension(literal), Tensor[[int]])
     assert_type(apply_dimension_flags(concrete), Tensor[[2]])
     assert_type(apply_narrowed_source((2, 3)), Tensor[[2, 3]])
+    partial = apply_partial_unknown(gradual)
+    assert_type(partial, Tensor[[int, 7, 11]])
+    assert_type(apply_literal_partial_unknown(gradual), Tensor[[int, 7, 11]])
+    assert_type(apply_all_unknown(gradual), Tensor[[int, int, int]])
+    assert_type(apply_consumed_partial_unknown(gradual), Tensor[[3, 7, int]])
+    assert_type(apply_unknown_filter(gradual, broad_axis), Tensor[IntTuple])
+    apply_unknown_invalid(gradual)  # E: dimension integer division by zero
+    assert_type(broad_flag_sequence(literal), Tensor[IntTuple])
     assert_type(apply_empty(concrete), Tensor[[]])
-    reveal_type(apply_bounded(concrete))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_unknown_length(broad_axis), Tensor[IntTuple])
+    assert_type(apply_zipped_partial_unknown(gradual), Tensor[[int, 11]])
+    assert_type(apply_truncated_partial_unknown(gradual), Tensor[IntTuple])
+    accept_rank_three(partial)
+    accept_rank_two(partial)  # E: is not assignable
+    accept_partial(concrete_partial)
+    assert_type(apply_bounded(concrete), Tensor[IntTuple])
     assert_type(anonymous_gradual(anonymous), Tensor[[int, 3]])
-    reveal_type(lazy_fallback(literal))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(lazy_fallback(literal), Tensor[IntTuple])
     apply_later_invalid(literal)  # E: Flag integer division by zero
     apply_prefix_error(literal)  # E: Flag integer division by zero
     assert_type(apply_shadowed(concrete), Tensor[[2, 3, 4]])
     assert_type(apply_zipped(concrete, literal), Tensor[[14]])
     assert_type(apply_zipped_alias(concrete, symbolic), Tensor[[(2 + N), 6]])
-    reveal_type(apply_zipped(gradual, concrete))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_zipped(gradual, concrete), Tensor[IntTuple])
     assert_type(apply_zipped_empty(concrete), Tensor[[]])
     apply_zipped_empty_invalid(gradual, 0)  # E: Flag integer division by zero
     assert_type(apply_zipped_empty_skip(gradual, 0), Tensor[[]])
     assert_type(apply_zipped_zero(concrete), Tensor[[]])
     assert_type(apply_zipped_bounded(concrete), Tensor[[2]])
-    reveal_type(apply_zipped_over_bound(concrete))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_zipped_over_bound(concrete), Tensor[IntTuple])
     apply_zipped_unknown_invalid(gradual, 0)  # E: Flag integer division by zero
     apply_zipped_order(concrete, 0, 0)  # E: Flag integer division by zero
     assert_type(apply_zipped_flag(concrete), Tensor[[7, 9]])
 
 def test_open[Rest: IntTuple](x: Tensor[[1, *Elements[Rest], 3]], concrete: Tensor[[2, 3, 4]]) -> None:
-    reveal_type(apply_zipped(x, concrete))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_zipped(x, concrete), Tensor[IntTuple])
     assert_type(apply_zipped_empty(x), Tensor[[]])
 "#,
 );
@@ -9469,7 +9546,7 @@ testcase!(
 import shape_extensions.dsl as dsl
 from shape_extensions import Elements, Flag, IntTuple, IntVar, broadcast, type_shape_dsl_function
 from torch import Tensor
-from typing import reveal_type
+from typing import assert_type, reveal_type
 
 @type_shape_dsl_function
 def select(shape: IntTuple, index: int) -> IntTuple:
@@ -9533,6 +9610,10 @@ def lazy_index(shape: IntTuple, choose: bool) -> IntTuple:
 def huge_index(shape: IntTuple) -> IntTuple:
     return dsl.IntTuple((shape[999999999999999999999999],))
 
+@type_shape_dsl_function
+def negative_huge_index(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[-999999999999999999999999],))
+
 def apply_select[Shape: IntTuple, Index: Flag[int]](
     x: Tensor[Shape], index: Index,
 ) -> Tensor[select(Shape, Index)]: ...
@@ -9544,6 +9625,7 @@ def apply_next[Shape: IntTuple, Index: Flag[int]](
 def apply_copy[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[copy_by_binder(Shape)]: ...
 def apply_reverse[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[reverse_by_binder(Shape)]: ...
 def apply_huge[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[huge_index(Shape)]: ...
+def apply_negative_huge[Shape: IntTuple](x: Tensor[Shape]) -> Tensor[negative_huge_index(Shape)]: ...
 
 def apply_divide[Shape: IntTuple, Divisor: Flag[int]](
     x: Tensor[Shape], divisor: Divisor,
@@ -9569,10 +9651,11 @@ def index_results[N: IntVar, Tail: IntTuple](
     reveal_type(apply_next(symbolic, 0))  # E: revealed type: Tensor[[3]]
     reveal_type(apply_copy(symbolic))  # E: revealed type: Tensor[[N, 3, 4]]
     reveal_type(apply_reverse(symbolic))  # E: revealed type: Tensor[[4, 3, N]]
-    reveal_type(apply_select(symbolic, broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
-    reveal_type(apply_select(gradual, 0))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_select(symbolic, broad), Tensor[tuple[int]])
+    assert_type(apply_select(gradual, 0), Tensor[tuple[int]])
     reveal_type(apply_select(unpacked, 0))  # E: revealed type: Tensor[[2]]
-    reveal_type(apply_huge(symbolic))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    apply_huge(symbolic)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
+    apply_negative_huge(symbolic)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
     reveal_type(apply_lazy(symbolic, False))  # E: revealed type: Tensor[[N, 3, 4]]
     reveal_type(apply_narrowed_comparison(symbolic, 0))  # E: revealed type: Tensor[[1]]
     reveal_type(apply_narrowed_comparison(symbolic, (0,)))  # E: revealed type: Tensor[[N, 3, 4]]
