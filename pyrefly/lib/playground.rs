@@ -23,6 +23,7 @@ use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::LiveSourceDatabase;
 use pyrefly_build::source_db::ModuleEnumerator;
 use pyrefly_build::source_db::SourceDatabase;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
@@ -562,6 +563,9 @@ impl Playground {
         if let Some(bindings) = transaction.get_bindings(handle) {
             let module_info = bindings.module();
             for unused in bindings.unused_variables() {
+                if Ast::is_pytest_tracebackhide(unused.name.as_str()) {
+                    continue;
+                }
                 let range = module_info.display_range(unused.range);
                 items.push(Diagnostic {
                     start_line: range.start.line_within_file().get() as i32,
@@ -1145,6 +1149,21 @@ mod tests {
         assert_eq!(unused_variables.len(), 1, "Should detect 1 unused variable");
         assert_eq!(unused_variables[0].message_header, "Variable `x` is unused");
         assert_eq!(unused_variables[0].severity, 1); // MarkerSeverity.Hint
+    }
+
+    #[test]
+    fn test_pytest_tracebackhide_not_reported_as_unused() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "main.py".to_owned(),
+            "def foo():\n    __tracebackhide__ = True".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+
+        let errors = state.get_errors();
+        assert!(errors.iter().all(|error| error.kind != "unused-variable"));
     }
 
     #[test]
