@@ -4,9 +4,10 @@
 # LICENSE file in the root directory of this source tree.
 
 # Phase 1.1: Missing shape operations tests
-from typing import assert_type, reveal_type
+from typing import Any, assert_type, reveal_type
 
 import torch
+from shape_extensions import IntTuple, IntVar
 from torch import Tensor
 
 
@@ -40,9 +41,10 @@ def test_movedim_single():
 
 def test_movedim_multiple():
     x: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
-    # Move dims 0 and 1 to positions 2 and 3: [2, 3, 4, 5] -> [4, 5, 2, 3]
-    result = torch.movedim(x, source=(0, 1), destination=(2, 3))
-    assert_type(result, Tensor[[4, 5, 2, 3]])
+    assert_type(
+        torch.movedim(x, source=(0, 1), destination=(2, 3)),
+        Tensor[[4, 5, 2, 3]],
+    )
 
 
 def test_movedim_negative():
@@ -63,6 +65,60 @@ def test_moveaxis():
     x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
     result = torch.moveaxis(x, source=0, destination=2)
     assert_type(result, Tensor[[3, 4, 2]])
+
+
+def test_movedim_method_function_alias_parity():
+    x: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
+    assert_type(torch.movedim(x, (0, 2), (2, 0)), Tensor[[4, 3, 2, 5]])
+    assert_type(torch.moveaxis(x, (0, 2), (2, 0)), Tensor[[4, 3, 2, 5]])
+    assert_type(
+        torch.movedim(input=x, source=(0, 2), destination=(2, 0)),
+        Tensor[[4, 3, 2, 5]],
+    )
+    assert_type(
+        torch.moveaxis(input=x, source=(0, 2), destination=(2, 0)),
+        Tensor[[4, 3, 2, 5]],
+    )
+    assert_type(x.movedim((0, 2), (2, 0)), Tensor[[4, 3, 2, 5]])
+    assert_type(x.moveaxis((0, 2), (2, 0)), Tensor[[4, 3, 2, 5]])
+
+
+def test_movedim_negative_tuple_axes():
+    x: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
+    assert_type(torch.movedim(x, (-1, -3), (0, 2)), Tensor[[5, 2, 3, 4]])
+
+
+def test_movedim_scalar_rank0():
+    scalar: Tensor[[]] = torch.tensor(1)
+    # A rank-0 tensor has one implicit axis spelled either 0 or -1, so every
+    # combination of those spellings is a legal no-op.
+    assert_type(torch.movedim(scalar, 0, 0), Tensor[[]])
+    assert_type(torch.movedim(scalar, -1, -1), Tensor[[]])
+    assert_type(torch.movedim(scalar, 0, -1), Tensor[[]])
+    assert_type(torch.moveaxis(scalar, -1, 0), Tensor[[]])
+    assert_type(scalar.movedim(0, -1), Tensor[[]])
+    assert_type(scalar.moveaxis(-1, -1), Tensor[[]])
+
+
+def movedim_symbolic[A: IntVar, B: IntVar, C: IntVar](
+    x: Tensor[[A, B, C]],
+) -> Tensor[[B, C, A]]:
+    return torch.moveaxis(x, 0, 2)
+
+
+def test_movedim_gradual_and_broad_controls(
+    scalar_source: int,
+    scalar_destination: int,
+    tuple_source: tuple[int, ...],
+    tuple_destination: tuple[int, ...],
+    dynamic: Any,
+):
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    gradual: Tensor[IntTuple] = x
+    assert_type(torch.movedim(gradual, 0, 2), Tensor[IntTuple])
+    assert_type(torch.movedim(x, scalar_source, scalar_destination), Tensor[IntTuple])
+    assert_type(torch.moveaxis(x, tuple_source, tuple_destination), Tensor)
+    assert_type(x.movedim(dynamic, dynamic), Tensor[IntTuple])
 
 
 # Test: torch.unfold (sliding window view)

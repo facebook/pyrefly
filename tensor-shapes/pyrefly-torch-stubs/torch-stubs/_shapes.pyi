@@ -395,12 +395,60 @@ def repeat_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:
         )
     )
 
+@type_shape_dsl_function
+def movedim_scalar_shape(shape: IntTuple, source: int, destination: int) -> IntTuple:
+    if not dsl.is_int_value(source) or not dsl.is_int_value(destination):
+        return dsl.IntTuple.gradual()
+    rank = len(shape)
+    if rank == 0:
+        # A rank-0 tensor still admits one implicit axis, so both spellings of it
+        # (0 and -1) are legal and the move is a no-op. Each control is checked
+        # independently so the reported axis matches the offending argument.
+        if source != 0 and source != -1:
+            return dsl.Invalid("movedim source dimension out of range")
+        if destination != 0 and destination != -1:
+            return dsl.Invalid("movedim destination dimension out of range")
+        return shape
+    if source < 0 - rank or source >= rank:
+        return dsl.Invalid("movedim source dimension out of range")
+    if destination < 0 - rank or destination >= rank:
+        return dsl.Invalid("movedim destination dimension out of range")
+    normalized_source = (source + rank) % rank
+    normalized_destination = (destination + rank) % rank
+    return dsl.IntTuple(
+        (
+            shape[normalized_source]
+            if index == normalized_destination
+            else shape[index + 1]
+            if normalized_source < normalized_destination
+            and index >= normalized_source
+            and index < normalized_destination
+            else shape[index - 1]
+            if normalized_source > normalized_destination
+            and index > normalized_destination
+            and index <= normalized_source
+            else shape[index]
+            for index in range(rank)
+        )
+    )
+
 @shape_dsl_function
 def movedim_ir(
     self: ShapedArray, source: int | list[int], destination: int | list[int]
 ) -> ShapedArray:
     return ShapedArray(
         shape=move_dims(self.shape, source, destination, len(self.shape))
+    )
+
+@shape_dsl_function
+def movedim_input_ir(
+    input: ShapedArray, source: int | list[int], destination: int | list[int]
+) -> ShapedArray:
+    # TODO(stroxler): Delete this wrapper when tuple-valued movedim is migrated to the type-level
+    # DSL. The legacy decorator binds arguments by name, and the public function uses `input`
+    # while the method uses `self`.
+    return ShapedArray(
+        shape=move_dims(input.shape, source, destination, len(input.shape))
     )
 
 @type_shape_dsl_function

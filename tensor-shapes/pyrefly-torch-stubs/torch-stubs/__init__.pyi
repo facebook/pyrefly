@@ -45,7 +45,9 @@ from torch._shapes import (
     index_select_shape,
     item_ir,
     matmul_shape,
+    movedim_input_ir,
     movedim_ir,
+    movedim_scalar_shape,
     multinomial_shape,
     numel_shape,
     permute_shape,
@@ -653,12 +655,18 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Remove dimension by slicing along it. Shape inference via meta-shape: torch.Tensor.unbind"""
         ...
 
-    @uses_shape_dsl(movedim_ir)
     @overload
-    def movedim(self: Tensor, source: int, destination: int) -> Tensor:
-        """Move single dimension to new position. Shape inference via meta-shape: torch.Tensor.movedim"""
+    def movedim[
+        Shape: IntTuple,
+        Source: Flag[builtins.int],
+        Destination: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], source: Source, destination: Destination
+    ) -> Tensor[movedim_scalar_shape(Shape, Source, Destination)]:
+        """Move a single dimension to a new position."""
         ...
 
+    @uses_shape_dsl(movedim_ir)
     @overload
     def movedim(
         self: Tensor, source: tuple[int, ...], destination: tuple[int, ...]
@@ -666,12 +674,18 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Move multiple dimensions to new positions. Shape inference via meta-shape: torch.Tensor.movedim"""
         ...
 
-    @uses_shape_dsl(movedim_ir)
     @overload
-    def moveaxis(self: Tensor, source: int, destination: int) -> Tensor:
-        """Alias for movedim. Shape inference via meta-shape: torch.Tensor.moveaxis"""
+    def moveaxis[
+        Shape: IntTuple,
+        Source: Flag[builtins.int],
+        Destination: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], source: Source, destination: Destination
+    ) -> Tensor[movedim_scalar_shape(Shape, Source, Destination)]:
+        """Alias for movedim with a single source and destination."""
         ...
 
+    @uses_shape_dsl(movedim_ir)
     @overload
     def moveaxis(
         self: Tensor, source: tuple[int, ...], destination: tuple[int, ...]
@@ -1935,28 +1949,40 @@ def unbind[Shape: IntTuple, Dim: Flag[builtins.int]](
     """Remove dimension by slicing along it. Shape inference via meta-shape: torch.unbind"""
     ...
 
-@uses_shape_dsl(movedim_ir)
 @overload
-def movedim(self: Tensor, source: int, destination: int) -> Tensor:
-    """Move single dimension to new position. Shape inference via meta-shape: torch.movedim"""
+def movedim[
+    Shape: IntTuple,
+    Source: Flag[builtins.int],
+    Destination: Flag[builtins.int],
+](
+    input: Tensor[Shape], source: Source, destination: Destination
+) -> Tensor[movedim_scalar_shape(Shape, Source, Destination)]:
+    """Move a single dimension to a new position."""
     ...
 
+@uses_shape_dsl(movedim_input_ir)
 @overload
 def movedim(
-    self: Tensor, source: tuple[int, ...], destination: tuple[int, ...]
+    input: Tensor, source: tuple[int, ...], destination: tuple[int, ...]
 ) -> Tensor:
     """Move multiple dimensions to new positions. Shape inference via meta-shape: torch.movedim"""
     ...
 
-@uses_shape_dsl(movedim_ir)
 @overload
-def moveaxis(self: Tensor, source: int, destination: int) -> Tensor:
-    """Alias for movedim. Shape inference via meta-shape: torch.moveaxis"""
+def moveaxis[
+    Shape: IntTuple,
+    Source: Flag[builtins.int],
+    Destination: Flag[builtins.int],
+](
+    input: Tensor[Shape], source: Source, destination: Destination
+) -> Tensor[movedim_scalar_shape(Shape, Source, Destination)]:
+    """Alias for movedim with a single source and destination."""
     ...
 
+@uses_shape_dsl(movedim_input_ir)
 @overload
 def moveaxis(
-    self: Tensor, source: tuple[int, ...], destination: tuple[int, ...]
+    input: Tensor, source: tuple[int, ...], destination: tuple[int, ...]
 ) -> Tensor:
     """Alias for movedim. Shape inference via meta-shape: torch.moveaxis"""
     ...
