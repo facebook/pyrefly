@@ -404,6 +404,35 @@ def test[N: IntVar](symbolic: Int[N], literal: Int[3], broad: Int) -> None:
 "#,
 );
 
+testcase!(
+    test_class_flag_substitutes_into_type_shape_dsl_return,
+    shaped_array_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, shaped_array, type_shape_dsl_function
+from typing import assert_type
+
+@shaped_array(shape="Shape")
+class Array[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def resize(shape: IntTuple, amount: int) -> IntTuple:
+    return dsl.IntTuple((shape[0], amount + 0))
+
+class Resize[Amount: Flag[int]]:
+    def __init__(self, amount: Amount) -> None: ...
+    def apply[Shape: IntTuple](
+        self, value: Array[Shape]
+    ) -> Array[resize(Shape, Amount)]: ...
+
+def check(value: Array[[2, 3]]) -> None:
+    assert_type(Resize(7).apply(value), Array[[2, 7]])
+
+def gradual(resize: Resize, value: Array[[2, 3]]) -> None:
+    assert_type(resize.apply(value), Array[[2, int]])
+"#,
+);
+
 fn type_shape_dsl_gradual_env() -> TestEnv {
     let mut env = shape_dsl_tensor_env();
     env.add(

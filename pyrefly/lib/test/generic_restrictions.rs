@@ -220,8 +220,254 @@ assert_type(mixed_domain(7, 8), tuple[Literal[7], Literal[8]])
 assert_type(multiple(True, True), Literal[True])
 multiple(True, False)  # E: Argument `Literal[False]` is not assignable to parameter `y` with type `Literal[True]`
 
-class Invalid[K: Flag[int]]: ...  # E: `Flag` type parameters are currently supported only on functions
-type InvalidAlias[K: Flag[int]] = K  # E: `Flag` type parameters are currently supported only on functions
+type InvalidAlias[K: Flag[int]] = K  # E: `Flag` type parameters are not supported on type aliases
+"#,
+);
+
+testcase!(
+    test_class_flag_constructor_inference,
+    flag_env(),
+    r#"
+from typing import Any, Literal, TypedDict, assert_type
+from shape_extensions import Flag
+
+class Control[K: Flag[int]]:
+    def __init__(self, value: K) -> None: ...
+    def get(self) -> K: ...
+
+class DefaultControl[K: Flag[int]]:
+    def __init__(self, value: K = -1) -> None: ...
+    def get(self) -> K: ...
+
+class Pair[Count: Flag[int], Label: Flag[str]]:
+    def __init__(self, label: Label, count: Count) -> None: ...
+    def get(self) -> tuple[Count, Label]: ...
+
+class RequiredValue(TypedDict):
+    value: Literal[4]
+
+assert_type(Control(1), Control[Literal[1]])
+assert_type(Control(value=2).get(), Literal[2])
+assert_type(Control(*(3,)).get(), Literal[3])
+required: RequiredValue = {"value": 4}
+assert_type(Control(**required).get(), Literal[4])
+assert_type(DefaultControl().get(), Literal[-1])
+assert_type(Pair("item", 6).get(), tuple[Literal[6], Literal["item"]])
+
+broad: int = 1
+dynamic: Any = 1
+values: tuple[int, ...] = ()
+keywords: dict[str, int] = {}
+assert_type(Control(broad), Control[int])
+assert_type(Control(dynamic), Control[Any])
+assert_type(DefaultControl(*values).get(), int)
+assert_type(DefaultControl(**keywords).get(), int)
+
+def bare_is_gradual(control: Control) -> None:
+    assert_type(control.get(), Any)
+"#,
+);
+
+testcase!(
+    test_class_flag_constructor_source_validation,
+    flag_env(),
+    r#"
+from shape_extensions import Flag
+
+type Carrier[T] = T
+
+class Missing[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter, found 0
+    pass
+
+class Multiple[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter, found 2
+    def __init__(self, x: K, y: K) -> None: ...
+
+class Wrapped[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter, found 0
+    def __init__(self, x: Carrier[K]) -> None: ...
+
+class UnionWrapped[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter, found 0
+    def __init__(self, x: K | None) -> None: ...
+
+class Variadic[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter, found 0
+    def __init__(self, *args: K) -> None: ...
+
+class Keywords[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter, found 0
+    def __init__(self, **kwargs: K) -> None: ...
+
+broad: int = 1
+class BroadDefault[K: Flag[int]]:  # E: Default for parameter binding
+    def __init__(self, value: K = broad) -> None: ...
+
+class Shadowed[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter, found 0
+    def __init__[K](self, value: K) -> None: ...  # E: Type parameter `K` shadows a type parameter of the same name from an enclosing scope
+"#,
+);
+
+testcase!(
+    test_class_flag_new_constructor,
+    flag_env(),
+    r#"
+from typing import Literal, Self, assert_type
+from shape_extensions import Flag
+
+# An overridden `__new__` suppresses the inherited `object.__init__`, so it can be the only
+# constructor phase that binds a `Flag` parameter.
+class Created[K: Flag[int]]:
+    def __new__(cls, value: K) -> Self: ...
+    def get(self) -> K: ...
+
+assert_type(Created(1), Created[Literal[1]])
+assert_type(Created(value=2).get(), Literal[2])
+
+# `__new__` and `__init__` may each bind a different `Flag` parameter.
+class Split[Count: Flag[int], Label: Flag[str]]:
+    def __new__(cls, count: Count, label: str) -> Self: ...
+    def __init__(self, count: int, label: Label) -> None: ...
+    def get(self) -> tuple[Count, Label]: ...
+
+assert_type(Split(3, "item").get(), tuple[Literal[3], Literal["item"]])
+
+# When both constructor phases bind the same `Flag`, they must agree on how callers supply it.
+class SameSource[K: Flag[int]]:
+    def __new__(cls, value: K = 1) -> Self: ...
+    def __init__(self, value: K = 1) -> None: ...
+    def get(self) -> K: ...
+
+assert_type(SameSource().get(), Literal[1])
+assert_type(SameSource(2).get(), Literal[2])
+
+class MismatchedName[K: Flag[int]]:  # E: must bind from the same constructor argument
+    def __new__(cls, value: K) -> Self: ...
+    def __init__(self, renamed: K) -> None: ...
+
+class MismatchedPosition[K: Flag[int]]:  # E: must bind from the same constructor argument
+    def __new__(cls, value: K, other: int) -> Self: ...
+    def __init__(self, other: int, value: K) -> None: ...
+
+class MismatchedDefault[K: Flag[int]]:  # E: must have the same default
+    def __new__(cls, value: K = 1) -> Self: ...
+    def __init__(self, value: K = 2) -> None: ...
+
+class MissingInNew[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter, found 0
+    def __new__(cls, value: list[K]) -> Self: ...
+
+class MultipleInNew[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter, found 2
+    def __new__(cls, value: K, other: K) -> Self: ...
+
+broad: int = 1
+class BadDefaultInNew[K: Flag[int]]:  # E: Default for parameter binding
+    def __new__(cls, value: K = broad) -> Self: ...
+
+# Provenance is recorded for plain generic base classes too, so an inherited `__new__` can bind
+# a `Flag` parameter that only the subclass introduces.
+class NewBase[T]:
+    def __new__(cls, value: T) -> Self: ...
+    def get(self) -> T: ...
+
+class InheritedNew[K: Flag[int]](NewBase[K]):
+    pass
+
+assert_type(InheritedNew(4).get(), Literal[4])
+
+class WrappedNewBase[T]:
+    def __new__(cls, value: list[T]) -> Self: ...
+
+class BadInheritedNew[K: Flag[int]](WrappedNewBase[K]):  # E: must directly annotate exactly one constructor parameter, found 0
+    pass
+"#,
+);
+
+testcase!(
+    test_class_flag_inherited_constructor,
+    flag_env(),
+    r#"
+from typing import Literal, assert_type, overload
+from shape_extensions import Flag
+
+class Base[T]:
+    def __init__(self, value: T) -> None: ...
+    def get(self) -> T: ...
+
+class Propagated[K: Flag[int]](Base[K]):
+    pass
+
+class Fixed(Base[Literal[7]]):
+    pass
+
+assert_type(Propagated(5), Propagated[Literal[5]])
+assert_type(Propagated(5).get(), Literal[5])
+assert_type(Fixed(7).get(), Literal[7])
+
+class WrappedBase[T]:
+    def __init__(self, value: list[T]) -> None: ...
+
+class BadInherited[K: Flag[int]](WrappedBase[K]):  # E: must directly annotate exactly one constructor parameter, found 0
+    pass
+
+type Carrier[T] = T
+class AliasBase[T]:
+    def __init__(self, value: Carrier[T]) -> None: ...
+
+class BadInheritedAlias[K: Flag[int]](AliasBase[K]):  # E: must directly annotate exactly one constructor parameter, found 0
+    pass
+
+broad: int = 1
+class DefaultBase[T]:
+    def __init__(self, value: T = broad) -> None: ...
+
+class BadInheritedDefault[K: Flag[int]](DefaultBase[K]):  # E: Default for parameter binding
+    pass
+
+class OverloadedBase[T]:
+    @overload
+    def __init__(self, value: T, mode: Literal[0]) -> None: ...
+    @overload
+    def __init__(self, value: T, mode: Literal[1]) -> None: ...
+    def __init__(self, value: T, mode: Literal[0] | Literal[1]) -> None: ...
+
+class Overloaded[K: Flag[int]](OverloadedBase[K]):
+    pass
+
+assert_type(Overloaded(8, 0), Overloaded[Literal[8]])
+assert_type(Overloaded(value=9, mode=1), Overloaded[Literal[9]])
+mode: Literal[0] | Literal[1] = 0
+assert_type(Overloaded(10, mode), Overloaded[Literal[10]])
+
+class MixedBase[T]:
+    @overload
+    def __init__(self, value: T, mode: Literal[0]) -> None: ...
+    @overload
+    def __init__(self, value: Carrier[T], mode: Literal[1]) -> None: ...
+    def __init__(self, value: T, mode: Literal[0] | Literal[1]) -> None: ...
+
+class BadOverloadBranch[K: Flag[int]](MixedBase[K]):  # E: must directly annotate exactly one constructor parameter, found 0
+    pass
+"#,
+);
+
+testcase!(
+    test_class_flag_constructor_field_does_not_bypass_validation,
+    flag_env(),
+    r#"
+from collections.abc import Callable
+from shape_extensions import Flag
+
+def replacement(value: int) -> None: ...
+def erase_signature[F](fn: F) -> Callable[..., None]: ...
+
+class Assigned[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter, found 0
+    __init__ = replacement
+
+class Annotated[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter, found 0
+    __init__: Callable[[K], None]
+
+class Rebound[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter, found 0
+    def __init__(self, value: K) -> None: ...
+    __init__ = replacement
+
+class Decorated[K: Flag[int]]:  # E: must directly annotate exactly one constructor parameter
+    @erase_signature
+    def __init__(self, value: K) -> None: ...
 "#,
 );
 

@@ -41,6 +41,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::TypeCheckOptions;
 use crate::alt::expr::ExprOptions;
 use crate::alt::expr::TypeOrExpr;
+use crate::alt::shape_flag::extend_shape_flag_vars_from_targs;
 use crate::alt::shape_flag::shape_flag_vars;
 use crate::alt::solve::Iterable;
 use crate::alt::unwrap::HintRef;
@@ -2006,7 +2007,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let meta_shape_func: Option<&dyn MetaShapeFunction> = shape_transform_func.as_deref();
         let mut bound_args: Option<HashMap<String, Type>> = meta_shape_func.map(|_| HashMap::new());
 
-        let (callable_qs, mut callable, shape_flag_vars) = if let Some(tparams) = tparams {
+        let (callable_qs, mut callable, mut shape_flag_vars) = if let Some(tparams) = tparams {
             let instantiate = |callable| {
                 let (qs, callable) = self.instantiate_fresh_callable(tparams, callable);
                 let flag_vars = shape_flag_vars(tparams, qs.vars());
@@ -2042,7 +2043,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             (QuantifiedHandle::empty(), callable, None)
         };
-        let call_context = call_context.with_shape_flag_vars(shape_flag_vars);
         let (mut self_qs, remaining_callable_qs) = if self_obj.is_some()
             && let Some(first_param) = callable.get_first_param()
             // TODO(https://github.com/facebook/pyrefly/issues/105): handle nested vars
@@ -2059,6 +2059,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         call_boundary.defer_quantified(remaining_callable_qs);
         if let Some(targs) = ctor_targs.as_mut() {
             let qs = self.solver().freshen_class_targs(targs, self.uniques);
+            extend_shape_flag_vars_from_targs(&mut shape_flag_vars, targs);
             let mp = targs.substitution_map();
             callable.params.visit_mut(&mut |t| t.subst_mut(&mp));
             if let Some(obj) = self_obj.as_mut() {
@@ -2074,6 +2075,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             call_boundary.defer_quantified(qs);
         }
+        let call_context = call_context.with_shape_flag_vars(shape_flag_vars);
         self.constrain_forwarded_overload_return(ForwardedOverloadCall {
             params: &callable.params,
             has_self: self_obj.is_some(),
