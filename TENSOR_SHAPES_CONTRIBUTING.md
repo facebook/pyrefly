@@ -390,7 +390,19 @@ the DSL through realistic PyTorch signatures.
 
 ## Pre-Commit Checks
 
-Before handing off changes, run formatting and linting:
+Python files in the tensor-shape packages use Ruff's formatter, rather than
+Black. Format them from the repository root with the same Ruff version as CI:
+
+```bash
+uv tool run --from ruff==0.16.5 ruff format \
+  --exclude 'tensor-shapes/skills/**' \
+  tensor-shapes
+```
+
+The `skills` directory is documentation rather than corpus source and is
+excluded because Ruff also formats Python snippets embedded in Markdown.
+
+Before handing off changes, also run the repository formatting and linting:
 
 ```bash
 ./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema

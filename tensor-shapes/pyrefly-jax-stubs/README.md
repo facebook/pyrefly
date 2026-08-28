@@ -24,5 +24,12 @@ expected.
 and every `test/test_*.py`, and those same test files then run against real
 JAX, so a stub that is self-consistent but wrong still fails.
 
+Before submitting a change, format this package with Ruff from the repository
+root:
+
+```bash
+uv tool run --from ruff==0.16.5 ruff format tensor-shapes/pyrefly-jax-stubs
+```
+
 Anything not listed above is simply absent rather than modeled loosely, so it is
 reported as a missing attribute rather than inferred gradually.
