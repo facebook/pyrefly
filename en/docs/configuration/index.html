@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
-<script src="/assets/js/runtime~main.8cbb225d.js" defer="defer"></script>
-<script src="/assets/js/main.dfb1e34f.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.880240bc.js" defer="defer"></script>
+<script src="/assets/js/main.5b7a8162.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -1096,10 +1096,11 @@ Only one of these options can be set in a configuration.</li>
 directory. If none is found, repeat the search in each ancestor directory up to the
 filesystem root, preferring the nearest match. Pyrefly infers a project root from the
 files being checked when there is no config file or other root marker. After finding
-<code>pyvenv.cfg</code>, Pyrefly probes the standard interpreter paths: <code>bin/python3</code>, <code>bin/python</code>,
-<code>python3</code>, and <code>python</code> on macOS and Linux, or <code>Scripts/python.exe</code> and <code>python.exe</code> on
-Windows. Environments in other directories or with only a version-specific executable
-such as <code>python3.12</code> must be activated or set explicitly with
+<code>pyvenv.cfg</code>, Pyrefly uses the interpreter every
+environment builder creates: <code>bin/python</code> on macOS and Linux, or
+<code>Scripts/python.exe</code> on Windows. Environments in other directories, or that no longer
+have that interpreter and keep only a name such as <code>python3</code> or <code>python3.12</code>, must be
+activated or set explicitly with
 <a href="#python-interpreter-path"><code>python-interpreter-path</code></a>.</li>
 <li>Query <code>$(which python3)</code> and <code>$(which python)</code> (platform independent) to use
 a system-installed interpreter.</li>
@@ -1114,7 +1115,7 @@ a system-installed interpreter.</li>
 <div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>You can run <code>pyrefly dump-config</code> and pass in your file or configuration like you would
 with <code>pyrefly check</code> to see what Pyrefly finds for your Python interpreter and
 <code>site-package-path</code>, along with other useful config-debugging features.</p></div></div>
-<h3 class="anchor anchorWithStickyNavbar_LWe7" id="filesystem-globbing">Filesystem Globbing<a href="#filesystem-globbing" class="hash-link" aria-label="Direct link to Filesystem Globbing" title="Direct link to Filesystem Globbing">​</a></h3>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="filesystem-globbing">Filesystem Globbing<a href="#filesystem-globbing" class="hash-link" aria-label="Direct link to Filesystem Globbing" title="Direct link to Filesystem Globbing">  ​</a></h3>
 <p>We use a standard Unix-style glob, which allows for wildcard matching when specifying a fileset. It is similar
 to regex, but more restricted given the subset of allowed syntax for paths on a filesystem. We currently only
 allow matching files with a <code>.py</code>, <code>.pyi</code>, or <code>.pyw</code> suffix.</p>

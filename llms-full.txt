@@ -3208,10 +3208,11 @@ We look for an interpreter with the following logic:
    directory. If none is found, repeat the search in each ancestor directory up to the
    filesystem root, preferring the nearest match. Pyrefly infers a project root from the
    files being checked when there is no config file or other root marker. After finding
-   `pyvenv.cfg`, Pyrefly probes the standard interpreter paths: `bin/python3`, `bin/python`,
-   `python3`, and `python` on macOS and Linux, or `Scripts/python.exe` and `python.exe` on
-   Windows. Environments in other directories or with only a version-specific executable
-   such as `python3.12` must be activated or set explicitly with
+   `pyvenv.cfg`, Pyrefly uses the interpreter every
+   environment builder creates: `bin/python` on macOS and Linux, or
+   `Scripts/python.exe` on Windows. Environments in other directories, or that no longer
+   have that interpreter and keep only a name such as `python3` or `python3.12`, must be
+   activated or set explicitly with
    [`python-interpreter-path`](#python-interpreter-path).
 5. Query `$(which python3)` and `$(which python)` (platform independent) to use
    a system-installed interpreter.
@@ -12546,8 +12547,19 @@ For operators with more complex shape logic (like `reshape`, `cat`, or
 
 ```python
 # Internal library definition — not user-facing code
-def repeat_ir(self: Tensor, sizes: list[int | symint]) -> Tensor:
-    return Tensor(shape=[d * r for d, r in zip(self.shape, sizes)])
+@type_shape_dsl_function
+def repeat_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:
+    if len(repeats) < len(shape):
+        return dsl.Invalid(
+            "Number of dimensions of repeat dims can not be smaller than number of dimensions of tensor"
+        )
+    extra = len(repeats) - len(shape)
+    return dsl.IntTuple(
+        (
+            repeats[index] if index < extra else shape[index - extra] * repeats[index]
+            for index in range(len(repeats))
+        )
+    )
 ```
 
 This means you can extend Pyrefly's shape coverage for new PyTorch operators
