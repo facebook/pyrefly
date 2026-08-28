@@ -9,11 +9,20 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 fn torch_env() -> TestEnv {
-    TestEnv::one(
-        "torch.nn",
+    let mut env = TestEnv::one(
+        "torch",
         r#"
 class Tensor:
+    def __truediv__(self, other: Tensor | float) -> Tensor: ...
     def tolist(self) -> list[int]: ...
+
+def tensor(value: float) -> Tensor: ...
+"#,
+    );
+    env.add(
+        "torch.nn",
+        r#"
+from torch import Tensor
 
 class Parameter(Tensor): ...
 
@@ -23,14 +32,16 @@ class Module:
     ) -> None: ...
     def register_parameter(self, name: str, param: Parameter | None) -> None: ...
 "#,
-    )
+    );
+    env
 }
 
 testcase!(
     test_nn_module_register_buffer_and_parameter,
     torch_env(),
     r#"
-from torch.nn import Module, Parameter, Tensor
+from torch import Tensor
+from torch.nn import Module, Parameter
 from typing import assert_type
 
 class Model(Module):
@@ -50,7 +61,7 @@ testcase!(
     test_register_buffer_is_only_special_for_nn_module,
     torch_env(),
     r#"
-from torch.nn import Tensor
+from torch import Tensor
 
 class NotAModule:
     def register_buffer(self, name: str, value: Tensor) -> None: ...
@@ -59,5 +70,25 @@ class NotAModule:
         self.register_buffer("values", Tensor())
 
 NotAModule().values  # E: Object of class `NotAModule` has no attribute `values`
+"#,
+);
+
+testcase!(
+    test_nn_module_registered_buffer_used_in_method,
+    torch_env(),
+    r#"
+import torch
+from torch import Tensor, nn
+from typing import assert_type
+
+class Model(nn.Module):
+    def __init__(self, input_std: Tensor | None = None) -> None:
+        self.register_buffer(
+            "input_std", torch.tensor(1.0) if input_std is None else input_std
+        )
+
+    def normalize(self, value: Tensor) -> Tensor:
+        assert_type(self.input_std, Tensor)
+        return value / self.input_std
 "#,
 );
