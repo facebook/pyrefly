@@ -44,7 +44,6 @@ jobs:
     - name: Check tensor-shape formatting
       run: >
         uv tool run --from ruff==0.16.5 ruff format --check
-        --exclude 'tensor-shapes/skills/**'
         tensor-shapes
       if: ${{ matrix.os == 'ubuntu-latest' }}
     - name: set windows cargo home

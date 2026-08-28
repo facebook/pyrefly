@@ -395,7 +395,6 @@ Black. Format them from the repository root with the same Ruff version as CI:
 
 ```bash
 uv tool run --from ruff==0.16.5 ruff format \
-  --exclude 'tensor-shapes/skills/**' \
   tensor-shapes
 ```
 
