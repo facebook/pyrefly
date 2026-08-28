@@ -22,6 +22,7 @@ use crate::dimension::ShapeError;
 use crate::dimension::canonicalize;
 use crate::dimension::gradual_size;
 use crate::dimension::is_gradual_size;
+use crate::dimension::is_gradual_size_bound_type_var;
 use crate::lit_int::LitInt;
 use crate::literal::Lit;
 use crate::quantified::QuantifiedKind;
@@ -1078,6 +1079,11 @@ fn carrier_element_to_dim(carrier: &Type) -> Option<Int> {
         Type::TypeVar(tv) if tv.kind() == QuantifiedKind::IntVar => {
             Some(type_to_dim_recover(carrier.clone()))
         }
+        // The currently supported broad `N: Int` bound stands for one dimension,
+        // so `tuple[N]` is a legal tuple-form shape. It projects gradually rather than
+        // symbolically: only `IntVar` owns a symbolic leaf. Precision is retained
+        // because substitution rewrites the tuple type before it is re-projected.
+        _ if is_gradual_size_bound_type_var(carrier) => Some(Int::Int),
         Type::Var(_) => Some(Int::Int),
         Type::Any(_) => Some(Int::Int),
         Type::ClassType(cls) if cls.is_builtin("int") => Some(Int::Int),
@@ -1117,10 +1123,15 @@ pub fn shape_to_tuple_carrier(shape: &IntTuple) -> Type {
 /// Detects a tuple-carrier shape variable occupying the variadic middle of an
 /// unpacked shape.
 pub fn is_tuple_carrier_shape_middle(ty: &Type) -> bool {
-    // An ordinary TypeVar is legal here only as a whole-shape carrier from
-    // tuple-carrier syntax, e.g. `Array[S, DType]` -> `Unpacked([], S, [])`.
+    // An ordinary TypeVar is legal here only as a whole-shape argument from
+    // tuple-form syntax, e.g. `Array[S, DType]` -> `Unpacked([], S, [])`.
     // Scalar symbolic dimensions use `Int`/`IntVar` and must not reach
-    // this fallback as bare TypeVars.
+    // this fallback as bare TypeVars. The supported broad `N: Int` bound denotes
+    // a single dimension, so it is admitted inside a tuple-form shape but never as
+    // a whole shape: `tuple[N]` is a shape, bare `N` is not.
+    if is_gradual_size_bound_type_var(ty) {
+        return false;
+    }
     matches!(ty, Type::Var(_))
         || matches!(ty, Type::TypeVar(tv) if tv.kind() == QuantifiedKind::TypeVar)
         || matches!(ty, Type::Quantified(q) if q.kind == QuantifiedKind::TypeVar)
@@ -2185,6 +2196,34 @@ mod tests {
         )
     }
 
+    /// A PEP 695 type parameter `[Name: <bound>]`.
+    fn pep695_type_var(name: &str, restriction: Restriction) -> Type {
+        Type::Quantified(Box::new(Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
+            Name::new(name),
+            QuantifiedKind::TypeVar,
+            None,
+            restriction,
+            PreInferenceVariance::Invariant,
+        )))
+    }
+
+    /// A legacy `Name = TypeVar("Name", bound=...)` type variable.
+    fn legacy_type_var(name: &str, restriction: Restriction) -> Type {
+        Type::TypeVar(TypeVar::new_with_kind(
+            Identifier::new(Name::new(name), TextRange::empty(TextSize::new(0))),
+            fake_module("__test__"),
+            QuantifiedKind::TypeVar,
+            restriction,
+            None,
+            PreInferenceVariance::Invariant,
+        ))
+    }
+
     fn scalar_symbol(name: &str) -> Int {
         Int::from_type(&Type::TypeVar(fake_type_var(name, QuantifiedKind::IntVar)))
             .expect("IntVar should construct a symbolic dimension")
@@ -3228,6 +3267,65 @@ mod tests {
             tuple_carrier_to_shape(&concrete_carrier(vec![symint.clone()])),
             Some(IntTuple::from_types(vec![symint.clone()]))
         );
+    }
+
+    #[test]
+    fn exact_int_bound_tuple_elements_project_gradually() {
+        for type_var in [
+            pep695_type_var("N", Restriction::Bound(gradual_size())),
+            legacy_type_var("N", Restriction::Bound(gradual_size())),
+        ] {
+            let shape_arg = concrete_carrier(vec![type_var.clone()]);
+            let array = registered_array_shape_arg(shape_arg.clone());
+            // The tuple-form shape is kept verbatim as the class argument, so
+            // substitution has an `N` left to replace.
+            assert_eq!(array.base_class.targs().as_slice(), vec![shape_arg.clone()]);
+            // Before substitution the dimension is gradual, not symbolic.
+            assert_eq!(array.shape(), IntTuple::from_ints(vec![Int::Int]));
+            assert_eq!(
+                tuple_carrier_to_shape(&shape_arg),
+                Some(IntTuple::from_ints(vec![Int::Int]))
+            );
+        }
+
+        // A raw `IntVar` is unaffected and still projects to a symbolic leaf.
+        let int_var = Type::Quantified(Box::new(fake_tparam("N", QuantifiedKind::IntVar)));
+        assert_eq!(
+            tuple_carrier_to_shape(&concrete_carrier(vec![int_var.clone()])),
+            Some(IntTuple::from_ints(vec![Int::Symbolic(Box::new(int_var))]))
+        );
+    }
+
+    #[test]
+    fn bare_int_bound_type_var_is_not_a_whole_shape() {
+        for type_var in [
+            pep695_type_var("N", Restriction::Bound(gradual_size())),
+            legacy_type_var("N", Restriction::Bound(gradual_size())),
+        ] {
+            assert!(!is_tuple_carrier_shape_middle(&type_var));
+            assert_eq!(tuple_carrier_to_shape(&type_var), None);
+        }
+    }
+
+    #[test]
+    fn other_type_variables_do_not_project_as_dimensions() {
+        let int_class = Type::ClassType(fake_class_type("builtins", "int"));
+        for restriction in [
+            Restriction::Bound(int_class.clone()),
+            Restriction::Bound(Type::Int(Int::Literal(5))),
+            Restriction::Constraints(vec![gradual_size(), int_class]),
+            Restriction::Unrestricted,
+        ] {
+            for type_var in [
+                pep695_type_var("T", restriction.clone()),
+                legacy_type_var("T", restriction.clone()),
+            ] {
+                assert_eq!(
+                    tuple_carrier_to_shape(&concrete_carrier(vec![type_var])),
+                    None
+                );
+            }
+        }
     }
 
     #[test]
