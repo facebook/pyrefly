@@ -14,6 +14,7 @@ fn flag_env() -> TestEnv {
         "shape_extensions/__init__.pyi",
         r#"
 class Flag[T]: ...
+class ProxyMethod[T]: ...
 "#,
     )
 }
@@ -265,6 +266,192 @@ assert_type(DefaultControl(**keywords).get(), int)
 
 def bare_is_gradual(control: Control) -> None:
     assert_type(control.get(), Any)
+"#,
+);
+
+testcase!(
+    test_class_flag_literal_preservation_in_inferred_fields,
+    flag_env(),
+    r#"
+from shape_extensions import Flag, ProxyMethod
+from typing import Any, Literal, assert_type
+
+class Control[K: Flag[int]]:
+    __call__: ProxyMethod["forward"]
+    def __init__(self, value: K) -> None: ...
+    def forward(self) -> K: ...
+
+class Box[T]:
+    def __init__(self, value: T) -> None: ...
+
+class Mixed[K: Flag[int], T]:
+    def __init__(self, control: K, value: T) -> None: ...
+
+class Holder:
+    def __init__(self) -> None:
+        self.control = Control(1)
+        self.box = Box(1)
+        self.plain = 1
+        self.mixed = Mixed(2, 3)
+        self.nested = ((Control(4),),)
+        self.sequence = (Control(5), Control(6))
+
+class BareHolder:
+    def __init__(self, control: Control) -> None:
+        self.control = control
+
+holder = Holder()
+assert_type(holder.control, Control[Literal[1]])
+assert_type(holder.control.forward(), Literal[1])
+assert_type(holder.control(), Literal[1])
+assert_type(holder.box, Box[int])
+assert_type(holder.plain, int)
+assert_type(holder.mixed, Mixed[Literal[2], int])
+assert_type(holder.nested, tuple[tuple[Control[Literal[4]]]])
+assert_type(holder.sequence, tuple[Control[Literal[5]], Control[Literal[6]]])
+
+def bare_is_gradual(holder: BareHolder) -> None:
+    assert_type(holder.control, Control[Any])
+    assert_type(holder.control(), Any)
+"#,
+);
+
+testcase!(
+    test_flag_literal_style_survives_generic_boundaries,
+    flag_env(),
+    r#"
+from typing import Any, Literal, LiteralString, assert_type, overload
+from shape_extensions import Flag, ProxyMethod
+
+class Control[K: Flag[int]]:
+    __call__: ProxyMethod["forward"]
+    def __init__(self, value: K) -> None: ...
+    def forward(self) -> K: ...
+
+class DefaultControl[K: Flag[int]]:
+    def __init__(self, value: K = -1) -> None: ...
+    def get(self) -> K: ...
+
+class TupleControl[K: Flag[tuple[int, int]]]:
+    def __init__(self, value: K) -> None: ...
+    def get(self) -> K: ...
+
+class Box[T]:
+    def __init__(self, value: T) -> None: ...
+
+class Tagged[T](str):
+    pass
+
+class Sequence[*Ts]:
+    def __init__(self, *values: *Ts) -> None: ...
+    def values(self) -> tuple[*Ts]: ...
+
+class Base[T]:
+    def __init__(self, value: T) -> None: ...
+    def get(self) -> T: ...
+
+class Inherited[K: Flag[int]](Base[K]):
+    pass
+
+def identity[T](value: T) -> T: ...
+def from_list[T](values: list[T]) -> T: ...
+def capture[K: Flag[int]](value: K) -> K: ...
+def capture_str[K: Flag[str]](value: K) -> K: ...
+def capture_bool[K: Flag[bool]](value: K) -> K: ...
+def capture_none[K: Flag[None]](value: K) -> K: ...
+
+assert_type(identity(Control(1)), Control[Literal[1]])
+assert_type(from_list([Control(2)]), Control[Literal[2]])
+assert_type(
+    Sequence(Control(3), Box(4), 5).values(),
+    tuple[Control[Literal[3]], Box[int], int],
+)
+assert_type(
+    Sequence((Control(6),), Control(7)).values(),
+    tuple[tuple[Control[Literal[6]]], Control[Literal[7]]],
+)
+assert_type(DefaultControl().get(), Literal[-1])
+assert_type(TupleControl((1, 2)).get(), tuple[Literal[1], Literal[2]])
+assert_type(
+    identity(TupleControl((3, 4))).get(),
+    tuple[Literal[3], Literal[4]],
+)
+assert_type(
+    Sequence(TupleControl((5, 6))).values()[0].get(),
+    tuple[Literal[5], Literal[6]],
+)
+assert_type(Inherited(8).get(), Literal[8])
+
+partial = []
+partial.append(Control(18))
+assert_type(partial[0], Control[Literal[18]])
+
+choice: Literal[9] | Literal[10] = 9
+explicit: Literal[11] = 11
+broad: int = 12
+dynamic: Any = 13
+assert_type(capture(choice), Literal[9] | Literal[10])
+assert_type(capture(explicit), Literal[11])
+assert_type(capture(broad), int)
+assert_type(capture(dynamic), Any)
+assert_type(identity(capture("bad")), str)  # E: not a valid `Flag[int]` value
+
+tagged: Tagged[Literal[19]] = Tagged()
+tagged_or_literal: Tagged[Literal[19]] | Literal["fallback"] = tagged
+assert_type(capture_str(tagged), Tagged[Literal[19]])
+assert_type(
+    capture_str(tagged_or_literal),
+    Tagged[Literal[19]] | Literal["fallback"],
+)
+literal_string: LiteralString = "literal string"
+assert_type(capture_str(literal_string), LiteralString)
+assert_type(identity(capture_str(literal_string)), LiteralString)
+assert_type(capture_bool(True), Literal[True])
+assert_type(identity(capture_bool(False)), Literal[False])
+assert_type(capture_none(None), None)
+assert_type(identity(capture_none(None)), None)
+
+@overload
+def rollback[K: Flag[int]](value: K, branch: Literal[0]) -> tuple[K]: ...
+@overload
+def rollback[T](value: T, branch: Literal[1]) -> list[T]: ...
+def rollback(value: object, branch: int) -> object: ...
+
+assert_type(rollback(14, 0), tuple[Literal[14]])
+assert_type(rollback(14, 1), list[int])
+
+class Holder:
+    def __init__(self) -> None:
+        self.sequence = Sequence(Control(15), Box(16), 17)
+
+holder = Holder()
+assert_type(
+    holder.sequence.values(),
+    tuple[Control[Literal[15]], Box[int], int],
+)
+assert_type(holder.sequence.values()[0](), Literal[15])
+"#,
+);
+
+// A literal upper bound blocks ordinary promotion, so `Tagged("a")` is a `str` subclass whose
+// class argument is a genuinely inferred *implicit* literal. Accepting it as a `Flag[str]`
+// control has to reach that nested argument: without `capture_str`, `identity(tagged)` widens
+// it to `Tagged[str]`.
+testcase!(
+    test_flag_literal_style_marks_nested_class_argument_literals,
+    flag_env(),
+    r#"
+from typing import Literal, assert_type
+from shape_extensions import Flag
+
+class Tagged[T: Literal["a", "b"]](str):
+    def __init__(self, value: T) -> None: ...
+
+def identity[T](value: T) -> T: ...
+def capture_str[K: Flag[str]](value: K) -> K: ...
+
+tagged = Tagged("a")
+assert_type(identity(capture_str(tagged)), Tagged[Literal["a"]])
 "#,
 );
 

@@ -30,6 +30,7 @@ use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::dimension::gradual_size;
 use pyrefly_types::dimension::is_gradual_size;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::literal::LitStyle;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::shaped_array::IntTuple;
@@ -3722,7 +3723,15 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 } else {
                     None
                 };
-                (t1.clone(), specialization_error)
+                // A successfully specialized `Flag` value's literal identity is part of its type,
+                // including literals nested in an accepted composite value, so pin them recursively
+                // against later widening. Rejected specializations keep their recovery type.
+                let answer = if specialization_error.is_none() {
+                    t1.clone().with_literal_style(LitStyle::Explicit)
+                } else {
+                    t1.clone()
+                };
+                (answer, specialization_error)
             }
             Restriction::Flag(_) | Restriction::Bound(_) | Restriction::Unrestricted => {
                 if self.is_subset_eq(&t1_p, &bound).is_err() {
