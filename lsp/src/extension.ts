@@ -35,6 +35,7 @@ import {PythonEnvironment} from './python-environment';
 import {
   triggerMsPythonRefreshLanguageServersIfInstalled,
 } from './extension-interop';
+import {resolveLspPath} from './lspPath';
 
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
@@ -88,14 +89,6 @@ async function overridePythonPath(
   return newResult;
 }
 
-function resolveLspPath(lspPath: string, cwd: vscode.Uri | undefined) {
-  let lspPathIsRelative = lspPath.startsWith("./") || lspPath.startsWith("../");
-  if (cwd != null && lspPathIsRelative) {
-    return vscode.Uri.joinPath(cwd, lspPath).fsPath;
-  }
-  return lspPath;
-}
-
 export async function activate(context: ExtensionContext) {
   // Initialize the output channel if it doesn't exist
   if (!outputChannel) {
@@ -117,7 +110,10 @@ export async function activate(context: ExtensionContext) {
   // There may be more than one URI due to multi-root workspaces, so just take the primary root.
   let globalCwd: vscode.Uri | undefined = vscode.workspace.workspaceFolders?.[0]?.uri;
 
-  const lspPath: string = resolveLspPath(requireSetting('pyrefly.lspPath'), globalCwd);
+  const lspPath: string = resolveLspPath(
+    requireSetting('pyrefly.lspPath'),
+    globalCwd?.fsPath,
+  );
   // `pyrefly.lspArguments` resolves to an empty array in some environments
   // (notably dev containers / remote, where the `machine-overridable` default
   // of `["lsp"]` is not applied). Spawning the binary with no subcommand makes
