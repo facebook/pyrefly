@@ -7968,7 +7968,7 @@ testcase!(
 import shape_extensions.dsl as dsl
 from shape_extensions import Flag, IntTuple, type_shape_dsl_function
 from torch import Tensor
-from typing import Any, reveal_type
+from typing import Any, assert_type, reveal_type
 
 @type_shape_dsl_function
 def choose(shape: IntTuple, keep: bool | None) -> IntTuple:
@@ -7977,6 +7977,14 @@ def choose(shape: IntTuple, keep: bool | None) -> IntTuple:
     if not keep:
         return shape
     return dsl.IntTuple((1,))
+
+@type_shape_dsl_function
+def choose_not_none(shape: IntTuple, keep: bool | None) -> IntTuple:
+    if keep is not None:
+        if keep:
+            return dsl.IntTuple((1,))
+        return shape
+    return dsl.IntTuple((9,))
 
 @type_shape_dsl_function
 def direct(shape: IntTuple, keep: bool | None) -> IntTuple:
@@ -8011,6 +8019,10 @@ def apply[Shape: IntTuple, Keep: Flag[bool | None]](
     x: Tensor[Shape], keep: Keep,
 ) -> Tensor[choose(Shape, Keep)]: ...
 
+def apply_not_none[Shape: IntTuple, Keep: Flag[bool | None]](
+    x: Tensor[Shape], keep: Keep,
+) -> Tensor[choose_not_none(Shape, Keep)]: ...
+
 def apply_direct[Shape: IntTuple, Keep: Flag[bool | None]](
     x: Tensor[Shape], keep: Keep,
 ) -> Tensor[direct(Shape, Keep)]: ...
@@ -8029,6 +8041,11 @@ def test(x: Tensor[[2, 3]], broad: bool | None, dynamic: Any) -> None:
     reveal_type(apply(x, None))  # E: revealed type: Tensor[[9]]
     reveal_type(apply(x, broad))  # E: revealed type: Tensor[tuple[Unknown, ...]]
     reveal_type(apply(x, dynamic))  # E: revealed type: Tensor[tuple[Unknown, ...]]
+    assert_type(apply_not_none(x, True), Tensor[[1]])
+    assert_type(apply_not_none(x, False), Tensor[[2, 3]])
+    assert_type(apply_not_none(x, None), Tensor[[9]])
+    assert_type(apply_not_none(x, broad), Tensor[IntTuple])
+    assert_type(apply_not_none(x, dynamic), Tensor[IntTuple])
     reveal_type(apply_direct(x, True))  # E: revealed type: Tensor[[1]]
     reveal_type(apply_direct(x, False))  # E: revealed type: Tensor[[2, 3]]
     reveal_type(apply_direct(x, None))  # E: revealed type: Tensor[[2, 3]]

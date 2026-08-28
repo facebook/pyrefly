@@ -1092,6 +1092,7 @@ pub enum TypeShapeDslConditionKind {
     IsNone {
         slot: usize,
         parameter_origins: Option<Box<[usize]>>,
+        negated: bool,
     },
     FlagIntCompare(TypeShapeDslComparisonOp),
     BoolSlot {
@@ -3137,30 +3138,40 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
 
         if let Expr::Compare(compare) = condition
             && compare.ops.len() == 1
-            && compare.ops[0] == CmpOp::Is
+            && matches!(compare.ops[0], CmpOp::Is | CmpOp::IsNot)
             && compare.comparators.len() == 1
             && matches!(&compare.comparators[0], Expr::NoneLiteral(_))
         {
+            let negated = compare.ops[0] == CmpOp::IsNot;
             let (slot, origins) = self.validate_flag_narrowing_operand(
                 &compare.left,
                 flow,
                 FLAG_REPRESENTABLE,
-                "`is None` requires a Flag value",
+                if negated {
+                    "`is not None` requires a Flag value"
+                } else {
+                    "`is None` requires a Flag value"
+                },
             )?;
-            let mut when_true = flow.clone();
-            let mut when_false = flow.clone();
-            when_true.kinds[slot] =
+            let mut when_none = flow.clone();
+            let mut when_not_none = flow.clone();
+            when_none.kinds[slot] =
                 Self::narrow_flag(flow.kinds[slot].clone(), FLAG_REPRESENTABLE, FLAG_NONE);
-            when_false.kinds[slot] =
+            when_not_none.kinds[slot] =
                 Self::narrow_flag(flow.kinds[slot].clone(), FLAG_REPRESENTABLE, FLAG_NOT_NONE);
             self.conditions.push(TypeShapeDslCondition {
                 range: compare.range,
                 kind: TypeShapeDslConditionKind::IsNone {
                     slot,
                     parameter_origins: origins,
+                    negated,
                 },
             });
-            return Ok((when_true, when_false));
+            return Ok(if negated {
+                (when_not_none, when_none)
+            } else {
+                (when_none, when_not_none)
+            });
         }
 
         if let Expr::Call(call) = condition
@@ -5490,18 +5501,25 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     unreachable!("validated is_int_value operand is a non-boolean Flag value")
                 }
             },
-            TypeShapeDslConditionKind::IsNone { slot, .. } => match environment.value(slot) {
-                DslValue::FlagNone => DslCondition::True,
-                DslValue::FlagInt(_)
-                | DslValue::FlagBool(_)
-                | DslValue::FlagString(_)
-                | DslValue::FlagSequence(_) => DslCondition::False,
-                DslValue::Unknown => DslCondition::Unknown,
-                DslValue::Dimension(_) | DslValue::Shape(_) | DslValue::DimensionTuple(_) => {
-                    // Function-level domain validation rejects non-Flag parameter origins.
-                    unreachable!("validated `is None` operand is a Flag value")
+            TypeShapeDslConditionKind::IsNone { slot, negated, .. } => {
+                let is_none = match environment.value(slot) {
+                    DslValue::FlagNone => DslCondition::True,
+                    DslValue::FlagInt(_)
+                    | DslValue::FlagBool(_)
+                    | DslValue::FlagString(_)
+                    | DslValue::FlagSequence(_) => DslCondition::False,
+                    DslValue::Unknown => DslCondition::Unknown,
+                    DslValue::Dimension(_) | DslValue::Shape(_) | DslValue::DimensionTuple(_) => {
+                        // Function-level domain validation rejects non-Flag parameter origins.
+                        unreachable!("validated `None` identity operand is a Flag value")
+                    }
+                };
+                if negated {
+                    Self::negate_condition(is_none)
+                } else {
+                    is_none
                 }
-            },
+            }
             TypeShapeDslConditionKind::StringEquality { negated } => {
                 let Expr::Compare(compare) = condition else {
                     unreachable!("validated Flag string equality is a comparison")

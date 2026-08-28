@@ -366,14 +366,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .then_some("`@type_shape_dsl_function` `is_int_value` requires a Flag[int | tuple[int, ...] | None] value")
                     }),
                     TypeShapeDslConditionKind::IsNone {
-                        parameter_origins, ..
+                        parameter_origins,
+                        negated,
+                        ..
                     } => parameter_origins.as_deref().and_then(|parameters| {
                         (!parameters.iter().all(|parameter| matches!(
                             parameter_domains[*parameter],
                             TypeShapeDslInputDomain::Flag(domain)
                                 if domain.is_subset_of(type_shape_dsl_representable_flag_domain())
                         )))
-                        .then_some("`@type_shape_dsl_function` `is None` requires a supported Flag value")
+                        .then_some(if *negated {
+                            "`@type_shape_dsl_function` `is not None` requires a supported Flag value"
+                        } else {
+                            "`@type_shape_dsl_function` `is None` requires a supported Flag value"
+                        })
                     }),
                     TypeShapeDslConditionKind::BoolSlot {
                         parameter_origins,
