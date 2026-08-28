@@ -8,6 +8,7 @@
 from typing import assert_type, reveal_type, TYPE_CHECKING
 
 import torch
+import torch.nn as nn
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -74,3 +75,7 @@ def test_flatten_dimension_errors():
     scalar: Tensor[[]] = torch.tensor(1)
     # E: flatten dimension out of range for scalar input
     scalar.flatten(1)
+    # E: flatten start_dim out of range
+    nn.Flatten(3)(x)
+    # E: flatten dimension out of range for scalar input
+    nn.Flatten()(scalar)

@@ -20,22 +20,22 @@ from typing import (
     TypeVar,
 )
 
-from shape_extensions import Elements, IntTuple, IntVar
+from shape_extensions import Elements, Flag, IntTuple, IntVar
 
 if TYPE_CHECKING:
     from shape_extensions import Int as _Int, ProxyMethod, uses_shape_dsl
     from torch import Tensor
     from torch._shapes import (
+        flatten_shape,
+        glu_shape,
         nn_avgpool_forward_ir,
-        nn_flatten_forward_ir,
-        nn_glu_forward_ir,
         nn_gru_forward_ir,
         nn_lstm_forward_ir,
         nn_lstmcell_forward_ir,
         nn_maxpool_forward_ir,
-        nn_pixel_shuffle_forward_ir,
-        nn_reflectionpad2d_forward_ir,
         nn_upsample_forward_ir,
+        pixel_shuffle_shape,
+        symmetric_pad2d_shape,
     )
 
 # Re-export submodules
@@ -891,30 +891,32 @@ class AdaptiveMaxPool3d[OD: IntVar, OH: IntVar, OW: IntVar](Module):
 # Upsampling / Rearrangement Modules
 # ==============================================================================
 
-class PixelShuffle(Module):
+class PixelShuffle[UpscaleFactor: Flag[int]](Module):
     """Rearranges channels into spatial dimensions.
 
     [B, C * r * r, H, W] → [B, C, H * r, W * r]
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via type-level DSL.
     """
 
-    def __init__(self, upscale_factor: int) -> None: ...
-    @uses_shape_dsl(nn_pixel_shuffle_forward_ir, capture_init=["upscale_factor"])
-    def forward(self, input: Tensor) -> Tensor: ...
+    def __init__(self, upscale_factor: UpscaleFactor) -> None: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[pixel_shuffle_shape(Shape, UpscaleFactor)]: ...
 
-class GLU(Module):
+class GLU[Dim: Flag[int]](Module):
     """Gated Linear Unit: splits input along dim, applies sigmoid gating.
 
     GLU(x) = x1 * sigmoid(x2) where x1, x2 = x.split(x.size(dim) // 2, dim)
     Output is same as input except dimension `dim` is halved.
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via type-level DSL.
     """
 
-    def __init__(self, dim: int = -1) -> None: ...
-    @uses_shape_dsl(nn_glu_forward_ir, capture_init=["dim"])
-    def forward(self, input: Tensor) -> Tensor: ...
+    def __init__(self, dim: Dim = -1) -> None: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[glu_shape(Shape, Dim)]: ...
 
 class LSTM(Module):
     """Long Short-Term Memory RNN.
@@ -1186,40 +1188,43 @@ class LazyLinear[OUT: IntVar](Module):
         self, input: Tensor[[*Elements[Bs], Any]]
     ) -> Tensor[[*Elements[Bs], OUT]]: ...
 
-class Flatten(Module):
+class Flatten[StartDim: Flag[int], EndDim: Flag[int]](Module):
     """Flattens a contiguous range of dims.
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via type-level DSL.
     """
 
-    def __init__(self, start_dim: int = 1, end_dim: int = -1) -> None: ...
-    @uses_shape_dsl(nn_flatten_forward_ir, capture_init=["start_dim", "end_dim"])
-    def forward(self, input: Tensor) -> Tensor: ...
+    def __init__(self, start_dim: StartDim = 1, end_dim: EndDim = -1) -> None: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[flatten_shape(Shape, StartDim, EndDim)]: ...
 
 class Unflatten(Module):
     """Unflattens a dimension"""
     def __init__(self, dim: int | str, unflattened_size: tuple[int, ...]) -> None: ...
     def forward(self, input: Tensor) -> Tensor: ...
 
-class ReflectionPad2d(Module):
+class ReflectionPad2d[Padding: Flag[int]](Module):
     """Pads input using reflection of the input boundary.
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via type-level DSL.
     """
 
-    def __init__(self, padding: int) -> None: ...
-    @uses_shape_dsl(nn_reflectionpad2d_forward_ir, capture_init=["padding"])
-    def forward(self, input: Tensor) -> Tensor: ...
+    def __init__(self, padding: Padding) -> None: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[symmetric_pad2d_shape(Shape, Padding)]: ...
 
-class ReplicationPad2d(Module):
+class ReplicationPad2d[Padding: Flag[int]](Module):
     """Pads input using replication of the input boundary.
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via type-level DSL.
     """
 
-    def __init__(self, padding: int) -> None: ...
-    @uses_shape_dsl(nn_reflectionpad2d_forward_ir, capture_init=["padding"])
-    def forward(self, input: Tensor) -> Tensor: ...
+    def __init__(self, padding: Padding) -> None: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[symmetric_pad2d_shape(Shape, Padding)]: ...
 
 # Embedding variants
 class EmbeddingBag[NUM_EMB: IntVar, EMB_DIM: IntVar](Module):

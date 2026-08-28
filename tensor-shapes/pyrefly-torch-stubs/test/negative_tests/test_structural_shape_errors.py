@@ -6,9 +6,28 @@
 from typing import reveal_type
 
 import torch
+import torch.nn as nn
 from shape_extensions import IntTuple
 from torch import Tensor
 from torch.nn import functional as F
+
+
+def test_invalid_constructor_control_module_shapes() -> None:
+    rank_two: Tensor[[8, 4]] = torch.randn(8, 4)
+    bad_channels: Tensor[[2, 10, 4, 4]] = torch.randn(2, 10, 4, 4)
+    glu_input: Tensor[[2, 5, 4]] = torch.randn(2, 5, 4)
+    pad_rank_two: Tensor[[4, 4]] = torch.randn(4, 4)
+    pad_rank_five: Tensor[[2, 3, 4, 4, 4]] = torch.randn(2, 3, 4, 4, 4)
+
+    nn.PixelShuffle(2)(rank_two)  # E: PixelShuffle requires at least 3D input
+    nn.PixelShuffle(0)(bad_channels)  # E: PixelShuffle upscale_factor must be positive
+    nn.PixelShuffle(3)(bad_channels)  # E: PixelShuffle input channels must be divisible
+    nn.GLU(3)(glu_input)  # E: GLU dimension out of range
+    nn.GLU(1)(glu_input)  # E: GLU input dimension must be even
+    nn.ReflectionPad2d(1)(pad_rank_two)  # E: 2D padding requires 3D or 4D input
+    nn.ReflectionPad2d(1)(pad_rank_five)  # E: 2D padding requires 3D or 4D input
+    nn.ReplicationPad2d(1)(pad_rank_two)  # E: 2D padding requires 3D or 4D input
+    nn.ReplicationPad2d(1)(pad_rank_five)  # E: 2D padding requires 3D or 4D input
 
 
 def check_invalid_structural_controls(

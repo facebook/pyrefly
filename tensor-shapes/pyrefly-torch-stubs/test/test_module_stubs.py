@@ -14,6 +14,7 @@ from typing import assert_type, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from shape_extensions import IntTuple, IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -346,6 +347,22 @@ def test_pixel_shuffle():
     assert_type(y, Tensor[[4, 8, 32, 32]])
 
 
+def test_pixel_shuffle_leading_symbolic_dims[B: IntVar, H: IntVar, W: IntVar](
+    x: Tensor[[7, B, 32, H, W]],
+) -> Tensor[[7, B, 8, H * 2, W * 2]]:
+    return nn.PixelShuffle(upscale_factor=2)(x)
+
+
+def test_pixel_shuffle_identity_reuse_and_gradual():
+    shuffle = nn.PixelShuffle(1)
+    x: Tensor[[2, 8, 3, 4]] = torch.randn(2, 8, 3, 4)
+    y: Tensor[[5, 12, 6, 7]] = torch.randn(5, 12, 6, 7)
+    gradual: Tensor[IntTuple] = torch.randn(2, 8, 3, 4)
+    assert_type(shuffle(x), Tensor[[2, 8, 3, 4]])
+    assert_type(shuffle(y), Tensor[[5, 12, 6, 7]])
+    assert_type(nn.PixelShuffle(2)(gradual), Tensor[IntTuple])
+
+
 def test_glu():
     """GLU(dim=1): halves the channel dimension."""
     glu = nn.GLU(dim=1)
@@ -362,6 +379,34 @@ def test_glu_default_dim():
     assert_type(y, Tensor[[4, 64]])
     rank_three: Tensor[[4, 64, 16]] = torch.randn(4, 64, 16)
     assert_type(glu(rank_three), Tensor[[4, 64, 8]])
+
+
+def test_glu_negative_dimension_symbolic_reuse_and_gradual[C: IntVar](
+    symbolic: Tensor[[3, C * 2]], gradual: Tensor[IntTuple]
+) -> Tensor[[3, C]]:
+    glu = nn.GLU(-1)
+    assert_type(glu(gradual), Tensor[IntTuple])
+    return glu(symbolic)
+
+
+def test_symmetric_pad2d_modules():
+    reflection = nn.ReflectionPad2d(padding=1)
+    replication = nn.ReplicationPad2d(2)
+    image: Tensor[[4, 3, 16, 20]] = torch.randn(4, 3, 16, 20)
+    unbatched: Tensor[[3, 16, 20]] = torch.randn(3, 16, 20)
+    gradual: Tensor[IntTuple] = torch.randn(4, 3, 16, 20)
+    assert_type(reflection(image), Tensor[[4, 3, 18, 22]])
+    assert_type(reflection(unbatched), Tensor[[3, 18, 22]])
+    assert_type(replication(image), Tensor[[4, 3, 20, 24]])
+    assert_type(replication(unbatched), Tensor[[3, 20, 24]])
+    assert_type(reflection(gradual), Tensor[IntTuple])
+    assert_type(replication(gradual), Tensor[IntTuple])
+
+
+def test_symmetric_pad2d_symbolic[H: IntVar, W: IntVar](
+    x: Tensor[[2, 3, H, W]],
+) -> tuple[Tensor[[2, 3, H + 2, W + 2]], Tensor[[2, 3, H + 4, W + 4]]]:
+    return nn.ReflectionPad2d(1)(x), nn.ReplicationPad2d(padding=2)(x)
 
 
 def test_lstm_unidirectional():
@@ -517,6 +562,83 @@ def test_flatten_module_custom_dims():
     assert_type(y, Tensor[[12, 32, 32]])
 
 
+def test_flatten_module_constructor_binding():
+    x: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
+    assert_type(nn.Flatten(start_dim=2, end_dim=3)(x), Tensor[[2, 3, 20]])
+
+
+def test_flatten_module_rank_and_dim_ranges():
+    scalar: Tensor[[]] = torch.tensor(1)
+    vector: Tensor[[7]] = torch.randn(7)
+    tensor: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
+    assert_type(nn.Flatten(0, -1)(scalar), Tensor[[1]])
+    assert_type(nn.Flatten(0)(vector), Tensor[[7]])
+    assert_type(nn.Flatten(-2, -1)(tensor), Tensor[[2, 3, 20]])
+    assert_type(nn.Flatten(-3, 2)(tensor), Tensor[[2, 12, 5]])
+    assert_type(nn.Flatten(1, 2)(tensor), Tensor[[2, 12, 5]])
+
+
+def flatten_symbolic[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+    x: Tensor[[B, C, H, W]],
+) -> Tensor[[B, C * H * W]]:
+    return nn.Flatten()(x)
+
+
+def test_flatten_module_symbolic_and_gradual():
+    symbolic: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
+    gradual: Tensor[IntTuple] = torch.randn(2, 3, 4)
+    assert_type(flatten_symbolic(symbolic), Tensor[[2, 60]])
+    assert_type(nn.Flatten()(gradual), Tensor[IntTuple])
+
+
+def test_flatten_module_reuse():
+    flatten = nn.Flatten(1, -1)
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    y: Tensor[[5, 6, 7, 8]] = torch.randn(5, 6, 7, 8)
+    assert_type(flatten(x), Tensor[[2, 12]])
+    assert_type(flatten(y), Tensor[[5, 336]])
+
+
+def test_flatten_method_function_module_parity():
+    x: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
+    assert_type(x.flatten(1, 2), Tensor[[2, 12, 5]])
+    assert_type(torch.flatten(x, 1, 2), Tensor[[2, 12, 5]])
+    assert_type(nn.Flatten(1, 2)(x), Tensor[[2, 12, 5]])
+
+
+class StoredControlModules:
+    def __init__(self):
+        self.flatten = nn.Flatten(1, -1)
+        self.glu = nn.GLU(-1)
+        self.shuffle = nn.PixelShuffle(2)
+        self.reflection = nn.ReflectionPad2d(1)
+        self.replication = nn.ReplicationPad2d(2)
+
+
+def test_stored_unannotated_control_modules():
+    modules = StoredControlModules()
+    flat_input: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    glu_input: Tensor[[2, 3, 8]] = torch.randn(2, 3, 8)
+    image: Tensor[[2, 8, 4, 5]] = torch.randn(2, 8, 4, 5)
+    assert_type(modules.flatten(flat_input), Tensor[[2, 12]])
+    assert_type(modules.flatten.forward(flat_input), Tensor[[2, 12]])
+    assert_type(modules.glu(glu_input), Tensor[[2, 3, 4]])
+    assert_type(modules.shuffle(image), Tensor[[2, 2, 8, 10]])
+    assert_type(modules.reflection(image), Tensor[[2, 8, 6, 7]])
+    assert_type(modules.replication(image), Tensor[[2, 8, 8, 9]])
+
+
+def test_gradual_constructor_controls(
+    start_dim: int, end_dim: int, dim: int, factor: int, padding: int
+):
+    x: Tensor[[2, 8, 4, 4]] = torch.randn(2, 8, 4, 4)
+    assert_type(nn.Flatten(start_dim, end_dim)(x), Tensor[IntTuple])
+    assert_type(nn.GLU(dim)(x), Tensor[IntTuple])
+    assert_type(nn.PixelShuffle(factor)(x), Tensor[IntTuple])
+    assert_type(nn.ReflectionPad2d(padding)(x), Tensor[[2, 8, int, int]])
+    assert_type(nn.ReplicationPad2d(padding)(x), Tensor[[2, 8, int, int]])
+
+
 def test_flatten_in_sequential():
     seq = nn.Sequential(
         nn.AdaptiveAvgPool2d((1, 1)),
@@ -525,6 +647,20 @@ def test_flatten_in_sequential():
     x: Tensor[[4, 64, 8, 8]] = torch.randn(4, 64, 8, 8)
     y = seq(x)
     assert_type(y, Tensor[[4, 64]])
+
+
+def test_migrated_control_modules_in_sequential():
+    rearrange = nn.Sequential(
+        nn.ReflectionPad2d(1),
+        nn.PixelShuffle(2),
+        nn.GLU(1),
+        nn.Flatten(1, -1),
+    )
+    replicate = nn.Sequential(nn.ReplicationPad2d(2), nn.Flatten())
+    image: Tensor[[2, 8, 4, 4]] = torch.randn(2, 8, 4, 4)
+    channels: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
+    assert_type(rearrange(image), Tensor[[2, 144]])
+    assert_type(replicate(channels), Tensor[[2, 216]])
 
 
 # ============================================================================

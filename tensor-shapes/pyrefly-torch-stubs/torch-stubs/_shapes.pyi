@@ -315,15 +315,6 @@ def permute_shape(shape: IntTuple, dims: int | tuple[int, ...] | None) -> IntTup
         return dsl.Invalid("permute dimensions must be unique")
     return dsl.IntTuple((shape[dim] for dim in normalized_dims))
 
-@shape_dsl_function
-def flatten_ir(self: ShapedArray, start_dim: int = 0, end_dim: int = -1) -> ShapedArray:
-    rank = len(self.shape)
-    s = normalize_dim(rank, start_dim)
-    e = normalize_dim(rank, end_dim)
-    return ShapedArray(
-        shape=self.shape[:s] + [prod(self.shape[s : e + 1])] + self.shape[e + 1 :]
-    )
-
 @type_shape_dsl_function
 def flatten_shape(shape: IntTuple, start_dim: int, end_dim: int) -> IntTuple:
     rank = len(shape)
@@ -1205,6 +1196,50 @@ def pad_shape(shape: IntTuple, pad: tuple[int, ...]) -> IntTuple:
     padding = dsl.IntTuple((item for item in pad))
     return _pad_shape(shape, padding)
 
+@type_shape_dsl_function
+def symmetric_pad2d_shape(input: IntTuple, padding: int) -> IntTuple:
+    if len(input) != 3 and len(input) != 4:
+        return dsl.Invalid("2D padding requires 3D or 4D input")
+    return dsl.IntTuple(
+        (
+            input[index] + 2 * padding if index >= len(input) - 2 else input[index]
+            for index in range(len(input))
+        )
+    )
+
+@type_shape_dsl_function
+def pixel_shuffle_shape(input: IntTuple, upscale_factor: int) -> IntTuple:
+    if len(input) < 3:
+        return dsl.Invalid("PixelShuffle requires at least 3D input")
+    if upscale_factor <= 0:
+        return dsl.Invalid("PixelShuffle upscale_factor must be positive")
+    channels = input[-3]
+    factor_squared = upscale_factor * upscale_factor
+    if dsl.is_concrete_int(channels) and channels % factor_squared != 0:
+        return dsl.Invalid(
+            "PixelShuffle input channels must be divisible by upscale_factor squared"
+        )
+    return dsl.concat(
+        input[:-3],
+        dsl.IntTuple(
+            (
+                channels // factor_squared,
+                input[-2] * upscale_factor,
+                input[-1] * upscale_factor,
+            )
+        ),
+    )
+
+@type_shape_dsl_function
+def glu_shape(input: IntTuple, dim: int) -> IntTuple:
+    if dim < 0 - len(input) or dim >= len(input):
+        return dsl.Invalid("GLU dimension out of range")
+    extent = input[dim]
+    if dsl.is_concrete_int(extent) and extent % 2 != 0:
+        return dsl.Invalid("GLU input dimension must be even")
+    halved = extent // 2
+    return replace_axis_extent(input, dim, halved)
+
 # The `+ 0` branches below keep normalized axes in one deferred integer domain.
 # TODO(stroxler): Factor the repeated FFT axis normalization and dimension replacement once DSL
 # helper calls can be used as expressions rather than only as direct return values.
@@ -1324,12 +1359,6 @@ def item_ir(self: ShapedArray) -> ShapedArray:
     return Unknown
 
 @shape_dsl_function
-def nn_flatten_forward_ir(
-    input: ShapedArray, start_dim: symint = 1, end_dim: symint = -1
-) -> ShapedArray:
-    return flatten_ir(input, start_dim, end_dim)
-
-@shape_dsl_function
 def nn_maxpool_forward_ir(
     input: ShapedArray,
     kernel_size: symint = 1,
@@ -1353,22 +1382,6 @@ def nn_upsample_forward_ir(
     input: ShapedArray, size: symint | None = None, scale_factor: symint | None = None
 ) -> ShapedArray:
     return interpolate_ir(input, size, scale_factor)
-
-@shape_dsl_function
-def nn_pixel_shuffle_forward_ir(
-    input: ShapedArray, upscale_factor: symint
-) -> ShapedArray:
-    r = upscale_factor
-    return ShapedArray(
-        shape=[input.shape[0], input.shape[1] // (r * r)]
-        + [d * r for d in input.shape[2:]]
-    )
-
-@shape_dsl_function
-def nn_glu_forward_ir(input: ShapedArray, dim: symint = -1) -> ShapedArray:
-    rank = len(input.shape)
-    d = normalize_dim(rank, dim)
-    return ShapedArray(shape=replace_dim(input.shape, d, input.shape[d] // 2))
 
 @shape_dsl_function
 def nn_lstm_forward_ir(
@@ -1404,14 +1417,3 @@ def nn_lstmcell_forward_ir(
     h = ShapedArray(shape=[input.shape[0], hidden_size])
     c = ShapedArray(shape=[input.shape[0], hidden_size])
     return [h, c]
-
-@shape_dsl_function
-def nn_reflectionpad2d_forward_ir(input: ShapedArray, padding: symint) -> ShapedArray:
-    return ShapedArray(
-        shape=[
-            input.shape[0],
-            input.shape[1],
-            input.shape[2] + 2 * padding,
-            input.shape[3] + 2 * padding,
-        ]
-    )
