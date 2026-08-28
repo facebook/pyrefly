@@ -2487,7 +2487,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.expand_mut(&mut ty);
         // An unannotated attribute whose value has a bare implicit `Any` type (e.g. from an
         // untyped call) is reported separately from the `None`/empty-tuple sentinel cases above.
-        if annotation.is_none() && matches!(&ty, Type::Any(AnyStyle::Implicit)) {
+        if annotation.is_none()
+            && matches!(&ty, Type::Any(AnyStyle::Propagated | AnyStyle::Implicit))
+        {
             self.error(
                 errors,
                 x.range(),

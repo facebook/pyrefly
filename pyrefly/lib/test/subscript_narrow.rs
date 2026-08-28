@@ -304,26 +304,26 @@ frame["end"] = frame["start"].shift(-1)
 );
 
 testcase!(
-    test_subscript_assign_implicit_any_does_not_narrow,
+    test_subscript_assign_implicit_any_still_narrows,
     r#"
-from typing import Any, assert_type
+from typing import assert_type
 
 def f(frame):
     values: list[float] = []
     frame["start"] = values
-    assert_type(frame["start"], Any)
+    assert_type(frame["start"], list[float])
 "#,
 );
 
 testcase!(
-    test_subscript_assign_error_any_does_not_narrow,
+    test_subscript_assign_error_any_still_narrows,
     r#"
-from typing import Any, assert_type
+from typing import assert_type
 
 def f(frame: MissingType) -> None:  # E: Could not find name `MissingType`
     values: list[float] = []
     frame["start"] = values
-    assert_type(frame["start"], Any)
+    assert_type(frame["start"], list[float])
 "#,
 );
 

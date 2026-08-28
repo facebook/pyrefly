@@ -1232,7 +1232,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     // TODO: flag incompatible `__new__` return annotations at the method definition.
                 } else if self.is_compatible_constructor_return(&ret, cls.class_object()) {
                     dunder_new_ret = Some(ret);
-                } else if !matches!(ret, Type::Any(AnyStyle::Error | AnyStyle::Implicit)) {
+                } else if !matches!(
+                    ret,
+                    Type::Any(AnyStyle::Error | AnyStyle::Propagated | AnyStyle::Implicit)
+                ) {
                     // Got something other than an instance of the class under construction.
                     // According to the spec, the actual type (as opposed to the class under construction)
                     // should take priority. However, if the actual type comes from a type error or an implicit

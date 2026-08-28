@@ -147,7 +147,10 @@ impl Callable {
     /// Used as a heuristic in decorator type resolution for union-typed
     /// decorators.
     pub fn is_args_kwargs_wrapper(&self) -> bool {
-        if !matches!(&self.ret, Type::Any(AnyStyle::Implicit)) {
+        if !matches!(
+            &self.ret,
+            Type::Any(AnyStyle::Propagated | AnyStyle::Implicit)
+        ) {
             return false;
         }
         match &self.params {
@@ -158,7 +161,7 @@ impl Callable {
                     && items.iter().enumerate().all(|(i, p)| match p {
                         Param::Varargs(..) | Param::Kwargs(..) => true,
                         Param::Pos(_, ty, _) | Param::PosOnly(Some(_), ty, _) if i == 0 => {
-                            matches!(ty, Type::Any(AnyStyle::Implicit))
+                            matches!(ty, Type::Any(AnyStyle::Propagated | AnyStyle::Implicit))
                         }
                         _ => false,
                     })
@@ -189,16 +192,21 @@ impl Callable {
     }
 
     /// Returns true if this callable carries no real type information: all
-    /// parameters and the return type are `Any(Implicit)` (i.e. Unknown).
+    /// parameters and the return type are implicit or propagated `Any`.
     pub fn is_fully_unknown(&self) -> bool {
-        if !matches!(&self.ret, Type::Any(AnyStyle::Implicit)) {
+        if !matches!(
+            &self.ret,
+            Type::Any(AnyStyle::Propagated | AnyStyle::Implicit)
+        ) {
             return false;
         }
         match &self.params {
-            Params::List(params) | Params::Partial(params) => params
-                .items()
-                .iter()
-                .all(|p| matches!(p.as_type(), Type::Any(AnyStyle::Implicit))),
+            Params::List(params) | Params::Partial(params) => params.items().iter().all(|p| {
+                matches!(
+                    p.as_type(),
+                    Type::Any(AnyStyle::Propagated | AnyStyle::Implicit)
+                )
+            }),
             Params::Ellipsis => true,
             _ => false,
         }

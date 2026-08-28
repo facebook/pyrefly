@@ -378,7 +378,7 @@ fn canonicalize_inner(ty: Type) -> DimensionResult<Type> {
 pub fn type_is_gradual_fast(ty: &Type) -> bool {
     match ty {
         Type::Int(dim) => int_is_gradual(dim),
-        Type::Any(AnyStyle::Implicit | AnyStyle::Explicit) => true,
+        Type::Any(AnyStyle::Implicit | AnyStyle::Propagated | AnyStyle::Explicit) => true,
         _ => false,
     }
 }

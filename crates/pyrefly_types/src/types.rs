@@ -398,6 +398,8 @@ pub enum NeverStyle {
 pub enum AnyStyle {
     /// The user wrote `Any` literally.
     Explicit,
+    /// `Any` propagated from an explicit `Any` through an operation.
+    Propagated,
     /// The user didn't write a type, so we inferred `Any`.
     Implicit,
     /// There was an error, so we made up `Any`.
@@ -408,8 +410,8 @@ pub enum AnyStyle {
 impl AnyStyle {
     pub fn propagate(self) -> Type {
         match self {
+            Self::Explicit | Self::Propagated => Type::Any(Self::Propagated),
             Self::Implicit | Self::Error => Type::Any(self),
-            Self::Explicit => Type::Any(Self::Implicit),
         }
     }
 }
@@ -2301,10 +2303,28 @@ mod tests {
     use crate::quantified::QuantifiedOrigin;
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
+    use crate::types::AnyStyle;
     use crate::types::TArgs;
     use crate::types::TParams;
     use crate::types::Type;
     use crate::types::Union;
+
+    #[test]
+    fn test_any_style_propagation_preserves_explicit_origin() {
+        assert_eq!(
+            AnyStyle::Explicit.propagate(),
+            Type::Any(AnyStyle::Propagated)
+        );
+        assert_eq!(
+            AnyStyle::Propagated.propagate(),
+            Type::Any(AnyStyle::Propagated)
+        );
+        assert_eq!(
+            AnyStyle::Implicit.propagate(),
+            Type::Any(AnyStyle::Implicit)
+        );
+        assert_eq!(AnyStyle::Error.propagate(), Type::Any(AnyStyle::Error));
+    }
 
     #[test]
     fn test_targs_visit_only_visits_applied_arguments() {
