@@ -867,6 +867,7 @@ pub enum TypeShapeDslReturnKind {
     Slot {
         slot: usize,
         kind: TypeShapeDslSlotReturnKind,
+        narrowing: TypeShapeDslParameterNarrowing,
     },
     /// Return the broadcast of two shape parameters.
     Broadcast {
@@ -885,8 +886,8 @@ pub enum TypeShapeDslReturnKind {
     HelperCall(usize),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// Validation information for a returned parameter or local slot.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslSlotReturnKind {
     /// The slot is the returned parameter itself.
     DirectParameter,
@@ -897,6 +898,13 @@ pub enum TypeShapeDslSlotReturnKind {
         domain: TypeShapeDslDomain,
         parameter_origins: Option<Box<[usize]>>,
     },
+}
+
+/// What control flow has established about a parameter at a particular use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TypeShapeDslParameterNarrowing {
+    /// The parameter is used without narrowing.
+    Unnarrowed,
 }
 
 /// The arithmetic a structurally validated dimension or Flag expression applies. Reached through
@@ -3426,6 +3434,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         TypeShapeDslReturnKind::Slot {
                             slot,
                             kind: TypeShapeDslSlotReturnKind::DirectParameter,
+                            narrowing: TypeShapeDslParameterNarrowing::Unnarrowed,
                         }
                     } else {
                         let kind = match &flow.kinds[slot] {
@@ -3456,7 +3465,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                                 });
                             }
                         };
-                        TypeShapeDslReturnKind::Slot { slot, kind }
+                        TypeShapeDslReturnKind::Slot {
+                            slot,
+                            kind,
+                            narrowing: TypeShapeDslParameterNarrowing::Unnarrowed,
+                        }
                     }
                 }
             }

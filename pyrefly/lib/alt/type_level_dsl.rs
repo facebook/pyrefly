@@ -25,6 +25,7 @@ use pyrefly_types::type_level_dsl::TypeShapeDslExpressionKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslFlagValueKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslInputDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslIntrinsic;
+use pyrefly_types::type_level_dsl::TypeShapeDslParameterNarrowing;
 use pyrefly_types::type_level_dsl::TypeShapeDslProgramError;
 use pyrefly_types::type_level_dsl::TypeShapeDslReturnKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslSlotReturnKind;
@@ -601,6 +602,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     TypeShapeDslReturnKind::Slot {
                         slot,
                         kind: TypeShapeDslSlotReturnKind::DirectParameter,
+                        ..
                     } if parameter_domains[*slot] != TypeShapeDslInputDomain::Value(result) => {
                         let flag_value =
                             matches!(parameter_domains[*slot], TypeShapeDslInputDomain::Flag(_));
@@ -681,7 +683,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         );
                         valid_body = false;
                     }
-                    TypeShapeDslReturnKind::Slot { .. }
+                    TypeShapeDslReturnKind::Slot {
+                        narrowing: TypeShapeDslParameterNarrowing::Unnarrowed,
+                        ..
+                    }
                     | TypeShapeDslReturnKind::Broadcast { .. }
                     | TypeShapeDslReturnKind::Expression(_)
                     | TypeShapeDslReturnKind::Invalid
