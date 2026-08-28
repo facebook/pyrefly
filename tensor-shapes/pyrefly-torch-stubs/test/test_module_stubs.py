@@ -355,11 +355,13 @@ def test_glu():
 
 
 def test_glu_default_dim():
-    """GLU(): default dim=1, halves dim 1."""
+    """GLU(): default dim=-1, halves the last axis."""
     glu = nn.GLU()
     x: Tensor[[4, 128]] = torch.randn(4, 128)
     y = glu(x)
     assert_type(y, Tensor[[4, 64]])
+    rank_three: Tensor[[4, 64, 16]] = torch.randn(4, 64, 16)
+    assert_type(glu(rank_three), Tensor[[4, 64, 8]])
 
 
 def test_lstm_unidirectional():

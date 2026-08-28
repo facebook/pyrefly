@@ -1339,7 +1339,7 @@ def nn_pixel_shuffle_forward_ir(
     )
 
 @shape_dsl_function
-def nn_glu_forward_ir(input: ShapedArray, dim: symint = 1) -> ShapedArray:
+def nn_glu_forward_ir(input: ShapedArray, dim: symint = -1) -> ShapedArray:
     rank = len(input.shape)
     d = normalize_dim(rank, dim)
     return ShapedArray(shape=replace_dim(input.shape, d, input.shape[d] // 2))
