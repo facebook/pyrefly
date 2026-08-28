@@ -68,12 +68,75 @@ $ grep '"name": "bad-assignment"' $TMPDIR/baseline_update_from_pyproject/baselin
 [0]
 ```
 
-The written baseline omits fields that are not used for matching.
+The default `full` format includes matching and informational fields.
+
+```scrut {output_stream: stdout}
+$ $JQ -c '.errors[0] | keys' $TMPDIR/baseline_update_from_pyproject/baseline.json
+["column","concise_description","name","path","severity"]
+[0]
+```
+
+The baseline format omits legacy display fields.
 
 ```scrut {output_stream: stdout}
 $ grep -cE '"(line|stop_line|stop_column|code|description)"' $TMPDIR/baseline_update_from_pyproject/baseline.json
 0
 [1]
+```
+
+## Minimal baselines contain only the configured matching fields
+
+```scrut
+$ mkdir -p $TMPDIR/baseline_minimal && \
+> echo "x: str = 1" > $TMPDIR/baseline_minimal/bad.py && \
+> printf 'baseline = "baseline.json"\nbaseline-format = "minimal"\n' > $TMPDIR/baseline_minimal/pyrefly.toml && \
+> cd $TMPDIR/baseline_minimal && \
+> $PYREFLY check --update-baseline --summary=none --output-format=omit-errors >/dev/null 2>/dev/null
+[1]
+```
+
+The default `column` mode needs only the path, error kind, and column.
+
+```scrut {output_stream: stdout}
+$ $JQ -c '.errors[0] | keys' $TMPDIR/baseline_minimal/baseline.json
+["column","name","path"]
+[0]
+```
+
+## A baseline missing the configured matching field explains how to update it
+
+Changing the matching mode makes the column-only baseline invalid.
+
+```scrut {output_stream: stderr}
+$ printf 'baseline = "baseline.json"\nbaseline-format = "minimal"\nbaseline-matching-mode = "concise_description"\n' > $TMPDIR/baseline_minimal/pyrefly.toml && \
+> cd $TMPDIR/baseline_minimal && \
+> $PYREFLY check --summary=none
+*failed to read baseline file*baseline file is invalid*rerun with `--update-baseline`*missing field `concise_description`* (glob)
+[1]
+```
+
+Regenerating the baseline writes the matching fields for the new mode.
+
+```scrut
+$ cd $TMPDIR/baseline_minimal && \
+> $PYREFLY check --update-baseline --summary=none --output-format=omit-errors >/dev/null 2>/dev/null
+[1]
+```
+
+```scrut {output_stream: stdout}
+$ $JQ -c '.errors[0] | keys' $TMPDIR/baseline_minimal/baseline.json
+["concise_description","name","path"]
+[0]
+```
+
+The concise-description mode keeps matching when the diagnostic moves to a
+different column.
+
+```scrut {output_stream: stderr}
+$ printf 'if True:\n    x: str = 1\n' > $TMPDIR/baseline_minimal/bad.py && \
+> cd $TMPDIR/baseline_minimal && \
+> $PYREFLY check --summary=none
+[0]
 ```
 
 ## Updating a baseline requires a path from the CLI or configuration

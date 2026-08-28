@@ -131,7 +131,21 @@ When the baseline is specified in the configuration file, you don't need to pass
 
 Note that `baseline` is a **project-level setting** and cannot be overridden in [`sub-config`](./configuration.mdx#sub-configs) sections. If you need different baseline files for different parts of your codebase, consider using separate Pyrefly configuration files.
 
-Errors are matched with the baseline by looking at file, error code, and column number.
+`baseline-matching-mode` controls how errors are matched:
+
+- `"column"` (default) matches the file, error kind, and starting column.
+- `"concise_description"` matches the file, error kind, and concise description.
+
+`baseline-format` controls which fields `--update-baseline` writes. `"full"`
+(default) includes all baseline metadata. `"minimal"` includes only the file,
+error kind, and the field required by the configured matching mode:
+
+```toml
+baseline = "baseline.json"
+baseline-matching-mode = "concise_description"
+baseline-format = "minimal"
+```
+
 Note that errors suppressed by the baseline file are still shown in the IDE.
 
 `--baseline-error-level=<ignore|info|warn|error>` and the project-level
@@ -153,7 +167,11 @@ Pyrefly records baseline provenance differently depending on the output format:
 - `sarif`: when a baseline is configured, each result has `baselineState` set to `unchanged` for a match and `new` otherwise.
 - `omit-errors`: the summary includes the number of emitted baselined diagnostics.
 
-If a baseline file is configured but cannot be read or parsed, the run fails with an error rather than proceeding as if no baseline were set. The exception is `--update-baseline`, which regenerates the file from scratch and so tolerates a missing or unparseable baseline.
+If a baseline file is configured but cannot be read, parsed, or does not contain
+the fields required by `baseline-matching-mode`, the run fails with an error.
+Rerun the command with `--update-baseline` to regenerate it using the current
+matching mode and format. Baseline regeneration tolerates a missing or invalid
+existing file.
 
 As you fix errors, the entries that suppressed them become stale. Two flags help keep the baseline current:
 

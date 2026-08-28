@@ -247,6 +247,18 @@
           "enum": ["ignore", "info", "warn", "error"],
           "default": "ignore"
         },
+        "baseline-matching-mode": {
+          "description": "Fields used to match diagnostics against baseline entries.",
+          "type": "string",
+          "enum": ["column", "concise_description"],
+          "default": "column"
+        },
+        "baseline-format": {
+          "description": "Amount of diagnostic information written to the baseline file.",
+          "type": "string",
+          "enum": ["full", "minimal"],
+          "default": "full"
+        },
         "build-system": {
           "description": "Pyrefly supports integrating into build systems to discover targets to type check and their dependencies. Currently supports Buck2 and custom queries.",
           "type": "object",
