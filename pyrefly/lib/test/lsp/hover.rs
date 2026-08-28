@@ -656,6 +656,53 @@ def handle(messages: Messages, payload: Payload[str]) -> Payload[int]: ...
 }
 
 #[test]
+fn hover_preserves_implicit_union_aliases_in_imported_function_signatures() {
+    let main = r#"
+import lib
+
+lib.relationship
+#   ^
+"#;
+    let lib = r#"
+from collections.abc import Callable, Sequence
+from typing import Any, Optional, Union
+
+class ColumnClause[T]: ...
+class DMLColumnRole: ...
+class Mapped[T]: ...
+class _HasClauseElement[T]: ...
+
+_ORMColCollectionElement = Union[
+    ColumnClause[Any], DMLColumnRole, Mapped[Any], _HasClauseElement[Any]
+]
+_ORMColCollectionArgument = Union[
+    str,
+    Sequence[_ORMColCollectionElement],
+    Callable[[], Sequence[_ORMColCollectionElement]],
+    Callable[[], _ORMColCollectionElement],
+    _ORMColCollectionElement,
+]
+
+def relationship(
+    foreign_keys: Optional[_ORMColCollectionArgument] = None,
+    remote_side: Optional[_ORMColCollectionArgument] = None,
+    union_arg: Union[_ORMColCollectionArgument, None] = None,
+    pipe_arg: _ORMColCollectionArgument | None = None,
+) -> None: ...
+"#;
+    let report =
+        get_batched_lsp_operations_report(&[("main", main), ("lib", lib)], get_test_report);
+    assert_eq!(
+        report
+            .matches("_ORMColCollectionArgument | None = None")
+            .count(),
+        4,
+        "got: {report}"
+    );
+    assert!(!report.contains("ColumnClause[Any]"), "got: {report}");
+}
+
+#[test]
 fn hover_over_inline_ignore_comment() {
     let code = r#"
 a: int = "test"  # pyrefly: ignore
