@@ -1499,10 +1499,17 @@ impl Solver {
     fn get_new_bound(
         &self,
         existing_bound: Option<Type>,
-        bound: Type,
+        mut bound: Type,
+        quantified_kind: Option<QuantifiedKind>,
         is_upper: bool,
         is_subset: &mut dyn FnMut(&Type, &Type) -> Result<(), SubsetError>,
     ) -> NewBound {
+        if quantified_kind == Some(QuantifiedKind::IntVar) {
+            // `validate_bound_consistency` accepted this bound, so the
+            // same IntVar normalization must succeed before storing it.
+            bound = type_as_intvar_solution(&bound)
+                .expect("successful IntVar bound check must normalize")
+        }
         // Check if the new bound can absorb or be absorbed into the existing bound.
         // Examples (lower bound): `float` absorbs `int`, `list[Any]` absorbs `list[int]`.
         // TODO(https://github.com/facebook/pyrefly/issues/105): there are a few fishy things:
@@ -1580,16 +1587,10 @@ impl Solver {
     /// Shared core of [`Self::add_lower_bound`] (`is_upper == false`) and
     /// [`Self::add_upper_bound`] (`is_upper == true`).
     ///
-    /// The two public functions are near-perfect mirrors: every divergence is
-    /// mechanically derivable from `is_upper` — which `Bounds` field is the
-    /// bound-side vs the opposite-side, the `is_subset` argument order, and the
-    /// `is_upper` bool threaded through `get_new_bound` (the same idiom
-    /// [`Self::get_new_bound`] already uses).
-    ///
-    /// Preserves the two-phase lock pattern of the originals: read under the
-    /// lock, drop the guard, validate without the lock (the `is_subset` callback
-    /// recurses into `is_subset_eq` which re-locks `variables`), then re-lock to
-    /// write. Holding the lock across `is_subset` would deadlock.
+    /// Uses a two-phase lock pattern: read under the lock, drop the guard,
+    /// validate without the lock (the `is_subset` callback recurses into
+    /// `is_subset_eq` which re-locks `variables`), then re-lock to write.
+    /// Holding the lock across `is_subset` would deadlock.
     fn add_var_bound(
         &self,
         v: Var,
@@ -1599,99 +1600,65 @@ impl Solver {
     ) -> Result<(), SubsetError> {
         let lock = self.variables.lock();
         let e = lock.get(v);
-        // The bound-side field holds bounds on the same side being added; the
-        // opposite-side field (`bounds.upper` for a lower bound, `bounds.lower`
-        // for an upper bound) is what the new bound must be consistent with.
-        let (first_bound, opp_bound, res, quantified_kind) = match &*e {
-            Variable::Quantified {
-                quantified: _,
-                bounds,
-            }
-            | Variable::Unwrap(bounds) => (
-                (if is_upper {
+        let (bounds, quantified_kind) = match &*e {
+            Variable::Quantified { bounds, quantified } => (bounds, Some(quantified.kind())),
+            Variable::Unwrap(bounds) => (bounds, None),
+            _ => return Ok(()),
+        };
+        let res = quantified_kind.map_or(Ok(()), |kind| {
+            self.validate_bound_consistency(
+                &bound,
+                if is_upper {
                     &bounds.upper
                 } else {
                     &bounds.lower
-                })
-                .first()
-                .cloned(),
-                self.get_current_bound(if is_upper {
-                    bounds.lower.clone()
-                } else {
-                    bounds.upper.clone()
-                }),
-                if let Variable::Quantified { quantified, .. } = &*e {
-                    self.validate_bound_consistency(
-                        &bound,
-                        if is_upper {
-                            &bounds.upper
-                        } else {
-                            &bounds.lower
-                        },
-                        quantified.kind(),
-                    )
-                } else {
-                    Ok(())
                 },
-                if let Variable::Quantified { quantified, .. } = &*e {
-                    Some(quantified.kind())
-                } else {
-                    None
-                },
-            ),
-            _ => return Ok(()),
+                kind,
+            )
+        });
+        let (first_bound, opposite_bound) = if is_upper {
+            (
+                bounds.upper.first().cloned(),
+                self.get_current_bound(bounds.lower.clone()),
+            )
+        } else {
+            (
+                bounds.lower.first().cloned(),
+                self.get_current_bound(bounds.upper.clone()),
+            )
         };
         drop(e);
         drop(lock);
         let res = res.and_then(|_| {
-            // For a lower bound we check `bound <: opp_bound` (the existing upper
-            // bound); for an upper bound we check `opp_bound <: bound` (the
-            // existing lower bound). Either way the new bound must be consistent
-            // with the opposite-side bound via transitivity.
-            opp_bound.map_or(Ok(()), |opp_bound| {
-                if is_upper {
-                    is_subset(&opp_bound, &bound)
-                } else {
-                    is_subset(&bound, &opp_bound)
-                }
-            })
+            // The new bound must be consistent with the opposite-side bound via transitivity.
+            let consistent = if is_upper {
+                opposite_bound.map(|lower_bound| is_subset(&lower_bound, &bound))
+            } else {
+                opposite_bound.map(|upper_bound| is_subset(&bound, &upper_bound))
+            };
+            consistent.unwrap_or(Ok(()))
         });
-        let new_bound = match (res.is_ok(), quantified_kind) {
-            (true, Some(QuantifiedKind::IntVar)) => Some(
-                self.get_new_bound(
-                    first_bound,
-                    // `validate_bound_consistency` accepted this bound, so the
-                    // same IntVar normalization must succeed before storing it.
-                    type_as_intvar_solution(&bound)
-                        .expect("successful IntVar bound check must normalize"),
-                    is_upper,
-                    is_subset,
-                ),
-            ),
-            (true, _) => Some(self.get_new_bound(first_bound, bound, is_upper, is_subset)),
-            (false, Some(QuantifiedKind::IntVar)) => None,
-            (false, _) => {
-                // TODO(https://github.com/facebook/pyrefly/issues/105): don't throw away the bound.
-                Some(NewBound::AddBound(Type::any_error()))
-            }
+        let new_bound = if res.is_ok() {
+            self.get_new_bound(first_bound, bound, quantified_kind, is_upper, is_subset)
+        } else {
+            // TODO(https://github.com/facebook/pyrefly/issues/105): don't throw away the bound.
+            NewBound::AddBound(Type::any_error())
         };
         let lock = self.variables.lock();
-        if let Some(new_bound) = new_bound {
-            match &mut *lock.get_mut(v) {
-                Variable::Quantified {
-                    quantified: _,
-                    bounds,
-                }
-                | Variable::Unwrap(bounds) => self.add_bound(
-                    if is_upper {
-                        &mut bounds.upper
-                    } else {
-                        &mut bounds.lower
-                    },
-                    new_bound,
-                ),
-                _ => {}
+        match &mut *lock.get_mut(v) {
+            Variable::Quantified {
+                quantified: _,
+                bounds,
             }
+            | Variable::Unwrap(bounds) => self.add_bound(
+                if is_upper {
+                    &mut bounds.upper
+                } else {
+                    &mut bounds.lower
+                },
+                new_bound,
+            ),
+            _ => {}
         }
         res
     }
