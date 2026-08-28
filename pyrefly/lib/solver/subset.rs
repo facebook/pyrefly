@@ -219,8 +219,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     }
 
     /// Constrain an unpacked vararg to the valid arities introduced by optional parameters.
-    /// The full parameter tuple remains the fallback solution when no later argument evidence
-    /// selects one of the shorter arities.
     fn is_subset_optional_prefixes(
         &mut self,
         unpack: &Type,
@@ -230,11 +228,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         optional_prefixes.push(full.clone());
         let accepted = unions(optional_prefixes, &self.solver.heap);
         let unpack = canonical_vararg_unpack_inner(unpack, &accepted);
-        self.is_subset_eq(unpack, &accepted)?;
-        for var in unpack.collect_maybe_placeholder_vars() {
-            self.solver.add_upper_bound_fallback(var, full.clone());
-        }
-        Ok(())
+        self.is_subset_eq(unpack, &accepted)
     }
 
     /// Can a function with l_args be called as a function with u_args?

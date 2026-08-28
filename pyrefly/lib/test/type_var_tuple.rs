@@ -248,14 +248,14 @@ def callback(x: int, y: str = "") -> None: ...
 
 assert_type(test(callback, 1), tuple[int])
 assert_type(test(callback, 1, ""), tuple[int, str])
-test(callback, 1, 1)  # E: Unpacked argument `tuple[Literal[1], Literal[1]]` is not assignable to parameter `*args` with type `tuple[int, str]`
-test(callback, 1, "", "")  # E: Unpacked argument `tuple[Literal[1], Literal[''], Literal['']]` is not assignable to parameter `*args` with type `tuple[int, str]`
+test(callback, 1, 1)  # E: Unpacked argument `tuple[Literal[1], Literal[1]]` is not assignable to parameter `*args` with type `tuple[int] | tuple[int, str]`
+test(callback, 1, "", "")  # E: Unpacked argument `tuple[Literal[1], Literal[''], Literal['']]` is not assignable to parameter `*args` with type `tuple[int] | tuple[int, str]`
 "#,
 );
 
-// Optional callback arities constrain matching without becoming the inferred value of `Ts`.
+// Optional callback arities remain visible when no call-site evidence selects one.
 testcase!(
-    test_type_var_tuple_callable_optional_parameter_does_not_escape,
+    test_type_var_tuple_callable_optional_parameter_union,
     r#"
 from typing import Callable, assert_type
 
@@ -263,13 +263,9 @@ def apply[*Ts](callback: Callable[[*Ts], None]) -> tuple[*Ts]: ...
 def callback(x: int, y: str = "") -> None: ...
 
 r = apply(callback)
-assert_type(r, tuple[int, str])
+assert_type(r, tuple[int] | tuple[int, str])
 assert_type(r[0], int)
-r[2]  # E: Index 2 out of range for tuple with 2 elements
-
-a, b = r
-assert_type(a, int)
-assert_type(b, str)
+r[2]  # E: Index 2 out of range for tuple with 1 elements # E: Index 2 out of range for tuple with 2 elements
 "#,
 );
 

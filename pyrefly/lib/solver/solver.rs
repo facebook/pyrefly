@@ -73,7 +73,7 @@ use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::function::Function;
 use crate::types::module::ModuleType;
-use crate::types::simplify::simplify_tuples;
+use crate::types::simplify::simplify_tuples_and_distribute_unpacking;
 use crate::types::simplify::unions;
 use crate::types::simplify::unions_with_literals;
 use crate::types::typed_dict::TypedDict;
@@ -140,9 +140,6 @@ struct Bounds {
     // not be order-dependent.
     lower: Vec<Type>,
     upper: Vec<Type>,
-    // An upper bound may describe several acceptable matches while this records the precise
-    // solution to use when no lower bound selects one of them.
-    upper_fallback: Vec<Type>,
 }
 
 impl Bounds {
@@ -150,18 +147,16 @@ impl Bounds {
         Self {
             lower: Vec::new(),
             upper: Vec::new(),
-            upper_fallback: Vec::new(),
         }
     }
 
     fn extend(&mut self, other: Bounds) {
         self.lower.extend(other.lower);
         self.upper.extend(other.upper);
-        self.upper_fallback.extend(other.upper_fallback);
     }
 
     fn is_empty(&self) -> bool {
-        self.lower.is_empty() && self.upper.is_empty() && self.upper_fallback.is_empty()
+        self.lower.is_empty() && self.upper.is_empty()
     }
 }
 
@@ -1171,9 +1166,7 @@ impl Solver {
                 *x = intersect(mem::take(&mut y.0), y.1.clone(), &self.heap);
             }
             if let Type::Tuple(tuple) = x {
-                *x = self
-                    .heap
-                    .mk_tuple(simplify_tuples(mem::take(tuple), &self.heap));
+                *x = simplify_tuples_and_distribute_unpacking(mem::take(tuple), &self.heap);
             }
             if let Type::IntTuple(shape) = x {
                 **shape = shape.normalize();
@@ -1681,16 +1674,6 @@ impl Solver {
         self.add_var_bound(v, bound, true, is_subset)
     }
 
-    /// Record the precise solution to use when an upper bound represents matching alternatives.
-    pub fn add_upper_bound_fallback(&self, v: Var, fallback: Type) {
-        let variables = self.variables.lock();
-        if let Variable::Quantified { quantified, bounds } = &mut *variables.get_mut(v)
-            && quantified.kind() == QuantifiedKind::TypeVarTuple
-        {
-            bounds.upper_fallback.push(fallback);
-        }
-    }
-
     /// Get current bound from a set of bounds of an unfinished variable.
     /// TODO(https://github.com/facebook/pyrefly/issues/105): the current solver design requires us
     /// to repeatedly clone and union together intermediate bounds to validate every new bound we
@@ -1724,14 +1707,12 @@ impl Solver {
     }
 
     fn solve_bounds(&self, bounds: Bounds) -> Option<Type> {
-        // Prefer non-Any lower bound > upper-bound fallback > upper bound > Any lower bound.
+        // Prefer non-Any lower bound > upper bound > Any lower bound.
         // TODO(https://github.com/facebook/pyrefly/issues/105): consider using polarity to
         // determine whether we use the lower or upper bound.
         let lower_bound = self.solve_one_bounds(bounds.lower);
         if lower_bound.as_ref().is_none_or(|b| b.is_any()) {
-            self.solve_one_bounds(bounds.upper_fallback)
-                .or_else(|| self.solve_one_bounds(bounds.upper))
-                .or(lower_bound)
+            self.solve_one_bounds(bounds.upper).or(lower_bound)
         } else {
             lower_bound
         }
