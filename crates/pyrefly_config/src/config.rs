@@ -23,6 +23,8 @@ use clap::ValueEnum;
 use derivative::Derivative;
 use dupe::Dupe as _;
 use itertools::Itertools;
+use pep440_rs::Version;
+use pep440_rs::VersionSpecifiers;
 use pyrefly_build::BuildSystem;
 use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::SourceDatabase;
@@ -530,6 +532,9 @@ pub struct ConfigFile {
     #[serde(skip)]
     pub source: ConfigSource,
 
+    /// The PEP 440 version requirement that the running Pyrefly must satisfy.
+    pub required_version: Option<String>,
+
     /// Files that should be counted as sources (e.g. user-space code).
     /// NOTE: unlike other args, this is never replaced with CLI arg overrides
     /// in this config, but may be overridden by CLI args where used.
@@ -699,6 +704,7 @@ impl Default for ConfigFile {
     fn default() -> Self {
         ConfigFile {
             source: ConfigSource::Synthetic(None),
+            required_version: None,
             project_includes: Default::default(),
             project_excludes: Default::default(),
             interpreters: Interpreters {
@@ -1062,6 +1068,11 @@ impl ConfigFile {
                  // we can use unwrap here, because the value in the root config must
                  // be set in `ConfigFile::configure()`.
                  self.root.infer_with_first_use.unwrap())
+    }
+
+    pub fn check_all_matches(&self, path: &Path) -> bool {
+        self.get_from_sub_configs(ConfigBase::get_check_all_matches, path)
+            .unwrap_or_else(|| self.root.check_all_matches.unwrap())
     }
 
     pub fn strict_callable_subtyping(&self, path: &Path) -> bool {
@@ -1471,6 +1482,7 @@ impl ConfigFile {
             apply_preset_default!(check_unannotated_defs);
             apply_preset_default!(infer_return_types);
             apply_preset_default!(infer_with_first_use);
+            apply_preset_default!(check_all_matches);
             apply_preset_default!(strict_callable_subtyping);
             apply_preset_default!(strict_partial_subtyping);
             apply_preset_default!(spec_compliant_overloads);
@@ -1528,6 +1540,10 @@ impl ConfigFile {
 
         if self.root.infer_with_first_use.is_none() {
             self.root.infer_with_first_use = Some(true);
+        }
+
+        if self.root.check_all_matches.is_none() {
+            self.root.check_all_matches = Some(false);
         }
 
         if self.root.strict_callable_subtyping.is_none() {
@@ -1744,6 +1760,25 @@ impl ConfigFile {
                 errors.push(ConfigError::warn(anyhow!(
                     "The top-level `pytorch-efficiency-lints` option is deprecated. Set the `pytorch-efficiency-lints` error kind in `[errors]` instead."
                 )));
+            }
+
+            if let Some(required_version) = &config.required_version {
+                match required_version.parse::<VersionSpecifiers>() {
+                    Ok(specifiers) => {
+                        let running_version = env!("CARGO_PKG_VERSION");
+                        let parsed_running_version = running_version
+                            .parse::<Version>()
+                            .expect("Pyrefly's package version must be PEP 440 compatible");
+                        if !specifiers.contains(&parsed_running_version) {
+                            errors.push(ConfigError::error(anyhow!(
+                                "Pyrefly {running_version} does not satisfy `required-version = \"{required_version}\"`"
+                            )));
+                        }
+                    }
+                    Err(error) => errors.push(ConfigError::error(anyhow!(
+                        "Invalid `required-version` `{required_version}`: {error}"
+                    ))),
+                }
             }
 
             if !config.root.extras.0.is_empty() {
@@ -2000,6 +2035,7 @@ mod tests {
             config,
             ConfigFile {
                 source: ConfigSource::Synthetic(None),
+                required_version: None,
                 project_includes: Globs::new(vec![
                     "tests".to_owned(),
                     "./implementation".to_owned()
@@ -2047,6 +2083,7 @@ mod tests {
                     disable_type_errors_in_ide: None,
                     ignore_errors_in_generated_code: Some(true),
                     infer_with_first_use: None,
+                    check_all_matches: None,
                     pytorch_efficiency_lints: None,
                     strict_callable_subtyping: None,
                     strict_partial_subtyping: None,
@@ -2075,6 +2112,7 @@ mod tests {
                         disable_type_errors_in_ide: None,
                         ignore_errors_in_generated_code: Some(false),
                         infer_with_first_use: Some(false),
+                        check_all_matches: None,
                         pytorch_efficiency_lints: None,
                         strict_callable_subtyping: Some(false),
                         strict_partial_subtyping: None,
@@ -2390,6 +2428,7 @@ mod tests {
         let interpreter = "venv/bin/python3".to_owned();
         let mut config = ConfigFile {
             source: ConfigSource::Synthetic(None),
+            required_version: None,
             project_includes: Globs::new(vec!["path1/**".to_owned(), "path2/path3".to_owned()])
                 .unwrap(),
             project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]).unwrap(),
@@ -2466,6 +2505,7 @@ mod tests {
 
         let expected_config = ConfigFile {
             source: ConfigSource::Synthetic(None),
+            required_version: None,
             project_includes: Globs::new(project_includes_vec).unwrap(),
             project_excludes: Globs::new(project_excludes_vec).unwrap(),
             interpreters: Interpreters {
@@ -2702,6 +2742,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                check_all_matches: Some(false),
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
@@ -2721,6 +2762,7 @@ output-format = "omit-errors"
                         replace_imports_with_any: Some(vec![
                             ModuleWildcard::new("highest").unwrap(),
                         ]),
+                        check_all_matches: Some(true),
                         ignore_errors_in_generated_code: None,
                         ..Default::default()
                     },
@@ -2753,6 +2795,9 @@ output-format = "omit-errors"
 
         // test empty value falls back to next
         assert!(config.ignore_errors_in_generated_code(Path::new("this/is/highest/priority")));
+        // test scalar sub-config override and root fallback
+        assert!(config.check_all_matches(Path::new("this/is/highest/priority")));
+        assert!(!config.check_all_matches(Path::new("this/does/not/match/any")));
         // test no pattern match
         assert!(config.replace_imports_with_any(
             Some(Path::new("this/does/not/match/any")),
@@ -2944,6 +2989,17 @@ output-format = "omit-errors"
         without_preset.configure();
 
         assert_eq!(with_preset.root, without_preset.root);
+    }
+
+    #[test]
+    fn test_check_all_matches() {
+        let mut default = ConfigFile::default();
+        default.configure();
+        assert!(!default.check_all_matches(Path::new("test.py")));
+
+        let mut enabled = ConfigFile::parse_config("check-all-matches = true").unwrap();
+        enabled.configure();
+        assert!(enabled.check_all_matches(Path::new("test.py")));
     }
 
     #[test]
@@ -3685,6 +3741,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                check_all_matches: None,
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
@@ -3727,6 +3784,7 @@ output-format = "omit-errors"
                 disable_type_errors_in_ide: Some(true),
                 ignore_errors_in_generated_code: Some(false),
                 infer_with_first_use: Some(true),
+                check_all_matches: None,
                 pytorch_efficiency_lints: None,
                 strict_callable_subtyping: Some(false),
                 strict_partial_subtyping: Some(false),
@@ -4078,6 +4136,30 @@ output-format = "omit-errors"
         assert!(!errors.is_empty(), "Expected errors for invalid TOML");
         // The config should still respect the file's location for project root detection.
         assert_eq!(config.source.root_from_file(), Some(root.path()));
+    }
+
+    #[test]
+    fn test_required_version() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        for (required_version, expect_error) in [
+            (format!("=={}", env!("CARGO_PKG_VERSION")), false),
+            ("<0".to_owned(), true),
+            ("not a specifier".to_owned(), true),
+        ] {
+            fs::write(&path, format!("required-version = {required_version:?}")).unwrap();
+            let (config, errors) = ConfigFile::from_file(&path);
+            assert_eq!(
+                config.required_version.as_deref(),
+                Some(required_version.as_str())
+            );
+            if expect_error {
+                assert_eq!(errors.len(), 1);
+                assert_eq!(errors[0].severity(), Severity::Error);
+            } else {
+                assert!(errors.is_empty());
+            }
+        }
     }
 
     #[test]

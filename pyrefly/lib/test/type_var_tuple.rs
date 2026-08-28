@@ -239,6 +239,83 @@ assert_type(test(fun, 1), tuple[int])
 );
 
 testcase!(
+    test_type_var_tuple_callable_optional_parameter,
+    r#"
+from typing import Callable, assert_type
+
+def test[*Ts, T](f: Callable[[*Ts], T], *args: *Ts) -> tuple[*Ts]: ...
+def callback(x: int, y: str = "") -> None: ...
+
+assert_type(test(callback, 1), tuple[int])
+assert_type(test(callback, 1, ""), tuple[int, str])
+test(callback, 1, 1)  # E: Unpacked argument `tuple[Literal[1], Literal[1]]` is not assignable to parameter `*args` with type `tuple[int, str]`
+test(callback, 1, "", "")  # E: Unpacked argument `tuple[Literal[1], Literal[''], Literal['']]` is not assignable to parameter `*args` with type `tuple[int, str]`
+"#,
+);
+
+// Optional callback arities constrain matching without becoming the inferred value of `Ts`.
+testcase!(
+    test_type_var_tuple_callable_optional_parameter_does_not_escape,
+    r#"
+from typing import Callable, assert_type
+
+def apply[*Ts](callback: Callable[[*Ts], None]) -> tuple[*Ts]: ...
+def callback(x: int, y: str = "") -> None: ...
+
+r = apply(callback)
+assert_type(r, tuple[int, str])
+assert_type(r[0], int)
+r[2]  # E: Index 2 out of range for tuple with 2 elements
+
+a, b = r
+assert_type(a, int)
+assert_type(b, str)
+"#,
+);
+
+// Optional positional parameters compose with each supported variadic callback form.
+testcase!(
+    test_type_var_tuple_callable_optional_parameter_with_varargs,
+    r#"
+from typing import Callable, assert_type
+
+def test[*Ts, T](f: Callable[[*Ts], T], *args: *Ts) -> tuple[*Ts]: ...
+
+def cb1(x: int, y: str = "", *rest: bytes) -> None: ...
+assert_type(test(cb1, 1), tuple[int])
+assert_type(test(cb1, 1, ""), tuple[int, str])
+assert_type(test(cb1, 1, "", b""), tuple[int, str, bytes])
+
+def cb2(x: int, y: str = "", *rest: *tuple[bytes, ...]) -> None: ...
+assert_type(test(cb2, 1), tuple[int])
+assert_type(test(cb2, 1, ""), tuple[int, str])
+assert_type(test(cb2, 1, "", b""), tuple[int, str, bytes])
+
+def cb3[*Us](x: int, y: str = "", *rest: *Us) -> None: ...
+assert_type(test(cb3, 1), tuple[int])
+assert_type(test(cb3, 1, ""), tuple[int, str])
+assert_type(test(cb3, 1, "", b""), tuple[int, str, bytes])
+
+def cb4(x: int, y: str = "", *rest: *tuple[bytes, complex]) -> None: ...
+test(cb4, 1)  # E: Unpacked argument `tuple[Literal[1]]` is not assignable to parameter `*args` with type `tuple[int, str, bytes, complex]`
+"#,
+);
+
+// Many optional parameters must not change which callback invocations are legal.
+testcase!(
+    test_type_var_tuple_callable_many_optional_parameters,
+    r#"
+from typing import Callable, assert_type
+
+def test[*Ts, T](f: Callable[[*Ts], T], *args: *Ts) -> tuple[*Ts]: ...
+def callback(a: int, b: str = "", c: str = "", d: str = "", e: str = "") -> None: ...
+
+assert_type(test(callback, 1), tuple[int])
+assert_type(test(callback, 1, "", "", "", ""), tuple[int, str, str, str, str])
+"#,
+);
+
+testcase!(
     test_type_var_tuple_resolves_to_empty,
     r#"
 from typing import Callable, assert_type

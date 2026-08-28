@@ -30,6 +30,7 @@ use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassFields;
+use pyrefly_types::class::PrecomputedTParams;
 use pyrefly_types::function::FuncMetadata;
 use pyrefly_types::function::Function;
 use pyrefly_types::function::FunctionKind;
@@ -306,19 +307,24 @@ struct TypeShapeContext<'a> {
 
 impl TypeShapeContext<'_> {
     fn declared_type_param_arity_for_class(&self, class: &Class) -> Option<usize> {
-        if let Some(tparams) = class.precomputed_tparams() {
-            return nonzero_arity(tparams.len());
+        match class.precomputed_tparams() {
+            PrecomputedTParams::NotGeneric => None,
+            PrecomputedTParams::Precomputed(tparams) => nonzero_arity(tparams.len()),
+            // Legacy type variables, so the arity is only known once the
+            // `KeyTParams` binding has been solved.
+            PrecomputedTParams::FromBinding => {
+                let handle = Handle::new(
+                    class.module_name(),
+                    class.module_path().dupe(),
+                    self.source_handle.sys_info().dupe(),
+                );
+                let bindings = self.transaction.get_bindings(&handle)?;
+                let answers = self.transaction.get_answers(&handle)?;
+                let idx =
+                    bindings.key_to_idx_hashed_opt(Hashed::new(&KeyTParams(class.index())))?;
+                nonzero_arity(answers.get_idx(idx)?.len())
+            }
         }
-
-        let handle = Handle::new(
-            class.module_name(),
-            class.module_path().dupe(),
-            self.source_handle.sys_info().dupe(),
-        );
-        let bindings = self.transaction.get_bindings(&handle)?;
-        let answers = self.transaction.get_answers(&handle)?;
-        let idx = bindings.key_to_idx_hashed_opt(Hashed::new(&KeyTParams(class.index())))?;
-        nonzero_arity(answers.get_idx(idx)?.len())
     }
 }
 
@@ -779,6 +785,11 @@ impl<'a> CalleesWithLocation<'a> {
                     .iter()
                     .flat_map(Self::class_info_from_bound_obj)
                     .collect_vec(),
+                Restriction::Flag(domain) => domain
+                    .class_names()
+                    .into_iter()
+                    .map(|name| (name.to_owned(), false))
+                    .collect(),
             },
             Type::Union(u) => u
                 .members
@@ -908,6 +919,10 @@ impl<'a> CalleesWithLocation<'a> {
             Type::Quantified(q) => match &q.restriction {
                 Restriction::Bound(Type::ClassType(c)) => self.find_init_or_new(c.class_object()),
                 Restriction::Constraints(tys) => self.init_or_new_from_union(tys, callee_range),
+                Restriction::Flag(domain) => self.init_or_new_from_union(
+                    &domain.types(&self.transaction.get_stdlib(&self.handle)),
+                    callee_range,
+                ),
                 x => panic!(
                     "unexpected restriction {}: {x:?}",
                     self.module_info.display_range(callee_range)
@@ -939,6 +954,13 @@ impl<'a> CalleesWithLocation<'a> {
                 Restriction::Bound(b) => {
                     self.callee_from_type(b, call_target, callee_range, call_arguments)
                 }
+                Restriction::Flag(domain) => domain
+                    .types(&self.transaction.get_stdlib(&self.handle))
+                    .iter()
+                    .flat_map(|ty| {
+                        self.callee_from_type(ty, call_target, callee_range, call_arguments)
+                    })
+                    .collect(),
                 x => panic!(
                     "unexpected restriction {}: {x:?}",
                     self.module_info.display_range(callee_range)

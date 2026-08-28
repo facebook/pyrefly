@@ -623,6 +623,16 @@ def test(x: tuple[int, str, bool]) -> None:
 );
 
 testcase!(
+    test_tuple_reverse_slice,
+    r#"
+from typing import assert_type
+
+def test(x: tuple[int, str, bool]) -> None:
+    assert_type(x[::-1], tuple[bool, str, int])
+"#,
+);
+
+testcase!(
     test_slice_union_step_reported_once,
     r#"
 def test(xs: list[int] | tuple[int, ...]) -> None:

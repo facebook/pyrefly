@@ -426,6 +426,154 @@ cfg: Config = {"": 1}
 }
 
 #[test]
+fn dict_value_completion_from_discriminated_typed_dict_union_literal() {
+    let code = r#"
+from typing import Literal, TypedDict
+
+class Foo(TypedDict):
+    kind: Literal["foo"]
+    foo_value: int
+
+class Bar(TypedDict):
+    kind: Literal["bar"]
+    bar_value: str
+
+type FooBar = Foo | Bar
+
+item: FooBar = {
+    "kind": "|",
+#            ^
+}
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.contains("- (Value) 'bar': Literal['bar']"),
+        "{report}"
+    );
+    assert!(
+        report.contains("- (Value) 'foo': Literal['foo']"),
+        "{report}"
+    );
+}
+
+#[test]
+fn dict_value_completion_narrows_discriminated_typed_dict_union_literal() {
+    let code = r#"
+from typing import Literal, TypedDict
+
+class Foo(TypedDict):
+    kind: Literal["foo"]
+    mode: Literal["foo-mode"]
+
+class Bar(TypedDict):
+    kind: Literal["bar"]
+    mode: Literal["bar-mode"]
+
+type FooBar = Foo | Bar
+
+item: FooBar = {
+    "kind": "foo",
+    "mode": "|",
+#            ^
+}
+"#;
+    let report =
+        get_batched_lsp_operations_report_allow_error(&[("main", code)], get_default_test_report());
+    let report = strip_ansi(&report);
+    assert!(
+        report.contains("- (Value) 'foo-mode': Literal['foo-mode']"),
+        "{report}"
+    );
+    assert!(
+        !report.contains("- (Value) 'bar-mode': Literal['bar-mode']"),
+        "{report}"
+    );
+}
+
+#[test]
+fn dict_key_completion_from_discriminated_typed_dict_union_literal() {
+    let code = r#"
+from typing import Literal, TypedDict
+
+class Foo(TypedDict):
+    kind: Literal["foo"]
+    foo_value: int
+
+class Bar(TypedDict):
+    kind: Literal["bar"]
+    bar_value: str
+
+type FooBar = Foo | Bar
+
+item: FooBar = {
+    "kind": "foo",
+    "": 0,
+#    ^
+}
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let position = extract_cursors_for_test(code)[0];
+    let txn = state.transaction();
+    let labels = dict_field_labels(&txn, handle, position);
+    assert_eq!(labels, vec!["foo_value".to_owned()]);
+}
+
+#[test]
+fn dict_key_completion_uses_enclosing_expected_type() {
+    let code = r#"
+from typing import Literal, TypedDict
+
+class Foo(TypedDict):
+    kind: Literal["foo"]
+    foo_value: int
+
+class Bar(TypedDict):
+    kind: Literal["bar"]
+    bar_value: str
+
+type FooBar = Foo | Bar
+
+def consume(item: FooBar) -> None: ...
+
+consume({
+    "kind": "foo",
+    "": 0,
+#    ^
+})
+
+def make() -> FooBar:
+    return {
+        "kind": "foo",
+        "": 0,
+#        ^
+    }
+
+class Outer(TypedDict):
+    item: FooBar
+
+outer: Outer = {
+    "item": {
+        "kind": "foo",
+        "": 0,
+#        ^
+    },
+}
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+    let txn = state.transaction();
+    for position in extract_cursors_for_test(code) {
+        assert_eq!(
+            dict_field_labels(&txn, handle, position),
+            vec!["foo_value".to_owned()]
+        );
+    }
+}
+
+#[test]
 fn dataframe_column_completion_from_method_argument() {
     let code = r#"
 import polars as pl
@@ -1667,6 +1815,44 @@ Completion Results:
 }
 
 #[test]
+fn kwargs_completion_pydantic_constructor_ignores_inherited_unannotated_new() {
+    let sqlmodel = r#"
+from typing import Any
+from pydantic import BaseModel
+
+class SQLModel(BaseModel):
+    def __new__(cls, *args: Any, **kwargs: Any):
+        return object.__new__(cls)
+
+    def __init__(self, **data: Any) -> None: ...
+"#;
+    let main = r#"
+from sqlmodel import SQLModel
+
+class A(SQLModel):
+    a: int
+    b: str
+
+A(
+# ^
+"#;
+    let pydantic_path =
+        std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
+    let mut test_env = TestEnv::new_with_site_package_paths(&[&pydantic_path]);
+    test_env.add("sqlmodel", sqlmodel);
+    test_env.add("main", main);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let report =
+        get_default_test_report()(&state, &handle("main"), extract_cursors_for_test(main)[0]);
+    assert!(report.contains("- (Variable) a=:"), "{report}");
+    assert!(report.contains("- (Variable) b=:"), "{report}");
+    assert!(!report.contains("args="), "{report}");
+    assert!(!report.contains("kwargs="), "{report}");
+}
+
+#[test]
 fn kwargs_completion_dunder_call_metaclass_constructor() {
     let code = r#"
 class Meta(type):
@@ -2773,6 +2959,41 @@ jso
     assert!(
         json[0].additional_text_edits.is_none(),
         "existing module import should not produce another import edit"
+    );
+}
+
+#[test]
+fn autoimport_suggests_unloaded_stdlib_module() {
+    let code = r#"
+jso
+#  ^
+"#;
+    let mut env = TestEnv::new().with_default_require_level(Require::Exports);
+    env.add("main", code);
+    let (state, handle_for) = env.to_state();
+    let handle = handle_for("main");
+    let position = extract_cursors_for_test(code)[0];
+
+    let completions =
+        state
+            .transaction()
+            .completion(&handle, position, ImportFormat::Absolute, true, None);
+    let json = completions
+        .iter()
+        .find(|item| item.label == "json")
+        .expect("expected an auto-import completion for the unloaded json module");
+    assert!(
+        json.detail
+            .as_ref()
+            .is_some_and(|detail| detail.contains("import json")),
+        "expected json completion to add an import, got {:?}",
+        json.detail
+    );
+    assert!(
+        json.additional_text_edits
+            .as_ref()
+            .is_some_and(|edits| !edits.is_empty()),
+        "expected json completion to include an import edit"
     );
 }
 

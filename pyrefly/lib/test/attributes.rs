@@ -1198,6 +1198,31 @@ def test(stack: ThemeStack) -> None:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3958
+testcase!(
+    test_property_returning_bound_method_preserves_signature,
+    r#"
+from typing import reveal_type
+
+class Foo:
+    def bar(
+        self,
+        simple_union: int | str,
+        complex_union: int | str | tuple[int, str] | None = None,
+    ) -> None: ...
+
+class FooManager:
+    def __init__(self) -> None:
+        self.foo = Foo()
+
+    @property
+    def bar(self):
+        return self.foo.bar
+
+reveal_type(FooManager().bar)  # E: revealed type: (simple_union: int | str, complex_union: int | str | tuple[int, str] | None = None) -> None
+"#,
+);
+
 testcase!(
     test_generic_function_as_closure_default_arg,
     r#"
@@ -3121,5 +3146,41 @@ f.real_method.test = None  # E: has no attribute `test`
 del f.real_method.test  # E: has no attribute `test`
 # Known method attributes are still accessible.
 name: str = f.real_method.__name__
+"#,
+);
+
+testcase!(
+    test_getattr_self_awaitable_recursion,
+    r#"
+from collections.abc import Awaitable
+
+class C:
+    def __getattr__(self: Awaitable, name: str):
+        pass
+
+C().a  # E: Argument `C` is not assignable to parameter `self` with type `Awaitable[Unknown]` in function `C.__getattr__`
+"#,
+);
+
+testcase!(
+    test_getattr_self_protocol_generic_cache_order,
+    r#"
+from typing import Protocol, TypeVar
+
+T = TypeVar("T", covariant=True)
+
+class P(Protocol[T]):
+    @property
+    def x(self) -> T: ...
+
+class C:
+    def __getattr__(self: "P[str]", name: str) -> int:
+        return 0
+
+def f_int(x: P[int]) -> None: ...
+def f_str(x: P[str]) -> None: ...
+
+f_int(C())
+f_str(C())  # E: Argument `C` is not assignable to parameter `x` with type `P[str]` in function `f_str`
 "#,
 );

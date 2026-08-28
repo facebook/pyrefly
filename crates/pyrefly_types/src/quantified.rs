@@ -39,10 +39,17 @@ pub enum QuantifiedOrigin {
     ScopedLegacy,
     /// PEP 695 type parameter — has its own definition range, no ambiguity.
     Pep695,
-    /// Synthetic Self quantified synthesized for `__new__` on a class.
-    SyntheticSelf,
-    /// Synthetic binder created during callable/tuple instantiation (TypeVarTuple residual).
-    SyntheticCallableResidual,
+    /// Synthetic quantified created by pyrefly rather than written in source.
+    Synthetic {
+        /// Is this a Self quantified synthesized for `__new__` on a class?
+        is_self: bool,
+    },
+}
+
+impl QuantifiedOrigin {
+    pub fn synthetic() -> Self {
+        Self::Synthetic { is_self: false }
+    }
 }
 
 /// A source range plus an index that disambiguates multiple quantifieds sharing the same range.
@@ -384,6 +391,7 @@ impl Quantified {
                     }
                     write!(f, ")")?;
                 }
+                Restriction::Flag(domain) => write!(f, ": Flag[{domain}]")?,
                 Restriction::Unrestricted => {}
             }
             if let Some(default) = self.default() {

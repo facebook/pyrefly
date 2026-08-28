@@ -20,6 +20,7 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_util::locked_map::LockedMap;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::name::Name;
 use vec1::Vec1;
@@ -506,7 +507,16 @@ pub fn find_import_internal(
             config
                 .fallback_search_path
                 .for_directory(origin.and_then(|p| p.parent()))
-                .iter(),
+                .iter()
+                .filter(|path| {
+                    // A root equal to a site package path entry is searched by the site package
+                    // branch below, where bundled stubs take priority over the packages they stub.
+                    // A root nested deeper inside site packages is not on `sys.path` at runtime, so
+                    // it is dropped rather than demoted.
+                    !config
+                        .site_package_path()
+                        .any(|site_package| path.starts_with(site_package))
+                }),
             &mut namespaces_found,
             style_filter,
             None,
@@ -665,8 +675,11 @@ fn suggest_stdlib_import_uncached(missing: ModuleName) -> Option<ModuleName> {
     // Collect all stdlib module names and find the best suggestion
     let candidates: Vec<Name> = ts.modules().map(|m| Name::new(m.as_str())).collect();
 
-    best_suggestion(&missing_name, candidates.iter().map(|c| (c, 0)))
-        .map(|suggestion| ModuleName::from_str(suggestion.as_str()))
+    best_suggestion(
+        &missing_name,
+        candidates.iter().map(|c| Candidate::measured(c, 0)),
+    )
+    .map(|suggestion| ModuleName::from_str(suggestion.as_str()))
 }
 
 #[cfg(test)]

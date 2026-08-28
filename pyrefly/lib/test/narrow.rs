@@ -2219,6 +2219,70 @@ def test_literal_string(x: str | None, values: set[LiteralString]) -> None:
 "#,
 );
 
+testcase!(
+    test_positive_equality_preserves_compatible_disjoint_types,
+    r#"
+from enum import IntEnum
+from typing import Literal, NewType, assert_type
+
+UserId = NewType("UserId", str)
+
+class Number(IntEnum):
+    ONE = 1
+
+class StrSubclass(str):
+    pass
+
+def test_numeric(x: float | None) -> None:
+    if x == 1:
+        assert_type(x, float)
+
+def test_bool(x: bool | None) -> None:
+    if x == 1:
+        assert_type(x, bool)
+
+def test_incompatible_groups(x: Literal["x"] | int) -> None:
+    if x == 1:
+        assert_type(x, Literal[1])
+
+def test_bytes_like(x: bytearray | None) -> None:
+    if x == b"x":
+        assert_type(x, bytearray)
+
+def test_literal(x: str | None) -> None:
+    if x == "x":
+        assert_type(x, Literal["x"])
+
+def test_str_subclass(x: StrSubclass | None) -> None:
+    if x == "x":
+        assert_type(x, StrSubclass)
+
+def test_newtype(x: UserId | None) -> None:
+    if x == "admin":
+        assert_type(x, UserId)
+
+def test_int_enum(x: Literal[Number.ONE] | None) -> None:
+    if x == 1:
+        assert_type(x, Literal[Number.ONE])
+
+def test_int_enum_reverse(x: int | None) -> None:
+    if x == Number.ONE:
+        assert_type(x, int)
+"#,
+);
+
+testcase!(
+    bug = "Integer equality narrowing drops equal bool literals",
+    test_positive_equality_int_literal_drops_bool,
+    r#"
+from typing import Literal, assert_type
+
+def f(x: int) -> None:
+    if x == 1:
+        assert_type(x, Literal[1])
+"#,
+);
+
 // Make sure we catch illegal arguments to isinstance and issubclass even when we aren't narrowing.
 testcase!(
     test_validate_class_object_no_narrow,

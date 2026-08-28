@@ -8,17 +8,33 @@ Type stubs for torch.nn.functional module.
 Functional neural network operations including convolution, pooling, activation, and normalization.
 """
 
+import builtins
 from typing import Literal, overload
 
-from shape_extensions import Elements, IntTuple, IntVar, uses_shape_dsl
+import shape_extensions
+from shape_extensions import (
+    Elements,
+    Flag,
+    Int as _Int,
+    IntTuple,
+    IntVar,
+    uses_shape_dsl,
+)
 from torch._shapes import (
-    adaptive_pool_ir,
-    conv_ir,
-    conv_transpose_ir,
-    cosine_similarity_ir,
+    adaptive_pool1d_shape,
+    adaptive_pool2d_shape,
+    adaptive_pool3d_shape,
+    adaptive_pool_gradual_shape,
+    classification_loss_shape,
+    conv_shape,
+    conv_transpose_shape,
+    cosine_embedding_score_shape,
+    cosine_similarity_shape,
     interpolate_ir,
-    loss_ir,
-    pad_ir,
+    kl_div_loss_shape,
+    loss_shape,
+    pad_shape,
+    pairwise_distance_shape,
     pool_ir,
 )
 
@@ -105,85 +121,133 @@ __all__ = [
 # ====================================================================
 
 # Convolution operations
-@uses_shape_dsl(conv_ir)
-def conv1d(
-    self: Tensor,
-    weight: Tensor,
+def conv1d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int]],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int] = 1,
-    padding: int | tuple[int] = 0,
-    dilation: int | tuple[int] = 1,
+    stride: Stride = 1,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
     groups: int = 1,
-) -> Tensor:
+) -> Tensor[conv_shape(InputShape, WeightShape, Stride, Padding, Dilation)]:
     """1D convolution. Shape inference via meta-shape: torch.nn.functional.conv1d"""
     ...
 
-@uses_shape_dsl(conv_ir)
-def conv2d(
-    self: Tensor,
-    weight: Tensor,
+def conv2d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int, int] = 1,
-    padding: int | tuple[int, int] = 0,
-    dilation: int | tuple[int, int] = 1,
+    stride: Stride = 1,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
     groups: int = 1,
-) -> Tensor:
+) -> Tensor[conv_shape(InputShape, WeightShape, Stride, Padding, Dilation)]:
     """2D convolution. Shape inference via meta-shape: torch.nn.functional.conv2d"""
     ...
 
-@uses_shape_dsl(conv_ir)
-def conv3d(
-    self: Tensor,
-    weight: Tensor,
+def conv3d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int, int, int] = 1,
-    padding: int | tuple[int, int, int] = 0,
-    dilation: int | tuple[int, int, int] = 1,
+    stride: Stride = 1,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
     groups: int = 1,
-) -> Tensor:
+) -> Tensor[conv_shape(InputShape, WeightShape, Stride, Padding, Dilation)]:
     """3D convolution. Shape inference via meta-shape: torch.nn.functional.conv3d"""
     ...
 
 # Transposed convolution operations
-@uses_shape_dsl(conv_transpose_ir)
-def conv_transpose1d(
-    self: Tensor,
-    weight: Tensor,
+def conv_transpose1d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    OutputPadding: Flag[builtins.int | tuple[builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int]],
+    Groups: Flag[builtins.int],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int] = 1,
-    padding: int | tuple[int] = 0,
-    output_padding: int | tuple[int] = 0,
-    dilation: int | tuple[int] = 1,
-    groups: int = 1,
-) -> Tensor:
+    stride: Stride = 1,
+    padding: Padding = 0,
+    output_padding: OutputPadding = 0,
+    dilation: Dilation = 1,
+    groups: Groups = 1,
+) -> Tensor[
+    conv_transpose_shape(
+        InputShape, WeightShape, Stride, Padding, OutputPadding, Dilation, Groups
+    )
+]:
     """1D transposed convolution. Shape inference via meta-shape: torch.nn.functional.conv_transpose1d"""
     ...
 
-@uses_shape_dsl(conv_transpose_ir)
-def conv_transpose2d(
-    self: Tensor,
-    weight: Tensor,
+def conv_transpose2d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    OutputPadding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Groups: Flag[builtins.int],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int, int] = 1,
-    padding: int | tuple[int, int] = 0,
-    output_padding: int | tuple[int, int] = 0,
-    dilation: int | tuple[int, int] = 1,
-    groups: int = 1,
-) -> Tensor:
+    stride: Stride = 1,
+    padding: Padding = 0,
+    output_padding: OutputPadding = 0,
+    dilation: Dilation = 1,
+    groups: Groups = 1,
+) -> Tensor[
+    conv_transpose_shape(
+        InputShape, WeightShape, Stride, Padding, OutputPadding, Dilation, Groups
+    )
+]:
     """2D transposed convolution. Shape inference via meta-shape: torch.nn.functional.conv_transpose2d"""
     ...
 
-@uses_shape_dsl(conv_transpose_ir)
-def conv_transpose3d(
-    self: Tensor,
-    weight: Tensor,
+def conv_transpose3d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    OutputPadding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Groups: Flag[builtins.int],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int, int, int] = 1,
-    padding: int | tuple[int, int, int] = 0,
-    output_padding: int | tuple[int, int, int] = 0,
-    dilation: int | tuple[int, int, int] = 1,
-    groups: int = 1,
-) -> Tensor:
+    stride: Stride = 1,
+    padding: Padding = 0,
+    output_padding: OutputPadding = 0,
+    dilation: Dilation = 1,
+    groups: Groups = 1,
+) -> Tensor[
+    conv_transpose_shape(
+        InputShape, WeightShape, Stride, Padding, OutputPadding, Dilation, Groups
+    )
+]:
     """3D transposed convolution. Shape inference via meta-shape: torch.nn.functional.conv_transpose3d"""
     ...
 
@@ -309,50 +373,167 @@ def avg_pool3d(
     ...
 
 # Adaptive max pooling operations
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_max_pool1d(
-    self: Tensor, output_size: int | tuple[int], return_indices: bool = False
-) -> Tensor:
-    """1D adaptive max pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_max_pool1d"""
+@overload
+def adaptive_max_pool1d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape],
+    output_size: _Int[O],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool1d_shape(Shape, O)]:
+    """1D adaptive max pooling. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_max_pool2d(
-    self: Tensor,
-    output_size: int | tuple[int, int] | None,
-    return_indices: bool = False,
-) -> Tensor:
-    """2D adaptive max pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_max_pool2d"""
+@overload
+def adaptive_max_pool1d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape],
+    output_size: tuple[_Int[O]],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool1d_shape(Shape, O)]: ...
+@overload
+def adaptive_max_pool1d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int],
+    return_indices: Literal[True],
+) -> tuple[
+    Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+    Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+]: ...
+@overload
+def adaptive_max_pool1d[Shape: IntTuple](
+    input: Tensor[Shape], output_size: int | tuple[int], return_indices: bool
+) -> (
+    Tensor[adaptive_pool_gradual_shape(Shape, 1)]
+    | tuple[
+        Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+        Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+    ]
+): ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape],
+    output_size: _Int[O],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool2d_shape(Shape, O, O)]:
+    """2D adaptive max pooling. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_max_pool3d(
-    self: Tensor,
-    output_size: int | tuple[int, int, int] | None,
-    return_indices: bool = False,
-) -> Tensor:
-    """3D adaptive max pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_max_pool3d"""
+@overload
+def adaptive_max_pool2d[Shape: IntTuple, OH: IntVar, OW: IntVar](
+    input: Tensor[Shape],
+    output_size: tuple[_Int[OH], _Int[OW]],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool2d_shape(Shape, OH, OW)]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: tuple[int | None, int | None],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool_gradual_shape(Shape, 2)]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None],
+    return_indices: Literal[True],
+) -> tuple[
+    Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+    Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None],
+    return_indices: bool,
+) -> (
+    Tensor[adaptive_pool_gradual_shape(Shape, 2)]
+    | tuple[
+        Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+        Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+    ]
+): ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape],
+    output_size: _Int[O],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool3d_shape(Shape, O, O, O)]:
+    """3D adaptive max pooling. Shape inference via type-level DSL."""
     ...
+
+@overload
+def adaptive_max_pool3d[Shape: IntTuple, OD: IntVar, OH: IntVar, OW: IntVar](
+    input: Tensor[Shape],
+    output_size: tuple[_Int[OD], _Int[OH], _Int[OW]],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: tuple[int | None, int | None, int | None],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool_gradual_shape(Shape, 3)]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None, int | None],
+    return_indices: Literal[True],
+) -> tuple[
+    Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+    Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None, int | None],
+    return_indices: bool,
+) -> (
+    Tensor[adaptive_pool_gradual_shape(Shape, 3)]
+    | tuple[
+        Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+        Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+    ]
+): ...
 
 # Adaptive average pooling operations
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_avg_pool1d(self: Tensor, output_size: int | tuple[int]) -> Tensor:
-    """1D adaptive average pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_avg_pool1d"""
+@overload
+def adaptive_avg_pool1d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape], output_size: _Int[O]
+) -> Tensor[adaptive_pool1d_shape(Shape, O)]:
+    """1D adaptive average pooling. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_avg_pool2d(
-    self: Tensor, output_size: int | tuple[int, int] | None
-) -> Tensor:
-    """2D adaptive average pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_avg_pool2d"""
+@overload
+def adaptive_avg_pool1d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape], output_size: tuple[_Int[O]]
+) -> Tensor[adaptive_pool1d_shape(Shape, O)]: ...
+@overload
+def adaptive_avg_pool2d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape], output_size: _Int[O]
+) -> Tensor[adaptive_pool2d_shape(Shape, O, O)]:
+    """2D adaptive average pooling. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_avg_pool3d(
-    self: Tensor, output_size: int | tuple[int, int, int] | None
-) -> Tensor:
-    """3D adaptive average pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_avg_pool3d"""
+@overload
+def adaptive_avg_pool2d[Shape: IntTuple, OH: IntVar, OW: IntVar](
+    input: Tensor[Shape], output_size: tuple[_Int[OH], _Int[OW]]
+) -> Tensor[adaptive_pool2d_shape(Shape, OH, OW)]: ...
+@overload
+def adaptive_avg_pool2d[Shape: IntTuple](
+    input: Tensor[Shape], output_size: tuple[int | None, int | None]
+) -> Tensor[adaptive_pool_gradual_shape(Shape, 2)]: ...
+@overload
+def adaptive_avg_pool3d[Shape: IntTuple, O: IntVar](
+    input: Tensor[Shape], output_size: _Int[O]
+) -> Tensor[adaptive_pool3d_shape(Shape, O, O, O)]:
+    """3D adaptive average pooling. Shape inference via type-level DSL."""
     ...
+
+@overload
+def adaptive_avg_pool3d[Shape: IntTuple, OD: IntVar, OH: IntVar, OW: IntVar](
+    input: Tensor[Shape], output_size: tuple[_Int[OD], _Int[OH], _Int[OW]]
+) -> Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)]: ...
+@overload
+def adaptive_avg_pool3d[Shape: IntTuple](
+    input: Tensor[Shape], output_size: tuple[int | None, int | None, int | None]
+) -> Tensor[adaptive_pool_gradual_shape(Shape, 3)]: ...
 
 # Interpolation/upsampling operations
 @uses_shape_dsl(interpolate_ir)
@@ -596,198 +777,357 @@ def logsigmoid[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
 # Phase 6: Loss Functions
 # ==============================================================================
 
-@uses_shape_dsl(loss_ir)
-@overload
-def mse_loss(
-    self: Tensor,
-    target: Tensor,
-    size_average: bool | None = None,
-    reduce: bool | None = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Mean squared error loss. Shape inference via meta-shape: torch.nn.functional.mse_loss"""
+def mse_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Mean squared error loss. Shape inference via type-level DSL."""
     ...
 
-@overload
-def mse_loss(
-    *,
-    input: Tensor,
-    target: Tensor,
-    size_average: bool | None = None,
-    reduce: bool | None = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Mean squared error loss. Keyword form is accepted but not shape-refined."""
+def l1_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """L1 loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def l1_loss(
-    self: Tensor,
+def nll_loss[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
     target: Tensor,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """L1 loss. Shape inference via meta-shape: torch.nn.functional.l1_loss"""
-    ...
-
-@uses_shape_dsl(loss_ir)
-def nll_loss(
-    self: Tensor,
-    target: Tensor,
-    weight: Tensor = None,
-    size_average: bool = None,
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
     ignore_index: int = -100,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Negative log likelihood loss. Shape inference via meta-shape: torch.nn.functional.nll_loss"""
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[classification_loss_shape(InputShape, Reduction, SizeAverage, Reduce)]:
+    """Negative log likelihood loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def cross_entropy(
-    self: Tensor,
+def cross_entropy[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
     target: Tensor,
-    weight: Tensor = None,
-    size_average: bool = None,
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
     ignore_index: int = -100,
-    reduce: bool = None,
-    reduction: str = "mean",
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
     label_smoothing: float = 0.0,
-) -> Tensor:
-    """Cross entropy loss. Shape inference via meta-shape: torch.nn.functional.cross_entropy"""
+) -> Tensor[classification_loss_shape(InputShape, Reduction, SizeAverage, Reduce)]:
+    """Cross entropy loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def binary_cross_entropy(
-    self: Tensor,
-    target: Tensor,
-    weight: Tensor = None,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Binary cross entropy loss. Shape inference via meta-shape: torch.nn.functional.binary_cross_entropy"""
+def binary_cross_entropy[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[InputShape],
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[loss_shape(InputShape, Reduction, SizeAverage, Reduce)]:
+    """Binary cross entropy loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def binary_cross_entropy_with_logits(
-    self: Tensor,
-    target: Tensor,
-    weight: Tensor = None,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-    pos_weight: Tensor = None,
-) -> Tensor:
-    """Binary cross entropy with logits. Shape inference via meta-shape: torch.nn.functional.binary_cross_entropy_with_logits"""
+def binary_cross_entropy_with_logits[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[InputShape],
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+    pos_weight: Tensor | None = None,
+) -> Tensor[loss_shape(InputShape, Reduction, SizeAverage, Reduce)]:
+    """Binary cross entropy with logits. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def kl_div(
-    self: Tensor,
-    target: Tensor,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
+def kl_div[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
     log_target: bool = False,
-) -> Tensor:
-    """KL divergence loss. Shape inference via meta-shape: torch.nn.functional.kl_div"""
+) -> Tensor[
+    kl_div_loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """KL divergence loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def smooth_l1_loss(
-    self: Tensor,
-    target: Tensor,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
+def smooth_l1_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
     beta: float = 1.0,
-) -> Tensor:
-    """Smooth L1 loss. Shape inference via meta-shape: torch.nn.functional.smooth_l1_loss"""
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Smooth L1 loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def huber_loss(
-    self: Tensor, target: Tensor, reduction: str = "mean", delta: float = 1.0
-) -> Tensor:
-    """Huber loss. Shape inference via meta-shape: torch.nn.functional.huber_loss"""
+def huber_loss[InputShape: IntTuple, TargetShape: IntTuple, Reduction: Flag[str]](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    reduction: Reduction = "mean",
+    delta: float = 1.0,
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape), Reduction, None, None
+    )
+]:
+    """Huber loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def poisson_nll_loss(
-    self: Tensor,
-    target: Tensor,
+def poisson_nll_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
     log_input: bool = True,
     full: bool = False,
-    size_average: bool = None,
+    size_average: SizeAverage = None,
     eps: float = 1e-8,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Poisson NLL loss. Shape inference via meta-shape: torch.nn.functional.poisson_nll_loss"""
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Poisson NLL loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def cosine_embedding_loss(
-    self: Tensor,
-    input2: Tensor,
-    target: Tensor,
+def cosine_embedding_loss[
+    Input1Shape: IntTuple,
+    Input2Shape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input1: Tensor[Input1Shape],
+    input2: Tensor[Input2Shape],
+    target: Tensor[TargetShape],
     margin: float = 0.0,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Cosine embedding loss. Shape inference via meta-shape: torch.nn.functional.cosine_embedding_loss"""
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(
+            cosine_embedding_score_shape(
+                Input1Shape,
+                Input2Shape,
+                shape_extensions.broadcast(Input1Shape, Input2Shape),
+                TargetShape,
+            ),
+            TargetShape,
+        ),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Cosine embedding loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def margin_ranking_loss(
-    self: Tensor,
-    input2: Tensor,
-    target: Tensor,
+def margin_ranking_loss[
+    Input1Shape: IntTuple,
+    Input2Shape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input1: Tensor[Input1Shape],
+    input2: Tensor[Input2Shape],
+    target: Tensor[TargetShape],
     margin: float = 0.0,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Margin ranking loss. Shape inference via meta-shape: torch.nn.functional.margin_ranking_loss"""
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(
+            shape_extensions.broadcast(Input1Shape, Input2Shape), TargetShape
+        ),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Margin ranking loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def triplet_margin_loss(
-    self: Tensor,
-    positive: Tensor,
-    negative: Tensor,
+def triplet_margin_loss[
+    AnchorShape: IntTuple,
+    PositiveShape: IntTuple,
+    NegativeShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    anchor: Tensor[AnchorShape],
+    positive: Tensor[PositiveShape],
+    negative: Tensor[NegativeShape],
     margin: float = 1.0,
     p: float = 2.0,
     eps: float = 1e-6,
     swap: bool = False,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Triplet margin loss. Shape inference via meta-shape: torch.nn.functional.triplet_margin_loss"""
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(
+            pairwise_distance_shape(
+                AnchorShape,
+                PositiveShape,
+                shape_extensions.broadcast(AnchorShape, PositiveShape),
+            ),
+            pairwise_distance_shape(
+                AnchorShape,
+                NegativeShape,
+                shape_extensions.broadcast(AnchorShape, NegativeShape),
+            ),
+        ),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Triplet margin loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def hinge_embedding_loss(
-    self: Tensor,
-    target: Tensor,
+def hinge_embedding_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
     margin: float = 1.0,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Hinge embedding loss. Shape inference via meta-shape: torch.nn.functional.hinge_embedding_loss"""
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Hinge embedding loss. Shape inference via type-level DSL."""
     ...
 
 # Padding operation
-@uses_shape_dsl(pad_ir)
+@overload
+def pad[Shape: IntTuple, Pad: Flag[tuple[builtins.int, ...]]](
+    input: Tensor[Shape],
+    pad: Pad,
+    mode: str = "constant",
+    value: float = 0.0,
+) -> Tensor[pad_shape(Shape, Pad)]:
+    """Pad tensor. Shape inference via type-level DSL."""
+    ...
+
+@overload
 def pad(
-    self: Tensor, pad: tuple[int, ...], mode: str = "constant", value: float = 0.0
-) -> Tensor:
-    """Pad tensor. Shape inference via meta-shape: torch.nn.functional.pad"""
+    input: Tensor,
+    pad: list[builtins.int],
+    mode: str = "constant",
+    value: float = 0.0,
+) -> Tensor[IntTuple]:
+    """Pad tensor by a list of amounts. A list carries no element literals, so the
+    padded shape stays gradual.
+
+    TODO(stroxler): Preserve list element literals when mutable sequence arguments can carry
+    shape values into the type-level DSL.
+    """
     ...
 
 # Softmax activation
@@ -901,15 +1241,10 @@ def scaled_dot_product_attention[
     """Scaled dot product attention. Shape inference via meta-shape: torch.nn.functional.scaled_dot_product_attention"""
     ...
 
-@uses_shape_dsl(cosine_similarity_ir)
-def cosine_similarity(
-    x1: Tensor, x2: Tensor, dim: int = 1, eps: float = 1e-8
-) -> Tensor:
-    """Cosine similarity: dot product along dim, normalized.
-
-    Shape inference via DSL (cosine_similarity_ir):
-    Output = broadcast(x1, x2) with dimension `dim` removed.
-    """
+def cosine_similarity[S1: IntTuple, S2: IntTuple, Dim: Flag[builtins.int]](
+    x1: Tensor[S1], x2: Tensor[S2], dim: Dim = 1, eps: float = 1e-8
+) -> Tensor[cosine_similarity_shape(shape_extensions.broadcast(S1, S2), Dim)]:
+    """Cosine similarity: dot product along dim, normalized."""
     ...
 
 def grid_sample[B: IntVar, C: IntVar, Hout: IntVar, Wout: IntVar](

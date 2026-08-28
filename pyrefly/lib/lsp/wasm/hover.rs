@@ -102,6 +102,12 @@ pub struct HoverOptions {
     pub verbosity_level: usize,
 }
 
+/// Hover qualifies the module of a value's type, but not of a signature, where a
+/// prefix on every parameter costs more than it explains.
+fn qualify_hover_names(kind: Option<SymbolKind>, type_: &Type) -> bool {
+    kind != Some(SymbolKind::Class) && !type_.is_toplevel_callable()
+}
+
 impl HoverValue {
     #[cfg(not(target_arch = "wasm32"))]
     fn format_symbol_def_locations(t: &Type) -> Option<String> {
@@ -194,7 +200,8 @@ impl HoverValue {
 
         // For methods, search in parent class; for constructors, use the return type
         let search_type = context_type
-            .visit_toplevel_func_metadata(&|meta| {
+            .toplevel_func_metadata()
+            .and_then(|meta| {
                 let symbol = meta.kind.to_func_symbol()?;
                 let class = symbol.cls.as_ref()?;
                 Some(Type::ClassType(ClassType::new(
@@ -289,8 +296,12 @@ impl HoverValue {
             section
         };
         let type_display = self.display.clone().unwrap_or_else(|| {
-            self.type_
-                .as_lsp_string_with_fallback_name(self.name.as_deref(), LspDisplayMode::Hover)
+            self.type_.as_lsp_string_with_options(
+                self.name.as_deref(),
+                LspDisplayMode::Hover,
+                false,
+                qualify_hover_names(self.kind, &self.type_).then(|| handle.module()),
+            )
         });
 
         Hover {
@@ -416,7 +427,9 @@ fn position_is_in_docstring(ast: Option<&ModModule>, position: TextSize) -> bool
 /// type metadata knows about the callable. This primarily handles third-party stubs
 /// where we only have typeshed information.
 fn fallback_hover_name_from_type(type_: &Type) -> Option<String> {
-    let name = type_.visit_toplevel_func_metadata(&|meta| Some(meta.kind.function_name()));
+    let name = type_
+        .toplevel_func_metadata()
+        .map(|meta| meta.kind.function_name());
     if let Some(name) = name {
         return Some(name.to_string());
     }
@@ -629,7 +642,8 @@ fn class_display_type(solver: &AnswersSolver<TransactionHandle<'_>>, type_: &Typ
         },
         _ => None,
     }?;
-    constructor.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(solver, c));
+    constructor
+        .transform_toplevel_callable_signatures(|c, _| expand_callable_kwargs_for_hover(solver, c));
     Some(solver.for_display(constructor))
 }
 
@@ -1025,16 +1039,19 @@ pub fn get_hover_with_verbosity(
                 {
                     class_type
                 } else {
-                    cloned.transform_toplevel_callable(|c| {
+                    cloned.transform_toplevel_callable_signatures(|c, _| {
                         expand_callable_kwargs_for_hover(&solver, c)
                     });
                     cloned
                 };
+                let qualify_outside =
+                    qualify_hover_names(kind, &display_type).then(|| handle.module());
                 let render = |expand| {
-                    display_type.as_lsp_string_with_fallback_name_and_expanded_unions(
+                    display_type.as_lsp_string_with_options(
                         name_for_display.as_deref(),
                         LspDisplayMode::Hover,
                         expand,
+                        qualify_outside,
                     )
                 };
                 let rendered = render(unions_expanded);

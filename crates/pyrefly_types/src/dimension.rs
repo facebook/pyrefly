@@ -332,6 +332,11 @@ impl Display for Int {
 // Canonicalization
 // ============================================================================
 
+#[derive(Debug)]
+struct DimensionOverflow;
+
+type DimensionResult<T> = Result<T, DimensionOverflow>;
+
 /// Canonicalize a dimension expression to a unique normal form.
 ///
 /// This transforms dimension expressions into a canonical form where:
@@ -340,36 +345,36 @@ impl Display for Int {
 /// - Factors are GCD-reduced (e.g., (4*N) // (6*M) = (2*N) // (3*M))
 /// - Expressions are ordered consistently
 /// - Gradual sizes propagate through the entire expression
+/// - Arithmetic outside the representable dimension domain becomes gradual
 ///
 /// This enables structural equality checking after canonicalization.
 pub fn canonicalize(ty: Type) -> Type {
-    // Normalize and canonicalize based on type
+    canonicalize_checked(ty).unwrap_or_else(|_| gradual_size())
+}
+
+fn canonicalize_checked(ty: Type) -> DimensionResult<Type> {
     match ty {
-        Type::Int(dim) => {
-            if int_is_gradual(&dim) {
-                return gradual_size();
-            }
-            canonicalize_int(dim)
-        }
+        Type::Int(dim) if int_is_gradual(&dim) => Ok(gradual_size()),
+        Type::Int(dim) => canonicalize_int(dim),
         // Quantified, Var, Any, and Literal are already canonical
-        other => other,
+        other => Ok(other),
     }
 }
 
 /// Inner canonicalization that skips the Any check.
 /// Called after the top-level `canonicalize` has already verified no Any is present.
-fn canonicalize_inner(ty: Type) -> Type {
+fn canonicalize_inner(ty: Type) -> DimensionResult<Type> {
     match ty {
         Type::Int(dim) => canonicalize_int(dim),
-        other => other,
+        other => Ok(other),
     }
 }
 
 /// Whether a type is gradual for size purposes.
 ///
-/// For a `Size` type this is equivalent to `is_gradual_size(&canonicalize(ty))`
-/// but avoids allocating a canonicalized copy, so it is cheap to call on a hot
-/// path before deciding whether canonicalization is needed at all.
+/// This is a sufficient pre-canonicalization check that avoids allocating on a
+/// hot path. Canonicalization can additionally produce a gradual size when
+/// concrete arithmetic overflows.
 pub fn type_is_gradual_fast(ty: &Type) -> bool {
     match ty {
         Type::Int(dim) => int_is_gradual(dim),
@@ -395,10 +400,8 @@ fn int_is_gradual(dim: &Int) -> bool {
 /// Whether canonicalizing a `Symbolic` leaf yields the gradual size. A builtin
 /// `int` leaf canonicalizes to the gradual size via `canonicalize_symbolic`, so
 /// it must be reported as gradual here even though it is not itself a `Size`.
-/// Every other leaf falls back to `type_is_gradual_fast`, which already matches how
-/// `canonicalize` short-circuits gradual (`Any`) and nested `Size` leaves. This
-/// keeps `type_is_gradual_fast` equivalent to
-/// `is_gradual_size(&canonicalize(..))` without allocating a canonical copy.
+/// Every other leaf falls back to `type_is_gradual_fast`, matching how
+/// `canonicalize` short-circuits gradual (`Any`) and nested `Size` leaves.
 fn symbolic_is_gradual(ty: &Type) -> bool {
     match ty {
         Type::ClassType(cls) if cls.is_builtin("int") => true,
@@ -407,9 +410,9 @@ fn symbolic_is_gradual(ty: &Type) -> bool {
 }
 
 /// Main canonicalization function for symbolic integer expressions.
-fn canonicalize_int(dim: Int) -> Type {
+fn canonicalize_int(dim: Int) -> DimensionResult<Type> {
     match dim {
-        Int::Literal(_) | Int::Int => Type::Int(dim),
+        Int::Literal(_) | Int::Int => Ok(Type::Int(dim)),
         Int::Symbolic(ty) => canonicalize_symbolic(*ty),
         Int::Add(left, right) => canonicalize_sum(left.into_type(), right.into_type()),
         Int::Sub(left, right) => {
@@ -424,7 +427,7 @@ fn canonicalize_int(dim: Int) -> Type {
     }
 }
 
-fn canonicalize_symbolic(ty: Type) -> Type {
+fn canonicalize_symbolic(ty: Type) -> DimensionResult<Type> {
     match ty {
         Type::Int(dim) => canonicalize_int(dim),
         Type::Literal(lit) => {
@@ -434,19 +437,19 @@ fn canonicalize_symbolic(ty: Type) -> Type {
                     "only integer literals can be converted into symbolic size expressions"
                 ),
             };
-            n.map(|n| Type::Int(Int::Literal(n)))
-                .unwrap_or_else(|| Type::Int(Int::Symbolic(Box::new(Type::Literal(lit)))))
+            Ok(n.map(|n| Type::Int(Int::Literal(n)))
+                .unwrap_or_else(|| Type::Int(Int::Symbolic(Box::new(Type::Literal(lit))))))
         }
-        Type::ClassType(cls) if cls.is_builtin("int") => gradual_size(),
-        other => Type::Int(Int::Symbolic(Box::new(other))),
+        Type::ClassType(cls) if cls.is_builtin("int") => Ok(gradual_size()),
+        other => Ok(Type::Int(Int::Symbolic(Box::new(other)))),
     }
 }
 
 /// Canonicalize a sum expression
-fn canonicalize_sum(left: Type, right: Type) -> Type {
+fn canonicalize_sum(left: Type, right: Type) -> DimensionResult<Type> {
     // Step 1: Recursively canonicalize operands
-    let left_canon = canonicalize_inner(left);
-    let right_canon = canonicalize_inner(right);
+    let left_canon = canonicalize_inner(left)?;
+    let right_canon = canonicalize_inner(right)?;
 
     // Step 2: Flatten to list of terms
     let mut terms = Vec::new();
@@ -458,8 +461,9 @@ fn canonicalize_sum(left: Type, right: Type) -> Type {
     let mut term_map: HashMap<Type, i64> = HashMap::new();
 
     for term in terms {
-        let (coeff, non_literal_part) = extract_coefficient(term);
-        *term_map.entry(non_literal_part).or_insert(0) += coeff;
+        let (coeff, non_literal_part) = extract_coefficient(term)?;
+        let entry = term_map.entry(non_literal_part).or_insert(0);
+        *entry = entry.checked_add(coeff).ok_or(DimensionOverflow)?;
     }
 
     // Step 4: Rebuild terms, filtering out zero coefficients
@@ -486,7 +490,7 @@ fn canonicalize_sum(left: Type, right: Type) -> Type {
     new_terms.sort_by(compare_type);
 
     // Step 6: Build result
-    rebuild_sum(new_terms)
+    Ok(rebuild_sum(new_terms))
 }
 
 /// Generic function to collect operands from a binary symbolic integer expression.
@@ -536,23 +540,24 @@ fn rebuild_sum(terms: Vec<Type>) -> Type {
 }
 
 /// Separate literal factors from non-literal factors, computing their product.
-fn separate_literal_factors(factors: Vec<Type>) -> (i64, Vec<Type>) {
-    let literal_product: i64 = factors
+fn separate_literal_factors(factors: Vec<Type>) -> DimensionResult<(i64, Vec<Type>)> {
+    let literal_product = factors
         .iter()
         .filter_map(|f| f.as_shape_literal())
-        .product();
+        .try_fold(1_i64, |product, factor| product.checked_mul(factor))
+        .ok_or(DimensionOverflow)?;
 
     let non_literal: Vec<Type> = factors
         .into_iter()
         .filter(|f| f.as_shape_literal().is_none())
         .collect();
 
-    (literal_product, non_literal)
+    Ok((literal_product, non_literal))
 }
 
 /// Extract coefficient and non-literal part from a term
-fn extract_coefficient(term: Type) -> (i64, Type) {
-    match term {
+fn extract_coefficient(term: Type) -> DimensionResult<(i64, Type)> {
+    Ok(match term {
         Type::Int(Int::Literal(n)) => (n, Type::Int(Int::Literal(1))),
         Type::Int(Int::Mul(_, _)) => {
             // Collect all factors
@@ -560,7 +565,7 @@ fn extract_coefficient(term: Type) -> (i64, Type) {
             collect_factors(term, &mut factors);
 
             // Separate literal from non-literal factors
-            let (coeff, non_literal_factors) = separate_literal_factors(factors);
+            let (coeff, non_literal_factors) = separate_literal_factors(factors)?;
 
             let non_literal_part = if non_literal_factors.is_empty() {
                 Type::Int(Int::Literal(1))
@@ -571,14 +576,14 @@ fn extract_coefficient(term: Type) -> (i64, Type) {
             (coeff, non_literal_part)
         }
         other => (1, other),
-    }
+    })
 }
 
 /// Canonicalize a product expression
-fn canonicalize_product(left: Type, right: Type) -> Type {
+fn canonicalize_product(left: Type, right: Type) -> DimensionResult<Type> {
     // Step 1: Recursively canonicalize operands
-    let left_canon = canonicalize_inner(left);
-    let right_canon = canonicalize_inner(right);
+    let left_canon = canonicalize_inner(left)?;
+    let right_canon = canonicalize_inner(right)?;
 
     // Step 2: Flatten to list of factors
     let mut factors = Vec::new();
@@ -590,11 +595,11 @@ fn canonicalize_product(left: Type, right: Type) -> Type {
         .iter()
         .any(|f| matches!(f, Type::Int(Int::Literal(0))))
     {
-        return Type::Int(Int::Literal(0));
+        return Ok(Type::Int(Int::Literal(0)));
     }
 
     // Step 4: Separate literals from non-literals
-    let (mut literal_product, mut non_literal_factors) = separate_literal_factors(factors);
+    let (mut literal_product, mut non_literal_factors) = separate_literal_factors(factors)?;
 
     // Step 4b: Group same-base Pow factors and absorb matching literals.
     // For example: 2 * 2**(I-1) → 2**(I-1+1) → 2**I
@@ -641,10 +646,10 @@ fn canonicalize_product(left: Type, right: Type) -> Type {
                 .into_iter()
                 .reduce(|acc, e| Type::Int(Int::add(acc, e)))
                 .unwrap();
-            let combined = canonicalize_pow(base, exp_sum);
+            let combined = canonicalize_pow(base, exp_sum)?;
             match &combined {
                 Type::Int(Int::Literal(n)) => {
-                    literal_product *= n;
+                    literal_product = literal_product.checked_mul(*n).ok_or(DimensionOverflow)?;
                 }
                 _ => {
                     non_literal_factors.push(combined);
@@ -686,8 +691,8 @@ fn canonicalize_product(left: Type, right: Type) -> Type {
                     let product = Type::Int(Int::mul(coeff.clone(), term));
                     canonicalize_inner(product)
                 })
-                .collect();
-            return rebuild_sum(distributed_terms);
+                .collect::<Result<_, _>>()?;
+            return Ok(rebuild_sum(distributed_terms));
         }
     }
 
@@ -703,9 +708,9 @@ fn canonicalize_product(left: Type, right: Type) -> Type {
 
     // Step 8: Build result
     if all_factors.is_empty() {
-        Type::Int(Int::Literal(1))
+        Ok(Type::Int(Int::Literal(1)))
     } else {
-        rebuild_product(all_factors)
+        Ok(rebuild_product(all_factors))
     }
 }
 
@@ -726,10 +731,10 @@ fn rebuild_product(factors: Vec<Type>) -> Type {
 }
 
 /// Canonicalize a floor division expression
-fn canonicalize_division(num: Type, den: Type) -> Type {
+fn canonicalize_division(num: Type, den: Type) -> DimensionResult<Type> {
     // Step 1: Canonicalize operands
-    let canonical_num = canonicalize_inner(num);
-    let canonical_den = canonicalize_inner(den);
+    let canonical_num = canonicalize_inner(num)?;
+    let canonical_den = canonicalize_inner(den)?;
 
     // Step 2: Check if numerator is a division - if so, flatten only when the
     // outer divisor is positive. For negative divisors, Python floor division
@@ -745,14 +750,14 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
     // Step 4: Apply simplifications
     match (&canonical_num, &canonical_den) {
         // 0 // a = 0
-        (Type::Int(Int::Literal(0)), _) => Type::Int(Int::Literal(0)),
+        (Type::Int(Int::Literal(0)), _) => Ok(Type::Int(Int::Literal(0))),
 
         // a // 1 = a
-        (_, Type::Int(Int::Literal(1))) => canonical_num,
+        (_, Type::Int(Int::Literal(1))) => Ok(canonical_num),
 
         // Both literals: compute
         (Type::Int(Int::Literal(n)), Type::Int(Int::Literal(d))) if *d != 0 => {
-            Type::Int(Int::Literal(floor_div(*n, *d)))
+            Ok(Type::Int(Int::Literal(floor_div(*n, *d)?)))
         }
 
         // Literal term extraction from sum numerator:
@@ -769,11 +774,15 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
             let mut extracted_sum: i64 = 0;
             let mut remaining = Vec::new();
             for term in terms {
-                if let Type::Int(Int::Literal(n)) = &term
-                    && n % d == 0
-                {
-                    extracted_sum += n / d;
-                    continue;
+                if let Type::Int(Int::Literal(n)) = &term {
+                    let remainder = n.checked_rem(d).ok_or(DimensionOverflow)?;
+                    if remainder == 0 {
+                        let quotient = n.checked_div(d).ok_or(DimensionOverflow)?;
+                        extracted_sum = extracted_sum
+                            .checked_add(quotient)
+                            .ok_or(DimensionOverflow)?;
+                        continue;
+                    }
                 }
                 remaining.push(term);
             }
@@ -781,15 +790,15 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
             if extracted_sum == 0 && remaining.len() == original_count {
                 // Nothing extracted — fall through to cancellation
                 let (new_num, new_den) =
-                    try_cancel_common_factors(rebuild_sum(remaining), canonical_den);
+                    try_cancel_common_factors(rebuild_sum(remaining), canonical_den)?;
                 if matches!(new_den, Type::Int(Int::Literal(1))) {
-                    new_num
+                    Ok(new_num)
                 } else {
-                    Type::Int(Int::floor_div(new_num, new_den))
+                    Ok(Type::Int(Int::floor_div(new_num, new_den)))
                 }
             } else if remaining.is_empty() {
                 // All terms extracted — result is just the extracted literal
-                Type::Int(Int::Literal(extracted_sum))
+                Ok(Type::Int(Int::Literal(extracted_sum)))
             } else {
                 // Some terms extracted: extracted_sum + remaining // d
                 let remainder_div = Type::Int(Int::FloorDiv(
@@ -797,7 +806,7 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
                     Box::new(Int::Literal(d)),
                 ));
                 if extracted_sum == 0 {
-                    remainder_div
+                    Ok(remainder_div)
                 } else {
                     canonicalize_sum(Type::Int(Int::Literal(extracted_sum)), remainder_div)
                 }
@@ -809,27 +818,27 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
         // -B + 2*A*B. When this sum is divided by (2*A-1), we need to factor
         // the common factor B back out to recover B*(2*A-1) and cancel.
         (Type::Int(Int::Add(_, _)), _) => {
-            if let Some(result) = try_factor_sum_and_cancel(&canonical_num, &canonical_den) {
-                result
+            if let Some(result) = try_factor_sum_and_cancel(&canonical_num, &canonical_den)? {
+                Ok(result)
             } else {
-                let (new_num, new_den) = try_cancel_common_factors(canonical_num, canonical_den);
+                let (new_num, new_den) = try_cancel_common_factors(canonical_num, canonical_den)?;
                 if matches!(new_den, Type::Int(Int::Literal(1))) {
-                    new_num
+                    Ok(new_num)
                 } else {
-                    Type::Int(Int::floor_div(new_num, new_den))
+                    Ok(Type::Int(Int::floor_div(new_num, new_den)))
                 }
             }
         }
 
         // Try cancellation
         _ => {
-            let (new_num, new_den) = try_cancel_common_factors(canonical_num, canonical_den);
+            let (new_num, new_den) = try_cancel_common_factors(canonical_num, canonical_den)?;
 
             // If denominator is 1 after cancellation, return numerator
             if matches!(new_den, Type::Int(Int::Literal(1))) {
-                new_num
+                Ok(new_num)
             } else {
-                Type::Int(Int::floor_div(new_num, new_den))
+                Ok(Type::Int(Int::floor_div(new_num, new_den)))
             }
         }
     }
@@ -843,11 +852,11 @@ fn canonicalize_division(num: Type, den: Type) -> Type {
 /// 3. Both concrete → compute the literal (e.g., 2**3 → 8), with overflow check
 /// 4. Nested Pow: (a**b)**c → a**(b*c)
 /// 5. Otherwise: Pow(canon_base, canon_exponent)
-fn canonicalize_pow(base: Type, exp: Type) -> Type {
-    let canon_base = canonicalize_inner(base);
-    let canon_exp = canonicalize_inner(exp);
+fn canonicalize_pow(base: Type, exp: Type) -> DimensionResult<Type> {
+    let canon_base = canonicalize_inner(base)?;
+    let canon_exp = canonicalize_inner(exp)?;
 
-    match (&canon_base, &canon_exp) {
+    Ok(match (&canon_base, &canon_exp) {
         // a ** 0 = 1
         (_, Type::Int(Int::Literal(0))) => Type::Int(Int::Literal(1)),
 
@@ -856,32 +865,37 @@ fn canonicalize_pow(base: Type, exp: Type) -> Type {
 
         // Both literals: compute base^exp with overflow protection
         (Type::Int(Int::Literal(b)), Type::Int(Int::Literal(e))) => {
-            if *e >= 0 && *e <= 63 {
-                match b.checked_pow(*e as u32) {
-                    Some(result) => Type::Int(Int::Literal(result)),
-                    None => {
-                        // Overflow: keep symbolic
-                        Type::Int(Int::pow(canon_base, canon_exp))
-                    }
-                }
-            } else {
+            if *e < 0 {
                 // Negative exponent: not meaningful for integer dimensions
                 Type::Int(Int::pow(canon_base, canon_exp))
+            } else if let Ok(exponent) = u32::try_from(*e) {
+                Type::Int(Int::Literal(
+                    b.checked_pow(exponent).ok_or(DimensionOverflow)?,
+                ))
+            } else {
+                let result = match *b {
+                    0 => 0,
+                    1 => 1,
+                    -1 if e % 2 == 0 => 1,
+                    -1 => -1,
+                    _ => return Err(DimensionOverflow),
+                };
+                Type::Int(Int::Literal(result))
             }
         }
 
         // (a ** b) ** c = a ** (b * c)
         (Type::Int(Int::Pow(inner_base, inner_exp)), _) => {
             let new_exp = Type::Int(Int::mul(inner_exp.clone().into_type(), canon_exp));
-            canonicalize_pow(inner_base.clone().into_type(), new_exp)
+            return canonicalize_pow(inner_base.clone().into_type(), new_exp);
         }
 
         _ => Type::Int(Int::pow(canon_base, canon_exp)),
-    }
+    })
 }
 
 /// Try to cancel common factors between numerator and denominator
-fn try_cancel_common_factors(num: Type, den: Type) -> (Type, Type) {
+fn try_cancel_common_factors(num: Type, den: Type) -> DimensionResult<(Type, Type)> {
     // Extract factors from numerator and denominator
     let mut num_factors = Vec::new();
     let mut den_factors = Vec::new();
@@ -889,13 +903,18 @@ fn try_cancel_common_factors(num: Type, den: Type) -> (Type, Type) {
     collect_factors(den, &mut den_factors);
 
     // Step 1: Separate literals from non-literals
-    let (num_literal, mut num_factors) = separate_literal_factors(num_factors);
-    let (den_literal, mut den_factors) = separate_literal_factors(den_factors);
+    let (num_literal, mut num_factors) = separate_literal_factors(num_factors)?;
+    let (den_literal, mut den_factors) = separate_literal_factors(den_factors)?;
 
     // Step 2: Apply GCD to literals
-    let g = gcd(num_literal.abs(), den_literal.abs());
-    let new_num_literal = num_literal / g;
-    let new_den_literal = den_literal / g;
+    let g = gcd(num_literal, den_literal);
+    if g == 0 {
+        return Err(DimensionOverflow);
+    }
+    let new_num_literal =
+        i64::try_from(i128::from(num_literal) / i128::from(g)).map_err(|_| DimensionOverflow)?;
+    let new_den_literal =
+        i64::try_from(i128::from(den_literal) / i128::from(g)).map_err(|_| DimensionOverflow)?;
 
     // Step 3: Find and remove structurally equal non-literal factors
     let mut i = 0;
@@ -922,7 +941,7 @@ fn try_cancel_common_factors(num: Type, den: Type) -> (Type, Type) {
     }
     let new_den = rebuild_product(den_factors);
 
-    (new_num, new_den)
+    Ok((new_num, new_den))
 }
 
 /// Try to factor a common factor out of a sum numerator and cancel with the denominator.
@@ -934,12 +953,12 @@ fn try_cancel_common_factors(num: Type, den: Type) -> (Type, Type) {
 ///   → B * (-1 + 2*A) // (-1 + 2*A) → B
 ///
 /// Only simplifies when ALL sum terms share the common factor (exact divisibility).
-fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
+fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> DimensionResult<Option<Type>> {
     let mut terms = Vec::new();
     collect_terms(num.clone(), &mut terms);
 
     if terms.len() < 2 {
-        return None;
+        return Ok(None);
     }
 
     // For each term, extract literal coefficient and non-literal factors.
@@ -950,7 +969,7 @@ fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
             collect_factors(term.clone(), &mut factors);
             separate_literal_factors(factors)
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     // Find common non-literal factors across ALL terms (set intersection).
     let mut common_factors: Vec<Type> = term_factorizations[0].1.clone();
@@ -967,7 +986,7 @@ fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
     }
 
     if common_factors.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     // Factor out common factors from each term, rebuilding quotient terms.
@@ -991,7 +1010,7 @@ fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
 
     // Canonicalize the quotient sum so it can be compared structurally with the denominator.
     let quotient_sum = rebuild_sum(quotient_terms);
-    let canonical_quotient = canonicalize_inner(quotient_sum);
+    let canonical_quotient = canonicalize_inner(quotient_sum)?;
 
     // Numerator = common_factors * canonical_quotient (as a product).
     // Try cancelling this product with the denominator.
@@ -999,11 +1018,11 @@ fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
     all_num_factors.push(canonical_quotient);
     let factored_num = rebuild_product(all_num_factors);
 
-    let (new_num, new_den) = try_cancel_common_factors(factored_num, den.clone());
+    let (new_num, new_den) = try_cancel_common_factors(factored_num, den.clone())?;
     if matches!(new_den, Type::Int(Int::Literal(1))) {
-        Some(new_num)
+        Ok(Some(new_num))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -1011,7 +1030,7 @@ fn try_factor_sum_and_cancel(num: &Type, den: &Type) -> Option<Type> {
 /// Returns (k, remainder). For example: extract_base_power(8, 2) = (3, 1),
 /// extract_base_power(12, 2) = (2, 3), extract_base_power(7, 2) = (0, 7).
 fn extract_base_power(mut value: i64, base: i64) -> (i64, i64) {
-    if base.abs() <= 1 {
+    if base.unsigned_abs() <= 1 {
         return (0, value);
     }
     let mut k = 0;
@@ -1022,7 +1041,9 @@ fn extract_base_power(mut value: i64, base: i64) -> (i64, i64) {
     (k, value)
 }
 
-fn gcd(mut a: i64, mut b: i64) -> i64 {
+fn gcd(a: i64, b: i64) -> u64 {
+    let mut a = a.unsigned_abs();
+    let mut b = b.unsigned_abs();
     while b != 0 {
         let temp = b;
         b = a % b;
@@ -1031,13 +1052,13 @@ fn gcd(mut a: i64, mut b: i64) -> i64 {
     a
 }
 
-fn floor_div(n: i64, d: i64) -> i64 {
-    let q = n / d;
-    let r = n % d;
+fn floor_div(n: i64, d: i64) -> DimensionResult<i64> {
+    let q = n.checked_div(d).ok_or(DimensionOverflow)?;
+    let r = n.checked_rem(d).ok_or(DimensionOverflow)?;
     if r != 0 && ((r < 0) != (d < 0)) {
-        q - 1
+        q.checked_sub(1).ok_or(DimensionOverflow)
     } else {
-        q
+        Ok(q)
     }
 }
 
@@ -1394,7 +1415,7 @@ mod tests {
     }
 
     #[test]
-    fn type_is_gradual_fast_matches_canonicalized_gradual_check() {
+    fn type_is_gradual_fast_detects_preexisting_gradual_values() {
         use crate::class::ClassType;
         use crate::display::tests::fake_class;
         use crate::types::TArgs;
@@ -1408,8 +1429,7 @@ mod tests {
             TArgs::default(),
         ));
 
-        // Each case must satisfy `type_is_gradual_fast(x) == is_gradual_size(&canonicalize(x))`.
-        let cases = vec![
+        let gradual_cases = vec![
             // A symbolic `int` leaf canonicalizes to the gradual size (regression case).
             Type::Int(Int::Symbolic(Box::new(int_class.clone()))),
             // Arithmetic over a symbolic `int` leaf is gradual too.
@@ -1419,18 +1439,20 @@ mod tests {
             )),
             // The bare gradual size.
             gradual_size(),
-            // A concrete literal is not gradual.
-            int_literal(5),
-            // A non-`int` symbolic leaf is not gradual.
-            Type::Int(Int::Symbolic(Box::new(str_class))),
         ];
-        for case in cases {
-            assert_eq!(
-                type_is_gradual_fast(&case),
-                is_gradual_size(&canonicalize(case.clone())),
-                "mismatch for {case:?}"
-            );
+        for case in gradual_cases {
+            assert!(type_is_gradual_fast(&case), "missed {case:?}");
+            assert!(is_gradual_size(&canonicalize(case)));
         }
+
+        assert!(!type_is_gradual_fast(&int_literal(5)));
+        assert!(!type_is_gradual_fast(&Type::Int(Int::Symbolic(Box::new(
+            str_class,
+        )))));
+
+        let overflowing = Type::Int(Int::pow(int_literal(2), int_literal(63)));
+        assert!(!type_is_gradual_fast(&overflowing));
+        assert!(is_gradual_size(&canonicalize(overflowing)));
     }
 
     #[test]
@@ -1492,6 +1514,111 @@ mod tests {
                 int_literal(1),
                 Type::Int(Int::pow(int_literal(2), Type::Var(Var::ZERO))),
             ))
+        );
+    }
+
+    #[test]
+    fn canonicalize_boundary_arithmetic_is_checked() {
+        let n = Type::Var(Var::ZERO);
+        let symbolic_n = Type::Int(Int::Symbolic(Box::new(n.clone())));
+
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(n.clone(), int_literal(i64::MAX)))),
+            Type::Int(Int::add(int_literal(i64::MAX), symbolic_n.clone())),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(n.clone(), int_literal(i64::MAX)))),
+            Type::Int(Int::add(int_literal(-i64::MAX), symbolic_n.clone())),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(int_literal(i64::MAX), n.clone()))),
+            Type::Int(Int::add(
+                int_literal(i64::MAX),
+                Type::Int(Int::mul(int_literal(-1), symbolic_n.clone())),
+            )),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(int_literal(i64::MIN), n.clone()))),
+            Type::Int(Int::add(
+                int_literal(i64::MIN),
+                Type::Int(Int::mul(int_literal(-1), symbolic_n)),
+            )),
+        );
+
+        let max_n = Type::Int(Int::mul(int_literal(i64::MAX), n.clone()));
+        assert_eq!(
+            canonicalize(Type::Int(Int::add(max_n.clone(), n.clone()))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::mul(max_n, int_literal(2)))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::sub(n, int_literal(i64::MIN)))),
+            gradual_size(),
+        );
+    }
+
+    #[test]
+    fn canonicalize_boundary_division_is_checked() {
+        let n = Type::Var(Var::ZERO);
+        let symbolic_n = Type::Int(Int::Symbolic(Box::new(n.clone())));
+
+        assert_eq!(
+            canonicalize(Type::Int(Int::floor_div(
+                Type::Int(Int::floor_div(n.clone(), int_literal(i64::MAX))),
+                int_literal(2),
+            ))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::floor_div(
+                int_literal(i64::MIN),
+                int_literal(-1),
+            ))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::floor_div(
+                Type::Int(Int::add(n.clone(), int_literal(i64::MIN))),
+                int_literal(-1),
+            ))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::floor_div(
+                Type::Int(Int::mul(int_literal(i64::MIN), n)),
+                int_literal(i64::MIN),
+            ))),
+            Type::Int(Int::floor_div(
+                Type::Int(Int::mul(int_literal(-1), symbolic_n)),
+                int_literal(-1),
+            )),
+        );
+    }
+
+    #[test]
+    fn canonicalize_literal_power_overflow_is_gradual() {
+        assert_eq!(
+            canonicalize(Type::Int(Int::pow(int_literal(2), int_literal(63)))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::pow(int_literal(-2), int_literal(63)))),
+            int_literal(i64::MIN),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::pow(int_literal(2), int_literal(62)))),
+            int_literal(1_i64 << 62),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::pow(int_literal(2), int_literal(i64::MAX),))),
+            gradual_size(),
+        );
+        assert_eq!(
+            canonicalize(Type::Int(Int::pow(int_literal(-1), int_literal(i64::MAX),))),
+            int_literal(-1),
         );
     }
 }

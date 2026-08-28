@@ -6,8 +6,8 @@
 from typing import Any, Literal, overload
 
 import shape_extensions
-from numpy._shapes import binary_ufunc_ir, diag_1d_ir, matmul_2d_ir, reduce_ir
-from shape_extensions import broadcast, Int, IntTuple, IntVar, uses_shape_dsl
+from numpy._shapes import diag_extent, matmul_shape, reduce_shape
+from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar
 
 from . import linalg as linalg, random as random
 
@@ -30,6 +30,10 @@ class dtype[Scalar = Any]:
     def __new__(cls, dtype: Any = ...) -> dtype: ...
     def __init__(self, dtype: Any = ...) -> None: ...
 
+# `ndarray` declares a `dtype` attribute, which shadows the class above throughout
+# its body. Annotations inside the class reach the class through this alias.
+_dtype = dtype
+
 @shape_extensions.shaped_array(shape="Shape")
 class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
     shape: Shape
@@ -38,6 +42,9 @@ class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
     def __len__[N: IntVar](self: ndarray[[N]]) -> Int[N]: ...
     @overload
     def __len__[N: IntVar, M: IntVar](self: ndarray[[N, M]]) -> Int[N]: ...
+    # TODO(stroxler): This overload does not bind: paired integer-array indexing
+    # infers a gradual shape rather than `[I]`, and float indices are not
+    # rejected. `test_indexing.py` covers both cases at runtime only.
     def __getitem__[
         N: IntVar,
         M: IntVar,
@@ -47,8 +54,8 @@ class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
     ](
         self: ndarray[[N, M], DType],
         key: tuple[
-            ndarray[[I], dtype[RowIndexScalar]],
-            ndarray[[I], dtype[ColumnIndexScalar]],
+            ndarray[[I], _dtype[RowIndexScalar]],
+            ndarray[[I], _dtype[ColumnIndexScalar]],
         ],
     ) -> ndarray[[I], DType]: ...
     # Only 2-D transpose is modeled for the NumPy shape-stub MVP.
@@ -142,13 +149,13 @@ class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
     def __rpow__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
     ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
-    # TODO: Bridge until operator dunders/bound methods can share the DSL-backed
-    # `np.matmul` rule and diagnostics.
+    # TODO(stroxler): Share the DSL-backed `np.matmul` rule once operator methods can invoke it.
     def __matmul__[N: IntVar, M: IntVar, P: IntVar](
         self: ndarray[[N, M], DType],
         other: ndarray[[M, P]],
     ) -> ndarray[[N, P], DType]: ...
-    # Narrow method bridge for PCA demos; the free `np.mean` covers general reductions.
+    # TODO(stroxler): Share the DSL-backed free-function reduction rules with bound methods.
+    # These narrow method bridges currently cover the shapes used by the example corpus.
     @overload
     def mean[N: IntVar, M: IntVar](
         self: ndarray[[N, M], DType],
@@ -188,12 +195,15 @@ def log2[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 def log10[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 def sqrt[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 def power[Shape: _Shape](x1: ndarray[Shape], x2: int | float, /) -> ndarray[Shape]: ...
-@uses_shape_dsl(binary_ufunc_ir)
-def minimum(x1: ndarray, x2: ndarray, /) -> ndarray: ...
-@uses_shape_dsl(binary_ufunc_ir)
-def maximum(x1: ndarray, x2: ndarray, /) -> ndarray: ...
-@uses_shape_dsl(binary_ufunc_ir)
-def arctan2(x1: ndarray, x2: ndarray, /) -> ndarray: ...
+def minimum[Shape1: _Shape, Shape2: _Shape](
+    x1: ndarray[Shape1, Any], x2: ndarray[Shape2, Any], /
+) -> ndarray[broadcast(Shape1, Shape2)]: ...
+def maximum[Shape1: _Shape, Shape2: _Shape](
+    x1: ndarray[Shape1, Any], x2: ndarray[Shape2, Any], /
+) -> ndarray[broadcast(Shape1, Shape2)]: ...
+def arctan2[Shape1: _Shape, Shape2: _Shape](
+    x1: ndarray[Shape1, Any], x2: ndarray[Shape2, Any], /
+) -> ndarray[broadcast(Shape1, Shape2)]: ...
 def sin[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 def cos[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 def tan[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
@@ -211,10 +221,27 @@ def fill_diagonal[N: IntVar, DType](
     val: Any,
     wrap: bool = False,
 ) -> None: ...
-@uses_shape_dsl(diag_1d_ir)
-def diag[DType](
-    v: ndarray[_AnyShape, DType], k: int = 0
-) -> ndarray[_AnyShape, DType]: ...
+@overload
+def diag[N: IntVar, DType, K: Flag[int] = 0](
+    v: ndarray[[N], DType], k: K = 0
+) -> ndarray[[diag_extent(N, K), diag_extent(N, K)], DType]: ...
+
+# TODO(stroxler): Model the shape arithmetic here; we can do better than `int`.
+@overload
+def diag[M: IntVar, N: IntVar, DType](
+    v: ndarray[[M, N], DType], k: int = 0
+) -> ndarray[[int], DType]: ...
+
+# Trailing fallback for ranks the precise overloads do not model, so their dtype survives
+# instead of degrading to `Any`. The parameter shape is a type variable rather than
+# `_AnyShape`: a gradual parameter shape would also match known-rank arguments whose dtype is
+# gradual, and that ambiguity collapses their precise result to a gradual shape.
+# The result is spelled `IntTuple`, the shape bound itself, rather than `_AnyShape`:
+# an unbounded tuple is not a valid shaped-array carrier. Both infer the same shape.
+@overload
+def diag[S: _Shape, DType](
+    v: ndarray[S, DType], k: int = 0
+) -> ndarray[IntTuple, DType]: ...
 def arange[N: IntVar](stop: Int[N], /) -> ndarray[[N], dtype[intp]]: ...
 @overload
 def expand_dims[N: IntVar, M: IntVar, DType](
@@ -231,14 +258,40 @@ def expand_dims[N: IntVar, M: IntVar, DType](
     a: ndarray[[N, M], DType],
     axis: Literal[2, -1],
 ) -> ndarray[[N, M, 1], DType]: ...
-@uses_shape_dsl(reduce_ir)
-def sum(a: ndarray, axis: _Axis = None, *, keepdims: bool = False) -> ndarray: ...
-@uses_shape_dsl(reduce_ir)
-def mean(a: ndarray, axis: _Axis = None, *, keepdims: bool = False) -> ndarray: ...
-@uses_shape_dsl(reduce_ir)
-def min(a: ndarray, axis: _Axis = None, *, keepdims: bool = False) -> ndarray: ...
-@uses_shape_dsl(reduce_ir)
-def max(a: ndarray, axis: _Axis = None, *, keepdims: bool = False) -> ndarray: ...
+
+# These stubs track reduction shapes but leave reduction dtype gradual.
+def sum[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_Axis],
+    KeepDims: Flag[bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+def mean[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_Axis],
+    KeepDims: Flag[bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+def min[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_Axis],
+    KeepDims: Flag[bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+def max[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_Axis],
+    KeepDims: Flag[bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
 @overload
 def argmin[N: IntVar, M: IntVar](
     a: ndarray[[N, M]],
@@ -253,8 +306,14 @@ def argmin[N: IntVar, M: IntVar](
     *,
     keepdims: Literal[False] = False,
 ) -> ndarray[[N], dtype[intp]]: ...
-@uses_shape_dsl(matmul_2d_ir)
-def matmul(a: ndarray, b: ndarray, /) -> ndarray: ...
+
+# NumPy uses the typed DSL for this rule; Torch still uses the legacy shaped-array
+# mechanism. This MVP models only two-dimensional inputs. The result dtype stays
+# gradual because dtype promotion is not modeled, while `ndarray.__matmul__`
+# carries the left operand's dtype.
+def matmul[LeftShape: _Shape, RightShape: _Shape](
+    a: ndarray[LeftShape], b: ndarray[RightShape], /
+) -> ndarray[matmul_shape(LeftShape, RightShape), Any]: ...
 
 # TODO(stroxler): Replace these finite tuple-shape constructor overloads with a
 # generic `Shape: tuple[int, ...]` overload once carrier shapes flow through

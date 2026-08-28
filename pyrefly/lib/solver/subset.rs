@@ -218,6 +218,25 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         result.map_err(|_| SubsetError::Other)
     }
 
+    /// Constrain an unpacked vararg to the valid arities introduced by optional parameters.
+    /// The full parameter tuple remains the fallback solution when no later argument evidence
+    /// selects one of the shorter arities.
+    fn is_subset_optional_prefixes(
+        &mut self,
+        unpack: &Type,
+        mut optional_prefixes: Vec<Type>,
+        full: Type,
+    ) -> Result<(), SubsetError> {
+        optional_prefixes.push(full.clone());
+        let accepted = unions(optional_prefixes, &self.solver.heap);
+        let unpack = canonical_vararg_unpack_inner(unpack, &accepted);
+        self.is_subset_eq(unpack, &accepted)?;
+        for var in unpack.collect_maybe_placeholder_vars() {
+            self.solver.add_upper_bound_fallback(var, full.clone());
+        }
+        Ok(())
+    }
+
     /// Can a function with l_args be called as a function with u_args?
     fn is_subset_param_list(
         &mut self,
@@ -349,36 +368,43 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     Some(Param::Varargs(_, Type::Unpack(u))),
                 ) => {
                     let mut l_types = Vec::new();
+                    let mut l_optional_prefixes = Vec::new();
                     loop {
-                        if let Some(Param::PosOnly(_, l, _) | Param::Pos(_, l, _)) = l_arg {
+                        if let Some(Param::PosOnly(_, l, required) | Param::Pos(_, l, required)) =
+                            l_arg
+                        {
+                            // Each trailing optional positional parameter adds a valid shorter
+                            // sequence; a later required parameter makes earlier prefixes invalid.
+                            match required {
+                                Required::Required => l_optional_prefixes.clear(),
+                                Required::Optional(_) => l_optional_prefixes
+                                    .push(self.solver.heap.mk_concrete_tuple(l_types.clone())),
+                            }
                             l_types.push(l.clone());
                             l_arg = l_args.next();
                         } else if let Some(Param::Varargs(_, Type::Unpack(l))) = l_arg {
-                            self.is_subset_eq(
-                                u,
-                                &self.solver.heap.mk_unpacked_tuple(
-                                    l_types,
-                                    (**l).clone(),
-                                    Vec::new(),
-                                ),
-                            )?;
+                            let full = self.solver.heap.mk_unpacked_tuple(
+                                l_types,
+                                (**l).clone(),
+                                Vec::new(),
+                            );
+                            self.is_subset_optional_prefixes(u, l_optional_prefixes, full)?;
                             l_arg = l_args.next();
                             u_arg = u_args.next();
                             break;
                         } else if let Some(Param::Varargs(_, l)) = l_arg {
-                            self.is_subset_eq(
-                                u,
-                                &self.solver.heap.mk_unpacked_tuple(
-                                    l_types,
-                                    self.solver.heap.mk_unbounded_tuple(l.clone()),
-                                    Vec::new(),
-                                ),
-                            )?;
+                            let full = self.solver.heap.mk_unpacked_tuple(
+                                l_types,
+                                self.solver.heap.mk_unbounded_tuple(l.clone()),
+                                Vec::new(),
+                            );
+                            self.is_subset_optional_prefixes(u, l_optional_prefixes, full)?;
                             l_arg = l_args.next();
                             u_arg = u_args.next();
                             break;
                         } else {
-                            self.is_subset_eq(u, &self.solver.heap.mk_concrete_tuple(l_types))?;
+                            let full = self.solver.heap.mk_concrete_tuple(l_types);
+                            self.is_subset_optional_prefixes(u, l_optional_prefixes, full)?;
                             u_arg = u_args.next();
                             break;
                         }
@@ -651,8 +677,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
         // Save coinductive state so we can detect if any coinductive assumptions
         // were used during this protocol check.
-        let prev_coinductive = self.coinductive_assumptions_used;
+        let prev_coinductive =
+            self.coinductive_assumptions_used || self.type_order.coinductive_assumptions_used();
         self.coinductive_assumptions_used = false;
+        self.type_order.set_coinductive_assumptions_used(false);
 
         // For class-level coinductive reasoning: if the `got` type's type arguments
         // contain Vars, we're likely in a recursive pattern (e.g., checking method return
@@ -687,7 +715,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         // 2. No coinductive assumptions were used during this check
         //    (otherwise the result may be contingent on an assumption
         //    that could be invalidated by rollback)
-        let used_coinductive = self.coinductive_assumptions_used;
+        let used_coinductive =
+            self.coinductive_assumptions_used || self.type_order.coinductive_assumptions_used();
         if has_no_vars && !used_coinductive {
             self.solver
                 .store_protocol_cache(&got, &want, &res, self.type_order);
@@ -695,6 +724,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
         // Restore: propagate any coinductive usage upward
         self.coinductive_assumptions_used = prev_coinductive || used_coinductive;
+        self.type_order
+            .set_coinductive_assumptions_used(prev_coinductive || used_coinductive);
 
         res
     }
@@ -1009,7 +1040,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         }
     }
 
-    fn is_subset_tuple_to_int_tuple(
+    pub(crate) fn is_subset_tuple_to_int_tuple(
         &mut self,
         got: &Tuple,
         want: &IntTuple,
@@ -1024,7 +1055,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             return Err(SubsetError::Other);
         }
         if Self::int_tuple_has_carrier_middle(want) {
-            self.bind_tensor_dimensions(&IntTuple::from_tuple(got.clone()), want)
+            // Dimension binding recovers non-size elements to gradual dimensions, so
+            // validate the actual structurally first. This must not bind anything:
+            // the carrier is still unsolved, and callers can roll this attempt back.
+            let Some(got) = tuple_carrier_to_shape(&Type::Tuple(got.clone())) else {
+                return Err(SubsetError::Other);
+            };
+            self.bind_tensor_dimensions(&got, want)
         } else {
             self.is_subset_eq(&Type::Tuple(got.clone()), &want.to_tuple_type())
         }
@@ -1228,15 +1265,20 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         // Save coinductive state so we can detect if any coinductive assumptions
         // were used during field comparisons (e.g., a field with a protocol type
         // that recursively references this TypedDict).
-        let prev_coinductive = self.coinductive_assumptions_used;
+        let prev_coinductive =
+            self.coinductive_assumptions_used || self.type_order.coinductive_assumptions_used();
         self.coinductive_assumptions_used = false;
+        self.type_order.set_coinductive_assumptions_used(false);
         let res = self.is_subset_typed_dict_inner(got, want);
-        let used_coinductive = self.coinductive_assumptions_used;
+        let used_coinductive =
+            self.coinductive_assumptions_used || self.type_order.coinductive_assumptions_used();
         if cacheable && !used_coinductive {
             self.solver
                 .store_typed_dict_cache(got, want, &res, self.type_order);
         }
         self.coinductive_assumptions_used = prev_coinductive || used_coinductive;
+        self.type_order
+            .set_coinductive_assumptions_used(prev_coinductive || used_coinductive);
         res
     }
 
@@ -1832,6 +1874,20 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 Ok(())
             }
             (Type::Quantified(q), u)
+                if let Restriction::Flag(domain) = q.restriction()
+                    && self
+                        .solver
+                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
+                            self.is_subset_eq(
+                                &domain.as_type(self.type_order.stdlib(), &self.solver.heap),
+                                u,
+                            )
+                        })
+                        .is_ok() =>
+            {
+                Ok(())
+            }
+            (Type::Quantified(q), u)
                 if let Restriction::Constraints(constraints) = q.restriction()
                     && self
                         .solver
@@ -1876,10 +1932,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 self.solver.expand_with_bounds(&mut got_expanded);
                 self.solver.expand_with_bounds(&mut want_expanded);
 
-                // Gradual-size fast path. `type_is_gradual_fast` is a by-reference
-                // equivalent of `is_gradual_size(&canonicalize(..))` for `Int`
-                // types, so we can short-circuit without allocating canonical
-                // copies on the common success path.
+                // Gradual-size fast path. This catches existing gradual leaves
+                // without allocating canonical copies on the common success path.
                 //
                 // Short-circuiting here before solving a fresh symbolic `want`
                 // (e.g. `Int[N]` for an unconstrained `IntVar` N) is safe and
@@ -1893,6 +1947,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
                 let got_canonical = got_expanded.clone().canonicalize();
                 let want_canonical = want_expanded.clone().canonicalize();
+                if is_gradual_size(&got_canonical) || is_gradual_size(&want_canonical) {
+                    return Ok(());
+                }
                 if got_canonical == want_canonical {
                     return Ok(());
                 }
@@ -2170,6 +2227,22 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     )),
                 )
             }
+            (Type::TypedDict(TypedDict::TypedDict(_)), Type::ClassType(want))
+                if !self.type_order.is_protocol(want.class_object())
+                    && !self.type_order.has_superclass(
+                        self.type_order.stdlib().mapping_object(),
+                        want.class_object(),
+                    )
+                    && !self.type_order.has_superclass(
+                        self.type_order.stdlib().dict_object(),
+                        want.class_object(),
+                    ) =>
+            {
+                // A declared TypedDict's nominal carrier is either Mapping or dict. Reject
+                // classes unrelated to both before calculating its value type, which may
+                // require solving recursive fields of the TypedDict currently being defined.
+                Err(SubsetError::Other)
+            }
             (Type::TypedDict(td @ TypedDict::TypedDict(_)), _) => {
                 let stdlib = self.type_order.stdlib();
                 if let Some(value_type) = self
@@ -2358,10 +2431,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 self.is_subset_eq(&self.type_order.constructor_to_callable(got_cls), want)
             }
             (Type::ClassDef(got), Type::BoundMethod(_) | Type::Callable(_) | Type::Function(_)) => {
-                let constructor = self
-                    .type_order
-                    .constructor_to_callable_for_class_def(got)
-                    .unwrap_or(Type::type_of(self.type_order.promote_silently(got)));
+                let constructor = self.type_order.constructor_to_callable_for_class_def(got);
                 self.is_subset_eq(&constructor, want)
             }
             (Type::ClassDef(got), Type::ClassDef(want)) => ok_or(
@@ -2430,18 +2500,21 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             {
                 Err(SubsetError::Other)
             }
-            (Type::ClassDef(got), Type::Type(inner))
-                if let Type::ClassType(want_cls) = &**inner
-                    && self.type_order.is_protocol(want_cls.class_object())
-                    && self.type_order.is_protocol(got) =>
-            {
-                // We only allow concrete class names to be assigned to `type[T]` if `T` is a protocol
-                Err(SubsetError::TypeOfProtocolNeedsConcreteClass(
-                    want_cls.name().clone(),
-                ))
-            }
             (Type::ClassDef(got), Type::Type(want)) => {
-                self.is_subset_eq(&self.type_order.promote_silently(got), want)
+                let res = self.is_subset_eq(&self.type_order.promote_silently(got), want);
+                if res.is_ok()
+                    && got.is_protocol()
+                    && let Type::ClassType(want_cls) = &**want
+                    && want_cls.class_object().is_protocol()
+                {
+                    // We only allow concrete class names to be assigned to `type[T]` if `T` is a protocol.
+                    // We do this check after all other checks on these types so that callers in contexts
+                    // in which this error isn't applicable can drop it without losing other errors.
+                    return Err(SubsetError::TypeOfProtocolNeedsConcreteClass(
+                        want_cls.name().clone(),
+                    ));
+                }
+                res
             }
             (Type::Type(inner), Type::ClassDef(want))
                 if let Type::ClassType(got_cls) = &**inner =>
@@ -2482,7 +2555,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 self.is_subset_eq(&got, want)
             }
             (Type::ClassType(got), Type::SelfType(want))
-                if got == want && self.type_order.is_final(got.class_object()) =>
+                if got == want && !self.type_order.is_subclassable(got.class_object()) =>
             {
                 Ok(())
             }

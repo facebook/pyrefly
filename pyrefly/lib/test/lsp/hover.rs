@@ -132,6 +132,68 @@ x: int = 0
     assert!(!compact_can_increase);
 }
 
+#[test]
+fn hover_shows_qualified_type_names() {
+    let torch = "class Tensor: ...";
+    let numpy = "class ndarray: ...";
+    let library = r#"
+from numpy import ndarray
+from torch import Tensor
+
+TensorLike = Tensor | ndarray
+
+def foo(value: TensorLike) -> TensorLike: ...
+def shape() -> list[int]: ...
+"#;
+    let main = r#"
+import numpy as np
+import torch as t
+import library as lib
+
+class Local: ...
+
+local = Local()
+#^
+tensor = t.Tensor()
+#^
+array = np.ndarray()
+#^
+combined = lib.foo(tensor)
+#^
+shape = lib.shape()
+#^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("torch", torch),
+            ("numpy", numpy),
+            ("library", library),
+            ("main", main),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("(variable) local: Local"),
+        "Expected hover to omit the current module, got: {report}"
+    );
+    assert!(
+        report.contains("(variable) tensor: torch.Tensor"),
+        "Expected hover to include the canonical torch module, got: {report}"
+    );
+    assert!(
+        report.contains("(variable) array: numpy.ndarray"),
+        "Expected hover to include the canonical numpy module, got: {report}"
+    );
+    assert!(
+        report.contains("(variable) combined: torch.Tensor | numpy.ndarray"),
+        "Expected hover to qualify names in a library type alias, got: {report}"
+    );
+    assert!(
+        report.contains("(variable) shape: list[int]"),
+        "Expected hover to omit the builtins module, got: {report}"
+    );
+}
+
 fn assert_sphinx_resolved_as_link(report: &str, role: &str, target: &str) {
     let raw = format!(":{role}:`{target}`");
     assert!(
@@ -424,6 +486,27 @@ drop_str
     assert!(
         report.contains(") -> (\n    T,\n    ParamSpec(P)\n) -> R"),
         "Expected wrapped return callable in hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_shows_flag_type_parameter_domain() {
+    let code = r#"
+from shape_extensions import Flag
+
+def select[K: Flag[int]](key: K) -> K: ...
+
+select(1)
+#^
+"#;
+    let shape_extensions = "class Flag[T]: ...";
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("shape_extensions", shape_extensions)],
+        get_test_report,
+    );
+    assert!(
+        report.contains("def select[K: Flag[int]]("),
+        "Expected hover to display the Flag domain, got: {report}"
     );
 }
 
@@ -1219,6 +1302,27 @@ c += 1
             "```python\n(method) __iadd__: def __iadd__(\n    self: Counter,\n    other: int\n) -> Counter: ...\n```"
         ),
         "Expected __iadd__ signature in hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_binop_lhs_literal_does_not_show_operator_dunder() {
+    let code = r#"
+x = 1 + 1
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | x = 1 + 1
+        ^
+```python
+Literal[1]
+```
+"#
+        .trim(),
+        report.trim(),
     );
 }
 
@@ -2086,6 +2190,51 @@ Person("Alice", 25)
 }
 
 #[test]
+fn hover_on_pydantic_constructor_ignores_inherited_unannotated_new() {
+    let sqlmodel = r#"
+from typing import Any
+from pydantic import BaseModel
+
+class SQLModel(BaseModel):
+    def __new__(cls, *args: Any, **kwargs: Any):
+        return object.__new__(cls)
+
+    def __init__(self, **data: Any) -> None: ...
+"#;
+    let main = r#"
+from sqlmodel import SQLModel
+
+class A(SQLModel):
+    a: int
+    b: str
+
+value = A
+#       ^
+A(a=1, b="")
+#^
+"#;
+    let pydantic_path =
+        std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
+    let mut test_env = TestEnv::new_with_site_package_paths(&[&pydantic_path]);
+    test_env.add("sqlmodel", sqlmodel);
+    test_env.add("main", main);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    for position in extract_cursors_for_test(main) {
+        let report = get_test_report(&state, &handle("main"), position);
+        assert!(
+            report.contains("a:") && report.contains("b:"),
+            "Expected Pydantic constructor hover to show synthesized fields, got: {report}"
+        );
+        assert!(
+            !report.contains("*args: Any") && !report.contains("**kwargs: Any"),
+            "Expected Pydantic constructor hover to hide inherited broad __new__, got: {report}"
+        );
+    }
+}
+
+#[test]
 fn hover_on_namedtuple_constructor_shows_field_signature() {
     let code = r#"
 from typing import NamedTuple
@@ -2251,7 +2400,7 @@ class DCTransformDeclarative(DeclarativeAttributeIntercept):
         "Hover must not expose an internal inference variable, got: {report}"
     );
     assert!(
-        report.contains(") -> Self@DeclarativeAttributeIntercept: ..."),
+        report.contains(") -> DeclarativeAttributeIntercept: ..."),
         "Hover should resolve the constructor's return type, got: {report}"
     );
 }

@@ -38,6 +38,7 @@ use pyrefly_types::shaped_array::index_shape_tensor;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier;
 use pyrefly_types::shaped_array::tuple_carrier_to_shape;
 use pyrefly_types::shaped_array::type_to_dim;
+use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::ExtraItems;
@@ -47,6 +48,7 @@ use pyrefly_types::types::Forallable;
 use pyrefly_util::owner::Owner;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::prelude::VecExt;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Arguments;
@@ -75,6 +77,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 use vec1::vec1;
 
@@ -86,6 +89,8 @@ use crate::alt::callable::CallArg;
 use crate::alt::class::typed_dict::TypedDictErrorKind;
 use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::polars_specials::is_polars_series;
+use crate::alt::regex::RegexValidationError;
+use crate::alt::regex::validate_pattern;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::solve::UntypeContext;
 use crate::alt::unwrap::HintRef;
@@ -390,9 +395,9 @@ fn classify_shaped_array_index_type(ty: &Type) -> Option<IndexOp> {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn synthesized_functional_class_type(&self, call: &ExprCall) -> Option<Type> {
-        let anon_key = Key::Anon(call.range);
+        let anon_key = Key::Anon(call.range());
         let idx = self
             .bindings()
             .key_to_idx_hashed_opt(Hashed::new(&anon_key))?;
@@ -456,7 +461,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     None => TypeCheckOptions::new(errors, context),
                 };
-                if self.check_type_with_options(got.ty(), want, x.range(), check_options) {
+                if self
+                    .check_type_with_options(got.ty(), want, x.range(), check_options)
+                    .is_none()
+                {
                     got
                 } else {
                     got.with_ty(want.clone())
@@ -483,7 +491,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 } else {
                     let result = self
                         .get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                        .arc_clone();
+                        .clone();
                     // Complements PromoteForward for seeded captures.
                     if self.bindings().should_promote_at_range(x.range) {
                         result.map_ty(|ty| ty.promote_shallow_implicit_literals(self.stdlib))
@@ -516,7 +524,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::Named(x) => match &*x.target {
                 Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => self
                     .get(&Key::Definition(ShortIdentifier::expr_name(name)))
-                    .arc_clone(),
+                    .clone(),
                 _ => self.expr_infer_impl(&x.value, hint, errors, type_form_context),
             },
             // All other expressions operate at the `Type` level only, so we avoid the overhead of
@@ -909,7 +917,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     if type_form_context != TypeFormContext::BaseClassList {
                         return self.error(
                             errors,
-                            x.range,
+                            x.range(),
                             ErrorKind::InvalidAnnotation,
                             "Function call cannot be used in annotations".to_owned(),
                         );
@@ -1050,7 +1058,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.check_pytorch_redundant_to_call(x, &callee_ty, errors);
         self.check_sqlalchemy_update_values_call(x, errors);
         if let Some(d) = self.call_to_dict(&callee_ty, &x.arguments) {
-            self.dict_infer(&d, hint, x.range, errors)
+            self.dict_infer(&d, hint, x.range(), errors)
         } else if let Some(ty) = self
             .anonymous_typed_dict_get_or_setdefault_with_literal(
                 &x.func,
@@ -1080,7 +1088,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.subscript_infer_for_type_with_key_present(
                     obj_ty.ty(),
                     key_expr,
-                    x.range,
+                    x.range(),
                     errors,
                     true,
                     TypeFormContext::TypeExpression,
@@ -1093,7 +1101,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .into_ty()
             }
         } else {
-            self.expr_call_infer(x, callee_ty, hint, errors)
+            let regex_pattern = Self::regex_pattern_argument(&x.arguments);
+            let regex_flags_position =
+                regex_pattern.and_then(|_| self.regex_flags_position(&callee_ty));
+            let ret = self.expr_call_infer(x, callee_ty, hint, errors);
+            if let (Some(pattern), Some(flags_position)) = (regex_pattern, regex_flags_position) {
+                self.regex_validate_pattern_argument(pattern, &x.arguments, flags_position, errors);
+            }
+            ret
         }
     }
 
@@ -1394,10 +1409,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 continue;
             };
             let field_name = &field_identifier.id;
-            if mapped_fields.contains_key(field_name) {
+            if mapped_fields.contains(field_name) {
                 let expected_ty = self.sqlalchemy_mapped_field_type(&model, field_name);
                 let got_ty = self.expr_infer(&keyword.value, errors);
-                if !self.is_subset_eq(&got_ty, &expected_ty) {
+                if !self.is_subset_eq(&got_ty, &expected_ty)
+                    && !Self::is_sqlalchemy_owned_type(&got_ty)
+                {
                     self.error(
                         errors,
                         keyword.value.range(),
@@ -1412,12 +1429,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } else {
                 let mut builder = errors.error_builder(
                     field_identifier.range(),
-                    ErrorKind::BadArgumentType,
+                    ErrorKind::UnexpectedKeyword,
                     format!("Unexpected SQLAlchemy update field `{field_name}`"),
                 );
                 if let Some(suggestion) = best_suggestion(
                     field_name,
-                    mapped_fields.keys().map(|candidate| (candidate, 0usize)),
+                    mapped_fields
+                        .iter()
+                        .map(|candidate| Candidate::measured(candidate, 0)),
                 ) {
                     builder = builder.with_detail(format!("Did you mean `{suggestion}`?"));
                 }
@@ -1446,11 +1465,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return false;
         };
         func_id.qname.id().as_str() == "update"
-            && func_id
-                .qname
-                .module_name()
-                .as_str()
-                .starts_with("sqlalchemy")
+            && Self::is_sqlalchemy_module(func_id.qname.module_name())
+    }
+
+    fn is_sqlalchemy_module(module: ModuleName) -> bool {
+        let name = module.as_str();
+        // The `.` keeps unrelated distributions such as `sqlalchemy_utils` out.
+        name == "sqlalchemy" || name.starts_with("sqlalchemy.")
+    }
+
+    /// SQLAlchemy accepts a SQL expression anywhere a column value is expected, so
+    /// a value the library itself produced is not checked against the mapped type.
+    fn is_sqlalchemy_owned_type(ty: &Type) -> bool {
+        match ty {
+            Type::ClassType(cls) => Self::is_sqlalchemy_module(cls.qname().module_name()),
+            Type::Annotated(inner, _) => Self::is_sqlalchemy_owned_type(inner),
+            Type::Union(union) => union.members.iter().any(Self::is_sqlalchemy_owned_type),
+            _ => false,
+        }
     }
 
     fn sqlalchemy_update_model_from_call(&self, call: &ExprCall) -> Option<Class> {
@@ -1466,7 +1498,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn sqlalchemy_mapped_model_fields(&self, model: &Class) -> SmallMap<Name, ()> {
+    fn sqlalchemy_mapped_model_fields(&self, model: &Class) -> SmallSet<Name> {
         self.get_class_field_map(model)
             .into_iter()
             .filter_map(|(name, field)| {
@@ -1474,13 +1506,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     return None;
                 }
                 let (_, annotation, _) = field.for_variance_inference();
-                if annotation.is_some_and(|annotation| {
-                    Self::is_sqlalchemy_mapped_annotation(annotation.get_type())
-                }) {
-                    Some((name, ()))
-                } else {
-                    None
-                }
+                annotation
+                    .is_some_and(|annotation| {
+                        Self::is_sqlalchemy_mapped_annotation(annotation.get_type())
+                    })
+                    .then_some(name)
             })
             .collect()
     }
@@ -1980,6 +2010,101 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 value: kw.value.clone(),
             }
         }))
+    }
+
+    /// Return the positional index of `flags` for `re` functions that accept a pattern.
+    fn regex_flags_position(&self, callee_ty: &Type) -> Option<usize> {
+        callee_ty.toplevel_func_metadata().and_then(|metadata| {
+            if metadata.kind.module_name().as_str() != "re" {
+                return None;
+            }
+            let class = metadata.kind.class();
+            let class = class.as_ref().map(|class| class.name().as_str());
+            let function = metadata.kind.function_name();
+            match (class, function.as_ref().as_str()) {
+                (None, "compile" | "template") => Some(1),
+                (None, "match" | "fullmatch" | "search" | "findall" | "finditer") => Some(2),
+                (None, "split") => Some(3),
+                (None, "sub" | "subn") => Some(4),
+                _ => None,
+            }
+        })
+    }
+
+    fn regex_pattern_argument(args: &Arguments) -> Option<&Expr> {
+        let pattern = args.args.first().or_else(|| {
+            args.keywords.iter().find_map(|kw| {
+                (kw.arg
+                    .as_ref()
+                    .is_some_and(|name| name.id.as_str() == "pattern"))
+                .then_some(&kw.value)
+            })
+        })?;
+        matches!(pattern, Expr::StringLiteral(_) | Expr::BytesLiteral(_)).then_some(pattern)
+    }
+
+    fn regex_validate_pattern_argument(
+        &self,
+        pattern: &Expr,
+        args: &Arguments,
+        flags_position: usize,
+        errors: &ErrorCollector,
+    ) {
+        let flags = args.args.get(flags_position).or_else(|| {
+            args.keywords.iter().find_map(|kw| {
+                (kw.arg
+                    .as_ref()
+                    .is_some_and(|name| name.id.as_str() == "flags"))
+                .then_some(&kw.value)
+            })
+        });
+        let Some(verbose) =
+            flags.map_or(Some(false), |flags| self.regex_verbose_flag(flags, errors))
+        else {
+            return;
+        };
+        let result = match pattern {
+            Expr::StringLiteral(ExprStringLiteral { value, .. }) => {
+                validate_pattern(value.to_str().as_bytes(), verbose)
+            }
+            Expr::BytesLiteral(value) => match Lit::from_bytes_literal(value) {
+                Some(Lit::Bytes(value)) => validate_pattern(&value, verbose),
+                _ => return,
+            },
+            _ => return,
+        };
+        if let Err(RegexValidationError::Invalid(error)) = result {
+            self.error(errors, pattern.range(), ErrorKind::Regex, error.to_owned());
+        }
+    }
+
+    fn regex_verbose_flag(&self, expr: &Expr, errors: &ErrorCollector) -> Option<bool> {
+        match expr {
+            Expr::BinOp(ExprBinOp {
+                left,
+                op: Operator::BitOr,
+                right,
+                ..
+            }) => match (
+                self.regex_verbose_flag(left, errors),
+                self.regex_verbose_flag(right, errors),
+            ) {
+                (Some(true), _) | (_, Some(true)) => Some(true),
+                (Some(false), Some(false)) => Some(false),
+                _ => None,
+            },
+            _ => match self.expr_infer(expr, errors) {
+                Type::Literal(literal) => match literal.value {
+                    Lit::Int(value) => value.as_i64().map(|value| value & 64 != 0),
+                    Lit::Bool(_) => Some(false),
+                    Lit::Enum(value) if value.class.has_qname("re", "RegexFlag") => {
+                        Some(matches!(value.member.as_str(), "X" | "VERBOSE"))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            },
+        }
     }
 
     /// If `func(args)` is a `.<method>("<literal>", ...)` call, return the receiver's
@@ -2516,7 +2641,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidSentinel,
                 "Sentinel requires a name as the first argument".to_owned(),
             );
@@ -2594,7 +2719,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if lit.value.to_str() != name.id.as_str() {
                     self.error(
                         errors,
-                        x.range,
+                        x.range(),
                         ErrorKind::InvalidTypeVar,
                         format!(
                             "{construct} must be assigned to a variable named `{}`",
@@ -2654,6 +2779,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 format!("{construct} cannot have both constraints and bound"),
                             );
                             restriction = Some(Restriction::Unrestricted);
+                        } else if self.reject_legacy_shape_flag_bound(
+                            &bound,
+                            kw.value.range(),
+                            errors,
+                        ) {
+                            restriction = Some(Restriction::Unrestricted);
                         } else {
                             restriction = Some(Restriction::Bound(bound));
                         }
@@ -2708,7 +2839,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !arg_name {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeVar,
                 "Missing `name` argument".to_owned(),
             );
@@ -2719,7 +2850,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeVar,
                 format!(
                     "Expected at least 2 constraints in {construct} `{}`, got {}",
@@ -2768,7 +2899,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if lit.value.to_str() != name.id.as_str() {
                     self.error(
                         errors,
-                        x.range,
+                        x.range(),
                         ErrorKind::InvalidParamSpec,
                         format!(
                             "ParamSpec must be assigned to a variable named `{}`",
@@ -2836,7 +2967,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !arg_name {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidParamSpec,
                 "Missing `name` argument".to_owned(),
             );
@@ -2867,7 +2998,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 if lit.value.to_str() != name.id.as_str() {
                     self.error(
                         errors,
-                        x.range,
+                        x.range(),
                         ErrorKind::InvalidTypeVarTuple,
                         format!(
                             "TypeVarTuple must be assigned to a variable named `{}`",
@@ -2945,7 +3076,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !arg_name {
             self.error(
                 errors,
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeVarTuple,
                 "Missing `name` argument".to_owned(),
             );
@@ -3029,6 +3160,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .iter()
                         .all(|constraint| self.is_enum_class_type(constraint))
             }
+            Restriction::Flag(domain) => domain
+                .types(self.stdlib)
+                .iter()
+                .all(|ty| self.is_enum_class_type(ty)),
         }
     }
 
@@ -3106,6 +3241,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
         key_present: bool, // true if the key is definitely known to be present
         type_form_context: TypeFormContext<'_>,
+    ) -> Type {
+        let mut aliases = SmallSet::new();
+        self.subscript_infer_for_type_with_key_present_inner(
+            base,
+            slice,
+            range,
+            errors,
+            key_present,
+            type_form_context,
+            &mut aliases,
+        )
+    }
+
+    fn subscript_infer_for_type_with_key_present_inner(
+        &self,
+        base: &Type,
+        slice: &Expr,
+        range: TextRange,
+        errors: &ErrorCollector,
+        key_present: bool, // true if the key is definitely known to be present
+        type_form_context: TypeFormContext<'_>,
+        aliases: &mut SmallSet<TypeAliasData>,
     ) -> Type {
         let xs = Ast::unpack_slice(slice);
         let slice_ty = LazyCell::new(|| self.expr_infer(slice, errors));
@@ -3483,13 +3640,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             }
                         }
                     }
-                    let result = self.subscript_infer_for_type_with_key_present(
+                    let result = self.subscript_infer_for_type_with_key_present_inner(
                         &schema.underlying_type(),
                         slice,
                         range,
                         errors,
                         key_present,
                         type_form_context,
+                        aliases,
                     );
                     // Preserve the stub's Series class when attaching an element dtype.
                     match (column_dtype, result) {
@@ -3505,37 +3663,50 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         (_, result) => result,
                     }
                 }
-                Type::Series(schema) => self.subscript_infer_for_type_with_key_present(
+                Type::Series(schema) => self.subscript_infer_for_type_with_key_present_inner(
                     &schema.underlying_type(),
                     slice,
                     range,
                     errors,
                     key_present,
                     type_form_context,
+                    aliases,
                 ),
                 Type::Quantified(ref q) if q.is_type_var() && q.restriction().is_restricted() => {
                     match q.restriction() {
                         Restriction::Bound(bound) => self
-                            .subscript_infer_for_type_with_key_present(
+                            .subscript_infer_for_type_with_key_present_inner(
                                 bound,
                                 slice,
                                 range,
                                 errors,
                                 key_present,
                                 type_form_context,
+                                aliases,
                             ),
                         Restriction::Constraints(constraints) => {
                             self.unions(constraints.map(|constraint| {
-                                self.subscript_infer_for_type_with_key_present(
+                                self.subscript_infer_for_type_with_key_present_inner(
                                     constraint,
                                     slice,
                                     range,
                                     errors,
                                     key_present,
                                     type_form_context,
+                                    aliases,
                                 )
                             }))
                         }
+                        Restriction::Flag(domain) => self
+                            .subscript_infer_for_type_with_key_present_inner(
+                                &domain.as_type(self.stdlib, self.heap),
+                                slice,
+                                range,
+                                errors,
+                                key_present,
+                                type_form_context,
+                                aliases,
+                            ),
                         Restriction::Unrestricted => {
                             unreachable!("restricted TypeVar cannot be unrestricted")
                         }
@@ -3583,7 +3754,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                         let fields = self.typed_dict_fields(&typed_dict);
                                         if let Some(suggestion) = best_suggestion(
                                             &key_name,
-                                            fields.keys().map(|candidate| (candidate, 0usize)),
+                                            fields
+                                                .keys()
+                                                .map(|candidate| Candidate::measured(candidate, 0)),
                                         ) {
                                             builder = builder.with_detail(format!(
                                                 "Did you mean `{suggestion}`?"
@@ -3621,14 +3794,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                     })
                 }
-                Type::UntypedAlias(ta) => self.subscript_infer_for_type_with_key_present(
-                    &self.untype_alias(&ta),
-                    slice,
-                    range,
-                    errors,
-                    key_present,
-                    type_form_context,
-                ),
+                Type::UntypedAlias(ta) => {
+                    // Recursive aliases can contain a mapping whose value is the alias itself.
+                    // A subscript on that value cannot be made more precise without expanding
+                    // the alias again, so stop the cycle with an implicit Any.
+                    if !aliases.insert((*ta).clone()) {
+                        self.heap.mk_any_implicit()
+                    } else {
+                        let result = self.subscript_infer_for_type_with_key_present_inner(
+                            &self.untype_alias(&ta),
+                            slice,
+                            range,
+                            errors,
+                            key_present,
+                            type_form_context,
+                            aliases,
+                        );
+                        aliases.shift_remove(&*ta);
+                        result
+                    }
+                }
                 t => self.error(
                     errors,
                     range,
@@ -3858,7 +4043,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub(crate) fn shaped_array_shape_arg_index(&self, cls: &ClassType) -> Option<usize> {
         let shape_param = self.shaped_array_shape_for_class_type(cls)?;
-        self.get_class_tparams(cls.class_object())
+        self.get_class_tparams(cls.class_object())?
             .iter()
             .position(|param| param == &shape_param)
     }
@@ -3880,7 +4065,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     _ => return None,
                 };
                 let int_type = self.stdlib.int().clone().to_type();
-                Self::is_int_tuple_carrier_bound(&upper_bound, &int_type)
+                Self::is_int_tuple_bound(&upper_bound, &int_type)
                     .then(|| IntTuple::unpacked(Vec::new(), shape_arg.clone(), Vec::new()))
             })
     }
@@ -3898,6 +4083,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let shape_idx = self
             .get_class_tparams(cls.class_object())
             .iter()
+            .flat_map(|tparams| tparams.iter())
             .position(|param| param == &shape_param)
             .expect("shaped-array metadata should refer to a class type parameter");
         let mut shape_arg = cls
@@ -4352,7 +4538,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Type {
         let metadata = self.get_metadata_for_class(cls);
         let class_ty = Type::ClassDef(cls.dupe());
-        let allow_dunder_lookup = self.get_class_tparams(cls).is_empty()
+        let allow_dunder_lookup = self
+            .get_class_tparams(cls)
+            .as_ref()
+            .is_none_or(|tparams| tparams.is_empty())
             && !metadata.has_base_any()
             && !metadata.is_new_type();
         let class_getitem_result = if allow_dunder_lookup {
@@ -4405,7 +4594,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Vec<Type> {
         let tparams = self.get_class_tparams(cls);
-        self.parse_type_args_for_tparams(args, tparams.as_vec(), type_form_context, errors)
+        let tparams: &[Quantified] = tparams.map_or(&[], |tparams| tparams.as_vec());
+        self.parse_type_args_for_tparams(args, tparams, type_form_context, errors)
     }
 
     fn parse_type_args_for_tparams(
@@ -4453,7 +4643,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                     if param.kind() == QuantifiedKind::TypeVar
                         && let Expr::List(ExprList { elts, .. }) = arg
-                        && Self::is_int_tuple_carrier_bound(
+                        && Self::is_int_tuple_bound(
                             &param.upper_bound(self.stdlib, self.heap),
                             &int_type,
                         )
@@ -4469,12 +4659,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .collect()
     }
 
-    /// Returns whether `ty` is the normalized upper bound for a bare `IntTuple`
-    /// carrier `TypeVar`.
+    /// Returns whether `ty` is the normalized upper bound for an `IntTuple`-bounded `TypeVar`.
     ///
     /// Other tuple bounds are ordinary type bounds and must not enable compact
     /// shape-list parsing.
-    fn is_int_tuple_carrier_bound(ty: &Type, int_type: &Type) -> bool {
+    fn is_int_tuple_bound(ty: &Type, int_type: &Type) -> bool {
         match ty {
             Type::IntTuple(_) => true,
             Type::Tuple(Tuple::Unbounded(inner)) => inner.as_ref() == int_type,
@@ -4484,9 +4673,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Returns whether `ty` can legally be the argument inside `Elements[...]`.
     ///
-    /// Valid carriers are concrete tuple types, type aliases (which normalize to
+    /// Valid arguments are concrete tuple types, type aliases (which normalize to
     /// tuples), and `TypeVar`s whose upper bound is an `IntTuple` (i.e., a tuple type).
-    fn is_int_tuple_elements_carrier(&self, ty: &Type) -> bool {
+    fn is_int_tuple_elements_argument(&self, ty: &Type) -> bool {
         let upper_bound = match ty {
             Type::Tuple(_) | Type::IntTuple(_) | Type::UntypedAlias(_) => return true,
             Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
@@ -4494,14 +4683,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             _ => return false,
         };
         let int_type = self.stdlib.int().clone().to_type();
-        Self::is_int_tuple_carrier_bound(&upper_bound, &int_type)
+        Self::is_int_tuple_bound(&upper_bound, &int_type)
     }
 
     fn is_shape_elements_class(&self, cls: &Class) -> bool {
         cls.has_toplevel_qname("shape_extensions", "Elements")
     }
 
-    /// Parse `Elements[S]` in `*Elements[S]`, returning the bare `S` carrier.
+    /// Parse `Elements[S]` in `*Elements[S]`, returning the bare `S` argument.
     ///
     /// `Elements` is the conceptual inverse of `tuple[Unpack[Ts]]`: whereas
     /// `tuple[Unpack[Ts]]` wraps a `TypeVarTuple` into a concrete tuple type,
@@ -4527,8 +4716,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         match Ast::unpack_slice(&subscript.slice) {
             [arg] => {
-                let carrier = self.expr_untype(arg, TypeFormContext::type_argument(), errors);
-                match carrier {
+                let argument = self.expr_untype(arg, TypeFormContext::type_argument(), errors);
+                match argument {
                     Type::IntTuple(shape) => match shape.view() {
                         IntTupleView::Concrete(_) => Ok(Some(shape_to_tuple_carrier(&shape))),
                         IntTupleView::Gradual => Ok(Some(self.bare_int_tuple_carrier())),
@@ -4537,21 +4726,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 errors,
                                 arg.range(),
                                 ErrorKind::InvalidAnnotation,
-                                "`Elements[...]` only supports concrete `IntTuple[...]` values or shape carriers"
+                                "`Elements[...]` cannot expand a symbolic-rank `IntTuple[...]` value"
                                     .to_owned(),
                             );
                             Err(())
                         }
                     },
-                    carrier if self.is_int_tuple_elements_carrier(&carrier) => Ok(Some(carrier)),
-                    carrier => {
+                    argument if self.is_int_tuple_elements_argument(&argument) => {
+                        Ok(Some(argument))
+                    }
+                    argument => {
                         self.error(
                             errors,
                             arg.range(),
                             ErrorKind::InvalidAnnotation,
                             format!(
-                                "`Elements[...]` requires an `IntTuple` carrier, got `{}`",
-                                self.for_display(carrier)
+                                "`Elements[...]` requires an `IntTuple` or integer tuple, got `{}`",
+                                self.for_display(argument)
                             ),
                         );
                         Err(())
@@ -4662,6 +4853,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tparams = self.get_class_tparams(cls);
         let shape_idx = tparams
             .iter()
+            .flat_map(|tparams| tparams.iter())
             .position(|param| param == &shape_param)
             .expect("shaped-array metadata should refer to a class type parameter");
         match shape_param.kind() {
@@ -4673,7 +4865,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 unreachable!("shaped-array metadata validation rejects ParamSpec shape parameters")
             }
         }
-        let validate_shape_slot = shape_idx < args.len() && args.len() <= tparams.len();
+        let validate_shape_slot = shape_idx < args.len()
+            && args.len() <= tparams.as_ref().map_or(0, |tparams| tparams.len());
         let shape_param_accepts_int_tuple = matches!(
             shape_param.upper_bound(self.stdlib, self.heap),
             Type::IntTuple(_)
@@ -4785,7 +4978,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             })
             .collect();
-        if args.len() <= tparams.len() && shape_arg_failed_to_parse {
+        if args.len() <= tparams.as_ref().map_or(0, |tparams| tparams.len())
+            && shape_arg_failed_to_parse
+        {
             return Type::any_error();
         }
         let mut base_class =

@@ -67,6 +67,12 @@ pub enum ExplicitSlots {
     Known(SlotsInfo),
 }
 
+#[derive(Clone, Copy, Debug, TypeEq, PartialEq, Eq)]
+pub enum DjangoRestFrameworkSerializerKind {
+    Serializer,
+    ModelSerializer,
+}
+
 impl ExplicitSlots {
     pub fn has_explicit_slots(&self) -> bool {
         !matches!(self, Self::Absent)
@@ -111,6 +117,7 @@ pub struct ClassMetadata {
     pydantic_model_kind: Option<PydanticModelKind>,
     is_attrs_class: bool,
     django_model_metadata: Option<DjangoModelMetadata>,
+    django_rest_framework_serializer_kind: Option<DjangoRestFrameworkSerializerKind>,
     is_marshmallow_schema: bool,
     is_factory_boy_factory: bool,
     /// Whether this class is a metaclass (i.e., a subclass of `type`).
@@ -184,6 +191,37 @@ impl Display for ClassMetadata {
     }
 }
 
+static RECURSIVE_CLASS_METADATA: ClassMetadata = ClassMetadata {
+    metaclass: None,
+    keywords: Keywords(Vec::new()),
+    typed_dict_metadata: None,
+    named_tuple_metadata: None,
+    enum_metadata: None,
+    protocol_metadata: None,
+    dataclass_metadata: None,
+    extends_abc: false,
+    bases: Vec::new(),
+    has_generic_base_class: false,
+    has_base_any: false,
+    is_new_type: false,
+    is_final: false,
+    deprecation: None,
+    is_local_disjoint_base: false,
+    has_local_dataclass_slots_request: false,
+    total_ordering_metadata: None,
+    dataclass_transform_metadata: None,
+    pydantic_model_kind: None,
+    is_attrs_class: false,
+    django_model_metadata: None,
+    is_marshmallow_schema: false,
+    is_factory_boy_factory: false,
+    django_rest_framework_serializer_kind: None,
+    is_metaclass: false,
+    explicit_slots: ExplicitSlots::Absent,
+    capture_init: None,
+    shaped_array_shape: None,
+};
+
 impl ClassMetadata {
     pub fn new(
         bases: Vec<Class>,
@@ -207,6 +245,7 @@ impl ClassMetadata {
         pydantic_model_kind: Option<PydanticModelKind>,
         is_attrs_class: bool,
         django_model_metadata: Option<DjangoModelMetadata>,
+        django_rest_framework_serializer_kind: Option<DjangoRestFrameworkSerializerKind>,
         is_marshmallow_schema: bool,
         is_factory_boy_factory: bool,
         is_metaclass: bool,
@@ -236,6 +275,7 @@ impl ClassMetadata {
             pydantic_model_kind,
             is_attrs_class,
             django_model_metadata,
+            django_rest_framework_serializer_kind,
             is_marshmallow_schema,
             is_factory_boy_factory,
             is_metaclass,
@@ -245,36 +285,8 @@ impl ClassMetadata {
         }
     }
 
-    pub fn recursive() -> Self {
-        ClassMetadata {
-            metaclass: None,
-            keywords: Keywords::default(),
-            typed_dict_metadata: None,
-            named_tuple_metadata: None,
-            enum_metadata: None,
-            protocol_metadata: None,
-            dataclass_metadata: None,
-            extends_abc: false,
-            bases: Vec::new(),
-            has_generic_base_class: false,
-            has_base_any: false,
-            is_new_type: false,
-            is_final: false,
-            deprecation: None,
-            is_local_disjoint_base: false,
-            has_local_dataclass_slots_request: false,
-            total_ordering_metadata: None,
-            dataclass_transform_metadata: None,
-            pydantic_model_kind: None,
-            is_attrs_class: false,
-            django_model_metadata: None,
-            is_marshmallow_schema: false,
-            is_factory_boy_factory: false,
-            is_metaclass: false,
-            explicit_slots: ExplicitSlots::Absent,
-            capture_init: None,
-            shaped_array_shape: None,
-        }
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_CLASS_METADATA
     }
 
     /// The class's custom (non-`type`) metaclass, if it has one.
@@ -306,12 +318,21 @@ impl ClassMetadata {
         self.django_model_metadata.is_some()
     }
 
+    pub fn is_django_rest_framework_serializer(&self) -> bool {
+        self.django_rest_framework_serializer_kind.is_some()
+    }
+
     pub fn is_marshmallow_schema(&self) -> bool {
         self.is_marshmallow_schema
     }
 
     pub fn is_factory_boy_factory(&self) -> bool {
         self.is_factory_boy_factory
+    }
+
+    pub fn is_django_rest_framework_model_serializer(&self) -> bool {
+        self.django_rest_framework_serializer_kind
+            == Some(DjangoRestFrameworkSerializerKind::ModelSerializer)
     }
 
     /// Whether this class is a metaclass (i.e., a subclass of `type`).
@@ -484,6 +505,12 @@ impl ClassSynthesizedField {
     pub fn new_classvar(ty: Type) -> Self {
         Self {
             inner: Arc::new(ClassField::new_synthesized_classvar(ty)),
+        }
+    }
+
+    pub fn new_instance_attribute(ty: Type) -> Self {
+        Self {
+            inner: Arc::new(ClassField::new_synthesized_instance_attribute(ty)),
         }
     }
 }
@@ -786,6 +813,8 @@ pub enum ClassMro {
     Cyclic,
 }
 
+static RECURSIVE_CLASS_MRO: ClassMro = ClassMro::Cyclic;
+
 impl Display for ClassMro {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
@@ -813,7 +842,7 @@ impl ClassMro {
     /// `Generic`, `Protocol`, and `object`.
     pub fn new(
         cls: &Class,
-        bases_with_mro: Vec<(&ClassType, Arc<ClassMro>)>,
+        bases_with_mro: Vec<(&ClassType, &ClassMro)>,
         errors: &ErrorCollector,
     ) -> Self {
         match Linearization::new(cls, bases_with_mro, errors) {
@@ -859,8 +888,8 @@ impl ClassMro {
         )
     }
 
-    pub fn recursive() -> Self {
-        Self::Cyclic
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_CLASS_MRO
     }
 }
 
@@ -878,6 +907,10 @@ pub struct ClassDisjointBase {
     representative: Option<Class>,
 }
 
+static RECURSIVE_CLASS_DISJOINT_BASE: ClassDisjointBase = ClassDisjointBase {
+    representative: None,
+};
+
 impl Display for ClassDisjointBase {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match &self.representative {
@@ -892,10 +925,8 @@ impl ClassDisjointBase {
         Self { representative }
     }
 
-    pub fn recursive() -> Self {
-        Self {
-            representative: None,
-        }
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_CLASS_DISJOINT_BASE
     }
 
     pub fn representative(&self) -> Option<&Class> {
@@ -946,7 +977,7 @@ impl Linearization {
     /// - One consisting of the base classes themselves in the order defined.
     fn new(
         cls: &Class,
-        bases_with_mro: Vec<(&ClassType, Arc<ClassMro>)>,
+        bases_with_mro: Vec<(&ClassType, &ClassMro)>,
         errors: &ErrorCollector,
     ) -> Linearization {
         let bases = match Vec1::try_from_vec(
@@ -963,7 +994,7 @@ impl Linearization {
         let mut all_bases_complete = true;
         let mut seen_ancestors: SmallMap<Class, ClassType> = SmallMap::new();
         for (base, mro) in bases_with_mro {
-            match &*mro {
+            match mro {
                 ClassMro::Resolved {
                     ancestors,
                     linearization_complete,

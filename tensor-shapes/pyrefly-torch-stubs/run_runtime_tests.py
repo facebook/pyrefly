@@ -16,6 +16,12 @@ SUITES = {
         "test_annotation_runtime.py",
         "test_annotation_runtime_future.py",
     ],
+    # Kept out of the "annotation" suite: importing shape_extensions.torchscript
+    # enables compatibility mode process-wide, which changes Int[...] behavior
+    # that the annotation tests assert on.
+    "torchscript": [
+        "test_torchscript_stripper_runtime.py",
+    ],
     "model": [
         "test_model_runtime.py",
     ],

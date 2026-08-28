@@ -156,8 +156,7 @@ impl ShapedArrayType {
                     .as_slice()
                     .get(*index)
                     .expect("shape argument index should point to a class type argument");
-                IntTuple::from_shape_arg_type(shape_arg)
-                    .or_else(|| tuple_carrier_to_shape(shape_arg))
+                IntTuple::from_shape_arg_or_tuple_carrier(shape_arg)
                     .expect("registered shaped-array shape argument should project to IntTuple")
             }
         }
@@ -367,6 +366,118 @@ impl IntTuple {
         }
     }
 
+    /// Concatenate shapes, falling back to a shapeless tuple when the result would require two
+    /// variadic middles.
+    pub(crate) fn concat(&self, other: &Self) -> Self {
+        match (self.view(), other.view()) {
+            (IntTupleView::Concrete(left), IntTupleView::Concrete(right)) => {
+                let mut dimensions = left.to_vec();
+                dimensions.extend_from_slice(right);
+                Self::new(dimensions)
+            }
+            (
+                IntTupleView::Concrete(left),
+                IntTupleView::Unpacked {
+                    prefix,
+                    middle,
+                    suffix,
+                },
+            ) => {
+                let mut combined_prefix = left.to_vec();
+                combined_prefix.extend_from_slice(prefix);
+                Self::unpacked(combined_prefix, middle.clone(), suffix.to_vec())
+            }
+            (
+                IntTupleView::Unpacked {
+                    prefix,
+                    middle,
+                    suffix,
+                },
+                IntTupleView::Concrete(right),
+            ) => {
+                let mut combined_suffix = suffix.to_vec();
+                combined_suffix.extend_from_slice(right);
+                Self::unpacked(prefix.to_vec(), middle.clone(), combined_suffix)
+            }
+            // A gradual operand contributes one unrepresentable variadic middle, so the known
+            // concrete edge of the other operand can still be retained.
+            (IntTupleView::Concrete(left), IntTupleView::Gradual) => Self::unpacked(
+                left.to_vec(),
+                Self::shapeless().to_shape_arg_type(),
+                Vec::new(),
+            ),
+            (IntTupleView::Gradual, IntTupleView::Concrete(right)) => Self::unpacked(
+                Vec::new(),
+                Self::shapeless().to_shape_arg_type(),
+                right.to_vec(),
+            ),
+            // Two variadic middles cannot be represented by one unpacked shape.
+            _ => Self::shapeless(),
+        }
+    }
+
+    /// Multiply all dimensions, returning a gradual dimension when a symbolic-rank shape or
+    /// overflowing concrete factors prevent an exact result. A definite zero factor wins even
+    /// when other dimensions are unknown.
+    pub(crate) fn product(&self) -> Int {
+        let dimensions = match self.view() {
+            IntTupleView::Concrete(dimensions) => dimensions,
+            IntTupleView::Unpacked { prefix, suffix, .. } => {
+                return if prefix
+                    .iter()
+                    .chain(suffix)
+                    .any(product_factor_is_definitely_zero)
+                {
+                    Int::Literal(0)
+                } else {
+                    Int::Int
+                };
+            }
+            IntTupleView::Gradual => return Int::Int,
+        };
+        if dimensions.iter().any(product_factor_is_definitely_zero) {
+            return Int::Literal(0);
+        }
+
+        let Some(factors) = dimensions
+            .iter()
+            .map(|dimension| {
+                product_canonicalization_term_count(dimension).map(|terms| (dimension, terms))
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Int::Int;
+        };
+        let factors = factors
+            .into_iter()
+            .filter(|(dimension, _)| !product_factor_is_definitely_one(dimension))
+            .collect::<Vec<_>>();
+        match factors.as_slice() {
+            [] => Int::Literal(1),
+            [(factor, _)] => canonicalize_int_dim((*factor).clone()),
+            factors => {
+                let expansion_terms = factors.iter().fold(1_usize, |terms, (_, factor_terms)| {
+                    terms
+                        .saturating_mul(*factor_terms)
+                        .min(MAX_PRODUCT_CANONICAL_TERMS + 1)
+                });
+                if expansion_terms > MAX_PRODUCT_CANONICAL_TERMS {
+                    return Int::Int;
+                }
+                let product = factors
+                    .iter()
+                    .map(|(factor, _)| canonicalize_int_dim((*factor).clone()))
+                    .fold(Int::Literal(1), |left, right| {
+                        Int::mul(Type::Int(left), Type::Int(right))
+                    });
+                match canonicalize(Type::Int(product)) {
+                    Type::Int(product) => product,
+                    _ => unreachable!("canonicalized IntTuple product must remain an Int"),
+                }
+            }
+        }
+    }
+
     /// Project this shape to the ordinary tuple type it denotes.
     pub fn to_tuple_type(&self) -> Type {
         match &self.0 {
@@ -413,6 +524,12 @@ impl IntTuple {
             Type::IntTuple(shape) => Some(shape.normalize()),
             _ => None,
         }
+    }
+
+    /// Recover a whole shape from either an `IntTuple` shape argument or a tuple
+    /// carrier that has already passed annotation validation.
+    pub fn from_shape_arg_or_tuple_carrier(arg: &Type) -> Option<Self> {
+        Self::from_shape_arg_type(arg).or_else(|| tuple_carrier_to_shape(arg))
     }
 
     /// Create and canonicalize a variadic shape with fixed dimensions around its middle.
@@ -779,6 +896,116 @@ fn canonicalize_int_dim(dim: Int) -> Int {
     }
 }
 
+fn product_factor_is_definitely_zero(dimension: &Int) -> bool {
+    match dimension {
+        Int::Literal(value) => *value == 0,
+        Int::Mul(left, right) => {
+            product_factor_is_definitely_zero(left) || product_factor_is_definitely_zero(right)
+        }
+        Int::Symbolic(ty) => match ty.as_ref() {
+            Type::Int(dimension) => product_factor_is_definitely_zero(dimension),
+            Type::Literal(literal) => {
+                matches!(&literal.value, Lit::Int(value) if value.as_i64() == Some(0))
+            }
+            _ => false,
+        },
+        Int::Int | Int::Add(_, _) | Int::Sub(_, _) | Int::FloorDiv(_, _) | Int::Pow(_, _) => false,
+    }
+}
+
+fn product_factor_is_definitely_one(dimension: &Int) -> bool {
+    match dimension {
+        Int::Pow(_, exponent) if product_factor_is_definitely_zero(exponent) => true,
+        Int::Symbolic(ty) => match ty.as_ref() {
+            Type::Int(dimension) => product_factor_is_definitely_one(dimension),
+            Type::Literal(literal) => match &literal.value {
+                Lit::Int(value) => value.as_i64() == Some(1),
+                _ => unreachable!("an Int dimension cannot contain a non-integer literal"),
+            },
+            _ => false,
+        },
+        Int::Literal(_)
+        | Int::Int
+        | Int::Add(_, _)
+        | Int::Sub(_, _)
+        | Int::Mul(_, _)
+        | Int::FloorDiv(_, _)
+        | Int::Pow(_, _) => {
+            product_factor_is_constant(dimension)
+                && matches!(canonicalize_int_dim(dimension.clone()), Int::Literal(1))
+        }
+    }
+}
+
+fn product_factor_is_constant(dimension: &Int) -> bool {
+    match dimension {
+        Int::Literal(_) => true,
+        Int::Int => false,
+        Int::Symbolic(ty) => match ty.as_ref() {
+            Type::Int(dimension) => product_factor_is_constant(dimension),
+            Type::Literal(literal) => match &literal.value {
+                Lit::Int(_) => true,
+                _ => unreachable!("an Int dimension cannot contain a non-integer literal"),
+            },
+            _ => false,
+        },
+        Int::Add(left, right)
+        | Int::Sub(left, right)
+        | Int::Mul(left, right)
+        | Int::FloorDiv(left, right)
+        | Int::Pow(left, right) => {
+            product_factor_is_constant(left) && product_factor_is_constant(right)
+        }
+    }
+}
+
+// Four terms admit two binomial factors while rejecting a third additive factor.
+const MAX_PRODUCT_CANONICAL_TERMS: usize = 4;
+
+/// Count terms that may be exposed to an enclosing product after canonicalization. Division may
+/// expose its numerator through cancellation, and power may expose its base when the exponent
+/// becomes one. Operands whose terms remain wrapped are still visited for validation. `None` means
+/// a nested symbolic integer literal is outside the representable `i64` dimension domain.
+fn product_canonicalization_term_count(dimension: &Int) -> Option<usize> {
+    let bounded_add = |left: usize, right: usize| {
+        left.saturating_add(right)
+            .min(MAX_PRODUCT_CANONICAL_TERMS + 1)
+    };
+    let bounded_mul = |left: usize, right: usize| {
+        left.saturating_mul(right)
+            .min(MAX_PRODUCT_CANONICAL_TERMS + 1)
+    };
+    match dimension {
+        Int::Add(left, right) | Int::Sub(left, right) => Some(bounded_add(
+            product_canonicalization_term_count(left)?,
+            product_canonicalization_term_count(right)?,
+        )),
+        Int::Mul(left, right) => Some(bounded_mul(
+            product_canonicalization_term_count(left)?,
+            product_canonicalization_term_count(right)?,
+        )),
+        Int::FloorDiv(numerator, denominator) => {
+            let numerator_terms = product_canonicalization_term_count(numerator)?;
+            let _ = product_canonicalization_term_count(denominator)?;
+            Some(numerator_terms)
+        }
+        Int::Pow(base, exponent) => {
+            let base_terms = product_canonicalization_term_count(base)?;
+            let _ = product_canonicalization_term_count(exponent)?;
+            Some(base_terms)
+        }
+        Int::Symbolic(ty) => match ty.as_ref() {
+            Type::Int(dimension) => product_canonicalization_term_count(dimension),
+            Type::Literal(literal) => match &literal.value {
+                Lit::Int(value) => value.as_i64().map(|_| 1),
+                _ => unreachable!("an Int dimension cannot contain a non-integer literal"),
+            },
+            _ => Some(1),
+        },
+        Int::Literal(_) | Int::Int => Some(1),
+    }
+}
+
 fn type_to_dim_recover(dim: Type) -> Int {
     type_to_dim(&dim).unwrap_or(Int::Int)
 }
@@ -947,7 +1174,8 @@ pub fn shape_to_tuple_carrier_arg(shape: &IntTuple) -> Type {
 ///
 /// `tuple[T, ...]` (including `tuple[int, ...]` and `tuple[Any, ...]`)
 /// intentionally canonicalizes to the shapeless / unknown-rank shape: an
-/// unbounded carrier conveys no recoverable per-dimension information.
+/// unbounded carrier conveys no recoverable per-dimension information. Its
+/// element must still be a dimension, so `tuple[str, ...]` is not a carrier.
 pub fn tuple_carrier_to_shape(carrier: &Type) -> Option<IntTuple> {
     match carrier {
         Type::Tuple(Tuple::Concrete(elts)) => {
@@ -967,14 +1195,18 @@ pub fn tuple_carrier_to_shape(carrier: &Type) -> Option<IntTuple> {
                 .iter()
                 .map(carrier_element_to_dim)
                 .collect::<Option<Vec<_>>>()?;
-            if matches!(middle, Type::Tuple(Tuple::Unbounded(_))) {
+            if let Type::Tuple(Tuple::Unbounded(elt)) = middle {
+                carrier_element_to_dim(elt)?;
                 return Some(IntTuple::unpacked(prefix, gradual_shape_middle(), suffix));
             }
             validate_tuple_carrier_unpacked_middle(middle)?;
             let middle = recover_unbounded_tuple_carrier_middle(middle.clone());
             Some(IntTuple::unpacked(prefix, middle, suffix))
         }
-        Type::Tuple(Tuple::Unbounded(_)) => Some(shapeless_shape()),
+        Type::Tuple(Tuple::Unbounded(elt)) => {
+            carrier_element_to_dim(elt)?;
+            Some(shapeless_shape())
+        }
         _ if is_tuple_carrier_shape_middle(carrier) => {
             Some(IntTuple::unpacked(Vec::new(), carrier.clone(), Vec::new()))
         }
@@ -1017,7 +1249,7 @@ fn validate_tuple_carrier_unpacked_middle(middle: &Type) -> Option<()> {
                 .collect::<Option<Vec<_>>>()?;
             validate_tuple_carrier_unpacked_middle(middle)
         }
-        Type::Tuple(Tuple::Unbounded(_)) => Some(()),
+        Type::Tuple(Tuple::Unbounded(elt)) => carrier_element_to_dim(elt).map(|_| ()),
         middle if is_unresolved_shape_middle(middle) => Some(()),
         Type::IntTuple(_) => Some(()),
         _ => None,
@@ -1804,7 +2036,9 @@ mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::nesting_context::NestingContext;
+    use pyrefly_util::visit::VisitMut;
     use ruff_python_ast::Identifier;
+    use ruff_python_ast::Int as AstInt;
     use ruff_python_ast::name::Name;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
@@ -1812,6 +2046,7 @@ mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::class::PrecomputedTParams;
     use crate::dimension::Int;
     use crate::dimension::ShapeError;
     use crate::dimension::gradual_size;
@@ -1828,12 +2063,15 @@ mod tests {
     use crate::shaped_array::IntTuple;
     use crate::shaped_array::IntTupleRepr;
     use crate::shaped_array::IntTupleView;
+    use crate::shaped_array::MAX_PRODUCT_CANONICAL_TERMS;
     use crate::shaped_array::ShapedArrayType;
     use crate::shaped_array::broadcast_dim;
     use crate::shaped_array::broadcast_shapes;
     use crate::shaped_array::gradual_shape_middle;
     use crate::shaped_array::index_shape_multi;
     use crate::shaped_array::is_tuple_carrier_shape_middle;
+    use crate::shaped_array::product_canonicalization_term_count;
+    use crate::shaped_array::product_factor_is_definitely_one;
     use crate::shaped_array::shape_to_tuple_carrier;
     use crate::shaped_array::shape_to_tuple_carrier_arg;
     use crate::shaped_array::tuple_carrier_to_shape;
@@ -1866,6 +2104,30 @@ mod tests {
         Type::Tuple(Tuple::Concrete(elts))
     }
 
+    #[test]
+    fn int_tuple_concat_preserves_one_variadic_middle() {
+        let middle = gradual_shape_middle();
+        let concrete = IntTuple::new(vec![dim(1), dim(2)]);
+        let unpacked = IntTuple::unpacked(vec![dim(3)], middle.clone(), vec![dim(4)]);
+
+        assert_eq!(
+            concrete.concat(&unpacked),
+            IntTuple::unpacked(vec![dim(1), dim(2), dim(3)], middle.clone(), vec![dim(4)],),
+        );
+        assert_eq!(
+            unpacked.concat(&concrete),
+            IntTuple::unpacked(vec![dim(3)], middle.clone(), vec![dim(4), dim(1), dim(2)],),
+        );
+        assert_eq!(
+            unpacked.concat(&IntTuple::unpacked(Vec::new(), middle, Vec::new())),
+            IntTuple::shapeless(),
+        );
+        assert_eq!(
+            IntTuple::shapeless().concat(&IntTuple::shapeless()),
+            IntTuple::shapeless(),
+        );
+    }
+
     fn fake_module(module: &str) -> Module {
         Module::new(
             ModuleName::from_str(module),
@@ -1882,7 +2144,7 @@ mod tests {
                 Identifier::new(Name::new(name), TextRange::empty(TextSize::new(0))),
                 NestingContext::toplevel(),
                 module,
-                None,
+                PrecomputedTParams::NotGeneric,
                 false,
             ),
             TArgs::default(),
@@ -3364,9 +3626,34 @@ mod tests {
     }
 
     #[test]
+    fn invalid_unbounded_carriers_fail() {
+        // Canonicalizing to shapeless would hide the invalid element, so an
+        // unbounded carrier is only a carrier when its element is a dimension.
+        let direct = Type::Tuple(Tuple::Unbounded(Box::new(Type::ClassType(
+            fake_class_type("builtins", "str"),
+        ))));
+        assert_eq!(tuple_carrier_to_shape(&direct), None);
+
+        let unpacked = Type::Tuple(Tuple::unpacked(
+            vec![literal(1)],
+            direct.clone(),
+            Vec::new(),
+        ));
+        assert_eq!(tuple_carrier_to_shape(&unpacked), None);
+
+        // The same holds for an unbounded tuple nested inside an unpacked middle.
+        let nested = Type::Tuple(Tuple::unpacked(
+            vec![literal(1)],
+            Type::Tuple(Tuple::unpacked(vec![literal(2)], direct, Vec::new())),
+            vec![literal(3)],
+        ));
+        assert_eq!(tuple_carrier_to_shape(&nested), None);
+    }
+
+    #[test]
     fn unbounded_carriers_canonicalize_to_shapeless() {
         // Unbounded carriers have no recoverable rank or per-dimension values,
-        // regardless of their element type.
+        // whatever dimension their element is.
         let any_unbounded = Type::any_tuple();
         let internal_unbounded = Type::Tuple(Tuple::Unbounded(Box::new(size(5))));
         let int_unbounded = Type::Tuple(Tuple::Unbounded(Box::new(Type::ClassType(
@@ -3525,6 +3812,235 @@ mod tests {
             tuple_carrier_to_shape(&concrete_carrier(vec![invalid_int.clone()])),
             None
         );
+    }
+
+    #[test]
+    fn int_tuple_product_overflow_is_gradual() {
+        let symbolic = Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+        let mut shape = IntTuple::new(vec![symbolic, Int::Literal(2)]);
+        let mut replacements = 0;
+        shape.visit_mut(&mut |ty: &mut Type| {
+            *ty = Type::Int(Int::Literal(i64::MAX));
+            replacements += 1;
+        });
+
+        assert_eq!(replacements, 1);
+        assert_eq!(shape.product(), Int::Int);
+    }
+
+    #[test]
+    fn int_tuple_product_rejects_unrepresentable_symbolic_literals() {
+        let too_large = Int::Symbolic(Box::new(
+            Lit::Int(LitInt::from_ast(&AstInt::from(i64::MAX as u64 + 1))).to_implicit_type(),
+        ));
+        let nested = Int::FloorDiv(Box::new(too_large), Box::new(Int::Literal(2)));
+
+        assert_eq!(IntTuple::new(vec![nested]).product(), Int::Int);
+    }
+
+    #[test]
+    fn int_tuple_product_bounds_expanded_term_count() {
+        let atom = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+        let binomial = || Int::Add(Box::new(atom()), Box::new(Int::Literal(1)));
+        let trinomial = Int::Add(Box::new(binomial()), Box::new(Int::Literal(1)));
+        let four_terms = Int::Mul(Box::new(binomial()), Box::new(binomial()));
+        let five_terms = Int::Add(Box::new(trinomial.clone()), Box::new(binomial()));
+        let six_terms = Int::Mul(Box::new(trinomial), Box::new(binomial()));
+
+        let allowed = product_canonicalization_term_count(&four_terms)
+            .expect("four representable terms have a finite expansion");
+        let rejected = product_canonicalization_term_count(&five_terms)
+            .expect("five representable terms have a finite expansion");
+        let multiplicative = product_canonicalization_term_count(&six_terms)
+            .expect("six representable terms have a finite expansion");
+
+        assert_eq!(allowed, 4);
+        assert_eq!(rejected, 5);
+        assert_eq!(multiplicative, MAX_PRODUCT_CANONICAL_TERMS + 1);
+        assert!(allowed <= MAX_PRODUCT_CANONICAL_TERMS);
+        assert!(rejected > MAX_PRODUCT_CANONICAL_TERMS);
+        assert!(multiplicative > MAX_PRODUCT_CANONICAL_TERMS);
+    }
+
+    #[test]
+    fn int_tuple_product_preserves_single_complex_factor_after_substitution() {
+        let mut shape = IntTuple::new(vec![Int::Symbolic(Box::new(Type::Var(Var::ZERO)))]);
+        let mut replacements = 0;
+        shape.visit_mut(&mut |ty: &mut Type| {
+            let atom = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+            let binomial = || Int::Add(Box::new(atom()), Box::new(Int::Literal(1)));
+            *ty = Type::Int(Int::Mul(
+                Box::new(Int::Add(Box::new(binomial()), Box::new(Int::Literal(1)))),
+                Box::new(binomial()),
+            ));
+            replacements += 1;
+        });
+
+        assert_eq!(replacements, 1);
+        assert_ne!(shape.product(), Int::Int);
+    }
+
+    #[test]
+    fn int_tuple_product_ignores_unit_factors_before_bounding_expansion() {
+        let symbolic = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+        let mut shape = IntTuple::new(vec![
+            symbolic(),
+            symbolic(),
+            symbolic(),
+            symbolic(),
+            symbolic(),
+            symbolic(),
+            symbolic(),
+        ]);
+        let mut replacements = 0;
+        shape.visit_mut(&mut |ty: &mut Type| {
+            let atom = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+            let binomial = || Int::Add(Box::new(atom()), Box::new(Int::Literal(1)));
+            *ty = Type::Int(match replacements {
+                0 => Int::Mul(
+                    Box::new(Int::Add(Box::new(binomial()), Box::new(Int::Literal(1)))),
+                    Box::new(binomial()),
+                ),
+                1 => Int::Literal(1),
+                2 => Int::Sub(Box::new(Int::Literal(2)), Box::new(Int::Literal(1))),
+                3 => Int::Mul(Box::new(Int::Literal(1)), Box::new(Int::Literal(1))),
+                4 => Int::Pow(Box::new(Int::Literal(-1)), Box::new(Int::Literal(2))),
+                5 => Int::FloorDiv(Box::new(Int::Literal(-3)), Box::new(Int::Literal(-2))),
+                6 => Int::Pow(Box::new(atom()), Box::new(Int::Literal(0))),
+                _ => unreachable!("the test shape has exactly seven symbolic dimensions"),
+            });
+            replacements += 1;
+        });
+
+        assert_eq!(replacements, 7);
+        let IntTupleView::Concrete(dimensions) = shape.view() else {
+            panic!("the test shape is concrete")
+        };
+        assert!(
+            dimensions[1..].iter().all(product_factor_is_definitely_one),
+            "all trailing factors should canonicalize to one: {:?}",
+            &dimensions[1..]
+        );
+        assert_ne!(shape.product(), Int::Int);
+    }
+
+    #[test]
+    fn int_tuple_product_accounts_for_wrapped_expansion() {
+        let atom = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+        let binomial = || Int::Add(Box::new(atom()), Box::new(Int::Literal(1)));
+        let five_terms = || {
+            Int::Add(
+                Box::new(Int::Add(Box::new(binomial()), Box::new(Int::Literal(1)))),
+                Box::new(binomial()),
+            )
+        };
+        let divided_by_one = Int::FloorDiv(Box::new(five_terms()), Box::new(Int::Literal(1)));
+        let raised_to_one = Int::Pow(Box::new(five_terms()), Box::new(Int::Literal(1)));
+        let denominator = atom();
+        let canceling_division = Int::FloorDiv(
+            Box::new(Int::Mul(
+                Box::new(Int::Add(Box::new(binomial()), Box::new(Int::Literal(1)))),
+                Box::new(denominator.clone()),
+            )),
+            Box::new(denominator),
+        );
+        let computed_exponent = Int::Pow(
+            Box::new(Int::Add(Box::new(binomial()), Box::new(Int::Literal(1)))),
+            Box::new(Int::Add(
+                Box::new(Int::Literal(0)),
+                Box::new(Int::Literal(1)),
+            )),
+        );
+
+        assert_eq!(
+            product_canonicalization_term_count(&divided_by_one),
+            Some(MAX_PRODUCT_CANONICAL_TERMS + 1)
+        );
+        assert_eq!(
+            product_canonicalization_term_count(&raised_to_one),
+            Some(MAX_PRODUCT_CANONICAL_TERMS + 1)
+        );
+        assert_eq!(
+            product_canonicalization_term_count(&canceling_division),
+            Some(3)
+        );
+        assert_eq!(
+            product_canonicalization_term_count(&computed_exponent),
+            Some(3)
+        );
+        for (wrapped, other) in [
+            (divided_by_one, atom()),
+            (raised_to_one, atom()),
+            (canceling_division, binomial()),
+            (computed_exponent, binomial()),
+        ] {
+            let symbolic = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+            let mut shape = IntTuple::new(vec![symbolic(), symbolic()]);
+            let mut replacements = 0;
+            shape.visit_mut(&mut |ty: &mut Type| {
+                *ty = if replacements == 0 {
+                    Type::Int(wrapped.clone())
+                } else {
+                    Type::Int(other.clone())
+                };
+                replacements += 1;
+            });
+
+            assert_eq!(replacements, 2);
+            assert_eq!(shape.product(), Int::Int);
+        }
+    }
+
+    #[test]
+    fn int_tuple_product_preserves_zero_exposed_after_construction() {
+        let symbolic = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+        let mut shape = IntTuple::new(vec![symbolic(), symbolic()]);
+        let mut replacement = 0;
+        shape.visit_mut(&mut |ty: &mut Type| {
+            *ty = if replacement == 0 {
+                Type::Int(Int::Literal(0))
+            } else {
+                Type::Int(Int::Add(
+                    Box::new(Int::Literal(1)),
+                    Box::new(Int::Literal(1)),
+                ))
+            };
+            replacement += 1;
+        });
+
+        assert_eq!(replacement, 2);
+        assert_eq!(shape.product(), Int::Literal(0));
+    }
+
+    #[test]
+    fn int_tuple_product_drops_symbolic_identity_exposed_after_construction() {
+        let symbolic = || Int::Symbolic(Box::new(Type::Var(Var::ZERO)));
+        let mut shape = IntTuple::new(vec![symbolic(), symbolic()]);
+        let mut replacement = 0;
+        shape.visit_mut(&mut |ty: &mut Type| {
+            *ty = if replacement == 0 {
+                Type::Int(Int::Literal(1))
+            } else {
+                Type::Int(Int::Literal(4))
+            };
+            replacement += 1;
+        });
+
+        assert_eq!(replacement, 2);
+        assert_eq!(shape.product(), Int::Literal(4));
+    }
+
+    #[test]
+    fn int_tuple_product_normalizes_a_lone_symbolic_literal() {
+        let mut shape = IntTuple::new(vec![Int::Symbolic(Box::new(Type::Var(Var::ZERO)))]);
+        let mut replacement = 0;
+        shape.visit_mut(&mut |ty: &mut Type| {
+            *ty = LitInt::new(4).to_implicit_type();
+            replacement += 1;
+        });
+
+        assert_eq!(replacement, 1);
+        assert_eq!(shape.product(), Int::Literal(4));
     }
 
     fn bool_literal() -> Type {

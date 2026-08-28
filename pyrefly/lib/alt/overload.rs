@@ -88,7 +88,7 @@ pub struct ArgsExpander<'a, Ans: LookupAnswer> {
     arg_lists: Vec<(Vec<CallArg<'a>>, Vec<CallKeyword<'a>>)>,
     /// Hard-coded limit to how many times we'll expand.
     gas: Gas,
-    solver: &'a AnswersSolver<'a, Ans>,
+    solver: &'a AnswersSolver<'a, 'a, Ans>,
 }
 
 impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
@@ -97,7 +97,7 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
     pub fn new(
         posargs: Vec<CallArg<'a>>,
         keywords: Vec<CallKeyword<'a>>,
-        solver: &'a AnswersSolver<'a, Ans>,
+        solver: &'a AnswersSolver<'a, 'a, Ans>,
     ) -> Self {
         Self {
             idx: if posargs.is_empty() {
@@ -252,7 +252,7 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Calls an overloaded function, returning the return type and the closest matching overload signature.
     pub fn call_overloads(
         &self,

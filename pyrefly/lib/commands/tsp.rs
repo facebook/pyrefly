@@ -52,6 +52,7 @@ pub fn run_tsp(
     telemetry: &impl Telemetry,
     wrapper: Option<ConfigConfigurerWrapper>,
     thread_count: ThreadCount,
+    server_version: Option<String>,
 ) -> anyhow::Result<()> {
     if let Some(initialize_info) =
         initialize_tsp_connection(&connection, &mut reader, args.indexing_mode)?
@@ -79,6 +80,7 @@ pub fn run_tsp(
             wrapper,
             thread_count,
             Instant::now(),
+            server_version,
         );
 
         // Reuse the existing lsp_loop but with TSP initialization
@@ -109,13 +111,22 @@ impl TspArgs {
         telemetry: &impl Telemetry,
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
+        server_version: Option<String>,
     ) -> anyhow::Result<CommandExitStatus> {
         // Note that we must have our logging only write out to stderr.
         eprintln!("starting TSP server");
 
         let (connection, reader, io_threads) = Connection::from_transport(&self.transport)?;
 
-        run_tsp(connection, reader, self, telemetry, wrapper, thread_count)?;
+        run_tsp(
+            connection,
+            reader,
+            self,
+            telemetry,
+            wrapper,
+            thread_count,
+            server_version,
+        )?;
         io_threads.join()?;
         // We have shut down gracefully.
         // Use writeln! instead of eprintln! to avoid panicking if stderr is closed.

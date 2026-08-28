@@ -54,6 +54,8 @@ use ruff_python_ast::ExprName;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
@@ -88,6 +90,7 @@ use crate::state::ide::insert_import_edit;
 use crate::state::ide::key_to_intermediate_definition;
 use crate::state::lsp_attributes::AttributeContext;
 use crate::state::lsp_attributes::definition_from_executable_ast;
+use crate::state::lsp_attributes::expr_matches_name;
 use crate::state::require::Require;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
@@ -399,7 +402,7 @@ pub(crate) fn attribute_symbol_kind_from_type(ty: &Type) -> SymbolKind {
             // function. Overloads and bound dunder methods (e.g. `__getitem__`, an
             // overloaded operator) carry no directly resolvable definition metadata, so they
             // must default to method rather than function.
-            let is_function = ty.visit_toplevel_func_metadata(&|meta| {
+            let is_function = ty.toplevel_func_metadata().is_some_and(|meta| {
                 meta.kind
                     .to_func_symbol()
                     .is_some_and(|symbol| symbol.cls.is_none())
@@ -1243,6 +1246,74 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    fn refine_keyword_argument_definition_for_class(
+        &self,
+        class_def: &StmtClassDef,
+        param_name: &Identifier,
+    ) -> Option<(TextRange, DefinitionMetadata)> {
+        let param_id = param_name.id();
+
+        // Prefer class field annotations/assignments when present.
+        for stmt in &class_def.body {
+            match stmt {
+                Stmt::AnnAssign(assign) if expr_matches_name(assign.target.as_ref(), param_id) => {
+                    return Some((assign.target.range(), DefinitionMetadata::Attribute));
+                }
+                Stmt::Assign(assign) => {
+                    if let Some(target) = assign
+                        .targets
+                        .iter()
+                        .find(|target| expr_matches_name(target, param_id))
+                    {
+                        return Some((target.range(), DefinitionMetadata::Attribute));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Fall back to __init__ parameters if no class field matches.
+        for stmt in &class_def.body {
+            if let Stmt::FunctionDef(function_def) = stmt
+                && function_def.name.id == dunder::INIT
+            {
+                for regular_param in function_def.parameters.args.iter() {
+                    if regular_param.name().id() == param_id {
+                        return Some((
+                            regular_param.name().range(),
+                            DefinitionMetadata::Variable(Some(SymbolKind::Variable)),
+                        ));
+                    }
+                }
+                for kwonly_param in function_def.parameters.kwonlyargs.iter() {
+                    if kwonly_param.name().id() == param_id {
+                        return Some((
+                            kwonly_param.name().range(),
+                            DefinitionMetadata::Variable(Some(SymbolKind::Variable)),
+                        ));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn refine_keyword_argument_definition_for_callee(
+        &self,
+        ast: &ModModule,
+        callee_range: TextRange,
+        param_name: &Identifier,
+    ) -> Option<(TextRange, DefinitionMetadata)> {
+        let covering_nodes = Ast::locate_node(ast, callee_range.start());
+        match (covering_nodes.first(), covering_nodes.get(1)) {
+            (Some(AnyNodeRef::Identifier(_)), Some(AnyNodeRef::StmtClassDef(class_def))) => {
+                self.refine_keyword_argument_definition_for_class(class_def, param_name)
+            }
+            _ => None,
+        }
+    }
+
     fn get_type_at_impl(
         &self,
         handle: &Handle,
@@ -1611,6 +1682,9 @@ impl<'a> Transaction<'a> {
             Type::Quantified(quantified) => match quantified.restriction {
                 Restriction::Bound(bound) => Self::callable_from_type(solver, bound),
                 Restriction::Constraints(options) => Self::callable_from_types(solver, options),
+                Restriction::Flag(domain) => {
+                    Self::callable_from_types(solver, domain.types(solver.stdlib))
+                }
                 Restriction::Unrestricted => None,
             },
             _ => None,
@@ -2213,6 +2287,10 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    fn position_is_between(position: TextSize, left_end: TextSize, right_start: TextSize) -> bool {
+        TextRange::new(left_end, right_start).contains(position)
+    }
+
     /// Try to find the dunder method associated with an operator at the cursor.
     ///
     /// Returns:
@@ -2224,6 +2302,7 @@ impl<'a> Transaction<'a> {
     fn find_operator_dunder(
         &self,
         handle: &Handle,
+        position: TextSize,
         covering_nodes: &[AnyNodeRef],
     ) -> Result<Option<OperatorDunder>, EmptyResponseReason> {
         // Look up the type of an expression, distinguishing "no answers"
@@ -2241,17 +2320,23 @@ impl<'a> Transaction<'a> {
             .iter()
             .find_map(|node| match node {
                 AnyNodeRef::ExprCompare(compare) => {
-                    for op in &compare.ops {
+                    let mut left = compare.left.as_ref();
+                    for (op, right) in compare.ops.iter().zip(compare.comparators.iter()) {
+                        if !Self::position_is_between(
+                            position,
+                            left.range().end(),
+                            right.range().start(),
+                        ) {
+                            left = right;
+                            continue;
+                        }
                         // Handle membership test operators (in/not in) - uses __contains__ on the right operand
                         if matches!(op, CmpOp::In | CmpOp::NotIn) {
-                            let result =
-                                type_at(compare.comparators.first()?.range()).map(|right_type| {
-                                    OperatorDunder {
-                                        base_type: right_type,
-                                        dunder_name: dunder::CONTAINS,
-                                        range: compare.range(),
-                                    }
-                                });
+                            let result = type_at(right.range()).map(|right_type| OperatorDunder {
+                                base_type: right_type,
+                                dunder_name: dunder::CONTAINS,
+                                range: compare.range(),
+                            });
                             return Some(result);
                         }
                         // is / is not — no dunder
@@ -2267,18 +2352,25 @@ impl<'a> Transaction<'a> {
                         }
                         // Handle rich comparison operators
                         if let Some(dunder_name) = dunder::rich_comparison_dunder(*op) {
-                            let result =
-                                type_at(compare.left.range()).map(|left_type| OperatorDunder {
-                                    base_type: left_type,
-                                    dunder_name,
-                                    range: compare.range(),
-                                });
+                            let result = type_at(left.range()).map(|left_type| OperatorDunder {
+                                base_type: left_type,
+                                dunder_name,
+                                range: compare.range(),
+                            });
                             return Some(result);
                         }
+                        left = right;
                     }
                     None
                 }
                 AnyNodeRef::ExprBinOp(binop) => {
+                    if !Self::position_is_between(
+                        position,
+                        binop.left.range().end(),
+                        binop.right.range().start(),
+                    ) {
+                        return None;
+                    }
                     let dunder_name = Name::new_static(binop.op.dunder());
                     Some(type_at(binop.left.range()).map(|left_type| OperatorDunder {
                         base_type: left_type,
@@ -2287,6 +2379,13 @@ impl<'a> Transaction<'a> {
                     }))
                 }
                 AnyNodeRef::StmtAugAssign(augassign) => {
+                    if !Self::position_is_between(
+                        position,
+                        augassign.target.range().end(),
+                        augassign.value.range().start(),
+                    ) {
+                        return None;
+                    }
                     let dunder_name = Name::new_static(augassign.op.in_place_dunder());
                     Some(
                         type_at(augassign.target.range()).map(|left_type| OperatorDunder {
@@ -2297,6 +2396,13 @@ impl<'a> Transaction<'a> {
                     )
                 }
                 AnyNodeRef::ExprUnaryOp(unaryop) => {
+                    if !Self::position_is_between(
+                        position,
+                        unaryop.range.start(),
+                        unaryop.operand.range().start(),
+                    ) {
+                        return None;
+                    }
                     let dunder_name = match unaryop.op {
                         UnaryOp::Invert => Ok(dunder::INVERT),
                         UnaryOp::UAdd => Ok(dunder::POS),
@@ -2329,15 +2435,31 @@ impl<'a> Transaction<'a> {
                     )
                 }
                 // Handle iteration `in` keyword in for loops
-                AnyNodeRef::StmtFor(stmt_for) => Some(type_at(stmt_for.iter.range()).map(
-                    |iter_type| OperatorDunder {
-                        base_type: iter_type,
-                        dunder_name: dunder::ITER,
-                        range: stmt_for.iter.range(),
-                    },
-                )),
+                AnyNodeRef::StmtFor(stmt_for) => {
+                    if !Self::position_is_between(
+                        position,
+                        stmt_for.target.range().end(),
+                        stmt_for.iter.range().start(),
+                    ) {
+                        return None;
+                    }
+                    Some(
+                        type_at(stmt_for.iter.range()).map(|iter_type| OperatorDunder {
+                            base_type: iter_type,
+                            dunder_name: dunder::ITER,
+                            range: stmt_for.iter.range(),
+                        }),
+                    )
+                }
                 // Handle iteration `in` keyword in comprehensions
                 AnyNodeRef::Comprehension(comp) => {
+                    if !Self::position_is_between(
+                        position,
+                        comp.target.range().end(),
+                        comp.iter.range().start(),
+                    ) {
+                        return None;
+                    }
                     Some(type_at(comp.iter.range()).map(|iter_type| OperatorDunder {
                         base_type: iter_type,
                         dunder_name: dunder::ITER,
@@ -2383,7 +2505,9 @@ impl<'a> Transaction<'a> {
         }
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
-        let dunder = self.find_operator_dunder(handle, &covering_nodes).ok()??;
+        let dunder = self
+            .find_operator_dunder(handle, position, &covering_nodes)
+            .ok()??;
         self.get_chosen_overload_trace_for_surface(handle, dunder.range, true)
     }
 
@@ -2393,10 +2517,11 @@ impl<'a> Transaction<'a> {
     fn find_definition_for_operator(
         &self,
         handle: &Handle,
+        position: TextSize,
         covering_nodes: &[AnyNodeRef],
         preference: FindPreference,
     ) -> Result<Option<Vec1<FindDefinitionItemWithDocstring>>, EmptyResponseReason> {
-        let Some(dunder) = self.find_operator_dunder(handle, covering_nodes)? else {
+        let Some(dunder) = self.find_operator_dunder(handle, position, covering_nodes)? else {
             return Ok(None);
         };
         let OperatorDunder {
@@ -2543,7 +2668,11 @@ impl<'a> Transaction<'a> {
             let ast = self.get_ast_or_parse_module(handle, &module_info);
 
             for range in ranges.into_iter() {
-                let (metadata, definition_range) = if let Some(param_range) =
+                let (metadata, definition_range) = if let Some((definition_range, metadata)) = self
+                    .refine_keyword_argument_definition_for_callee(ast.as_ref(), range, identifier)
+                {
+                    (metadata, definition_range)
+                } else if let Some(param_range) =
                     self.refine_param_location_for_callee(ast.as_ref(), range, identifier)
                 {
                     (
@@ -2620,6 +2749,46 @@ impl<'a> Transaction<'a> {
                 self.find_definition_for_dunder_all_entry(handle, position, preference)
         {
             return Ok(vec1![definition]);
+        }
+
+        if let Some(AnyNodeRef::ExprStringLiteral(literal)) = covering_nodes
+            .iter()
+            .find(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+            && let Some(part) = literal
+                .value
+                .iter()
+                .find(|part| part.content_range().contains(position))
+            && let Some(module) = self.get_module_info(handle)
+        {
+            let contents = module.code_at(part.content_range());
+            // Only treat the string as a module path if the complete contents resolve.
+            if let Ok(Some(full_definition)) = self.find_definition_for_imported_module(
+                handle,
+                ModuleName::from_str(contents),
+                preference,
+            ) {
+                let offset = (position - part.content_range().start())
+                    .to_usize()
+                    .min(contents.len());
+                let component = contents.as_bytes()[..offset]
+                    .iter()
+                    .filter(|c| **c == b'.')
+                    .count();
+                let end = contents
+                    .match_indices('.')
+                    .nth(component)
+                    .map_or(contents.len(), |(offset, _)| offset);
+                if end == contents.len() {
+                    return Ok(vec1![full_definition]);
+                }
+                if let Ok(Some(definition)) = self.find_definition_for_imported_module(
+                    handle,
+                    ModuleName::from_str(&contents[..end]),
+                    preference,
+                ) {
+                    return Ok(vec1![definition]);
+                }
+            }
         }
 
         match Self::identifier_from_covering_nodes(&covering_nodes) {
@@ -2953,9 +3122,12 @@ impl<'a> Transaction<'a> {
                     };
                 }
                 // Fall back to operator handling
-                if let Some(defs) =
-                    self.find_definition_for_operator(handle, &covering_nodes, preference)?
-                {
+                if let Some(defs) = self.find_definition_for_operator(
+                    handle,
+                    position,
+                    &covering_nodes,
+                    preference,
+                )? {
                     return Ok(defs);
                 }
                 let found = covering_nodes
@@ -3123,8 +3295,9 @@ impl<'a> Transaction<'a> {
             // signature and report the classes of the parameter types, which are never
             // the type of this expression. A non-function type visits to `None`, as
             // does a function with no `def`, and both fall through as before.
-            if let Some(def) =
-                t.visit_toplevel_func_metadata(&|m| self.function_def_location(handle, m))
+            if let Some(def) = t
+                .toplevel_func_metadata()
+                .and_then(|m| self.function_def_location(handle, m))
             {
                 return Ok(vec![def?]);
             }
@@ -3168,11 +3341,15 @@ impl<'a> Transaction<'a> {
         .map(|item| TextRangeWithModule::new(item.module, item.definition_range))
     }
 
-    pub(crate) fn search_modules_fuzzy(&self, pattern: &str) -> Vec<ModuleName> {
+    pub(crate) fn search_modules_fuzzy(&self, handle: &Handle, pattern: &str) -> Vec<ModuleName> {
         let matcher = SkimMatcherV2::default().smart_case();
         let mut results = Vec::new();
+        // `self.modules()` only contains modules that have already been loaded. Include modules
+        // discoverable from the active file's import paths so auto-import works on the first try.
+        let mut module_names: HashSet<_> = self.modules().into_iter().collect();
+        module_names.extend(self.import_prefixes(handle, ModuleName::from_str(pattern)));
 
-        for module_name in self.modules() {
+        for module_name in module_names {
             let module_name_str = module_name.as_str();
 
             // Skip builtins module
@@ -3208,6 +3385,12 @@ impl<'a> Transaction<'a> {
         // Actions that carry more than one edit (e.g. the missing-`@override` fix,
         // which inserts both the decorator and an import).
         let mut multi_actions: Vec<(String, Vec<(Module, TextRange, String)>)> = Vec::new();
+        // Deduplicates the actions pushed onto `other_actions`. The same fix can
+        // be generated more than once -- e.g. several errors on one line all
+        // produce an identical "add pyrefly ignore" action, or one unused binding
+        // is reported through multiple imports -- and we don't want to offer the
+        // user the same quick fix twice. Keying on (title, edit range, edit text)
+        // treats two actions as equal when they would make the same visible edit.
         let mut other_action_keys: HashSet<(String, TextRange, String)> = HashSet::new();
         if let Some(bindings) = self.get_bindings(handle) {
             for unused in bindings.unused_imports() {
@@ -3219,7 +3402,12 @@ impl<'a> Transaction<'a> {
                             unused,
                         )
                 {
-                    other_actions.push(action);
+                    // `insert` returns false when this exact edit was already
+                    // queued, so a duplicate action is dropped rather than pushed.
+                    let key = (action.0.clone(), action.2, action.3.clone());
+                    if other_action_keys.insert(key) {
+                        other_actions.push(action);
+                    }
                 }
             }
         }
@@ -3227,6 +3415,18 @@ impl<'a> Transaction<'a> {
             let error_range = error.range();
             if error_range.contains_range(range)
                 && let Some(action) = quick_fixes::enum_member::replace_with_enum_member_code_action(
+                    &module_info,
+                    &ast,
+                    &error,
+                )
+            {
+                let key = (action.0.clone(), action.2, action.3.clone());
+                if other_action_keys.insert(key) {
+                    other_actions.push(action);
+                }
+            }
+            if error_range.contains_range(range)
+                && let Some(action) = quick_fixes::assert_not_none::assert_not_none_code_action(
                     &module_info,
                     &ast,
                     &error,
@@ -3277,7 +3477,7 @@ impl<'a> Transaction<'a> {
                         &mut import_actions,
                         unknown_name,
                     );
-                    for module_name in self.search_modules_fuzzy(unknown_name) {
+                    for module_name in self.search_modules_fuzzy(handle, unknown_name) {
                         if module_name == handle.module() {
                             continue;
                         }
@@ -4807,9 +5007,7 @@ fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
                 definition.module.path().dupe(),
                 sys_info,
             );
-            let rdeps = transaction.transitive_rdeps(definition_handle.dupe());
-            transaction.run_for_handles(&[definition_handle], Require::Everything)?;
-            rdeps
+            transaction.transitive_rdeps(definition_handle.dupe())
         }
     };
     for fs_counterpart_of_in_memory_handles in transitive_rdeps
@@ -4826,10 +5024,12 @@ fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
     {
         transitive_rdeps.remove(&fs_counterpart_of_in_memory_handles);
     }
-    let candidate_handles = transitive_rdeps
+    let candidate_handles: Vec<Handle> = transitive_rdeps
         .into_iter()
         .sorted_by_key(|h| h.path().dupe())
-        .collect::<Vec<_>>();
+        .collect();
+
+    transaction.run_for_handles(&candidate_handles, Require::Everything)?;
 
     Ok(candidate_handles)
 }

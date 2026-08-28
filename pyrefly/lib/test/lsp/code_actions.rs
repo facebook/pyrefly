@@ -63,6 +63,19 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     report
 }
 
+fn get_test_report_with_error_count(state: &State, handle: &Handle, position: TextSize) -> String {
+    let error_count = state
+        .transaction()
+        .get_errors(vec![handle])
+        .collect_errors()
+        .ordinary
+        .len();
+    format!(
+        "Error count: {error_count}\n{}",
+        get_test_report(state, handle, position)
+    )
+}
+
 fn apply_refactor_edits_for_module(
     module: &ModuleInfo,
     edits: &[(Module, TextRange, String)],
@@ -1072,6 +1085,145 @@ takes_status("active")
 }
 
 #[test]
+fn quickfix_narrow_optional_argument() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"def g(y: int) -> None: ...
+def f(x: int | None) -> None:
+    g(x)
+#     ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("    assert x is not None\n    g(x)"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_optional_attribute_receiver() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"class T:
+    y: int
+
+def f(x: T | None) -> None:
+    x.y
+#   ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("    assert x is not None\n    x.y"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_optional_attribute_value_not_offered() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"class T:
+    y: int | None
+
+def g(y: int) -> None: ...
+def f(x: T) -> None:
+    g(x.y)
+#     ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        !report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_comprehension_variable_not_offered() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"def g(y: int) -> int:
+    return y
+
+def f(xs: list[int | None]) -> list[int]:
+    return [g(x) for x in xs]
+#             ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        !report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_lambda_parameter_not_offered() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"from typing import Callable
+
+def g(y: int) -> int:
+    return y
+
+f: Callable[[int | None], int] = lambda x: g(x)
+#                                              ^
+"#,
+        )],
+        get_test_report,
+    );
+    assert!(
+        !report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+}
+
+#[test]
+fn quickfix_narrow_optional_attribute_augmented_assignment() {
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[(
+            "main",
+            r#"class T:
+    y: int
+
+def f(x: T | None) -> None:
+    x.y += 1
+#   ^
+"#,
+        )],
+        get_test_report_with_error_count,
+    );
+    assert!(report.contains("Error count: 1"), "{report}");
+    assert!(
+        report.contains("# Title: Add `assert x is not None`"),
+        "{report}"
+    );
+    assert!(
+        report.contains("    assert x is not None\n    x.y += 1"),
+        "{report}"
+    );
+}
+
+#[test]
 fn quickfix_add_pyrefly_ignore_code_with_existing_comment() {
     let report = get_batched_lsp_operations_report_allow_error(
         &[(
@@ -1374,6 +1526,11 @@ fn unused_import_action_after(code: &str, cursor_offset: usize) -> Option<String
     let (_, edits) = actions
         .into_iter()
         .find(|(title, _)| title.starts_with("Remove unused import: `"))?;
+    assert_eq!(
+        1,
+        edits.len(),
+        "removing an unused import should be a single edit"
+    );
     let (module, range, patch) = edits.into_iter().next()?;
     if module.path() != module_info.path() {
         return None;
@@ -1407,6 +1564,130 @@ fn remove_unused_import_quickfix_removes_last_alias() {
 }
 
 #[test]
+fn remove_unused_import_quickfix_removes_alias_in_type_checking_block() {
+    let code = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\n    import sys\nprint(sys.version)\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import sys\nprint(sys.version)\n",
+        after
+    );
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_emptied_type_checking_block() {
+    let code = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("from typing import TYPE_CHECKING\nx = 1\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_nested_emptied_blocks() {
+    let code = "from typing import TYPE_CHECKING\nx = 1\nif x:\n    if TYPE_CHECKING:\n        import os\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("from typing import TYPE_CHECKING\nx = 1\n", after);
+}
+
+// Removing the whole `if` would drop the `else` branch, so the body keeps a `pass`.
+#[test]
+fn remove_unused_import_quickfix_passes_block_with_else_clause() {
+    let code =
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import os\nelse:\n    x = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    pass\nelse:\n    x = 1\n",
+        after
+    );
+}
+
+// A loop header runs whatever its body does, so the loop stays with a `pass`.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_loop_body() {
+    let code = "for i in range(3):\n    import os\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("for i in range(3):\n    pass\nx = 1\n", after);
+}
+
+// A `try` body that keeps another statement is edited in place; emptying it
+// leaves a `pass`, which is what the next test pins down.
+#[test]
+fn remove_unused_import_quickfix_removes_alias_in_try_block() {
+    let code =
+        "try:\n    import os\n    import sys\nexcept ImportError:\n    pass\nprint(sys.version)\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    import sys\nexcept ImportError:\n    pass\nprint(sys.version)\n",
+        after
+    );
+}
+
+// Dropping the `try` would take handlers that may do real work with it, so the
+// body keeps a `pass` and the handlers are left for the user to judge.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_statement() {
+    let code = "try:\n    import os\nexcept ImportError:\n    pass\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    pass\nexcept ImportError:\n    pass\nx = 1\n",
+        after
+    );
+}
+
+// The capability probe from the review of D116863962: the handler sets a
+// fallback that the rest of the program reads, so it must survive the fix.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_keeping_capability_probe() {
+    let code = "available = True\ntry:\n    import os\nexcept ImportError:\n    available = False\nprint(available)\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "available = True\ntry:\n    pass\nexcept ImportError:\n    available = False\nprint(available)\n",
+        after
+    );
+}
+
+// A `finally` block runs even when the body is empty, so it must not be dropped.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_with_finally() {
+    let code =
+        "try:\n    import os\nexcept ImportError:\n    pass\nfinally:\n    print('done')\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    pass\nexcept ImportError:\n    pass\nfinally:\n    print('done')\nx = 1\n",
+        after
+    );
+}
+
+// An `else` block runs whenever the body completes, so it must not be dropped.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_try_with_else() {
+    let code =
+        "try:\n    import os\nexcept ImportError:\n    pass\nelse:\n    print('ok')\nx = 1\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "try:\n    pass\nexcept ImportError:\n    pass\nelse:\n    print('ok')\nx = 1\n",
+        after
+    );
+}
+
+// Emptying a handler body says nothing about the `try` body, which must survive.
+#[test]
+fn remove_unused_import_quickfix_passes_emptied_except_handler() {
+    let code = "try:\n    x = 1\nexcept ImportError:\n    import os\n";
+    let cursor_offset = code.find("import os").unwrap() + "import ".len();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("try:\n    x = 1\nexcept ImportError:\n    pass\n", after);
+}
+
+#[test]
 fn remove_unused_import_quickfix_keeps_statement_after_semicolon() {
     let code = "import os; x = 1\n";
     let cursor_offset = code.find("os").unwrap();
@@ -1436,6 +1717,37 @@ fn remove_unused_import_quickfix_removes_from_import_alias() {
     let cursor_offset = code.find("Dict").unwrap();
     let after = unused_import_action_after(code, cursor_offset).unwrap();
     assert_eq!("from typing import List\nx: List[int] = []\n", after);
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_first_parenthesized_alias() {
+    let code = "from typing import (\n    Dict,\n    List,\n)\nx: List[int] = []\n";
+    let cursor_offset = code.find("Dict").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import (\n    List,\n)\nx: List[int] = []\n",
+        after
+    );
+}
+
+#[test]
+fn remove_unused_import_quickfix_removes_last_parenthesized_alias() {
+    let code = "from typing import (\n    Dict,\n    List,\n)\nx: Dict[str, int] = {}\n";
+    let cursor_offset = code.find("List").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!(
+        "from typing import (\n    Dict,\n)\nx: Dict[str, int] = {}\n",
+        after
+    );
+}
+
+// A dotted import binds only its first component, so the whole statement goes.
+#[test]
+fn remove_unused_import_quickfix_removes_dotted_import() {
+    let code = "import os.path\nx = 1\n";
+    let cursor_offset = code.find("os.path").unwrap();
+    let after = unused_import_action_after(code, cursor_offset).unwrap();
+    assert_eq!("x = 1\n", after);
 }
 
 #[test]

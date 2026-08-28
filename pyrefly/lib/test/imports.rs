@@ -1019,6 +1019,85 @@ x()  # E: `foo.x` is deprecated
 "#,
 );
 
+fn env_reexport_deprecated() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "mypkg._private",
+        "mypkg/_private.py",
+        r#"
+from warnings import deprecated
+
+@deprecated("Don't use this class")
+class MyClass: ...
+
+@deprecated("Don't use this function")
+def my_func(): ...
+
+class NonDeprecatedClass: ...
+"#,
+    );
+    t.add_with_path(
+        "mypkg",
+        "mypkg/__init__.py",
+        r#"
+from mypkg._private import MyClass, my_func, NonDeprecatedClass # E: `MyClass` is deprecated # E: `my_func` is deprecated
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_deprecated_reexport_warn,
+    env_reexport_deprecated(),
+    r#"
+from mypkg import MyClass # E: `MyClass` is deprecated
+from mypkg import my_func # E: `my_func` is deprecated
+from mypkg import NonDeprecatedClass
+
+_ = MyClass()
+my_func()  # E: `mypkg._private.my_func` is deprecated
+"#,
+);
+
+fn env_chained_reexport_deprecated() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "pkg.origin",
+        "pkg/origin.py",
+        r#"
+from warnings import deprecated
+
+@deprecated("Deprecation message")
+class DepClass: ...
+"#,
+    );
+    t.add_with_path(
+        "pkg.middle",
+        "pkg/middle.py",
+        r#"
+from pkg.origin import DepClass as MiddleClass # E: `DepClass` is deprecated
+"#,
+    );
+    t.add_with_path(
+        "pkg.outer",
+        "pkg/outer.py",
+        r#"
+from pkg.middle import MiddleClass # E: `MiddleClass` is deprecated
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_deprecated_chained_reexport_warn,
+    env_chained_reexport_deprecated(),
+    r#"
+from pkg.outer import MiddleClass # E: `MiddleClass` is deprecated
+
+_ = MiddleClass()
+"#,
+);
+
 fn env_func_x_deprecated_conditionally() -> TestEnv {
     TestEnv::one(
         "foo",
@@ -1459,6 +1538,38 @@ testcase!(
     r#"
 from a import X
 from b import X  # E: Cannot assign to `X` because it is imported as final
+"#,
+);
+
+/// A re-export chain may pass through the same module more than once under
+/// different names, so walking it terminates on a repeated (module, name) pair
+/// rather than a repeated module. Here `m.name1` resolves via `n.name2` back to
+/// `m.name3`, which is the `Final` definition the reassignment must report.
+fn env_final_reexport_revisits_module() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "m",
+        r#"
+from typing import Final
+from n import name2 as name1
+name3: Final[int] = 1
+"#,
+    );
+    t.add(
+        "n",
+        r#"
+from m import name3 as name2
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_final_through_reexport_revisiting_module,
+    env_final_reexport_revisits_module(),
+    r#"
+from m import name1
+name1 = 2  # E: Cannot assign to `name1` because it is imported as final
 "#,
 );
 
@@ -2387,5 +2498,32 @@ from bar import c
 from bar import d
 from bar import e  # E: `e` is not exported from module `bar`
 from bar import f
+"#,
+);
+
+fn env_implicit_reexport_removed_from_all() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+c: int = 3
+"#,
+    );
+    t.add(
+        "bar",
+        r#"
+from foo import c
+__all__ = ["c"]
+__all__.remove("c")
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_implicit_reexport_removed_from_all,
+    env_implicit_reexport_removed_from_all().enable_implicit_reexport_error(),
+    r#"
+from bar import c  # E: `c` is not exported from module `bar`
 "#,
 );

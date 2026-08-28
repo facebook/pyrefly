@@ -43,6 +43,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::types::class::Class;
 use crate::types::literal::Lit;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
@@ -55,7 +56,7 @@ enum EqualityCompatibilityGroup {
     Str,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn callable_dunder_helper(
         &self,
         method_type: Type,
@@ -750,7 +751,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         });
         // If we're assigning to something with an annotation, make sure the produced value is assignable to it
         if let Some(ann) = ann.map(|k| self.get_idx(k)) {
-            self.check_final_reassignment(&ann, x.range(), errors);
+            self.check_final_reassignment(ann, x.range(), errors);
             if let Some(ann_ty) = ann.ty(self.heap, self.stdlib) {
                 if result.is_any() {
                     // Any provides no useful narrowing information, so preserve
@@ -1153,13 +1154,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         );
     }
 
-    fn equality_compatibility_group(&self, ty: &Type) -> Option<EqualityCompatibilityGroup> {
-        let class = match ty {
+    fn equality_class<'b>(&'b self, ty: &'b Type) -> Option<&'b Class> {
+        Some(match ty {
             Type::ClassType(cls) => cls.class_object(),
             Type::Literal(lit) => lit.value.general_class_type(self.stdlib).class_object(),
             Type::LiteralString(_) => self.stdlib.str().class_object(),
             _ => return None,
-        };
+        })
+    }
+
+    fn equality_compatibility_group(&self, ty: &Type) -> Option<EqualityCompatibilityGroup> {
+        let class = self.equality_class(ty)?;
         match (class.qname().module_name().as_str(), class.name().as_str()) {
             ("builtins", "bool" | "int" | "float" | "complex") | ("decimal", "Decimal") => {
                 Some(EqualityCompatibilityGroup::Numeric)
@@ -1171,5 +1176,26 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             ("builtins", "str") => Some(EqualityCompatibilityGroup::Str),
             _ => None,
         }
+    }
+
+    /// Returns whether builtin equality may succeed without nominal type overlap.
+    pub(crate) fn equality_can_match_disjoint(&self, left: &Type, right: &Type) -> bool {
+        let compatibility_group = |ty: &Type| {
+            self.equality_compatibility_group(ty).or_else(|| {
+                let class = self.equality_class(ty)?;
+                self.get_mro_for_class(class)
+                    .ancestors_no_object()
+                    .iter()
+                    .find_map(|ancestor| {
+                        self.equality_compatibility_group(&Type::ClassType(ancestor.clone()))
+                    })
+            })
+        };
+        let left_class = self.equality_class(left);
+        let right_class = self.equality_class(right);
+        let left_group = compatibility_group(left);
+        left_class != right_class
+            && left_group.is_some()
+            && left_group == compatibility_group(right)
     }
 }

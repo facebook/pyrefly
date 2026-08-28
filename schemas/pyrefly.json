@@ -64,6 +64,11 @@
           "type": "boolean",
           "default": true
         },
+        "check-all-matches": {
+          "description": "Whether to check every match statement for exhaustiveness instead of limiting checks to closed subject types.",
+          "type": "boolean",
+          "default": false
+        },
         "untyped-def-behavior": {
           "description": "How should Pyrefly treat function definitions with no parameter or return type annotations?",
           "type": "string",
@@ -105,6 +110,11 @@
     {
       "type": "object",
       "properties": {
+        "required-version": {
+          "description": "A PEP 440 version specifier that the running version of Pyrefly must satisfy.",
+          "type": "string",
+          "examples": [">=1.2.0", ">=1.2.0,<2.0.0", "==1.2.0"]
+        },
         "preset": {
           "description": "Named preset that provides default error severities and behavior settings. User-specified settings override the preset.",
           "type": "string",

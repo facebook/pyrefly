@@ -14,6 +14,7 @@ mod fields;
 mod foreign_key;
 mod many_to_many;
 mod model;
+mod model_serializer;
 mod reverse_relations;
 mod util;
 mod view;

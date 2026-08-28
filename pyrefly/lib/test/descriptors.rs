@@ -907,6 +907,12 @@ class Mapped[T]:
     "#,
     );
     env.add(
+        "sqlalchemy.sql.elements",
+        r#"
+class ColumnElement[T]: ...
+    "#,
+    );
+    env.add(
         "sqlalchemy.sql.dml",
         r#"
 class Update:
@@ -932,6 +938,7 @@ from .decl_api import DeclarativeBase as DeclarativeBase
         "sqlalchemy/__init__.py",
         r#"
 from .sql.dml import Update as Update
+from .sql.elements import ColumnElement as ColumnElement
 def update(table: object) -> Update: ...
     "#,
     );
@@ -996,6 +1003,10 @@ class User(Base):
 sa.update(User).where(User.id == 1).values(name="alice", id=1)
 sa.update(User).where(User.id == 1).values(name=0)  # E: `Literal[0]` is not assignable to field `name` with type `str`
 sa.update(User).where(User.id == 1).values(nam="alice")  # E: Unexpected SQLAlchemy update field `nam`
+
+# SQLAlchemy accepts a SQL expression wherever a column value is expected.
+def sql_expr() -> sa.ColumnElement[int]: ...
+sa.update(User).values(name=sql_expr())
 
 class CustomUpdate:
     def values(self, **kwargs: object) -> CustomUpdate: ...

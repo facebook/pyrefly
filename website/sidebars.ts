@@ -152,9 +152,21 @@ let docsSidebar = [
         label: 'Import Resolution',
     },
     {
-        type: 'doc' as const,
-        id: 'bazel',
-        label: 'Bazel Integration',
+        type: 'category' as const,
+        label: 'Build System Integration',
+        collapsed: false,
+        items: [
+            {
+                type: 'doc' as const,
+                id: 'bazel',
+                label: 'Bazel',
+            },
+            {
+                type: 'doc' as const,
+                id: 'pants',
+                label: 'Pants',
+            },
+        ],
     },
     {
         type: 'category' as const,

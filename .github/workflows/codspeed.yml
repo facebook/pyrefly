@@ -12,12 +12,24 @@ on:
 permissions:
   contents: read
   id-token: write # OpenID Connect auth with CodSpeed (no token secret required)
+
+# GitHub sets `head_ref` only for a pull request. A new push to a pull request
+# cancels the previous run. All other events use the unique `run_id`. Each of
+# these runs gets its own group, and no run cancels a different run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   # Instruction-count (Valgrind) measurement of the small, deterministic
   # microbenchmarks. They are single-threaded and fast, so callgrind's overhead
   # is bounded and the instruction counts are stable run-to-run.
   simulation:
     name: Microbenchmarks (simulation)
+    # The trigger includes `edited` only to let `#bench` in the description
+    # start the walltime job below. The microbenchmark results do not change
+    # when the description changes.
+    if: ${{ github.event.action != 'edited' }}
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6

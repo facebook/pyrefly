@@ -62,14 +62,17 @@ fn format_generic_entity(noun: &str, name: &Name, tparams: &TParams) -> String {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Silently promotes a Class to a ClassType, using default type arguments. It is up to the
     /// caller to ensure they are not calling this method on a TypedDict class, which should be
     /// promoted to TypedDict instead of ClassType.
     pub fn promote_nontypeddict_silently_to_classtype(&self, cls: &Class) -> ClassType {
         ClassType::new(
             cls.dupe(),
-            self.create_default_targs(self.get_class_tparams(cls), None),
+            self.get_class_tparams(cls)
+                .map_or_else(TArgs::default, |tparams| {
+                    self.create_default_targs(tparams.dupe(), None)
+                }),
         )
     }
 
@@ -84,17 +87,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> ClassType {
-        ClassType::new(
-            cls.dupe(),
-            self.create_targs(
-                cls.name(),
-                self.get_class_tparams(cls),
-                targs,
-                range,
-                true,
-                errors,
-            ),
-        )
+        let targs = match self.get_class_tparams(cls) {
+            Some(tparams) => {
+                self.create_targs(cls.name(), tparams.dupe(), targs, range, true, errors)
+            }
+            None => self.reject_targs_without_tparams(cls.name(), &targs, range, errors),
+        };
+        ClassType::new(cls.dupe(), targs)
     }
 
     fn specialize_impl(
@@ -106,27 +105,30 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let metadata = self.get_metadata_for_class(cls);
-        let tparams = self.get_class_tparams(cls);
+        let tparams = self.get_class_tparams(cls).dupe();
 
         // We didn't find any type parameters for this class, but it may have ones we don't know about if:
         // - the class inherits from Any, or
         // - the class inherits from Generic[...] or Protocol [...]. We probably dropped the type
         //   arguments because we found an error in them.
-        let has_unknown_tparams =
-            tparams.is_empty() && (metadata.has_base_any() || metadata.has_generic_base_class());
+        let has_unknown_tparams = tparams.as_ref().is_none_or(|tparams| tparams.is_empty())
+            && (metadata.has_base_any() || metadata.has_generic_base_class());
 
         let targs = if !targs.is_empty() && has_unknown_tparams {
             // Accept any number of arguments (by ignoring them).
             TArgs::default()
         } else {
-            self.create_targs(
-                cls.name(),
-                tparams,
-                targs,
-                range,
-                validate_restriction,
-                errors,
-            )
+            match tparams {
+                Some(tparams) => self.create_targs(
+                    cls.name(),
+                    tparams.dupe(),
+                    targs,
+                    range,
+                    validate_restriction,
+                    errors,
+                ),
+                None => self.reject_targs_without_tparams(cls.name(), &targs, range, errors),
+            }
         };
         self.type_of_instance(cls, targs)
     }
@@ -211,7 +213,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// promote(list) == list[Any]
     /// instantiate(list) == list[T]
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
-        let tparams = self.get_class_tparams(cls);
+        let Some(tparams) = self.get_class_tparams(cls).map(Dupe::dupe) else {
+            return self.type_of_instance(cls, TArgs::default());
+        };
         let tparams_for_error = tparams.dupe();
         let targs = self.create_default_targs(
             tparams,
@@ -253,19 +257,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// Version of `promote` that does not potentially raise errors.
     /// Should only be used for unusual scenarios.
     pub fn promote_silently(&self, cls: &Class) -> Type {
-        let targs = self.create_default_targs(self.get_class_tparams(cls), None);
+        let targs = self
+            .get_class_tparams(cls)
+            .map_or_else(TArgs::default, |tparams| {
+                self.create_default_targs(tparams.dupe(), None)
+            });
         self.type_of_instance(cls, targs)
     }
 
     fn targs_of_tparams(&self, class: &Class) -> TArgs {
-        let tparams = self.get_class_tparams(class);
-        TArgs::new(
-            tparams.dupe(),
-            tparams
-                .iter()
-                .map(|q| q.clone().to_type(self.heap))
-                .collect(),
-        )
+        self.get_class_tparams(class)
+            .map_or_else(TArgs::default, |tparams| {
+                TArgs::new(
+                    tparams.dupe(),
+                    tparams
+                        .iter()
+                        .map(|q| q.clone().to_type(self.heap))
+                        .collect(),
+                )
+            })
     }
 
     /// Given a class or typed dictionary, create a `Type` that represents a generic instance of
@@ -286,7 +296,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let identity = QuantifiedIdentity::new(
             self.module().name(),
             AnchorIndex::first(TextRange::default()),
-            QuantifiedOrigin::SyntheticCallableResidual,
+            QuantifiedOrigin::synthetic(),
         );
         let quantified = Quantified::new(
             identity,
@@ -312,7 +322,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let identity = QuantifiedIdentity::new(
             self.module().name(),
             AnchorIndex::new(TextRange::default(), 1),
-            QuantifiedOrigin::SyntheticCallableResidual,
+            QuantifiedOrigin::synthetic(),
         );
         let quantified = Quantified::new(
             identity,
@@ -345,11 +355,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Instantiates a class or typed dictionary with fresh variables for its type parameters.
     pub fn instantiate_fresh_class(&self, cls: &Class) -> (QuantifiedHandle, Type) {
-        self.solver().fresh_quantified(
-            &self.get_class_tparams(cls),
-            self.instantiate(cls),
-            self.uniques,
-        )
+        let ty = self.instantiate(cls);
+        match self.get_class_tparams(cls) {
+            Some(tparams) => self.solver().fresh_quantified(tparams, ty, self.uniques),
+            None => (QuantifiedHandle::empty(), ty),
+        }
     }
 
     pub fn instantiate_fresh_forall(&self, forall: Forall<Forallable>) -> (QuantifiedHandle, Type) {
@@ -426,6 +436,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } else {
             self.heap.mk_class_type(ClassType::new(cls.dupe(), targs))
         }
+    }
+
+    /// Type arguments applied to something with no type parameters. There is
+    /// nothing to substitute, so the only question is whether the caller passed
+    /// arguments that cannot go anywhere.
+    fn reject_targs_without_tparams(
+        &self,
+        name: &Name,
+        targs: &[Type],
+        range: TextRange,
+        errors: &ErrorCollector,
+    ) -> TArgs {
+        if !targs.is_empty() {
+            self.error(
+                errors,
+                range,
+                ErrorKind::BadSpecialization,
+                format!(
+                    "Expected {} for `{}`, got {}",
+                    count(0, "type argument"),
+                    name,
+                    targs.len()
+                ),
+            );
+        }
+        TArgs::default()
     }
 
     fn create_targs(

@@ -20,6 +20,7 @@ use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forallable;
 use pyrefly_types::types::TArgs;
 use pyrefly_types::types::Var;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::helpers::is_dunder;
 use ruff_python_ast::name::Name;
@@ -39,6 +40,7 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::error::error::ErrorQuickFix;
 use crate::error::style::ErrorStyle;
 use crate::solver::solver::SubsetError;
 use crate::state::loader::FindingOrError;
@@ -581,7 +583,7 @@ impl ClassBase {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Compute the get (i.e. read) type of an attribute. If the attribute cannot be found or read,
     /// error and return `Any`. Use this to infer the type of a direct attribute fetch.
     pub fn type_of_attr_get(
@@ -606,10 +608,20 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Check if we have a partial union failure (attribute exists on some union members
         // but not others) before consuming the vectors. This helps us decide whether to suggest.
         let is_partial_union_failure = !found.is_empty() && !not_found.is_empty();
+        let mut can_narrow_none = is_partial_union_failure
+            && error.is_empty()
+            && not_found.iter().all(|missing| {
+                matches!(
+                    missing,
+                    NotFoundOn::ClassInstance(class, _)
+                        if class == self.stdlib.none_type().class_object()
+                )
+            });
         for (attr, _) in found {
             match self.resolve_get_access(attr_name, attr, range, errors, context) {
                 Ok(ty) => types.push(ty),
                 Err(err) => {
+                    can_narrow_none = false;
                     error_messages.push(err.to_error_msg(attr_name));
                     success = false;
                 }
@@ -654,11 +666,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             {
                 details.push(format!("Did you mean `{suggestion}`?"));
             }
-            errors
+            let mut builder = errors
                 .error_builder(range, error_kind, header)
                 .with_details(details)
-                .with_context(context)
-                .emit();
+                .with_context(context);
+            if can_narrow_none {
+                builder = builder.with_quick_fix(ErrorQuickFix::AssertNotNone);
+            }
+            builder.emit();
             self.heap.mk_any_error()
         } else {
             self.heap.mk_any_error() // we've encountered internal errors (already logged above)
@@ -745,7 +760,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
         best_suggestion(
             missing,
-            common_candidates.iter().map(|candidate| (candidate, 0)),
+            common_candidates
+                .iter()
+                .map(|candidate| Candidate::measured(candidate, 0)),
         )
     }
 
@@ -1430,14 +1447,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             attr_name.clone(),
                         ));
                     }
-                    // Filter overloaded got-side methods by self-type so the subset
-                    // solver doesn't match an overload whose `self:` is incompatible
-                    // with the receiver.
-                    let filtered = self.filter_got_overloads_for_protocol(got_attr);
-                    let got_attr = filtered.as_ref().unwrap_or(got_attr);
-                    self.is_attribute_subset(got_attr, &want, &mut |got, want| {
-                        is_subset(got, want)
-                    })
+                    if matches!(got_attr, Attribute::GetAttr(..)) {
+                        let guard_key = (got.clone(), protocol.clone(), attr_name.clone());
+                        if self.enter_protocol_member_check(guard_key.clone()) {
+                            continue;
+                        }
+                        let res = self.is_attribute_subset(got_attr, &want, is_subset);
+                        self.exit_protocol_member_check(&guard_key);
+                        res
+                    } else {
+                        // Filter overloaded got-side methods by self-type so the subset
+                        // solver doesn't match an overload whose `self:` is incompatible
+                        // with the receiver.
+                        let filtered = self.filter_got_overloads_for_protocol(got_attr);
+                        let got_attr = filtered.as_ref().unwrap_or(got_attr);
+                        self.is_attribute_subset(got_attr, &want, is_subset)
+                    }
                     .map_err(|err| {
                         SubsetError::IncompatibleAttribute(Box::new((
                             protocol.name().clone(),
@@ -1659,7 +1684,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // Normal class instance attribute lookup
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let attr_lookup_result =
-                    self.get_enum_or_instance_attribute(class, &metadata, attr_name);
+                    self.get_enum_or_instance_attribute(class, metadata, attr_name);
                 match attr_lookup_result {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
@@ -1679,7 +1704,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AttributeBase1::EnumLiteral(lit @ LitEnum { class, .. }) => {
                 let metadata = self.get_metadata_for_class(class.class_object());
                 let attr_lookup_result =
-                    self.get_enum_literal_or_instance_attribute(lit, &metadata, attr_name);
+                    self.get_enum_literal_or_instance_attribute(lit, metadata, attr_name);
                 match attr_lookup_result {
                     Some(attr) => acc.found_class_attribute(attr, base),
                     None if metadata.has_base_any() => {
@@ -2217,7 +2242,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         };
 
         if let Some(attr) = self.try_get_from_export(module_name, attr_name.clone()) {
-            Some(Attribute::simple(attr.arc_clone()))
+            Some(Attribute::simple(attr.clone()))
         } else if self
             .exports
             .is_submodule_imported_implicitly(module_name, attr_name)
@@ -2558,6 +2583,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         ));
                     }
                 }
+                Restriction::Flag(domain) => {
+                    // Every materialized Flag domain member has an attribute base. Neither the
+                    // generic `object` fallback nor an empty result would be correct here.
+                    for ty in domain.types(self.stdlib) {
+                        let base = self
+                            .as_attribute_base(ty)
+                            .expect("Flag domain members have attribute bases");
+                        for base1 in base.0 {
+                            acc.push(
+                                self.attribute_base_for_bounded_quantified(
+                                    (*quantified).clone(),
+                                    base1,
+                                )
+                                .expect("Flag domain members have class-instance bases"),
+                            );
+                        }
+                    }
+                }
                 Restriction::Unrestricted => acc.push(AttributeBase1::Quantified(
                     (*quantified).clone(),
                     self.stdlib.object().clone(),
@@ -2699,6 +2742,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             (*quantified).clone(),
                             self.stdlib.object().clone(),
                         )));
+                    }
+                }
+                Restriction::Flag(domain) => {
+                    // Every materialized Flag domain member has a class-instance base. Neither
+                    // the generic `object` fallback nor an empty result would be correct here.
+                    for ty in domain.types(self.stdlib) {
+                        let base = self
+                            .as_attribute_base(ty)
+                            .expect("Flag domain members have attribute bases");
+                        for base1 in base.0 {
+                            let cls = self
+                                .quantified_bound_class(base1)
+                                .expect("Flag domain members have class-instance bases");
+                            acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
+                                (*quantified).clone(),
+                                cls,
+                            )));
+                        }
                     }
                 }
                 Restriction::Unrestricted => acc.push(AttributeBase1::ClassObject(
@@ -2915,8 +2976,8 @@ pub struct AttrInfo {
     pub is_reexport: bool,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
-    fn completions_mro<T>(
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    fn completions_mro<'a, T>(
         &self,
         mro: T,
         expected_attribute_name: Option<&Name>,

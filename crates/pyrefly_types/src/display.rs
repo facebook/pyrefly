@@ -260,22 +260,29 @@ impl<'a> TypeDisplayContext<'a> {
         self.render_self_type_as_self = true;
     }
 
-    /// Always display the module name, except for builtins.
-    pub fn always_display_module_name_except_builtins(&mut self) {
-        let builtins_module = ModuleName::from_str("builtins");
+    /// Always qualify names backed by a `QName`, except for builtins.
+    fn qualify_qnames_except(&mut self, unqualified_modules: &[ModuleName]) {
         let fake_module = ModuleName::from_str("__pyrefly__type__display__context__");
         for c in self.qnames.values_mut() {
-            if c.info.len() > 1 {
-                continue; // Multiple modules, so we need to keep the module name to disambiguate.
-            }
-            if let Some(value) = c.info.get_mut(&builtins_module) {
-                // Name is a builtin, we set it a default location so we hit the fallback branch in `QNameInfo::fmt`.
-                *value = Some(TextRange::default());
-            } else {
-                // Name is not a builtins, so we add a fake module to force the module name to be displayed.
+            if c.info.len() == 1
+                && !c
+                    .info
+                    .keys()
+                    .any(|module| unqualified_modules.contains(module))
+            {
                 c.info.insert(fake_module, None);
             }
         }
+    }
+
+    /// Qualify names from outside the current module, except for builtins.
+    fn always_display_external_qname_module_names(&mut self, current_module: ModuleName) {
+        self.qualify_qnames_except(&[ModuleName::builtins(), current_module]);
+    }
+
+    /// Always display the module name, except for builtins.
+    pub fn always_display_module_name_except_builtins(&mut self) {
+        self.qualify_qnames_except(&[ModuleName::builtins()]);
         self.always_display_module_name = true;
     }
 
@@ -400,6 +407,7 @@ impl<'a> TypeDisplayContext<'a> {
                     commas_iter(|| tys.iter().map(|ty| self.display_internal(ty)))
                 )?;
             }
+            Restriction::Flag(domain) => write!(f, ": Flag[{domain}]")?,
             _ => {}
         }
         if let Some(default) = param.default() {
@@ -586,6 +594,23 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
+    /// Whether a type has to be parenthesized for display in a sequence of types, such as a union
+    /// written with the `|` syntax.
+    fn needs_parens_in_sequence(&self, t: &Type) -> bool {
+        match t {
+            Type::Callable(_)
+            | Type::CallableResidual(_)
+            | Type::Function(_)
+            | Type::Intersect(_) => true,
+            // Overloads are already wrapped in `Overload[...]`, and query mode wraps bound methods in `BoundMethod[...]`.
+            Type::BoundMethod(m) => {
+                !matches!(m.func, BoundMethodType::Overload(_))
+                    && self.lsp_display_mode != LspDisplayMode::Query
+            }
+            _ => false,
+        }
+    }
+
     /// Helper function to format a sequence of types with a separator.
     /// Used for unions, intersections, and other type sequences.
     fn fmt_type_sequence<'b>(
@@ -600,14 +625,7 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str(separator)?;
             }
 
-            let needs_parens = wrap_callables_and_intersect
-                && matches!(
-                    t,
-                    Type::Callable(_)
-                        | Type::CallableResidual(_)
-                        | Type::Function(_)
-                        | Type::Intersect(_)
-                );
+            let needs_parens = wrap_callables_and_intersect && self.needs_parens_in_sequence(t);
             if needs_parens {
                 output.write_str("(")?;
             }
@@ -998,7 +1016,7 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                     output.write_str(name.as_str())?;
                     output.write_str(": ")?;
-                    output.write_str(dtype.name())?;
+                    output.write_fmt(format_args!("{dtype}"))?;
                 }
                 if schema.completeness == SchemaCompleteness::Partial {
                     if !schema.columns.is_empty() {
@@ -1015,7 +1033,7 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Series(schema) => {
                 self.fmt_helper_generic(&schema.underlying_type(), false, output)?;
                 output.write_str("[")?;
-                output.write_str(schema.dtype.name())?;
+                output.write_fmt(format_args!("{}", schema.dtype))?;
                 output.write_str("]")
             }
             Type::Int(dim) => output.write_str(&format!("Int[{dim}]")),
@@ -1364,10 +1382,7 @@ impl<'a> TypeDisplayContext<'a> {
                             }
                             literals.push(&lit.value)
                         }
-                        Type::Callable(_)
-                        | Type::CallableResidual(_)
-                        | Type::Function(_)
-                        | Type::Intersect(_) => {
+                        t if self.needs_parens_in_sequence(t) => {
                             // These types need parentheses in union context
                             let mut temp = String::new();
                             {
@@ -1425,13 +1440,7 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str("]")?;
                         } else {
                             // Regular union member - use helper for just this one
-                            let needs_parens = matches!(
-                                t,
-                                Type::Callable(_)
-                                    | Type::CallableResidual(_)
-                                    | Type::Function(_)
-                                    | Type::Intersect(_)
-                            );
+                            let needs_parens = self.needs_parens_in_sequence(t);
                             if needs_parens {
                                 output.write_str("(")?;
                             }
@@ -1810,28 +1819,28 @@ fn annotation_context<'a>(ty: &'a Type, stdlib: Option<&'a Stdlib>) -> TypeDispl
 
 impl Type {
     pub fn as_lsp_string(&self, mode: LspDisplayMode) -> String {
-        self.as_lsp_string_with_fallback_name(None, mode)
+        self.as_lsp_string_with_options(None, mode, false, None)
     }
 
-    pub fn as_lsp_string_with_fallback_name(
-        &self,
-        fallback_name: Option<&str>,
-        mode: LspDisplayMode,
-    ) -> String {
-        self.as_lsp_string_with_fallback_name_and_expanded_unions(fallback_name, mode, false)
-    }
-
-    /// Render the type for LSP display. When `expand_unions` is true, named
-    /// nested unions are shown by their members instead of their alias name —
-    /// this backs the hover panel's "+" verbosity control.
-    pub fn as_lsp_string_with_fallback_name_and_expanded_unions(
+    /// Render the type for LSP display.
+    ///
+    /// A `fallback_name` renders a bare callable as `def <name>(...): ...`.
+    /// `expand_unions` shows named nested unions by their members instead of
+    /// their alias name, backing the hover panel's "+" verbosity control.
+    /// `qualify_outside` prefixes names backed by a `QName` with their module,
+    /// except for builtins and for the given module.
+    pub fn as_lsp_string_with_options(
         &self,
         fallback_name: Option<&str>,
         mode: LspDisplayMode,
         expand_unions: bool,
+        qualify_outside: Option<ModuleName>,
     ) -> String {
         let mut c = TypeDisplayContext::new(&[self]);
         c.set_lsp_display_mode(mode);
+        if let Some(current_module) = qualify_outside {
+            c.always_display_external_qname_module_names(current_module);
+        }
         if expand_unions {
             c.always_display_expanded_unions();
         }
@@ -1841,7 +1850,7 @@ impl Type {
         {
             let trimmed = rendered.trim_start();
             if trimmed.starts_with('(') {
-                return format!("def {}{}: ...", name, trimmed);
+                return format!("def {name}{trimmed}: ...");
             }
         }
         rendered
@@ -1911,6 +1920,7 @@ pub mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::class::PrecomputedTParams;
     use crate::data_frame::DataFrameKind;
     use crate::data_frame::DataFrameSchema;
     use crate::dimension::Int;
@@ -1953,7 +1963,7 @@ pub mod tests {
             Identifier::new(Name::new(name), TextRange::empty(TextSize::new(range))),
             NestingContext::toplevel(),
             mi,
-            None,
+            PrecomputedTParams::NotGeneric,
             false,
         )
     }
@@ -2895,6 +2905,22 @@ pub mod tests {
         assert_eq!(
             ctx.display(&bound_method).to_string(),
             "BoundMethod[builtins.type[my.module.MyClass], (self: typing.Any, x: typing.Any, y: typing.Any) -> None]"
+        );
+    }
+
+    #[test]
+    fn test_display_bound_method_in_union() {
+        let bound_method = fake_bound_method("foo", "MyClass", "my.module");
+        let union = Type::union(vec![bound_method, Type::None]);
+        let mut ctx = TypeDisplayContext::new(&[&union]);
+        assert_eq!(
+            ctx.display(&union).to_string(),
+            "((x: Any, y: Any) -> None) | None"
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Query);
+        assert_eq!(
+            ctx.display(&union).to_string(),
+            "BoundMethod[builtins.type[my.module.MyClass], (self: typing.Any, x: typing.Any, y: typing.Any) -> None] | None"
         );
     }
 

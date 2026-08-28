@@ -470,6 +470,66 @@ impl FromStr for ErrorOutput {
 }
 
 impl OutputArgs {
+    fn has_custom_options(&self) -> bool {
+        let Self {
+            output,
+            output_format,
+            debug_info,
+            report_binding_memory,
+            report_trace,
+            dependency_graph,
+            report_timings,
+            report_glean,
+            report_pysa,
+            report_pysa_format,
+            report_demand_tree,
+            report_cinderx,
+            cinderx_include_readable,
+            cinderx_include_deps,
+            count_errors,
+            summarize_errors,
+            only,
+            summary,
+            no_progress_bar,
+            progress_bar,
+            relative_to,
+            baseline,
+            baseline_error_level,
+            update_baseline,
+            prune_baseline,
+            error_stale_baseline,
+            min_severity,
+        } = self;
+
+        !output.is_empty()
+            || output_format.is_some()
+            || debug_info.is_some()
+            || report_binding_memory.is_some()
+            || report_trace.is_some()
+            || dependency_graph.is_some()
+            || report_timings.is_some()
+            || report_glean.is_some()
+            || report_pysa.is_some()
+            || !matches!(report_pysa_format, report::pysa::PysaFormat::Capnp)
+            || report_demand_tree.is_some()
+            || report_cinderx.is_some()
+            || *cinderx_include_readable
+            || *cinderx_include_deps
+            || count_errors.is_some()
+            || summarize_errors.is_some()
+            || only.is_some()
+            || !matches!(summary, Summary::Default)
+            || *no_progress_bar
+            || progress_bar.is_some()
+            || relative_to.is_some()
+            || baseline.is_some()
+            || baseline_error_level.is_some()
+            || *update_baseline
+            || *prune_baseline
+            || *error_stale_baseline
+            || min_severity.is_some()
+    }
+
     /// Validate invariants across all requested output destinations.
     fn validate_outputs(&self) -> anyhow::Result<()> {
         let mut has_stdout = false;
@@ -574,6 +634,19 @@ struct BehaviorArgs {
         default_missing_value = "pyrefly"
     )]
     remove_unused_ignores: Option<UnusedIgnoreKind>,
+}
+
+impl BehaviorArgs {
+    fn has_custom_options(&self) -> bool {
+        let Self {
+            check_all,
+            suppress_errors,
+            expectations,
+            remove_unused_ignores,
+        } = self;
+
+        *check_all || *suppress_errors || *expectations || remove_unused_ignores.is_some()
+    }
 }
 
 fn write_errors_to_file(
@@ -1202,105 +1275,172 @@ fn write_unconfigured_upsell<W: Write>(
     Ok(())
 }
 
-/// An initialized incremental checking session.
-struct IncrementalSession {
-    // These inputs are fixed for the session.
-    args: CheckArgs,
+/// A checker that preserves type-checking state across caller-supplied filesystem events.
+pub struct IncrementalChecker {
+    require_levels: RequireLevels,
     files_to_check: Box<dyn Includes>,
 
-    // These fields change as filesystem events are applied.
     handles: Handles,
     state: State,
 }
 
-/// An initialized session and the result of the check that initialized it.
-struct StartedIncrementalSession {
-    session: IncrementalSession,
-    initial_check: anyhow::Result<(CommandExitStatus, Vec<Error>)>,
+/// The diagnostics produced by an incremental check.
+pub struct IncrementalCheckResult {
+    /// Type-checking diagnostics for the configured file set.
+    pub diagnostics: Vec<Error>,
+    /// Configuration errors discovered while resolving or checking the file set.
+    pub config_errors: Vec<ConfigError>,
 }
 
-impl IncrementalSession {
-    fn check_updates(
-        &mut self,
-        version: &str,
-        events: &CategorizedEvents,
-    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
-        let require_levels = self.args.get_required_levels();
-        let mut transaction = self.state.new_committable_transaction(
-            require_levels.default,
-            self.args.output.progress_bar_style().make_subscriber(),
+/// An incremental transaction that runs before exposing results and commits afterward.
+struct IncrementalCheckTransaction<'a> {
+    state: &'a State,
+    transaction: CommittingTransaction<'a>,
+    handles: Vec<Handle>,
+    sourcedb_errors: Vec<ConfigError>,
+    require: Require,
+}
+
+impl IncrementalCheckTransaction<'_> {
+    fn run<T>(
+        mut self,
+        finish: impl FnOnce(&mut Transaction, &[Handle], Vec<ConfigError>) -> T,
+    ) -> T {
+        self.transaction
+            .as_mut()
+            .run(&self.handles, self.require, None);
+        let result = finish(
+            self.transaction.as_mut(),
+            &self.handles,
+            self.sourcedb_errors,
         );
-        transaction.as_mut().invalidate_events(events);
-        self.handles
-            .apply_events(events, self.files_to_check.as_ref());
-        finish_incremental_check(self, transaction, version, UpsellDecision::Skip)
+        self.state.commit_transaction(self.transaction, None);
+        result
     }
 }
 
-fn start_incremental(
-    args: CheckArgs,
-    files_to_check: Box<dyn Includes>,
-    config_finder: ConfigFinder,
-    thread_count: ThreadCount,
-    version: &str,
-    upsell: UpsellDecision,
-) -> anyhow::Result<StartedIncrementalSession> {
-    args.output.validate_outputs()?;
-    let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
-    let handles = Handles::new(expanded_file_list);
-    let session = IncrementalSession {
-        args,
-        files_to_check,
-        handles,
-        state: State::new(config_finder, thread_count),
-    };
-    let require_levels = session.args.get_required_levels();
-    let transaction = session
-        .state
-        .new_committable_transaction(require_levels.default, None);
-    let initial_check = finish_incremental_check(&session, transaction, version, upsell);
-    Ok(StartedIncrementalSession {
-        session,
-        initial_check,
-    })
+impl IncrementalChecker {
+    /// Initialize a checker without running a check.
+    pub fn new(
+        require_levels: RequireLevels,
+        files_to_check: Box<dyn Includes>,
+        config_finder: ConfigFinder,
+        thread_count: ThreadCount,
+    ) -> anyhow::Result<Self> {
+        let handles = {
+            let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
+            Handles::new(expanded_file_list)
+        };
+        Ok(Self {
+            require_levels,
+            files_to_check,
+            handles,
+            state: State::new(config_finder, thread_count),
+        })
+    }
+
+    /// Run a check after applying the filesystem events supplied by the caller.
+    pub fn check(&mut self, events: &CategorizedEvents) -> IncrementalCheckResult {
+        self.prepare_check(events)
+            .run(|transaction, handles, mut sourcedb_errors| {
+                let diagnostics = transaction
+                    .get_errors(handles)
+                    .collect_display_errors_with_unused_ignores();
+                let mut config_errors = transaction.get_config_errors();
+                config_errors.append(&mut sourcedb_errors);
+                IncrementalCheckResult {
+                    diagnostics,
+                    config_errors,
+                }
+            })
+    }
+
+    /// Return the number of configured files checked by this checker.
+    pub fn checked_file_count(&self) -> usize {
+        self.handles.len()
+    }
+
+    fn prepare_check(&mut self, events: &CategorizedEvents) -> IncrementalCheckTransaction<'_> {
+        let mut transaction = self
+            .state
+            .new_committable_transaction(self.require_levels.default, None);
+        transaction.as_mut().invalidate_events(events);
+        self.handles
+            .apply_events(events, self.files_to_check.as_ref());
+
+        let (loaded_handles, reloaded_configs, sourcedb_errors) =
+            self.handles.all(self.state.config_finder());
+
+        transaction
+            .as_mut()
+            .invalidate_find_for_configs(reloaded_configs);
+        IncrementalCheckTransaction {
+            state: &self.state,
+            transaction,
+            handles: loaded_handles,
+            sourcedb_errors,
+            require: self.require_levels.specified,
+        }
+    }
 }
 
-fn finish_incremental_check(
-    session: &IncrementalSession,
-    mut transaction: CommittingTransaction<'_>,
-    version: &str,
-    upsell: UpsellDecision,
-) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
-    let timings = Timings::new();
-    let args = &session.args;
-    let require_levels = args.get_required_levels();
+/// Adapts incremental checking to the existing CLI reporting and source-mutation behavior.
+struct IncrementalCheckCommand {
+    args: CheckArgs,
+    checker: IncrementalChecker,
+}
 
-    let (loaded_handles, reloaded_configs, sourcedb_errors) =
-        session.handles.all(session.state.config_finder());
+impl IncrementalCheckCommand {
+    fn new(
+        args: CheckArgs,
+        files_to_check: Box<dyn Includes>,
+        config_finder: ConfigFinder,
+        thread_count: ThreadCount,
+    ) -> anyhow::Result<Self> {
+        args.output.validate_outputs()?;
+        let require_levels = args.get_required_levels();
+        Ok(Self {
+            args,
+            checker: IncrementalChecker::new(
+                require_levels,
+                files_to_check,
+                config_finder,
+                thread_count,
+            )?,
+        })
+    }
 
-    let config = loaded_handles.first().map(|handle| {
-        session.state.config_finder().python_file(
-            ModuleNameWithKind::guaranteed(handle.module()),
-            handle.path(),
-        )
-    });
-    let defaults = args.output.resolve(config.as_deref());
-
-    transaction
-        .as_mut()
-        .invalidate_find_for_configs(reloaded_configs);
-    let result = args.run_inner(
-        timings,
-        transaction.as_mut(),
-        version,
-        &loaded_handles,
-        &defaults,
-        sourcedb_errors,
-        require_levels.specified,
-        upsell,
-    );
-    session.state.commit_transaction(transaction, None);
-    result
+    fn check(
+        &mut self,
+        version: &str,
+        events: &CategorizedEvents,
+        upsell: UpsellDecision,
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let timings = Timings::new();
+        let args = &self.args;
+        let mut check = self.checker.prepare_check(events);
+        let transaction = check.transaction.as_mut();
+        let handles = &check.handles;
+        let config = handles.first().map(|handle| {
+            transaction.config_finder().python_file(
+                ModuleNameWithKind::guaranteed(handle.module()),
+                handle.path(),
+            )
+        });
+        let defaults = args.output.resolve(config.as_deref());
+        let run = args.prepare_cli_run(timings, transaction, handles, &defaults)?;
+        check.run(|transaction, handles, sourcedb_errors| {
+            args.finish_cli_run(
+                run,
+                transaction,
+                version,
+                handles,
+                &defaults,
+                sourcedb_errors,
+                upsell,
+            )
+        })
+    }
 }
 
 async fn run_watch(
@@ -1314,29 +1454,33 @@ async fn run_watch(
 ) -> anyhow::Result<()> {
     // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
     // - Config search is stable across incremental runs.
-    let StartedIncrementalSession {
-        mut session,
-        initial_check,
-    } = start_incremental(
-        args,
-        files_to_check,
-        config_finder,
-        thread_count,
-        version,
-        upsell,
-    )?;
-    if let Err(e) = initial_check {
+    let mut command =
+        IncrementalCheckCommand::new(args, files_to_check, config_finder, thread_count)?;
+    if let Err(e) = command.check(version, &CategorizedEvents::default(), upsell) {
         eprintln!("{e:#}");
     }
     loop {
         let events = get_watcher_events(&mut watcher).await?;
-        if let Err(e) = session.check_updates(version, &events) {
+        if let Err(e) = command.check(version, &events, UpsellDecision::Skip) {
             eprintln!("{e:#}");
         }
     }
 }
 
+/// CLI-owned state that must remain live across a type-checking run.
+struct PreparedCliRun {
+    timings: Timings,
+    memory_trace: MemoryUsageTrace,
+    demand_tree_subscriber: Option<TestSubscriber>,
+    type_check_start: Instant,
+}
+
 impl CheckArgs {
+    /// Whether the invocation customizes check behavior or output.
+    pub fn has_custom_options(&self) -> bool {
+        self.output.has_custom_options() || self.behavior.has_custom_options()
+    }
+
     /// Run a one-shot type check. Returns the exit status, the CLI-visible errors,
     /// and a `CheckResult` suitable for telemetry logging.
     pub fn run_once(
@@ -1481,15 +1625,35 @@ impl CheckArgs {
 
     fn run_inner(
         &self,
-        mut timings: Timings,
+        timings: Timings,
         transaction: &mut Transaction,
         version: &str,
         handles: &[Handle],
         defaults: &OutputDefaults,
-        mut sourcedb_errors: Vec<ConfigError>,
+        sourcedb_errors: Vec<ConfigError>,
         require: Require,
         upsell: UpsellDecision,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let run = self.prepare_cli_run(timings, transaction, handles, defaults)?;
+        transaction.run(handles, require, None);
+        self.finish_cli_run(
+            run,
+            transaction,
+            version,
+            handles,
+            defaults,
+            sourcedb_errors,
+            upsell,
+        )
+    }
+
+    fn prepare_cli_run(
+        &self,
+        timings: Timings,
+        transaction: &mut Transaction,
+        handles: &[Handle],
+        defaults: &OutputDefaults,
+    ) -> anyhow::Result<PreparedCliRun> {
         // Baseline maintenance actions are mutually exclusive.
         let baseline_action = if self.output.update_baseline {
             Some("--update-baseline")
@@ -1520,7 +1684,7 @@ impl CheckArgs {
                 baseline_path.display()
             );
         }
-        let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
+        let memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         if let Some(pysa_directory) = &self.output.report_pysa {
             let reporter = report::pysa::PysaReporter::new(
@@ -1557,7 +1721,31 @@ impl CheckArgs {
             transaction.set_subscriber(self.output.progress_bar_style().make_subscriber());
             None
         };
-        transaction.run(handles, require, None);
+
+        Ok(PreparedCliRun {
+            timings,
+            memory_trace,
+            demand_tree_subscriber,
+            type_check_start,
+        })
+    }
+
+    fn finish_cli_run(
+        &self,
+        run: PreparedCliRun,
+        transaction: &mut Transaction,
+        version: &str,
+        handles: &[Handle],
+        defaults: &OutputDefaults,
+        mut sourcedb_errors: Vec<ConfigError>,
+        upsell: UpsellDecision,
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let PreparedCliRun {
+            mut timings,
+            mut memory_trace,
+            demand_tree_subscriber,
+            type_check_start,
+        } = run;
         transaction.set_subscriber(None);
 
         let loads = if self.behavior.check_all {
@@ -1950,6 +2138,8 @@ impl CheckArgs {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -1958,8 +2148,86 @@ mod tests {
     use pyrefly_python::module_path::ModulePath;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
+    use tempfile::TempDir;
 
     use super::*;
+
+    struct TestIncludes {
+        root: PathBuf,
+        initial_files: Vec<PathBuf>,
+    }
+
+    impl Includes for TestIncludes {
+        fn roots(&self) -> Vec<PathBuf> {
+            vec![self.root.clone()]
+        }
+
+        fn files_iter(&self) -> anyhow::Result<Box<dyn Iterator<Item = PathBuf> + '_>> {
+            Ok(Box::new(self.initial_files.clone().into_iter()))
+        }
+
+        fn covers(&self, path: &Path) -> bool {
+            path.starts_with(&self.root)
+                && matches!(
+                    path.extension().and_then(|x| x.to_str()),
+                    Some("py" | "pyi")
+                )
+        }
+
+        fn covers_ignoring_excludes(&self, path: &Path) -> bool {
+            self.covers(path)
+        }
+
+        fn errors(&mut self) -> Vec<anyhow::Error> {
+            Vec::new()
+        }
+    }
+
+    /// A config finder that resolves everything under `root` without querying an
+    /// interpreter, so tests do not depend on the machine's Python environment.
+    fn test_config_finder(root: &Path) -> ConfigFinder {
+        let mut config = ConfigFile::default();
+        config.python_environment.set_empty_to_default();
+        config.interpreters.skip_interpreter_query = true;
+        config.search_path_from_file = vec![root.to_path_buf()];
+        config.disable_search_path_heuristics = true;
+        config.configure();
+        ConfigFinder::new_constant(ArcId::new(config))
+    }
+
+    fn incremental_checker(root: &Path, initial_files: Vec<PathBuf>) -> IncrementalChecker {
+        IncrementalChecker::new(
+            RequireLevels {
+                specified: Require::Errors,
+                default: Require::Exports,
+            },
+            Box::new(TestIncludes {
+                root: root.to_path_buf(),
+                initial_files,
+            }),
+            test_config_finder(root),
+            ThreadCount::Inline,
+        )
+        .unwrap()
+    }
+
+    fn check(
+        checker: &mut IncrementalChecker,
+        events: &CategorizedEvents,
+    ) -> IncrementalCheckResult {
+        let result = checker.check(events);
+        assert!(
+            result.config_errors.is_empty(),
+            "unexpected config errors:\n{}",
+            result
+                .config_errors
+                .iter()
+                .map(ConfigError::get_message)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        result
+    }
 
     fn sample_error(msg: String) -> Error {
         let module = Module::new(
@@ -1974,6 +2242,212 @@ mod tests {
             Vec::new(),
             ErrorKind::BadAssignment,
         )
+    }
+
+    /// Asking for two reports in one run must produce both of them in full.
+    /// See https://github.com/facebook/pyrefly/issues/4683: the CinderX report
+    /// dropped the ASTs that the Glean report reads once the check is done, so
+    /// the run died partway through writing its output.
+    #[test]
+    fn check_writes_cinderx_and_glean_reports_together() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let module = root.join("main.py");
+        fs::write(
+            &module,
+            r#"class Widget:
+    def apply(self, n: int) -> int:
+        return n + 1
+
+
+def go(w: Widget) -> int:
+    return w.apply(1)
+"#,
+        )
+        .unwrap();
+        let cinderx_dir = temp.path().join("cinderx");
+        let glean_dir = temp.path().join("glean");
+
+        let args = CheckArgs::parse_from([
+            "check",
+            "--report-cinderx",
+            cinderx_dir.to_str().unwrap(),
+            "--report-glean",
+            glean_dir.to_str().unwrap(),
+        ]);
+        let (status, errors, _) = args
+            .run_once(
+                "test",
+                Box::new(TestIncludes {
+                    root: root.clone(),
+                    initial_files: vec![module],
+                }),
+                test_config_finder(&root),
+                UpsellDecision::Skip,
+                ThreadCount::Inline,
+            )
+            .unwrap();
+        assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
+        assert!(matches!(status, CommandExitStatus::Success));
+
+        // The CinderX report is only complete with its two project-level files
+        // beside `types/`; a consumer that sees `types/` alone cannot tell a
+        // truncated report from a report over a smaller codebase.
+        assert!(cinderx_dir.join("types").join("main.json").is_file());
+        assert!(cinderx_dir.join("index.json").is_file());
+        assert!(cinderx_dir.join("class_metadata.json").is_file());
+
+        // Glean names each file after a hash of the module path, so look for
+        // any non-empty file rather than a fixed name.
+        let glean_files: Vec<_> = fs::read_dir(&glean_dir)
+            .expect("glean output directory should exist")
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(glean_files.len(), 1, "expected one Glean file per module");
+        assert!(fs::metadata(&glean_files[0]).unwrap().len() > 0);
+    }
+
+    #[test]
+    fn incremental_checker_rechecks_modified_files() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let path = root.join("main.py");
+        fs::write(&path, "x: int = 'bad'\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![path.clone()]);
+
+        let errors = check(&mut checker, &CategorizedEvents::default()).diagnostics;
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].path().as_path(), path);
+
+        fs::write(&path, "x: int = 1\n").unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                modified: vec![path],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn incremental_checker_updates_checked_files() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let initial = root.join("main.py");
+        fs::write(&initial, "x: int = 1\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![initial]);
+        assert!(
+            check(&mut checker, &CategorizedEvents::default())
+                .diagnostics
+                .is_empty()
+        );
+
+        let outside = temp.path().join("outside.py");
+        fs::write(&outside, "x: int = 'bad'\n").unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                created: vec![outside],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert!(errors.is_empty());
+
+        let created = root.join("created.py");
+        fs::write(&created, "x: int = 'bad'\n").unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                created: vec![created.clone()],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].path().as_path(), created);
+
+        fs::remove_file(&created).unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                removed: vec![created],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn incremental_checker_rechecks_dependents() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let dependency = root.join("dependency.py");
+        let dependent = root.join("dependent.py");
+        fs::write(&dependency, "value: str = 'ok'\n").unwrap();
+        fs::write(
+            &dependent,
+            "from dependency import value\nresult: str = value\n",
+        )
+        .unwrap();
+        let mut checker = incremental_checker(&root, vec![dependency.clone(), dependent.clone()]);
+        assert!(
+            check(&mut checker, &CategorizedEvents::default())
+                .diagnostics
+                .is_empty()
+        );
+
+        fs::write(&dependency, "value: int = 1\n").unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                modified: vec![dependency],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path().as_path() == dependent)
+        );
+    }
+
+    #[test]
+    fn incremental_checker_reports_removed_imports() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let dependency = root.join("dependency.py");
+        let dependent = root.join("dependent.py");
+        fs::write(&dependency, "value = 1\n").unwrap();
+        fs::write(&dependent, "from dependency import value\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![dependency.clone(), dependent.clone()]);
+        assert!(
+            check(&mut checker, &CategorizedEvents::default())
+                .diagnostics
+                .is_empty()
+        );
+
+        fs::remove_file(&dependency).unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                removed: vec![dependency],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert!(errors.iter().any(|error| {
+            error.path().as_path() == dependent && error.error_kind() == ErrorKind::MissingImport
+        }));
     }
 
     #[test]

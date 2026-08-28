@@ -119,7 +119,7 @@ enum IntersectFallback {
     Right,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // Get the union of all members of an enum, minus the specified member
     fn subtract_enum_member(&self, instance: Instance, name: &Name) -> Type {
         if self
@@ -166,6 +166,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Bound(bound) => self.disjoint_base(bound),
+                Restriction::Flag(domain) => {
+                    self.disjoint_base(&domain.as_type(self.stdlib, self.heap))
+                }
                 Restriction::Constraints(_) | Restriction::Unrestricted => {
                     self.stdlib.object().class_object().dupe()
                 }
@@ -286,6 +289,52 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     fn intersect(&self, left: &Type, right: &Type) -> Type {
         self.intersect_with_fallback(left, right, IntersectFallback::Never)
+    }
+
+    fn narrow_enum_after_equality_match(&self, left: &Type, right: &Type) -> Option<Type> {
+        let Type::ClassType(class) = left else {
+            return None;
+        };
+        if !self.get_metadata_for_class(class.class_object()).is_enum() {
+            return None;
+        }
+        let mut matches = self
+            .get_enum_members(class.class_object())
+            .into_iter()
+            .filter(|lit| match lit {
+                Lit::Enum(lit_enum) => Self::literal_equal(&lit_enum.ty, right),
+                _ => false,
+            })
+            .map(Lit::to_implicit_type)
+            .collect::<Vec<_>>();
+        matches.sort();
+        matches.dedup();
+        if matches.is_empty() {
+            None
+        } else {
+            Some(self.unions(matches))
+        }
+    }
+
+    /// Return the possible types of `left` after `left == right` evaluates to true.
+    fn narrow_after_equality_match(&self, left: &Type, right: &Type) -> Type {
+        let mut matches = Vec::new();
+        self.map_over_union(left, |left| {
+            self.map_over_union(right, |right| {
+                let narrowed = if self.equality_can_match_disjoint(left, right) {
+                    self.narrow_enum_after_equality_match(left, right)
+                        .unwrap_or_else(|| left.clone())
+                } else {
+                    self.intersect(left, right)
+                };
+                if !narrowed.is_never() {
+                    matches.push(narrowed);
+                }
+            });
+        });
+        matches.sort();
+        matches.dedup();
+        self.unions(matches)
     }
 
     /// Calculate the intersection of a number of types
@@ -826,8 +875,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     /// with the type. We allow negative narrowing as long as it is not definitely unsafe - that
     /// is, if we're unsure, we allow it.
     fn expr_as_class_info(&self, e: &Expr, errors: &ErrorCollector) -> Vec<(Type, bool)> {
-        fn f<'a, Ans: LookupAnswer>(
-            me: &AnswersSolver<'a, Ans>,
+        fn f<Ans: LookupAnswer>(
+            me: &AnswersSolver<'_, '_, Ans>,
             e: &Expr,
             res: &mut Vec<(Type, bool)>,
             errors: &ErrorCollector,
@@ -1653,6 +1702,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             AtomicNarrowOp::NotTypeGuard(_, _) => ty.clone(),
             AtomicNarrowOp::TypeIs(t, arguments) => {
+                let is_builtin_callable =
+                    t.callee_kind() == Some(CalleeKind::Function(FunctionKind::Callable));
                 if let CallTargetLookup::Ok(call_target) = self.as_call_target(t.clone()) {
                     let args = arguments.args.map(CallArg::expr_maybe_starred);
                     let kws = arguments.keywords.map(CallKeyword::new);
@@ -1669,7 +1720,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         None,
                     );
                     if let Type::TypeIs(t) = ret {
-                        return self.narrow_typeis(ty, &t, range, errors);
+                        let target = if is_builtin_callable {
+                            // `callable` is annotated as `TypeIs[Callable[..., object]]` which is
+                            // too conservative and prone to false positives, see
+                            // https://github.com/facebook/pyrefly/issues/911
+                            self.heap.mk_callable_ellipsis(self.heap.mk_any_implicit())
+                        } else {
+                            *t
+                        };
+                        return self.narrow_typeis(ty, &target, range, errors);
                     }
                 }
                 ty.clone()
@@ -1735,7 +1794,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             AtomicNarrowOp::Eq(v) => {
                 let right = self.expr_infer(v, errors);
                 if Self::is_literal(&right) {
-                    self.intersect(ty, &right)
+                    self.narrow_after_equality_match(ty, &right)
                 } else {
                     ty.clone()
                 }
@@ -2194,9 +2253,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         })
     }
 
-    /// Determines if a type should be checked for match exhaustiveness.
-    /// We check exhaustiveness when the type has a finite, known set of possible values.
-    fn should_check_exhaustiveness(&self, ty: &Type) -> bool {
+    /// Whether the subject type is closed enough for default exhaustiveness checking.
+    pub(crate) fn should_check_exhaustiveness_by_default(&self, ty: &Type) -> bool {
         match ty {
             Type::ClassType(cls) => {
                 // Non-subclassable classes are exhaustible, with the exception of Flag enums,
@@ -2218,7 +2276,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     && union
                         .members
                         .iter()
-                        .all(|m| self.should_check_exhaustiveness(m))
+                        .all(|m| self.should_check_exhaustiveness_by_default(m))
             }
 
             _ => false,
@@ -2257,9 +2315,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         errors: &ErrorCollector,
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
-        let subject_info = self.with_type_for_exhaustiveness_check(&self.get_idx(*subject_idx));
-        // We only check match exhaustiveness if the subject is an enum or a union of enum literals
-        if !self.should_check_exhaustiveness(subject_info.ty()) {
+        let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
+        if !self.solver().check_all_matches
+            && !self.should_check_exhaustiveness_by_default(subject_info.ty())
+        {
             return;
         }
         let ignore_errors = self.error_swallower();
@@ -2321,7 +2380,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !Self::is_match_case_reachability_op(op) {
             return;
         }
-        let subject_info = self.with_type_for_exhaustiveness_check(&self.get_idx(*subject_idx));
+        let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
         let subject_ty = subject_info.ty().clone();
         if subject_ty.is_any()
             || matches!(&subject_ty, Type::ClassType(cls) if cls.is_builtin("object"))

@@ -987,6 +987,8 @@ pub struct Server {
     external_references: Arc<dyn ExternalProvider>,
     /// The time at which the server was started, for telemetry.
     server_start_time: Instant,
+    /// The version of Pyrefly that's currently running.
+    server_version: Option<String>,
 }
 
 pub fn shutdown_finish(sender: &Sender<Message>, reader: &mut MessageReader, id: RequestId) {
@@ -1484,6 +1486,7 @@ fn matches_fix_all_kind(kind: &CodeActionKind) -> bool {
 
 struct TypeHierarchyTarget {
     def_index: ClassDefIndex,
+    module_name: ModuleName,
     module_path: ModulePath,
     name_range: TextRange,
     is_object: bool,
@@ -1503,6 +1506,7 @@ pub fn lsp_loop(
     wrapper: Option<ConfigConfigurerWrapper>,
     thread_count: ThreadCount,
     lsp_start_time: Instant,
+    server_version: Option<String>,
 ) -> anyhow::Result<()> {
     info!("Reading messages");
     let lsp_queue = LspQueue::new();
@@ -1527,6 +1531,7 @@ pub fn lsp_loop(
         wrapper,
         thread_count,
         lsp_start_time,
+        server_version,
     );
     std::thread::scope(|scope| {
         // Spawn the event processing loop on a thread with a large stack
@@ -1884,23 +1889,10 @@ impl Server {
                     let ruff_notebook =
                         params.notebook_document.to_ruff_notebook(&cell_contents)?;
                     let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
-                    let notebook_path = url
-                        .to_file_path()
-                        .or_else(|_| {
-                            if url.scheme() == "untitled" || url.scheme() == "inmemory" {
-                                Ok(self
-                                    .unsaved_file_tracker
-                                    .ensure_path_for_open(&url, "jupyter"))
-                            } else {
-                                Err(())
-                            }
-                        })
-                        .map_err(|_| {
-                            anyhow::anyhow!(
-                                "Could not convert uri to filepath: {}, expected a notebook",
-                                url
-                            )
-                        })?;
+                    let notebook_path = url.to_file_path().unwrap_or_else(|_| {
+                        self.unsaved_file_tracker
+                            .ensure_path_for_open(&url, "jupyter")
+                    });
                     for cell_url in lsp_notebook.code_cell_urls() {
                         self.open_notebook_cells
                             .write()
@@ -2601,7 +2593,9 @@ impl Server {
                                 )
                             }
                             TypeErrorDisplayStatusVersion::V2 => {
-                                TypeErrorDisplayStatusResponse::V2(default_v2_response())
+                                TypeErrorDisplayStatusResponse::V2(default_v2_response(
+                                    self.server_version.clone(),
+                                ))
                             }
                         }
                     };
@@ -2649,6 +2643,7 @@ impl Server {
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
         lsp_start_time: Instant,
+        server_version: Option<String>,
     ) -> Self {
         let folders = if let Some(capability) = &initialize_params.capabilities.workspace
             && let Some(true) = capability.workspace_folders
@@ -2733,6 +2728,7 @@ impl Server {
             pending_invalidation_events: Arc::new(Mutex::new(CategorizedEvents::default())),
             external_references,
             server_start_time: lsp_start_time,
+            server_version,
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
@@ -2918,7 +2914,11 @@ impl Server {
             // resolver at config synthesis time, not per-diagnostic.
 
             if let Some(lsp_file) = open_files.get(&path)
-                && config.project_includes.covers(&path)
+                && (config.project_includes.covers(&path)
+                    || (matches!(&**lsp_file, LspFile::Notebook(_))
+                        && config
+                            .project_includes
+                            .covers(&path.with_extension("ipynb"))))
                 && !config.project_excludes.covers(&path)
                 && type_error_status.is_enabled()
             {
@@ -3031,6 +3031,7 @@ impl Server {
             config.disable_type_errors_in_ide(path),
             workspace_disable_type_errors,
             workspace_type_checking_mode,
+            self.server_version.clone(),
         )
     }
 
@@ -3650,13 +3651,14 @@ impl Server {
         version: i32,
         contents: Arc<LspFile>,
     ) -> anyhow::Result<()> {
+        let is_notebook = matches!(&*contents, LspFile::Notebook(_));
         let path = url
             .to_file_path()
             .or_else(|_| {
-                if url.scheme() == "untitled" || url.scheme() == "inmemory" {
+                if is_notebook || url.scheme() == "untitled" || url.scheme() == "inmemory" {
                     Ok(self
                         .unsaved_file_tracker
-                        .ensure_path_for_open(&url, "python"))
+                        .ensure_path_for_open(&url, if is_notebook { "jupyter" } else { "python" }))
                 } else {
                     Err(())
                 }
@@ -4795,17 +4797,17 @@ impl Server {
                 actions.push(action);
             }
             record_code_action_telemetry("move_symbol_new_file", start);
+            let start = Instant::now();
+            if let Some(action) = safe_delete_file_code_action(
+                &self.initialize_params.capabilities,
+                &self.state,
+                transaction,
+                uri,
+            ) {
+                actions.push(action);
+            }
+            record_code_action_telemetry("safe_delete_file", start);
         }
-        let start = Instant::now();
-        if let Some(action) = safe_delete_file_code_action(
-            &self.initialize_params.capabilities,
-            &self.state,
-            transaction,
-            uri,
-        ) {
-            actions.push(action);
-        }
-        record_code_action_telemetry("safe_delete_file", start);
         Ok((!actions.is_empty()).then_some(actions))
     }
 
@@ -6250,7 +6252,8 @@ impl Server {
         let def_index = bindings.class_def_index(class_def)?;
         Some(TypeHierarchyTarget {
             def_index,
-            module_path: definition.module.path().dupe(),
+            module_name: definition.module.name(),
+            module_path: definition.module.path().to_key_eq(),
             name_range: class_def.name.range,
             is_object: class_def.name.id == "object"
                 && definition.module.name().as_str() == "builtins",
@@ -6311,7 +6314,9 @@ impl Server {
                 let Some(class_def_index) = bindings.class_def_index(class_def) else {
                     continue;
                 };
-                if class_def_index == target.def_index && module_info.path() == &target.module_path
+                if class_def_index == target.def_index
+                    && module_info.name() == target.module_name
+                    && module_info.path().to_key_eq() == target.module_path
                 {
                     continue;
                 }
@@ -6321,8 +6326,10 @@ impl Server {
                     let mro = solutions.get(&KeyClassMro(class_def_index));
                     mro.ancestors_no_object().iter().any(|ancestor| {
                         let ancestor_class = ancestor.class_object();
+                        // Imports resolve an open module through its filesystem counterpart.
                         ancestor_class.index() == target.def_index
-                            && ancestor_class.module_path() == &target.module_path
+                            && ancestor_class.module_name() == target.module_name
+                            && ancestor_class.module_path().to_key_eq() == target.module_path
                     })
                 };
                 if !is_subtype {

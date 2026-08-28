@@ -230,6 +230,137 @@ def identity(x: Int) -> Int:
 }
 
 #[test]
+fn test_type_shape_dsl_helper_edit_invalidates_caller() {
+    let mut i = Incremental::with_files(vec![
+        "helpers".to_owned(),
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+from typing import Callable
+
+class Int: pass
+class IntTuple: pass
+def shaped_array[T](*, shape: str) -> Callable[[type[T]], type[T]]: ...
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def leaf(first: Int, second: Int) -> Int:
+    return first
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from helpers import leaf
+from shape_extensions import Int, IntTuple, shaped_array, type_shape_dsl_function
+
+@shaped_array(shape="Shape")
+class Tensor[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def middle(first: Int, second: Int) -> Int:
+    return leaf(first, second)
+
+@type_shape_dsl_function
+def root(first: Int, second: Int) -> Int:
+    return middle(first, second)
+
+def chosen() -> Tensor[[root(Int[2], Int[3])]]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import Tensor, chosen
+
+result: Tensor[[2]] = chosen()
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def leaf(first: Int, second: Int) -> Int:
+    return second
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "helpers", "main"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].msg().contains("not assignable to `Tensor[[2]]`"));
+}
+
+#[test]
+fn test_type_shape_dsl_cross_module_helper_cycle_is_rejected() {
+    let mut i = Incremental::with_files(vec![
+        "left".to_owned(),
+        "right".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "left",
+        r#"
+from right import right
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def left(x: Int) -> Int:
+    return right(x)
+"#,
+    );
+    i.set(
+        "right",
+        r#"
+from left import left
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def right(x: Int) -> Int:
+    return left(x)
+"#,
+    );
+
+    let result = i.unchecked(&["left"]);
+    let errors = result.errors.collect_display_errors();
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one cycle diagnostic, got {errors:?}"
+    );
+    // Neither side of a helper cycle can become a validated DSL function, so cycles surface at
+    // the ordinary helper-validation boundary rather than through an evaluator-specific error.
+    assert!(
+        errors[0]
+            .msg()
+            .contains("DSL helper callee must be a validated"),
+        "expected the cross-module helper cycle to be rejected, got {errors:?}"
+    );
+}
+
+#[test]
 fn test_type_shape_dsl_gradual_reexport_target_invalidates_importer() {
     let mut i = Incremental::with_files(vec![
         "main".to_owned(),

@@ -17,7 +17,6 @@ use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::visit::Visit;
-use ruff_python_ast::Decorator;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprList;
@@ -73,7 +72,6 @@ use crate::binding::binding::KeyClassSynthesizedFields;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyTParams;
 use crate::binding::binding::KeyVariance;
-use crate::binding::binding::ShapedArrayMetadata;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::CurrentIdx;
 use crate::binding::bindings::LegacyTParamCollector;
@@ -384,16 +382,8 @@ impl<'a> BindingsBuilder<'a> {
         let mut keywords = Vec::new();
         if let Some(args) = &mut x.arguments {
             args.keywords.iter_mut().for_each(|keyword| {
-                if let Some(name) = &keyword.arg {
-                    self.ensure_expr(&mut keyword.value, class_object.usage());
-                    keywords.push((name.clone(), keyword.value.clone()));
-                } else {
-                    self.error(
-                        keyword.range(),
-                        ErrorKind::InvalidInheritance,
-                        "Unpacking is not supported in class header".to_owned(),
-                    )
-                }
+                self.ensure_expr(&mut keyword.value, class_object.usage());
+                keywords.push(keyword.clone());
             });
         }
         let bases: Arc<[BaseClass]> = Arc::from(bases.into_boxed_slice());
@@ -418,11 +408,6 @@ impl<'a> BindingsBuilder<'a> {
                 class_idx: class_indices.class_idx,
             },
         );
-        self.insert_binding_idx(
-            class_indices.synthesized_fields_idx,
-            BindingClassSynthesizedFields(class_indices.class_idx),
-        );
-
         self.add_name_definitions(&legacy);
 
         self.scopes.push(Scope::class_body(
@@ -445,7 +430,16 @@ impl<'a> BindingsBuilder<'a> {
             body,
             &NestingContext::class(ShortIdentifier::new(&x.name), parent.dupe()),
         );
-        let field_definitions = self.scopes.finish_class_and_get_field_definitions();
+        let (field_definitions, nn_module_registrations) =
+            self.scopes.finish_class_and_get_field_definitions();
+        self.insert_binding_idx(
+            class_indices.synthesized_fields_idx,
+            BindingClassSynthesizedFields {
+                class_idx: class_indices.class_idx,
+                nn_module_registrations: (!nn_module_registrations.is_empty())
+                    .then(|| Box::new(nn_module_registrations)),
+            },
+        );
 
         let django_field_info = self.extract_django_fields_from_class_body(&field_definitions);
         let mut fields = SmallMap::with_capacity(field_definitions.len());
@@ -590,156 +584,6 @@ impl<'a> BindingsBuilder<'a> {
                 class_idx: class_indices.class_idx,
             },
         );
-    }
-
-    fn is_shaped_array_decorator(&self, expr: &Expr) -> bool {
-        self.as_special_export(expr) == Some(SpecialExport::ShapedArray)
-    }
-
-    /// Extract `@shaped_array(shape="Shape")` from class decorators.
-    fn extract_shaped_array_metadata(
-        &mut self,
-        decorators: &[Decorator],
-    ) -> Option<Box<ShapedArrayMetadata>> {
-        let mut metadata = None;
-        let mut seen_shaped_array = false;
-        for decorator in decorators {
-            let Some(call) = decorator.expression.as_call_expr() else {
-                if self.is_shaped_array_decorator(&decorator.expression) {
-                    if seen_shaped_array {
-                        self.error(
-                            decorator.range(),
-                            ErrorKind::InvalidArgument,
-                            "Duplicate `@shaped_array` decorator".to_owned(),
-                        );
-                        continue;
-                    }
-                    seen_shaped_array = true;
-                    self.error(
-                        decorator.range(),
-                        ErrorKind::InvalidArgument,
-                        "`@shaped_array` requires a `shape` keyword argument".to_owned(),
-                    );
-                }
-                continue;
-            };
-            if !self.is_shaped_array_decorator(&call.func) {
-                continue;
-            }
-            if seen_shaped_array {
-                self.error(
-                    decorator.range(),
-                    ErrorKind::InvalidArgument,
-                    "Duplicate `@shaped_array` decorator".to_owned(),
-                );
-                continue;
-            }
-            seen_shaped_array = true;
-
-            let mut invalid = false;
-            if let Some(arg) = call.arguments.args.first() {
-                self.error(
-                    arg.range(),
-                    ErrorKind::InvalidArgument,
-                    "`@shaped_array` expects `shape` as a keyword argument".to_owned(),
-                );
-                invalid = true;
-            }
-
-            let mut shape_keyword = None;
-            for keyword in &call.arguments.keywords {
-                let Some(arg) = &keyword.arg else {
-                    self.error(
-                        keyword.range(),
-                        ErrorKind::InvalidArgument,
-                        "Unpacking is not supported in `@shaped_array`".to_owned(),
-                    );
-                    invalid = true;
-                    continue;
-                };
-                if arg.as_str() == "shape" {
-                    if shape_keyword.is_none() {
-                        shape_keyword = Some(keyword);
-                    }
-                } else {
-                    self.error(
-                        keyword.range(),
-                        ErrorKind::InvalidArgument,
-                        format!(
-                            "Unexpected keyword argument `{}` for `@shaped_array`; expected `shape`",
-                            arg.id
-                        ),
-                    );
-                    invalid = true;
-                }
-            }
-
-            let Some(shape_keyword) = shape_keyword else {
-                if !invalid {
-                    self.error(
-                        call.range(),
-                        ErrorKind::InvalidArgument,
-                        "`@shaped_array` requires a `shape` keyword argument".to_owned(),
-                    );
-                }
-                continue;
-            };
-            let Expr::StringLiteral(shape) = &shape_keyword.value else {
-                self.error(
-                    shape_keyword.value.range(),
-                    ErrorKind::InvalidArgument,
-                    "`@shaped_array` `shape` argument must be a string literal".to_owned(),
-                );
-                continue;
-            };
-            if !invalid {
-                metadata = Some(Box::new(ShapedArrayMetadata {
-                    shape_name: Name::new(shape.value.to_str()),
-                    range: shape_keyword.value.range(),
-                }));
-            }
-        }
-        metadata
-    }
-
-    /// Scan a class body for a `forward` method decorated with
-    /// `@uses_shape_dsl(..., capture_init=[...])` and return the list of `__init__`
-    /// parameter names to capture for shape inference.
-    fn extract_capture_init(&mut self, body: &[Stmt]) -> Option<Vec<Name>> {
-        let forward = body
-            .iter()
-            .filter_map(|stmt| stmt.as_function_def_stmt())
-            .find(|func_def| func_def.name.as_str() == "forward")?;
-
-        forward.decorator_list.iter().find_map(|decorator| {
-            let call = decorator.expression.as_call_expr()?;
-            if self.as_special_export(&call.func) != Some(SpecialExport::UsesShapeDsl) {
-                return None;
-            }
-            let capture_init_kw = call.arguments.keywords.iter().find(|kw| {
-                kw.arg
-                    .as_ref()
-                    .is_some_and(|a| a.as_str() == "capture_init")
-            })?;
-            let list = capture_init_kw.value.as_list_expr()?;
-            let names: Vec<Name> = list
-                .elts
-                .iter()
-                .filter_map(|elt| {
-                    if let Some(s) = elt.as_string_literal_expr() {
-                        Some(Name::new(s.value.to_str()))
-                    } else {
-                        self.error(
-                            elt.range(),
-                            ErrorKind::InvalidArgument,
-                            "`capture_init` entries must be string literals".to_owned(),
-                        );
-                        None
-                    }
-                })
-                .collect();
-            Some(names)
-        })
     }
 
     /// Extracts docstrings for each field, mapping the field's range to the docstring's range.
@@ -1154,7 +998,7 @@ impl<'a> BindingsBuilder<'a> {
         class_indices: ClassIndices,
         parent: &NestingContext,
         base: Option<Expr>,
-        keywords: Box<[(Identifier, Expr)]>,
+        keywords: Box<[Keyword]>,
         // name, position, annotation, value
         member_definitions: Vec<(String, TextRange, Option<Expr>, Option<ExprOrBinding>)>,
         illegal_identifier_handling: IllegalIdentifierHandling,
@@ -1207,7 +1051,10 @@ impl<'a> BindingsBuilder<'a> {
         );
         self.insert_binding_idx(
             class_indices.synthesized_fields_idx,
-            BindingClassSynthesizedFields(class_indices.class_idx),
+            BindingClassSynthesizedFields {
+                class_idx: class_indices.class_idx,
+                nn_module_registrations: None,
+            },
         );
 
         let mut fields = SmallMap::new();
@@ -1603,11 +1450,7 @@ impl<'a> BindingsBuilder<'a> {
                 _ => None,
             };
             if recognized_kw.is_some() {
-                let kw_name = kw
-                    .arg
-                    .clone()
-                    .expect("recognized TypedDict keyword must have a name");
-                base_class_keywords.push((kw_name, kw.value.clone()));
+                base_class_keywords.push(kw.clone());
             } else {
                 let msg = if let Some(name) = &kw.arg {
                     format!("Unrecognized keyword argument `{name}`")

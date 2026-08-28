@@ -302,6 +302,92 @@ def f() -> None:
 }
 
 #[test]
+fn test_callees_flag_type_constructor() {
+    let tdir = TempDir::new().unwrap();
+    let path = tdir.path().join("shape_extensions.py");
+    fs_anyhow::write(
+        &path,
+        r#"
+class Flag[T]: ...
+
+def construct[K: Flag[int]](source: K, cls: type[K]) -> K:
+    return cls()
+"#,
+    )
+    .unwrap();
+
+    let query = create_query();
+    let shape_extensions = ModuleName::from_str("shape_extensions");
+    let errors = query.add_files(vec![(
+        shape_extensions,
+        ModulePath::filesystem(path.clone()),
+    )]);
+    assert!(errors.is_empty(), "Unexpected errors: {errors:?}");
+
+    let callees = query
+        .get_callees_with_location(shape_extensions, ModulePath::filesystem(path), None)
+        .unwrap();
+    assert!(
+        callees
+            .iter()
+            .any(|(_, callee)| callee.target.starts_with("builtins.int.__")),
+        "Expected the Flag domain's constructor callee, got: {callees:?}"
+    );
+}
+
+#[test]
+fn test_callees_flag_union_class_names() {
+    let tdir = TempDir::new().unwrap();
+    let file_path = tdir.path().join("main.py");
+    let shape_extensions_path = tdir.path().join("shape_extensions.py");
+    let code = r#"
+from shape_extensions import Flag
+
+def stringify[K: Flag[int | str | tuple[int, ...] | None]](value: K) -> str:
+    return value.__str__()
+"#;
+    fs_anyhow::write(&file_path, code).unwrap();
+    fs_anyhow::write(&shape_extensions_path, "class Flag[T]: ...\n").unwrap();
+
+    let mut config = ConfigFile::default();
+    config.search_path_from_args.push(tdir.path().to_path_buf());
+    config.python_environment.set_empty_to_default();
+    config.configure();
+    let query = Query::new(
+        ConfigFinder::new_constant(ArcId::new(config)),
+        TEST_THREAD_COUNT,
+    );
+    let module_name = ModuleName::from_str("main");
+    let path = ModulePath::filesystem(file_path.clone());
+    let errors = query.add_files(vec![
+        (module_name, path.clone()),
+        (
+            ModuleName::from_str("shape_extensions"),
+            ModulePath::filesystem(shape_extensions_path),
+        ),
+    ]);
+    assert!(errors.is_empty(), "Unexpected errors: {errors:?}");
+
+    let mut class_names = query
+        .get_callees_with_location(module_name, path, None)
+        .unwrap()
+        .into_iter()
+        .filter_map(|(_, callee)| callee.class_name)
+        .collect::<Vec<_>>();
+    class_names.sort();
+    class_names.dedup();
+    assert_eq!(
+        class_names,
+        vec![
+            "builtins.int",
+            "builtins.str",
+            "builtins.tuple",
+            "types.NoneType",
+        ]
+    );
+}
+
+#[test]
 fn test_callees_attribute_narrow_does_not_overwrite_rhs_trace() {
     // Regression test: narrowing on an attribute facet (e.g. `c.p == k.v`) used to
     // record the LHS property getter's trace against the narrow expression's range,

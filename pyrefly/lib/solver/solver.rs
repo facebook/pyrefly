@@ -17,6 +17,7 @@ use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::mem;
+use std::sync::Arc;
 
 use itertools::Either;
 use itertools::Itertools;
@@ -31,9 +32,11 @@ use pyrefly_types::dimension::is_gradual_size;
 use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tuple::Tuple;
+use pyrefly_types::type_var::FlagDomain;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TArgs;
 use pyrefly_util::gas::Gas;
@@ -136,6 +139,9 @@ struct Bounds {
     // not be order-dependent.
     lower: Vec<Type>,
     upper: Vec<Type>,
+    // An upper bound may describe several acceptable matches while this records the precise
+    // solution to use when no lower bound selects one of them.
+    upper_fallback: Vec<Type>,
 }
 
 impl Bounds {
@@ -143,16 +149,18 @@ impl Bounds {
         Self {
             lower: Vec::new(),
             upper: Vec::new(),
+            upper_fallback: Vec::new(),
         }
     }
 
     fn extend(&mut self, other: Bounds) {
         self.lower.extend(other.lower);
         self.upper.extend(other.upper);
+        self.upper_fallback.extend(other.upper_fallback);
     }
 
     fn is_empty(&self) -> bool {
-        self.lower.is_empty() && self.upper.is_empty()
+        self.lower.is_empty() && self.upper.is_empty() && self.upper_fallback.is_empty()
     }
 }
 
@@ -525,6 +533,7 @@ pub struct Solver {
     /// Like protocol_cache, only caches Var-free types.
     typed_dict_cache: Mutex<HashMap<(TypedDict, TypedDict), Result<(), SubsetError>>>,
     pub infer_with_first_use: bool,
+    pub check_all_matches: bool,
     pub heap: TypeHeap,
     pub tensor_shapes: bool,
     pub strict_callable_subtyping: bool,
@@ -585,6 +594,7 @@ impl Solver {
     /// Create a new solver.
     pub fn new(
         infer_with_first_use: bool,
+        check_all_matches: bool,
         tensor_shapes: bool,
         strict_callable_subtyping: bool,
         strict_partial_subtyping: bool,
@@ -597,6 +607,7 @@ impl Solver {
             protocol_cache: Default::default(),
             typed_dict_cache: Default::default(),
             infer_with_first_use,
+            check_all_matches,
             heap: TypeHeap::new(),
             tensor_shapes,
             strict_callable_subtyping,
@@ -837,10 +848,15 @@ impl Solver {
         }
         let variables = self.variables.lock();
         let mut errors = self.instantiation_errors.write();
+        // Restore nodes first, so all roots are correct before we write to them with `update`.
+        let mut pending_variables = Vec::with_capacity(snapshot.0.len());
         for (var, state) in snapshot.0 {
             *variables.get_node(var).borrow_mut() = state.node;
-            variables.update(var, state.variable);
-            match state.error {
+            pending_variables.push((var, state.variable, state.error));
+        }
+        for (var, variable, error) in pending_variables {
+            variables.update(var, variable);
+            match error {
                 Some(e) => {
                     errors.insert(var, e);
                 }
@@ -1697,6 +1713,16 @@ impl Solver {
         self.add_var_bound(v, bound, true, is_subset)
     }
 
+    /// Record the precise solution to use when an upper bound represents matching alternatives.
+    pub fn add_upper_bound_fallback(&self, v: Var, fallback: Type) {
+        let variables = self.variables.lock();
+        if let Variable::Quantified { quantified, bounds } = &mut *variables.get_mut(v)
+            && quantified.kind() == QuantifiedKind::TypeVarTuple
+        {
+            bounds.upper_fallback.push(fallback);
+        }
+    }
+
     /// Get current bound from a set of bounds of an unfinished variable.
     /// TODO(https://github.com/facebook/pyrefly/issues/105): the current solver design requires us
     /// to repeatedly clone and union together intermediate bounds to validate every new bound we
@@ -1730,12 +1756,14 @@ impl Solver {
     }
 
     fn solve_bounds(&self, bounds: Bounds) -> Option<Type> {
-        // Prefer non-Any bound > Any bound > no bound
+        // Prefer non-Any lower bound > upper-bound fallback > upper bound > Any lower bound.
         // TODO(https://github.com/facebook/pyrefly/issues/105): consider using polarity to
         // determine whether we use the lower or upper bound.
         let lower_bound = self.solve_one_bounds(bounds.lower);
         if lower_bound.as_ref().is_none_or(|b| b.is_any()) {
-            self.solve_one_bounds(bounds.upper).or(lower_bound)
+            self.solve_one_bounds(bounds.upper_fallback)
+                .or_else(|| self.solve_one_bounds(bounds.upper))
+                .or(lower_bound)
         } else {
             lower_bound
         }
@@ -2678,6 +2706,16 @@ impl Solver {
 
 #[derive(Debug, Clone)]
 pub enum TypeVarSpecializationError {
+    BadFlagSpecialization {
+        name: Name,
+        got: Type,
+        domain: FlagDomain,
+    },
+    ConflictingFlagSpecialization {
+        name: Name,
+        selected: Type,
+        constraint: Type,
+    },
     BadBoundSpecialization {
         name: Name,
         got: Type,
@@ -2696,15 +2734,29 @@ pub enum TypeVarSpecializationError {
 impl TypeVarSpecializationError {
     pub fn error_kind(&self) -> ErrorKind {
         match self {
-            Self::BadBoundSpecialization { .. } | Self::BadConstraintSpecialization { .. } => {
-                ErrorKind::BadSpecialization
-            }
+            Self::BadFlagSpecialization { .. }
+            | Self::ConflictingFlagSpecialization { .. }
+            | Self::BadBoundSpecialization { .. }
+            | Self::BadConstraintSpecialization { .. } => ErrorKind::BadSpecialization,
             Self::IncompatibleOverloadResidual { .. } => ErrorKind::IncompatibleOverloadResidual,
         }
     }
 
     pub fn to_error_msg<Ans: LookupAnswer>(self, ans: &AnswersSolver<Ans>) -> String {
         match self {
+            Self::BadFlagSpecialization { name, got, domain } => format!(
+                "`{}` is not a valid `Flag[{domain}]` value for type variable `{name}`",
+                ans.for_display(got),
+            ),
+            Self::ConflictingFlagSpecialization {
+                name,
+                selected,
+                constraint,
+            } => format!(
+                "`{}` is incompatible with selected `Flag` value `{}` for type variable `{name}`",
+                ans.for_display(constraint),
+                ans.for_display(selected),
+            ),
             Self::BadBoundSpecialization { name, got, want } => {
                 TypeCheckKind::TypeVarSpecialization(name).format_error(
                     &ans.for_display(got),
@@ -3077,6 +3129,8 @@ impl CallBoundary {
             witness: None,
             argument_side: ArgumentSide::default(),
             boundary: Some(self),
+            shape_flag_vars: None,
+            shape_flag_binding_source: None,
         }
     }
 
@@ -3163,6 +3217,8 @@ pub struct CallContext<'subset> {
     witness: Option<ResidualWitnessContext>,
     argument_side: ArgumentSide,
     boundary: Option<&'subset CallBoundary>,
+    shape_flag_vars: Option<Arc<SmallSet<Var>>>,
+    shape_flag_binding_source: Option<Var>,
 }
 
 impl<'subset> CallContext<'subset> {
@@ -3192,11 +3248,44 @@ impl<'subset> CallContext<'subset> {
         self
     }
 
+    pub(crate) fn with_shape_flag_vars(mut self, vars: Option<Arc<SmallSet<Var>>>) -> Self {
+        self.shape_flag_vars = vars;
+        self
+    }
+
+    pub(crate) fn is_shape_flag_var_type(&self, ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::Var(var)
+                if self.shape_flag_vars.as_ref().is_some_and(|vars| vars.contains(var))
+        )
+    }
+
+    pub(crate) fn for_shape_flag_binding_source(&self, ty: &Type) -> Option<Self> {
+        let Type::Var(var) = ty else {
+            return None;
+        };
+        self.shape_flag_vars
+            .as_ref()
+            .is_some_and(|vars| vars.contains(var))
+            .then(|| {
+                let mut context = self.clone();
+                context.shape_flag_binding_source = Some(*var);
+                context
+            })
+    }
+
+    fn is_shape_flag_binding_source(&self, var: Var) -> bool {
+        self.shape_flag_binding_source == Some(var)
+    }
+
     pub fn with_outside_context(mut self) -> Self {
         // Both capture writers require a non-default argument side, so this disables
         // capture while retaining the boundary's previously collected captures.
         self.witness = Default::default();
         self.argument_side = Default::default();
+        self.shape_flag_vars = Default::default();
+        self.shape_flag_binding_source = None;
         self
     }
 
@@ -3488,6 +3577,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     .iter()
                     .any(|c2| self.is_subset_eq(c1, c2).is_ok())
             }),
+            Restriction::Flag(domain) => {
+                domain.types(self.type_order.stdlib()).iter().all(|atom| {
+                    constraints
+                        .iter()
+                        .any(|constraint| self.is_subset_eq(atom, constraint).is_ok())
+                })
+            }
             Restriction::Unrestricted => {
                 // Check if the implicit bound `object` is assignable to any of the constraints
                 constraints.iter().any(|c| {
@@ -3528,14 +3624,26 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         Some(best)
     }
 
+    /// Whether `q` is a `TypeVar` whose bound represents an entire shape.
+    fn has_int_tuple_bound(q: &Quantified) -> bool {
+        q.kind() == QuantifiedKind::TypeVar
+            && matches!(q.restriction(), Restriction::Bound(Type::IntTuple(_)))
+    }
+
     /// is_subset_eq_var(t1, Quantified)
     fn is_subset_eq_quantified(
         &mut self,
         t1: &Type,
         q: &Quantified,
+        lower_bound: Option<&Type>,
         upper_bound: Option<&Type>,
+        is_shape_flag_binding_source: bool,
     ) -> (Type, Option<TypeVarSpecializationError>) {
-        let t1_p = {
+        // An `IntTuple`-bounded actual is a dimension sequence. Literal promotion would erase
+        // those dimensions, and the probe guarding promotion binds variables as a side effect.
+        let t1_p = if Self::has_int_tuple_bound(q) {
+            t1.clone()
+        } else {
             let t1_p = t1
                 .clone()
                 .promote_implicit_literals(self.type_order.stdlib());
@@ -3551,50 +3659,97 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             }
         };
         let bound = q.upper_bound(self.type_order.stdlib(), &self.solver.heap);
-        // For constrained TypeVars, promote to the matching constraint type.
-        if let Restriction::Constraints(constraints) = &q.restriction {
-            if let Type::Quantified(q_t1) = t1 {
-                let err = (!self.quantified_satisfies_constraints(q_t1, constraints)).then(|| {
-                    TypeVarSpecializationError::BadConstraintSpecialization {
-                        name: q.name.clone(),
-                        got: t1.clone(),
-                        want: constraints.clone(),
-                    }
+        match q.restriction() {
+            Restriction::Constraints(constraints) => {
+                // For constrained TypeVars, promote to the matching constraint type.
+                if let Type::Quantified(q_t1) = t1 {
+                    let err =
+                        (!self.quantified_satisfies_constraints(q_t1, constraints)).then(|| {
+                            TypeVarSpecializationError::BadConstraintSpecialization {
+                                name: q.name.clone(),
+                                got: t1.clone(),
+                                want: constraints.clone(),
+                            }
+                        });
+                    (t1.clone(), err)
+                // Try promoted type first, then fall back to original (for literal bounds).
+                } else if let Some(constraint) = self.find_matching_constraint(&t1_p, constraints) {
+                    (constraint.clone(), None)
+                } else if let Some(constraint) = self.find_matching_constraint(t1, constraints) {
+                    (constraint.clone(), None)
+                } else {
+                    // `Any` falls through to here because it does not match a specific constraint.
+                    let specialization_error = (!t1_p.is_any()).then(|| {
+                        TypeVarSpecializationError::BadConstraintSpecialization {
+                            name: q.name().clone(),
+                            got: t1_p.clone(),
+                            want: constraints.clone(),
+                        }
+                    });
+                    (t1_p.clone(), specialization_error)
+                }
+            }
+            Restriction::Flag(domain) if is_shape_flag_binding_source => {
+                let accepted = domain.accepts_with_str_subclasses(t1, |member| match member {
+                    Type::ClassType(cls) | Type::SelfType(cls) => self.type_order.has_superclass(
+                        cls.class_object(),
+                        self.type_order.stdlib().str().class_object(),
+                    ),
+                    _ => false,
                 });
-                (t1.clone(), err)
-            // Try promoted type first, then fall back to original (for literal bounds).
-            } else if let Some(constraint) = self.find_matching_constraint(&t1_p, constraints) {
-                (constraint.clone(), None)
-            } else if let Some(constraint) = self.find_matching_constraint(t1, constraints) {
-                (constraint.clone(), None)
-            } else {
-                // `Any` falls through to here because it does not match a specific constraint.
-                let specialization_error = (!t1_p.is_any()).then(|| {
-                    TypeVarSpecializationError::BadConstraintSpecialization {
+                let specialization_error = if !accepted {
+                    Some(TypeVarSpecializationError::BadFlagSpecialization {
                         name: q.name().clone(),
-                        got: t1_p.clone(),
-                        want: constraints.clone(),
-                    }
-                });
-                (t1_p.clone(), specialization_error)
-            }
-        } else if self.is_subset_eq(&t1_p, &bound).is_err() {
-            // If the promoted type fails, try again with the original type, in case the bound itself is literal.
-            // This could be more optimized, but errors are rare, so this code path should not be hot.
-            if self.is_subset_eq(t1, &bound).is_err() {
-                // If the original type is also an error, use the promoted type.
-                let specialization_error = TypeVarSpecializationError::BadBoundSpecialization {
-                    name: q.name().clone(),
-                    got: t1_p.clone(),
-                    want: bound,
+                        got: t1.clone(),
+                        domain: *domain,
+                    })
+                } else if let Some(lower_bound) = lower_bound
+                    && self.is_subset_eq(lower_bound, t1).is_err()
+                {
+                    Some(TypeVarSpecializationError::ConflictingFlagSpecialization {
+                        name: q.name().clone(),
+                        selected: t1.clone(),
+                        constraint: lower_bound.clone(),
+                    })
+                } else if let Some(upper_bound) = upper_bound
+                    && self.is_subset_eq(t1, upper_bound).is_err()
+                {
+                    Some(TypeVarSpecializationError::ConflictingFlagSpecialization {
+                        name: q.name().clone(),
+                        selected: t1.clone(),
+                        constraint: upper_bound.clone(),
+                    })
+                } else {
+                    None
                 };
-                (t1_p.clone(), Some(specialization_error))
-            } else {
-                (t1.clone(), None)
+                (t1.clone(), specialization_error)
             }
-        } else {
-            (t1_p.clone(), None)
+            Restriction::Flag(_) | Restriction::Bound(_) | Restriction::Unrestricted => {
+                if self.is_subset_eq(&t1_p, &bound).is_err() {
+                    // If the promoted type fails, try again with the original type, in case the bound itself is literal.
+                    // This could be more optimized, but errors are rare, so this code path should not be hot.
+                    if self.is_subset_eq(t1, &bound).is_err() {
+                        // If the original type is also an error, use the promoted type.
+                        let specialization_error =
+                            TypeVarSpecializationError::BadBoundSpecialization {
+                                name: q.name().clone(),
+                                got: t1_p.clone(),
+                                want: bound,
+                            };
+                        (t1_p.clone(), Some(specialization_error))
+                    } else {
+                        (t1.clone(), None)
+                    }
+                } else {
+                    (t1_p.clone(), None)
+                }
+            }
         }
+    }
+
+    fn is_shape_flag_binding_source(&self, q: &Quantified, v: Var) -> bool {
+        matches!(q.restriction(), Restriction::Flag(_))
+            && self.active_call_context.is_shape_flag_binding_source(v)
     }
 
     /// Implementation of Var subset cases, calling onward to solve non-Var cases.
@@ -3752,6 +3907,32 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                                     }
                                 }
                             }
+                            Ok(())
+                        }
+                        // An empty container contributes no evidence for a Flag. Keep its
+                        // validated direct source authoritative instead of preserving the partial.
+                        (
+                            Variable::PartialContained(_),
+                            Variable::Quantified {
+                                quantified: q2,
+                                bounds: _,
+                            },
+                        ) if matches!(q2.restriction(), Restriction::Flag(_)) => {
+                            drop(variable1);
+                            drop(variable2);
+                            variables.unify(*v1, *v2);
+                            Ok(())
+                        }
+                        (
+                            Variable::Quantified {
+                                quantified: q1,
+                                bounds: _,
+                            },
+                            Variable::PartialContained(_),
+                        ) if matches!(q1.restriction(), Restriction::Flag(_)) => {
+                            drop(variable1);
+                            drop(variable2);
+                            variables.unify(*v2, *v1);
                             Ok(())
                         }
                         (
@@ -3921,6 +4102,22 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 self.record_deferred_residual_target_vars(*v2, t1);
                 let variables = self.solver.variables.lock();
                 let v2_ref = variables.get(*v2);
+                // Tuple actuals for `IntTuple`-bounded variables use dimension binding.
+                let has_int_tuple_bound = match &*v2_ref {
+                    Variable::Quantified { quantified, .. }
+                    | Variable::PartialQuantified(quantified) => {
+                        Self::has_int_tuple_bound(quantified)
+                    }
+                    _ => false,
+                };
+                if has_int_tuple_bound && let Type::Tuple(tuple) = t1 {
+                    drop(v2_ref);
+                    drop(variables);
+                    return self.is_subset_tuple_to_int_tuple(
+                        tuple,
+                        &IntTuple::unpacked(Vec::new(), Type::Var(*v2), Vec::new()),
+                    );
+                }
                 match &*v2_ref {
                     Variable::Answer { ty: t2, .. } => {
                         let t2 = t2.clone();
@@ -3945,11 +4142,24 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         bounds,
                     } => {
                         let q = q.clone();
+                        let is_shape_flag_binding_source =
+                            self.is_shape_flag_binding_source(&q, *v2);
+                        // Optimization: compute the lower bound only when it is needed for shape
+                        // flag checks. Computing it unconditionally makes pytorch incremental
+                        // edits 4-5x slower on our LSP benchmarks.
+                        let lower_bound = is_shape_flag_binding_source
+                            .then(|| self.solver.get_current_bound(bounds.lower.clone()))
+                            .flatten();
                         let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
                         drop(v2_ref);
                         drop(variables);
-                        let (answer, specialization_error) =
-                            self.is_subset_eq_quantified(t1, &q, upper_bound.as_ref());
+                        let (answer, specialization_error) = self.is_subset_eq_quantified(
+                            t1,
+                            &q,
+                            lower_bound.as_ref(),
+                            upper_bound.as_ref(),
+                            is_shape_flag_binding_source,
+                        );
                         if let Some(specialization_error) = specialization_error {
                             self.solver
                                 .instantiation_errors
@@ -3957,7 +4167,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                                 .insert(*v2, specialization_error);
                         }
                         if q.kind() == QuantifiedKind::ParamSpec
-                            || matches!(q.restriction(), Restriction::Constraints(_))
+                            // For constraints, `Any` usually does not provide any information, so
+                            // we drop it and pin to the first non-`Any` answer.
+                            || (matches!(q.restriction(), Restriction::Constraints(_)) && !answer.is_any())
+                            || is_shape_flag_binding_source
                         {
                             // If the TypeVar has constraints, we write the answer immediately to
                             // enforce that we always match the same constraint.
@@ -3980,8 +4193,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         let q = q.clone();
                         drop(v2_ref);
                         drop(variables);
-                        let (answer, specialization_error) =
-                            self.is_subset_eq_quantified(t1, &q, None);
+                        let (answer, specialization_error) = self.is_subset_eq_quantified(
+                            t1,
+                            &q,
+                            None,
+                            None,
+                            self.is_shape_flag_binding_source(&q, *v2),
+                        );
                         let answer = normalize_answer_for_kind(q.kind(), Cow::Owned(answer));
                         if let Some(specialization_error) = specialization_error {
                             self.solver
@@ -4096,9 +4314,10 @@ mod tests {
     use ruff_text_size::TextSize;
 
     use super::*;
+    use crate::types::class::PrecomputedTParams;
 
     fn solver_with_answer(answer: Type) -> (Solver, Var) {
-        let solver = Solver::new(false, true, false, false, false, false);
+        let solver = Solver::new(false, false, true, false, false, false, false);
         let uniques = UniqueFactory::new();
         let var = Var::new(&uniques);
         solver
@@ -4141,7 +4360,7 @@ mod tests {
 
     #[test]
     fn sanitize_type_vars_follows_answer_chains_without_rewriting() {
-        let solver = Solver::new(false, true, false, false, false, false);
+        let solver = Solver::new(false, false, true, false, false, false, false);
         let uniques = UniqueFactory::new();
         let range = TextRange::new(TextSize::new(1), TextSize::new(3));
         let partial = solver.fresh_partial_contained(&uniques, range);
@@ -4171,7 +4390,7 @@ mod tests {
 
     #[test]
     fn sanitize_type_vars_freezes_through_residual_answers() {
-        let solver = Solver::new(false, true, false, false, false, false);
+        let solver = Solver::new(false, false, true, false, false, false, false);
         let uniques = UniqueFactory::new();
         let range = TextRange::new(TextSize::new(1), TextSize::new(3));
         let partial = solver.fresh_partial_contained(&uniques, range);
@@ -4211,6 +4430,59 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn restore_vars_preserves_vars_outside_the_snapshot() {
+        let solver = Solver::new(false, true, false, false, false, false, false);
+        let uniques = UniqueFactory::new();
+        let inner = Var::new(&uniques);
+        let root = Var::new(&uniques);
+        let escapee = Var::new(&uniques);
+        let rank_filler = Var::new(&uniques);
+        {
+            let mut variables = solver.variables.lock();
+            variables.insert_fresh(inner, Variable::answer(Type::None));
+            variables.insert_fresh(root, Variable::answer(Type::None));
+            variables.insert_fresh(escapee, Variable::answer(Type::Any(AnyStyle::Explicit)));
+            variables.insert_fresh(rank_filler, Variable::answer(Type::None));
+            // `inner` becomes `Goto(root)`, and `root` gains rank 1.
+            variables.unify(inner, root);
+            // Raise `escapee`'s rank so the next unification points `root` at it, not the reverse.
+            variables.unify(rank_filler, escapee);
+        }
+
+        let snapshot = solver.snapshot_vars(&[inner, root]);
+
+        {
+            let variables = solver.variables.lock();
+            // `root` becomes `Goto(escapee)`.
+            variables.unify(root, escapee);
+            // Verify that the test is set up correctly: both vars in the snapshot now point to a var
+            // outside the snapshot.
+            assert_eq!(variables.get_root(inner), escapee);
+            assert_eq!(variables.get_root(root), escapee);
+        }
+
+        solver.restore_vars(snapshot);
+
+        let variables = solver.variables.lock();
+        assert!(
+            matches!(&*variables.get(root), Variable::Answer { ty, .. } if *ty == Type::None),
+            "a snapshotted root is restored to its own answer"
+        );
+        assert_eq!(
+            variables.get_root(inner),
+            root,
+            "a `Goto` var's root is correctly restored"
+        );
+        assert!(
+            matches!(
+                &*variables.get(escapee),
+                Variable::Answer { ty, .. } if *ty == Type::Any(AnyStyle::Explicit)
+            ),
+            "a var outside the snapshot keeps its own answer"
+        );
+    }
+
     fn quantified(kind: QuantifiedKind, index: u32) -> Quantified {
         quantified_with_restriction(kind, index, Restriction::Unrestricted)
     }
@@ -4224,7 +4496,7 @@ mod tests {
             QuantifiedIdentity::new(
                 ModuleName::from_str("test"),
                 AnchorIndex::new(TextRange::default(), index),
-                QuantifiedOrigin::SyntheticCallableResidual,
+                QuantifiedOrigin::synthetic(),
             ),
             Name::new(match kind {
                 QuantifiedKind::IntVar => "S",
@@ -4252,7 +4524,7 @@ mod tests {
                 Identifier::new(Name::new("Array"), TextRange::empty(TextSize::new(0))),
                 NestingContext::toplevel(),
                 module,
-                None,
+                PrecomputedTParams::NotGeneric,
                 false,
             ),
             targs,
@@ -4653,7 +4925,7 @@ mod tests {
         ];
         for (index, (v1_quantified, k1, r1, v2_quantified, k2, r2)) in cases.into_iter().enumerate()
         {
-            let solver = Solver::new(false, true, false, false, false, false);
+            let solver = Solver::new(false, false, true, false, false, false, false);
             let uniques = UniqueFactory::new();
             let v1 = Var::new(&uniques);
             let v2 = Var::new(&uniques);

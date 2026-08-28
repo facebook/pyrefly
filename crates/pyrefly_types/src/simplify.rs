@@ -103,7 +103,7 @@ fn unions_internal(
         collapse_tuple_unions_with_empty(&mut res, heap);
         collapse_builtins_type(&mut res, heap);
         collapse_wide_tuple_unions(&mut res, heap);
-        collapse_quantifieds(&mut res, heap);
+        collapse_quantifieds(&mut res, stdlib, heap);
         // Second pass: squashing can still leave a pathologically large union (e.g. thousands
         // of distinct class types). Widen anything still over the cap to `Any`.
         if res.len() > MAX_UNION_MEMBERS {
@@ -445,7 +445,7 @@ fn collapse_builtins_type(types: &mut Vec<Type>, heap: &TypeHeap) {
 /// A restricted quantified `Q` whose restriction consists of the types `c_1, ..., c_n` is fully
 /// covered by the union `(Q & c_1) | ... | (Q & c_n)`: every value of `Q` satisfies one of its
 /// restrictions, so the union collapses to just `Q`.
-fn collapse_quantifieds(types: &mut Vec<Type>, heap: &TypeHeap) {
+fn collapse_quantifieds(types: &mut Vec<Type>, stdlib: Option<&Stdlib>, heap: &TypeHeap) {
     // For each quantified appearing in a `Q & t` member, gather the `t`s.
     let mut quantified_intersects: SmallMap<&Quantified, Vec<(usize, &Type)>> = SmallMap::new();
     for (idx, ty) in types.iter().enumerate() {
@@ -458,10 +458,20 @@ fn collapse_quantifieds(types: &mut Vec<Type>, heap: &TypeHeap) {
     let mut indices_to_remove = SmallSet::new();
     let mut quantifieds_to_collapse = Vec::new();
     for (q, ts) in quantified_intersects {
+        let flag_types;
         let restrictions = match q.restriction() {
             Restriction::Constraints(cs) => cs.iter().collect(),
             Restriction::Bound(Type::Union(u)) => u.members.iter().collect(),
             Restriction::Bound(b) => vec![b],
+            Restriction::Flag(domain) => {
+                let Some(stdlib) = stdlib else {
+                    // Raw union construction cannot materialize the builtin domain, so preserve
+                    // the unsimplified intersection until a Stdlib-aware normalization boundary.
+                    continue;
+                };
+                flag_types = domain.types(stdlib);
+                flag_types.iter().collect()
+            }
             Restriction::Unrestricted => continue,
         };
         if restrictions.iter().all(|r| ts.iter().any(|(_, t)| t == r)) {

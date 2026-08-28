@@ -67,7 +67,10 @@ impl ModuleErrors {
                 previous_range = x.range();
                 previous_start = self.items.len();
                 self.items.push(x);
-            } else if !self.items[previous_start..].contains(&x) {
+            } else if !self.items[previous_start..]
+                .iter_mut()
+                .any(|existing| existing.merge_if_same_diagnostic(&x))
+            {
                 self.items.push(x);
             }
         }
@@ -379,6 +382,18 @@ impl ErrorBuilder<'_> {
     /// Append a detail line (shown indented below the header).
     pub fn with_detail(mut self, msg: String) -> Self {
         if self.active {
+            self.details.push(msg);
+        }
+        self
+    }
+
+    /// Append a detail line that is only worth working out if the error will be
+    /// kept. Modules loaded below `Require::Errors` collect with
+    /// [`ErrorStyle::Never`], so for them this never runs at all.
+    pub fn with_detail_from(mut self, msg: impl FnOnce() -> Option<String>) -> Self {
+        if self.active
+            && let Some(msg) = msg()
+        {
             self.details.push(msg);
         }
         self

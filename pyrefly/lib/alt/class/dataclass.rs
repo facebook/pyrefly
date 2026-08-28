@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_python::dunder;
 use pyrefly_types::typed_dict::AnonymousTypedDictInner;
 use pyrefly_types::typed_dict::TypedDict;
@@ -80,14 +78,14 @@ impl ReplaceKind {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Gets dataclass fields for an `@dataclass`-decorated class. attrs with
     /// `auto_attribs=False` collects only `attr.ib()`/`field()` assignments;
     /// every other kind is annotation-driven.
     pub fn get_dataclass_fields(
         &self,
         cls: &Class,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         kind: &DataclassKind,
     ) -> SmallSet<Name> {
         let attrs_initializer_only = matches!(
@@ -149,7 +147,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.check_attrs_default_decorator_return_types(cls, dataclass, errors);
         if dataclass.kws.init {
             let init_method = if let Some((root_model_type, has_strict)) =
-                self.get_pydantic_root_model_type_via_mro(cls, &metadata)
+                self.get_pydantic_root_model_type_via_mro(cls, metadata)
             {
                 self.get_pydantic_root_model_init(cls, root_model_type, has_strict)
             } else if metadata.is_pydantic_model() {
@@ -378,12 +376,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     ) -> Option<Type> {
         let get_ty = self.descriptor_member_type(descriptor_cls, &dunder::GET)?;
         let instance_ty = self.instantiate(cls);
-        // `callable_signatures` yields the unbound member signatures, so the parameters are
+        // `toplevel_callable_signatures` yields the unbound member signatures, so the parameters are
         // `__get__(self, obj, cls)` - the `obj` param is at index 1
         let instance_returns = get_ty
-            .callable_signatures()
-            .iter()
-            .filter_map(|sig| {
+            .toplevel_callable_signatures()
+            .filter_map(|(sig, _)| {
                 let obj_ty = sig.get_positional_param(1)?;
                 self.is_subset_eq(&instance_ty, obj_ty)
                     .then(|| sig.ret.clone())
@@ -460,9 +457,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .descriptor_member_type(&descriptor_cls, &dunder::SET)
                     .and_then(|set_ty| {
                         set_ty
-                            .callable_signatures()
-                            .first()
-                            .and_then(|sig| sig.get_positional_param(2).cloned())
+                            .toplevel_callable_signatures()
+                            .next()
+                            .and_then(|(sig, _)| sig.get_positional_param(2).cloned())
                     });
 
                 if let (Some(get_ty), Some(set_ty)) = (get_return_ty, set_value_ty) {
@@ -727,7 +724,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         cls: &Class,
         dataclass_metadata: &DataclassMetadata,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
         is_from_dataclass_transform: bool,
         errors: &ErrorCollector,
     ) {
@@ -940,17 +937,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // `__init__`. This mirrors how Pyright handles `field_specifiers` per PEP 681.
         let constructor_callable = self.constructor_to_callable_distributed(func);
         let func = constructor_callable.as_ref().unwrap_or(func);
-        let sigs = func.callable_signatures();
+        let sigs = func.toplevel_callable_signatures().collect::<Vec<_>>();
         let sig = if sigs.len() == 1 {
-            sigs[0].clone()
+            sigs[0].0.clone()
         } else if sigs.len() > 1
             && let Type::Overload(overload) = func
         {
             // Overloaded function. Call it to see which signature is actually used.
-            // TODO: sigs could contain unbound type parameters, because `callable_signatures`
+            // TODO: sigs could contain unbound type parameters, because `toplevel_callable_signatures`
             // looks through foralls. Overload selection might fail spuriously.
             self.call_overloads(
-                Vec1::try_from_vec(sigs.map(|x| {
+                Vec1::try_from_vec(sigs.map(|(x, _)| {
                     TargetWithTParams(
                         None,
                         Function {
@@ -1060,10 +1057,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Only overloads callable with a single positional argument contribute an input type;
             // an overload requiring a second positional arg can't be the converter.
             let inputs: Vec<Type> = ty
-                .callable_signatures()
-                .iter()
-                .filter(|sig| sig.accepts_single_positional_arg())
-                .filter_map(|sig| sig.get_first_param())
+                .toplevel_callable_signatures()
+                .filter(|(sig, _)| sig.accepts_single_positional_arg())
+                .filter_map(|(sig, _)| sig.get_first_param())
                 .cloned()
                 .collect();
             if inputs.is_empty() {

@@ -94,6 +94,11 @@ fn quantified_to_structured(
             .iter()
             .map(|c| type_to_structured(c, table, pending_class_traits))
             .collect(),
+        Restriction::Flag(domain) => domain
+            .class_names()
+            .into_iter()
+            .map(|name| insert_simple_class(name, table))
+            .collect(),
         Restriction::Unrestricted => vec![],
     };
     let bound_hashes: Vec<u64> = bound_indices.iter().map(|&i| table.hash_at(i)).collect();
@@ -384,6 +389,11 @@ pub(crate) fn type_to_structured(
                 Restriction::Constraints(constraints) => constraints
                     .iter()
                     .map(|c| type_to_structured(c, table, pending_class_traits))
+                    .collect(),
+                Restriction::Flag(domain) => domain
+                    .class_names()
+                    .into_iter()
+                    .map(|name| insert_simple_class(name, table))
                     .collect(),
                 Restriction::Unrestricted => vec![],
             };
