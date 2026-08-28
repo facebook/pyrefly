@@ -1718,37 +1718,41 @@ impl<'a> BindingsBuilder<'a> {
         let (default_idx, partial_type_info) =
             self.follow_to_partial_type(deferred.lookup_result_idx);
 
-        if let Some((def_idx, first_use)) = partial_type_info {
-            // Determine side effects based on usage and first_use state.
-            if deferred.usage.is_static() {
-                self.mark_does_not_pin_if_first_use(def_idx);
-            } else if deferred.usage.may_pin_partial_type() {
-                // Normal reads: if this is the first use, mark it.
-                if matches!(first_use, FirstUse::Undetermined)
-                    && let Some(current_idx) = deferred.usage.current_idx()
-                {
-                    self.mark_first_use(def_idx, current_idx);
+        let (target_idx, forward_to_first_use) =
+            if let Some((def_idx, first_use)) = partial_type_info {
+                // Determine side effects based on usage and first_use state.
+                if deferred.usage.is_static() {
+                    self.mark_does_not_pin_if_first_use(def_idx);
+                } else if deferred.usage.may_pin_partial_type() {
+                    // Normal reads: if this is the first use, mark it.
+                    if matches!(first_use, FirstUse::Undetermined)
+                        && let Some(current_idx) = deferred.usage.current_idx()
+                    {
+                        self.mark_first_use(def_idx, current_idx);
+                    }
                 }
-            }
-            // Non-pinning reads leave first_use as Undetermined so that the next
-            // semantic read can still become the first use for pinning.
-            // All partial type reads forward to the NameAssign (def_idx).
-            self.insert_binding_idx(deferred.bound_name_idx, Binding::ForwardToFirstUse(def_idx));
-        } else {
-            let orig_binding = self.idx_to_binding(default_idx);
-            let binding = if let Some(b) = orig_binding
-                && matches!(b, Binding::LambdaParameter(..))
-            {
-                // Lambda parameters have special handling in Key::check_shortcut.
-                // We bind directly to the definition to ensure the shortcut is always detected.
-                b.clone()
-            } else if deferred.promote {
-                Binding::PromoteForward(default_idx)
+                // Non-pinning reads leave first_use as Undetermined so that the next
+                // semantic read can still become the first use for pinning.
+                // All partial type reads forward to the NameAssign (def_idx).
+                (def_idx, true)
             } else {
-                Binding::Forward(default_idx)
+                (default_idx, false)
             };
-            self.insert_binding_idx(deferred.bound_name_idx, binding);
-        }
+
+        let binding = if forward_to_first_use {
+            Binding::ForwardToFirstUse(target_idx)
+        } else if let Some(b) = self.idx_to_binding(target_idx)
+            && matches!(b, Binding::LambdaParameter(..))
+        {
+            // Lambda parameters have special handling in Key::check_shortcut.
+            // We bind directly to the definition to ensure the shortcut is always detected.
+            b.clone()
+        } else if deferred.promote {
+            Binding::PromoteForward(target_idx)
+        } else {
+            Binding::Forward(target_idx)
+        };
+        self.insert_binding_idx(deferred.bound_name_idx, binding);
 
         if matches!(
             deferred.usage,
