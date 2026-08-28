@@ -110,3 +110,102 @@ def reshape_shape(shape: IntTuple, newshape: int | tuple[int, ...] | None) -> In
     if len(inferred) == 1:
         return dsl.IntTuple.gradual()
     return dsl.IntTuple(dim for dim in dims)
+
+@type_shape_dsl_function
+def fft_n_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return dsl.Invalid("FFT requires at least 1-D array")
+    if n < 0:
+        return dsl.Invalid("n must be non-negative")
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT axis out of bounds")
+    extent = n + 0
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def rfft_shape(shape: IntTuple, dim: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return dsl.Invalid("FFT requires at least 1-D array")
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT axis out of bounds")
+    extent = shape[axis] // 2 + 1
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def rfft_n_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return dsl.Invalid("FFT requires at least 1-D array")
+    if n < 0:
+        return dsl.Invalid("n must be non-negative")
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT axis out of bounds")
+    extent = n // 2 + 1
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def irfft_shape(shape: IntTuple, dim: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return dsl.Invalid("FFT requires at least 1-D array")
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT axis out of bounds")
+    extent = 2 * (shape[axis] - 1)
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def irfft_n_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return dsl.Invalid("FFT requires at least 1-D array")
+    if n < 0:
+        return dsl.Invalid("n must be non-negative")
+    if dim < 0:
+        axis = dim + rank
+    else:
+        axis = dim + 0
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("FFT axis out of bounds")
+    extent = n + 0
+    return dsl.concat(
+        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
+    )
+
+@type_shape_dsl_function
+def fftfreq_shape(n: int) -> IntTuple:
+    if n < 0:
+        return dsl.Invalid("n must be non-negative")
+    extent = n + 0
+    return dsl.IntTuple((extent,))
+
+@type_shape_dsl_function
+def rfftfreq_shape(n: int) -> IntTuple:
+    if n < 0:
+        return dsl.Invalid("n must be non-negative")
+    return dsl.IntTuple((n // 2 + 1,))

@@ -15,6 +15,8 @@ from jax._shapes import (
 )
 from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar
 
+from . import fft as fft
+
 type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
 # The trailing `None` is not a legal argument to `reshape`. It is present because
