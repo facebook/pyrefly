@@ -27,6 +27,7 @@ use pyrefly_types::type_level_dsl::TypeShapeDslInputDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslIntrinsic;
 use pyrefly_types::type_level_dsl::TypeShapeDslProgramError;
 use pyrefly_types::type_level_dsl::TypeShapeDslReturnKind;
+use pyrefly_types::type_level_dsl::TypeShapeDslSlotReturnKind;
 use pyrefly_types::type_var::FlagDomain;
 use pyrefly_types::type_var::FlagMember;
 use pyrefly_types::type_var::Restriction;
@@ -568,13 +569,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             for return_ in validated.returns() {
                 match return_.kind() {
-                    TypeShapeDslReturnKind::Local { domain, .. } if *domain != result => {
+                    TypeShapeDslReturnKind::Slot {
+                        kind: TypeShapeDslSlotReturnKind::KnownDomain { domain, .. },
+                        ..
+                    } if *domain != result => {
                         self.error(errors, return_.range(), ErrorKind::InvalidArgument, "`@type_shape_dsl_function` local return domain must match the declared result".to_owned());
                         valid_body = false;
                     }
-                    TypeShapeDslReturnKind::Local {
-                        domain,
-                        parameter_origins: Some(parameters),
+                    TypeShapeDslReturnKind::Slot {
+                        kind:
+                            TypeShapeDslSlotReturnKind::KnownDomain {
+                                domain,
+                                parameter_origins: Some(parameters),
+                            },
                         ..
                     } if !parameters.iter().all(|parameter| {
                         parameter_domains[*parameter] == TypeShapeDslInputDomain::Value(*domain)
@@ -591,19 +598,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         );
                         valid_body = false;
                     }
-                    TypeShapeDslReturnKind::AliasedParameter { parameters, .. }
-                        if !parameters.iter().all(|parameter| {
-                            parameter_domains[*parameter] == TypeShapeDslInputDomain::Value(result)
-                        }) =>
-                    {
-                        self.error(errors, return_.range(), ErrorKind::InvalidArgument, "`@type_shape_dsl_function` local alias return domain must match the declared result".to_owned());
-                        valid_body = false;
-                    }
-                    TypeShapeDslReturnKind::Parameter(index)
-                        if parameter_domains[*index] != TypeShapeDslInputDomain::Value(result) =>
-                    {
+                    TypeShapeDslReturnKind::Slot {
+                        slot,
+                        kind: TypeShapeDslSlotReturnKind::DirectParameter,
+                    } if parameter_domains[*slot] != TypeShapeDslInputDomain::Value(result) => {
                         let flag_value =
-                            matches!(parameter_domains[*index], TypeShapeDslInputDomain::Flag(_));
+                            matches!(parameter_domains[*slot], TypeShapeDslInputDomain::Flag(_));
                         self.error(
                             errors,
                             return_.range(),
@@ -611,15 +611,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             if flag_value {
                                 format!(
                                     "`@type_shape_dsl_function` Flag parameter `{}` is input-only and cannot be returned",
-                                    dsl.parameter_name(*index)
+                                    dsl.parameter_name(*slot)
                                 )
                             } else {
                                 format!(
                                     "`@type_shape_dsl_function` return annotation must match returned parameter `{}`",
-                                    dsl.parameter_name(*index)
+                                    dsl.parameter_name(*slot)
                                 )
                             },
                         );
+                        valid_body = false;
+                    }
+                    TypeShapeDslReturnKind::Slot {
+                        kind: TypeShapeDslSlotReturnKind::ParameterAlias(parameters),
+                        ..
+                    } if !parameters.iter().all(|parameter| {
+                        parameter_domains[*parameter] == TypeShapeDslInputDomain::Value(result)
+                    }) =>
+                    {
+                        self.error(errors, return_.range(), ErrorKind::InvalidArgument, "`@type_shape_dsl_function` local alias return domain must match the declared result".to_owned());
                         valid_body = false;
                     }
                     TypeShapeDslReturnKind::Broadcast {
@@ -671,9 +681,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         );
                         valid_body = false;
                     }
-                    TypeShapeDslReturnKind::Parameter(_)
-                    | TypeShapeDslReturnKind::Local { .. }
-                    | TypeShapeDslReturnKind::AliasedParameter { .. }
+                    TypeShapeDslReturnKind::Slot { .. }
                     | TypeShapeDslReturnKind::Broadcast { .. }
                     | TypeShapeDslReturnKind::Expression(_)
                     | TypeShapeDslReturnKind::Invalid

@@ -863,16 +863,10 @@ impl SourceRangeKey for TypeShapeDslAssignment {
 /// `StructurallyValidatedTypeShapeDslFunction` identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeShapeDslReturnKind {
-    /// Return the parameter at the given zero-based position.
-    Parameter(usize),
-    Local {
+    /// Return the value stored in a parameter or local slot.
+    Slot {
         slot: usize,
-        domain: TypeShapeDslDomain,
-        parameter_origins: Option<Box<[usize]>>,
-    },
-    AliasedParameter {
-        slot: usize,
-        parameters: Box<[usize]>,
+        kind: TypeShapeDslSlotReturnKind,
     },
     /// Return the broadcast of two shape parameters.
     Broadcast {
@@ -889,6 +883,20 @@ pub enum TypeShapeDslReturnKind {
     Gradual(TypeShapeDslDomain),
     /// Evaluate a statically resolved user-defined DSL helper.
     HelperCall(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Validation information for a returned parameter or local slot.
+pub enum TypeShapeDslSlotReturnKind {
+    /// The slot is the returned parameter itself.
+    DirectParameter,
+    /// The slot is a local whose domain comes from the listed parameters.
+    ParameterAlias(Box<[usize]>),
+    /// The slot has a known domain, with optional contributing parameters.
+    KnownDomain {
+        domain: TypeShapeDslDomain,
+        parameter_origins: Option<Box<[usize]>>,
+    },
 }
 
 /// The arithmetic a structurally validated dimension or Flag expression applies. Reached through
@@ -3415,27 +3423,31 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         });
                     }
                     if slot < self.parameters.args.len() {
-                        TypeShapeDslReturnKind::Parameter(slot)
+                        TypeShapeDslReturnKind::Slot {
+                            slot,
+                            kind: TypeShapeDslSlotReturnKind::DirectParameter,
+                        }
                     } else {
-                        let (domain, parameter_origins) = match &flow.kinds[slot] {
-                            DslStaticKind::Dimension => (TypeShapeDslDomain::Int, None),
+                        let kind = match &flow.kinds[slot] {
+                            DslStaticKind::Dimension => TypeShapeDslSlotReturnKind::KnownDomain {
+                                domain: TypeShapeDslDomain::Int,
+                                parameter_origins: None,
+                            },
                             DslStaticKind::DeferredInteger(index) => {
                                 self.resolve_deferred_integer(*index, DslIntegerDomain::Dimension)?;
-                                (TypeShapeDslDomain::Int, None)
+                                TypeShapeDslSlotReturnKind::KnownDomain {
+                                    domain: TypeShapeDslDomain::Int,
+                                    parameter_origins: None,
+                                }
                             }
                             DslStaticKind::IntTuple { parameter_origins } => {
-                                (TypeShapeDslDomain::IntTuple, parameter_origins.clone())
+                                TypeShapeDslSlotReturnKind::KnownDomain {
+                                    domain: TypeShapeDslDomain::IntTuple,
+                                    parameter_origins: parameter_origins.clone(),
+                                }
                             }
                             DslStaticKind::UnknownParameters(parameters) => {
-                                self.returns.push(TypeShapeDslReturn {
-                                    statement_range: return_stmt.range,
-                                    value_range: returned.range(),
-                                    kind: TypeShapeDslReturnKind::AliasedParameter {
-                                        slot,
-                                        parameters: parameters.clone(),
-                                    },
-                                });
-                                return Ok(());
+                                TypeShapeDslSlotReturnKind::ParameterAlias(parameters.clone())
                             }
                             _ => {
                                 return Err(TypeShapeDslDefinitionError {
@@ -3444,11 +3456,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                                 });
                             }
                         };
-                        TypeShapeDslReturnKind::Local {
-                            slot,
-                            domain,
-                            parameter_origins,
-                        }
+                        TypeShapeDslReturnKind::Slot { slot, kind }
                     }
                 }
             }
@@ -4338,18 +4346,7 @@ impl ResolvedTypeShapeDslProgram {
                         .map(|return_| return_.kind.clone())
                         .expect("validated return statement must have validation metadata");
                     return DslControlFlow::Return(match kind {
-                        TypeShapeDslReturnKind::Parameter(return_index) => {
-                            assert_eq!(
-                                node.parameter_domains()[return_index],
-                                TypeShapeDslInputDomain::Value(node.result_domain()),
-                                "validated parameter return domain must match its result domain"
-                            );
-                            DslOutcome::Value(environment.value(return_index).clone())
-                        }
-                        TypeShapeDslReturnKind::Local { slot, .. } => {
-                            DslOutcome::Value(environment.value(slot).clone())
-                        }
-                        TypeShapeDslReturnKind::AliasedParameter { slot, .. } => {
+                        TypeShapeDslReturnKind::Slot { slot, .. } => {
                             DslOutcome::Value(environment.value(slot).clone())
                         }
                         TypeShapeDslReturnKind::Broadcast {
