@@ -475,6 +475,15 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 (Some(_), Some(Param::KwOnly(_, _, _) | Param::Kwargs(_, _))) => {
                     break;
                 }
+                (None, Some(Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _))) => {
+                    let missing = std::iter::once(ty.clone())
+                        .chain(u_args.filter_map(|param| match param {
+                            Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) => Some(ty.clone()),
+                            _ => None,
+                        }))
+                        .collect();
+                    return Err(SubsetError::CallableMissingPositionalParameters(missing));
+                }
                 _ => return Err(SubsetError::Other),
             }
         }
@@ -1073,12 +1082,21 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         want_ts: &[PrefixParam],
         want_pspec: &Type,
     ) -> Result<(), SubsetError> {
-        if got.len() < want_ts.len() {
-            return Err(SubsetError::Other);
-        }
         // Preserve Pos vs PosOnly so that the subset checker can reject name mismatches
         // (e.g. Pos("a", int) vs Pos("self", K) fails, but PosOnly matches any name).
         let args: Vec<Param> = want_ts.iter().map(|p| p.to_param_preserve_name()).collect();
+        if got.len() < args.len() {
+            // Run the regular parameter matcher first so it can distinguish a type mismatch
+            // from parameters that are genuinely absent. A variadic parameter may consume the
+            // whole prefix, but inferring the remaining ParamSpec from it is not supported.
+            self.is_subset_param_list(
+                got.items(),
+                &args,
+                params_are_gradual_variadic(got.items()),
+                params_are_gradual_variadic(&args),
+            )?;
+            return Err(SubsetError::Other);
+        }
         let (pre, post) = got.items().split_at(args.len());
         self.is_subset_param_list(
             pre,
