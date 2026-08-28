@@ -2410,17 +2410,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             x.attr.range,
             AttributeReferenceKind::Textual,
         );
-        let attr_type = self.attr_infer(base, &x.attr.id, x.range, errors, None);
-        if base.ty().is_literal_string() {
-            match attr_type.ty() {
-                Type::BoundMethod(method) => attr_type
-                    .clone()
-                    .with_ty(method.with_bound_object(base.ty().clone()).as_type()),
-                _ => attr_type,
-            }
-        } else {
-            attr_type
-        }
+        self.attr_infer(base, &x.attr.id, x.range, errors, None)
     }
 
     pub fn attr_infer(
