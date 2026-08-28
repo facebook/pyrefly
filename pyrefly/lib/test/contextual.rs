@@ -221,6 +221,54 @@ x9: list[str] = {"a": 1}  # E: `dict[str, int]` is not assignable to `list[str]`
     "#,
 );
 
+// The `Any` in a type variable's bound carries no information about the literal, so a non-empty
+// list infers its own element type. An empty list has nothing to infer from and keeps the bound.
+testcase!(
+    test_any_bounded_typevar_list_hint,
+    r#"
+from typing import Any, assert_type
+
+def keep[T: list[Any]](x: T) -> T: ...
+
+assert_type(keep([0]), list[int])
+assert_type(keep([x for x in [0]]), list[int])
+assert_type(keep([]), list[Any])
+    "#,
+);
+
+testcase!(
+    test_any_bounded_typevar_nested_empty_literal,
+    r#"
+from typing import Any, reveal_type
+
+def keep[T: list[Any]](x: T) -> T: ...
+
+reveal_type(keep([[]]))  # E: revealed type: list[list[Any]]
+reveal_type(keep([[], [1]]))  # E: revealed type: list[list[int] | list[Any]]
+reveal_type(keep([[] for _ in [0]]))  # E: revealed type: list[list[Any]]
+reveal_type(keep([set()]))  # E: revealed type: list[set[Any]]
+reveal_type(keep([list()]))  # E: revealed type: list[list[Any]]
+reveal_type(keep([{}]))  # E: revealed type: list[dict[Any, Any]]
+    "#,
+);
+
+// An unconstrained generic return should not narrow permanently from its first mutation.
+testcase!(
+    bug = "Repeated append over-narrows an empty generic list return",
+    test_any_bounded_typevar_empty_list_repeated_append,
+    r#"
+from typing import Any, reveal_type
+
+def keep[T: list[Any]](x: T) -> T: ...
+
+def f():
+    xs = keep([])
+    xs.append(1)
+    xs.append(2)  # E: Argument `Literal[2]` is not assignable to parameter `object` with type `Literal[1]`
+    reveal_type(xs)  # E: revealed type: list[Literal[1]] | list[Any]
+    "#,
+);
+
 testcase!(
     test_call_keyword_arg_is_context_even_for_duplicates,
     r#"

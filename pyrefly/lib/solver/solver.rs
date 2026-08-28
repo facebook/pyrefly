@@ -780,6 +780,30 @@ impl Solver {
         )
     }
 
+    /// Replace unresolved empty-container element types with `fallback` in a copy of `ty`.
+    pub(crate) fn replace_unresolved_partials(&self, mut ty: Type, fallback: &Type) -> Type {
+        self.expand_mut(&mut ty);
+        let partials: SmallSet<_> = {
+            let variables = self.variables.lock();
+            ty.collect_maybe_placeholder_vars()
+                .into_iter()
+                .filter(|var| {
+                    matches!(
+                        &*variables.get(*var),
+                        Variable::PartialQuantified(_) | Variable::PartialContained(_)
+                    )
+                })
+                .collect()
+        };
+        ty.transform_mut(&mut |ty| {
+            if matches!(ty, Type::Var(var) if partials.contains(var)) {
+                *ty = fallback.clone();
+            }
+        });
+        self.simplify_mut(&mut ty);
+        ty
+    }
+
     /// Returns true if the given type is a Var that points to a partial variable.
     pub fn is_partial(&self, ty: &Type) -> bool {
         if let Type::Var(v) = ty {

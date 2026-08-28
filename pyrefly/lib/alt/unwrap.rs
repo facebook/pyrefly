@@ -27,6 +27,26 @@ pub const MAX_CALL_HINT_WIDTH: usize = 4;
 /// Maximum size for a union hint to `infer_with_decomposed_hint`.
 pub const MAX_DECOMPOSE_HINT_WIDTH: usize = 8;
 
+/// A contextual element hint for list literals and comprehensions.
+pub(crate) enum ListElementHint {
+    /// A hint that should be applied while inferring the element.
+    Hint(Type),
+    /// An `Any` hint that is ignored for inference but retained as a fallback.
+    ///
+    /// The contained type is always `Any`, preserving its original `AnyStyle`.
+    UninformativeAny(Type),
+}
+
+impl ListElementHint {
+    /// Split the hint into an inference hint and a fallback.
+    pub(crate) fn into_parts(self) -> (Option<Type>, Option<Type>) {
+        match self {
+            Self::Hint(ty) => (Some(ty), None),
+            Self::UninformativeAny(ty) => (None, Some(ty)),
+        }
+    }
+}
+
 // The error collector is None for a "soft" type hint, where we try to
 // match an expression against a hint, but fall back to the inferred type
 // without any errors if the hint is incompatible.
@@ -293,13 +313,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    pub fn decompose_list(&self, hint: &Type) -> Option<Type> {
+    pub(crate) fn decompose_list(&self, hint: &Type) -> Option<ListElementHint> {
         let elem = self.fresh_var();
         let list_type = self
             .heap
             .mk_class_type(self.stdlib.list(elem.to_type(self.heap)));
         if self.is_subset_eq(&list_type, hint) {
-            self.resolve_var_opt(hint, elem)
+            match self.resolve_var_opt(hint, elem) {
+                Some(elem_hint)
+                    if elem_hint.is_any()
+                        && hint
+                            .collect_maybe_placeholder_vars()
+                            .into_iter()
+                            .any(|var| self.solver().var_is_quantified(var)) =>
+                {
+                    // An `Any` element hint obtained while the container hint still has an unsolved
+                    // generic variable carries no information about the literal's elements.
+                    Some(ListElementHint::UninformativeAny(elem_hint))
+                }
+                Some(elem_hint) => Some(ListElementHint::Hint(elem_hint)),
+                None => None,
+            }
         } else {
             None
         }
