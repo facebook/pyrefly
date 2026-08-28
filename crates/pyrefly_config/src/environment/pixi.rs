@@ -23,7 +23,12 @@ fn interpreter_candidates(environment: &Path) -> [PathBuf; 2] {
     ]
 }
 
-fn find_in_workspace(workspace: &Path) -> Option<PathBuf> {
+/// Find the Python interpreter in an installed Pixi workspace's default environment.
+///
+/// Activated Pixi environments already expose their interpreter through environment variables and
+/// `PATH`. This fallback only inspects `.pixi/envs/default`; it does not validate the manifest or
+/// resolve detached-environment locations.
+pub(crate) fn find_in_workspace(workspace: &Path) -> Option<PathBuf> {
     let environment = workspace
         .join(".pixi")
         .join("envs")
@@ -33,23 +38,12 @@ fn find_in_workspace(workspace: &Path) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-/// Find the Python interpreter in an installed Pixi workspace's default environment.
-///
-/// Activated Pixi environments already expose their interpreter through environment variables and
-/// `PATH`. This fallback covers editors and other processes started without Pixi activation, where
-/// the default environment lives at `.pixi/envs/default`.
-pub fn find(project_path: &Path) -> Option<PathBuf> {
-    project_path
-        .ancestors()
-        .take_while(|path| !path.as_os_str().is_empty())
-        .find_map(find_in_workspace)
-}
-
 #[cfg(test)]
 mod tests {
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
+    use crate::environment::interpreters::Interpreters;
 
     fn interpreter_name() -> &'static str {
         if cfg!(windows) {
@@ -105,7 +99,7 @@ mod tests {
         setup_workspace(tempdir.path(), vec![environment("default", true)]);
 
         assert_eq!(
-            find(tempdir.path()),
+            Interpreters::find_project_interpreter(tempdir.path()),
             Some(default_interpreter(tempdir.path()))
         );
     }
@@ -124,7 +118,7 @@ mod tests {
         );
 
         assert_eq!(
-            find(&root.join("project/src")),
+            Interpreters::find_project_interpreter(&root.join("project/src")),
             Some(default_interpreter(root))
         );
     }
@@ -134,7 +128,7 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         setup_workspace(tempdir.path(), vec![environment("dev", true)]);
 
-        assert_eq!(find(tempdir.path()), None);
+        assert_eq!(Interpreters::find_project_interpreter(tempdir.path()), None);
     }
 
     #[test]
@@ -142,6 +136,6 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         setup_workspace(tempdir.path(), vec![environment("default", false)]);
 
-        assert_eq!(find(tempdir.path()), None);
+        assert_eq!(Interpreters::find_project_interpreter(tempdir.path()), None);
     }
 }

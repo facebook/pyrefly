@@ -165,10 +165,10 @@ impl Interpreters {
     /// 2. Check for a configured interpreter path, discovery command, or Conda environment.
     /// 3. Check for an IDE / LSP provided `python-interpreter`.
     /// 4. Check for an active venv or Conda environment.
-    /// 5. Check for a `venv` in the current project.
-    /// 6. Check for a Pixi default environment in the current project.
-    /// 7. Use an interpreter we can find on the `$PATH`.
-    /// 8. Give up and return an error.
+    /// 5. Check the project and its ancestors for a venv or Pixi default environment.
+    ///    The nearest environment wins, with venv preferred in the same directory.
+    /// 6. Use an interpreter we can find on the `$PATH`.
+    /// 7. Give up and return an error.
     pub(crate) fn find_interpreter(
         &self,
         path: Option<&Path>,
@@ -242,8 +242,17 @@ impl Interpreters {
         ))
     }
 
-    fn find_project_interpreter(start_path: &Path) -> Option<PathBuf> {
-        venv::find(start_path).or_else(|| pixi::find(start_path))
+    /// Find the nearest project environment, preferring venv over Pixi at the same root.
+    pub(crate) fn find_project_interpreter(start_path: &Path) -> Option<PathBuf> {
+        Self::search_roots(start_path)
+            .find_map(|root| venv::find_in_root(root).or_else(|| pixi::find_in_workspace(root)))
+    }
+
+    /// Visit the project and its ancestors without treating an empty relative path as a root.
+    fn search_roots(start_path: &Path) -> impl Iterator<Item = &Path> {
+        start_path
+            .ancestors()
+            .take_while(|path| !path.as_os_str().is_empty())
     }
 
     fn interpreter_path_or_cmd(&self) -> anyhow::Result<Option<ConfigOrigin<PathBuf>>> {
@@ -340,7 +349,6 @@ impl Interpreters {
 
 #[cfg(test)]
 mod test {
-    #[cfg(windows)]
     use std::fs;
 
     use pyrefly_util::test_path::TestPath;
@@ -373,10 +381,8 @@ mod test {
         tempdir
     }
 
-    fn setup_pixi_test_dir() -> (TempDir, PathBuf) {
-        let tempdir = tempdir().unwrap();
-        let root = tempdir.path();
-        let interpreter = if cfg!(windows) {
+    fn setup_pixi_test_dir(root: &Path) -> PathBuf {
+        if cfg!(windows) {
             TestPath::setup_test_directory(
                 root,
                 vec![TestPath::dir(
@@ -403,8 +409,7 @@ mod test {
                 )],
             );
             root.join(".pixi/envs/default/bin/python3")
-        };
-        (tempdir, interpreter)
+        }
     }
 
     /// Produces a conda environment name that should not actually be possible in conda.
@@ -675,7 +680,8 @@ mod test {
 
     #[test]
     fn test_find_project_interpreter_pixi() {
-        let (tempdir, interpreter) = setup_pixi_test_dir();
+        let tempdir = tempdir().unwrap();
+        let interpreter = setup_pixi_test_dir(tempdir.path());
 
         assert_eq!(
             Interpreters::find_project_interpreter(tempdir.path()),
@@ -684,26 +690,62 @@ mod test {
     }
 
     #[test]
+    fn test_search_roots_skips_empty_relative_ancestor() {
+        assert_eq!(
+            Interpreters::search_roots(Path::new("project/src"))
+                .map(Path::to_path_buf)
+                .collect::<Vec<_>>(),
+            vec![PathBuf::from("project/src"), PathBuf::from("project")],
+        );
+    }
+
+    #[test]
     fn test_find_project_interpreter_prefers_venv() {
         let tempdir = setup_test_dir();
         let root = tempdir.path();
-        let pixi_environment = root.join(".pixi/envs/default");
-        std::fs::create_dir_all(if cfg!(windows) {
-            pixi_environment.clone()
-        } else {
-            pixi_environment.join("bin")
-        })
-        .unwrap();
-        std::fs::File::create(if cfg!(windows) {
-            pixi_environment.join("python.exe")
-        } else {
-            pixi_environment.join("bin/python3")
-        })
-        .unwrap();
+        setup_pixi_test_dir(root);
 
         assert_eq!(
             Interpreters::find_project_interpreter(root),
             Some(root.join("venv").join(test_venv_interpreter_name()))
+        );
+    }
+
+    #[test]
+    fn test_find_project_interpreter_prefers_nearer_pixi() {
+        let tempdir = setup_test_dir();
+        let project = tempdir.path().join("project");
+        let start_path = project.join("src");
+        fs::create_dir_all(&start_path).unwrap();
+        let interpreter = setup_pixi_test_dir(&project);
+
+        assert_eq!(
+            Interpreters::find_project_interpreter(&start_path),
+            Some(interpreter)
+        );
+    }
+
+    #[test]
+    fn test_find_project_interpreter_prefers_nearer_venv() {
+        let tempdir = tempdir().unwrap();
+        setup_pixi_test_dir(tempdir.path());
+        let project = tempdir.path().join("project");
+        let start_path = project.join("src");
+        fs::create_dir_all(&start_path).unwrap();
+        TestPath::setup_test_directory(
+            &project,
+            vec![TestPath::dir(
+                "venv",
+                vec![
+                    TestPath::file(test_venv_interpreter_name()),
+                    TestPath::file("pyvenv.cfg"),
+                ],
+            )],
+        );
+
+        assert_eq!(
+            Interpreters::find_project_interpreter(&start_path),
+            Some(project.join("venv").join(test_venv_interpreter_name()))
         );
     }
 }
