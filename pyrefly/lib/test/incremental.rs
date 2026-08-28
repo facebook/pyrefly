@@ -230,6 +230,76 @@ def identity(x: Int) -> Int:
 }
 
 #[test]
+fn test_shape_flag_constructor_source_edit_invalidates_consumers() {
+    let mut i = Incremental::with_files(vec!["consumer".to_owned(), "main".to_owned()]);
+    let main = |annotation: &str| {
+        format!(
+            r#"
+type Carrier[T] = T
+from shape_extensions import Flag
+
+class Control[T: Flag[int]]:
+    def __init__(self, value: {annotation}) -> None: ...
+"#,
+        )
+    };
+    i.set("main", &main("T"));
+    i.set(
+        "consumer",
+        r#"
+from main import Control
+
+control = Control(value=1)
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    // The alias resolves to the same parameter type, so constructor-source metadata is the only
+    // exported type information that changes.
+    i.set("main", &main("Carrier[T]"));
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main"]);
+    assert!(changed.errors.collect_display_errors().is_empty());
+}
+
+#[test]
+fn test_shape_flag_constructor_source_after_paramspec_edit_invalidates_consumers() {
+    let mut i = Incremental::with_files(vec!["consumer".to_owned(), "main".to_owned()]);
+    let main = |annotation: &str| {
+        format!(
+            r#"
+type Carrier[T] = T
+from shape_extensions import Flag
+
+class Control[T: Flag[int]]:
+    def __init__[**P](
+        self, *args: P.args, value: {annotation}, **kwargs: P.kwargs
+    ) -> None: ...
+"#,
+        )
+    };
+    i.set("main", &main("T"));
+    i.set(
+        "consumer",
+        r#"
+from main import Control
+
+control = Control(value=1)
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    // ParamSpec variadics are removed from the lowered parameter list. Match the remaining
+    // parameter to its source by name so this provenance change still invalidates consumers.
+    i.set("main", &main("Carrier[T]"));
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main"]);
+    assert!(changed.errors.collect_display_errors().is_empty());
+}
+
+#[test]
 fn test_type_shape_dsl_helper_edit_invalidates_caller() {
     let mut i = Incremental::with_files(vec![
         "helpers".to_owned(),

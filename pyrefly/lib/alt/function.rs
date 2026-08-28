@@ -950,6 +950,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
         let mut metadata = def.metadata.clone();
         metadata.display_signature.0 = display_signature.map(Box::new);
+        self.record_shape_flag_constructor_sources(
+            stmt,
+            &def.params,
+            def.defining_cls.as_ref(),
+            &mut metadata,
+        );
         if let Some(dsl) = &def.type_shape_dsl_def
             && let Some(kind) = self.validate_type_shape_dsl_declaration(
                 dsl,

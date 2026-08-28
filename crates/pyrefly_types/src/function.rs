@@ -204,6 +204,9 @@ pub struct FuncFlags {
     pub is_overload: bool,
     pub is_staticmethod: bool,
     pub is_classmethod: bool,
+    /// Parameter indices whose annotations directly name a type parameter of the defining class.
+    /// This is used when a subclass binds that parameter to a shape `Flag`.
+    pub shape_flag_constructor_sources: Option<Box<Vec<usize>>>,
     /// A function decorated with `@deprecated`
     pub deprecation: Option<Deprecation>,
     /// Metadata for `@property`, `@foo.setter`, and `@foo.deleter`.

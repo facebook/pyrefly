@@ -699,6 +699,10 @@ impl Forall<Forallable> {
 /// These are things that can have Forall around them, so often you see `Forall<Forallable>`
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "shape Flag constructor metadata adds one pointer; boxing every generic function would add indirection to the common path"
+)]
 pub enum Forallable {
     TypeAlias(TypeAliasData),
     Function(Function),

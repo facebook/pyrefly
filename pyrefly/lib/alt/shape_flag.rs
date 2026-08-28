@@ -7,8 +7,11 @@
 
 use std::sync::Arc;
 
+use pyrefly_python::dunder;
 use pyrefly_types::callable::Param;
 use pyrefly_types::callable::Required;
+use pyrefly_types::class::Class;
+use pyrefly_types::function::FuncMetadata;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::type_var::FlagDomain;
 use pyrefly_types::type_var::FlagMember;
@@ -48,6 +51,50 @@ pub(crate) fn shape_flag_vars(tparams: &TParams, vars: &[Var]) -> Option<Arc<Sma
 }
 
 impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
+    /// Record constructor parameters whose source annotations directly name a type parameter of
+    /// the defining class. A subclass may bind an ordinary base-class parameter to a `Flag`, and
+    /// this provenance is lost when aliases are resolved.
+    pub(crate) fn record_shape_flag_constructor_sources(
+        &self,
+        stmt: &FunctionDefData,
+        params: &[Param],
+        defining_cls: Option<&Class>,
+        metadata: &mut FuncMetadata,
+    ) {
+        if stmt.name.id != dunder::INIT && stmt.name.id != dunder::NEW {
+            return;
+        }
+        let Some(cls) = defining_cls else {
+            return;
+        };
+        let class_tparams = self.get_class_tparams(cls);
+        let sources = params
+            .iter()
+            .enumerate()
+            .filter_map(|(index, param)| {
+                let name = param.name()?;
+                let parameter = stmt.parameters.find(name.as_str())?;
+                let Some(Expr::Name(name)) = parameter.annotation() else {
+                    return None;
+                };
+                let Type::Quantified(quantified) = param.as_type() else {
+                    return None;
+                };
+                (matches!(
+                    param,
+                    Param::PosOnly(..) | Param::Pos(..) | Param::KwOnly(..)
+                ) && quantified.name() == &name.id
+                    && class_tparams
+                        .iter()
+                        .any(|tparams| tparams.iter().any(|tparam| tparam == &**quantified)))
+                .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        if !sources.is_empty() {
+            metadata.flags.shape_flag_constructor_sources = Some(Box::new(sources));
+        }
+    }
+
     pub(crate) fn reject_legacy_shape_flag_bound(
         &self,
         bound: &Type,
