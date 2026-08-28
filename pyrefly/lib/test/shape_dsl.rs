@@ -1139,6 +1139,86 @@ def assert_single_dim(x: Array[[3], int]) -> None:
 "#,
 );
 
+// `tuple[...]` and `IntTuple[...]` denote equivalent int-tuple types; what
+// differs is the source syntax each spelling accepts. A tuple element is an
+// ordinary type, so a dimension there may be written explicitly as `Int[5]`.
+// Direct `IntTuple[...]` arguments and shaped-array bare-list blocks are
+// instead raw integer dimension expressions, arithmetic included, that get an
+// implicit `Int` wrapper -- so an already-wrapped `Int[...]` is not one of them.
+// Symbolic dimensions stay exclusive to `IntVar`: an unresolved `N: Int` is a
+// gradual dimension, never a symbolic one.
+testcase!(
+    test_shape_dimension_syntax_across_tuple_forms,
+    shaped_array_env(),
+    r#"
+from typing import Any, assert_type
+from shape_extensions import Int, IntTuple, IntVar, shaped_array
+
+type _Shape = IntTuple
+type _AnyShape = tuple[Any, ...]
+
+@shaped_array(shape="Shape")
+class Array[Shape: _Shape = _AnyShape, DType = Any]: ...
+
+def ordinary_tuple_form[N: Int, M: IntVar](
+    unresolved: Array[tuple[N], int],
+    tuple_literal: Array[tuple[Int[5]], int],
+    tuple_int_var: Array[tuple[M], int],  # E: `M` is an `IntVar` and cannot be used as an ordinary type
+    tuple_symbolic: Array[tuple[Int[M]], int],
+    tuple_arithmetic: Array[tuple[Int[M + 1]], int],
+    nested_type_object: Array[tuple[type[Int[5]]], int],  # E: Invalid shaped-array shape carrier `tuple[type[Int[5]]]`
+) -> None:
+    # An unresolved `N: Int` is gradual, so it is not a symbolic dimension.
+    assert_type(unresolved, Array[[int], int])
+    assert_type(tuple_literal, Array[[5], int])
+    assert_type(tuple_int_var, Array[[int], int])
+    assert_type(tuple_symbolic, Array[[M], int])
+    assert_type(tuple_arithmetic, Array[[M + 1], int])
+    # Explicit `Int[...]` elements denote the same shapes as the corresponding
+    # direct `IntTuple[...]` forms.
+    assert_type(tuple_literal, Array[IntTuple[5], int])
+    assert_type(tuple_symbolic, Array[IntTuple[M], int])
+    assert_type(tuple_arithmetic, Array[IntTuple[M + 1], int])
+
+def direct_int_tuple_form[N: Int, M: IntVar](
+    direct_literal: Array[IntTuple[5], int],
+    direct_int_var: Array[IntTuple[M], int],
+    direct_arithmetic: Array[IntTuple[M + 1], int],
+    direct_explicit_int: Array[IntTuple[Int[5]], int],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
+    direct_ordinary: Array[IntTuple[N], int],  # E: `N` must be an `IntVar` to be used as a shape dimension
+) -> None:
+    assert_type(direct_literal, Array[[5], int])
+    assert_type(direct_int_var, Array[[M], int])
+    assert_type(direct_arithmetic, Array[[M + 1], int])
+    # Invalid explicit `Int[...]` syntax rejects the whole annotation, while a
+    # rejected type variable preserves the rank with a gradual dimension.
+    assert_type(direct_explicit_int, Any)
+    assert_type(direct_ordinary, Array[[int], int])
+
+def bare_list_form[N: Int, M: IntVar](
+    raw: Array[[5, M], int],
+    arithmetic: Array[[M + 1], int],
+    bare_explicit_int: Array[[Int[5]], int],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
+    bare_ordinary: Array[[N], int],  # E: `N` must be an `IntVar` to be used as a shape dimension
+) -> None:
+    assert_type(raw, Array[[5, M], int])
+    assert_type(arithmetic, Array[[M + 1], int])
+    assert_type(bare_explicit_int, Any)
+    assert_type(bare_ordinary, Array[[int], int])
+
+def inexact_bounds[C: (Int[2], Int[3]), L: Int[5], B: int, O: Int | None](
+    tuple_constrained: Array[tuple[C], int],  # E: Invalid shaped-array shape carrier `tuple[C]`
+    tuple_literal_bound: Array[tuple[L], int],  # E: Invalid shaped-array shape carrier `tuple[L]`
+    tuple_builtin_int: Array[tuple[B], int],  # E: Invalid shaped-array shape carrier `tuple[B]`
+    tuple_optional: Array[tuple[O], int],  # E: Invalid shaped-array shape carrier `tuple[O]`
+    direct_constrained: Array[IntTuple[C], int],  # E: `C` must be an `IntVar` to be used as a shape dimension
+    direct_literal_bound: Array[IntTuple[L], int],  # E: `L` must be an `IntVar` to be used as a shape dimension
+    direct_builtin_int: Array[IntTuple[B], int],  # E: `B` must be an `IntVar` to be used as a shape dimension
+    direct_optional: Array[IntTuple[O], int],  # E: `O` must be an `IntVar` to be used as a shape dimension
+) -> None: ...
+"#,
+);
+
 testcase!(
     test_intvar_rejects_non_int_specialization_with_int_recovery,
     shaped_array_env(),
