@@ -325,6 +325,32 @@ def flatten_ir(self: ShapedArray, start_dim: int = 0, end_dim: int = -1) -> Shap
     )
 
 @type_shape_dsl_function
+def flatten_shape(shape: IntTuple, start_dim: int, end_dim: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        if (start_dim == 0 or start_dim == -1) and (end_dim == 0 or end_dim == -1):
+            return dsl.IntTuple((1,))
+        return dsl.Invalid("flatten dimension out of range for scalar input")
+    if start_dim < 0 - rank or start_dim >= rank:
+        return dsl.Invalid("flatten start_dim out of range")
+    if end_dim < 0 - rank or end_dim >= rank:
+        return dsl.Invalid("flatten end_dim out of range")
+    if start_dim < 0:
+        start = start_dim + rank
+    else:
+        start = start_dim + 0
+    if end_dim < 0:
+        end = end_dim + rank
+    else:
+        end = end_dim + 0
+    if start > end:
+        return dsl.Invalid("flatten start_dim cannot come after end_dim")
+    return dsl.concat(
+        dsl.concat(shape[:start], dsl.IntTuple((dsl.prod(shape[start : end + 1]),))),
+        shape[end + 1 :],
+    )
+
+@type_shape_dsl_function
 def expand_shape(shape: IntTuple, sizes: IntTuple) -> IntTuple:
     if len(sizes) < len(shape):
         return dsl.Invalid("expand target rank cannot be smaller than input rank")

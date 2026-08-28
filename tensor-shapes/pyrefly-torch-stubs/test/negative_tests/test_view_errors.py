@@ -61,3 +61,16 @@ def test_zero_sized_inference():
     reveal_type(empty.reshape(-1))
     # E: could not infer size for dimension -1
     empty.reshape(0, -1)
+
+
+def test_flatten_dimension_errors():
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    # E: flatten start_dim out of range
+    x.flatten(3)
+    # E: flatten end_dim out of range
+    x.flatten(0, -4)
+    # E: flatten start_dim cannot come after end_dim
+    torch.flatten(x, 2, 1)
+    scalar: Tensor[[]] = torch.tensor(1)
+    # E: flatten dimension out of range for scalar input
+    scalar.flatten(1)

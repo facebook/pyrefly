@@ -41,7 +41,7 @@ from torch._shapes import (
     eig_shape,
     einsum_ir,
     expand_shape,
-    flatten_ir,
+    flatten_shape,
     index_select_shape,
     item_ir,
     matmul_shape,
@@ -312,9 +312,14 @@ class Tensor[Shape: _Shape = _AnyShape]:
 
     @overload
     def view(self, shape: Sequence[builtins.int]) -> Tensor: ...
-    @uses_shape_dsl(flatten_ir)
-    def flatten(self: Tensor, start_dim: int = 0, end_dim: int = -1) -> Tensor:
-        """Flatten dimensions. Shape inference via meta-shape: torch.flatten"""
+    def flatten[
+        Shape: IntTuple,
+        StartDim: Flag[builtins.int],
+        EndDim: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], start_dim: StartDim = 0, end_dim: EndDim = -1
+    ) -> Tensor[flatten_shape(Shape, StartDim, EndDim)]:
+        """Flatten dimensions. Shape inference via the type-level DSL."""
         ...
 
     def transpose[
@@ -1723,9 +1728,14 @@ def argmin[
     """Argmin. Shape inference via meta-shape: torch.argmin"""
     ...
 
-@uses_shape_dsl(flatten_ir)
-def flatten(self: Tensor, start_dim: int = 0, end_dim: int = -1) -> Tensor:
-    """Flatten dimensions. Shape inference via meta-shape: torch.flatten"""
+def flatten[
+    Shape: IntTuple,
+    StartDim: Flag[builtins.int],
+    EndDim: Flag[builtins.int],
+](
+    self: Tensor[Shape], start_dim: StartDim = 0, end_dim: EndDim = -1
+) -> Tensor[flatten_shape(Shape, StartDim, EndDim)]:
+    """Flatten dimensions. Shape inference via the type-level DSL."""
     ...
 
 # ==== Tensor Creation Functions ====

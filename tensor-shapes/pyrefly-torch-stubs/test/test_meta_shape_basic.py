@@ -403,6 +403,19 @@ def test_flatten_partial_method():
     assert_type(result, Tensor[[2, 12, 5]])
 
 
+def test_flatten_scalar_and_gradual():
+    scalar: Tensor[[]] = torch.tensor(1)
+    gradual: Tensor[IntTuple] = torch.randn(2, 3, 4)
+    assert_type(scalar.flatten(), Tensor[[1]])
+    assert_type(torch.flatten(gradual), Tensor[IntTuple])
+
+
+def test_flatten_negative_and_runtime_start(start_dim: int):
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    assert_type(x.flatten(-2), Tensor[[2, 12]])
+    assert_type(torch.flatten(x, start_dim), Tensor[IntTuple])
+
+
 # Test 14: torch.stack - stack tensors along new dimension
 def test_stack():
     x: Tensor[[2, 3]] = torch.randn(2, 3)
