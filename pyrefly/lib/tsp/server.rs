@@ -45,6 +45,7 @@ use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::state::state::Transaction;
 use crate::tsp::validation::internal_error;
 use crate::tsp::validation::invalid_params_error;
 use crate::tsp::validation::snapshot_outdated_error;
@@ -202,6 +203,7 @@ impl<T: TspInterface> TspConnection<T> {
     fn dispatch_tsp_request<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: Option<&mut TelemetryEvent>,
         request: &Request,
         msg: TSPRequests,
     ) -> anyhow::Result<bool> {
@@ -216,7 +218,11 @@ impl<T: TspInterface> TspConnection<T> {
                 Ok(true)
             }
             TSPRequests::ResolveImportRequest { params, .. } => {
-                self.handle_resolve_import(request.id.clone(), params, ide_transaction_manager);
+                let mut transaction = self
+                    .inner()
+                    .non_committable_transaction(ide_transaction_manager);
+                self.handle_resolve_import(request.id.clone(), params, &mut transaction);
+                Self::save_transaction(ide_transaction_manager, transaction, telemetry_event);
                 Ok(true)
             }
             TSPRequests::GetPythonSearchPathsRequest { params, .. } => {
@@ -224,21 +230,33 @@ impl<T: TspInterface> TspConnection<T> {
                 Ok(true)
             }
             TSPRequests::GetDeclaredTypeRequest { params, .. } => {
-                self.dispatch_get_type_request(request.id.clone(), params, |s, p| {
-                    s.handle_get_declared_type(p)
-                });
+                self.dispatch_get_type_request(
+                    ide_transaction_manager,
+                    telemetry_event,
+                    request.id.clone(),
+                    params,
+                    |s, p, transaction| s.handle_get_declared_type(p, transaction),
+                );
                 Ok(true)
             }
             TSPRequests::GetComputedTypeRequest { params, .. } => {
-                self.dispatch_get_type_request(request.id.clone(), params, |s, p| {
-                    s.handle_get_computed_type(p)
-                });
+                self.dispatch_get_type_request(
+                    ide_transaction_manager,
+                    telemetry_event,
+                    request.id.clone(),
+                    params,
+                    |s, p, transaction| s.handle_get_computed_type(p, transaction),
+                );
                 Ok(true)
             }
             TSPRequests::GetExpectedTypeRequest { params, .. } => {
-                self.dispatch_get_type_request(request.id.clone(), params, |s, p| {
-                    s.handle_get_expected_type(p)
-                });
+                self.dispatch_get_type_request(
+                    ide_transaction_manager,
+                    telemetry_event,
+                    request.id.clone(),
+                    params,
+                    |s, p, transaction| s.handle_get_expected_type(p, transaction),
+                );
                 Ok(true)
             }
             TSPRequests::ConnectionRequest { .. } => {
@@ -252,13 +270,16 @@ impl<T: TspInterface> TspConnection<T> {
     /// Deserialize `serde_json::Value` params into [`GetTypeParams`], call the
     /// handler, and send the response. Shared by getDeclaredType,
     /// getComputedType, and getExpectedType.
-    fn dispatch_get_type_request(
-        &self,
+    fn dispatch_get_type_request<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: Option<&mut TelemetryEvent>,
         id: RequestId,
         raw_params: serde_json::Value,
         handler: impl FnOnce(
             &Self,
             GetTypeParams,
+            &mut Transaction<'a>,
         ) -> Result<Option<tsp_types::Type>, lsp_server::ResponseError>,
     ) {
         let params: GetTypeParams = match serde_json::from_value::<GetTypeParams>(raw_params) {
@@ -268,13 +289,30 @@ impl<T: TspInterface> TspConnection<T> {
                 return;
             }
         };
-        match handler(self, params) {
+        let mut transaction = self
+            .inner()
+            .non_committable_transaction(ide_transaction_manager);
+        let result = handler(self, params, &mut transaction);
+        Self::save_transaction(ide_transaction_manager, transaction, telemetry_event);
+        match result {
             Ok(result) => {
                 self.send_ok(id, result);
             }
             Err(err) => {
                 self.send_err(id, err);
             }
+        }
+    }
+
+    fn save_transaction<'a>(
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        transaction: Transaction<'a>,
+        telemetry_event: Option<&mut TelemetryEvent>,
+    ) {
+        if let Some(telemetry_event) = telemetry_event {
+            ide_transaction_manager.save(transaction, telemetry_event);
+        } else {
+            ide_transaction_manager.save_without_telemetry(transaction);
         }
     }
 }
@@ -325,7 +363,12 @@ impl<T: TspInterface> TspMainConnection<T> {
                     self.handle_connection_request(request.id.clone(), params);
                 }
                 Some(msg) => {
-                    self.dispatch_tsp_request(ide_transaction_manager, request, msg)?;
+                    self.dispatch_tsp_request(
+                        ide_transaction_manager,
+                        Some(telemetry_event),
+                        request,
+                        msg,
+                    )?;
                 }
                 None => {
                     self.send_response(Response::new_err(
@@ -504,6 +547,7 @@ impl<T: TspInterface> TspExtraConnection<T> {
             let mut selector = crossbeam_channel::Select::new();
             let close_index = selector.recv(&close_rx);
             let message_index = selector.recv(&message_rx);
+            let mut tm = TransactionManager::default();
             loop {
                 let selected = selector.select();
                 match selected.index() {
@@ -517,11 +561,9 @@ impl<T: TspInterface> TspExtraConnection<T> {
                         };
 
                         match message {
-                            Message::Request(request) => {
-                                let mut tm = TransactionManager::default();
-                                match parse_tsp_request(&request) {
-                                    Some(TSPRequests::ConnectionRequest { .. }) => {
-                                        self.send_err(
+                            Message::Request(request) => match parse_tsp_request(&request) {
+                                Some(TSPRequests::ConnectionRequest { .. }) => {
+                                    self.send_err(
                                             request.id,
                                             ResponseError {
                                                 code: ErrorCode::InvalidRequest as i32,
@@ -532,27 +574,26 @@ impl<T: TspInterface> TspExtraConnection<T> {
                                                 data: None,
                                             },
                                         );
-                                    }
-                                    Some(msg) => {
-                                        if let Err(error) =
-                                            self.dispatch_tsp_request(&mut tm, &request, msg)
-                                        {
-                                            warn!("Extra TSP connection error: {error}");
-                                            break;
-                                        }
-                                    }
-                                    None => {
-                                        self.send_response(Response::new_err(
-                                            request.id,
-                                            ErrorCode::MethodNotFound as i32,
-                                            format!(
-                                                "Extra TSP connection does not support method: {}",
-                                                request.method
-                                            ),
-                                        ));
+                                }
+                                Some(msg) => {
+                                    if let Err(error) =
+                                        self.dispatch_tsp_request(&mut tm, None, &request, msg)
+                                    {
+                                        warn!("Extra TSP connection error: {error}");
+                                        break;
                                     }
                                 }
-                            }
+                                None => {
+                                    self.send_response(Response::new_err(
+                                        request.id,
+                                        ErrorCode::MethodNotFound as i32,
+                                        format!(
+                                            "Extra TSP connection does not support method: {}",
+                                            request.method
+                                        ),
+                                    ));
+                                }
+                            },
                             Message::Notification(_) | Message::Response(_) => {}
                         }
 

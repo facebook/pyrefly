@@ -24,6 +24,7 @@ use lsp_types::request::Request as _;
 use pretty_assertions::assert_eq;
 use pyrefly_util::fs_anyhow::read_to_string;
 use pyrefly_util::telemetry::NoTelemetry;
+use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use serde_json::Value;
 
@@ -560,6 +561,10 @@ pub struct TspInteraction {
 
 impl TspInteraction {
     pub fn new() -> Self {
+        Self::new_with_telemetry(NoTelemetry)
+    }
+
+    pub fn new_with_telemetry(telemetry: impl Telemetry + 'static) -> Self {
         init_test();
 
         let ((conn_server, server_reader), (conn_client, _client_reader)) = Connection::memory();
@@ -583,7 +588,7 @@ impl TspInteraction {
                 conn_server,
                 server_reader,
                 args,
-                &NoTelemetry,
+                &telemetry,
                 None,
                 TEST_THREAD_COUNT,
                 None,

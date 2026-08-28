@@ -77,4 +77,9 @@ impl<'a> TransactionManager<'a> {
     pub fn save(&mut self, transaction: Transaction<'a>, telemetry: &mut TelemetryEvent) {
         self.saved_state = Some(transaction.save(telemetry))
     }
+
+    /// Save a transaction for a request that does not have a telemetry event.
+    pub fn save_without_telemetry(&mut self, transaction: Transaction<'a>) {
+        self.saved_state = Some(transaction.save_without_telemetry())
+    }
 }

@@ -12,6 +12,7 @@ use tsp_types::GetTypeParams;
 use tsp_types::Type;
 
 use crate::lsp::non_wasm::server::TspInterface;
+use crate::state::state::Transaction;
 use crate::tsp::server::TspConnection;
 use crate::tsp::validation::parse_uri;
 
@@ -24,6 +25,7 @@ impl<T: TspInterface> TspConnection<T> {
     pub fn handle_get_computed_type(
         &self,
         params: GetTypeParams,
+        transaction: &mut Transaction,
     ) -> Result<Option<Type>, ResponseError> {
         self.validate_snapshot(params.snapshot)?;
         // Validate the URI is parseable (rejects malformed strings).
@@ -33,6 +35,7 @@ impl<T: TspInterface> TspConnection<T> {
         let start = params.position();
         let end = params.end_position();
         Ok(self.inner().computed_type_at_range(
+            transaction,
             params.uri(),
             start.line,
             start.character,

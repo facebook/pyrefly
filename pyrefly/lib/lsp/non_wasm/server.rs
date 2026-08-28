@@ -482,7 +482,13 @@ pub trait TspInterface: Send + Sync + 'static {
     ///
     /// Returns `None` when the URI cannot be resolved, the position is invalid,
     /// or no type information is available at that location.
-    fn type_at_position(&self, uri: &str, line: u32, character: u32) -> Option<tsp_types::Type>;
+    fn type_at_position(
+        &self,
+        transaction: &mut Transaction,
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> Option<tsp_types::Type>;
 
     /// Return the computed (inferred) type for a node spanning the given range,
     /// converted to the TSP wire format.
@@ -503,6 +509,7 @@ pub trait TspInterface: Send + Sync + 'static {
     /// `get_stdlib`.
     fn computed_type_at_range(
         &self,
+        transaction: &mut Transaction,
         uri: &str,
         start_line: u32,
         start_character: u32,
@@ -516,6 +523,7 @@ pub trait TspInterface: Send + Sync + 'static {
     /// expected-type context applies.
     fn expected_type_at_position(
         &self,
+        transaction: &mut Transaction,
         uri: &str,
         line: u32,
         character: u32,
@@ -6504,12 +6512,12 @@ impl Server {
         )
     }
 
-    /// Build a read transaction and the handle the type checker analyzes `path`
-    /// under, so `(uri, range)` queries resolve for any analyzable file rather
-    /// than only open documents.
+    /// Return the handle the type checker analyzes `path` under, so `(uri,
+    /// range)` queries resolve for any analyzable file rather than only open
+    /// documents.
     ///
-    /// Open files are served from their in-memory overlay (already committed by
-    /// the recheck that ran on `didOpen`). For anything else we reuse the handle
+    /// Open files are served from the in-memory overlay already incorporated in
+    /// the supplied transaction. For anything else we reuse the handle
     /// the file was already analyzed under — an imported dependency's filesystem
     /// handle, or a bundled stdlib stub's `BundledTypeshed` handle whose
     /// `SysInfo` we can't reconstruct here, hence the by-path lookup — and force
@@ -6517,14 +6525,10 @@ impl Server {
     /// bindings/answers, which the type lookup reads) so narrowed/computed types
     /// are available. A file that isn't analyzed yet falls back to a fresh
     /// filesystem handle read from disk.
-    fn query_transaction_and_handle<'a>(&'a self, path: &Path) -> (Transaction<'a>, Handle) {
+    fn query_handle(&self, transaction: &mut Transaction, path: &Path) -> Handle {
         if self.open_files.read().contains_key(path) {
-            return (
-                self.state.transaction(),
-                make_open_handle(&self.state, path),
-            );
+            return make_open_handle(&self.state, path);
         }
-        let mut transaction = self.state.transaction();
         // Imported dependencies live under a filesystem handle we can rebuild
         // directly; only scan when that misses (bundled stubs, unusual SysInfo).
         let fs_handle =
@@ -6539,29 +6543,29 @@ impl Server {
                 .unwrap_or(fs_handle)
         };
         transaction.run(&[handle.dupe()], Require::Everything, None);
-        (transaction, handle)
+        handle
     }
 
-    /// Open `uri` at `(line, character)`: resolve the path, build a handle, and
-    /// start a transaction, returning it alongside the handle and the resolved
-    /// in-file position.
-    fn open_at_position<'a>(
-        &'a self,
+    /// Open `uri` at `(line, character)`: resolve the path and return its handle
+    /// and in-file position in `transaction`.
+    fn open_at_position(
+        &self,
+        transaction: &mut Transaction,
         uri: &str,
         line: u32,
         character: u32,
-    ) -> Option<(Transaction<'a>, Handle, TextSize)> {
+    ) -> Option<(Handle, TextSize)> {
         let url = Url::parse(uri)
             .ok()
             .or_else(|| Url::from_file_path(uri).ok())?;
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
-        let (transaction, handle) = self.query_transaction_and_handle(&path);
+        let handle = self.query_handle(transaction, &path);
         let module_info = transaction.get_module_info(&handle)?;
         let position =
             module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
-        Some((transaction, handle, position))
+        Some((handle, position))
     }
 
     /// Convert `ty` to the TSP wire format, resolving every declaration location
@@ -6758,18 +6762,25 @@ impl TspInterface for Server {
         Ok(paths)
     }
 
-    fn type_at_position(&self, uri: &str, line: u32, character: u32) -> Option<tsp_types::Type> {
-        let (transaction, handle, position) = self.open_at_position(uri, line, character)?;
+    fn type_at_position(
+        &self,
+        transaction: &mut Transaction,
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> Option<tsp_types::Type> {
+        let (handle, position) = self.open_at_position(transaction, uri, line, character)?;
         // For TSP, return the raw declared type without coercing callees in
         // call position. This keeps the function's `Declaration::Regular`
         // intact on the wire, which TSP clients need to re-resolve the
         // signature (parameters, overloads) from source.
         let ty = transaction.get_type_at_preserving_declaration(&handle, position)?;
-        Some(self.convert_type_in_transaction(&transaction, &handle, &ty))
+        Some(self.convert_type_in_transaction(transaction, &handle, &ty))
     }
 
     fn computed_type_at_range(
         &self,
+        transaction: &mut Transaction,
         uri: &str,
         start_line: u32,
         start_character: u32,
@@ -6782,7 +6793,7 @@ impl TspInterface for Server {
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
-        let (transaction, handle) = self.query_transaction_and_handle(&path);
+        let handle = self.query_handle(transaction, &path);
         let module_info = transaction.get_module_info(&handle)?;
         let start = module_info.from_lsp_position(
             lsp_types::Position {
@@ -6804,23 +6815,24 @@ impl TspInterface for Server {
         // Convert against the *same* transaction that produced `ty`, so export
         // location resolution stays warm and cannot hit a cold `get_stdlib`.
         let ty = transaction.get_computed_type_at_range(&handle, range)?;
-        Some(self.convert_type_in_transaction(&transaction, &handle, &ty))
+        Some(self.convert_type_in_transaction(transaction, &handle, &ty))
     }
 
     fn expected_type_at_position(
         &self,
+        transaction: &mut Transaction,
         uri: &str,
         line: u32,
         character: u32,
     ) -> Option<tsp_types::Type> {
-        let (transaction, handle, position) = self.open_at_position(uri, line, character)?;
+        let (handle, position) = self.open_at_position(transaction, uri, line, character)?;
         // Prefer the contextually expected type; fall back to the computed type
         // (preserving declarations) so the result is meaningful even outside an
         // expected-type context.
         let ty = transaction
             .get_expected_type_at(&handle, position)
             .or_else(|| transaction.get_type_at_preserving_declaration(&handle, position))?;
-        Some(self.convert_type_in_transaction(&transaction, &handle, &ty))
+        Some(self.convert_type_in_transaction(transaction, &handle, &ty))
     }
 
     fn resolve_uri_to_path(&self, uri: &Url) -> Option<PathBuf> {

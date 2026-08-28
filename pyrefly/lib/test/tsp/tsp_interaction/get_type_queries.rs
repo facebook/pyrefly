@@ -8,7 +8,13 @@
 //! Integration tests for the `typeServer/getDeclaredType`,
 //! `typeServer/getComputedType`, and `typeServer/getExpectedType` TSP requests.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use lsp_types::Url;
+use pyrefly_lsp_test::object_model::RecordedTelemetryEvent;
+use pyrefly_lsp_test::object_model::TestTelemetry;
+use pyrefly_util::telemetry::TelemetryEventKind;
 use tempfile::TempDir;
 use tsp_types::TypeKind;
 
@@ -168,6 +174,21 @@ fn get_expected_type_ok(
     let result = resp.result.expect("Expected result");
     assert!(!result.is_null(), "Expected non-null type result");
     result
+}
+
+fn wait_for_type_query_event(
+    rx: &crossbeam_channel::Receiver<Arc<RecordedTelemetryEvent>>,
+) -> Arc<RecordedTelemetryEvent> {
+    loop {
+        let event = rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("timed out waiting for getComputedType telemetry");
+        if let TelemetryEventKind::LspEvent(ref name) = event.event.kind
+            && name.contains("getComputedType")
+        {
+            return event;
+        }
+    }
 }
 
 // =======================================================================
@@ -431,6 +452,84 @@ fn test_get_computed_type_in_unopened_file() {
     // Query the `g` function definition in the unopened `lib.py`.
     let result = get_computed_type_ok(&mut tsp, &lib_uri, 0, 4, snapshot);
     assert_kind(&result, TypeKind::Function);
+
+    tsp.shutdown();
+}
+
+#[test]
+fn test_get_computed_type_reuses_unopened_file_solve() {
+    let temp_dir = TempDir::new().unwrap();
+    write_pyproject(temp_dir.path());
+    let lib_path = temp_dir.path().join("lib.py");
+    std::fs::write(
+        &lib_path,
+        "def first() -> int: ...\ndef second() -> str: ...\n",
+    )
+    .unwrap();
+    let lib_uri = Url::from_file_path(&lib_path).unwrap().to_string();
+    std::fs::write(temp_dir.path().join("main.py"), "import lib\n").unwrap();
+
+    let telemetry = TestTelemetry::new();
+    let telemetry_rx = telemetry.subscribe();
+    let mut tsp = TspInteraction::new_with_telemetry(telemetry);
+    tsp.set_root(temp_dir.path().to_path_buf());
+    tsp.initialize(Default::default());
+    tsp.server.did_open("main.py");
+    tsp.client.expect_any_message();
+    let snapshot = get_current_snapshot(&mut tsp, 2);
+
+    let first = get_computed_type_ok(&mut tsp, &lib_uri, 0, 4, snapshot);
+    assert_kind(&first, TypeKind::Function);
+    let first_event = wait_for_type_query_event(&telemetry_rx);
+    let first_stats = first_event
+        .event
+        .transaction_stats
+        .as_ref()
+        .expect("first query should report transaction stats");
+    assert!(
+        first_stats.step_answers_count > 0,
+        "first query should solve the unopened module"
+    );
+
+    let second = get_computed_type_ok(&mut tsp, &lib_uri, 1, 4, snapshot);
+    assert_kind(&second, TypeKind::Function);
+    let second_event = wait_for_type_query_event(&telemetry_rx);
+    let second_stats = second_event
+        .event
+        .transaction_stats
+        .as_ref()
+        .expect("second query should report transaction stats");
+    assert_eq!(
+        second_stats.step_answers_count, 0,
+        "second query should reuse retained answers"
+    );
+    assert_eq!(
+        second_stats.run_todo_count, 0,
+        "second query should not enqueue type-checking work"
+    );
+
+    std::fs::write(
+        &lib_path,
+        "def first() -> bytes: ...\ndef second() -> float: ...\n",
+    )
+    .unwrap();
+    tsp.server.did_change_watched_files("lib.py", "changed");
+    tsp.client.expect_any_message();
+    let changed_snapshot = get_current_snapshot(&mut tsp, 5);
+    assert!(changed_snapshot > snapshot);
+
+    let changed = get_computed_type_ok(&mut tsp, &lib_uri, 0, 4, changed_snapshot);
+    assert_kind(&changed, TypeKind::Function);
+    let changed_event = wait_for_type_query_event(&telemetry_rx);
+    let changed_stats = changed_event
+        .event
+        .transaction_stats
+        .as_ref()
+        .expect("query after an edit should report transaction stats");
+    assert!(
+        changed_stats.step_answers_count > 0,
+        "query after an edit should recompute the unopened module"
+    );
 
     tsp.shutdown();
 }

@@ -22,7 +22,7 @@ use tsp_types::protocol::ResolveImportParams;
 
 use crate::lsp::module_helpers::to_real_path;
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::state::state::Transaction;
 use crate::tsp::server::TspConnection;
 use crate::tsp::validation::invalid_params_error;
 use crate::tsp::validation::parse_uri;
@@ -34,11 +34,11 @@ impl<T: TspInterface> TspConnection<T> {
     /// [`ModuleName`], resolves via [`Transaction::import_handle`], and returns
     /// the resolved module's file URI as a string (or JSON `null` if the
     /// module cannot be found).
-    pub fn handle_resolve_import<'a>(
-        &'a self,
+    pub fn handle_resolve_import(
+        &self,
         id: RequestId,
         params: ResolveImportParams,
-        ide_transaction_manager: &mut TransactionManager<'a>,
+        transaction: &mut Transaction,
     ) {
         // --- 1. Validate snapshot ---
         if let Err(err) = self.validate_snapshot(params.snapshot) {
@@ -84,9 +84,6 @@ impl<T: TspInterface> TspConnection<T> {
         };
 
         // --- 4. Resolve the import via existing infrastructure ---
-        let transaction = self
-            .inner()
-            .non_committable_transaction(ide_transaction_manager);
         let result = transaction.import_handle(&source_handle, module_name, None);
 
         // --- 5. Convert result to URI string (or null) ---

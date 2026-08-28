@@ -745,6 +745,16 @@ pub struct Transaction<'a> {
 impl<'a> Transaction<'a> {
     /// Drops the lock and retains just the underlying data.
     pub(crate) fn save(self, telemetry: &mut TelemetryEvent) -> TransactionData<'a> {
+        self.save_impl(Some(telemetry))
+    }
+
+    /// Drops the lock and retains the transaction data when no telemetry event
+    /// owns this request (for example, an auxiliary TSP connection).
+    pub(crate) fn save_without_telemetry(self) -> TransactionData<'a> {
+        self.save_impl(None)
+    }
+
+    fn save_impl(self, telemetry: Option<&mut TelemetryEvent>) -> TransactionData<'a> {
         let Transaction {
             data,
             stats,
@@ -754,10 +764,12 @@ impl<'a> Transaction<'a> {
             demand_collector: _,
         } = self;
         drop(readable);
-        let mut stats = stats.into_inner();
-        stats.cancelled = data.todo.get_cancellation_handle().is_cancelled();
-        copy_timing_counters(&timing, &mut stats);
-        telemetry.set_transaction_stats(stats);
+        if let Some(telemetry) = telemetry {
+            let mut stats = stats.into_inner();
+            stats.cancelled = data.todo.get_cancellation_handle().is_cancelled();
+            copy_timing_counters(&timing, &mut stats);
+            telemetry.set_transaction_stats(stats);
+        }
         data
     }
 
