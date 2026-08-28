@@ -224,7 +224,7 @@ def fill_diagonal[N: IntVar, DType](
 @overload
 def diag[N: IntVar, DType, K: Flag[int] = 0](
     v: ndarray[[N], DType], k: K = 0
-) -> ndarray[[diag_extent(N, K), diag_extent(N, K)], DType]: ...
+) -> ndarray[[diag_extent(Int[N], K), diag_extent(Int[N], K)], DType]: ...
 
 # TODO(stroxler): Model the shape arithmetic here; we can do better than `int`.
 @overload
