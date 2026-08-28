@@ -302,19 +302,25 @@ fn test_incoming_call_hierarchy_unopened_caller_file() {
         .expect_response_with(|result| {
             let incoming_calls =
                 result.expect("Expected Some(incoming_calls) for an unopened caller file");
-            let caller_names: Vec<String> = incoming_calls
+            let mut caller_names: Vec<String> = incoming_calls
                 .iter()
                 .map(|call| call.from.name.clone())
                 .collect();
-
-            for expected in ["caller_one", "caller_two", "method_caller"] {
-                assert!(
-                    caller_names.contains(&expected.to_owned()),
-                    "Expected to find {} in an unopened file, got: {:?}",
-                    expected,
-                    caller_names
-                );
-            }
+            caller_names.sort();
+            assert_eq!(
+                caller_names,
+                vec![
+                    "caller_one".to_owned(),
+                    "caller_three".to_owned(),
+                    "caller_two".to_owned(),
+                    "method_caller".to_owned(),
+                ]
+            );
+            assert!(
+                incoming_calls
+                    .iter()
+                    .all(|call| call.from_ranges.len() == 1)
+            );
 
             true
         })

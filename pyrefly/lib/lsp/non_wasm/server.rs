@@ -6280,15 +6280,6 @@ impl Server {
                 handles.push(candidate);
             }
         }
-        // `type_hierarchy_subtype_items` reads each candidate's AST, solutions and bindings and
-        // silently `continue`s past any candidate missing them, so it needs `Require::Everything`.
-        // Escalate here rather than in `compute_transitive_rdeps_for_definition_impl`: this keeps
-        // type hierarchy's behaviour exactly as it is today while letting `textDocument/references`
-        // and `find_global_implementations_from_definition`, both answered entirely from the index,
-        // stop paying for ASTs they never read.
-        if !handles.is_empty() {
-            transaction.run(&handles, Require::Everything, None)?;
-        }
         Ok(handles)
     }
 

@@ -5015,6 +5015,8 @@ fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
                 sys_info,
             );
             let rdeps = transaction.transitive_rdeps(definition_handle.dupe());
+            // Same-module reference discovery reads the definition's AST, bindings, and answers,
+            // even though most reverse dependencies can be answered from their retained indexes.
             transaction.run_for_handles(&[definition_handle], Require::Everything)?;
             rdeps
         }
@@ -5078,11 +5080,25 @@ fn process_rdeps_with_definition_impl<T: RdepTransaction, R>(
     transaction: &mut T,
     sys_info: SysInfo,
     definition: &TextRangeWithModule,
-    mut process_fn: impl FnMut(&mut T, &Handle, &TextRangeWithModule) -> Option<R>,
+    process_fn: impl FnMut(&mut T, &Handle, &TextRangeWithModule) -> Option<R>,
 ) -> Result<Vec<R>, Cancelled> {
     let candidate_handles =
         compute_transitive_rdeps_for_definition_impl(transaction, sys_info, definition)?;
 
+    Ok(process_candidate_handles_with_definition_impl(
+        transaction,
+        candidate_handles,
+        definition,
+        process_fn,
+    ))
+}
+
+fn process_candidate_handles_with_definition_impl<T: RdepTransaction, R>(
+    transaction: &mut T,
+    candidate_handles: Vec<Handle>,
+    definition: &TextRangeWithModule,
+    mut process_fn: impl FnMut(&mut T, &Handle, &TextRangeWithModule) -> Option<R>,
+) -> Vec<R> {
     let mut results = Vec::new();
     for handle in candidate_handles {
         let patched_definition = patch_definition_for_handle_impl(transaction, &handle, definition);
@@ -5091,7 +5107,7 @@ fn process_rdeps_with_definition_impl<T: RdepTransaction, R>(
         }
     }
 
-    Ok(results)
+    results
 }
 
 fn find_global_references_from_definition_impl<T: RdepTransaction>(
@@ -5101,9 +5117,16 @@ fn find_global_references_from_definition_impl<T: RdepTransaction>(
     definition: TextRangeWithModule,
     options: ReferenceOptions,
 ) -> Result<Vec<(Module, Vec<TextRange>)>, Cancelled> {
-    let results = process_rdeps_with_definition_impl(
+    let candidate_handles =
+        compute_transitive_rdeps_for_definition_impl(transaction, sys_info, &definition)?;
+    if definition_kind.symbol_kind() == Some(SymbolKind::Parameter) {
+        // Keyword argument references require each candidate's AST and bindings to resolve the
+        // callee and refine the argument back to this parameter.
+        transaction.run_for_handles(&candidate_handles, Require::Everything)?;
+    }
+    let results = process_candidate_handles_with_definition_impl(
         transaction,
-        sys_info,
+        candidate_handles,
         &definition,
         |transaction, handle, patched_definition| {
             let mut module_refs: Vec<(Module, Vec<TextRange>)> = Vec::new();
@@ -5144,7 +5167,7 @@ fn find_global_references_from_definition_impl<T: RdepTransaction>(
                 Some(module_refs)
             }
         },
-    )?;
+    );
 
     let mut global_references: Vec<(Module, Vec<TextRange>)> = Vec::new();
     for module_refs in results {
@@ -5190,8 +5213,9 @@ impl<'a> Transaction<'a> {
 impl<'a> CancellableTransaction<'a> {
     /// Processes each transitive reverse dependency for a given definition location.
     ///
-    /// This is a common pattern in workspace-wide
-    /// references-related features
+    /// This is a common pattern in workspace-wide references-related features. Candidates are
+    /// processed at their current requirement level; callers must explicitly request any data
+    /// beyond the retained index.
     pub(crate) fn process_rdeps_with_definition<T>(
         &mut self,
         sys_info: SysInfo,
