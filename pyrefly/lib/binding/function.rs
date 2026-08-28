@@ -857,8 +857,15 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn function_def(&mut self, mut x: StmtFunctionDef, parent: &NestingContext) {
-        // This is to handle "def" with no func name after
+        // Parse-error recovery produces a nameless function (e.g. a `def` with no
+        // name, or a decorator with no definition after it). It defines nothing,
+        // but its decorators are still expressions that the static definitions pass
+        // has walked, so they need bindings for anything they define.
         if x.name.id.is_empty() {
+            self.ensure_and_bind_decorators(
+                mem::take(&mut x.decorator_list),
+                &mut Usage::NonPinningValue(None),
+            );
             return;
         }
         let func_name = x.name.clone();

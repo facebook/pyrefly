@@ -228,7 +228,13 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     pub fn class_def(&mut self, mut x: StmtClassDef, parent: &NestingContext) {
+        // See the matching comment in `function_def`: a nameless class comes from
+        // parse-error recovery and defines nothing, but its decorators still do.
         if x.name.id.is_empty() {
+            self.ensure_and_bind_decorators(
+                mem::take(&mut x.decorator_list),
+                &mut Usage::NonPinningValue(None),
+            );
             return;
         }
         let synthesized_base_classes = self.prescan_synthesized_bases(&mut x, parent);

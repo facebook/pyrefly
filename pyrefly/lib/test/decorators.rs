@@ -1146,3 +1146,32 @@ def g() -> int:
     return 1
 "#,
 );
+
+// A decorator with no definition after it parses as a nameless function, whose
+// decorators still have to be bound: a walrus in one defines a real name.
+testcase!(
+    test_decorator_with_no_definition,
+    r#"
+from typing import Literal, assert_type
+@x := 1
+assert_type(x, Literal[1])  # E: Parse error: Expected class, function definition or async function definition after decorator
+"#,
+);
+
+testcase!(
+    test_decorator_with_incomplete_walrus,
+    r#"
+@x :=  # E: Parse error: Expected an expression
+y = 1  # E: Parse error: Expected class, function definition or async function definition after decorator
+"#,
+);
+
+testcase!(
+    test_decorator_on_nameless_class,
+    r#"
+from typing import Literal, assert_type
+@y := 2
+class  # E: Parse error: Expected an identifier
+assert_type(y, Literal[2])  # E: Parse error: Expected an indented block after `class` definition
+"#,
+);
