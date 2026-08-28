@@ -21,6 +21,7 @@ use crate::equality::TypeEq;
 use crate::literal::Lit;
 use crate::quantified::QuantifiedKind;
 use crate::type_level_dsl::TypeShapeDslDomain;
+use crate::type_var::Restriction;
 use crate::types::AnyStyle;
 use crate::types::Type;
 
@@ -171,6 +172,20 @@ pub fn gradual_size() -> Type {
 /// Whether `ty` is the gradual size type.
 pub fn is_gradual_size(ty: &Type) -> bool {
     matches!(ty, Type::Int(Int::Int))
+}
+
+/// Whether `ty` is an ordinary type variable whose bound is exactly the gradual size `Int`.
+///
+/// Shape features currently support only this broad bound. Narrower or wider bounds remain on
+/// the ordinary type-variable path until their shape semantics are defined explicitly.
+pub fn is_gradual_size_bound_type_var(ty: &Type) -> bool {
+    let (kind, restriction) = match ty {
+        Type::Quantified(q) => (q.kind(), q.restriction()),
+        Type::TypeVar(type_var) => (type_var.kind(), type_var.restriction()),
+        _ => return false,
+    };
+    kind == QuantifiedKind::TypeVar
+        && matches!(restriction, Restriction::Bound(bound) if is_gradual_size(bound))
 }
 
 pub fn int_type_is_provably_nonnegative(ty: &Type) -> bool {
@@ -1341,18 +1356,78 @@ fn contains_var_in_symbolic_type(ty: &Type, nested: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use ruff_python_ast::Identifier;
     use ruff_python_ast::Int as AstInt;
+    use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
 
     use super::*;
     use crate::lit_int::LitInt;
     use crate::literal::Lit;
     use crate::literal::LitStyle;
     use crate::literal::Literal;
+    use crate::quantified::AnchorIndex;
+    use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
+    use crate::quantified::QuantifiedOrigin;
+    use crate::type_var::PreInferenceVariance;
+    use crate::type_var::TypeVar;
     use crate::types::AnyStyle;
     use crate::types::Var;
 
     fn int_literal(n: i64) -> Type {
         Type::Int(Int::Literal(n))
+    }
+
+    fn quantified_type_var(bound: Type) -> Type {
+        Type::Quantified(Box::new(Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
+            Name::new_static("N"),
+            QuantifiedKind::TypeVar,
+            None,
+            Restriction::Bound(bound),
+            PreInferenceVariance::Invariant,
+        )))
+    }
+
+    #[test]
+    fn gradual_size_bound_type_var_requires_exact_bound() {
+        assert!(is_gradual_size_bound_type_var(&quantified_type_var(
+            gradual_size()
+        )));
+
+        let module = Module::new(
+            ModuleName::from_str("__test__"),
+            ModulePath::filesystem(PathBuf::from("__test__")),
+            Arc::new(String::new()),
+        );
+        let legacy = Type::TypeVar(TypeVar::new_with_kind(
+            Identifier::new(
+                Name::new_static("LegacyN"),
+                TextRange::empty(TextSize::new(0)),
+            ),
+            module,
+            QuantifiedKind::TypeVar,
+            Restriction::Bound(gradual_size()),
+            None,
+            PreInferenceVariance::Invariant,
+        ));
+        assert!(is_gradual_size_bound_type_var(&legacy));
+
+        assert!(!is_gradual_size_bound_type_var(&quantified_type_var(
+            Type::Int(Int::Literal(5))
+        )));
     }
 
     #[test]

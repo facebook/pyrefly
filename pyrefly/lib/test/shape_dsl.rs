@@ -1591,6 +1591,81 @@ def invalid_metadata() -> Tensor[local_lookalike(IntTuple[2], IntTuple[2])]: ...
 );
 
 testcase!(
+    test_type_shape_dsl_int_bound_typevar_arguments,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def identity(x: Int) -> Int:
+    return x
+
+@type_shape_dsl_function
+def plus_one(x: Int) -> Int:
+    return x + 1
+
+@type_shape_dsl_function
+def through_helper(x: Int) -> Int:
+    return plus_one(x)
+
+def bounded[N: Int](x: N) -> Tensor[[identity(N)]]: ...
+def bounded_helper[N: Int](x: N) -> Tensor[[through_helper(N)]]: ...
+def bounded_default[N: Int](x: N = 3) -> Tensor[[identity(N)]]: ...
+def bounded_pair[N: Int](x: N, y: N) -> Tensor[[identity(N)]]: ...
+
+class BoundedBox[N: Int]:
+    def result(self) -> Tensor[[identity(N)]]: ...
+
+def check[M: IntVar](
+    exact: Int[3],
+    gradual: Int,
+    symbolic: Int[M],
+    plain: int,
+    box: BoundedBox[Int[3]],
+) -> None:
+    # A bare literal is promoted to `int` when the bound is solved, so the call is
+    # admitted but evaluates gradually; only a dimension type survives precisely.
+    assert_type(bounded(3), Tensor[[int]])
+    assert_type(bounded(exact), Tensor[[3]])
+    assert_type(bounded(gradual), Tensor[[int]])
+    assert_type(bounded(symbolic), Tensor[[M]])
+    assert_type(bounded(plain), Tensor[[int]])
+    assert_type(bounded_helper(exact), Tensor[[4]])
+    assert_type(bounded_default(), Tensor[[int]])
+    assert_type(bounded_pair(exact, exact), Tensor[[3]])
+    assert_type(box.result(), Tensor[[3]])
+
+# An `Int`-bound variable that substitution never resolves evaluates as the
+# gradual size, not as a symbolic dimension: only `IntVar` carries symbols.
+def unresolved[N: Int](x: N) -> None:
+    assert_type(bounded(x), Tensor[[int]])
+
+def intvar_compatibility[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(N)]]: ...
+def constant_folding() -> Tensor[[through_helper(3)]]: ...
+
+def check_constant() -> None:
+    assert_type(constant_folding(), Tensor[[4]])
+
+def invalid_union_expression() -> Tensor[[identity(Int[2] | None)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `Int[2] | None`
+def invalid_bound[N: Int | None]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
+def invalid_builtin_bound[N: int]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
+# The initial integration deliberately recognizes only the broad `Int` bound. Narrower bounds
+# remain unsupported until their unresolved evaluation semantics are defined.
+def invalid_exact_bound[N: Int[5]]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
+def invalid_int_constraints[N: (Int[2], Int[3])]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
+
+class Other:
+    class Int: ...
+
+def invalid_same_named_bound[N: Other.Int]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
+def invalid_constraints[N: (Int, str)]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
+def raw_arithmetic[N: Int]() -> Tensor[[identity(N + N)]]: ...  # E: `N` must be an `IntVar` to be used in shape arithmetic  # E: `N` must be an `IntVar` to be used in shape arithmetic
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_identity_import_resolution,
     type_shape_dsl_import_env(),
     r#"

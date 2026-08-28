@@ -10,6 +10,7 @@ use std::slice;
 use std::sync::Arc;
 
 use pyrefly_types::callable::Param;
+use pyrefly_types::dimension::is_gradual_size_bound_type_var;
 use pyrefly_types::function::FuncDefId;
 use pyrefly_types::function::FunctionKind;
 use pyrefly_types::quantified::QuantifiedKind;
@@ -1036,8 +1037,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Type::Any(_) => true,
                 Type::Int(_) => true,
                 Type::TypeLevelDslCall(call) => call.result_domain() == TypeShapeDslDomain::Int,
-                Type::Quantified(q) => q.kind() == QuantifiedKind::IntVar,
-                Type::TypeVar(type_var) => type_var.kind() == QuantifiedKind::IntVar,
+                Type::Quantified(q) => {
+                    q.kind() == QuantifiedKind::IntVar || is_gradual_size_bound_type_var(ty)
+                }
+                Type::TypeVar(type_var) => {
+                    type_var.kind() == QuantifiedKind::IntVar || is_gradual_size_bound_type_var(ty)
+                }
                 _ => false,
             },
             TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple) => {
