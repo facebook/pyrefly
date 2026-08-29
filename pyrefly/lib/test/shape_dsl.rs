@@ -1749,9 +1749,10 @@ testcase!(
     test_type_shape_dsl_optional_int_parameter,
     shape_dsl_tensor_env(),
     r#"
-from shape_extensions import Int, IntVar, type_shape_dsl_function
+from shape_extensions import Flag, Int, IntTuple, IntVar, type_shape_dsl_function
+import shape_extensions.dsl as dsl
 from torch import Tensor
-from typing import assert_type
+from typing import Any, assert_type
 
 @type_shape_dsl_function
 def optional_or(n: Int | None, fallback: Int) -> Int:
@@ -1782,6 +1783,124 @@ def aliased_optional_or(n: Int | None, fallback: Int) -> Int:
 def nested_optional_or(n: Int | None, fallback: Int) -> Int:
     return optional_or(n, fallback)
 
+@type_shape_dsl_function
+def arithmetic_or(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return n + 1
+
+@type_shape_dsl_function
+def not_none_arithmetic_or(n: Int | None, fallback: Int) -> Int:
+    if n is not None:
+        return n + 1
+    return fallback
+
+@type_shape_dsl_function
+def mixed_arithmetic_or(n: Int | None, offset: Int, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return n + offset
+
+@type_shape_dsl_function
+def mixed_flag_arithmetic_or(n: Int | None, offset: int, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    result = n + offset
+    return result
+
+@type_shape_dsl_function
+def unused_arithmetic(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    ignored = n + 1
+    return fallback
+
+@type_shape_dsl_function
+def unused_mixed_deferred(
+    n: Int | None, axis: int | tuple[int, ...] | None, fallback: Int,
+) -> Int:
+    if n is None:
+        return fallback
+    if dsl.is_int_value(axis):
+        offset = axis + 1
+        ignored = offset + n
+    return fallback
+
+@type_shape_dsl_function
+def binary_or_fallback(n: Int | None, m: Int | None, fallback: Int) -> Int:
+    if n is None or m is None:
+        return fallback
+    return n + m
+
+@type_shape_dsl_function
+def tuple_or(n: Int | None, fallback: Int) -> IntTuple:
+    if n is not None:
+        return dsl.IntTuple((n,))
+    return dsl.IntTuple((fallback,))
+
+@type_shape_dsl_function
+def alias_or(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    value = n
+    return value
+
+@type_shape_dsl_function
+def derived_local_or(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    value = n + 1
+    return value + 1
+
+@type_shape_dsl_function
+def merged_alias_or(n: Int | None, fallback: Int, choose: bool) -> Int:
+    if n is None:
+        return fallback
+    value = n if choose else fallback
+    return value
+
+@type_shape_dsl_function
+def contradictory_source_or(
+    n: Int | None, m: Int | None, fallback: Int, choose: bool,
+) -> Int:
+    if n is not None:
+        return fallback
+    if m is None:
+        return fallback
+    value = n if choose else m
+    if value is not None:
+        return value
+    return fallback
+
+@type_shape_dsl_function
+def contradictory_branch(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        if n is not None:
+            return n
+    return fallback
+
+@type_shape_dsl_function
+def tuple_alias_or(n: Int | None, fallback: Int) -> IntTuple:
+    if n is None:
+        return dsl.IntTuple((fallback,))
+    value = n
+    return dsl.IntTuple((value,))
+
+@type_shape_dsl_function
+def literal_local_tuple(_unused: Int) -> IntTuple:
+    value = 3
+    return dsl.IntTuple((value,))
+
+@type_shape_dsl_function
+def conditional_literal_local_tuple(choose: bool) -> IntTuple:
+    value = 3 if choose else 4
+    return dsl.IntTuple((value,))
+
+@type_shape_dsl_function
+def arithmetic_literal_local_tuple(_unused: Int) -> IntTuple:
+    value = 3 + 4
+    return dsl.IntTuple((value,))
+
 def direct_literal() -> Tensor[[optional_or(3, Int[7])]]: ...
 def direct_none() -> Tensor[[reversed_optional_or(None, Int[7])]]: ...
 def direct_not_none() -> Tensor[[not_none_or(Int[3], Int[7])]]: ...
@@ -1792,6 +1911,35 @@ def direct_union() -> Tensor[[optional_or(Int | None, Int[7])]]: ...
 def direct_nested() -> Tensor[[nested_optional_or(None, Int[7])]]: ...
 def direct_gradual() -> Tensor[[optional_or(Int, Int[7])]]: ...
 def direct_symbolic[M: IntVar](x: Tensor[[M]]) -> Tensor[[optional_or(Int[M], Int[7])]]: ...
+def arithmetic_literal() -> Tensor[[arithmetic_or(Int[3], Int[7])]]: ...
+def arithmetic_none() -> Tensor[[arithmetic_or(None, Int[7])]]: ...
+def arithmetic_gradual() -> Tensor[[arithmetic_or(Int, Int[7])]]: ...
+def arithmetic_dynamic() -> Tensor[[arithmetic_or(Any, Int[7])]]: ...
+def not_none_arithmetic() -> Tensor[[not_none_arithmetic_or(Int[3], Int[7])]]: ...
+def mixed_arithmetic() -> Tensor[[mixed_arithmetic_or(Int[3], Int[2], Int[7])]]: ...
+def mixed_flag_arithmetic() -> Tensor[[mixed_flag_arithmetic_or(Int[3], 2, Int[7])]]: ...
+def unused() -> Tensor[[unused_arithmetic(Int[3], Int[7])]]: ...
+def unused_mixed[Axis: Flag[int | tuple[int, ...] | None]](axis: Axis) -> Tensor[
+    [unused_mixed_deferred(Int[3], Axis, Int[7])]
+]: ...
+def tupled() -> Tensor[tuple_or(Int[3], Int[7])]: ...
+def aliased() -> Tensor[[alias_or(Int[3], Int[7])]]: ...
+def derived_local() -> Tensor[[derived_local_or(Int[3], Int[7])]]: ...
+def merged_alias_true() -> Tensor[[merged_alias_or(Int[3], Int[7], True)]]: ...
+def merged_alias_false() -> Tensor[[merged_alias_or(Int[3], Int[7], False)]]: ...
+def merged_alias_none() -> Tensor[[merged_alias_or(None, Int[7], True)]]: ...
+def contradictory_source_true() -> Tensor[[contradictory_source_or(None, Int[3], Int[7], True)]]: ...
+def contradictory_source_false() -> Tensor[[contradictory_source_or(None, Int[3], Int[7], False)]]: ...
+def contradictory_branch_none() -> Tensor[[contradictory_branch(None, Int[7])]]: ...
+def contradictory_branch_int() -> Tensor[[contradictory_branch(Int[3], Int[7])]]: ...
+def tuple_alias() -> Tensor[tuple_alias_or(Int[3], Int[7])]: ...
+def literal_local() -> Tensor[literal_local_tuple(Int[1])]: ...
+def conditional_literal_local_true() -> Tensor[conditional_literal_local_tuple(True)]: ...
+def conditional_literal_local_false() -> Tensor[conditional_literal_local_tuple(False)]: ...
+def arithmetic_literal_local() -> Tensor[arithmetic_literal_local_tuple(Int[1])]: ...
+def arithmetic_symbolic[M: IntVar](x: Tensor[[M]]) -> Tensor[[arithmetic_or(Int[M], Int[7])]]: ...
+def binary_both() -> Tensor[[binary_or_fallback(Int[3], Int[4], Int[10])]]: ...
+def binary_none() -> Tensor[[binary_or_fallback(Int[3], None, Int[10])]]: ...
 
 # An unresolved variable is admitted only when its bound resolves to exactly
 # `Int | None`; without a concrete substitution, evaluation is gradual.
@@ -1807,9 +1955,36 @@ def check() -> None:
     assert_type(direct_union(), Tensor[[int]])
     assert_type(direct_nested(), Tensor[[7]])
     assert_type(direct_gradual(), Tensor[[int]])
+    assert_type(arithmetic_literal(), Tensor[[4]])
+    assert_type(arithmetic_none(), Tensor[[7]])
+    assert_type(arithmetic_gradual(), Tensor[[int]])
+    assert_type(arithmetic_dynamic(), Tensor[[int]])
+    assert_type(not_none_arithmetic(), Tensor[[4]])
+    assert_type(mixed_arithmetic(), Tensor[[5]])
+    assert_type(mixed_flag_arithmetic(), Tensor[[5]])
+    assert_type(unused(), Tensor[[7]])
+    assert_type(unused_mixed(1), Tensor[[7]])
+    assert_type(tupled(), Tensor[[3]])
+    assert_type(aliased(), Tensor[[3]])
+    assert_type(derived_local(), Tensor[[5]])
+    assert_type(merged_alias_true(), Tensor[[3]])
+    assert_type(merged_alias_false(), Tensor[[7]])
+    assert_type(merged_alias_none(), Tensor[[7]])
+    assert_type(contradictory_source_true(), Tensor[[7]])
+    assert_type(contradictory_source_false(), Tensor[[3]])
+    assert_type(contradictory_branch_none(), Tensor[[7]])
+    assert_type(contradictory_branch_int(), Tensor[[7]])
+    assert_type(tuple_alias(), Tensor[[3]])
+    assert_type(literal_local(), Tensor[[3]])
+    assert_type(conditional_literal_local_true(), Tensor[[3]])
+    assert_type(conditional_literal_local_false(), Tensor[[4]])
+    assert_type(arithmetic_literal_local(), Tensor[[7]])
+    assert_type(binary_both(), Tensor[[7]])
+    assert_type(binary_none(), Tensor[[10]])
 
 def check_symbolic[M: IntVar](x: Tensor[[M]]) -> None:
     assert_type(direct_symbolic(x), Tensor[[M]])
+    assert_type(arithmetic_symbolic(x), Tensor[[M + 1]])
 "#,
 );
 
@@ -1817,7 +1992,7 @@ testcase!(
     test_type_shape_dsl_optional_int_invalid_uses,
     shape_dsl_tensor_env(),
     r#"
-from shape_extensions import Int, type_shape_dsl_function
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
 import shape_extensions.dsl as dsl
 from torch import Tensor
 from typing import Any
@@ -1847,7 +2022,81 @@ def none_branch(n: Int | None, fallback: Int) -> Int:
 @type_shape_dsl_function
 def wrong_narrowing(n: Int | None, fallback: Int) -> Int:
     if dsl.is_int_value(n):  # E: `is_int_value` requires a Flag
-        return n  # E: must be narrowed to exclude `None`
+        return n
+    return fallback
+
+@type_shape_dsl_function
+def unnarrowed_arithmetic(n: Int | None) -> Int:
+    return n + 1  # E: dimension arithmetic operands must be annotated  # E: is not supported
+
+@type_shape_dsl_function
+def unnarrowed_tuple(n: Int | None) -> IntTuple:
+    return dsl.IntTuple((n,))  # E: IntTuple elements must be annotated
+
+@type_shape_dsl_function
+def unnarrowed_alias(n: Int | None) -> Int:
+    value = n
+    return value  # E: must be narrowed to exclude `None`  # E: Returned type
+
+@type_shape_dsl_function
+def nonnone_flag(n: int | tuple[int, ...] | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return n + 1  # E: is not supported  # E: dimension arithmetic operands must be annotated
+
+@type_shape_dsl_function
+def partially_narrowed(n: Int | None, m: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return n + m  # E: dimension arithmetic operands must be annotated  # E: is not supported
+
+@type_shape_dsl_function
+def branch_narrowing_does_not_leak(
+    n: Int | None, fallback: Int, choose: bool,
+) -> Int:
+    if choose:
+        if n is None:
+            return fallback
+        value = n
+    else:
+        value = n
+    return value  # E: must be narrowed to exclude `None`  # E: Returned type
+
+@type_shape_dsl_function
+def mixed_string_arithmetic(
+    n: Int | None, fallback: Int, choose: bool,
+) -> Int:
+    if n is None:
+        return fallback
+    value = n if choose else "bad"
+    return value + 1  # E: dimension arithmetic operands must be integer values  # E: is not supported
+
+@type_shape_dsl_function
+def mixed_string_return(
+    n: Int | None, fallback: Int, choose: bool,
+) -> Int:
+    if n is None:
+        return fallback
+    value = n if choose else "bad"
+    return value  # E: Flag values are input-only  # E: Returned type
+
+@type_shape_dsl_function
+def mixed_sequence_tuple(
+    n: Int | None, fallback: Int, choose: bool,
+) -> IntTuple:
+    if n is None:
+        return dsl.IntTuple((fallback,))
+    value = n if choose else (1, 2)
+    return dsl.IntTuple((value,))  # E: `IntTuple` elements must be dimension values
+
+@type_shape_dsl_function
+def mixed_none_comparison(
+    n: Int | None, fallback: Int, choose: bool,
+) -> Int:
+    value = n if choose else None
+    none_value = None
+    if value == none_value:  # E: Flag value has the wrong domain
+        return fallback
     return fallback
 
 @type_shape_dsl_function
@@ -1891,16 +2140,17 @@ def bad_bound[N: int | None]() -> Tensor[[optional_or(N, Int[7])]]: ...  # E: Ex
 def bad_exact_bound[N: Int[3] | None]() -> Tensor[[optional_or(N, Int[7])]]: ...  # E: Expected an `Int | None` argument
 def bad_constraints[N: (Int, None)]() -> Tensor[[optional_or(N, Int[7])]]: ...  # E: Expected an `Int | None` argument
 def raw_arithmetic[N: Int | None]() -> Tensor[[optional_or(N + N, Int[7])]]: ...  # E: `N` must be an `IntVar` to be used in shape arithmetic  # E: `N` must be an `IntVar` to be used in shape arithmetic
+
+def call_nonnone_flag() -> Tensor[[nonnone_flag((1, 2), Int[7])]]: ...  # E: Expected a type-level DSL function
 "#,
 );
 
 testcase!(
-    bug = "narrowed OptionalInt values do not propagate through expressions yet",
-    test_type_shape_dsl_optional_int_narrowing_limitations,
+    bug = "narrowed OptionalInt values do not forward to helpers yet",
+    test_type_shape_dsl_optional_int_helper_limitations,
     shape_dsl_tensor_env(),
     r#"
-from shape_extensions import Int, IntTuple, type_shape_dsl_function
-import shape_extensions.dsl as dsl
+from shape_extensions import Int, type_shape_dsl_function
 
 @type_shape_dsl_function
 def int_helper(n: Int) -> Int:
@@ -1913,12 +2163,6 @@ def optional_or(n: Int | None, fallback: Int) -> Int:
     return n
 
 @type_shape_dsl_function
-def narrowed_arithmetic(n: Int | None, fallback: Int) -> Int:
-    if n is None:
-        return fallback
-    return n + 1  # E: dimension arithmetic operands must be integer values
-
-@type_shape_dsl_function
 def narrowed_helper(n: Int | None, fallback: Int) -> Int:
     if n is None:
         return fallback
@@ -1929,19 +2173,6 @@ def narrowed_optional_helper(n: Int | None, fallback: Int) -> Int:
     if n is None:
         return fallback
     return optional_or(n, fallback)  # E: DSL helper argument domains must exactly match
-
-@type_shape_dsl_function
-def narrowed_tuple(n: Int | None, fallback: Int) -> IntTuple:
-    if n is None:
-        return dsl.IntTuple((fallback,))
-    return dsl.IntTuple((n,))  # E: `IntTuple` elements must be dimension values
-
-@type_shape_dsl_function
-def narrowed_local(n: Int | None, fallback: Int) -> Int:
-    if n is None:
-        return fallback
-    value = n
-    return value
 "#,
 );
 
@@ -2432,6 +2663,26 @@ def return_flag(n: Int, k: int) -> Int:
     return k  # E: Flag parameter `k` is input-only
 
 @type_shape_dsl_function
+def return_flag_alias(n: Int, k: int) -> Int:
+    value = k
+    return value  # E: Flag parameter `k` is input-only
+
+@type_shape_dsl_function
+def return_local_int(n: Int) -> Int:
+    value = 1
+    return value  # E: Flag values are input-only
+
+@type_shape_dsl_function
+def return_local_string(n: Int) -> Int:
+    value = "x"
+    return value  # E: Flag values are input-only  # E: Returned type
+
+@type_shape_dsl_function
+def return_local_tuple(n: Int) -> Int:
+    value = (1, 2)
+    return value  # E: Flag values are input-only  # E: Returned type
+
+@type_shape_dsl_function
 def reversed(n: Int, k: int) -> Int:
     if 0 < k:
         return n
@@ -2475,19 +2726,19 @@ def reversed_arithmetic(n: Int, k: int) -> Int:
 
 @type_shape_dsl_function
 def union_arithmetic(n: Int, k: int | bool) -> Int:
-    return n + k  # E: dimension arithmetic operands must be annotated as `Int` or `Flag[int]`
+    return n + k  # E: dimension arithmetic operands must be annotated
 
 @type_shape_dsl_function
 def boolean_arithmetic(n: Int, enabled: bool) -> Int:
-    return n + enabled  # E: dimension arithmetic operands must be annotated as `Int` or `Flag[int]`
+    return n + enabled  # E: dimension arithmetic operands must be annotated
 
 @type_shape_dsl_function
 def sequence_arithmetic(n: Int, values: tuple[int, ...]) -> Int:
-    return n + values  # E: is not supported between  # E: dimension arithmetic operands must be annotated as `Int` or `Flag[int]`
+    return n + values  # E: is not supported between  # E: dimension arithmetic operands must be annotated
 
 @type_shape_dsl_function
 def shape_arithmetic(n: Int, shape: IntTuple) -> Int:
-    return n + shape  # E: is not supported between  # E: dimension arithmetic operands must be annotated as `Int` or `Flag[int]`
+    return n + shape  # E: is not supported between  # E: dimension arithmetic operands must be annotated
 
 @type_shape_dsl_function
 def self_referencing_local(n: Int, k: int) -> Int:
@@ -9585,6 +9836,15 @@ def local_argument(shape: IntTuple) -> Int:
     return int_leaf(dimension)
 
 @type_shape_dsl_function
+def narrowed_flag_arithmetic_to_int_helper(
+    axis: int | tuple[int, ...] | None, fallback: Int,
+) -> Int:
+    if dsl.is_int_value(axis):
+        offset = axis + 1
+        return int_leaf(offset)
+    return fallback
+
+@type_shape_dsl_function
 def parameter_flag(shape: IntTuple, axis: int) -> IntTuple:
     return axis_helper(shape, axis)
 
@@ -9654,6 +9914,7 @@ def apply_imported(x: Tensor[[2, 3]]) -> Tensor[imported(IntTuple[2, 3])]: ...
 def apply_gradual_argument() -> Tensor[propagate_argument(IntTuple)]: ...
 def apply_nested(x: Tensor[[2, 3]]) -> Tensor[helper_of_helper(IntTuple[2, 3])]: ...
 def apply_local(x: Tensor[[2, 3]]) -> Tensor[[local_argument(IntTuple[2, 3])]]: ...
+def apply_narrowed_flag_arithmetic() -> Tensor[[narrowed_flag_arithmetic_to_int_helper(2, Int[7])]]: ...
 def apply_parameter_flag(x: Tensor[[2, 3]]) -> Tensor[parameter_flag(IntTuple[2, 3], 0)]: ...
 def apply_local_flag(x: Tensor[[2, 3]]) -> Tensor[local_flag(IntTuple[2, 3])]: ...
 def apply_fixed_tuple_flag[Axes: Flag[tuple[int, int]]](axes: Axes) -> Tensor[fixed_tuple_flag(IntTuple[2, 3], Axes)]: ...
@@ -9671,6 +9932,7 @@ def test(x: Tensor[[2, 3]], broad_axes: tuple[int, int]) -> None:
     reveal_type(apply_gradual_argument())  # E: revealed type: Tensor[tuple[Unknown, ...]]
     assert_type(apply_nested(x), Tensor[[2]])
     assert_type(apply_local(x), Tensor[[2]])
+    assert_type(apply_narrowed_flag_arithmetic(), Tensor[[3]])
     assert_type(apply_parameter_flag(x), Tensor[[2]])
     assert_type(apply_local_flag(x), Tensor[[2]])
     assert_type(apply_fixed_tuple_flag((0, 1)), Tensor[[2]])

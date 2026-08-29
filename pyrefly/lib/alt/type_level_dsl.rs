@@ -145,6 +145,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> Option<ResolvedTypeShapeDslFunction> {
         let mut helpers = Vec::new();
+        let mut helper_argument_domains = Vec::new();
         let mut deferred_integer_domains = HashMap::new();
         let mut valid = true;
         let swallowed_errors = self.error_swallower();
@@ -152,14 +153,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let callee = self.expr_infer(helper_call.callee(), &swallowed_errors);
             match callee.callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::TypeShapeDsl(helper_id, helper))) => {
-                    if helper_call
-                        .argument_domains(
-                            &parameter_domains,
-                            helper.parameter_domains(),
-                            &mut deferred_integer_domains,
-                        )
-                        .is_none()
-                    {
+                    let Some(argument_domains) = helper_call.argument_domains(
+                        &parameter_domains,
+                        helper.parameter_domains(),
+                        &mut deferred_integer_domains,
+                    ) else {
                         self.error(
                             errors,
                             helper_call.callee().range(),
@@ -171,7 +169,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         );
                         valid = false;
                         continue;
-                    }
+                    };
                     if helper.result_domain() != result_domain {
                         self.error(
                             errors,
@@ -195,6 +193,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         valid = false;
                         continue;
                     }
+                    helper_argument_domains.push(argument_domains);
                     helpers.push((helper_id.clone(), helper.clone()));
                 }
                 Some(CalleeKind::Function(FunctionKind::Def(callee_id)))
@@ -222,6 +221,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if !valid {
             return None;
         }
+        let definition = if deferred_integer_domains.is_empty() {
+            definition
+        } else {
+            match definition.finalize_helper_argument_domains(
+                |expr| self.resolve_type_shape_dsl_intrinsic(expr),
+                &helper_argument_domains,
+            ) {
+                Ok(definition) => Arc::new(definition),
+                Err(error) => {
+                    self.error(
+                        errors,
+                        error.range,
+                        ErrorKind::InvalidArgument,
+                        format!("@type_shape_dsl_function {}", error.message),
+                    );
+                    return None;
+                }
+            }
+        };
         match ResolvedTypeShapeDslFunction::try_new(
             func_id.clone(),
             definition,
@@ -417,22 +435,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             for expression in validated.expressions() {
                 let invalid_domain = match expression.kind() {
                     TypeShapeDslExpressionKind::DimensionSlot {
-                        parameter_origins: Some(parameters),
+                        parameter_uses: Some(uses),
                         ..
-                    } => (!parameters.iter().all(|parameter| {
-                        parameter_domains[*parameter]
-                            == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
+                    } => (!uses.iter().all(|use_| {
+                        parameter_domains[use_.parameter()]
+                            .can_use_as(TypeShapeDslDomain::Int, use_.narrowing())
                     }))
-                    .then_some("`@type_shape_dsl_function` IntTuple elements must be annotated as `Int`"),
+                    .then_some("`@type_shape_dsl_function` IntTuple elements must be annotated as `Int`, or as `Int | None` and narrowed to exclude `None`"),
                     TypeShapeDslExpressionKind::IntegerSlot {
-                        parameter_origins: Some(parameters),
-                        narrowed,
+                        parameter_uses: Some(uses),
                         ..
                     } => {
-                        let valid = parameters.iter().all(|parameter| {
-                            match parameter_domains[*parameter] {
-                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => true,
-                                TypeShapeDslInputDomain::Flag(domain) if *narrowed => {
+                        let valid = uses.iter().all(|use_| {
+                            let narrowing = use_.narrowing();
+                            parameter_domains[use_.parameter()]
+                                .can_use_as(TypeShapeDslDomain::Int, narrowing)
+                                || match parameter_domains[use_.parameter()] {
+                                TypeShapeDslInputDomain::Flag(domain)
+                                    if narrowing == TypeShapeDslParameterNarrowing::Integer =>
+                                {
                                     domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
                                 }
                                 TypeShapeDslInputDomain::Flag(domain) => {
@@ -441,7 +462,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 _ => false,
                             }
                         });
-                        (!valid).then_some("`@type_shape_dsl_function` dimension arithmetic operands must be annotated as `Int` or `Flag[int]`")
+                        (!valid).then_some("`@type_shape_dsl_function` dimension arithmetic operands must be annotated as `Int`, as `Int | None` narrowed to exclude `None`, or as a compatible integer Flag")
                     }
                     TypeShapeDslExpressionKind::IntTupleIndex {
                         parameter_origins: Some(shapes),
@@ -482,16 +503,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .then_some("`@type_shape_dsl_function` shape expression operands must be annotated as `IntTuple`")
                     }
                     TypeShapeDslExpressionKind::GeneratorSourceSlot {
-                        parameter_origins: Some(parameters),
-                        narrowed,
+                        parameter_uses: Some(uses),
                         ..
                     } => {
-                        let valid = parameters.iter().all(|parameter| {
+                        let valid = uses.iter().all(|use_| {
                             matches!(
-                                parameter_domains[*parameter],
+                                parameter_domains[use_.parameter()],
                                 TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple)
-                            ) || match parameter_domains[*parameter] {
-                                TypeShapeDslInputDomain::Flag(domain) if *narrowed => {
+                            ) || match parameter_domains[use_.parameter()] {
+                                TypeShapeDslInputDomain::Flag(domain)
+                                    if use_.narrowing()
+                                        != TypeShapeDslParameterNarrowing::Unnarrowed =>
+                                {
                                     domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
                                 }
                                 TypeShapeDslInputDomain::Flag(domain) => {
@@ -505,15 +528,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         )
                     }
                     TypeShapeDslExpressionKind::FlagValueSlot {
-                        parameter_origins: Some(parameters),
+                        parameter_uses: Some(uses),
                         required,
-                        narrowed,
                         ..
                     } => {
-                        let valid = parameters.iter().all(|parameter| {
-                            match parameter_domains[*parameter] {
+                        let valid = uses.iter().all(|use_| {
+                            match parameter_domains[use_.parameter()] {
                                 TypeShapeDslInputDomain::Flag(domain) => match required {
-                                    TypeShapeDslFlagValueKind::Int if *narrowed => {
+                                    TypeShapeDslFlagValueKind::Int
+                                        if use_.narrowing()
+                                            == TypeShapeDslParameterNarrowing::Integer =>
+                                    {
                                         domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
                                     }
                                     TypeShapeDslFlagValueKind::Int => {
@@ -525,7 +550,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                                 FlagMember::Str,
                                             ))
                                     }
-                                    TypeShapeDslFlagValueKind::Sequence if *narrowed => {
+                                    TypeShapeDslFlagValueKind::Sequence
+                                        if use_.narrowing()
+                                            != TypeShapeDslParameterNarrowing::Unnarrowed =>
+                                    {
                                         domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
                                     }
                                     TypeShapeDslFlagValueKind::Sequence => {
@@ -592,11 +620,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         kind:
                             TypeShapeDslSlotReturnKind::KnownDomain {
                                 domain,
-                                parameter_origins: Some(parameters),
+                                parameter_uses: Some(uses),
                             },
                         ..
-                    } if !parameters.iter().all(|parameter| {
-                        parameter_domains[*parameter] == TypeShapeDslInputDomain::Value(*domain)
+                    } if !uses.iter().all(|use_| {
+                        parameter_domains[use_.parameter()].can_use_as(*domain, use_.narrowing())
                     }) =>
                     {
                         self.error(
@@ -611,43 +639,64 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         valid_body = false;
                     }
                     TypeShapeDslReturnKind::Slot {
-                        slot,
-                        kind: TypeShapeDslSlotReturnKind::DirectParameter,
-                        narrowing,
-                    } if !parameter_domains[*slot].can_use_as(result, *narrowing) => {
+                        kind: TypeShapeDslSlotReturnKind::DirectParameter(use_),
+                        ..
+                    } if !parameter_domains[use_.parameter()]
+                        .can_use_as(result, use_.narrowing()) =>
+                    {
+                        let parameter = use_.parameter();
                         self.error(
                             errors,
                             return_.range(),
                             ErrorKind::InvalidArgument,
-                            match parameter_domains[*slot] {
+                            match parameter_domains[parameter] {
                                 TypeShapeDslInputDomain::Flag(_) => format!(
                                     "`@type_shape_dsl_function` Flag parameter `{}` is input-only and cannot be returned",
-                                    dsl.parameter_name(*slot)
+                                    dsl.parameter_name(parameter)
                                 ),
                                 TypeShapeDslInputDomain::OptionalInt
                                     if result == TypeShapeDslDomain::Int => format!(
                                     "`@type_shape_dsl_function` `Int | None` parameter `{}` must be narrowed to exclude `None` before it can be returned as `Int`",
-                                    dsl.parameter_name(*slot)
+                                    dsl.parameter_name(parameter)
                                 ),
                                 TypeShapeDslInputDomain::OptionalInt
                                 | TypeShapeDslInputDomain::Value(_) => format!(
                                     "`@type_shape_dsl_function` return annotation must match returned parameter `{}`",
-                                    dsl.parameter_name(*slot)
+                                    dsl.parameter_name(parameter)
                                 ),
                             },
                         );
                         valid_body = false;
                     }
                     TypeShapeDslReturnKind::Slot {
-                        kind: TypeShapeDslSlotReturnKind::ParameterAlias(parameters),
-                        narrowing,
+                        kind: TypeShapeDslSlotReturnKind::ParameterAlias(parameter_uses),
                         ..
-                    } if !parameters.iter().all(|parameter| {
-                        parameter_domains[*parameter].can_use_as(result, *narrowing)
-                    }) =>
-                    {
-                        self.error(errors, return_.range(), ErrorKind::InvalidArgument, "`@type_shape_dsl_function` local alias return domain must match the declared result".to_owned());
-                        valid_body = false;
+                    } => {
+                        if let Some(invalid_use) = parameter_uses.iter().find(|use_| {
+                            !parameter_domains[use_.parameter()]
+                                .can_use_as(result, use_.narrowing())
+                        }) {
+                            let message = match parameter_domains[invalid_use.parameter()] {
+                                TypeShapeDslInputDomain::Flag(_) => format!(
+                                        "`@type_shape_dsl_function` Flag parameter `{}` is input-only and cannot be returned",
+                                        dsl.parameter_name(invalid_use.parameter())
+                                    ),
+                                TypeShapeDslInputDomain::OptionalInt
+                                    if result == TypeShapeDslDomain::Int => format!(
+                                        "`@type_shape_dsl_function` `Int | None` parameter `{}` must be narrowed to exclude `None` before it can be returned as `Int`",
+                                        dsl.parameter_name(invalid_use.parameter())
+                                    ),
+                                TypeShapeDslInputDomain::OptionalInt
+                                | TypeShapeDslInputDomain::Value(_) => "`@type_shape_dsl_function` local alias return domain must match the declared result".to_owned(),
+                            };
+                            self.error(
+                                errors,
+                                return_.range(),
+                                ErrorKind::InvalidArgument,
+                                message,
+                            );
+                            valid_body = false;
+                        }
                     }
                     TypeShapeDslReturnKind::Broadcast {
                         left_parameters,
