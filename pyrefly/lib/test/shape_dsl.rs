@@ -2488,6 +2488,40 @@ def check_symbolic[M: IntVar](x: Tensor[[M]]) -> None:
 );
 
 testcase!(
+    test_type_shape_dsl_int_bound_typevar_tuple_arguments,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def identity(x: Int) -> Int:
+    return x
+
+# An `Int`-bounded variable types a runtime argument directly, including when it is
+# nested in an ordinary tuple.
+def scalar_argument[N: Int](x: N) -> Tensor[[identity(N)]]: ...
+def tuple_argument[N: Int](x: tuple[N]) -> Tensor[[identity(N)]]: ...
+def pair_argument[N: Int, M: Int](x: tuple[N, M]) -> Tensor[[identity(N), identity(M)]]: ...
+# `Int[...]` continues to wrap an `IntVar` used as a runtime argument.
+def explicit_int_argument[K: IntVar](x: tuple[Int[K]]) -> Tensor[[identity(K)]]: ...
+
+def check[K: IntVar](k: Int[K], plain: int) -> None:
+    assert_type(scalar_argument(3), Tensor[[3]])
+    assert_type(tuple_argument((3,)), Tensor[[3]])
+    assert_type(pair_argument((3, 5)), Tensor[[3, 5]])
+    assert_type(explicit_int_argument((k,)), Tensor[[K]])
+    # A runtime `int` has no dimension to keep, so only that extent goes gradual.
+    assert_type(pair_argument((3, plain)), Tensor[[3, int]])
+
+# A direct `IntTuple` annotation accepts raw symbolic dimensions. An `Int`-bounded
+# variable is instead a runtime argument to a DSL call.
+def direct_int_tuple_argument[N: Int](x: N) -> Tensor[IntTuple[N]]: ...  # E: `N` must be an `IntVar` to be used as a shape dimension
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_identity_import_resolution,
     type_shape_dsl_import_env(),
     r#"

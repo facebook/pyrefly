@@ -374,18 +374,18 @@ def avg_pool3d(
 
 # Adaptive max pooling operations
 @overload
-def adaptive_max_pool1d[Shape: IntTuple, O: IntVar](
+def adaptive_max_pool1d[Shape: IntTuple, O: _Int](
     input: Tensor[Shape],
-    output_size: _Int[O],
+    output_size: O,
     return_indices: Literal[False] = False,
 ) -> Tensor[adaptive_pool1d_shape(Shape, O)]:
     """1D adaptive max pooling. Shape inference via type-level DSL."""
     ...
 
 @overload
-def adaptive_max_pool1d[Shape: IntTuple, O: IntVar](
+def adaptive_max_pool1d[Shape: IntTuple, O: _Int](
     input: Tensor[Shape],
-    output_size: tuple[_Int[O]],
+    output_size: tuple[O],
     return_indices: Literal[False] = False,
 ) -> Tensor[adaptive_pool1d_shape(Shape, O)]: ...
 @overload
@@ -408,18 +408,18 @@ def adaptive_max_pool1d[Shape: IntTuple](
     ]
 ): ...
 @overload
-def adaptive_max_pool2d[Shape: IntTuple, O: IntVar](
+def adaptive_max_pool2d[Shape: IntTuple, O: _Int](
     input: Tensor[Shape],
-    output_size: _Int[O],
+    output_size: O,
     return_indices: Literal[False] = False,
 ) -> Tensor[adaptive_pool2d_shape(Shape, O, O)]:
     """2D adaptive max pooling. Shape inference via type-level DSL."""
     ...
 
 @overload
-def adaptive_max_pool2d[Shape: IntTuple, OH: IntVar, OW: IntVar](
+def adaptive_max_pool2d[Shape: IntTuple, OH: _Int, OW: _Int](
     input: Tensor[Shape],
-    output_size: tuple[_Int[OH], _Int[OW]],
+    output_size: tuple[OH, OW],
     return_indices: Literal[False] = False,
 ) -> Tensor[adaptive_pool2d_shape(Shape, OH, OW)]: ...
 @overload
@@ -450,18 +450,18 @@ def adaptive_max_pool2d[Shape: IntTuple](
     ]
 ): ...
 @overload
-def adaptive_max_pool3d[Shape: IntTuple, O: IntVar](
+def adaptive_max_pool3d[Shape: IntTuple, O: _Int](
     input: Tensor[Shape],
-    output_size: _Int[O],
+    output_size: O,
     return_indices: Literal[False] = False,
 ) -> Tensor[adaptive_pool3d_shape(Shape, O, O, O)]:
     """3D adaptive max pooling. Shape inference via type-level DSL."""
     ...
 
 @overload
-def adaptive_max_pool3d[Shape: IntTuple, OD: IntVar, OH: IntVar, OW: IntVar](
+def adaptive_max_pool3d[Shape: IntTuple, OD: _Int, OH: _Int, OW: _Int](
     input: Tensor[Shape],
-    output_size: tuple[_Int[OD], _Int[OH], _Int[OW]],
+    output_size: tuple[OD, OH, OW],
     return_indices: Literal[False] = False,
 ) -> Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)]: ...
 @overload
@@ -494,41 +494,41 @@ def adaptive_max_pool3d[Shape: IntTuple](
 
 # Adaptive average pooling operations
 @overload
-def adaptive_avg_pool1d[Shape: IntTuple, O: IntVar](
-    input: Tensor[Shape], output_size: _Int[O]
+def adaptive_avg_pool1d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O
 ) -> Tensor[adaptive_pool1d_shape(Shape, O)]:
     """1D adaptive average pooling. Shape inference via type-level DSL."""
     ...
 
 @overload
-def adaptive_avg_pool1d[Shape: IntTuple, O: IntVar](
-    input: Tensor[Shape], output_size: tuple[_Int[O]]
+def adaptive_avg_pool1d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: tuple[O]
 ) -> Tensor[adaptive_pool1d_shape(Shape, O)]: ...
 @overload
-def adaptive_avg_pool2d[Shape: IntTuple, O: IntVar](
-    input: Tensor[Shape], output_size: _Int[O]
+def adaptive_avg_pool2d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O
 ) -> Tensor[adaptive_pool2d_shape(Shape, O, O)]:
     """2D adaptive average pooling. Shape inference via type-level DSL."""
     ...
 
 @overload
-def adaptive_avg_pool2d[Shape: IntTuple, OH: IntVar, OW: IntVar](
-    input: Tensor[Shape], output_size: tuple[_Int[OH], _Int[OW]]
+def adaptive_avg_pool2d[Shape: IntTuple, OH: _Int, OW: _Int](
+    input: Tensor[Shape], output_size: tuple[OH, OW]
 ) -> Tensor[adaptive_pool2d_shape(Shape, OH, OW)]: ...
 @overload
 def adaptive_avg_pool2d[Shape: IntTuple](
     input: Tensor[Shape], output_size: tuple[int | None, int | None]
 ) -> Tensor[adaptive_pool_gradual_shape(Shape, 2)]: ...
 @overload
-def adaptive_avg_pool3d[Shape: IntTuple, O: IntVar](
-    input: Tensor[Shape], output_size: _Int[O]
+def adaptive_avg_pool3d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O
 ) -> Tensor[adaptive_pool3d_shape(Shape, O, O, O)]:
     """3D adaptive average pooling. Shape inference via type-level DSL."""
     ...
 
 @overload
-def adaptive_avg_pool3d[Shape: IntTuple, OD: IntVar, OH: IntVar, OW: IntVar](
-    input: Tensor[Shape], output_size: tuple[_Int[OD], _Int[OH], _Int[OW]]
+def adaptive_avg_pool3d[Shape: IntTuple, OD: _Int, OH: _Int, OW: _Int](
+    input: Tensor[Shape], output_size: tuple[OD, OH, OW]
 ) -> Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)]: ...
 @overload
 def adaptive_avg_pool3d[Shape: IntTuple](

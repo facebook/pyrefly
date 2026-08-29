@@ -403,36 +403,36 @@ class Tensor[Shape: _Shape = _AnyShape]:
     @overload
     def repeat_interleave[
         Shape: IntTuple,
-        Repeats: IntVar,
-        OutputSize: IntVar,
+        Repeats: _Int,
+        OutputSize: _Int,
         Dim: Flag[builtins.int | None],
     ](
         self: Tensor[Shape],
-        repeats: _Int[Repeats],
+        repeats: Repeats,
         dim: Dim = None,
         *,
-        output_size: _Int[OutputSize],
+        output_size: OutputSize,
     ) -> Tensor[repeat_interleave_checked_shape(Shape, Repeats, OutputSize, Dim)]: ...
     @overload
     def repeat_interleave[
         Shape: IntTuple,
-        OutputSize: IntVar,
+        OutputSize: _Int,
         Dim: Flag[builtins.int | None],
     ](
         self: Tensor[Shape],
         repeats: Tensor,
         dim: Dim = None,
         *,
-        output_size: _Int[OutputSize],
+        output_size: OutputSize,
     ) -> Tensor[repeat_interleave_output_shape(Shape, OutputSize, Dim)]: ...
     @overload
     def repeat_interleave[
         Shape: IntTuple,
-        Repeats: IntVar,
+        Repeats: _Int,
         Dim: Flag[builtins.int | None],
     ](
         self: Tensor[Shape],
-        repeats: _Int[Repeats],
+        repeats: Repeats,
         dim: Dim = None,
         *,
         output_size: None = None,
@@ -594,9 +594,9 @@ class Tensor[Shape: _Shape = _AnyShape]:
     def narrow[
         Shape: IntTuple,
         Dim: Flag[builtins.int],
-        Length: IntVar,
+        Length: _Int,
     ](
-        self: Tensor[Shape], dim: Dim, start: int, length: _Int[Length]
+        self: Tensor[Shape], dim: Dim, start: int, length: Length
     ) -> Tensor[replace_axis_extent(Shape, Dim, Length)]:
         """Narrow tensor along dimension. Shape inference via meta-shape: torch.Tensor.narrow"""
         ...
@@ -911,9 +911,9 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Mode along dimension. Returns (values, indices). Shape inference via meta-shape: torch.Tensor.mode"""
         ...
 
-    def topk[Shape: IntTuple, K: IntVar, Dim: Flag[builtins.int]](
+    def topk[Shape: IntTuple, K: _Int, Dim: Flag[builtins.int]](
         self: Tensor[Shape],
-        k: _Int[K],
+        k: K,
         dim: Dim = -1,
         largest: bool = True,
         sorted: bool = True,
@@ -1471,9 +1471,9 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Sample from Bernoulli distribution in-place. Shape inference via generic fixture signature."""
         ...
 
-    def multinomial[Shape: IntTuple, NumSamples: IntVar](
+    def multinomial[Shape: IntTuple, NumSamples: _Int](
         self: Tensor[Shape],
-        num_samples: _Int[NumSamples],
+        num_samples: NumSamples,
         replacement: bool = False,
     ) -> Tensor[multinomial_shape(Shape, NumSamples)]:
         """Sample from multinomial distribution. Shape inference via meta-shape: torch.Tensor.multinomial"""
@@ -1568,32 +1568,32 @@ def unsqueeze[Shape: IntTuple, Dim: Flag[builtins.int]](
 @overload
 def repeat_interleave[
     Shape: IntTuple,
-    Repeats: IntVar,
-    OutputSize: IntVar,
+    Repeats: _Int,
+    OutputSize: _Int,
     Dim: Flag[builtins.int | None],
 ](
     input: Tensor[Shape],
-    repeats: _Int[Repeats],
+    repeats: Repeats,
     dim: Dim = None,
     *,
-    output_size: _Int[OutputSize],
+    output_size: OutputSize,
 ) -> Tensor[repeat_interleave_checked_shape(Shape, Repeats, OutputSize, Dim)]: ...
 @overload
 def repeat_interleave[
     Shape: IntTuple,
-    OutputSize: IntVar,
+    OutputSize: _Int,
     Dim: Flag[builtins.int | None],
 ](
     input: Tensor[Shape],
     repeats: Tensor,
     dim: Dim = None,
     *,
-    output_size: _Int[OutputSize],
+    output_size: OutputSize,
 ) -> Tensor[repeat_interleave_output_shape(Shape, OutputSize, Dim)]: ...
 @overload
-def repeat_interleave[Shape: IntTuple, Repeats: IntVar, Dim: Flag[builtins.int | None]](
+def repeat_interleave[Shape: IntTuple, Repeats: _Int, Dim: Flag[builtins.int | None]](
     input: Tensor[Shape],
-    repeats: _Int[Repeats],
+    repeats: Repeats,
     dim: Dim = None,
     *,
     output_size: None = None,
@@ -1897,8 +1897,8 @@ def select[Shape: IntTuple, Dim: Flag[builtins.int]](
     """Select along dimension. Shape inference via meta-shape: torch.select"""
     ...
 
-def narrow[Shape: IntTuple, Dim: Flag[builtins.int], Length: IntVar](
-    self: Tensor[Shape], dim: Dim, start: int, length: _Int[Length]
+def narrow[Shape: IntTuple, Dim: Flag[builtins.int], Length: _Int](
+    self: Tensor[Shape], dim: Dim, start: int, length: Length
 ) -> Tensor[replace_axis_extent(Shape, Dim, Length)]:
     """Narrow tensor along dimension. Shape inference via meta-shape: torch.narrow"""
     ...
@@ -2114,9 +2114,9 @@ def mode[Shape: IntTuple, Dim: Flag[builtins.int], Keepdim: Flag[builtins.bool]]
     """Mode along dimension. Returns (values, indices). Shape inference via meta-shape: torch.mode"""
     ...
 
-def topk[Shape: IntTuple, K: IntVar, Dim: Flag[builtins.int]](
+def topk[Shape: IntTuple, K: _Int, Dim: Flag[builtins.int]](
     self: Tensor[Shape],
-    k: _Int[K],
+    k: K,
     dim: Dim = -1,
     largest: bool = True,
     sorted: bool = True,
@@ -2759,9 +2759,9 @@ def bernoulli[Shape: IntTuple](input: Tensor[Shape], p: float = 0.5) -> Tensor[S
     """Sample from Bernoulli distribution. Shape inference via generic fixture signature."""
     ...
 
-def multinomial[Shape: IntTuple, NumSamples: IntVar](
+def multinomial[Shape: IntTuple, NumSamples: _Int](
     input: Tensor[Shape],
-    num_samples: _Int[NumSamples],
+    num_samples: NumSamples,
     replacement: bool = False,
 ) -> Tensor[multinomial_shape(Shape, NumSamples)]:
     """Sample from multinomial distribution. Shape inference via meta-shape: torch.multinomial"""
