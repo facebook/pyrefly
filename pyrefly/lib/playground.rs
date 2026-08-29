@@ -563,7 +563,7 @@ impl Playground {
         if let Some(bindings) = transaction.get_bindings(handle) {
             let module_info = bindings.module();
             for unused in bindings.unused_variables() {
-                if Ast::is_pytest_tracebackhide(unused.name.as_str()) {
+                if Ast::is_intentionally_unused(unused.name.as_str()) {
                     continue;
                 }
                 let range = module_info.display_range(unused.range);
@@ -592,6 +592,9 @@ impl Playground {
         if let Some(bindings) = transaction.get_bindings(handle) {
             let module_info = bindings.module();
             for unused in bindings.unused_parameters() {
+                if Ast::is_intentionally_unused(unused.name.as_str()) {
+                    continue;
+                }
                 let range = module_info.display_range(unused.range);
                 items.push(Diagnostic {
                     start_line: range.start.line_within_file().get() as i32,
@@ -1135,7 +1138,7 @@ mod tests {
         let mut files = SmallMap::new();
         files.insert(
             "main.py".to_owned(),
-            "def foo():\n    x = 42\n    y = 10\n    return y".to_owned(),
+            "def foo():\n    x = 42\n    _ignored = 0\n    y = 10\n    return y".to_owned(),
         );
         state.update_sandbox_files(files, true);
         state.set_active_file("main.py");
@@ -1172,7 +1175,8 @@ mod tests {
         let mut files = SmallMap::new();
         files.insert(
             "main.py".to_owned(),
-            "def greet(name: str, age: int) -> str:\n    return f\"Hello {name}\"".to_owned(),
+            "def greet(name: str, age: int, _unused: bool) -> str:\n    return f\"Hello {name}\""
+                .to_owned(),
         );
         state.update_sandbox_files(files, true);
         state.set_active_file("main.py");
@@ -1186,7 +1190,7 @@ mod tests {
         assert_eq!(
             unused_parameters.len(),
             1,
-            "Should detect 1 unused parameter"
+            "Should detect 1 unused parameter and skip the underscore-prefixed parameter"
         );
         assert_eq!(
             unused_parameters[0].message_header,
