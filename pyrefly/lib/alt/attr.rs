@@ -1182,8 +1182,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// is `true` when `__dict__` appears in slots.
     fn extract_local_slot_names(&self, cls: &Class) -> Option<(SmallSet<Name>, bool)> {
         let metadata = self.get_metadata_for_class(cls);
-        if let Some(dc) = metadata.dataclass_metadata()
-            && dc.kws.slots
+        // An inherited `slots=True` does not synthesize `__slots__` on the subclass.
+        if metadata.has_local_dataclass_slots_request()
+            && let Some(dc) = metadata.dataclass_metadata()
         {
             let mut names = SmallSet::new();
             let has_dict = dc.fields.iter().any(|n| *n == dunder::DICT);
