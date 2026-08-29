@@ -2610,7 +2610,7 @@ testcase!(
     r#"
 import shape_extensions.dsl as shape_dsl
 import shape_extensions.dsl
-from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions import Flag, Int, IntTuple, type_shape_dsl_function
 from shape_extensions.dsl import Int as DslInt, IntTuple as DslIntTuple
 from gradual_reexport import ReexportedInt
 from torch import Tensor
@@ -2646,22 +2646,179 @@ def gradual_nested_import(x: Int) -> Int:
 def identity_shape(shape: IntTuple) -> IntTuple:
     return shape
 
+@type_shape_dsl_function
+def inferred_int(x: Int) -> Int:
+    return x
+
+@type_shape_dsl_function
+def inferred_shape(shape: IntTuple) -> IntTuple:
+    return shape
+
+@type_shape_dsl_function
+def offset(x: Int, amount: int) -> Int:
+    return x + amount
+
+@type_shape_dsl_function
+def nested_offset(x: Int, amount: int) -> Int:
+    return x + (amount + 1)
+
+@type_shape_dsl_function
+def select_axis(shape: IntTuple, index: int) -> Int:
+    selected = shape[index]
+    return selected
+
+@type_shape_dsl_function
+def partial_shape(shape: IntTuple) -> IntTuple:
+    return shape_dsl.IntTuple((shape[0], shape_dsl.Int.gradual(), DslInt.gradual(), shape[2]))
+
+@type_shape_dsl_function
+def assigned_partial_shape(shape: IntTuple) -> IntTuple:
+    dimension = gradual_assignment()
+    return shape_dsl.IntTuple((shape[0], dimension, shape[2]))
+
+@type_shape_dsl_function
+def arithmetic_partial_shape(shape: IntTuple) -> IntTuple:
+    assigned = gradual_assignment()
+    return shape_dsl.IntTuple(
+        (
+            shape[0],
+            shape_dsl.Int.gradual() + 1,
+            DslInt.gradual() * 2,
+            assigned // 2,
+            DslInt.gradual() % 2,
+            shape[2],
+        )
+    )
+
+@type_shape_dsl_function
+def overflow_partial_shape(shape: IntTuple) -> IntTuple:
+    return shape_dsl.IntTuple((shape[0], 9223372036854775807 + 1, shape[2]))
+
+@type_shape_dsl_function
+def gradual_is_concrete_int(shape: IntTuple) -> IntTuple:
+    dimension = shape_dsl.Int.gradual()
+    if shape_dsl.is_concrete_int(dimension):
+        return shape_dsl.IntTuple((1,))
+    return shape_dsl.IntTuple((2,))
+
+@type_shape_dsl_function
+def gradual_arithmetic_is_concrete_int(shape: IntTuple) -> IntTuple:
+    dimension = shape_dsl.Int.gradual() + 1
+    if shape_dsl.is_concrete_int(dimension):
+        return shape_dsl.IntTuple((1,))
+    return shape_dsl.IntTuple((2,))
+
+@type_shape_dsl_function
+def classify_offset(x: Int, amount: int) -> IntTuple:
+    shifted = x + amount
+    if shape_dsl.is_concrete_int(shifted):
+        return shape_dsl.IntTuple((1,))
+    return shape_dsl.IntTuple((2,))
+
+@type_shape_dsl_function
+def classify_incremented_offset(amount: int) -> IntTuple:
+    shifted = amount + 1
+    if shifted >= 0:
+        return shape_dsl.IntTuple((1,))
+    return shape_dsl.IntTuple((2,))
+
+@type_shape_dsl_function
+def gradual_equals_literal(shape: IntTuple) -> IntTuple:
+    if shape_dsl.Int.gradual() == 3:
+        return shape_dsl.IntTuple((1,))
+    return shape_dsl.IntTuple((2,))
+
+@type_shape_dsl_function
+def gradual_floor_zero(shape: IntTuple) -> IntTuple:
+    return shape_dsl.IntTuple((shape_dsl.Int.gradual() // 0,))  # E: Cannot divide by zero
+
+@type_shape_dsl_function
+def gradual_modulo_zero(shape: IntTuple) -> IntTuple:
+    return shape_dsl.IntTuple((shape_dsl.Int.gradual() % 0,))  # E: Cannot divide by zero
+
+@type_shape_dsl_function
+def generated_gradual_shape(shape: IntTuple) -> IntTuple:
+    return shape_dsl.IntTuple((shape_dsl.Int.gradual() for _index in range(2)))
+
 def int_result() -> Tensor[[gradual_int(Int[2])]]: ...
 def shape_result() -> Tensor[gradual_shape(IntTuple[2, 3])]: ...
 def assignment_alias_result() -> Tensor[[gradual_assignment_alias(Int[2])]]: ...
 def reexport_result() -> Tensor[[gradual_reexport(Int[2])]]: ...
 def nested_import_result() -> Tensor[[gradual_nested_import(Int[2])]]: ...
 def nested_multi_result() -> Tensor[identity_shape(gradual_multi(Int[2], IntTuple[3, 4]))]: ...
+def inferred_int_result() -> Tensor[[inferred_int(int)]]: ...
+def inferred_shape_result() -> Tensor[inferred_shape(IntTuple)]: ...
+def apply_offset[K: Flag[int]](amount: K) -> Tensor[[offset(Int[2], K)]]: ...
+def apply_nested_offset[K: Flag[int]](amount: K) -> Tensor[[nested_offset(Int[2], K)]]: ...
+def apply_index[K: Flag[int]](index: K) -> Tensor[[select_axis(IntTuple[2, 3], K)]]: ...
+def partial_result() -> Tensor[partial_shape(IntTuple[2, 3, 4])]: ...
+def assigned_partial_result() -> Tensor[assigned_partial_shape(IntTuple[2, 3, 4])]: ...
+def arithmetic_partial_result() -> Tensor[arithmetic_partial_shape(IntTuple[2, 3, 4])]: ...
+def overflow_partial_result() -> Tensor[overflow_partial_shape(IntTuple[2, 3, 4])]: ...
+def is_concrete_int_result() -> Tensor[gradual_is_concrete_int(IntTuple[2])]: ...
+def arithmetic_is_concrete_int_result() -> Tensor[gradual_arithmetic_is_concrete_int(IntTuple[2])]: ...
+def classify_offset_result[K: Flag[int]](amount: K) -> Tensor[classify_offset(Int[2], K)]: ...
+def classify_incremented_offset_result[K: Flag[int]](amount: K) -> Tensor[classify_incremented_offset(K)]: ...
+def gradual_equality_result() -> Tensor[gradual_equals_literal(IntTuple[2])]: ...
+def apply_floor_zero(x: Tensor[[2]]) -> Tensor[gradual_floor_zero(IntTuple[2])]: ...
+def apply_modulo_zero(x: Tensor[[2]]) -> Tensor[gradual_modulo_zero(IntTuple[2])]: ...
+def generated_result() -> Tensor[generated_gradual_shape(IntTuple[2])]: ...
 
-def test() -> None:
+def test(broad_amount: int, any_amount: Any, x: Tensor[[2]]) -> None:
     assert_type(int_result(), Tensor[[int]])
     assert_type(shape_result(), Tensor[IntTuple])
     assert_type(assignment_alias_result(), Tensor[[int]])
     assert_type(reexport_result(), Tensor[[int]])
     assert_type(nested_import_result(), Tensor[[int]])
     assert_type(nested_multi_result(), Tensor[IntTuple])
+    assert_type(inferred_int_result(), Tensor[[int]])
+    assert_type(inferred_shape_result(), Tensor[IntTuple])
+    assert_type(apply_offset(broad_amount), Tensor[[int]])
+    assert_type(apply_nested_offset(broad_amount), Tensor[[int]])
+    assert_type(apply_index(broad_amount), Tensor[[int]])
     reveal_type(DslInt.gradual)  # E: revealed type: () -> Any
     assert_type(DslInt.gradual(), Any)
+    assert_type(partial_result(), Tensor[[2, int, int, 4]])
+    assert_type(assigned_partial_result(), Tensor[[2, int, 4]])
+    assert_type(arithmetic_partial_result(), Tensor[[2, int, int, int, int, 4]])
+    assert_type(overflow_partial_result(), Tensor[[2, int, 4]])
+    assert_type(is_concrete_int_result(), Tensor[[2]])
+    assert_type(arithmetic_is_concrete_int_result(), Tensor[[2]])
+    assert_type(classify_offset_result(broad_amount), Tensor[[2]])
+    assert_type(classify_offset_result(any_amount), Tensor[IntTuple])
+    assert_type(classify_incremented_offset_result(broad_amount), Tensor[IntTuple])
+    assert_type(apply_index(any_amount), Tensor[[int]])
+    assert_type(gradual_equality_result(), Tensor[IntTuple])
+    apply_floor_zero(x)  # E: dimension integer division by zero
+    apply_modulo_zero(x)  # E: dimension integer modulo by zero
+    assert_type(generated_result(), Tensor[[int, int]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_gradual_dimension_invalid_syntax,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def positional(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((dsl.Int.gradual(1),))  # E: `gradual()` does not accept arguments  # E: Expected 0 positional arguments
+
+@type_shape_dsl_function
+def keyword(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((dsl.Int.gradual(value=1),))  # E: `gradual()` does not accept arguments  # E: Unexpected keyword argument
+
+@type_shape_dsl_function
+def bare(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((dsl.Int.gradual,))  # E: elements must be dimensions
+
+@type_shape_dsl_function
+def ordered(shape: IntTuple) -> IntTuple:
+    if dsl.Int.gradual() <= 3:  # E: derived dimension comparisons support only `==` and `!=`
+        return dsl.IntTuple((1,))
+    return shape
 "#,
 );
 
@@ -2684,19 +2841,19 @@ class SpoofInt:
 
 @type_shape_dsl_function
 def positional(x: Int) -> Int:
-    return official_gradual(x)  # E: @type_shape_dsl_function gradual return does not accept arguments  # E: Expected 0 positional arguments
+    return official_gradual(x)  # E: @type_shape_dsl_function `gradual()` does not accept arguments  # E: Expected 0 positional arguments
 
 @type_shape_dsl_function
 def keyword(x: Int) -> Int:
-    return official_gradual(x=x)  # E: @type_shape_dsl_function gradual return does not accept arguments  # E: Unexpected keyword argument
+    return official_gradual(x=x)  # E: @type_shape_dsl_function `gradual()` does not accept arguments  # E: Unexpected keyword argument
 
 @type_shape_dsl_function
 def starred(x: Int) -> Int:
-    return official_gradual(*())  # E: @type_shape_dsl_function gradual return does not accept arguments
+    return official_gradual(*())  # E: @type_shape_dsl_function `gradual()` does not accept arguments
 
 @type_shape_dsl_function
 def keyword_starred(x: Int) -> Int:
-    return official_gradual(**{})  # E: @type_shape_dsl_function gradual return does not accept arguments
+    return official_gradual(**{})  # E: @type_shape_dsl_function `gradual()` does not accept arguments
 
 @type_shape_dsl_function
 def bare(x: Int) -> Int:
@@ -9341,7 +9498,7 @@ def invalid_keyword(shape: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def gradual_arguments(shape: IntTuple) -> IntTuple:
-    return dsl.IntTuple.gradual(1)  # E: @type_shape_dsl_function gradual return does not accept arguments  # E: Expected 0 positional arguments
+    return dsl.IntTuple.gradual(1)  # E: @type_shape_dsl_function `gradual()` does not accept arguments  # E: Expected 0 positional arguments
 
 @type_shape_dsl_function
 def unsupported_unary(shape: IntTuple) -> IntTuple:

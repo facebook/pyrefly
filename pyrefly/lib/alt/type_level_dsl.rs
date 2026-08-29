@@ -623,6 +623,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         (!valid).then_some("`@type_shape_dsl_function` Flag operation requires a compatible Flag parameter")
                     }
                     TypeShapeDslExpressionKind::DimensionLiteral(_)
+                    | TypeShapeDslExpressionKind::Gradual
                     | TypeShapeDslExpressionKind::IntTupleSlot { .. }
                     | TypeShapeDslExpressionKind::IntTupleSlice
                     | TypeShapeDslExpressionKind::IntTupleConcat

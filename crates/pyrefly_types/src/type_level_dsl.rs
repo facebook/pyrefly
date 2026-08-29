@@ -1187,6 +1187,8 @@ pub enum TypeShapeDslExpressionKind {
         parameter_uses: Option<Box<[TypeShapeDslParameterUse]>>,
     },
     DimensionLiteral(Option<i64>),
+    /// An explicit `Int.gradual()` used where a dimension is expected.
+    Gradual,
     IntTupleIndex {
         shape: usize,
         parameter_origins: Option<Box<[usize]>>,
@@ -2341,6 +2343,13 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 self.validate_int_tuple_product(call, flow)?;
                 TypeShapeDslExpressionKind::IntTupleProduct
             }
+            Expr::Call(call)
+                if self.intrinsic(&call.func)
+                    == Some(TypeShapeDslIntrinsic::Gradual(TypeShapeDslDomain::Int)) =>
+            {
+                Self::validate_gradual_call(call)?;
+                TypeShapeDslExpressionKind::Gradual
+            }
             Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len) => {
                 self.validate_length(call, flow, DslIntegerDomain::Dimension)?
             }
@@ -3045,6 +3054,17 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok(())
     }
 
+    fn validate_gradual_call(call: &ExprCall) -> Result<(), TypeShapeDslDefinitionError> {
+        if call.arguments.args.is_empty() && call.arguments.keywords.is_empty() {
+            Ok(())
+        } else {
+            Err(TypeShapeDslDefinitionError {
+                range: call.arguments.range,
+                message: "`gradual()` does not accept arguments",
+            })
+        }
+    }
+
     fn validate_int_tuple_expression(
         &mut self,
         expression: &Expr,
@@ -3254,6 +3274,17 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 Ok(DslStaticKind::Dimension)
             }
             Expr::Call(call)
+                if self.intrinsic(&call.func)
+                    == Some(TypeShapeDslIntrinsic::Gradual(TypeShapeDslDomain::Int)) =>
+            {
+                Self::validate_gradual_call(call)?;
+                self.expressions.push(TypeShapeDslExpression {
+                    range: call.range(),
+                    kind: TypeShapeDslExpressionKind::Gradual,
+                });
+                Ok(DslStaticKind::Dimension)
+            }
+            Expr::Call(call)
                 if matches!(
                     self.intrinsic(&call.func),
                     Some(TypeShapeDslIntrinsic::Range | TypeShapeDslIntrinsic::Tuple)
@@ -3432,7 +3463,13 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 self.is_dimension_expression(&binop.left, flow)
                     || self.is_dimension_expression(&binop.right, flow)
             }
-            Expr::Call(call) => self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Prod),
+            Expr::Call(call) => matches!(
+                self.intrinsic(&call.func),
+                Some(
+                    TypeShapeDslIntrinsic::Prod
+                        | TypeShapeDslIntrinsic::Gradual(TypeShapeDslDomain::Int)
+                )
+            ),
             Expr::If(if_expr) => {
                 self.is_dimension_expression(&if_expr.body, flow)
                     || self.is_dimension_expression(&if_expr.orelse, flow)
@@ -4155,12 +4192,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             }
             Some(returned @ Expr::Call(call)) => match self.intrinsic(&call.func) {
                 Some(TypeShapeDslIntrinsic::Gradual(domain)) => {
-                    if !call.arguments.args.is_empty() || !call.arguments.keywords.is_empty() {
-                        return Err(TypeShapeDslDefinitionError {
-                            range: call.arguments.range,
-                            message: "gradual return does not accept arguments",
-                        });
-                    }
+                    Self::validate_gradual_call(call)?;
                     TypeShapeDslReturnKind::Gradual(domain)
                 }
                 Some(TypeShapeDslIntrinsic::Broadcast) => {
@@ -4889,6 +4921,8 @@ pub enum TypeLevelDslFunction {
 #[derive(Debug, Clone)]
 enum DslValue {
     Unknown,
+    /// A runtime value known to be an `int` whose value is not statically known.
+    GradualInt,
     Dimension(Int),
     Shape(IntTuple),
     FlagInt(i64),
@@ -5399,11 +5433,17 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 self.evaluate_expression(&generator.elt, &iteration, budget),
             ) {
                 (_, invalid @ DslOutcome::Invalid(_)) => return invalid,
-                (GeneratorResultKind::Dimensions, DslOutcome::Value(DslValue::Unknown)) => {
+                (
+                    GeneratorResultKind::Dimensions,
+                    DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown),
+                ) => {
                     // The source cardinality and filter membership already determine the rank.
                     dimensions.push(Int::Int)
                 }
-                (GeneratorResultKind::FlagValues, DslOutcome::Value(DslValue::Unknown)) => {
+                (
+                    GeneratorResultKind::FlagValues,
+                    DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown),
+                ) => {
                     // Flag sequences have no gradual element representation.
                     unknown = true
                 }
@@ -5446,6 +5486,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 DslValue::FlagInt(value) => {
                     DslOutcome::Value(DslValue::Dimension(Int::Literal(*value)))
                 }
+                DslValue::GradualInt => DslOutcome::Value(DslValue::Dimension(Int::Int)),
                 value @ (DslValue::Dimension(_) | DslValue::Unknown) => {
                     DslOutcome::Value(value.clone())
                 }
@@ -5459,6 +5500,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     DslValue::FlagInt(value) => {
                         DslOutcome::Value(DslValue::Dimension(Int::Literal(*value)))
                     }
+                    DslValue::GradualInt => DslOutcome::Value(DslValue::Dimension(Int::Int)),
                     DslValue::Unknown => DslOutcome::Value(DslValue::Unknown),
                     _ => unreachable!("generator elements are integer values"),
                 }
@@ -5470,6 +5512,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 DslValue::FlagInt(value) => {
                     DslOutcome::Value(DslValue::Dimension(Int::Literal(*value)))
                 }
+                DslValue::GradualInt => DslOutcome::Value(DslValue::Dimension(Int::Int)),
                 value @ (DslValue::Dimension(_) | DslValue::Unknown) => {
                     DslOutcome::Value(value.clone())
                 }
@@ -5506,33 +5549,42 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 };
                 let start = evaluate_bound(slice.lower.as_deref());
                 let stop = evaluate_bound(slice.upper.as_deref());
-                let (shape, start, stop) = match (shape, start, stop) {
-                    (DslOutcome::Invalid(error), _, _)
-                    | (_, DslOutcome::Invalid(error), _)
-                    | (_, _, DslOutcome::Invalid(error)) => return DslOutcome::Invalid(error),
-                    (DslOutcome::Value(DslValue::Unknown), _, _)
-                    | (_, DslOutcome::Value(DslValue::Unknown), _)
-                    | (_, _, DslOutcome::Value(DslValue::Unknown)) => {
-                        return DslOutcome::Value(DslValue::Unknown);
+                for outcome in [&shape, &start, &stop] {
+                    if let DslOutcome::Invalid(error) = outcome {
+                        return DslOutcome::Invalid(error.clone());
                     }
-                    (DslOutcome::ExplicitGradual, _, _)
-                    | (_, DslOutcome::ExplicitGradual, _)
-                    | (_, _, DslOutcome::ExplicitGradual) => {
+                }
+                let value = |outcome| match outcome {
+                    DslOutcome::Value(value) => value,
+                    DslOutcome::Invalid(_) => {
+                        unreachable!("invalid slice outcomes return before decoding values")
+                    }
+                    DslOutcome::ExplicitGradual => {
                         unreachable!("validated slice expressions cannot return explicit gradual")
                     }
-                    (
-                        DslOutcome::Value(DslValue::Shape(shape)),
-                        DslOutcome::Value(start),
-                        DslOutcome::Value(stop),
-                    ) => (shape, start, stop),
+                };
+                let shape = match value(shape) {
+                    DslValue::Shape(shape) => shape,
+                    DslValue::Unknown => return DslOutcome::Value(DslValue::Unknown),
                     _ => unreachable!("validated IntTuple slice operand is a shape"),
                 };
-                let bound = |value| match value {
-                    DslValue::FlagNone => None,
-                    DslValue::FlagInt(value) => Some(value),
+                let bound = |outcome| match value(outcome) {
+                    DslValue::FlagNone => Ok(None),
+                    DslValue::FlagInt(value) => Ok(Some(value)),
+                    DslValue::GradualInt | DslValue::Unknown => {
+                        Err(DslOutcome::Value(DslValue::Unknown))
+                    }
                     _ => unreachable!("validated IntTuple slice bound is an optional Flag[int]"),
                 };
-                evaluate_int_tuple_slice(&shape, bound(start), bound(stop))
+                let start = match bound(start) {
+                    Ok(start) => start,
+                    Err(outcome) => return outcome,
+                };
+                let stop = match bound(stop) {
+                    Ok(stop) => stop,
+                    Err(outcome) => return outcome,
+                };
+                evaluate_int_tuple_slice(&shape, start, stop)
                     .map_or(DslOutcome::Value(DslValue::Unknown), |shape| {
                         DslOutcome::Value(DslValue::Shape(shape))
                     })
@@ -5565,6 +5617,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 .map_or(DslOutcome::Value(DslValue::Unknown), |literal| {
                     DslOutcome::Value(DslValue::Dimension(Int::Literal(literal)))
                 }),
+            TypeShapeDslExpressionKind::Gradual => DslOutcome::Value(DslValue::Dimension(Int::Int)),
             TypeShapeDslExpressionKind::IntTupleIndex { shape, .. } => {
                 let Expr::Subscript(subscript) = expression else {
                     unreachable!("validated IntTuple index expression is a subscript")
@@ -5582,6 +5635,9 @@ impl StructurallyValidatedTypeShapeDslFunction {
                             DslOutcome::Value(DslValue::FlagInt(index)) => index,
                             DslOutcome::Value(DslValue::Unknown) => {
                                 return DslOutcome::Value(DslValue::Unknown);
+                            }
+                            DslOutcome::Value(DslValue::GradualInt) => {
+                                return DslOutcome::Value(DslValue::Dimension(Int::Int));
                             }
                             DslOutcome::ExplicitGradual => {
                                 unreachable!(
@@ -5685,6 +5741,8 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 };
                 match self.evaluate_expression(&call.arguments.args[0], environment, budget) {
                     DslOutcome::Value(DslValue::Shape(shape)) => match shape.product() {
+                        // TODO(stroxler): Preserve a gradual product as a gradual dimension once
+                        // callers can distinguish an unknown equality check from a proven match.
                         Int::Int => DslOutcome::Value(DslValue::Unknown),
                         product => DslOutcome::Value(DslValue::Dimension(product)),
                     },
@@ -5731,6 +5789,9 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     DslValue::Dimension(_) | DslValue::Unknown => {
                         DslOutcome::Value(DslValue::Unknown)
                     }
+                    DslValue::GradualInt => unreachable!(
+                        "generator sources normalize gradual integer elements to dimensions"
+                    ),
                     _ => unreachable!("generator elements are integer values"),
                 }
             }
@@ -5765,7 +5826,9 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 for element in &tuple.elts {
                     match self.evaluate_expression(element, environment, budget) {
                         DslOutcome::Value(DslValue::FlagInt(value)) => values.push(value),
-                        DslOutcome::Value(DslValue::Unknown) => unknown = true,
+                        DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown) => {
+                            unknown = true
+                        }
                         DslOutcome::ExplicitGradual => {
                             unreachable!("validated value expression cannot return gradual")
                         }
@@ -5789,7 +5852,9 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 for argument in &call.arguments.args {
                     match self.evaluate_expression(argument, environment, budget) {
                         DslOutcome::Value(DslValue::FlagInt(value)) => values.push(Some(value)),
-                        DslOutcome::Value(DslValue::Unknown) => values.push(None),
+                        DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown) => {
+                            values.push(None)
+                        }
                         DslOutcome::ExplicitGradual => {
                             unreachable!("validated value expression cannot return gradual")
                         }
@@ -5860,8 +5925,8 @@ impl StructurallyValidatedTypeShapeDslFunction {
                         .map_or(DslOutcome::Value(DslValue::Unknown), |count| {
                             DslOutcome::Value(DslValue::FlagInt(count))
                         }),
-                    (DslOutcome::Value(DslValue::Unknown), _)
-                    | (_, DslOutcome::Value(DslValue::Unknown)) => {
+                    (DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown), _)
+                    | (_, DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown)) => {
                         DslOutcome::Value(DslValue::Unknown)
                     }
                     (DslOutcome::ExplicitGradual, _) | (_, DslOutcome::ExplicitGradual) => {
@@ -5899,8 +5964,8 @@ impl StructurallyValidatedTypeShapeDslFunction {
                             })
                         }
                     },
-                    (DslOutcome::Value(DslValue::Unknown), _)
-                    | (_, DslOutcome::Value(DslValue::Unknown)) => {
+                    (DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown), _)
+                    | (_, DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown)) => {
                         DslOutcome::Value(DslValue::Unknown)
                     }
                     (DslOutcome::ExplicitGradual, _) | (_, DslOutcome::ExplicitGradual) => {
@@ -5932,6 +5997,10 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     (DslOutcome::Value(DslValue::Unknown), _)
                     | (_, DslOutcome::Value(DslValue::Unknown)) => {
                         DslOutcome::Value(DslValue::Unknown)
+                    }
+                    (DslOutcome::Value(DslValue::GradualInt), _)
+                    | (_, DslOutcome::Value(DslValue::GradualInt)) => {
+                        DslOutcome::Value(DslValue::GradualInt)
                     }
                     (
                         DslOutcome::Value(DslValue::FlagInt(left)),
@@ -6207,7 +6276,8 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 DslValue::FlagBool(true) => DslCondition::True,
                 DslValue::FlagBool(false) | DslValue::FlagNone => DslCondition::False,
                 DslValue::Unknown => DslCondition::Unknown,
-                DslValue::FlagInt(_)
+                DslValue::GradualInt
+                | DslValue::FlagInt(_)
                 | DslValue::FlagString(_)
                 | DslValue::FlagSequence(_)
                 | DslValue::Dimension(_)
@@ -6222,7 +6292,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
                         DslCondition::True
                     }
                     // Symbolic and explicit-gradual `Int` values are definitively non-concrete.
-                    DslValue::Dimension(_) => DslCondition::False,
+                    DslValue::GradualInt | DslValue::Dimension(_) => DslCondition::False,
                     // An omitted optional dimension is definitively non-concrete.
                     DslValue::FlagNone => DslCondition::False,
                     // An admitted argument we cannot read as an `Int` is gradual, so it must fall
@@ -6240,7 +6310,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 }
             }
             TypeShapeDslConditionKind::IsIntValue { slot, .. } => match environment.value(slot) {
-                DslValue::FlagInt(_) => DslCondition::True,
+                DslValue::GradualInt | DslValue::FlagInt(_) => DslCondition::True,
                 DslValue::FlagNone | DslValue::FlagSequence(_) => DslCondition::False,
                 DslValue::Unknown => DslCondition::Unknown,
                 DslValue::FlagBool(_)
@@ -6255,6 +6325,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 let is_none = match environment.value(slot) {
                     DslValue::FlagNone => DslCondition::True,
                     DslValue::FlagInt(_)
+                    | DslValue::GradualInt
                     | DslValue::FlagBool(_)
                     | DslValue::FlagString(_)
                     | DslValue::FlagSequence(_)
@@ -6331,8 +6402,10 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     (DslOutcome::Invalid(error), _) | (_, DslOutcome::Invalid(error)) => {
                         return Err(error);
                     }
-                    (DslOutcome::Value(DslValue::Unknown), _)
-                    | (_, DslOutcome::Value(DslValue::Unknown)) => DslCondition::Unknown,
+                    (DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown), _)
+                    | (_, DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown)) => {
+                        DslCondition::Unknown
+                    }
                     _ => unreachable!("validated Flag comparison operands are integers"),
                 }
             }
@@ -6358,8 +6431,10 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     (DslOutcome::Invalid(error), _) | (_, DslOutcome::Invalid(error)) => {
                         return Err(error);
                     }
-                    (DslOutcome::Value(DslValue::Unknown), _)
-                    | (_, DslOutcome::Value(DslValue::Unknown)) => DslCondition::Unknown,
+                    (DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown), _)
+                    | (_, DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown)) => {
+                        DslCondition::Unknown
+                    }
                     _ => unreachable!("validated membership uses an integer and Flag sequence"),
                 }
             }
@@ -6386,6 +6461,10 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     }
                     (DslOutcome::Value(DslValue::Unknown), _)
                     | (_, DslOutcome::Value(DslValue::Unknown)) => DslCondition::Unknown,
+                    (DslOutcome::Value(DslValue::GradualInt), _)
+                    | (_, DslOutcome::Value(DslValue::GradualInt)) => unreachable!(
+                        "validated dimension expressions normalize gradual integers to dimensions"
+                    ),
                     _ => unreachable!("validated dimension comparison operands are dimensions"),
                 }
             }
@@ -6431,8 +6510,10 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     (DslOutcome::Invalid(error), _) | (_, DslOutcome::Invalid(error)) => {
                         return Err(error);
                     }
-                    (DslOutcome::Value(DslValue::Unknown), _)
-                    | (_, DslOutcome::Value(DslValue::Unknown)) => DslCondition::Unknown,
+                    (DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown), _)
+                    | (_, DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown)) => {
+                        DslCondition::Unknown
+                    }
                     _ => unreachable!("validated integer comparison operands are integers"),
                 }
             }
@@ -6491,7 +6572,8 @@ impl StructurallyValidatedTypeShapeDslFunction {
                         | (DslValue::FlagString(_), DslValue::FlagNone) => {
                             equality_condition(false)
                         }
-                        (DslValue::Unknown, _) | (_, DslValue::Unknown) => DslCondition::Unknown,
+                        (DslValue::GradualInt | DslValue::Unknown, _)
+                        | (_, DslValue::GradualInt | DslValue::Unknown) => DslCondition::Unknown,
                         _ => unreachable!(
                             "validated slot comparison operands share the same value domain"
                         ),
@@ -6670,6 +6752,7 @@ fn lower_parameter(ty: &Type, domain: TypeShapeDslInputDomain) -> DslValue {
             }
             match ty {
                 Type::None => DslValue::FlagNone,
+                Type::ClassType(cls) if cls.is_builtin("int") => DslValue::GradualInt,
                 Type::Int(Int::Literal(value)) => DslValue::FlagInt(*value),
                 // Symbolic shape integers satisfy `Flag[int]`, but DSL flag operations inspect
                 // only concrete runtime values. Generic substitution does not re-evaluate a call
@@ -6712,6 +6795,7 @@ fn evaluate_dimension_arithmetic(
     fn operand(outcome: DslOutcome) -> Option<Int> {
         match outcome {
             DslOutcome::Value(DslValue::Dimension(value)) => Some(value),
+            DslOutcome::Value(DslValue::GradualInt) => Some(Int::Int),
             DslOutcome::Value(DslValue::Unknown) => None,
             DslOutcome::Invalid(_) => unreachable!(
                 "invalid dimension arithmetic operands are propagated before evaluation"
@@ -6742,6 +6826,8 @@ fn evaluate_dimension_arithmetic(
         });
     }
     let left = operand(left);
+    // A broad integer becomes `Int::Int` at a dimension boundary. `Unknown` instead means that
+    // evaluation could not establish an integer value, so arithmetic must retain that distinction.
     let (Some(left), Some(right)) = (left, right) else {
         return DslOutcome::Value(DslValue::Unknown);
     };
@@ -6753,14 +6839,14 @@ fn evaluate_dimension_arithmetic(
                 })
             },
             |value| {
-                value.map_or(DslOutcome::Value(DslValue::Unknown), |value| {
+                value.map_or(DslOutcome::Value(DslValue::Dimension(Int::Int)), |value| {
                     DslOutcome::Value(DslValue::Dimension(Int::Literal(value)))
                 })
             },
         );
     }
     if matches!(op, TypeShapeDslArithmeticOp::Modulo) {
-        return DslOutcome::Value(DslValue::Unknown);
+        return DslOutcome::Value(DslValue::Dimension(Int::Int));
     }
     let result = match op {
         TypeShapeDslArithmeticOp::Add => Int::add(Type::Int(left), Type::Int(right)),
@@ -6770,7 +6856,6 @@ fn evaluate_dimension_arithmetic(
         TypeShapeDslArithmeticOp::Modulo => unreachable!("symbolic modulo is gradual"),
     };
     match canonicalize(Type::Int(result)) {
-        Type::Int(Int::Int) => DslOutcome::Value(DslValue::Unknown),
         Type::Int(result) => DslOutcome::Value(DslValue::Dimension(result)),
         _ => unreachable!("canonicalized dimension arithmetic must remain an Int"),
     }
@@ -6934,6 +7019,7 @@ impl DslValue {
     fn into_type(self) -> Type {
         match self {
             Self::Dimension(value) => Type::Int(value),
+            Self::GradualInt => Type::Int(Int::Int),
             Self::Shape(value) => value.to_shape_arg_type(),
             Self::Unknown => unreachable!("unknown DSL values project through the fallback"),
             Self::FlagInt(_)
