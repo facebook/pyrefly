@@ -10344,6 +10344,12 @@ def wrong_result(dimension: Int) -> IntTuple:
     return int_helper(dimension)  # E: DSL helper result domain must match  # E: Returned type
 
 @type_shape_dsl_function
+def helper_and_body_errors(dimension: Int, shape: IntTuple, mode: str) -> Int:
+    if mode:  # E: a name used directly as a condition requires a boolean Flag value
+        return dimension
+    return shape_helper(shape)  # E: DSL helper result domain must match  # E: Returned type
+
+@type_shape_dsl_function
 def unbounded_tuple_argument(shape: IntTuple, axes: tuple[int, ...]) -> IntTuple:
     return fixed_tuple_helper(shape, axes)  # E: DSL helper argument domains are incompatible  # E: is not assignable to parameter
 

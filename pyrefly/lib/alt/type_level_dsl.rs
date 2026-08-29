@@ -162,20 +162,22 @@ fn type_shape_dsl_comparison_domain(
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
-    /// Resolves the shape-specific helper calls retained during syntax validation.
+    /// Resolves helper calls and rebuilds metadata affected by their selected argument domains.
     ///
-    /// `FunctionKind` is the narrow boundary with Pyrefly's ordinary function model. Resolving
-    /// callees here gives imports and aliases normal name-resolution semantics while keeping the
-    /// helper graph and evaluator entirely in the shape DSL representation.
-    fn resolve_type_shape_dsl_function(
+    /// Resolving callees through the ordinary function model gives imports and aliases normal
+    /// name-resolution semantics while keeping the helper graph and evaluator entirely in the
+    /// shape DSL representation.
+    fn resolve_and_finalize_type_shape_dsl_helpers(
         &self,
         func_id: &Arc<FuncDefId>,
         definition: Arc<StructurallyValidatedTypeShapeDslFunction>,
-        parameter_domains: Vec<TypeShapeDslInputDomain>,
+        parameter_domains: &[TypeShapeDslInputDomain],
         result_domain: TypeShapeDslDomain,
-        function_range: TextRange,
         errors: &ErrorCollector,
-    ) -> Option<ResolvedTypeShapeDslFunction> {
+    ) -> Option<(
+        Arc<StructurallyValidatedTypeShapeDslFunction>,
+        Vec<(Arc<FuncDefId>, Arc<ResolvedTypeShapeDslFunction>)>,
+    )> {
         let mut helpers = Vec::new();
         let mut helper_argument_domains = Vec::new();
         let mut deferred_integer_domains = HashMap::new();
@@ -186,7 +188,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             match callee.callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::TypeShapeDsl(helper_id, helper))) => {
                     let argument_domains = match helper_call.argument_domains(
-                        &parameter_domains,
+                        parameter_domains,
                         helper.parameter_domains(),
                         &mut deferred_integer_domains,
                     ) {
@@ -288,24 +290,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
         };
-        match ResolvedTypeShapeDslFunction::try_new(
-            func_id.clone(),
-            definition,
-            parameter_domains,
-            result_domain,
-            helpers,
-        ) {
-            Ok(function) => Some(function),
-            Err(error) => {
-                self.error(
-                    errors,
-                    function_range,
-                    ErrorKind::InvalidArgument,
-                    error.message().to_owned(),
-                );
-                None
-            }
-        }
+        Some((definition, helpers))
     }
 
     /// Validates resolved DSL annotations, emitting diagnostics and metadata only on success.
@@ -380,7 +365,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
         }
         if valid_parameters && let Some(result) = return_domain {
-            let mut valid_body = true;
+            let (validated, helpers, valid_helpers) = match function_kind {
+                FunctionKind::Def(func_id) => {
+                    match self.resolve_and_finalize_type_shape_dsl_helpers(
+                        func_id,
+                        validated.clone(),
+                        &parameter_domains,
+                        result,
+                        errors,
+                    ) {
+                        Some((validated, helpers)) => (validated, helpers, true),
+                        None => (validated, Vec::new(), false),
+                    }
+                }
+                _ => (validated, Vec::new(), true),
+            };
+            let mut valid_body = valid_helpers;
             for condition in validated.conditions() {
                 let invalid_domain = match condition.kind() {
                     TypeShapeDslConditionKind::SlotCompare {
@@ -813,18 +813,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             if valid_body && let FunctionKind::Def(func_id) = function_kind {
-                if let Some(function) = self.resolve_type_shape_dsl_function(
-                    func_id,
+                match ResolvedTypeShapeDslFunction::try_new(
+                    func_id.clone(),
                     validated,
                     parameter_domains,
                     result,
-                    function_range,
-                    errors,
+                    helpers,
                 ) {
-                    return Some(FunctionKind::TypeShapeDsl(
-                        func_id.clone(),
-                        Arc::new(function),
-                    ));
+                    Ok(function) => {
+                        return Some(FunctionKind::TypeShapeDsl(
+                            func_id.clone(),
+                            Arc::new(function),
+                        ));
+                    }
+                    Err(error) => {
+                        self.error(
+                            errors,
+                            function_range,
+                            ErrorKind::InvalidArgument,
+                            error.message().to_owned(),
+                        );
+                    }
                 }
             } else if valid_body {
                 self.error(
