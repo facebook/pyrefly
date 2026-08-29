@@ -6,8 +6,8 @@
 """Focused tests for the shared `pool_shape` helper.
 
 The six pooling module stubs keep scalar-only arguments, so the tuple side of the
-shared surface is pinned here through a local stub that binds the arguments the
-way the functional pooling surface will bind them when it migrates.
+shared surface is pinned here through a local stub that matches the functional
+pooling surface.
 """
 
 from typing import assert_type, reveal_type, TYPE_CHECKING
@@ -106,6 +106,7 @@ def test_invalid_specializations_stay_gradual():
     assert_type(generic_kernel(x, 0), Tensor)
     assert_type(generic_stride(x, 0), Tensor)
     assert_type(generic_padding(x, 2), Tensor)
+    assert_type(generic_padding(x, -1), Tensor)
     assert_type(generic_dilation(x, 0), Tensor)
 
 
@@ -120,6 +121,19 @@ def generic_extent[L: IntVar](x: Tensor[[2, 3, L]]):
 def test_symbolic_extent_preserves_its_formula():
     too_small: Tensor[[2, 3, 2]] = torch.randn(2, 3, 2)
     reveal_type(generic_extent(too_small))  # revealed type: Tensor[[2, 3, 0]]
+
+
+def check_undecidable_tuple_arguments_stay_gradual(
+    unknown_arity: tuple[int, ...],
+    unknown_elements: tuple[int, int],
+) -> None:
+    # A tuple argument is undecidable in two independent ways: its arity may be
+    # unknown, so the per-axis rule cannot be zipped, or its arity may be fixed
+    # while the entries are unknown, so no value predicate can be answered. Either
+    # way the call must recover gradually rather than leave a check unmade.
+    x: Tensor[[2, 3, 8, 12]] = torch.randn(2, 3, 8, 12)
+    assert_type(pool2d(x, unknown_arity), Tensor)
+    assert_type(pool2d(x, unknown_elements), Tensor)
 
 
 def test_known_arguments_stay_exact():

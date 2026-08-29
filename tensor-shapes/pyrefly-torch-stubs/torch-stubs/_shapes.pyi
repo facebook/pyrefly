@@ -173,16 +173,6 @@ def move_dims(
     perm = scatter(rank, dst_norm + non_dst, src_norm + remaining, 0)
     return [dims[p] for p in perm]
 
-@shape_dsl_function
-def conv_spatial_out(
-    input_dim: int | symint,
-    kernel: int | symint,
-    stride: int | symint,
-    padding: int | symint,
-    dilation: int | symint,
-) -> int | symint:
-    return (input_dim + 2 * padding - dilation * (kernel - 1) - 1) // stride + 1
-
 @type_shape_dsl_function
 def reshape_shape(shape: IntTuple, target: IntTuple) -> IntTuple:
     inferred = tuple(
@@ -1047,30 +1037,6 @@ def conv_transpose_shape(
     )
     # Transposed convolution stores per-group output channels in `weight_shape[1]`.
     return dsl.concat(dsl.IntTuple((input_shape[0], weight_shape[1] * groups)), spatial)
-
-@shape_dsl_function
-def pool_ir(
-    self: ShapedArray,
-    kernel_size: int | list[int],
-    stride: int | list[int] | None = None,
-    padding: int | list[int] = 0,
-    dilation: int | list[int] = 1,
-    return_indices: bool = False,
-) -> ShapedArray:
-    spatial_dims = len(self.shape) - 2
-    ks_list = broadcast_int(kernel_size, spatial_dims)
-    stride_list = ks_list if stride == None else broadcast_int(stride, spatial_dims)
-    padding_list = broadcast_int(padding, spatial_dims)
-    dilation_list = broadcast_int(dilation, spatial_dims)
-    out = [self.shape[0], self.shape[1]] + [
-        conv_spatial_out(s, k, st, p, dil)
-        for s, k, st, p, dil in zip(
-            self.shape[2:], ks_list, stride_list, padding_list, dilation_list
-        )
-    ]
-    if return_indices:
-        return [ShapedArray(shape=out), ShapedArray(shape=out)]
-    return ShapedArray(shape=out)
 
 @type_shape_dsl_function
 def pool_shape(

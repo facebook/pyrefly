@@ -5,12 +5,12 @@
 
 # Phase 3: Convolution & Pooling operations smoke tests
 # Tests for CNN-critical operations: conv, conv_transpose, pooling, adaptive pooling, interpolate
-from typing import assert_type
+from typing import Any, assert_type
 
 import torch
 import torch.nn
 import torch.nn.functional
-from shape_extensions import IntVar
+from shape_extensions import Int, IntTuple, IntVar
 from torch import Tensor
 
 # ==== 1D Convolution Operations ====
@@ -256,6 +256,193 @@ def test_avg_pool3d():
     # kernel_size=2, stride=2
     result = torch.nn.functional.avg_pool3d(input, kernel_size=2, stride=2)
     assert_type(result, Tensor[[1, 64, 8, 16, 16]])
+
+
+def test_functional_pool_batched_and_unbatched_ranks():
+    one_unbatched: Tensor[[3, 16]] = torch.randn(3, 16)
+    one_batched: Tensor[[2, 3, 16]] = torch.randn(2, 3, 16)
+    two_unbatched: Tensor[[3, 16, 20]] = torch.randn(3, 16, 20)
+    two_batched: Tensor[[2, 3, 16, 20]] = torch.randn(2, 3, 16, 20)
+    three_unbatched: Tensor[[3, 8, 10, 12]] = torch.randn(3, 8, 10, 12)
+    three_batched: Tensor[[2, 3, 8, 10, 12]] = torch.randn(2, 3, 8, 10, 12)
+    assert_type(torch.nn.functional.max_pool1d(one_unbatched, 2), Tensor[[3, 8]])
+    assert_type(torch.nn.functional.max_pool1d(one_batched, 2), Tensor[[2, 3, 8]])
+    assert_type(torch.nn.functional.max_pool2d(two_unbatched, 2), Tensor[[3, 8, 10]])
+    assert_type(torch.nn.functional.max_pool2d(two_batched, 2), Tensor[[2, 3, 8, 10]])
+    assert_type(
+        torch.nn.functional.max_pool3d(three_unbatched, 2), Tensor[[3, 4, 5, 6]]
+    )
+    assert_type(
+        torch.nn.functional.max_pool3d(three_batched, 2),
+        Tensor[[2, 3, 4, 5, 6]],
+    )
+    assert_type(torch.nn.functional.avg_pool1d(one_unbatched, 2), Tensor[[3, 8]])
+    assert_type(torch.nn.functional.avg_pool1d(one_batched, 2), Tensor[[2, 3, 8]])
+    assert_type(torch.nn.functional.avg_pool2d(two_unbatched, 2), Tensor[[3, 8, 10]])
+    assert_type(torch.nn.functional.avg_pool2d(two_batched, 2), Tensor[[2, 3, 8, 10]])
+    assert_type(
+        torch.nn.functional.avg_pool3d(three_unbatched, 2), Tensor[[3, 4, 5, 6]]
+    )
+    assert_type(
+        torch.nn.functional.avg_pool3d(three_batched, 2),
+        Tensor[[2, 3, 4, 5, 6]],
+    )
+
+
+def test_functional_pool_tuple_arguments():
+    one: Tensor[[2, 3, 17]] = torch.randn(2, 3, 17)
+    two: Tensor[[2, 3, 11, 12]] = torch.randn(2, 3, 11, 12)
+    three: Tensor[[2, 3, 8, 11, 14]] = torch.randn(2, 3, 8, 11, 14)
+    assert_type(
+        torch.nn.functional.max_pool1d(one, (3,), stride=None), Tensor[[2, 3, 5]]
+    )
+    assert_type(
+        torch.nn.functional.max_pool2d(
+            two,
+            (3, 2),
+            stride=(2, 1),
+            padding=(1, 0),
+            dilation=(2, 1),
+        ),
+        Tensor[[2, 3, 5, 11]],
+    )
+    assert_type(
+        torch.nn.functional.max_pool3d(
+            three, (2, 3, 4), stride=(1, 2, 3), padding=(0, 1, 2)
+        ),
+        Tensor[[2, 3, 7, 6, 5]],
+    )
+    assert_type(
+        torch.nn.functional.avg_pool1d(one, (3,), stride=None), Tensor[[2, 3, 5]]
+    )
+    assert_type(
+        torch.nn.functional.avg_pool2d(two, (3, 2), stride=(2, 1), padding=(1, 0)),
+        Tensor[[2, 3, 6, 11]],
+    )
+    assert_type(
+        torch.nn.functional.avg_pool3d(
+            three, (2, 3, 4), stride=(1, 2, 3), padding=(0, 1, 2)
+        ),
+        Tensor[[2, 3, 7, 6, 5]],
+    )
+
+
+def test_functional_pool_ceil_mode_and_last_window_correction():
+    adds_window: Tensor[[2, 3, 6]] = torch.randn(2, 3, 6)
+    corrects_window: Tensor[[2, 3, 5]] = torch.randn(2, 3, 5)
+    dilated_half_padding: Tensor[[2, 3, 10]] = torch.randn(2, 3, 10)
+    assert_type(
+        torch.nn.functional.max_pool1d(adds_window, 3, stride=2),
+        Tensor[[2, 3, 2]],
+    )
+    assert_type(
+        torch.nn.functional.max_pool1d(adds_window, 3, stride=2, ceil_mode=True),
+        Tensor[[2, 3, 3]],
+    )
+    assert_type(
+        torch.nn.functional.avg_pool1d(adds_window, 3, stride=2),
+        Tensor[[2, 3, 2]],
+    )
+    assert_type(
+        torch.nn.functional.avg_pool1d(adds_window, 3, stride=2, ceil_mode=True),
+        Tensor[[2, 3, 3]],
+    )
+    assert_type(
+        torch.nn.functional.max_pool1d(
+            corrects_window, 2, stride=2, padding=1, ceil_mode=True
+        ),
+        Tensor[[2, 3, 3]],
+    )
+    assert_type(
+        torch.nn.functional.avg_pool1d(
+            corrects_window, 2, stride=2, padding=1, ceil_mode=True
+        ),
+        Tensor[[2, 3, 3]],
+    )
+    assert_type(
+        torch.nn.functional.max_pool1d(
+            dilated_half_padding,
+            4,
+            stride=3,
+            padding=2,
+            dilation=2,
+            ceil_mode=True,
+        ),
+        Tensor[[2, 3, 4]],
+    )
+    assert_type(
+        torch.nn.functional.max_pool1d(
+            dilated_half_padding,
+            4,
+            stride=6,
+            padding=2,
+            dilation=2,
+            ceil_mode=True,
+        ),
+        Tensor[[2, 3, 2]],
+    )
+
+
+def test_functional_max_pool_return_indices():
+    x: Tensor[[2, 3, 10, 14]] = torch.randn(2, 3, 10, 14)
+    assert_type(torch.nn.functional.max_pool2d(x, 2), Tensor[[2, 3, 5, 7]])
+    assert_type(
+        torch.nn.functional.max_pool2d(x, 2, return_indices=True),
+        tuple[Tensor[[2, 3, 5, 7]], Tensor[[2, 3, 5, 7]]],
+    )
+    assert_type(
+        torch.nn.functional.max_pool2d(x, 2, None, 0, 1, False, True),
+        tuple[Tensor[[2, 3, 5, 7]], Tensor[[2, 3, 5, 7]]],
+    )
+
+
+def check_functional_pool_gradual_arguments[M: IntVar](
+    x: Tensor[[2, 3, 10, 14]],
+    symbolic: Int[M],
+    broad_int: int,
+    broad_pair: tuple[int, int],
+    optional_stride: int | None,
+    broad_bool: bool,
+    dynamic: Any,
+) -> None:
+    # `return_indices` selects between overloads, so a broad `bool` still forms the
+    # exact shaped union; only arguments the shape rule reads degrade the shape.
+    assert_type(
+        torch.nn.functional.max_pool2d(x, 2, return_indices=broad_bool),
+        Tensor[[2, 3, 5, 7]] | tuple[Tensor[[2, 3, 5, 7]], Tensor[[2, 3, 5, 7]]],
+    )
+    assert_type(
+        torch.nn.functional.max_pool2d(x, 2, None, 0, 1, False, broad_bool),
+        Tensor[[2, 3, 5, 7]] | tuple[Tensor[[2, 3, 5, 7]], Tensor[[2, 3, 5, 7]]],
+    )
+    assert_type(
+        torch.nn.functional.max_pool2d(x, 2, ceil_mode=broad_bool),
+        Tensor[[2, 3, int, int]],
+    )
+    assert_type(torch.nn.functional.max_pool2d(x, symbolic), Tensor[IntTuple])
+    assert_type(torch.nn.functional.max_pool2d(x, broad_int), Tensor[IntTuple])
+    assert_type(
+        torch.nn.functional.max_pool2d(
+            x, broad_pair, broad_pair, broad_pair, broad_pair
+        ),
+        Tensor[IntTuple],
+    )
+    assert_type(torch.nn.functional.max_pool2d(x, 2, optional_stride), Tensor[IntTuple])
+    assert_type(
+        torch.nn.functional.max_pool2d(x, dynamic, dynamic, dynamic, dynamic),
+        Tensor[IntTuple],
+    )
+    assert_type(torch.nn.functional.avg_pool2d(x, symbolic), Tensor[IntTuple])
+    assert_type(torch.nn.functional.avg_pool2d(x, broad_int), Tensor[IntTuple])
+    assert_type(
+        torch.nn.functional.avg_pool2d(x, broad_pair, broad_pair, broad_pair),
+        Tensor[IntTuple],
+    )
+    assert_type(torch.nn.functional.avg_pool2d(x, 2, optional_stride), Tensor[IntTuple])
+    assert_type(
+        torch.nn.functional.avg_pool2d(x, dynamic, dynamic, dynamic),
+        Tensor[IntTuple],
+    )
 
 
 # ==== Adaptive Max Pooling Operations ====

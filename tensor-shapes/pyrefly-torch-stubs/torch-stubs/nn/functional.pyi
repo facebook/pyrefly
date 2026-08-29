@@ -35,7 +35,7 @@ from torch._shapes import (
     loss_shape,
     pad_shape,
     pairwise_distance_shape,
-    pool_ir,
+    pool_shape,
 )
 
 from .. import Tensor
@@ -252,123 +252,189 @@ def conv_transpose3d[
     ...
 
 # Max pooling operations
-@uses_shape_dsl(pool_ir)
 @overload
-def max_pool1d(
-    self: Tensor,
-    kernel_size: int | tuple[int],
-    stride: int | tuple[int] | None = None,
-    padding: int | tuple[int] = 0,
-    dilation: int | tuple[int] = 1,
-    ceil_mode: bool = False,
+def max_pool1d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
     return_indices: Literal[False] = False,
-) -> Tensor:
+) -> Tensor[pool_shape(Shape, 1, Kernel, Stride, Padding, Dilation, CeilMode)]:
     """1D max pooling. Shape inference via meta-shape: torch.nn.functional.max_pool1d"""
     ...
 
 @overload
-def max_pool1d(
-    self: Tensor,
-    kernel_size: int | tuple[int],
-    stride: int | tuple[int] | None = None,
-    padding: int | tuple[int] = 0,
-    dilation: int | tuple[int] = 1,
-    ceil_mode: bool = False,
+def max_pool1d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
     return_indices: Literal[True] = True,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[
+    Tensor[pool_shape(Shape, 1, Kernel, Stride, Padding, Dilation, CeilMode)],
+    Tensor[pool_shape(Shape, 1, Kernel, Stride, Padding, Dilation, CeilMode)],
+]:
     """1D max pooling with indices. Shape inference via meta-shape: torch.nn.functional.max_pool1d"""
     ...
 
-@uses_shape_dsl(pool_ir)
 @overload
-def max_pool2d(
-    self: Tensor,
-    kernel_size: int | tuple[int, int],
-    stride: int | tuple[int, int] | None = None,
-    padding: int | tuple[int, int] = 0,
-    dilation: int | tuple[int, int] = 1,
-    ceil_mode: bool = False,
+def max_pool2d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
     return_indices: Literal[False] = False,
-) -> Tensor:
+) -> Tensor[pool_shape(Shape, 2, Kernel, Stride, Padding, Dilation, CeilMode)]:
     """2D max pooling. Shape inference via meta-shape: torch.nn.functional.max_pool2d"""
     ...
 
 @overload
-def max_pool2d(
-    self: Tensor,
-    kernel_size: int | tuple[int, int],
-    stride: int | tuple[int, int] | None = None,
-    padding: int | tuple[int, int] = 0,
-    dilation: int | tuple[int, int] = 1,
-    ceil_mode: bool = False,
+def max_pool2d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
     return_indices: Literal[True] = True,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[
+    Tensor[pool_shape(Shape, 2, Kernel, Stride, Padding, Dilation, CeilMode)],
+    Tensor[pool_shape(Shape, 2, Kernel, Stride, Padding, Dilation, CeilMode)],
+]:
     """2D max pooling with indices. Shape inference via meta-shape: torch.nn.functional.max_pool2d"""
     ...
 
-@uses_shape_dsl(pool_ir)
 @overload
-def max_pool3d(
-    self: Tensor,
-    kernel_size: int | tuple[int, int, int],
-    stride: int | tuple[int, int, int] | None = None,
-    padding: int | tuple[int, int, int] = 0,
-    dilation: int | tuple[int, int, int] = 1,
-    ceil_mode: bool = False,
+def max_pool3d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
     return_indices: Literal[False] = False,
-) -> Tensor:
+) -> Tensor[pool_shape(Shape, 3, Kernel, Stride, Padding, Dilation, CeilMode)]:
     """3D max pooling. Shape inference via meta-shape: torch.nn.functional.max_pool3d"""
     ...
 
 @overload
-def max_pool3d(
-    self: Tensor,
-    kernel_size: int | tuple[int, int, int],
-    stride: int | tuple[int, int, int] | None = None,
-    padding: int | tuple[int, int, int] = 0,
-    dilation: int | tuple[int, int, int] = 1,
-    ceil_mode: bool = False,
+def max_pool3d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
     return_indices: Literal[True] = True,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[
+    Tensor[pool_shape(Shape, 3, Kernel, Stride, Padding, Dilation, CeilMode)],
+    Tensor[pool_shape(Shape, 3, Kernel, Stride, Padding, Dilation, CeilMode)],
+]:
     """3D max pooling with indices. Shape inference via meta-shape: torch.nn.functional.max_pool3d"""
     ...
 
 # Average pooling operations
-@uses_shape_dsl(pool_ir)
-def avg_pool1d(
-    self: Tensor,
-    kernel_size: int | tuple[int],
-    stride: int | tuple[int] | None = None,
-    padding: int | tuple[int] = 0,
-    ceil_mode: bool = False,
+#
+# Average pooling has no dilation, so the shared helper receives the neutral rate
+# `1`; `count_include_pad` and `divisor_override` only weight the averaged values.
+def avg_pool1d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    ceil_mode: CeilMode = False,
     count_include_pad: bool = True,
-) -> Tensor:
+) -> Tensor[pool_shape(Shape, 1, Kernel, Stride, Padding, 1, CeilMode)]:
     """1D average pooling. Shape inference via meta-shape: torch.nn.functional.avg_pool1d"""
     ...
 
-@uses_shape_dsl(pool_ir)
-def avg_pool2d(
-    self: Tensor,
-    kernel_size: int | tuple[int, int],
-    stride: int | tuple[int, int] | None = None,
-    padding: int | tuple[int, int] = 0,
-    ceil_mode: bool = False,
+def avg_pool2d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    ceil_mode: CeilMode = False,
     count_include_pad: bool = True,
     divisor_override: int | None = None,
-) -> Tensor:
+) -> Tensor[pool_shape(Shape, 2, Kernel, Stride, Padding, 1, CeilMode)]:
     """2D average pooling. Shape inference via meta-shape: torch.nn.functional.avg_pool2d"""
     ...
 
-@uses_shape_dsl(pool_ir)
-def avg_pool3d(
-    self: Tensor,
-    kernel_size: int | tuple[int, int, int],
-    stride: int | tuple[int, int, int] | None = None,
-    padding: int | tuple[int, int, int] = 0,
-    ceil_mode: bool = False,
+def avg_pool3d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    ceil_mode: CeilMode = False,
     count_include_pad: bool = True,
     divisor_override: int | None = None,
-) -> Tensor:
+) -> Tensor[pool_shape(Shape, 3, Kernel, Stride, Padding, 1, CeilMode)]:
     """3D average pooling. Shape inference via meta-shape: torch.nn.functional.avg_pool3d"""
     ...
 
