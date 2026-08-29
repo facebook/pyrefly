@@ -1669,6 +1669,16 @@ def f(o: OpenTypedDict) -> UnpackingTarget:
     return {"y": "", **o}
 ```
 
+The same error is reported when an open TypedDict is unpacked into a call whose target cannot
+accept the unknown items:
+```python
+def g(x: int) -> None: ...
+
+def h(o: OpenTypedDict) -> None:
+    # Error: `o` could carry items under keys that `g` does not accept.
+    g(**o)
+```
+
 To fix this error, close the open TypedDict to indicate it does not contain any unknown items:
 ```python
 class OpenTypedDict(TypedDict, closed=True): ...

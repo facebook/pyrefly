@@ -718,6 +718,14 @@ enum NameOrigin<'a> {
     UnpackedKwargs(Option<&'a Name>),
 }
 
+/// Where a value that may land on an unmatched keyword parameter came from.
+enum SplatSource {
+    /// The value type of a splatted mapping, e.g. `f(**d)` where `d: dict[str, int]`.
+    MappingValue,
+    OpenExtraItems,
+    DeclaredExtraItems,
+}
+
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Flag a call argument whose type is an implicit `Any` (unknown). Emitted into
     /// `arg_errors` (not `call_errors`), which is not used to decide overload/hint
@@ -1366,11 +1374,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             );
                         },
                     );
-                    if let ExtraItems::Extra(extra) = self.typed_dict_extra_items(typed_dict) {
-                        kwargs = Some((name.as_ref(), Some(type_owner.push(extra.ty))))
-                    } else {
-                        kwargs = Some((name.as_ref(), None))
-                    }
+                    kwargs = match self.typed_dict_extra_items(typed_dict) {
+                        ExtraItems::Closed => None,
+                        ExtraItems::Extra(extra) => {
+                            Some((name.as_ref(), Some(type_owner.push(extra.ty))))
+                        }
+                        ExtraItems::Default => Some((name.as_ref(), None)),
+                    };
                 }
                 Param::Kwargs(name, ty) => {
                     kwargs = Some((name.as_ref(), Some(ty)));
@@ -1394,30 +1404,67 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 );
             }
         };
-        let mut splat_kwargs = Vec::new();
+        let mut splat_kwargs: Vec<(Type, TextRange, SplatSource)> = Vec::new();
         for kw in keywords {
             match kw.arg {
                 None => {
                     let ty = kw.value.infer(self, arg_errors);
                     self.maybe_error_unknown_argument_type(&ty, kw.range, arg_errors);
                     if let Type::TypedDict(typed_dict) = ty {
-                        // Splatting an open TypedDict into a callable without `**kwargs` is
-                        // unsafe, since the TypedDict may contain additional, unknown keys
-                        if kwargs.is_none()
-                            && !matches!(
-                                self.typed_dict_extra_items(&typed_dict),
-                                ExtraItems::Closed
-                            )
+                        // A non-closed TypedDict may carry arbitrary unknown keys, which can
+                        // match the callee's kwargs or any of its unmatched keyword params. An
+                        // anonymous TypedDict comes from a dict display, whose keys are all known.
+                        let extra_items = self.typed_dict_extra_items(&typed_dict);
+                        if !typed_dict.is_anonymous() && !matches!(extra_items, ExtraItems::Closed)
                         {
-                            error(
-                                call_errors,
+                            let open = matches!(extra_items, ExtraItems::Default);
+                            let extra_ty = extra_items.extra_item(self.stdlib).ty;
+                            match &kwargs {
+                                None => {
+                                    error(
+                                        call_errors,
+                                        kw.range,
+                                        if open {
+                                            ErrorKind::OpenUnpacking
+                                        } else {
+                                            ErrorKind::UnexpectedKeyword
+                                        },
+                                        format!(
+                                            "`{}` may contain extra items of type `{}`, which cannot be unpacked into a callable that accepts no extra keyword arguments",
+                                            typed_dict.name(),
+                                            self.for_display(extra_ty.clone()),
+                                        ),
+                                    );
+                                }
+                                Some((kwargs_name, Some(want))) => {
+                                    self.check_type_with_options(
+                                        &extra_ty,
+                                        want,
+                                        kw.range,
+                                        TypeCheckOptions::new(call_errors, &|| {
+                                            TypeCheckContext::of_kind(
+                                                TypeCheckKind::CallExtraItems(
+                                                    open,
+                                                    kwargs_name.cloned(),
+                                                    callable_name.cloned(),
+                                                ),
+                                            )
+                                            .with_context(context.map(|ctx| ctx()))
+                                        })
+                                        .with_call_context(call_context),
+                                    );
+                                }
+                                Some((_, None)) => {}
+                            }
+                            splat_kwargs.push((
+                                extra_ty,
                                 kw.range,
-                                ErrorKind::OpenUnpacking,
-                                format!(
-                                    "`{}` is an open TypedDict with unknown extra items, which cannot be unpacked into a callable without `**kwargs`",
-                                    typed_dict.name()
-                                ),
-                            );
+                                if open {
+                                    SplatSource::OpenExtraItems
+                                } else {
+                                    SplatSource::DeclaredExtraItems
+                                },
+                            ));
                         }
                         for (name, field) in self.typed_dict_fields(&typed_dict).into_iter() {
                             let name = name_owner.push(name);
@@ -1488,7 +1535,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                             .with_call_context(call_context),
                                         );
                                     };
-                                    splat_kwargs.push((value, kw.range));
+                                    splat_kwargs.push((value, kw.range, SplatSource::MappingValue));
                                 } else {
                                     error(
                                         call_errors,
@@ -1634,11 +1681,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             extra_posargs_iter.next();
         }
         let mut extra_posargs_matched = 0;
+        let splat_may_supply_missing_args = splat_kwargs
+            .iter()
+            .any(|(_, _, source)| matches!(source, SplatSource::MappingValue));
         for (name, (want, origin, required)) in kwparams.iter() {
             if !seen_names.contains_key(name) {
                 match required {
                     Required::Required => {
-                        if splat_kwargs.is_empty() {
+                        if !splat_may_supply_missing_args {
                             if let Some(arg_range) = extra_posargs_iter.next() {
                                 error(
                                     call_errors,
@@ -1666,16 +1716,28 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     Required::Optional(None) => {}
                 }
-                for (ty, range) in &splat_kwargs {
+                for (ty, range, source) in &splat_kwargs {
                     self.check_type_with_options(
                         ty,
                         want,
                         *range,
                         TypeCheckOptions::new(call_errors, &|| {
-                            TypeCheckContext::of_kind(TypeCheckKind::CallUnpackKwArg(
-                                (*name).clone(),
-                                callable_name.cloned(),
-                            ))
+                            TypeCheckContext::of_kind(match source {
+                                SplatSource::MappingValue => TypeCheckKind::CallUnpackKwArg(
+                                    (*name).clone(),
+                                    callable_name.cloned(),
+                                ),
+                                SplatSource::OpenExtraItems => TypeCheckKind::CallExtraItems(
+                                    true,
+                                    Some((*name).clone()),
+                                    callable_name.cloned(),
+                                ),
+                                SplatSource::DeclaredExtraItems => TypeCheckKind::CallExtraItems(
+                                    false,
+                                    Some((*name).clone()),
+                                    callable_name.cloned(),
+                                ),
+                            })
                             .with_context(context.map(|ctx| ctx()))
                         })
                         .with_call_context(call_context),
