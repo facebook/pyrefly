@@ -3012,11 +3012,11 @@ testcase!(
 import shape_extensions.dsl as dsl
 import shape_extensions.dsl
 from predicate_reexport import predicate as reexported_predicate
-from shape_extensions import Int, IntVar, type_shape_dsl_function
+from shape_extensions import Flag, Int, IntVar, type_shape_dsl_function
 from shape_extensions.dsl import is_concrete_int
 from shape_extensions.dsl import is_concrete_int as imported_alias
 from torch import Tensor
-from typing import Any, reveal_type
+from typing import Any, assert_type, reveal_type
 
 value_alias = is_concrete_int
 
@@ -3056,6 +3056,51 @@ def reexported(x: Int, yes: Int, no: Int) -> Int:
         return yes
     return no
 
+@type_shape_dsl_function
+def optional(x: Int | None, fallback: Int) -> Int:
+    if is_concrete_int(x):
+        return x
+    return fallback
+
+@type_shape_dsl_function
+def optional_lt_literal(x: Int | None, yes: Int, no: Int) -> Int:
+    if is_concrete_int(x) and x < 3:
+        return yes
+    return no
+
+@type_shape_dsl_function
+def literal_lt_optional(x: Int | None, yes: Int, no: Int) -> Int:
+    if is_concrete_int(x) and 1 < x:
+        return yes
+    return no
+
+@type_shape_dsl_function
+def optional_lt_parameter(x: Int | None, limit: Int, yes: Int, no: Int) -> Int:
+    if is_concrete_int(x) and x < limit:
+        return yes
+    return no
+
+@type_shape_dsl_function
+def optional_lt_local(x: Int | None, choose: bool, yes: Int, no: Int) -> Int:
+    limit = 3 if choose else 1
+    if is_concrete_int(x) and x < limit:
+        return yes
+    return no
+
+@type_shape_dsl_function
+def int_eq_local(x: Int, yes: Int, no: Int) -> Int:
+    limit = 3
+    if x == limit:
+        return yes
+    return no
+
+@type_shape_dsl_function
+def int_lt_local(x: Int, yes: Int, no: Int) -> Int:
+    limit = 3
+    if x < limit:
+        return yes
+    return no
+
 def literal() -> Tensor[[direct(Int[2], Int[7], Int[8])]]: ...
 def computed_literal() -> Tensor[[qualified(Int[1 + 1], Int[7], Int[8])]]: ...
 def gradual() -> Tensor[[fully_qualified(Int, Int[7], Int[8])]]: ...
@@ -3063,9 +3108,26 @@ def symbolic[N: IntVar](x: Tensor[[N]]) -> Tensor[[imported(N, Int[7], Int[8])]]
 def solved_literal[N: IntVar](x: Tensor[[N]]) -> Tensor[[direct(N, Int[7], Int[8])]]: ...
 def aliased_literal() -> Tensor[[value_aliased(Int[2], Int[7], Int[8])]]: ...
 def reexported_literal() -> Tensor[[reexported(Int[2], Int[7], Int[8])]]: ...
+def optional_literal() -> Tensor[[optional(Int[2], Int[7])]]: ...
+def optional_none() -> Tensor[[optional(None, Int[7])]]: ...
+def optional_gradual() -> Tensor[[optional(Int, Int[7])]]: ...
+def optional_symbolic[N: IntVar](x: Tensor[[N]]) -> Tensor[[optional(Int[N], Int[7])]]: ...
+def optional_literal_comparison() -> Tensor[[optional_lt_literal(Int[2], Int[7], Int[8])]]: ...
+def reversed_optional_literal_comparison() -> Tensor[[literal_lt_optional(Int[2], Int[7], Int[8])]]: ...
+def optional_parameter_comparison() -> Tensor[[optional_lt_parameter(Int[2], Int[3], Int[7], Int[8])]]: ...
+def optional_local_comparison[Choose: Flag[bool]](
+    choose: Choose,
+) -> Tensor[[optional_lt_local(Int[2], Choose, Int[7], Int[8])]]: ...
+def int_eq_local_literal() -> Tensor[[int_eq_local(Int[3], Int[7], Int[8])]]: ...
+def int_lt_local_literal() -> Tensor[[int_lt_local(Int[2], Int[7], Int[8])]]: ...
+def int_eq_local_gradual() -> Tensor[[int_eq_local(Int, Int[7], Int[8])]]: ...
+def int_lt_local_gradual() -> Tensor[[int_lt_local(Int, Int[7], Int[8])]]: ...
+def int_eq_local_symbolic[N: IntVar](x: Tensor[[N]]) -> Tensor[[int_eq_local(N, Int[7], Int[8])]]: ...
+def int_lt_local_symbolic[N: IntVar](x: Tensor[[N]]) -> Tensor[[int_lt_local(N, Int[7], Int[8])]]: ...
 # `Any` is admitted without error but is not readable as an `Int`, so the guard is unknown and
 # must fall back gradually instead of taking the precise `Int[8]` false branch.
 def any_argument() -> Tensor[[direct(Any, Int[7], Int[8])]]: ...
+def optional_any_argument() -> Tensor[[optional(Any, Int[7])]]: ...
 
 def test(x: Tensor[[2]]) -> None:
     reveal_type(literal())  # E: revealed type: Tensor[[7]]
@@ -3075,9 +3137,25 @@ def test(x: Tensor[[2]]) -> None:
     reveal_type(aliased_literal())  # E: revealed type: Tensor[[7]]
     reveal_type(reexported_literal())  # E: revealed type: Tensor[[7]]
     reveal_type(any_argument())  # E: revealed type: Tensor[[int]]
+    assert_type(optional_literal(), Tensor[[2]])
+    assert_type(optional_none(), Tensor[[7]])
+    assert_type(optional_gradual(), Tensor[[7]])
+    assert_type(optional_any_argument(), Tensor[[int]])
+    assert_type(optional_literal_comparison(), Tensor[[7]])
+    assert_type(reversed_optional_literal_comparison(), Tensor[[7]])
+    assert_type(optional_parameter_comparison(), Tensor[[7]])
+    assert_type(optional_local_comparison(True), Tensor[[7]])
+    assert_type(optional_local_comparison(False), Tensor[[8]])
+    assert_type(int_eq_local_literal(), Tensor[[7]])
+    assert_type(int_lt_local_literal(), Tensor[[7]])
+    assert_type(int_eq_local_gradual(), Tensor[[int]])
+    assert_type(int_lt_local_gradual(), Tensor[[int]])
 
 def test_symbolic[N: IntVar](x: Tensor[[N]]) -> None:
     reveal_type(symbolic(x))  # E: revealed type: Tensor[[8]]
+    assert_type(optional_symbolic(x), Tensor[[7]])
+    assert_type(int_eq_local_symbolic(x), Tensor[[int]])
+    assert_type(int_lt_local_symbolic(x), Tensor[[int]])
 "#,
 );
 
@@ -3484,8 +3562,8 @@ testcase!(
     test_type_shape_dsl_is_concrete_int_and_lt,
     shape_dsl_tensor_env(),
     r#"
-from shape_extensions import Int, IntVar, type_shape_dsl_function
-from shape_extensions.dsl import Int as DslInt, is_concrete_int
+from shape_extensions import Flag, Int, IntTuple, IntVar, type_shape_dsl_function
+from shape_extensions.dsl import Int as DslInt, IntTuple as DslIntTuple, is_concrete_int
 from torch import Tensor
 from typing import assert_type, reveal_type
 
@@ -3517,12 +3595,22 @@ def int_min(a: Int, b: Int) -> Int:
         return b
     return DslInt.gradual()
 
+@type_shape_dsl_function
+def classify_flag_values(values: tuple[int, ...]) -> IntTuple:
+    return DslIntTuple(1 if is_concrete_int(value) else 2 for value in values)
+
+@type_shape_dsl_function
+def classify_dimensions(shape: IntTuple) -> IntTuple:
+    return DslIntTuple(1 if is_concrete_int(dimension) else 2 for dimension in shape)
+
 def guarded_true() -> Tensor[[guarded_lt(Int[2], Int[3], Int[7], Int[8])]]: ...
 def guarded_false() -> Tensor[[guarded_lt(Int[3], Int[2], Int[7], Int[8])]]: ...
 def guarded_gradual() -> Tensor[[guarded_lt(Int, Int[3], Int[7], Int[8])]]: ...
 def reflexive_gradual() -> Tensor[[reflexive_lt(Int, Int[7], Int[8])]]: ...
 def min_concrete() -> Tensor[[int_min(Int[2], Int[3])]]: ...
 def min_gradual() -> Tensor[[int_min(Int, Int[2])]]: ...
+def flag_values[Values: Flag[tuple[int, ...]]](values: Values) -> Tensor[classify_flag_values(Values)]: ...
+def concrete_dimensions() -> Tensor[classify_dimensions(IntTuple[2, 3])]: ...
 def guarded_symbolic[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> Tensor[[guarded_lt(N, M, Int[7], Int[8])]]: ...
 def unguarded_symbolic[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> Tensor[[unguarded_lt(N, M, Int[7], Int[8])]]: ...
 def same_symbolic[N: IntVar](x: Tensor[[N]]) -> Tensor[[unguarded_lt(N, N, Int[7], Int[8])]]: ...
@@ -3535,6 +3623,8 @@ def test() -> None:
     assert_type(reflexive_gradual(), Tensor[[8]])
     reveal_type(min_concrete())  # E: revealed type: Tensor[[2]]
     reveal_type(min_gradual())  # E: revealed type: Tensor[[int]]
+    assert_type(flag_values((2, 3)), Tensor[[1, 1]])
+    assert_type(concrete_dimensions(), Tensor[[1, 1]])
 
 def test_symbolic[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> None:
     reveal_type(guarded_symbolic(x, y))  # E: revealed type: Tensor[[8]]
@@ -3587,10 +3677,36 @@ def keyword_starred(x: Int) -> Int:
     return x
 
 @type_shape_dsl_function
-def wrong_domain(x: IntTuple) -> IntTuple:
-    if dsl.is_concrete_int(x):  # E: condition operands must be annotated as `Int`
-        return x
+def wrong_domain(x: IntTuple, fallback: IntTuple) -> IntTuple:
+    if dsl.is_concrete_int(x):  # E: `is_concrete_int` requires an `Int` or `Int | None` value
+        return fallback
     return x
+
+@type_shape_dsl_function
+def wrong_flag_domain(x: bool | None, fallback: Int) -> Int:
+    if dsl.is_concrete_int(x):  # E: `is_concrete_int` requires an `Int` or `Int | None` value
+        return fallback
+    return fallback
+
+@type_shape_dsl_function
+def wrong_broad_flag(
+    x: int | tuple[int, ...] | None, fallback: Int,
+) -> Int:
+    if dsl.is_concrete_int(x):  # E: `is_concrete_int` requires an `Int` or `Int | None` value
+        return fallback
+    return fallback
+
+@type_shape_dsl_function
+def optional_false_branch(x: Int | None, fallback: Int) -> Int:
+    if dsl.is_concrete_int(x):
+        return fallback
+    return x  # E: must be narrowed to exclude `None`  # E: Returned type
+
+@type_shape_dsl_function
+def optional_flag_only_comparison(x: Int | None, fallback: Int) -> Int:
+    if dsl.is_concrete_int(x) and x >= 0:  # E: `Int` comparisons support only `==`, `!=`, and `<`
+        return x
+    return fallback
 
 @type_shape_dsl_function
 def builtin_isinstance(x: Int) -> Int:
@@ -10276,12 +10392,22 @@ def invalid_join_helper(
     return select(shape, index)  # E: helper argument domains must exactly match  # E: not assignable to parameter `index`
 
 @type_shape_dsl_function
-def narrowed_int_comparison(
-    shape: IntTuple, candidate: int | tuple[int, ...],
+def narrowed_int_equality(
+    shape: IntTuple, candidate: int | tuple[int, ...] | None,
 ) -> IntTuple:
     if dsl.is_int_value(candidate):
         zero = 0
         if candidate == zero:
+            return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def narrowed_int_ordered(
+    shape: IntTuple, candidate: int | tuple[int, ...] | None,
+) -> IntTuple:
+    if dsl.is_int_value(candidate):
+        zero = 0
+        if candidate >= zero:
             return dsl.IntTuple((1,))
     return shape
 
@@ -10339,9 +10465,13 @@ def apply_lazy[Shape: IntTuple, Choose: Flag[bool]](
     x: Tensor[Shape], choose: Choose,
 ) -> Tensor[lazy_index(Shape, Choose)]: ...
 
-def apply_narrowed_comparison[
-    Shape: IntTuple, Candidate: Flag[int | tuple[int, ...]],
-](x: Tensor[Shape], candidate: Candidate) -> Tensor[narrowed_int_comparison(Shape, Candidate)]: ...
+def apply_narrowed_equality[
+    Shape: IntTuple, Candidate: Flag[int | tuple[int, ...] | None],
+](x: Tensor[Shape], candidate: Candidate) -> Tensor[narrowed_int_equality(Shape, Candidate)]: ...
+
+def apply_narrowed_ordered[
+    Shape: IntTuple, Candidate: Flag[int | tuple[int, ...] | None],
+](x: Tensor[Shape], candidate: Candidate) -> Tensor[narrowed_int_ordered(Shape, Candidate)]: ...
 
 def index_results[N: IntVar, Tail: IntTuple](
     symbolic: Tensor[[N, 3, 4]],
@@ -10361,8 +10491,12 @@ def index_results[N: IntVar, Tail: IntTuple](
     apply_huge(symbolic)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
     apply_negative_huge(symbolic)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
     reveal_type(apply_lazy(symbolic, False))  # E: revealed type: Tensor[[N, 3, 4]]
-    reveal_type(apply_narrowed_comparison(symbolic, 0))  # E: revealed type: Tensor[[1]]
-    reveal_type(apply_narrowed_comparison(symbolic, (0,)))  # E: revealed type: Tensor[[N, 3, 4]]
+    assert_type(apply_narrowed_equality(symbolic, 0), Tensor[[1]])
+    assert_type(apply_narrowed_equality(symbolic, (0,)), Tensor[[N, 3, 4]])
+    assert_type(apply_narrowed_equality(symbolic, None), Tensor[[N, 3, 4]])
+    assert_type(apply_narrowed_ordered(symbolic, 0), Tensor[[1]])
+    assert_type(apply_narrowed_ordered(symbolic, (0,)), Tensor[[N, 3, 4]])
+    assert_type(apply_narrowed_ordered(symbolic, None), Tensor[[N, 3, 4]])
     apply_select(symbolic, 3)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
     apply_select(symbolic, -4)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds
     apply_select(empty, 0)  # E: Cannot evaluate type-level shape DSL call: IntTuple index out of bounds

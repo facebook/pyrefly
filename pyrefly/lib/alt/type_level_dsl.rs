@@ -28,6 +28,7 @@ use pyrefly_types::type_level_dsl::TypeShapeDslFlagValueKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslInputDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslIntrinsic;
 use pyrefly_types::type_level_dsl::TypeShapeDslParameterNarrowing;
+use pyrefly_types::type_level_dsl::TypeShapeDslParameterUse;
 use pyrefly_types::type_level_dsl::TypeShapeDslProgramError;
 use pyrefly_types::type_level_dsl::TypeShapeDslReturnKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslSlotReturnKind;
@@ -81,49 +82,102 @@ fn type_shape_dsl_optional_flag_domain(member: FlagMember) -> FlagDomain {
 }
 
 #[derive(Clone, Copy)]
-enum TypeShapeDslSlotComparisonDomain {
+enum TypeShapeDslComparisonDomain {
     Dimension,
     FlagInt,
     FlagString,
 }
 
-fn type_shape_dsl_slot_comparison_domain(
-    left_parameters: Option<&[usize]>,
-    right_parameters: Option<&[usize]>,
+fn type_shape_dsl_comparison_domain(
+    left_parameter_uses: Option<&[TypeShapeDslParameterUse]>,
+    right_parameter_uses: Option<&[TypeShapeDslParameterUse]>,
+    left_is_flag_operand: bool,
+    right_is_flag_operand: bool,
+    left_non_parameter_flag_domain: Option<FlagDomain>,
+    right_non_parameter_flag_domain: Option<FlagDomain>,
     parameter_domains: &[TypeShapeDslInputDomain],
-) -> Option<TypeShapeDslSlotComparisonDomain> {
-    let has_known_dimension = left_parameters.is_none() || right_parameters.is_none();
-    let mut domains = left_parameters
-        .into_iter()
-        .chain(right_parameters)
-        .flatten()
-        .map(|parameter| parameter_domains[*parameter]);
-    if has_known_dimension {
-        return domains
-            .all(|domain| domain == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int))
-            .then_some(TypeShapeDslSlotComparisonDomain::Dimension);
-    }
-
-    let domains = domains.collect::<Vec<_>>();
-    if domains.is_empty() {
-        unreachable!("a parameter-backed slot comparison has at least one parameter")
-    }
-    if domains
+) -> Option<TypeShapeDslComparisonDomain> {
+    let operands = [
+        (
+            left_parameter_uses,
+            left_is_flag_operand,
+            left_non_parameter_flag_domain,
+        ),
+        (
+            right_parameter_uses,
+            right_is_flag_operand,
+            right_non_parameter_flag_domain,
+        ),
+    ];
+    if !operands
         .iter()
-        .all(|domain| *domain == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int))
+        .all(|(uses, is_flag_operand, non_parameter_domain)| {
+            (uses.is_none() && !*is_flag_operand)
+                || uses.is_some_and(|uses| !uses.is_empty())
+                || non_parameter_domain.is_some()
+        })
     {
-        Some(TypeShapeDslSlotComparisonDomain::Dimension)
-    } else if domains
-        .iter()
-        .all(|domain| *domain == TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Int)))
-    {
-        Some(TypeShapeDslSlotComparisonDomain::FlagInt)
-    } else if domains.iter().all(|domain| {
-        matches!(domain, TypeShapeDslInputDomain::Flag(domain)
-            if domain.contains(FlagMember::Str)
-                && domain.is_subset_of(type_shape_dsl_optional_flag_domain(FlagMember::Str)))
+        unreachable!("validated comparison operands have a known value or a parameter source")
+    }
+    let supports_dimension = |uses: Option<&[TypeShapeDslParameterUse]>,
+                              is_flag_operand: bool,
+                              flag_domain: Option<FlagDomain>| {
+        uses.is_none() && !is_flag_operand
+            || uses.is_some_and(|uses| {
+                uses.iter()
+                    .all(|use_| match parameter_domains[use_.parameter()] {
+                        TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => true,
+                        TypeShapeDslInputDomain::OptionalInt => {
+                            use_.narrowing() == TypeShapeDslParameterNarrowing::Integer
+                        }
+                        _ => false,
+                    })
+                    && flag_domain.is_none_or(|domain| domain == FlagDomain::of(FlagMember::Int))
+            })
+    };
+    let supports_flag_int = |uses: Option<&[TypeShapeDslParameterUse]>,
+                             is_flag_operand: bool,
+                             flag_domain: Option<FlagDomain>| {
+        (is_flag_operand || uses.is_some_and(|uses| !uses.is_empty()))
+            && flag_domain.is_none_or(|domain| domain == FlagDomain::of(FlagMember::Int))
+            && uses.is_some_and(|uses| {
+                uses.iter().all(|use_| {
+                    matches!(parameter_domains[use_.parameter()], TypeShapeDslInputDomain::Flag(domain)
+                        if (domain == FlagDomain::of(FlagMember::Int)
+                            && use_.narrowing() == TypeShapeDslParameterNarrowing::Unnarrowed)
+                            || (use_.narrowing() == TypeShapeDslParameterNarrowing::Integer
+                                && domain.contains(FlagMember::Int)
+                                && domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())))
+                })
+            })
+    };
+    let supports_flag_string = |uses: Option<&[TypeShapeDslParameterUse]>,
+                                is_flag_operand: bool,
+                                flag_domain: Option<FlagDomain>| {
+        (is_flag_operand || uses.is_some_and(|uses| !uses.is_empty()))
+            && flag_domain.is_none_or(|domain| {
+            domain.contains(FlagMember::Str)
+                && domain.is_subset_of(type_shape_dsl_optional_flag_domain(FlagMember::Str))
+        }) && uses.is_some_and(|uses| {
+            uses.iter().all(|use_| {
+                matches!(parameter_domains[use_.parameter()], TypeShapeDslInputDomain::Flag(domain)
+                    if domain.contains(FlagMember::Str)
+                        && domain.is_subset_of(type_shape_dsl_optional_flag_domain(FlagMember::Str)))
+            })
+        })
+    };
+    if operands.iter().all(|(uses, is_flag_operand, flag_domain)| {
+        supports_flag_int(*uses, *is_flag_operand, *flag_domain)
     }) {
-        Some(TypeShapeDslSlotComparisonDomain::FlagString)
+        Some(TypeShapeDslComparisonDomain::FlagInt)
+    } else if operands.iter().all(|(uses, is_flag_operand, flag_domain)| {
+        supports_dimension(*uses, *is_flag_operand, *flag_domain)
+    }) {
+        Some(TypeShapeDslComparisonDomain::Dimension)
+    } else if operands.iter().all(|(uses, is_flag_operand, flag_domain)| {
+        supports_flag_string(*uses, *is_flag_operand, *flag_domain)
+    }) {
+        Some(TypeShapeDslComparisonDomain::FlagString)
     } else {
         None
     }
@@ -336,24 +390,42 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             for condition in validated.conditions() {
                 let invalid_domain = match condition.kind() {
                     TypeShapeDslConditionKind::SlotCompare {
-                        left_parameters,
-                        right_parameters,
+                        left_parameter_uses,
+                        right_parameter_uses,
+                        left_is_flag_operand,
+                        right_is_flag_operand,
+                        left_non_parameter_flag_domain,
+                        right_non_parameter_flag_domain,
                         op,
                         ..
-                    } => match type_shape_dsl_slot_comparison_domain(
-                        left_parameters.as_deref(),
-                        right_parameters.as_deref(),
+                    }
+                    | TypeShapeDslConditionKind::IntegerCompare {
+                        left_parameter_uses,
+                        right_parameter_uses,
+                        left_is_flag_operand,
+                        right_is_flag_operand,
+                        left_non_parameter_flag_domain,
+                        right_non_parameter_flag_domain,
+                        op,
+                        ..
+                    } => match type_shape_dsl_comparison_domain(
+                        left_parameter_uses.as_deref(),
+                        right_parameter_uses.as_deref(),
+                        *left_is_flag_operand,
+                        *right_is_flag_operand,
+                        *left_non_parameter_flag_domain,
+                        *right_non_parameter_flag_domain,
                         &parameter_domains,
                     ) {
-                        Some(TypeShapeDslSlotComparisonDomain::Dimension) => (!matches!(
+                        Some(TypeShapeDslComparisonDomain::Dimension) => (!matches!(
                             op,
                             TypeShapeDslComparisonOp::Equal
                                 | TypeShapeDslComparisonOp::NotEqual
                                 | TypeShapeDslComparisonOp::LessThan
                         ))
                         .then_some("`@type_shape_dsl_function` `Int` comparisons support only `==`, `!=`, and `<`"),
-                        Some(TypeShapeDslSlotComparisonDomain::FlagInt) => None,
-                        Some(TypeShapeDslSlotComparisonDomain::FlagString) => (!matches!(
+                        Some(TypeShapeDslComparisonDomain::FlagInt) => None,
+                        Some(TypeShapeDslComparisonDomain::FlagString) => (!matches!(
                             op,
                             TypeShapeDslComparisonOp::Equal
                                 | TypeShapeDslComparisonOp::NotEqual
@@ -370,10 +442,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ..
                     } => parameter_origins.as_deref().and_then(|parameters| {
                         (!parameters.iter().all(|parameter| {
-                            parameter_domains[*parameter]
-                                == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
+                            matches!(
+                                parameter_domains[*parameter],
+                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
+                                    | TypeShapeDslInputDomain::OptionalInt
+                            )
                         }))
-                            .then_some("`@type_shape_dsl_function` condition operands must be annotated as `Int`")
+                        .then_some("`@type_shape_dsl_function` `is_concrete_int` requires an `Int` or `Int | None` value")
                     }),
                     TypeShapeDslConditionKind::IsIntValue {
                         parameter_origins, ..
