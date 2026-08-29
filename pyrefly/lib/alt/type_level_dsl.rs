@@ -48,6 +48,7 @@ use ruff_text_size::TextRange;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::alt::expr::DimensionExprError;
 use crate::alt::solve::TypeFormContext;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -1055,14 +1056,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
             | TypeShapeDslInputDomain::OptionalInt => {
                 let dimension_errors = self.error_collector();
-                let parsed_dimension = self
-                    .parse_dimension_list(
+                let parsed_dimension = match self
+                    .parse_dimension_list_for_type_shape_dsl_int_argument(
                         slice::from_ref(arg),
                         type_form_context,
                         &dimension_errors,
-                    )
-                    .and_then(|dims| dims.into_iter().next())
-                    .filter(|ty| !ty.is_error());
+                    ) {
+                    Ok(dimensions) => dimensions.into_iter().next().filter(|ty| !ty.is_error()),
+                    Err(DimensionExprError::Invalid) => None,
+                    Err(DimensionExprError::InvalidExplicitIntWrapper) => {
+                        errors.extend(dimension_errors);
+                        return Type::any_error();
+                    }
+                };
                 if let Some(ty) = parsed_dimension {
                     errors.extend(dimension_errors);
                     ty

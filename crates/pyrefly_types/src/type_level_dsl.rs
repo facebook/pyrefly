@@ -7007,7 +7007,13 @@ impl DslFlagSequence {
 impl DslValue {
     fn from_type(ty: &Type, domain: TypeShapeDslDomain) -> Self {
         match domain {
-            TypeShapeDslDomain::Int => Int::from_type(ty).map_or(Self::Unknown, Self::Dimension),
+            TypeShapeDslDomain::Int => match Int::from_type(ty) {
+                Some(dimension) => match canonicalize(Type::Int(dimension)) {
+                    Type::Int(dimension) => Self::Dimension(dimension),
+                    canonical => unreachable!("canonicalizing a dimension yields `{canonical}`"),
+                },
+                None => Self::Unknown,
+            },
             TypeShapeDslDomain::IntTuple => Self::from_shape_type(ty),
         }
     }

@@ -1809,6 +1809,77 @@ def raw_arithmetic[N: Int]() -> Tensor[[identity(N + N)]]: ...  # E: `N` must be
 );
 
 testcase!(
+    test_type_shape_dsl_explicit_int_arithmetic_operands,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import D, Int, IntVar, type_shape_dsl_function
+import shape_extensions.dsl as dsl
+from torch import Tensor
+from typing import Any, assert_type
+
+@type_shape_dsl_function
+def identity(x: Int) -> Int:
+    return x
+
+@type_shape_dsl_function
+def optional_or(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return n
+
+@type_shape_dsl_function
+def int_min(a: Int, b: Int) -> Int:
+    if a == b:
+        return a
+    if dsl.is_concrete_int(a) and dsl.is_concrete_int(b):
+        if a < b:
+            return a
+        return b
+    return dsl.Int.gradual()
+
+@type_shape_dsl_function
+def classify(x: Int, concrete: Int, nonconcrete: Int) -> Int:
+    if dsl.is_concrete_int(x):
+        return concrete
+    return nonconcrete
+
+def wrapped_literals() -> Tensor[[identity(Int[2] + Int[3])]]: ...
+def nested_wrapped_literals() -> Tensor[[identity((Int[1] + 2) * Int[3])]]: ...
+def optional_wrapped() -> Tensor[[optional_or(Int[1] + Int[6], Int[8])]]: ...
+def optional_none() -> Tensor[[optional_or(None, Int[8])]]: ...
+def wrapped_any() -> Tensor[[identity(Int[Any])]]: ...
+def classified_any() -> Tensor[[classify(Int[Any], Int[1], Int[2])]]: ...
+def classified_int() -> Tensor[[classify(Int[int], Int[1], Int[2])]]: ...
+def wrapped_symbol[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(Int[N])]]: ...
+def wrapped_symbol_arithmetic[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(Int[N] + 1)]]: ...
+def runtime_wrapped_symbol_arithmetic[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(D[Int[N] + 1])]]: ...
+def wrapped_two_symbols[N: IntVar, M: IntVar](x: Tensor[[N]], y: Tensor[[M]]) -> Tensor[[identity(Int[N] + Int[M])]]: ...
+def svd_min[M: IntVar, N: IntVar](x: Tensor[[M, N]]) -> Tensor[[int_min(Int[M], Int[N])]]: ...
+
+def check(two: Tensor[[2]], three: Tensor[[3]], gradual: Tensor[[int]], matrix: Tensor[[3, 2]]) -> None:
+    assert_type(wrapped_literals(), Tensor[[5]])
+    assert_type(nested_wrapped_literals(), Tensor[[9]])
+    assert_type(optional_wrapped(), Tensor[[7]])
+    assert_type(optional_none(), Tensor[[8]])
+    assert_type(wrapped_any(), Tensor[[int]])
+    assert_type(classified_any(), Tensor[[2]])
+    assert_type(classified_int(), Tensor[[2]])
+    assert_type(wrapped_symbol(two), Tensor[[2]])
+    assert_type(wrapped_symbol_arithmetic(two), Tensor[[3]])
+    assert_type(runtime_wrapped_symbol_arithmetic(two), Tensor[[3]])
+    assert_type(wrapped_symbol(gradual), Tensor[[int]])
+    assert_type(wrapped_symbol_arithmetic(gradual), Tensor[[int]])
+    assert_type(wrapped_two_symbols(two, three), Tensor[[5]])
+    assert_type(svd_min(matrix), Tensor[[2]])
+
+def ordinary_shape[N: IntVar](x: Tensor[[Int[N] + 1]]) -> None: ...  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
+def invalid_wrapper() -> Tensor[[identity(Int[str])]]: ...  # E: Tensor shape dimensions must be integer literals or type variables, got `type[str]`
+def invalid_nested_wrapper[N: IntVar]() -> Tensor[[identity(Int[Int[N]])]]: ...  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
+def invalid_bare_typevar[T]() -> Tensor[[identity(D[T])]]: ...  # E: `T` must be an `IntVar` to be used as a shape dimension
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_optional_int_parameter,
     shape_dsl_tensor_env(),
     r#"

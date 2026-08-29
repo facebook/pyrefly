@@ -155,15 +155,39 @@ enum DimensionExprContext {
     /// An operand of shape arithmetic, e.g. the `N` in `Tensor[N + 1]`. Only a
     /// `IntVar` is allowed; a plain `TypeVar` is rejected.
     Arithmetic,
+    /// The root of an `Int` or `Int | None` shape-DSL argument. It retains the
+    /// diagnostics of a bare dimension while allowing explicit `Int[...]`
+    /// wrappers here and in nested arithmetic.
+    DslArgument,
+    /// Arithmetic in an `Int` or `Int | None` shape-DSL argument. Unlike ordinary
+    /// shape arithmetic, explicit `Int[...]` wrappers are valid operands.
+    DslArithmetic,
 }
 
 impl DimensionExprContext {
     fn error_context(self) -> &'static str {
         match self {
-            Self::Bare => "as a shape dimension",
-            Self::Arithmetic => "in shape arithmetic",
+            Self::Bare | Self::DslArgument => "as a shape dimension",
+            Self::Arithmetic | Self::DslArithmetic => "in shape arithmetic",
         }
     }
+
+    fn operand(self) -> Self {
+        match self {
+            Self::Bare | Self::Arithmetic => Self::Arithmetic,
+            Self::DslArgument | Self::DslArithmetic => Self::DslArithmetic,
+        }
+    }
+
+    fn allows_explicit_int_wrapper(self) -> bool {
+        matches!(self, Self::DslArgument | Self::DslArithmetic)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum DimensionExprError {
+    Invalid,
+    InvalidExplicitIntWrapper,
 }
 
 impl Ranged for TypeOrExpr<'_> {
@@ -4204,17 +4228,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// `Tensor[Batch, Channels + 1, 3]` the dimension expressions are the type
     /// variable `Batch`, the arithmetic expression `Channels + 1`, and the
     /// integer literal `3`. Returns the `Type` the dimension resolves to, or
-    /// `None` (after emitting an error) if it is not a valid dimension.
-    fn parse_dimension_expr(&self, expr: &Expr, errors: &ErrorCollector) -> Option<Type> {
-        self.parse_dimension_expr_with_context(expr, errors, DimensionExprContext::Bare)
-    }
-
+    /// an error (after emitting a diagnostic) if it is not a valid dimension.
     fn parse_dimension_expr_with_context(
         &self,
         expr: &Expr,
         errors: &ErrorCollector,
         context: DimensionExprContext,
-    ) -> Option<Type> {
+        type_form_context: TypeFormContext<'_>,
+    ) -> Result<Type, DimensionExprError> {
         // shape_extensions.D[...] and D(...) are runtime-only wrappers that
         // let Python evaluate arithmetic on PEP 695 type variables.
         match expr {
@@ -4223,7 +4244,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if let Type::ClassDef(ref cls) = base
                     && self.is_shape_arith_wrapper_class(cls)
                 {
-                    return self.parse_dimension_expr_with_context(&x.slice, errors, context);
+                    return self.parse_dimension_expr_with_context(
+                        &x.slice,
+                        errors,
+                        context,
+                        type_form_context,
+                    );
+                }
+                if context.allows_explicit_int_wrapper()
+                    && matches!(base, Type::ClassDef(ref cls) if self.is_int_class(cls))
+                {
+                    let wrapper_errors = self.error_collector();
+                    let wrapped = self.expr_untype(expr, type_form_context, &wrapper_errors);
+                    errors.extend(wrapper_errors);
+                    return match wrapped {
+                        Type::Int(_) => Ok(wrapped),
+                        Type::Any(AnyStyle::Explicit | AnyStyle::Implicit) => Ok(gradual_size()),
+                        _ => Err(DimensionExprError::InvalidExplicitIntWrapper),
+                    };
                 }
             }
             Expr::Call(ExprCall {
@@ -4238,6 +4276,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             &arguments.args[0],
                             errors,
                             context,
+                            type_form_context,
                         );
                     }
                     self.error(
@@ -4257,7 +4296,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             )
                         },
                     );
-                    return None;
+                    return Err(DimensionExprError::Invalid);
                 }
             }
             _ => {}
@@ -4272,7 +4311,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     ErrorKind::InvalidAnnotation,
                     "String literals are not valid tensor dimensions".to_owned(),
                 );
-                None
+                Err(DimensionExprError::Invalid)
             }
             // Number literal: concrete dimension
             Expr::NumberLiteral(ExprNumberLiteral { value, .. }) => match value {
@@ -4280,7 +4319,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     if let Some(value) = int_val.as_i64() {
                         // Allow any integer value during parsing - validation happens later
                         // This allows expressions like N + 0 where 0 is part of an expression
-                        Some(self.heap.mk_int(Int::literal(value)))
+                        Ok(self.heap.mk_int(Int::literal(value)))
                     } else {
                         self.error(
                             errors,
@@ -4288,7 +4327,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             ErrorKind::InvalidAnnotation,
                             "Tensor shape dimension too large".to_owned(),
                         );
-                        None
+                        Err(DimensionExprError::Invalid)
                     }
                 }
                 _ => {
@@ -4299,7 +4338,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         "Tensor shape dimensions must be integers, not floats or complex numbers"
                             .to_owned(),
                     );
-                    None
+                    Err(DimensionExprError::Invalid)
                 }
             },
             // Name expression: could be a type variable
@@ -4310,9 +4349,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     Type::ClassDef(cls) if cls.has_toplevel_qname("typing", "Any") => {
                         // typing.Any in a type annotation position (e.g., Tensor[16, Any])
                         // Use Explicit since the user wrote Any explicitly
-                        Some(Type::Any(AnyStyle::Explicit))
+                        Ok(Type::Any(AnyStyle::Explicit))
                     }
-                    Type::ClassDef(cls) if cls.is_builtin("int") => Some(gradual_size()),
+                    Type::ClassDef(cls) if cls.is_builtin("int") => Ok(gradual_size()),
                     _ => {
                         match self.untype_opt_with_context(
                             expr_type.clone(),
@@ -4321,10 +4360,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             UntypeContext::SymbolicInt(context.error_context()),
                         ) {
                             Some(Type::Quantified(q)) if q.kind() == QuantifiedKind::IntVar => {
-                                Some(Type::Quantified(q))
+                                Ok(Type::Quantified(q))
                             }
-                            Some(ty @ Type::TypeVar(_)) => Some(ty),
-                            Some(ty) if ty.is_error() => Some(ty),
+                            Some(ty @ Type::TypeVar(_)) => Ok(ty),
+                            Some(ty) if ty.is_error() => Ok(ty),
                             _ => {
                                 self.error(
                                     errors,
@@ -4335,7 +4374,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                         self.for_display(expr_type)
                                     ),
                                 );
-                                None
+                                Err(DimensionExprError::Invalid)
                             }
                         }
                     }
@@ -4346,12 +4385,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let inner = self.parse_dimension_expr_with_context(
                     &x.operand,
                     errors,
-                    DimensionExprContext::Arithmetic,
+                    context.operand(),
+                    type_form_context,
                 )?;
-                Some(
-                    self.heap
-                        .mk_int(Int::sub(self.heap.mk_int(Int::Literal(0)), inner)),
-                )
+                Ok(self
+                    .heap
+                    .mk_int(Int::sub(self.heap.mk_int(Int::Literal(0)), inner)))
             }
             // Binary operations: N + M, N * M, etc.
             Expr::BinOp(ExprBinOp {
@@ -4373,18 +4412,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 op.as_str()
                             ),
                         );
-                        return None;
+                        return Err(DimensionExprError::Invalid);
                     }
                 };
                 let left_dim = self.parse_dimension_expr_with_context(
                     left,
                     errors,
-                    DimensionExprContext::Arithmetic,
+                    context.operand(),
+                    type_form_context,
                 )?;
                 let right_dim = self.parse_dimension_expr_with_context(
                     right,
                     errors,
-                    DimensionExprContext::Arithmetic,
+                    context.operand(),
+                    type_form_context,
                 )?;
                 if *op == Operator::Pow {
                     let right_dim_canon = canonicalize(right_dim.clone());
@@ -4397,13 +4438,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             ErrorKind::InvalidAnnotation,
                             "Tensor shape exponent must not be negative".to_owned(),
                         );
-                        return None;
+                        return Err(DimensionExprError::Invalid);
                     }
-                    return Some(canonicalize(
+                    return Ok(canonicalize(
                         self.heap.mk_int(Int::pow(left_dim, right_dim_canon)),
                     ));
                 }
-                Some(self.heap.mk_int(make_int(left_dim, right_dim)))
+                Ok(self.heap.mk_int(make_int(left_dim, right_dim)))
             }
             // Anything else is an error
             _ => {
@@ -4417,7 +4458,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         self.for_display(expr_type)
                     ),
                 );
-                None
+                Err(DimensionExprError::Invalid)
             }
         }
     }
@@ -4430,6 +4471,38 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Option<Vec<Type>> {
+        self.parse_dimension_list_with_context(
+            args,
+            type_form_context,
+            errors,
+            DimensionExprContext::Bare,
+        )
+        .ok()
+    }
+
+    /// Parse an `Int` or `Int | None` shape-DSL argument, where explicit `Int[...]`
+    /// wrappers are valid arithmetic operands.
+    pub(super) fn parse_dimension_list_for_type_shape_dsl_int_argument(
+        &self,
+        args: &[Expr],
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+    ) -> Result<Vec<Type>, DimensionExprError> {
+        self.parse_dimension_list_with_context(
+            args,
+            type_form_context,
+            errors,
+            DimensionExprContext::DslArgument,
+        )
+    }
+
+    fn parse_dimension_list_with_context(
+        &self,
+        args: &[Expr],
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+        context: DimensionExprContext,
+    ) -> Result<Vec<Type>, DimensionExprError> {
         let mut dims = Vec::new();
         for arg in args {
             let dim = if let Expr::Call(call) = arg
@@ -4452,7 +4525,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     ty
                 }
             } else {
-                self.parse_dimension_expr(arg, errors)?
+                self.parse_dimension_expr_with_context(arg, errors, context, type_form_context)?
             };
             let simplified = canonicalize(dim);
 
@@ -4466,12 +4539,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     ErrorKind::InvalidAnnotation,
                     format!("Tensor shape dimension must be positive, got {}", value),
                 );
-                return None;
+                return Err(DimensionExprError::Invalid);
             }
 
             dims.push(simplified);
         }
-        Some(dims)
+        Ok(dims)
     }
 
     pub fn parse_assert_shape_expr(
