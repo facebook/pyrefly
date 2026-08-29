@@ -1288,11 +1288,10 @@ def glu_shape(input: IntTuple, dim: int) -> IntTuple:
     halved = extent // 2
     return replace_axis_extent(input, dim, halved)
 
-# The `+ 0` branches below keep normalized axes in one deferred integer domain.
-# TODO(stroxler): Factor the repeated FFT axis normalization and dimension replacement once DSL
-# helper calls can be used as expressions rather than only as direct return values.
+# `n` defaults to the existing extent of the transformed axis, so `None` and an
+# explicit length differ only in which value feeds the halved output extent.
 @type_shape_dsl_function
-def rfft_shape(shape: IntTuple, dim: int) -> IntTuple:
+def rfft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
     rank = len(shape)
     if dim < 0:
         axis = dim + rank
@@ -1300,13 +1299,16 @@ def rfft_shape(shape: IntTuple, dim: int) -> IntTuple:
         axis = dim + 0
     if axis < 0 or axis >= rank:
         return dsl.Invalid("FFT dimension out of range")
-    extent = shape[axis] // 2 + 1
-    return dsl.concat(
-        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
-    )
+    if n is None:
+        transformed = dsl.IntTuple((shape[axis] // 2 + 1,))
+    else:
+        transformed = dsl.IntTuple((n // 2 + 1,))
+    return dsl.concat(dsl.concat(shape[:axis], transformed), shape[axis + 1 :])
 
+# The inverse transform undoes the halving: without `n` it reconstructs the even
+# signal length, and with `n` the requested length becomes the axis extent.
 @type_shape_dsl_function
-def rfft_literal_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:
+def irfft_shape(shape: IntTuple, n: Int | None, dim: int) -> IntTuple:
     rank = len(shape)
     if dim < 0:
         axis = dim + rank
@@ -1314,63 +1316,11 @@ def rfft_literal_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:
         axis = dim + 0
     if axis < 0 or axis >= rank:
         return dsl.Invalid("FFT dimension out of range")
-    extent = n // 2 + 1
-    return dsl.concat(
-        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
-    )
-
-@type_shape_dsl_function
-def rfft_n_shape(shape: IntTuple, n: Int, dim: int) -> IntTuple:
-    rank = len(shape)
-    if dim < 0:
-        axis = dim + rank
+    if n is None:
+        transformed = dsl.IntTuple((2 * (shape[axis] - 1),))
     else:
-        axis = dim + 0
-    if axis < 0 or axis >= rank:
-        return dsl.Invalid("FFT dimension out of range")
-    return dsl.concat(
-        dsl.concat(shape[:axis], dsl.IntTuple((n // 2 + 1,))), shape[axis + 1 :]
-    )
-
-@type_shape_dsl_function
-def irfft_shape(shape: IntTuple, dim: int) -> IntTuple:
-    rank = len(shape)
-    if dim < 0:
-        axis = dim + rank
-    else:
-        axis = dim + 0
-    if axis < 0 or axis >= rank:
-        return dsl.Invalid("FFT dimension out of range")
-    extent = 2 * (shape[axis] - 1)
-    return dsl.concat(
-        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
-    )
-
-@type_shape_dsl_function
-def irfft_literal_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:
-    rank = len(shape)
-    if dim < 0:
-        axis = dim + rank
-    else:
-        axis = dim + 0
-    if axis < 0 or axis >= rank:
-        return dsl.Invalid("FFT dimension out of range")
-    # Arithmetic converts the `Flag[int]` length to an `Int` dimension.
-    extent = n + 0
-    return dsl.concat(
-        dsl.concat(shape[:axis], dsl.IntTuple((extent,))), shape[axis + 1 :]
-    )
-
-@type_shape_dsl_function
-def irfft_n_shape(shape: IntTuple, n: Int, dim: int) -> IntTuple:
-    rank = len(shape)
-    if dim < 0:
-        axis = dim + rank
-    else:
-        axis = dim + 0
-    if axis < 0 or axis >= rank:
-        return dsl.Invalid("FFT dimension out of range")
-    return dsl.concat(dsl.concat(shape[:axis], dsl.IntTuple((n,))), shape[axis + 1 :])
+        transformed = dsl.IntTuple((n,))
+    return dsl.concat(dsl.concat(shape[:axis], transformed), shape[axis + 1 :])
 
 @type_shape_dsl_function
 def size_dim_shape(shape: IntTuple, dim: int) -> Int:

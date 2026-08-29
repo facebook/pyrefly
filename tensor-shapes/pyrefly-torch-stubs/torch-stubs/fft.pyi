@@ -4,18 +4,14 @@
 # LICENSE file in the root directory of this source tree.
 
 # Type stubs for torch.fft module (Phase 6: FFT Operations)
-from typing import overload
+from typing import TYPE_CHECKING
 
-from shape_extensions import Flag, Int as _Int, IntTuple, IntVar
+from shape_extensions import Flag, IntTuple
 from torch import Tensor
-from torch._shapes import (
-    irfft_literal_shape,
-    irfft_n_shape,
-    irfft_shape,
-    rfft_literal_shape,
-    rfft_n_shape,
-    rfft_shape,
-)
+from torch._shapes import irfft_shape, rfft_shape
+
+if TYPE_CHECKING:
+    from shape_extensions import Int as _Int
 
 # 1D FFT operations
 def fft[Shape: IntTuple](
@@ -24,62 +20,18 @@ def fft[Shape: IntTuple](
 def ifft[Shape: IntTuple](
     input: Tensor[Shape], n: int = None, dim: int = -1, norm: str = None
 ) -> Tensor[Shape]: ...
-@overload
-def rfft[Shape: IntTuple, Dim: Flag[int]](
-    self: Tensor[Shape], n: None = None, dim: Dim = -1, norm: str = None
-) -> Tensor[rfft_shape(Shape, Dim)]: ...
-@overload
-def rfft[Shape: IntTuple, N: IntVar, Dim: Flag[int]](
-    self: Tensor[Shape], n: _Int[N], dim: Dim = -1, norm: str = None
-) -> Tensor[rfft_n_shape(Shape, _Int[N], Dim)]: ...
-@overload
-def rfft[Shape: IntTuple, N: Flag[int], Dim: Flag[int]](
-    self: Tensor[Shape], n: N, dim: Dim = -1, norm: str = None
-) -> Tensor[rfft_literal_shape(Shape, N, Dim)]: ...
-@overload
-def rfft(self: Tensor, n: int, dim: int = -1, norm: str = None) -> Tensor: ...
-@overload
-def irfft[Shape: IntTuple, Dim: Flag[int]](
-    self: Tensor[Shape], n: None = None, dim: Dim = -1, norm: str = None
-) -> Tensor[irfft_shape(Shape, Dim)]: ...
-@overload
-def irfft[Shape: IntTuple, N: IntVar, Dim: Flag[int]](
-    self: Tensor[Shape], n: _Int[N], dim: Dim = -1, norm: str = None
-) -> Tensor[irfft_n_shape(Shape, _Int[N], Dim)]: ...
-@overload
-def irfft[Shape: IntTuple, N: Flag[int], Dim: Flag[int]](
-    self: Tensor[Shape], n: N, dim: Dim = -1, norm: str = None
-) -> Tensor[irfft_literal_shape(Shape, N, Dim)]: ...
-@overload
-def irfft(self: Tensor, n: int, dim: int = -1, norm: str = None) -> Tensor: ...
-@overload
-def hfft[Shape: IntTuple, Dim: Flag[int]](
-    self: Tensor[Shape], n: None = None, dim: Dim = -1, norm: str = None
-) -> Tensor[irfft_shape(Shape, Dim)]: ...
-@overload
-def hfft[Shape: IntTuple, N: IntVar, Dim: Flag[int]](
-    self: Tensor[Shape], n: _Int[N], dim: Dim = -1, norm: str = None
-) -> Tensor[irfft_n_shape(Shape, _Int[N], Dim)]: ...
-@overload
-def hfft[Shape: IntTuple, N: Flag[int], Dim: Flag[int]](
-    self: Tensor[Shape], n: N, dim: Dim = -1, norm: str = None
-) -> Tensor[irfft_literal_shape(Shape, N, Dim)]: ...
-@overload
-def hfft(self: Tensor, n: int, dim: int = -1, norm: str = None) -> Tensor: ...
-@overload
-def ihfft[Shape: IntTuple, Dim: Flag[int]](
-    self: Tensor[Shape], n: None = None, dim: Dim = -1, norm: str = None
-) -> Tensor[rfft_shape(Shape, Dim)]: ...
-@overload
-def ihfft[Shape: IntTuple, N: IntVar, Dim: Flag[int]](
-    self: Tensor[Shape], n: _Int[N], dim: Dim = -1, norm: str = None
-) -> Tensor[rfft_n_shape(Shape, _Int[N], Dim)]: ...
-@overload
-def ihfft[Shape: IntTuple, N: Flag[int], Dim: Flag[int]](
-    self: Tensor[Shape], n: N, dim: Dim = -1, norm: str = None
-) -> Tensor[rfft_literal_shape(Shape, N, Dim)]: ...
-@overload
-def ihfft(self: Tensor, n: int, dim: int = -1, norm: str = None) -> Tensor: ...
+def rfft[Shape: IntTuple, N: _Int | None, Dim: Flag[int]](
+    input: Tensor[Shape], n: N = None, dim: Dim = -1, norm: str = None
+) -> Tensor[rfft_shape(Shape, N, Dim)]: ...
+def irfft[Shape: IntTuple, N: _Int | None, Dim: Flag[int]](
+    input: Tensor[Shape], n: N = None, dim: Dim = -1, norm: str = None
+) -> Tensor[irfft_shape(Shape, N, Dim)]: ...
+def hfft[Shape: IntTuple, N: _Int | None, Dim: Flag[int]](
+    input: Tensor[Shape], n: N = None, dim: Dim = -1, norm: str = None
+) -> Tensor[irfft_shape(Shape, N, Dim)]: ...
+def ihfft[Shape: IntTuple, N: _Int | None, Dim: Flag[int]](
+    input: Tensor[Shape], n: N = None, dim: Dim = -1, norm: str = None
+) -> Tensor[rfft_shape(Shape, N, Dim)]: ...
 
 # 2D FFT operations
 def fft2[Shape: IntTuple](

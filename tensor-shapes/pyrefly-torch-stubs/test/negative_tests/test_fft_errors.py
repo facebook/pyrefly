@@ -12,3 +12,15 @@ def test_fft_axis_errors(x: Tensor[[3, 4]]) -> None:
     torch.fft.rfft(x, dim=2)
     # E: Cannot evaluate type-level shape DSL call: FFT dimension out of range
     torch.fft.irfft(x, dim=-3)
+    # E: Cannot evaluate type-level shape DSL call: FFT dimension out of range
+    torch.fft.hfft(x, dim=2)
+    # E: Cannot evaluate type-level shape DSL call: FFT dimension out of range
+    torch.fft.ihfft(x, dim=-3)
+    # E: Cannot evaluate type-level shape DSL call: FFT dimension out of range
+    torch.fft.rfft(x, n=8, dim=2)
+    # E: Cannot evaluate type-level shape DSL call: FFT dimension out of range
+    torch.fft.irfft(x, n=8, dim=-3)
+    # E: Cannot evaluate type-level shape DSL call: FFT dimension out of range
+    torch.fft.hfft(x, n=8, dim=2)
+    # E: Cannot evaluate type-level shape DSL call: FFT dimension out of range
+    torch.fft.ihfft(x, n=8, dim=-3)
