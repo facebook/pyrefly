@@ -1439,12 +1439,24 @@ enum DslLengthOperand<'a> {
 }
 
 #[derive(Clone)]
+/// Validation-time state for an integer-valued local that may be either a symbolic `Int`
+/// dimension or a Flag integer. Validation retains its expression until a later use selects the
+/// domain, and redirects group related locals under one decision.
 struct DeferredInteger {
     expression: Expr,
     flow: DslValidationFlow,
-    domain: Option<DslIntegerDomain>,
-    parent: usize,
+    state: DeferredIntegerState,
     validated: bool,
+}
+
+#[derive(Clone)]
+enum DeferredIntegerState {
+    /// A root before a use selects the group's evaluation domain.
+    UnresolvedRoot,
+    /// A root whose expressions have a selected evaluation domain.
+    ResolvedRoot(DslIntegerDomain),
+    /// A non-root entry in the union-find structure.
+    Redirect(usize),
 }
 
 // TODO(stroxler): Isolate deferred integer union-find state and AST revalidation behind a
@@ -1507,38 +1519,29 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         self.deferred_integers.push(DeferredInteger {
             expression: expression.clone(),
             flow: flow.clone(),
-            domain: None,
-            parent: index,
+            state: DeferredIntegerState::UnresolvedRoot,
             validated: false,
         });
         DslStaticKind::DeferredInteger(index)
     }
 
     fn deferred_integer_root(&self, mut index: usize) -> usize {
-        while self.deferred_integers[index].parent != index {
-            debug_assert!(
-                self.deferred_integers[index].domain.is_none(),
-                "only a deferred integer group root may carry its domain"
-            );
-            index = self.deferred_integers[index].parent;
+        while let DeferredIntegerState::Redirect(parent) = self.deferred_integers[index].state {
+            index = parent;
         }
         index
     }
 
     fn deferred_integer_domain(&self, index: usize) -> (usize, Option<DslIntegerDomain>) {
         let root = self.deferred_integer_root(index);
-        debug_assert!(
-            self.deferred_integers
-                .iter()
-                .enumerate()
-                .all(
-                    |(index, deferred)| self.deferred_integer_root(index) != root
-                        || index == root
-                        || deferred.domain.is_none()
-                ),
-            "only a deferred integer group root may carry its domain"
-        );
-        (root, self.deferred_integers[root].domain)
+        let domain = match self.deferred_integers[root].state {
+            DeferredIntegerState::UnresolvedRoot => None,
+            DeferredIntegerState::ResolvedRoot(domain) => Some(domain),
+            DeferredIntegerState::Redirect(_) => {
+                unreachable!("a deferred integer root cannot be a redirect")
+            }
+        };
+        (root, domain)
     }
 
     fn merge_deferred_integers(
@@ -1559,11 +1562,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             });
         }
         let domain = left_domain.or(right_domain);
-        self.deferred_integers[right].domain = None;
-        self.deferred_integers[right].parent = left;
-        self.deferred_integers[left].domain = domain;
+        self.deferred_integers[right].state = DeferredIntegerState::Redirect(left);
         if let Some(domain) = domain {
             self.resolve_deferred_integer(left, domain)?;
+        } else {
+            self.deferred_integers[left].state = DeferredIntegerState::UnresolvedRoot;
         }
         Ok(left)
     }
@@ -1729,15 +1732,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 message: "an integer local cannot be used as both a dimension and a Flag value",
             });
         }
-        self.deferred_integers[root].domain = Some(domain);
+        self.deferred_integers[root].state = DeferredIntegerState::ResolvedRoot(domain);
         let group = (0..self.deferred_integers.len())
             .filter(|index| self.deferred_integer_root(*index) == root)
             .collect::<Vec<_>>();
         for index in group {
-            debug_assert!(
-                index == root || self.deferred_integers[index].domain.is_none(),
-                "only a deferred integer group root may carry its domain"
-            );
             if self.deferred_integers[index].validated {
                 continue;
             }
