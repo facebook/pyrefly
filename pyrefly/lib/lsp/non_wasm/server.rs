@@ -1797,6 +1797,9 @@ impl Server {
             LspEvent::Exit => {
                 return Ok(ProcessEvent::Exit);
             }
+            LspEvent::TspExtraRequest { .. } => {
+                unreachable!("extra TSP connection requests are answered by the TSP loop")
+            }
             LspEvent::RecheckFinished => {
                 // We did a commit and want to get back to a stable state.
                 self.validate_in_memory_and_commit_if_possible(
