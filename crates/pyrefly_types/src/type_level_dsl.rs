@@ -3821,24 +3821,36 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             IntegerLiteral::Value(value) => Some(value),
             IntegerLiteral::NotLiteral | IntegerLiteral::Unrepresentable { .. } => None,
         };
-        let is_proven_integer = |expression: &Expr| {
+        let is_integer_comparison_candidate = |expression: &Expr| {
             let Expr::Name(_) = expression else {
                 return Ok(false);
             };
             let slot = self.slot(expression, flow)?;
-            Ok(matches!(
-                &flow.kinds[slot],
+            Ok(match &flow.kinds[slot] {
                 DslStaticKind::ValueSet {
                     sources,
                     kinds: FLAG_INT,
                 } if sources.all_prove(TypeShapeDslParameterNarrowing::Integer)
-                    && sources.non_parameter_values_are(FLAG_INT)
-            ))
+                    && sources.non_parameter_values_are(FLAG_INT) =>
+                {
+                    true
+                }
+                DslStaticKind::ValueSet {
+                    sources,
+                    kinds: FLAG_NOT_NONE,
+                } if !sources.parameter_uses.is_empty()
+                    && sources.all_prove(TypeShapeDslParameterNarrowing::NonNone) =>
+                {
+                    true
+                }
+                _ => false,
+            })
         };
         let simple_operands = (matches!(&*compare.left, Expr::Name(_)) || left_literal.is_some())
             && (matches!(right, Expr::Name(_)) || right_literal.is_some());
         let integer_comparison = if simple_operands
-            && (is_proven_integer(&compare.left)? || is_proven_integer(right)?)
+            && (is_integer_comparison_candidate(&compare.left)?
+                || is_integer_comparison_candidate(right)?)
         {
             let integer_literal_operand = || {
                 Some(TypeShapeDslComparisonOperand {

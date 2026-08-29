@@ -1989,6 +1989,76 @@ def check_symbolic[M: IntVar](x: Tensor[[M]]) -> None:
 );
 
 testcase!(
+    test_type_shape_dsl_optional_int_comparisons,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def nonnone_lt_literal(n: Int | None, yes: Int, no: Int) -> Int:
+    if n is not None and n < 4:
+        return yes
+    return no
+
+@type_shape_dsl_function
+def fallthrough_lt_parameter(n: Int | None, limit: Int, yes: Int, no: Int) -> Int:
+    if n is None:
+        return no
+    if n < limit:
+        return yes
+    return no
+
+@type_shape_dsl_function
+def nonnone_eq_literal(n: Int | None, yes: Int, no: Int) -> Int:
+    if n is not None and n == 3:
+        return yes
+    return no
+
+@type_shape_dsl_function
+def fallthrough_eq_parameter(n: Int | None, expected: Int, yes: Int, no: Int) -> Int:
+    if n is None:
+        return no
+    if n == expected:
+        return yes
+    return no
+
+@type_shape_dsl_function
+def reject_broad_non_none(
+    value: int | tuple[int, ...] | None, yes: Int, no: Int,
+) -> Int:
+    if value is None:
+        return no
+    expected = 4
+    if value == expected:  # E: comparison operands must both be annotated as `Int` or both be `Flag[int]`
+        return yes
+    return no
+
+def lt_literal_true() -> Tensor[[nonnone_lt_literal(Int[3], Int[7], Int[8])]]: ...
+def lt_literal_false() -> Tensor[[nonnone_lt_literal(Int[5], Int[7], Int[8])]]: ...
+def lt_literal_none() -> Tensor[[nonnone_lt_literal(None, Int[7], Int[8])]]: ...
+def lt_parameter_true() -> Tensor[[fallthrough_lt_parameter(Int[3], Int[4], Int[7], Int[8])]]: ...
+def lt_parameter_false() -> Tensor[[fallthrough_lt_parameter(Int[5], Int[4], Int[7], Int[8])]]: ...
+def eq_literal_true() -> Tensor[[nonnone_eq_literal(Int[3], Int[7], Int[8])]]: ...
+def eq_literal_false() -> Tensor[[nonnone_eq_literal(Int[4], Int[7], Int[8])]]: ...
+def eq_parameter_true() -> Tensor[[fallthrough_eq_parameter(Int[3], Int[3], Int[7], Int[8])]]: ...
+def eq_parameter_false() -> Tensor[[fallthrough_eq_parameter(Int[3], Int[4], Int[7], Int[8])]]: ...
+
+def check() -> None:
+    assert_type(lt_literal_true(), Tensor[[7]])
+    assert_type(lt_literal_false(), Tensor[[8]])
+    assert_type(lt_literal_none(), Tensor[[8]])
+    assert_type(lt_parameter_true(), Tensor[[7]])
+    assert_type(lt_parameter_false(), Tensor[[8]])
+    assert_type(eq_literal_true(), Tensor[[7]])
+    assert_type(eq_literal_false(), Tensor[[8]])
+    assert_type(eq_parameter_true(), Tensor[[7]])
+    assert_type(eq_parameter_false(), Tensor[[8]])
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_optional_int_invalid_uses,
     shape_dsl_tensor_env(),
     r#"

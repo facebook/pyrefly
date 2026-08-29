@@ -108,17 +108,12 @@ fn type_shape_dsl_comparison_domain(
         let uses = operand.parameter_uses.as_deref();
         uses.is_none() && !operand.is_flag_operand
             || uses.is_some_and(|uses| {
-                uses.iter()
-                    .all(|use_| match parameter_domains[use_.parameter()] {
-                        TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => true,
-                        TypeShapeDslInputDomain::OptionalInt => {
-                            use_.narrowing() == TypeShapeDslParameterNarrowing::Integer
-                        }
-                        _ => false,
-                    })
-                    && operand
-                        .non_parameter_flag_domain
-                        .is_none_or(|domain| domain == FlagDomain::of(FlagMember::Int))
+                uses.iter().all(|use_| {
+                    parameter_domains[use_.parameter()]
+                        .can_use_as(TypeShapeDslDomain::Int, use_.narrowing())
+                }) && operand
+                    .non_parameter_flag_domain
+                    .is_none_or(|domain| domain == FlagDomain::of(FlagMember::Int))
             })
     };
     let supports_flag_int = |operand: &TypeShapeDslComparisonOperand| {
