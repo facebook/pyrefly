@@ -1183,23 +1183,57 @@ def adaptive_pool_gradual_shape(
         return dsl.Invalid("adaptive pooling supports one to three spatial dimensions")
     return dsl.IntTuple.gradual()
 
-@shape_dsl_function
-def interpolate_ir(
-    self: ShapedArray,
-    size: int | symint | list[int | symint] | None = None,
-    scale_factor: int | symint | None = None,
-) -> ShapedArray:
-    if size != None:
-        return ShapedArray(
-            shape=[self.shape[0], self.shape[1]]
-            + broadcast_int(size, len(self.shape) - 2)
-        )
-    if scale_factor != None:
-        return ShapedArray(
-            shape=[self.shape[0], self.shape[1]]
-            + [d * scale_factor for d in self.shape[2:]]
-        )
-    raise Error("interpolate requires either 'size' or 'scale_factor' argument")
+@type_shape_dsl_function
+def interpolate_scalar_shape(
+    input: IntTuple, size: Int | None, scale_factor: Int | None
+) -> IntTuple:
+    # Positivity is deliberately unchecked here, unlike in the tuple helpers
+    # below: a direct predicate would make every symbolic scalar argument
+    # undecidable and therefore gradual, which is the precision this arm exists
+    # to preserve. Torch validates the value at runtime.
+    rank = len(input)
+    if rank < 3 or rank > 5:
+        return dsl.Invalid("interpolate requires rank 3, 4, or 5")
+    if size is not None and scale_factor is not None:
+        return dsl.Invalid("interpolate accepts only one of size or scale_factor")
+    elif size is not None:
+        output = dsl.IntTuple((size for _ in range(rank - 2)))
+    elif scale_factor is not None:
+        output = dsl.IntTuple((input[i + 2] * scale_factor for i in range(rank - 2)))
+    else:
+        return dsl.Invalid("interpolate requires size or scale_factor")
+    return dsl.concat(input[:2], output)
+
+@type_shape_dsl_function
+def interpolate_size_shape(input: IntTuple, size: IntTuple) -> IntTuple:
+    rank = len(input)
+    if rank < 3 or rank > 5:
+        return dsl.Invalid("interpolate requires rank 3, 4, or 5")
+    if len(size) != rank - 2:
+        return dsl.Invalid("interpolate size must match the spatial rank")
+    # A direct predicate, not one gated on concreteness: an entry the checker
+    # cannot decide makes the whole call recover gradually. The DSL is not
+    # re-evaluated once a type parameter is specialized, so gating would leave
+    # a shape that no validation ever revisits.
+    if any(dim < 1 for dim in size):
+        return dsl.Invalid("interpolate size must be positive")
+    return dsl.concat(input[:2], size)
+
+@type_shape_dsl_function
+def interpolate_scale_shape(input: IntTuple, scale_factor: IntTuple) -> IntTuple:
+    rank = len(input)
+    if rank < 3 or rank > 5:
+        return dsl.Invalid("interpolate requires rank 3, 4, or 5")
+    if len(scale_factor) != rank - 2:
+        return dsl.Invalid("interpolate scale_factor must match the spatial rank")
+    # Direct predicate for the same reason as in `interpolate_size_shape`: an
+    # undecidable factor must not be multiplied into a shape that is never
+    # re-checked once the factor is known.
+    if any(factor < 1 for factor in scale_factor):
+        return dsl.Invalid("interpolate scale_factor must be positive")
+    spatial = dsl.IntTuple((input[i] for i in range(2, rank)))
+    output = dsl.IntTuple((dim * factor for dim, factor in zip(spatial, scale_factor)))
+    return dsl.concat(input[:2], output)
 
 # Reduction precedence shared by every `torch.nn.functional` loss: the legacy
 # `reduce`/`size_average` flags override `reduction`, in that order. `unreduced_shape`
@@ -1429,12 +1463,6 @@ def item_ir(self: ShapedArray) -> ShapedArray:
             + "D tensor"
         )
     return Unknown
-
-@shape_dsl_function
-def nn_upsample_forward_ir(
-    input: ShapedArray, size: symint | None = None, scale_factor: symint | None = None
-) -> ShapedArray:
-    return interpolate_ir(input, size, scale_factor)
 
 @shape_dsl_function
 def nn_lstm_forward_ir(

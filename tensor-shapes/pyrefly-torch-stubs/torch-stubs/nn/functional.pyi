@@ -12,14 +12,7 @@ import builtins
 from typing import Literal, overload
 
 import shape_extensions
-from shape_extensions import (
-    Elements,
-    Flag,
-    Int as _Int,
-    IntTuple,
-    IntVar,
-    uses_shape_dsl,
-)
+from shape_extensions import Elements, Flag, Int as _Int, IntTuple, IntVar
 from torch._shapes import (
     adaptive_pool1d_shape,
     adaptive_pool2d_shape,
@@ -30,7 +23,9 @@ from torch._shapes import (
     conv_transpose_shape,
     cosine_embedding_score_shape,
     cosine_similarity_shape,
-    interpolate_ir,
+    interpolate_scalar_shape,
+    interpolate_scale_shape,
+    interpolate_size_shape,
     kl_div_loss_shape,
     loss_shape,
     pad_shape,
@@ -602,29 +597,91 @@ def adaptive_avg_pool3d[Shape: IntTuple](
 ) -> Tensor[adaptive_pool_gradual_shape(Shape, 3)]: ...
 
 # Interpolation/upsampling operations
-@uses_shape_dsl(interpolate_ir)
-def interpolate(
-    self: Tensor,
-    size: int | tuple[int, ...] | None = None,
-    scale_factor: float | tuple[float, ...] | None = None,
+# Integer overloads precede float fallbacks because int is compatible with float.
+@overload
+def interpolate[
+    Shape: IntTuple,
+    Size: _Int | None = None,
+    Scale: _Int | None = None,
+](
+    self: Tensor[Shape],
+    size: Size = None,
+    scale_factor: Scale = None,
     mode: str = "nearest",
     align_corners: bool | None = None,
     recompute_scale_factor: bool | None = None,
     antialias: bool = False,
-) -> Tensor:
-    """Interpolate/upsample tensor. Shape inference via meta-shape: torch.nn.functional.interpolate"""
-    ...
-
-@uses_shape_dsl(interpolate_ir)
-def upsample(
-    self: Tensor,
-    size: int | tuple[int, ...] | None = None,
-    scale_factor: float | tuple[float, ...] | None = None,
+) -> Tensor[interpolate_scalar_shape(Shape, Size, Scale)]: ...
+@overload
+def interpolate[Shape: IntTuple, Size: IntTuple](
+    self: Tensor[Shape],
+    size: Size,
+    scale_factor: None = None,
     mode: str = "nearest",
     align_corners: bool | None = None,
-) -> Tensor:
-    """Upsample tensor (deprecated, use interpolate). Shape inference via meta-shape: torch.nn.functional.upsample"""
-    ...
+    recompute_scale_factor: bool | None = None,
+    antialias: bool = False,
+) -> Tensor[interpolate_size_shape(Shape, Size)]: ...
+@overload
+def interpolate[Shape: IntTuple, Scale: IntTuple](
+    self: Tensor[Shape],
+    size: None = None,
+    scale_factor: Scale = ...,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+    recompute_scale_factor: bool | None = None,
+    antialias: bool = False,
+) -> Tensor[interpolate_scale_shape(Shape, Scale)]: ...
+
+# TODO(stroxler): Preserve shapes once the V2 DSL supports float arithmetic.
+@overload
+def interpolate(
+    self: Tensor,
+    size: None = None,
+    scale_factor: float | tuple[float, ...] = ...,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+    recompute_scale_factor: bool | None = None,
+    antialias: bool = False,
+) -> Tensor: ...
+@overload
+def upsample[
+    Shape: IntTuple,
+    Size: _Int | None = None,
+    Scale: _Int | None = None,
+](
+    self: Tensor[Shape],
+    size: Size = None,
+    scale_factor: Scale = None,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+) -> Tensor[interpolate_scalar_shape(Shape, Size, Scale)]: ...
+@overload
+def upsample[Shape: IntTuple, Size: IntTuple](
+    self: Tensor[Shape],
+    size: Size,
+    scale_factor: None = None,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+) -> Tensor[interpolate_size_shape(Shape, Size)]: ...
+@overload
+def upsample[Shape: IntTuple, Scale: IntTuple](
+    self: Tensor[Shape],
+    size: None = None,
+    scale_factor: Scale = ...,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+) -> Tensor[interpolate_scale_shape(Shape, Scale)]: ...
+
+# TODO(stroxler): Preserve shapes once the V2 DSL supports float arithmetic.
+@overload
+def upsample(
+    self: Tensor,
+    size: None = None,
+    scale_factor: float | tuple[float, ...] = ...,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+) -> Tensor: ...
 
 # Phase 2: Activation functions
 def relu[Shape: IntTuple](input: Tensor[Shape], inplace: bool = False) -> Tensor[Shape]:

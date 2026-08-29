@@ -59,6 +59,22 @@ def test_upsample_only():
     assert_type(out, Tensor[[2, 64, 64, 64]])
 
 
+def test_upsample_size_in_sequential():
+    seq = nn.Sequential(nn.Upsample(size=48, mode="bilinear", align_corners=False))
+    x: Tensor[[2, 64, 32, 40]] = torch.randn(2, 64, 32, 40)
+    assert_type(seq(x), Tensor[[2, 64, 48, 48]])
+
+
+def test_gradual_upsample_composes_in_sequential():
+    # Tuple sizes and float scales are valid but gradual, so composing them must
+    # widen the pipeline rather than reject it or keep a stale precise shape.
+    x: Tensor[[2, 64, 32, 40]] = torch.randn(2, 64, 32, 40)
+    tuple_size = nn.Sequential(nn.Conv2d(64, 64, 3, padding=1), nn.Upsample((64, 80)))
+    float_scale = nn.Sequential(nn.Upsample(scale_factor=1.5), nn.ReLU())
+    assert_type(tuple_size(x), Tensor)
+    assert_type(float_scale(x), Tensor)
+
+
 # Test 6: Upsample called directly for comparison
 def test_upsample_direct():
     up = nn.Upsample(scale_factor=2)

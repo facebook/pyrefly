@@ -28,10 +28,10 @@ if TYPE_CHECKING:
     from torch._shapes import (
         flatten_shape,
         glu_shape,
+        interpolate_scalar_shape,
         nn_gru_forward_ir,
         nn_lstm_forward_ir,
         nn_lstmcell_forward_ir,
-        nn_upsample_forward_ir,
         pixel_shuffle_shape,
         pool_shape,
         symmetric_pad2d_shape,
@@ -1054,21 +1054,56 @@ class GRUCell(Module):
     ) -> None: ...
     def forward(self, input: Tensor, hx: Tensor | None = None) -> Tensor: ...
 
-class Upsample(Module):
-    """Upsamples input. Shape inference via DSL + NNModule init capture.
+class Upsample[
+    Size: _Int | None,
+    Scale: _Int | None,
+    TupleSize: tuple[int, ...] | None = None,
+    FloatScale: float | tuple[float, ...] | None = None,
+](Module):
+    """Upsamples input with scalar integer arguments tracked by the V2 DSL.
 
-    Supports size (target spatial dims) or scale_factor (int multiplier).
-    Float scale_factor not yet supported in DSL.
+    Literal preservation only applies to parameters bound by the `Int` special
+    form, so the valid-but-gradual tuple and float arguments get their own
+    parameters. A non-`None` `TupleSize`/`FloatScale` is what steers `forward`
+    away from the precise arm.
+
+    The scalar arguments deliberately have no type-parameter default: a bare
+    `nn.Upsample` annotation names an instance whose arguments are unknown, and
+    defaulting them to `None` would make it indistinguishable from `Upsample()`,
+    whose omitted arguments really do bind `None` and are an error. The
+    tuple/float parameters keep their defaults because they only ever steer
+    `forward` away from the precise arm.
     """
 
+    @overload
     def __init__(
         self,
-        size: int | None = None,
-        scale_factor: int | None = None,
+        size: Size = None,
+        scale_factor: Scale = None,
         mode: str = "nearest",
         align_corners: bool | None = None,
     ) -> None: ...
-    @uses_shape_dsl(nn_upsample_forward_ir, capture_init=["size", "scale_factor"])
+    @overload
+    def __init__(
+        self,
+        size: TupleSize,
+        scale_factor: None = None,
+        mode: str = "nearest",
+        align_corners: bool | None = None,
+    ) -> None: ...
+    @overload
+    def __init__(
+        self,
+        size: None = None,
+        scale_factor: FloatScale = ...,
+        mode: str = "nearest",
+        align_corners: bool | None = None,
+    ) -> None: ...
+    @overload
+    def forward[Shape: IntTuple, S: _Int | None, F: _Int | None](
+        self: Upsample[S, F, None, None], input: Tensor[Shape]
+    ) -> Tensor[interpolate_scalar_shape(Shape, S, F)]: ...
+    @overload
     def forward(self, input: Tensor) -> Tensor: ...
 
 # ==============================================================================

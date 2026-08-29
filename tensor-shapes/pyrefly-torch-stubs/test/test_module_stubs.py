@@ -514,6 +514,35 @@ def test_upsample_size():
     assert_type(y, Tensor[[4, 64, 64, 64]])
 
 
+def test_upsample_symbolic_arguments[S: IntVar](size: Int[S], scale: Int[S]) -> None:
+    x: Tensor[[4, 64, 5, 7]] = torch.randn(4, 64, 5, 7)
+    assert_type(nn.Upsample(size=size)(x), Tensor[[4, 64, S, S]])
+    assert_type(nn.Upsample(scale_factor=scale)(x), Tensor[[4, 64, 5 * S, 7 * S]])
+
+
+def test_upsample_gradual_scalar_arguments(size: int, scale: int) -> None:
+    x: Tensor[[4, 64, 5, 7]] = torch.randn(4, 64, 5, 7)
+    assert_type(nn.Upsample(size=size)(x), Tensor[[4, 64, int, int]])
+    assert_type(nn.Upsample(scale_factor=scale)(x), Tensor[[4, 64, int, int]])
+
+
+def test_upsample_valid_tuple_and_float_arguments() -> None:
+    """Tuple sizes and float scales are valid at runtime, but gradual here."""
+    x: Tensor[[4, 64, 5, 7]] = torch.randn(4, 64, 5, 7)
+    assert_type(nn.Upsample(size=(10, 14))(x), Tensor)
+    assert_type(nn.Upsample(scale_factor=1.5)(x), Tensor)
+    assert_type(nn.Upsample(scale_factor=(1.5, 2.0))(x), Tensor)
+    assert_type(nn.Upsample(None, 1.5)(x), Tensor)
+
+
+def test_upsample_bare_annotation_is_gradual(up: nn.Upsample) -> None:
+    # An unparameterized annotation says the arguments are unknown, not absent:
+    # unlike `nn.Upsample()` (see `negative_tests/test_interpolate_errors.py`)
+    # it must recover gradually instead of reporting a missing argument.
+    x: Tensor[[4, 64, 5, 7]] = torch.randn(4, 64, 5, 7)
+    assert_type(up(x), Tensor)
+
+
 def test_pixel_shuffle():
     """PixelShuffle(2): [B, C*4, H, W] → [B, C, H*2, W*2]"""
     ps = nn.PixelShuffle(2)

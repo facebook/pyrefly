@@ -514,51 +514,186 @@ def test_adaptive_avg_pool3d():
 # ==== Interpolation/Upsampling Operations ====
 
 
-def test_interpolate_size_1d():
-    """Test interpolation with size parameter (1D)"""
-    input: Tensor[[1, 32, 50]] = torch.randn(1, 32, 50)
-    # Upsample to size 100
-    result = torch.nn.functional.interpolate(input, size=100)
-    assert_type(result, Tensor[[1, 32, 100]])
+def test_interpolate_integer_arguments_all_ranks():
+    one: Tensor[[2, 3, 7]] = torch.randn(2, 3, 7)
+    two: Tensor[[2, 3, 5, 7]] = torch.randn(2, 3, 5, 7)
+    three: Tensor[[2, 3, 4, 5, 6]] = torch.randn(2, 3, 4, 5, 6)
+    assert_type(torch.nn.functional.interpolate(one, 11), Tensor[[2, 3, 11]])
+    assert_type(torch.nn.functional.interpolate(two, 11), Tensor[[2, 3, 11, 11]])
+    assert_type(torch.nn.functional.interpolate(three, 11), Tensor[[2, 3, 11, 11, 11]])
+    assert_type(torch.nn.functional.interpolate(one, (11,)), Tensor[[2, 3, 11]])
+    assert_type(torch.nn.functional.interpolate(two, (11, 13)), Tensor[[2, 3, 11, 13]])
+    assert_type(
+        torch.nn.functional.interpolate(three, (7, 11, 13)),
+        Tensor[[2, 3, 7, 11, 13]],
+    )
+    assert_type(
+        torch.nn.functional.interpolate(one, scale_factor=2), Tensor[[2, 3, 14]]
+    )
+    assert_type(torch.nn.functional.interpolate(two, None, 2), Tensor[[2, 3, 10, 14]])
+    assert_type(
+        torch.nn.functional.interpolate(three, scale_factor=2),
+        Tensor[[2, 3, 8, 10, 12]],
+    )
+    assert_type(
+        torch.nn.functional.interpolate(one, scale_factor=(2,)),
+        Tensor[[2, 3, 14]],
+    )
+    assert_type(
+        torch.nn.functional.interpolate(two, None, (2, 3)),
+        Tensor[[2, 3, 10, 21]],
+    )
+    assert_type(
+        torch.nn.functional.interpolate(two, scale_factor=(2, 2)),
+        Tensor[[2, 3, 10, 14]],
+    )
+    assert_type(
+        torch.nn.functional.interpolate(three, scale_factor=(2, 3, 4)),
+        Tensor[[2, 3, 8, 15, 24]],
+    )
 
 
-def test_interpolate_size_2d():
-    """Test interpolation with size parameter (2D) - common for upsampling in segmentation"""
-    input: Tensor[[2, 64, 16, 16]] = torch.randn(2, 64, 16, 16)
-    # Upsample to 32x32
-    result = torch.nn.functional.interpolate(input, size=(32, 32))
-    assert_type(result, Tensor[[2, 64, 32, 32]])
+def test_upsample_integer_arguments_all_ranks():
+    one: Tensor[[2, 3, 7]] = torch.randn(2, 3, 7)
+    two: Tensor[[2, 3, 5, 7]] = torch.randn(2, 3, 5, 7)
+    three: Tensor[[2, 3, 4, 5, 6]] = torch.randn(2, 3, 4, 5, 6)
+    assert_type(torch.nn.functional.upsample(one, 11), Tensor[[2, 3, 11]])
+    assert_type(torch.nn.functional.upsample(two, 11), Tensor[[2, 3, 11, 11]])
+    assert_type(torch.nn.functional.upsample(three, 11), Tensor[[2, 3, 11, 11, 11]])
+    assert_type(torch.nn.functional.upsample(one, (11,)), Tensor[[2, 3, 11]])
+    assert_type(torch.nn.functional.upsample(two, (11, 13)), Tensor[[2, 3, 11, 13]])
+    assert_type(
+        torch.nn.functional.upsample(three, (7, 11, 13)),
+        Tensor[[2, 3, 7, 11, 13]],
+    )
+    assert_type(torch.nn.functional.upsample(one, scale_factor=2), Tensor[[2, 3, 14]])
+    assert_type(torch.nn.functional.upsample(two, None, 2), Tensor[[2, 3, 10, 14]])
+    assert_type(
+        torch.nn.functional.upsample(three, scale_factor=2),
+        Tensor[[2, 3, 8, 10, 12]],
+    )
+    assert_type(
+        torch.nn.functional.upsample(one, scale_factor=(2,)), Tensor[[2, 3, 14]]
+    )
+    assert_type(torch.nn.functional.upsample(two, None, (2, 3)), Tensor[[2, 3, 10, 21]])
+    assert_type(
+        torch.nn.functional.upsample(three, scale_factor=(2, 3, 4)),
+        Tensor[[2, 3, 8, 15, 24]],
+    )
 
 
-def test_interpolate_scale_factor_2d():
-    """Test interpolation with scale_factor"""
-    input: Tensor[[4, 128, 14, 14]] = torch.randn(4, 128, 14, 14)
-    # 2x upsampling: 14x14 → 28x28
-    result = torch.nn.functional.interpolate(input, scale_factor=2)
-    assert_type(result, Tensor[[4, 128, 28, 28]])
+def test_interpolate_scalar_symbolic_and_gradual_arguments[S: IntVar](
+    x: Tensor[[2, 3, 5, 7]], symbolic: Int[S], broad: int
+) -> None:
+    assert_type(torch.nn.functional.interpolate(x, symbolic), Tensor[[2, 3, S, S]])
+    assert_type(
+        torch.nn.functional.interpolate(x, scale_factor=symbolic),
+        Tensor[[2, 3, 5 * S, 7 * S]],
+    )
+    assert_type(torch.nn.functional.interpolate(x, broad), Tensor[[2, 3, int, int]])
+    assert_type(
+        torch.nn.functional.interpolate(x, scale_factor=broad),
+        Tensor[[2, 3, int, int]],
+    )
+    assert_type(torch.nn.functional.upsample(x, symbolic), Tensor[[2, 3, S, S]])
+    assert_type(
+        torch.nn.functional.upsample(x, scale_factor=symbolic),
+        Tensor[[2, 3, 5 * S, 7 * S]],
+    )
+    assert_type(torch.nn.functional.upsample(x, broad), Tensor[[2, 3, int, int]])
+    assert_type(
+        torch.nn.functional.upsample(x, scale_factor=broad),
+        Tensor[[2, 3, int, int]],
+    )
 
 
-def test_interpolate_size_3d():
-    """Test interpolation for 3D data"""
-    input: Tensor[[1, 16, 8, 16, 16]] = torch.randn(1, 16, 8, 16, 16)
-    # Upsample to 16x32x32
-    result = torch.nn.functional.interpolate(input, size=(16, 32, 32))
-    assert_type(result, Tensor[[1, 16, 16, 32, 32]])
+def test_interpolate_undecidable_tuple_and_float_fallbacks[H: IntVar, W: IntVar](
+    x: Tensor[[2, 3, H, W]],
+    fixed: tuple[int, int],
+    variadic: tuple[int, ...],
+    symbolic: tuple[Int[H], Int[W]],
+    dynamic: Any,
+) -> None:
+    # Every tuple argument here is undecidable in at least one way: unknown arity,
+    # unknown entries, or symbolic entries. None of them can be range-checked, so
+    # the whole call recovers gradually rather than deferring the check to an
+    # expression the DSL never revisits. Float scales have no V2 arithmetic at
+    # all and take the plain-`Tensor` arm.
+    assert_type(torch.nn.functional.interpolate(x, fixed), Tensor[IntTuple])
+    assert_type(torch.nn.functional.interpolate(x, symbolic), Tensor[IntTuple])
+    assert_type(torch.nn.functional.interpolate(x, variadic), Tensor[IntTuple])
+    assert_type(torch.nn.functional.interpolate(x, dynamic), Tensor[IntTuple])
+    assert_type(
+        torch.nn.functional.interpolate(x, scale_factor=fixed), Tensor[IntTuple]
+    )
+    assert_type(
+        torch.nn.functional.interpolate(x, scale_factor=symbolic), Tensor[IntTuple]
+    )
+    assert_type(
+        torch.nn.functional.interpolate(x, scale_factor=variadic), Tensor[IntTuple]
+    )
+    assert_type(
+        torch.nn.functional.interpolate(x, scale_factor=dynamic), Tensor[IntTuple]
+    )
+    assert_type(torch.nn.functional.interpolate(x, scale_factor=1.5), Tensor)
+    assert_type(torch.nn.functional.interpolate(x, scale_factor=(2, 1.5)), Tensor)
+    assert_type(torch.nn.functional.upsample(x, fixed), Tensor[IntTuple])
+    assert_type(torch.nn.functional.upsample(x, symbolic), Tensor[IntTuple])
+    assert_type(torch.nn.functional.upsample(x, variadic), Tensor[IntTuple])
+    assert_type(torch.nn.functional.upsample(x, dynamic), Tensor[IntTuple])
+    assert_type(torch.nn.functional.upsample(x, scale_factor=fixed), Tensor[IntTuple])
+    assert_type(
+        torch.nn.functional.upsample(x, scale_factor=symbolic), Tensor[IntTuple]
+    )
+    assert_type(
+        torch.nn.functional.upsample(x, scale_factor=variadic), Tensor[IntTuple]
+    )
+    assert_type(torch.nn.functional.upsample(x, scale_factor=dynamic), Tensor[IntTuple])
+    assert_type(torch.nn.functional.upsample(x, scale_factor=1.5), Tensor)
+    assert_type(torch.nn.functional.upsample(x, scale_factor=(2, 1.5)), Tensor)
 
 
-def test_upsample_size():
-    """Test upsample (deprecated, uses interpolate internally)"""
-    input: Tensor[[2, 32, 10, 10]] = torch.randn(2, 32, 10, 10)
-    result = torch.nn.functional.upsample(input, size=(20, 20))
-    assert_type(result, Tensor[[2, 32, 20, 20]])
+def interpolate_generic_size[Size: IntTuple](x: Tensor[[2, 3, 8, 8]], size: Size):
+    resized = torch.nn.functional.interpolate(x, size)
+    assert_type(resized, Tensor[IntTuple])
+    return resized
 
 
-def test_upsample_scale_factor():
-    """Test upsample with scale_factor"""
-    input: Tensor[[1, 64, 7, 7]] = torch.randn(1, 64, 7, 7)
-    # 4x upsampling: 7x7 → 28x28
-    result = torch.nn.functional.upsample(input, scale_factor=4)
-    assert_type(result, Tensor[[1, 64, 28, 28]])
+def interpolate_generic_scale[Scale: IntTuple](x: Tensor[[2, 3, 8, 8]], scale: Scale):
+    resized = torch.nn.functional.interpolate(x, None, scale)
+    assert_type(resized, Tensor[IntTuple])
+    return resized
+
+
+def test_interpolate_invalid_tuple_specializations_stay_gradual():
+    # Specializing an argument the DSL already gave up on must not resurrect the
+    # arithmetic: a later negative or zero entry stays gradual here, while the
+    # same literal passed directly is rejected (see
+    # `negative_tests/test_interpolate_errors.py`).
+    x: Tensor[[2, 3, 8, 8]] = torch.randn(2, 3, 8, 8)
+    assert_type(interpolate_generic_size(x, (4, 4)), Tensor[IntTuple])
+    assert_type(interpolate_generic_size(x, (0, 4)), Tensor[IntTuple])
+    assert_type(interpolate_generic_scale(x, (2, 2)), Tensor[IntTuple])
+    assert_type(interpolate_generic_scale(x, (2, -1)), Tensor[IntTuple])
+
+
+def test_interpolate_shape_neutral_options():
+    x: Tensor[[2, 3, 5, 7]] = torch.randn(2, 3, 5, 7)
+    assert_type(
+        torch.nn.functional.interpolate(
+            x,
+            (10, 14),
+            mode="bilinear",
+            align_corners=False,
+            recompute_scale_factor=False,
+            antialias=True,
+        ),
+        Tensor[[2, 3, 10, 14]],
+    )
+    assert_type(
+        torch.nn.functional.upsample(x, (10, 14), mode="bilinear", align_corners=False),
+        Tensor[[2, 3, 10, 14]],
+    )
 
 
 # ==== Comprehensive Tests (Multiple Operations) ====
