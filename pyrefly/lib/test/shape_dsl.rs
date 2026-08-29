@@ -1812,7 +1812,7 @@ testcase!(
     test_type_shape_dsl_explicit_int_arithmetic_operands,
     shape_dsl_tensor_env(),
     r#"
-from shape_extensions import D, Int, IntVar, type_shape_dsl_function
+from shape_extensions import D, Int, IntTuple, IntVar, type_shape_dsl_function
 import shape_extensions.dsl as dsl
 from torch import Tensor
 from typing import Any, assert_type
@@ -2555,6 +2555,67 @@ def check() -> None:
 def check_symbolic[M: IntVar](x: Tensor[[M]]) -> None:
     assert_type(symbolic(x), Tensor[[M]])
     assert_type(concrete_symbolic(x), Tensor[[7]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_rejects_raw_intvar_arguments,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import D, Int, IntTuple, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def identity(x: Int) -> Int:
+    return x
+
+@type_shape_dsl_function
+def optional_or(x: Int | None, fallback: Int) -> Int:
+    if x is None:
+        return fallback
+    return x
+
+def wrapped[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(Int[N])]]: ...
+def wrapped_arithmetic[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(Int[N] + 1)]]: ...
+def outer_wrapper[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(Int[N + 1])]]: ...
+def runtime_wrapper[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(D[Int[N] + 1])]]: ...
+def runtime_call_wrapper[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(D(Int[N] + 1))]]: ...
+def nested_runtime_wrappers[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(D[D(Int[N] + 1)])]]: ...
+
+def check(x: Tensor[[2]]) -> None:
+    assert_type(wrapped(x), Tensor[[2]])
+    assert_type(wrapped_arithmetic(x), Tensor[[3]])
+    assert_type(outer_wrapper(x), Tensor[[3]])
+    assert_type(runtime_wrapper(x), Tensor[[3]])
+    assert_type(runtime_call_wrapper(x), Tensor[[3]])
+    assert_type(nested_runtime_wrappers(x), Tensor[[3]])
+
+def raw[N: IntVar]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`; raw `IntVar` `N` must be wrapped as `Int[N]`
+def optional_raw[N: IntVar]() -> Tensor[[optional_or(N, Int[1])]]: ...  # E: Expected an `Int | None` argument for parameter `x` (position 1) of `optional_or`; raw `IntVar` `N` must be wrapped as `Int[N]`
+def raw_negated[N: IntVar]() -> Tensor[[identity(-N)]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def raw_arithmetic[N: IntVar]() -> Tensor[[identity(N + 1)]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def nested_raw[N: IntVar]() -> Tensor[[identity((Int[N] + 1) * N)]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def runtime_raw[N: IntVar]() -> Tensor[[identity(D[N])]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def runtime_arithmetic_raw[N: IntVar]() -> Tensor[[identity(D[N + 1])]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def runtime_call_raw[N: IntVar]() -> Tensor[[identity(D(N + 1))]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def nested_runtime_raw[N: IntVar]() -> Tensor[[identity(D[D(D[N + 1])])]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def mixed_runtime_raw[N: IntVar]() -> Tensor[[identity(D(D[Int[N] + D(N)]))]]: ...  # E: raw `IntVar` `N` must be wrapped as `Int[N]`
+def optional_union_raw[N: IntVar]() -> Tensor[[optional_or(N | None, Int[1])]]: ...  # E: Expected an `Int | None` argument for parameter `x` (position 1) of `optional_or`; raw `IntVar` `N` must be wrapped as `Int[N]`
+# Passing the dimension itself is the valid spelling; a type union is not a runtime DSL value.
+def wrapped_optional_union[N: IntVar]() -> Tensor[[optional_or(Int[N] | None, Int[1])]]: ...  # E: Expected an `Int | None` argument
+
+# Unsupported operators keep their parser diagnostic instead of being mistaken for supported arithmetic.
+def unsupported_raw_modulo[N: IntVar]() -> Tensor[[identity(N % 2)]]: ...  # E: Unsupported operator `%` in tensor shape dimension
+
+def malformed_runtime_empty() -> Tensor[[identity(D())]]: ...  # E: Expected 1 positional argument for `D`, got 0
+def malformed_runtime_many() -> Tensor[[identity(D(1, 2))]]: ...  # E: Expected 1 positional argument for `D`, got 2
+def malformed_runtime_keyword() -> Tensor[[identity(D(x=1))]]: ...  # E: `D` accepts exactly 1 positional argument and no keyword arguments
+def malformed_runtime_subscript() -> Tensor[[identity(D[1, 2])]]: ...  # E: Expected 1 argument for `D`, got 2
+
+# The restriction applies only to shape-transform arguments, not ordinary shape syntax.
+def ordinary_shape[N: IntVar](x: Tensor[[N + 1]]) -> Tensor[[N + 1]]: ...
+def ordinary_int_tuple[N: IntVar](x: IntTuple[N + 1]) -> Tensor[[N + 1]]: ...
 "#,
 );
 

@@ -42,6 +42,7 @@ use pyrefly_types::types::Type;
 use pyrefly_util::display::pluralize;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
+use ruff_python_ast::Operator;
 use ruff_python_ast::UnaryOp;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -160,6 +161,13 @@ fn type_shape_dsl_comparison_domain(
     } else {
         None
     }
+}
+
+#[derive(Clone, Copy)]
+struct TypeShapeDslArgumentContext<'a> {
+    function_name: &'a str,
+    parameter_name: &'a str,
+    position: usize,
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
@@ -1007,7 +1015,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
         }
 
-        let argument_context = TypeFormContext::TypeArgument(&type_form_context);
+        let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
         let mut args = Vec::with_capacity(call.arguments.args.len());
         for (index, (arg_expr, domain)) in call
             .arguments
@@ -1016,8 +1024,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .zip(parameter_domains)
             .enumerate()
         {
-            let arg =
-                self.parse_type_shape_dsl_argument(arg_expr, *domain, argument_context, errors);
+            let argument_context = TypeShapeDslArgumentContext {
+                function_name: name,
+                parameter_name: function.parameter_name(index).as_str(),
+                position: index + 1,
+            };
+            let arg = self.parse_type_shape_dsl_argument(
+                arg_expr,
+                *domain,
+                type_argument_context,
+                argument_context,
+                errors,
+            );
             if arg.is_error() {
                 return arg;
             }
@@ -1028,15 +1046,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         "an"
                     }
                 };
+                let displayed = self.for_display(arg.clone());
                 return self.error(
                     errors,
                     arg_expr.range(),
                     ErrorKind::InvalidAnnotation,
                     format!(
-                        "Expected {article} `{domain}` argument for parameter `{}` (position {}) of `{name}`, got `{}`",
-                        function.parameter_name(index),
-                        index + 1,
-                        self.for_display(arg.clone())
+                        "Expected {article} `{domain}` argument for parameter `{}` (position {}) of `{}`, got `{displayed}`",
+                        argument_context.parameter_name,
+                        argument_context.position,
+                        argument_context.function_name,
                     ),
                 );
             }
@@ -1050,11 +1069,52 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         arg: &Expr,
         domain: TypeShapeDslInputDomain,
         type_form_context: TypeFormContext<'_>,
+        argument_context: TypeShapeDslArgumentContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
         match domain {
             TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
             | TypeShapeDslInputDomain::OptionalInt => {
+                let raw_int_var_error = |range, ty| {
+                    let displayed = self.for_display(ty);
+                    let TypeShapeDslArgumentContext {
+                        function_name,
+                        parameter_name,
+                        position,
+                    } = argument_context;
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::InvalidAnnotation,
+                        format!(
+                            "Expected an `{domain}` argument for parameter `{parameter_name}` (position {position}) of `{function_name}`; raw `IntVar` `{displayed}` must be wrapped as `Int[{displayed}]`"
+                        ),
+                    )
+                };
+                if matches!(domain, TypeShapeDslInputDomain::OptionalInt)
+                    && let Expr::BinOp(binary) = arg
+                    && binary.op == Operator::BitOr
+                {
+                    let dimension = if matches!(binary.left.as_ref(), Expr::NoneLiteral(_)) {
+                        Some(binary.right.as_ref())
+                    } else if matches!(binary.right.as_ref(), Expr::NoneLiteral(_)) {
+                        Some(binary.left.as_ref())
+                    } else {
+                        None
+                    };
+                    if let Some(dimension) = dimension {
+                        let discarded = self.error_collector();
+                        if let Err(DimensionExprError::RawIntVar { range, ty }) = self
+                            .parse_dimension_list_for_type_shape_dsl_int_argument(
+                                slice::from_ref(dimension),
+                                type_form_context,
+                                &discarded,
+                            )
+                        {
+                            return raw_int_var_error(range, ty);
+                        }
+                    }
+                }
                 let dimension_errors = self.error_collector();
                 let parsed_dimension = match self
                     .parse_dimension_list_for_type_shape_dsl_int_argument(
@@ -1067,6 +1127,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     Err(DimensionExprError::InvalidExplicitIntWrapper) => {
                         errors.extend(dimension_errors);
                         return Type::any_error();
+                    }
+                    Err(DimensionExprError::RawIntVar { range, ty }) => {
+                        errors.extend(dimension_errors);
+                        return raw_int_var_error(range, ty);
                     }
                 };
                 if let Some(ty) = parsed_dimension {
@@ -1187,12 +1251,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Type::Any(_) => true,
                 Type::Int(_) => true,
                 Type::TypeLevelDslCall(call) => call.result_domain() == TypeShapeDslDomain::Int,
-                Type::Quantified(q) => {
-                    q.kind() == QuantifiedKind::IntVar || is_gradual_size_bound_type_var(ty)
-                }
-                Type::TypeVar(type_var) => {
-                    type_var.kind() == QuantifiedKind::IntVar || is_gradual_size_bound_type_var(ty)
-                }
+                Type::Quantified(_) | Type::TypeVar(_) => is_gradual_size_bound_type_var(ty),
                 _ => false,
             },
             TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple) => {

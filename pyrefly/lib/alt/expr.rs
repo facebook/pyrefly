@@ -182,12 +182,17 @@ impl DimensionExprContext {
     fn allows_explicit_int_wrapper(self) -> bool {
         matches!(self, Self::DslArgument | Self::DslArithmetic)
     }
+
+    fn rejects_raw_int_var(self) -> bool {
+        matches!(self, Self::DslArgument | Self::DslArithmetic)
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) enum DimensionExprError {
     Invalid,
     InvalidExplicitIntWrapper,
+    RawIntVar { range: TextRange, ty: Type },
 }
 
 impl Ranged for TypeOrExpr<'_> {
@@ -4244,8 +4249,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if let Type::ClassDef(ref cls) = base
                     && self.is_shape_arith_wrapper_class(cls)
                 {
+                    let operand = match x.slice.as_ref() {
+                        Expr::Tuple(tuple) if tuple.elts.len() == 1 => &tuple.elts[0],
+                        Expr::Tuple(tuple) => {
+                            self.error(
+                                errors,
+                                expr.range(),
+                                ErrorKind::InvalidAnnotation,
+                                format!("Expected 1 argument for `D`, got {}", tuple.elts.len()),
+                            );
+                            return Err(DimensionExprError::Invalid);
+                        }
+                        operand => operand,
+                    };
                     return self.parse_dimension_expr_with_context(
-                        &x.slice,
+                        operand,
                         errors,
                         context,
                         type_form_context,
@@ -4359,6 +4377,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             errors,
                             UntypeContext::SymbolicInt(context.error_context()),
                         ) {
+                            Some(ty)
+                                if context.rejects_raw_int_var()
+                                    && match &ty {
+                                        Type::Quantified(q) => q.kind() == QuantifiedKind::IntVar,
+                                        Type::TypeVar(type_var) => {
+                                            type_var.kind() == QuantifiedKind::IntVar
+                                        }
+                                        _ => false,
+                                    } =>
+                            {
+                                Err(DimensionExprError::RawIntVar {
+                                    range: expr.range(),
+                                    ty,
+                                })
+                            }
                             Some(Type::Quantified(q)) if q.kind() == QuantifiedKind::IntVar => {
                                 Ok(Type::Quantified(q))
                             }
@@ -4509,20 +4542,28 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 && type_form_context.allows_type_level_dsl_call()
             {
                 let callee = self.expr_infer(&call.func, &self.error_swallower());
-                let ty = self.parse_type_level_dsl_call(call, &callee, type_form_context, errors);
-                if let Type::TypeLevelDslCall(call) = &ty
-                    && call.result_domain() != TypeShapeDslDomain::Int
-                {
-                    self.error(
-                        errors,
-                        arg.range(),
-                        ErrorKind::InvalidAnnotation,
-                        "Expected a type-level shape DSL call with an `Int` result in a shape dimension, got an `IntTuple` result"
-                            .to_owned(),
-                    );
-                    Type::any_error()
+                if matches!(
+                    callee,
+                    Type::ClassDef(ref cls) if self.is_shape_arith_wrapper_class(cls)
+                ) {
+                    self.parse_dimension_expr_with_context(arg, errors, context, type_form_context)?
                 } else {
-                    ty
+                    let ty =
+                        self.parse_type_level_dsl_call(call, &callee, type_form_context, errors);
+                    if let Type::TypeLevelDslCall(call) = &ty
+                        && call.result_domain() != TypeShapeDslDomain::Int
+                    {
+                        self.error(
+                            errors,
+                            arg.range(),
+                            ErrorKind::InvalidAnnotation,
+                            "Expected a type-level shape DSL call with an `Int` result in a shape dimension, got an `IntTuple` result"
+                                .to_owned(),
+                        );
+                        Type::any_error()
+                    } else {
+                        ty
+                    }
                 }
             } else {
                 self.parse_dimension_expr_with_context(arg, errors, context, type_form_context)?

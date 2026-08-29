@@ -138,10 +138,8 @@ def repeat[Shape: IntTuple, Repeats: IntTuple](
 
 The DSL is intentionally small. Its main value domains are `Int` for one shape
 dimension and `IntTuple` for a complete shape. Runtime configuration values are
-connected through `Flag[...]` type parameters on public signatures. `IntVar`
-names a symbolic dimension, while `Int[N]` connects a runtime integer parameter
-to it; for example, `def zeros[N: IntVar](n: Int[N]) -> Tensor[[N]]: ...`.
-The body language supports common shape computations, including:
+connected through `Flag[...]` type parameters on public signatures. The body
+language supports common shape computations, including:
 
 - `dsl.IntTuple(...)` to construct result shapes
 - `len`, indexing, slicing, and bounded generator expressions
@@ -149,11 +147,63 @@ The body language supports common shape computations, including:
 - `if` / `else`
 - Single-assignment local variables
 - Direct returns from other `@type_shape_dsl_function` helpers
-- DSL operations such as `dsl.concat`, `dsl.prod`, `dsl.Invalid`, and gradual
-  `Int` or `IntTuple` results
+- DSL operations such as `dsl.concat`, `dsl.prod`, and `dsl.Invalid`
+- `dsl.Int.gradual()` for a gradual dimension expression, and a direct
+  `return dsl.IntTuple.gradual()` for a gradual shape
 
 Keep DSL functions simple and algebraic. They are analyzed by Pyrefly; they are
 not normal runtime implementations of PyTorch operations.
+
+### Integer Helper Arguments
+
+Declare a helper parameter as `Int` when it consumes one dimension, or as
+`Int | None` when `None` has a distinct meaning. For a public runtime integer
+that passes through to a helper, prefer a type parameter bound exactly by shape
+`Int` and annotate the runtime parameter with that type parameter:
+
+```python
+@type_shape_dsl_function
+def resize_shape(size: Int) -> IntTuple:
+    return dsl.IntTuple((size,))
+
+def resize[N: Int](size: N) -> Tensor[resize_shape(N)]: ...
+```
+
+This form requires the bound to be exactly `Int`. Use `IntVar` instead when a
+type parameter names a symbolic dimension in direct `IntTuple` or list shape
+syntax. If that symbolic dimension is also passed to a DSL helper, wrap it with
+`Int[...]` at the call boundary:
+
+```python
+def zeros[N: IntVar](n: Int[N]) -> Tensor[[N]]: ...
+def resize_symbolic[N: IntVar](size: Int[N]) -> Tensor[resize_shape(Int[N])]: ...
+```
+
+Raw `IntVar` arguments and arithmetic such as `N + 1` are rejected in helper
+calls; write `Int[N]` and `Int[N] + 1` instead. `Int[N] | None` written directly
+as an argument is type-union syntax, not a runtime DSL value. Pass `Int[N]`,
+`None`, or a type parameter whose bound is exactly `Int | None`, as appropriate.
+An argument that still resolves to `Int | None` is accepted as gradual until
+control flow narrows it; the non-`None` branch can then use it as an `Int`.
+
+A broad runtime `int` used as a dimension becomes a gradual dimension, which
+preserves known rank and other dimensions. `Any` remains unknown rather than
+being treated as a gradual integer. `dsl.Int.gradual()` is itself an `Int`
+expression, so it can participate in arithmetic and `dsl.IntTuple(...)`
+construction. `dsl.IntTuple.gradual()` currently represents a whole gradual
+shape only as a direct DSL-function return; it cannot be assigned to a local or
+embedded in a larger expression.
+
+`D[...]` and `D(...)` remain compatibility wrappers for annotations that Python
+would otherwise evaluate eagerly. They do not replace `Int[...]`: `D[N]` still
+contains a raw `IntVar` and is rejected, while `D[Int[N] + 1]` is valid.
+
+Use `dsl.is_concrete_int(value)` with an `Int` or `Int | None` value when a
+branch requires an integer literal known during shape evaluation; it is false
+for `None`, symbolic dimensions, and gradual `Int` values. Use
+`dsl.is_int_value(value)` to narrow the integer member of a compatible
+`Flag[int | tuple[int, ...] | None]` value. That predicate does not prove the
+integer is concrete.
 
 The type-level DSL used by the NumPy and JAX stubs is a separate, smaller
 subset, and it is still being built out. Two things about it are worth knowing
@@ -189,8 +239,9 @@ then calls `reduce_shape(...)` in the return annotation.
 
 1. Write the shape transform in `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`.
 2. Decorate it with `@type_shape_dsl_function`.
-3. Bind the relevant public arguments with `IntVar`, `IntTuple`, or `Flag[...]`
-   type parameters and call the DSL function from the return annotation.
+3. Bind the relevant public arguments with `Int`, `IntVar`, `IntTuple`, or
+   `Flag[...]` type parameters and call the DSL function from the return
+   annotation.
 4. Add positive tests that use `assert_type` to check the computed shape.
 5. Add negative tests with `# E:` expectations if the DSL should reject invalid
    shapes or report shape errors.
