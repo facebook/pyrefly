@@ -3184,3 +3184,72 @@ f_int(C())
 f_str(C())  # E: Argument `C` is not assignable to parameter `x` with type `P[str]` in function `f_str`
 "#,
 );
+
+testcase!(
+    test_getattr_self_generic_protocol_recursion,
+    r#"
+from typing import Protocol, TypeVar
+
+T = TypeVar("T", covariant=True)
+
+class P(Protocol[T]):
+    @property
+    def x(self) -> T: ...
+
+class C:
+    def __getattr__(self: P[T], name: str) -> T:
+        raise AttributeError
+
+def f(x: P[int]) -> None: ...
+
+f(C())
+"#,
+);
+
+testcase!(
+    test_getattr_self_generic_protocol_recursion_nonconforming,
+    r#"
+from typing import Protocol, TypeVar
+
+T = TypeVar("T", covariant=True)
+
+class P(Protocol[T]):
+    @property
+    def x(self) -> T: ...
+
+class C:
+    def __getattr__(self: P[T], name: str) -> str:
+        raise AttributeError
+
+def f(x: P[int]) -> None: ...
+
+f(C())  # E: Argument `C` is not assignable to parameter `x` with type `P[int]`
+"#,
+);
+
+testcase!(
+    test_getattr_self_generic_protocol_mutual_recursion,
+    r#"
+from typing import Protocol
+
+class P[T](Protocol):
+    @property
+    def x(self) -> "Q[T]": ...
+
+class Q[T](Protocol):
+    @property
+    def y(self) -> P[T]: ...
+
+class C[T]:
+    def __getattr__(self: P[T], name: str) -> "D[T]":
+        raise AttributeError
+
+class D[T]:
+    def __getattr__(self: Q[T], name: str) -> C[T]:
+        raise AttributeError
+
+def f(x: P[int]) -> None: ...
+
+f(C[int]())
+"#,
+);
