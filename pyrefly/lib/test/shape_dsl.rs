@@ -703,7 +703,7 @@ testcase!(
 from shape_extensions import Int, IntTuple, type_shape_dsl_function
 
 @type_shape_dsl_function
-def missing_parameter(x) -> Int:  # E: parameter `x` must be annotated as `Int`, `IntTuple`, or a supported Flag value type
+def missing_parameter(x) -> Int:  # E: parameter `x` must be annotated as `Int`, `Int | None`, `IntTuple`, or a supported Flag value type
     return x
 
 @type_shape_dsl_function
@@ -719,7 +719,7 @@ def cross_domain(x: Int) -> IntTuple:
     return x  # E: `@type_shape_dsl_function` return annotation must match returned parameter `x`  # E: Returned type `Int[int]` is not assignable to declared return type `IntTuple`
 
 @type_shape_dsl_function
-def missing_second(x: Int, y) -> Int:  # E: parameter `y` must be annotated as `Int`, `IntTuple`, or a supported Flag value type
+def missing_second(x: Int, y) -> Int:  # E: parameter `y` must be annotated as `Int`, `Int | None`, `IntTuple`, or a supported Flag value type
     return x
 
 @type_shape_dsl_function
@@ -1742,6 +1742,206 @@ class Other:
 def invalid_same_named_bound[N: Other.Int]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
 def invalid_constraints[N: (Int, str)]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
 def raw_arithmetic[N: Int]() -> Tensor[[identity(N + N)]]: ...  # E: `N` must be an `IntVar` to be used in shape arithmetic  # E: `N` must be an `IntVar` to be used in shape arithmetic
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_optional_int_parameter,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def optional_or(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return n
+
+@type_shape_dsl_function
+def reversed_optional_or(n: None | Int, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return n
+
+@type_shape_dsl_function
+def not_none_or(n: Int | None, fallback: Int) -> Int:
+    if n is not None:
+        return n
+    return fallback
+
+@type_shape_dsl_function
+def aliased_optional_or(n: Int | None, fallback: Int) -> Int:
+    value = n
+    if value is None:
+        return fallback
+    return value
+
+@type_shape_dsl_function
+def nested_optional_or(n: Int | None, fallback: Int) -> Int:
+    return optional_or(n, fallback)
+
+def direct_literal() -> Tensor[[optional_or(3, Int[7])]]: ...
+def direct_none() -> Tensor[[reversed_optional_or(None, Int[7])]]: ...
+def direct_not_none() -> Tensor[[not_none_or(Int[3], Int[7])]]: ...
+def direct_not_none_none() -> Tensor[[not_none_or(None, Int[7])]]: ...
+def aliased_literal() -> Tensor[[aliased_optional_or(Int[3], Int[7])]]: ...
+def aliased_none() -> Tensor[[aliased_optional_or(None, Int[7])]]: ...
+def direct_union() -> Tensor[[optional_or(Int | None, Int[7])]]: ...
+def direct_nested() -> Tensor[[nested_optional_or(None, Int[7])]]: ...
+def direct_gradual() -> Tensor[[optional_or(Int, Int[7])]]: ...
+def direct_symbolic[M: IntVar](x: Tensor[[M]]) -> Tensor[[optional_or(Int[M], Int[7])]]: ...
+
+# An unresolved variable is admitted only when its bound resolves to exactly
+# `Int | None`; without a concrete substitution, evaluation is gradual.
+def unresolved[N: Int | None]() -> Tensor[[optional_or(N, Int[7])]]: ...
+
+def check() -> None:
+    assert_type(direct_literal(), Tensor[[3]])
+    assert_type(direct_none(), Tensor[[7]])
+    assert_type(direct_not_none(), Tensor[[3]])
+    assert_type(direct_not_none_none(), Tensor[[7]])
+    assert_type(aliased_literal(), Tensor[[3]])
+    assert_type(aliased_none(), Tensor[[7]])
+    assert_type(direct_union(), Tensor[[int]])
+    assert_type(direct_nested(), Tensor[[7]])
+    assert_type(direct_gradual(), Tensor[[int]])
+
+def check_symbolic[M: IntVar](x: Tensor[[M]]) -> None:
+    assert_type(direct_symbolic(x), Tensor[[M]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_optional_int_invalid_uses,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, type_shape_dsl_function
+import shape_extensions.dsl as dsl
+from torch import Tensor
+from typing import Any
+
+@type_shape_dsl_function
+def unnarrowed(n: Int | None) -> Int:
+    return n  # E: must be narrowed to exclude `None`  # E: Returned type
+
+@type_shape_dsl_function
+def truthy(n: Int | None, fallback: Int) -> Int:
+    if n:  # E: requires a boolean Flag value
+        return n  # E: must be narrowed to exclude `None`
+    return fallback
+
+@type_shape_dsl_function
+def fallthrough(n: Int | None, fallback: Int) -> Int:
+    if n is not None:
+        value = fallback + fallback
+    return n  # E: must be narrowed to exclude `None`  # E: Returned type
+
+@type_shape_dsl_function
+def none_branch(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return n  # E: must be narrowed to exclude `None`  # E: Returned type
+    return fallback
+
+@type_shape_dsl_function
+def wrong_narrowing(n: Int | None, fallback: Int) -> Int:
+    if dsl.is_int_value(n):  # E: `is_int_value` requires a Flag
+        return n  # E: must be narrowed to exclude `None`
+    return fallback
+
+@type_shape_dsl_function
+def optional_or(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return n
+
+@type_shape_dsl_function
+def bad_int_is_none(n: Int, fallback: Int) -> Int:
+    if n is None:  # E: `is None` requires an `Int | None` value or a supported Flag value
+        return fallback
+    return n
+
+# Narrower declarations are intentionally unsupported even though their values
+# are representable; the DSL currently exposes one exact optional-Int domain.
+@type_shape_dsl_function
+def bad_exact(n: Int[3] | None) -> Int:  # E: parameter `n` must be annotated
+    return dsl.Int.gradual()
+
+@type_shape_dsl_function
+def bad_wide(n: Int | None | str) -> Int:  # E: parameter `n` must be annotated
+    return dsl.Int.gradual()
+
+@type_shape_dsl_function
+def bad_mixed_int(n: Int | int) -> Int:  # E: parameter `n` must be annotated
+    return dsl.Int.gradual()
+
+@type_shape_dsl_function
+def bad_any(n: Int | Any) -> Int:  # E: parameter `n` must be annotated
+    return dsl.Int.gradual()
+
+class Other:
+    class Int: ...
+
+@type_shape_dsl_function
+def bad_same_name(n: Other.Int | None) -> Int:  # E: parameter `n` must be annotated
+    return dsl.Int.gradual()
+
+def bad_bound[N: int | None]() -> Tensor[[optional_or(N, Int[7])]]: ...  # E: Expected an `Int | None` argument
+def bad_exact_bound[N: Int[3] | None]() -> Tensor[[optional_or(N, Int[7])]]: ...  # E: Expected an `Int | None` argument
+def bad_constraints[N: (Int, None)]() -> Tensor[[optional_or(N, Int[7])]]: ...  # E: Expected an `Int | None` argument
+def raw_arithmetic[N: Int | None]() -> Tensor[[optional_or(N + N, Int[7])]]: ...  # E: `N` must be an `IntVar` to be used in shape arithmetic  # E: `N` must be an `IntVar` to be used in shape arithmetic
+"#,
+);
+
+testcase!(
+    bug = "narrowed OptionalInt values do not propagate through expressions yet",
+    test_type_shape_dsl_optional_int_narrowing_limitations,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+import shape_extensions.dsl as dsl
+
+@type_shape_dsl_function
+def int_helper(n: Int) -> Int:
+    return n
+
+@type_shape_dsl_function
+def optional_or(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return n
+
+@type_shape_dsl_function
+def narrowed_arithmetic(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return n + 1  # E: dimension arithmetic operands must be integer values
+
+@type_shape_dsl_function
+def narrowed_helper(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return int_helper(n)  # E: DSL helper argument domains must exactly match
+
+@type_shape_dsl_function
+def narrowed_optional_helper(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return optional_or(n, fallback)  # E: DSL helper argument domains must exactly match
+
+@type_shape_dsl_function
+def narrowed_tuple(n: Int | None, fallback: Int) -> IntTuple:
+    if n is None:
+        return dsl.IntTuple((fallback,))
+    return dsl.IntTuple((n,))  # E: `IntTuple` elements must be dimension values
+
+@type_shape_dsl_function
+def narrowed_local(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    value = n
+    return value
 "#,
 );
 

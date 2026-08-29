@@ -174,18 +174,43 @@ pub fn is_gradual_size(ty: &Type) -> bool {
     matches!(ty, Type::Int(Int::Int))
 }
 
+fn type_var_bound(ty: &Type) -> Option<&Type> {
+    let (kind, restriction) = match ty {
+        Type::Quantified(q) => (q.kind(), q.restriction()),
+        Type::TypeVar(type_var) => (type_var.kind(), type_var.restriction()),
+        _ => return None,
+    };
+    if kind != QuantifiedKind::TypeVar {
+        return None;
+    }
+    match restriction {
+        Restriction::Bound(bound) => Some(bound),
+        Restriction::Constraints(_) | Restriction::Flag(_) | Restriction::Unrestricted => None,
+    }
+}
+
 /// Whether `ty` is an ordinary type variable whose bound is exactly the gradual size `Int`.
 ///
 /// Shape features currently support only this broad bound. Narrower or wider bounds remain on
 /// the ordinary type-variable path until their shape semantics are defined explicitly.
 pub fn is_gradual_size_bound_type_var(ty: &Type) -> bool {
-    let (kind, restriction) = match ty {
-        Type::Quantified(q) => (q.kind(), q.restriction()),
-        Type::TypeVar(type_var) => (type_var.kind(), type_var.restriction()),
-        _ => return false,
+    type_var_bound(ty).is_some_and(is_gradual_size)
+}
+
+/// Whether `ty` is exactly the shape `Int | None` domain, in either order.
+pub fn is_optional_int(ty: &Type) -> bool {
+    let Type::Union(union) = ty else {
+        return false;
     };
-    kind == QuantifiedKind::TypeVar
-        && matches!(restriction, Restriction::Bound(bound) if is_gradual_size(bound))
+    matches!(
+        union.members.as_slice(),
+        [int, Type::None] | [Type::None, int] if is_gradual_size(int)
+    )
+}
+
+/// Whether `ty` is an ordinary type variable whose resolved bound is exactly `Int | None`.
+pub fn is_optional_int_bound_type_var(ty: &Type) -> bool {
+    type_var_bound(ty).is_some_and(is_optional_int)
 }
 
 pub fn int_type_is_provably_nonnegative(ty: &Type) -> bool {
@@ -1401,33 +1426,64 @@ mod tests {
         )))
     }
 
-    #[test]
-    fn gradual_size_bound_type_var_requires_exact_bound() {
-        assert!(is_gradual_size_bound_type_var(&quantified_type_var(
-            gradual_size()
-        )));
-
+    fn legacy_type_var(bound: Type) -> Type {
         let module = Module::new(
             ModuleName::from_str("__test__"),
             ModulePath::filesystem(PathBuf::from("__test__")),
             Arc::new(String::new()),
         );
-        let legacy = Type::TypeVar(TypeVar::new_with_kind(
+        Type::TypeVar(TypeVar::new_with_kind(
             Identifier::new(
                 Name::new_static("LegacyN"),
                 TextRange::empty(TextSize::new(0)),
             ),
             module,
             QuantifiedKind::TypeVar,
-            Restriction::Bound(gradual_size()),
+            Restriction::Bound(bound),
             None,
             PreInferenceVariance::Invariant,
-        ));
-        assert!(is_gradual_size_bound_type_var(&legacy));
+        ))
+    }
+
+    #[test]
+    fn gradual_size_bound_type_var_requires_exact_bound() {
+        assert!(is_gradual_size_bound_type_var(&quantified_type_var(
+            gradual_size()
+        )));
+
+        assert!(is_gradual_size_bound_type_var(&legacy_type_var(
+            gradual_size()
+        )));
 
         assert!(!is_gradual_size_bound_type_var(&quantified_type_var(
             Type::Int(Int::Literal(5))
         )));
+    }
+
+    #[test]
+    fn optional_int_requires_exact_members() {
+        for optional in [
+            Type::union(vec![gradual_size(), Type::None]),
+            Type::union(vec![Type::None, gradual_size()]),
+        ] {
+            assert!(is_optional_int(&optional));
+            assert!(is_optional_int_bound_type_var(&quantified_type_var(
+                optional.clone()
+            )));
+            assert!(is_optional_int_bound_type_var(&legacy_type_var(optional)));
+        }
+
+        let narrow = Type::union(vec![Type::Int(Int::Literal(3)), Type::None]);
+        assert!(!is_optional_int(&narrow));
+        assert!(!is_optional_int_bound_type_var(&quantified_type_var(
+            narrow.clone()
+        )));
+        assert!(!is_optional_int_bound_type_var(&legacy_type_var(narrow)));
+        assert!(!is_optional_int(&Type::union(vec![
+            gradual_size(),
+            Type::None,
+            Type::Any(AnyStyle::Explicit),
+        ])));
     }
 
     #[test]

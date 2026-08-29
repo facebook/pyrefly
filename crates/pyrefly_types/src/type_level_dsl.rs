@@ -82,7 +82,23 @@ impl TypeShapeDslDomain {
 /// configuration values supplied by ordinary Python calls.
 pub enum TypeShapeDslInputDomain {
     Value(TypeShapeDslDomain),
+    /// The input-only domain spelled exactly `Int | None`.
+    OptionalInt,
     Flag(FlagDomain),
+}
+
+impl TypeShapeDslInputDomain {
+    /// Whether a parameter in this domain may be used as a value in `result` after narrowing.
+    pub fn can_use_as(
+        self,
+        result: TypeShapeDslDomain,
+        narrowing: TypeShapeDslParameterNarrowing,
+    ) -> bool {
+        self == Self::Value(result)
+            || (self == Self::OptionalInt
+                && result == TypeShapeDslDomain::Int
+                && narrowing == TypeShapeDslParameterNarrowing::NonNone)
+    }
 }
 
 /// A syntactically valid helper call retained until ordinary name resolution is available.
@@ -237,6 +253,7 @@ impl fmt::Display for TypeShapeDslInputDomain {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Value(domain) => f.write_str(domain.as_str()),
+            Self::OptionalInt => f.write_str("Int | None"),
             Self::Flag(domain) => write!(f, "Flag[{domain}]"),
         }
     }
@@ -905,6 +922,8 @@ pub enum TypeShapeDslSlotReturnKind {
 pub enum TypeShapeDslParameterNarrowing {
     /// The parameter is used without narrowing.
     Unnarrowed,
+    /// Control flow has ruled out `None` at this use.
+    NonNone,
 }
 
 /// The arithmetic a structurally validated dimension or Flag expression applies. Reached through
@@ -3148,9 +3167,9 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 flow,
                 FLAG_REPRESENTABLE,
                 if negated {
-                    "`is not None` requires a Flag value"
+                    "`is not None` requires an `Int | None` or Flag value"
                 } else {
-                    "`is None` requires a Flag value"
+                    "`is None` requires an `Int | None` or Flag value"
                 },
             )?;
             let mut when_none = flow.clone();
@@ -3441,14 +3460,10 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                             message: "local value must be definitely assigned before use",
                         });
                     }
-                    if slot < self.parameters.args.len() {
-                        TypeShapeDslReturnKind::Slot {
-                            slot,
-                            kind: TypeShapeDslSlotReturnKind::DirectParameter,
-                            narrowing: TypeShapeDslParameterNarrowing::Unnarrowed,
-                        }
+                    let kind = if slot < self.parameters.args.len() {
+                        TypeShapeDslSlotReturnKind::DirectParameter
                     } else {
-                        let kind = match &flow.kinds[slot] {
+                        match &flow.kinds[slot] {
                             DslStaticKind::Dimension => TypeShapeDslSlotReturnKind::KnownDomain {
                                 domain: TypeShapeDslDomain::Int,
                                 parameter_origins: None,
@@ -3469,18 +3484,29 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                             DslStaticKind::UnknownParameters(parameters) => {
                                 TypeShapeDslSlotReturnKind::ParameterAlias(parameters.clone())
                             }
+                            DslStaticKind::Flag {
+                                origins: Some(DslFlagOrigins::Narrowed(parameters)),
+                                kinds: FLAG_NOT_NONE,
+                            } => TypeShapeDslSlotReturnKind::ParameterAlias(parameters.clone()),
                             _ => {
                                 return Err(TypeShapeDslDefinitionError {
                                     range: returned.range(),
                                     message: "Flag values cannot be returned as shape values",
                                 });
                             }
-                        };
-                        TypeShapeDslReturnKind::Slot {
-                            slot,
-                            kind,
-                            narrowing: TypeShapeDslParameterNarrowing::Unnarrowed,
                         }
+                    };
+                    let narrowing = match &flow.kinds[slot] {
+                        DslStaticKind::Flag {
+                            origins: Some(DslFlagOrigins::Narrowed(_)),
+                            kinds: FLAG_NOT_NONE,
+                        } => TypeShapeDslParameterNarrowing::NonNone,
+                        _ => TypeShapeDslParameterNarrowing::Unnarrowed,
+                    };
+                    TypeShapeDslReturnKind::Slot {
+                        slot,
+                        kind,
+                        narrowing,
                     }
                 }
             }
@@ -5507,11 +5533,11 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     DslValue::FlagInt(_)
                     | DslValue::FlagBool(_)
                     | DslValue::FlagString(_)
-                    | DslValue::FlagSequence(_) => DslCondition::False,
+                    | DslValue::FlagSequence(_)
+                    | DslValue::Dimension(_) => DslCondition::False,
                     DslValue::Unknown => DslCondition::Unknown,
-                    DslValue::Dimension(_) | DslValue::Shape(_) | DslValue::DimensionTuple(_) => {
-                        // Function-level domain validation rejects non-Flag parameter origins.
-                        unreachable!("validated `None` identity operand is a Flag value")
+                    DslValue::Shape(_) | DslValue::DimensionTuple(_) => {
+                        unreachable!("validated `None` identity operands cannot be shape values")
                     }
                 };
                 if negated {
@@ -5851,6 +5877,10 @@ fn evaluate_int_tuple_slice(
 fn lower_parameter(ty: &Type, domain: TypeShapeDslInputDomain) -> DslValue {
     match domain {
         TypeShapeDslInputDomain::Value(domain) => DslValue::from_type(ty, domain),
+        TypeShapeDslInputDomain::OptionalInt => match ty {
+            Type::None => DslValue::FlagNone,
+            _ => DslValue::from_type(ty, TypeShapeDslDomain::Int),
+        },
         TypeShapeDslInputDomain::Flag(domain) => {
             // Tuple expressions used as Flag defaults are represented as `Type::Type`; evaluation
             // consumes the value described by the expression rather than the class object wrapper.
@@ -6158,6 +6188,50 @@ impl DslEnvironment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Var;
+
+    #[test]
+    fn optional_int_lowering_preserves_dimension_values() {
+        for dimension in [
+            Int::Literal(0),
+            Int::Literal(3),
+            Int::Int,
+            Int::Symbolic(Box::new(Type::Var(Var::ZERO))),
+        ] {
+            assert!(matches!(
+                lower_parameter(
+                    &Type::Int(dimension.clone()),
+                    TypeShapeDslInputDomain::OptionalInt,
+                ),
+                DslValue::Dimension(actual) if actual == dimension
+            ));
+        }
+        assert!(matches!(
+            lower_parameter(&Type::None, TypeShapeDslInputDomain::OptionalInt),
+            DslValue::FlagNone
+        ));
+        assert!(matches!(
+            lower_parameter(&Type::any_error(), TypeShapeDslInputDomain::OptionalInt),
+            DslValue::Unknown
+        ));
+    }
+
+    #[test]
+    fn optional_int_requires_non_none_narrowing_before_int_use() {
+        let optional = TypeShapeDslInputDomain::OptionalInt;
+        assert!(optional.can_use_as(
+            TypeShapeDslDomain::Int,
+            TypeShapeDslParameterNarrowing::NonNone
+        ));
+        assert!(!optional.can_use_as(
+            TypeShapeDslDomain::Int,
+            TypeShapeDslParameterNarrowing::Unnarrowed
+        ));
+        assert!(!optional.can_use_as(
+            TypeShapeDslDomain::IntTuple,
+            TypeShapeDslParameterNarrowing::NonNone
+        ));
+    }
 
     #[test]
     fn flag_sequence_index_finds_first_concrete_value() {
