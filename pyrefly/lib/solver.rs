@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+mod shape;
 pub mod solver;
 pub mod subset;
 pub mod type_order;

@@ -174,16 +174,22 @@ pub fn is_gradual_size(ty: &Type) -> bool {
     matches!(ty, Type::Int(Int::Int))
 }
 
-fn type_var_bound(ty: &Type) -> Option<&Type> {
+/// Whether a type-variable restriction is bounded by exactly the gradual size `Int`.
+fn is_gradual_size_bound(restriction: &Restriction) -> bool {
+    matches!(restriction, Restriction::Bound(bound) if is_gradual_size(bound))
+}
+
+fn type_var_restriction(ty: &Type) -> Option<&Restriction> {
     let (kind, restriction) = match ty {
         Type::Quantified(q) => (q.kind(), q.restriction()),
         Type::TypeVar(type_var) => (type_var.kind(), type_var.restriction()),
         _ => return None,
     };
-    if kind != QuantifiedKind::TypeVar {
-        return None;
-    }
-    match restriction {
+    (kind == QuantifiedKind::TypeVar).then_some(restriction)
+}
+
+fn type_var_bound(ty: &Type) -> Option<&Type> {
+    match type_var_restriction(ty)? {
         Restriction::Bound(bound) => Some(bound),
         Restriction::Constraints(_) | Restriction::Flag(_) | Restriction::Unrestricted => None,
     }
@@ -194,7 +200,7 @@ fn type_var_bound(ty: &Type) -> Option<&Type> {
 /// Shape features currently support only this broad bound. Narrower or wider bounds remain on
 /// the ordinary type-variable path until their shape semantics are defined explicitly.
 pub fn is_gradual_size_bound_type_var(ty: &Type) -> bool {
-    type_var_bound(ty).is_some_and(is_gradual_size)
+    type_var_restriction(ty).is_some_and(is_gradual_size_bound)
 }
 
 /// Whether `ty` is exactly the shape `Int | None` domain, in either order.

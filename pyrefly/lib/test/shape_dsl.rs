@@ -1676,7 +1676,7 @@ testcase!(
     r#"
 from shape_extensions import Int, IntVar, type_shape_dsl_function
 from torch import Tensor
-from typing import assert_type
+from typing import Any, Callable, assert_type
 
 @type_shape_dsl_function
 def identity(x: Int) -> Int:
@@ -1690,37 +1690,99 @@ def plus_one(x: Int) -> Int:
 def through_helper(x: Int) -> Int:
     return plus_one(x)
 
+@type_shape_dsl_function
+def optional_or(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return n
+
 def bounded[N: Int](x: N) -> Tensor[[identity(N)]]: ...
 def bounded_helper[N: Int](x: N) -> Tensor[[through_helper(N)]]: ...
 def bounded_default[N: Int](x: N = 3) -> Tensor[[identity(N)]]: ...
 def bounded_pair[N: Int](x: N, y: N) -> Tensor[[identity(N)]]: ...
+def optional_bounded[N: Int | None](x: N) -> Tensor[[optional_or(N, Int[7])]]: ...
+def bounded_value[N: Int](x: N) -> N:
+    return x
+
+def ordinary_value[T: int](x: T) -> T:
+    return x
+
+def bounded_with_callback[N: Int](callback: Callable[[N], None], value: N) -> N:
+    return value
+
+def accepts_three(value: Int[3]) -> None: ...
 
 class BoundedBox[N: Int]:
     def result(self) -> Tensor[[identity(N)]]: ...
+
+class InferredBox[N: Int]:
+    def __init__(self, value: N) -> None: ...
+    def result(self) -> Tensor[[identity(N)]]: ...
+
+def nested[N: Int](value: N) -> InferredBox[N]:
+    return InferredBox(value)
+
+def nested_value[N: Int](value: N) -> N:
+    return bounded_value(value)
 
 def check[M: IntVar](
     exact: Int[3],
     gradual: Int,
     symbolic: Int[M],
     plain: int,
+    dynamic: Any,
     box: BoundedBox[Int[3]],
 ) -> None:
-    # A bare literal is promoted to `int` when the bound is solved, so the call is
-    # admitted but evaluates gradually; only a dimension type survives precisely.
-    assert_type(bounded(3), Tensor[[int]])
+    # An exact `Int` bound keeps shape dimensions precise while ordinary `int`
+    # values remain gradual.
+    assert_type(bounded(3), Tensor[[3]])
     assert_type(bounded(exact), Tensor[[3]])
     assert_type(bounded(gradual), Tensor[[int]])
     assert_type(bounded(symbolic), Tensor[[M]])
     assert_type(bounded(plain), Tensor[[int]])
     assert_type(bounded_helper(exact), Tensor[[4]])
-    assert_type(bounded_default(), Tensor[[int]])
+    assert_type(bounded_helper(3), Tensor[[4]])
+    assert_type(bounded_default(), Tensor[[3]])
+    assert_type(bounded_default(7), Tensor[[7]])
     assert_type(bounded_pair(exact, exact), Tensor[[3]])
+    assert_type(bounded_pair(3, 3), Tensor[[3]])
+    assert_type(bounded_pair(3, 4), Tensor[[int]])
+    assert_type(bounded_pair(gradual, exact), Tensor[[int]])
+    assert_type(optional_bounded(3), Tensor[[3]])
+    assert_type(optional_bounded(None), Tensor[[7]])
+    assert_type(optional_bounded(dynamic), Tensor[[int]])
     assert_type(box.result(), Tensor[[3]])
+    assert_type(bounded_value(3), Int[3])
+    assert_type(ordinary_value(3), int)
+    assert_type(bounded(dynamic), Tensor[[int]])
+    assert_type(InferredBox(3), InferredBox[Int[3]])
+    assert_type(InferredBox(3).result(), Tensor[[3]])
+    assert_type(InferredBox(symbolic).result(), Tensor[[M]])
+    bounded(True)  # E: `bool` is not assignable to upper bound `Int[int]` of type variable `N`
+    bounded("nope")  # E: `str` is not assignable to upper bound `Int[int]` of type variable `N`
+
+def check_union(value: Int[3] | Int[4]) -> None:
+    assert_type(bounded(value), Tensor[[int]])
+
+def check_accumulated_upper_bound(
+    three: Int[3], four: Int[4], either: Int[3] | Int[4]
+) -> None:
+    assert_type(bounded_with_callback(accepts_three, three), Int[3])
+    bounded_with_callback(accepts_three, four)  # E: Argument `Int[4]` is not assignable to parameter `value`
+    bounded_with_callback(accepts_three, either)  # E: Argument `Int[3] | Int[4]` is not assignable to parameter `value`
+
+class MyInt(int): ...
+
+def check_int_subclass(value: MyInt) -> None:
+    bounded(value)  # E: `MyInt` is not assignable to upper bound `Int[int]` of type variable `N`
 
 # An `Int`-bound variable that substitution never resolves evaluates as the
 # gradual size, not as a symbolic dimension: only `IntVar` carries symbols.
 def unresolved[N: Int](x: N) -> None:
     assert_type(bounded(x), Tensor[[int]])
+    assert_type(nested(x), InferredBox[N])
+    assert_type(nested(x).result(), Tensor[[int]])
+    assert_type(nested_value(x), N)
 
 def intvar_compatibility[N: IntVar](x: Tensor[[N]]) -> Tensor[[identity(N)]]: ...
 def constant_folding() -> Tensor[[through_helper(3)]]: ...
@@ -1735,6 +1797,7 @@ def invalid_builtin_bound[N: int]() -> Tensor[[identity(N)]]: ...  # E: Expected
 # remain unsupported until their unresolved evaluation semantics are defined.
 def invalid_exact_bound[N: Int[5]]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
 def invalid_int_constraints[N: (Int[2], Int[3])]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
+def invalid_unrestricted[N]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
 
 class Other:
     class Int: ...

@@ -63,6 +63,9 @@ use crate::error::collector::ErrorBuilder;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
+use crate::solver::shape::ShapeIntBoundSolution;
+use crate::solver::shape::has_int_tuple_bound;
+use crate::solver::shape::normalize_shape_int_bound_solution;
 use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
 use crate::types::callable::Param;
@@ -3597,12 +3600,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         Some(best)
     }
 
-    /// Whether `q` is a `TypeVar` whose bound represents an entire shape.
-    fn has_int_tuple_bound(q: &Quantified) -> bool {
-        q.kind() == QuantifiedKind::TypeVar
-            && matches!(q.restriction(), Restriction::Bound(Type::IntTuple(_)))
-    }
-
     /// is_subset_eq_var(t1, Quantified)
     fn is_subset_eq_quantified(
         &mut self,
@@ -3614,8 +3611,22 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     ) -> (Type, Option<TypeVarSpecializationError>) {
         // An `IntTuple`-bounded actual is a dimension sequence. Literal promotion would erase
         // those dimensions, and the probe guarding promotion binds variables as a side effect.
-        let t1_p = if Self::has_int_tuple_bound(q) {
+        let t1_p = if has_int_tuple_bound(q) {
             t1.clone()
+        } else if let Some(normalized) =
+            normalize_shape_int_bound_solution(q, t1, self.type_order.stdlib(), &self.solver.heap)
+        {
+            let ShapeIntBoundSolution {
+                answer,
+                precise_union,
+            } = normalized;
+            if let (Some(precise_union), Some(upper_bound)) = (precise_union, upper_bound)
+                && self.is_subset_eq(&precise_union, upper_bound).is_err()
+            {
+                precise_union
+            } else {
+                answer
+            }
         } else {
             let t1_p = t1
                 .clone()
@@ -4086,9 +4097,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 // Tuple actuals for `IntTuple`-bounded variables use dimension binding.
                 let has_int_tuple_bound = match &*v2_ref {
                     Variable::Quantified { quantified, .. }
-                    | Variable::PartialQuantified(quantified) => {
-                        Self::has_int_tuple_bound(quantified)
-                    }
+                    | Variable::PartialQuantified(quantified) => has_int_tuple_bound(quantified),
                     _ => false,
                 };
                 if has_int_tuple_bound && let Type::Tuple(tuple) = t1 {
