@@ -916,12 +916,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
         let callable = make_callable(def.params.clone(), ret);
         if let Some(cls) = &def.defining_cls {
-            // Constructors are always validated per spec. For other methods,
-            // skip overload variants because self/cls annotations in overloads
-            // are a valid pattern for type narrowing.
-            let is_constructor = stmt.name.id == dunder::INIT || is_dunder_new;
-            let should_validate = is_constructor || !def.metadata.flags.is_overload;
-            if should_validate {
+            // Skip overload variants: self/cls annotations in overloads are a
+            // valid pattern for type narrowing (including constructors). Call-site
+            // overload selection already requires the receiver to match. Keep
+            // validating non-overload definitions and the implementation.
+            if !def.metadata.flags.is_overload {
                 if def.metadata.flags.is_classmethod || is_dunder_new {
                     self.validate_cls_annotation(
                         cls,
