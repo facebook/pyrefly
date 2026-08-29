@@ -956,6 +956,27 @@ impl<'a> Transaction<'a> {
     ) -> Option<Type> {
         let module = self.get_ast(handle)?;
         let covering_nodes = Ast::locate_node(&module, position);
+
+        // Quoted forward references are rewritten during binding to `Name` nodes
+        // whose ranges match the string *content* (without quotes). Prefer that
+        // trace so hovering `Child` in `type['Child']` yields `type[Child]`
+        // (ClassDef), not the enclosing `type[...]` expression (`type[type[Child]]`).
+        // See https://github.com/facebook/pyrefly/issues/4703.
+        if let Some(AnyNodeRef::ExprStringLiteral(literal)) = covering_nodes
+            .iter()
+            .find(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+        {
+            for part in literal.value.iter() {
+                let content_range = part.content_range();
+                if content_range.contains(position)
+                    && let Some(ty) =
+                        self.get_type_trace_for_surface(handle, content_range, for_display)
+                {
+                    return Some(ty);
+                }
+            }
+        }
+
         for node in covering_nodes {
             if node.as_expr_ref().is_none() {
                 continue;

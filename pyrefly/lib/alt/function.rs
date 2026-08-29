@@ -2772,7 +2772,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 range,
                                 ErrorKind::InvalidAnnotation,
                                 format!(
-                                    "`{method_name}` method self type `{}` is not a superclass of class `{cls_name}`",
+                                    "`{method_name}`: `{}` is not a superclass of class `{cls_name}`",
                                     self.for_display(self_ty.clone()),
                                 ),
                             )
@@ -2817,13 +2817,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         && !self.type_order().has_superclass(cls, cls_ty.class_object())
                         && !self.type_order().is_protocol(cls_ty.class_object())
                     {
+                        // Compare class to class (not `type[X]` to class `Y`).
                         errors
                             .error_builder(
                                 range,
                                 ErrorKind::InvalidAnnotation,
                                 format!(
-                                    "`{method_name}` method self type `{}` is not a superclass of class `{cls_name}`",
-                                    self.for_display(self_ty.clone()),
+                                    "`{method_name}`: `{}` is not a superclass of class `{cls_name}`",
+                                    self.for_display((**inner).clone()),
                                 ),
                             )
                             .emit();
@@ -2859,13 +2860,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             .has_superclass(cls, inner_cls.class_object())
                         && !self.type_order().is_protocol(inner_cls.class_object())
                     {
+                        // Compare class to class (not `type[X]` to class `Y`).
                         errors
                             .error_builder(
                                 range,
                                 ErrorKind::InvalidAnnotation,
                                 format!(
-                                    "`{method_name}` method cls type `{}` is not a superclass of class `{cls_name}`",
-                                    self.for_display(cls_ty.clone()),
+                                    "`{method_name}`: `{}` is not a superclass of class `{cls_name}`",
+                                    self.for_display((**f).clone()),
                                 ),
                             )
                             .emit();
