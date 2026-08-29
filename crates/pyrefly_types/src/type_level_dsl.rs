@@ -1155,6 +1155,14 @@ pub enum TypeShapeDslFlagValueKind {
     Sequence,
 }
 
+/// Information needed to validate one comparison operand after parameter domains are resolved.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TypeShapeDslComparisonOperand {
+    pub parameter_uses: Option<Box<[TypeShapeDslParameterUse]>>,
+    pub is_flag_operand: bool,
+    pub non_parameter_flag_domain: Option<FlagDomain>,
+}
+
 /// What a structurally validated DSL condition tests. Like `TypeShapeDslReturnKind`, this depends
 /// on intrinsic resolution, so it participates in `StructurallyValidatedTypeShapeDslFunction`
 /// identity.
@@ -1169,21 +1177,13 @@ pub enum TypeShapeDslConditionKind {
     SlotCompare {
         left: usize,
         right: usize,
-        left_parameter_uses: Option<Box<[TypeShapeDslParameterUse]>>,
-        right_parameter_uses: Option<Box<[TypeShapeDslParameterUse]>>,
-        left_is_flag_operand: bool,
-        right_is_flag_operand: bool,
-        left_non_parameter_flag_domain: Option<FlagDomain>,
-        right_non_parameter_flag_domain: Option<FlagDomain>,
+        left_operand: TypeShapeDslComparisonOperand,
+        right_operand: TypeShapeDslComparisonOperand,
         op: TypeShapeDslComparisonOp,
     },
     IntegerCompare {
-        left_parameter_uses: Option<Box<[TypeShapeDslParameterUse]>>,
-        right_parameter_uses: Option<Box<[TypeShapeDslParameterUse]>>,
-        left_is_flag_operand: bool,
-        right_is_flag_operand: bool,
-        left_non_parameter_flag_domain: Option<FlagDomain>,
-        right_non_parameter_flag_domain: Option<FlagDomain>,
+        left_operand: TypeShapeDslComparisonOperand,
+        right_operand: TypeShapeDslComparisonOperand,
         op: TypeShapeDslComparisonOp,
     },
     DimensionEquality {
@@ -3740,43 +3740,51 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         }
 
         let comparison_operand = |kind: &DslStaticKind| match kind {
-            DslStaticKind::UnknownParameters(parameters) => Some((
-                Some(parameter_uses(
+            DslStaticKind::UnknownParameters(parameters) => Some(TypeShapeDslComparisonOperand {
+                parameter_uses: Some(parameter_uses(
                     parameters,
                     TypeShapeDslParameterNarrowing::Unnarrowed,
                 )),
-                false,
-                None,
-            )),
-            DslStaticKind::Dimension => Some((None, false, None)),
+                is_flag_operand: false,
+                non_parameter_flag_domain: None,
+            }),
+            DslStaticKind::Dimension => Some(TypeShapeDslComparisonOperand {
+                parameter_uses: None,
+                is_flag_operand: false,
+                non_parameter_flag_domain: None,
+            }),
             DslStaticKind::ValueSet {
                 sources,
                 kinds: FLAG_INT,
             } if sources.all_prove(TypeShapeDslParameterNarrowing::Integer)
                 && sources.non_parameter_values_are(FLAG_INT) =>
             {
-                Some((
-                    Some(sources.parameter_uses.clone()),
-                    true,
-                    flag_domain_from_kinds(sources.non_parameter_kinds),
-                ))
+                Some(TypeShapeDslComparisonOperand {
+                    parameter_uses: Some(sources.parameter_uses.clone()),
+                    is_flag_operand: true,
+                    non_parameter_flag_domain: flag_domain_from_kinds(sources.non_parameter_kinds),
+                })
             }
             DslStaticKind::ValueSet {
                 sources,
                 kinds: FLAG_NOT_NONE,
-            } if sources.all_prove(TypeShapeDslParameterNarrowing::NonNone) => Some((
-                Some(sources.parameter_uses.clone()),
-                true,
-                flag_domain_from_kinds(sources.non_parameter_kinds),
-            )),
+            } if sources.all_prove(TypeShapeDslParameterNarrowing::NonNone) => {
+                Some(TypeShapeDslComparisonOperand {
+                    parameter_uses: Some(sources.parameter_uses.clone()),
+                    is_flag_operand: true,
+                    non_parameter_flag_domain: flag_domain_from_kinds(sources.non_parameter_kinds),
+                })
+            }
             DslStaticKind::ValueSet {
                 sources,
                 kinds: FLAG_NONE,
-            } if sources.all_prove(TypeShapeDslParameterNarrowing::IsNone) => Some((
-                Some(sources.parameter_uses.clone()),
-                true,
-                flag_domain_from_kinds(sources.non_parameter_kinds),
-            )),
+            } if sources.all_prove(TypeShapeDslParameterNarrowing::IsNone) => {
+                Some(TypeShapeDslComparisonOperand {
+                    parameter_uses: Some(sources.parameter_uses.clone()),
+                    is_flag_operand: true,
+                    non_parameter_flag_domain: flag_domain_from_kinds(sources.non_parameter_kinds),
+                })
+            }
             _ => None,
         };
         let slot_comparison = match (&*compare.left, right) {
@@ -3791,25 +3799,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     comparison_operand(&flow.kinds[left])
                         .zip(comparison_operand(&flow.kinds[right]))
                         .map(|(left_operand, right_operand)| {
-                            let (
-                                left_parameter_uses,
-                                left_is_flag_operand,
-                                left_non_parameter_flag_domain,
-                            ) = left_operand;
-                            let (
-                                right_parameter_uses,
-                                right_is_flag_operand,
-                                right_non_parameter_flag_domain,
-                            ) = right_operand;
                             TypeShapeDslConditionKind::SlotCompare {
                                 left,
                                 right,
-                                left_parameter_uses,
-                                right_parameter_uses,
-                                left_is_flag_operand,
-                                right_is_flag_operand,
-                                left_non_parameter_flag_domain,
-                                right_non_parameter_flag_domain,
+                                left_operand,
+                                right_operand,
                                 op: comparison_op,
                             }
                         })
@@ -3847,11 +3841,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             && (is_proven_integer(&compare.left)? || is_proven_integer(right)?)
         {
             let integer_literal_operand = || {
-                Some((
-                    Some(Vec::<TypeShapeDslParameterUse>::new().into_boxed_slice()),
-                    true,
-                    flag_domain_from_kinds(FLAG_INT),
-                ))
+                Some(TypeShapeDslComparisonOperand {
+                    parameter_uses: Some(Vec::<TypeShapeDslParameterUse>::new().into_boxed_slice()),
+                    is_flag_operand: true,
+                    non_parameter_flag_domain: flag_domain_from_kinds(FLAG_INT),
+                })
             };
             let left_operand = match &*compare.left {
                 Expr::Name(_) => {
@@ -3876,19 +3870,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         let kind = match (slot_comparison, integer_comparison) {
             (Some(kind), _) => kind,
             (None, Some((left_operand, right_operand))) => {
-                let (left_parameter_uses, left_is_flag_operand, left_non_parameter_flag_domain) =
-                    left_operand;
-                let (right_parameter_uses, right_is_flag_operand, right_non_parameter_flag_domain) =
-                    right_operand;
                 self.validate_dimension_arithmetic_operand(&compare.left, flow)?;
                 self.validate_dimension_arithmetic_operand(right, flow)?;
                 TypeShapeDslConditionKind::IntegerCompare {
-                    left_parameter_uses,
-                    right_parameter_uses,
-                    left_is_flag_operand,
-                    right_is_flag_operand,
-                    left_non_parameter_flag_domain,
-                    right_non_parameter_flag_domain,
+                    left_operand,
+                    right_operand,
                     op: comparison_op,
                 }
             }
