@@ -2216,14 +2216,16 @@ def call_nonnone_flag() -> Tensor[[nonnone_flag((1, 2), Int[7])]]: ...  # E: Exp
 );
 
 testcase!(
-    bug = "narrowed OptionalInt values do not forward to helpers yet",
-    test_type_shape_dsl_optional_int_helper_limitations,
+    test_type_shape_dsl_optional_int_helper_forwarding,
     shape_dsl_tensor_env(),
     r#"
-from shape_extensions import Int, type_shape_dsl_function
+from shape_extensions import Flag, Int, IntVar, type_shape_dsl_function
+import shape_extensions.dsl as dsl
+from torch import Tensor
+from typing import Any, assert_type
 
 @type_shape_dsl_function
-def int_helper(n: Int) -> Int:
+def int_identity(n: Int) -> Int:
     return n
 
 @type_shape_dsl_function
@@ -2233,16 +2235,192 @@ def optional_or(n: Int | None, fallback: Int) -> Int:
     return n
 
 @type_shape_dsl_function
-def narrowed_helper(n: Int | None, fallback: Int) -> Int:
-    if n is None:
-        return fallback
-    return int_helper(n)  # E: DSL helper argument domains must exactly match
+def optional_flag_or(n: Int, axis: int | None) -> Int:
+    return n
 
 @type_shape_dsl_function
-def narrowed_optional_helper(n: Int | None, fallback: Int) -> Int:
+def direct_optional(n: Int | None, fallback: Int) -> Int:
+    return optional_or(n, fallback)
+
+@type_shape_dsl_function
+def int_to_optional(n: Int, fallback: Int) -> Int:
+    return optional_or(n, fallback)
+
+@type_shape_dsl_function
+def narrowed_to_int(n: Int | None, fallback: Int) -> Int:
     if n is None:
         return fallback
-    return optional_or(n, fallback)  # E: DSL helper argument domains must exactly match
+    return int_identity(n)
+
+@type_shape_dsl_function
+def narrowed_to_optional(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return optional_or(n, fallback)
+
+@type_shape_dsl_function
+def local_none_to_optional(fallback: Int) -> Int:
+    missing = None
+    return optional_or(missing, fallback)
+
+@type_shape_dsl_function
+def mixed_optional_sources(
+    n: Int | None, m: Int, fallback: Int, choose: bool,
+) -> Int:
+    if n is None:
+        return fallback
+    value = n if choose else m
+    return optional_or(value, fallback)
+
+@type_shape_dsl_function
+def mixed_optional_and_none(
+    n: Int | None, fallback: Int, choose: bool,
+) -> Int:
+    value = n if choose else None
+    return optional_or(value, fallback)
+
+@type_shape_dsl_function
+def concrete_to_int(n: Int | None, fallback: Int) -> Int:
+    if dsl.is_concrete_int(n):
+        return int_identity(n)
+    return fallback
+
+@type_shape_dsl_function
+def redundant_int_narrowing(n: Int, fallback: Int) -> Int:
+    if dsl.is_concrete_int(n):
+        return optional_or(n, fallback)
+    return fallback
+
+@type_shape_dsl_function
+def deferred_to_int_or_optional(
+    n: Int | None, fallback: Int, choose: bool,
+) -> Int:
+    if n is None:
+        return fallback
+    value = n + 1
+    if choose:
+        return int_identity(value)
+    return optional_or(value, fallback)
+
+@type_shape_dsl_function
+def flag_subset(n: Int, axis: int) -> Int:
+    return optional_flag_or(n, axis)
+
+@type_shape_dsl_function
+def narrowed_flag_subset(
+    n: Int, axis: int | tuple[int, ...] | None,
+) -> Int:
+    if dsl.is_int_value(axis):
+        return optional_flag_or(n, axis)
+    return n
+
+@type_shape_dsl_function
+def flag_int_or(n: Int, axis: int) -> Int:
+    return n
+
+@type_shape_dsl_function
+def deferred_flag_to_flag(
+    n: Int, axis: int | tuple[int, ...] | None,
+) -> Int:
+    if dsl.is_int_value(axis):
+        offset = axis + 1
+        return flag_int_or(n, offset)
+    return n
+
+@type_shape_dsl_function
+def deferred_flag_to_wider_flag(
+    n: Int, axis: int | tuple[int, ...] | None,
+) -> Int:
+    if dsl.is_int_value(axis):
+        offset = axis + 1
+        return optional_flag_or(n, offset)
+    return n
+
+@type_shape_dsl_function
+def shape_to_flag(n: Int) -> Int:
+    offset = n + 1
+    return flag_int_or(n, offset)  # E: DSL helper argument domains are incompatible
+
+@type_shape_dsl_function
+def unnarrowed_optional_to_int(n: Int | None, fallback: Int) -> Int:
+    return int_identity(n)  # E: DSL helper argument domains are incompatible  # E: Argument
+
+@type_shape_dsl_function
+def flag_to_int(n: Int, axis: int | tuple[int, ...] | None) -> Int:
+    if dsl.is_int_value(axis):
+        return int_identity(axis)  # E: DSL helper argument domains are incompatible
+    return n
+
+@type_shape_dsl_function
+def optional_to_flag(n: Int | None, fallback: Int) -> Int:
+    if n is None:
+        return fallback
+    return optional_flag_or(fallback, n)  # E: DSL helper argument domains are incompatible
+
+@type_shape_dsl_function
+def deferred_flag_to_optional(
+    n: Int, axis: int | tuple[int, ...] | None,
+) -> Int:
+    if dsl.is_int_value(axis):
+        offset = axis + 1
+        return optional_or(offset, n)
+    return n
+
+def literal() -> Tensor[[direct_optional(3, Int[7])]]: ...
+def omitted() -> Tensor[[direct_optional(None, Int[7])]]: ...
+def gradual() -> Tensor[[direct_optional(Int, Int[7])]]: ...
+def int_widened() -> Tensor[[int_to_optional(Int[3], Int[7])]]: ...
+def narrowed() -> Tensor[[narrowed_to_int(Int[3], Int[7])]]: ...
+def narrowed_optional() -> Tensor[[narrowed_to_optional(Int[3], Int[7])]]: ...
+def local_none() -> Tensor[[local_none_to_optional(Int[7])]]: ...
+def mixed_sources_true() -> Tensor[[mixed_optional_sources(Int[3], Int[4], Int[7], True)]]: ...
+def mixed_sources_false() -> Tensor[[mixed_optional_sources(Int[3], Int[4], Int[7], False)]]: ...
+def mixed_none_true() -> Tensor[[mixed_optional_and_none(Int[3], Int[7], True)]]: ...
+def mixed_none_false() -> Tensor[[mixed_optional_and_none(Int[3], Int[7], False)]]: ...
+def concrete() -> Tensor[[concrete_to_int(3, Int[7])]]: ...
+def concrete_none() -> Tensor[[concrete_to_int(None, Int[7])]]: ...
+def dynamic() -> Tensor[[concrete_to_int(Any, Int[7])]]: ...
+def redundant() -> Tensor[[redundant_int_narrowing(Int[3], Int[7])]]: ...
+def deferred_int() -> Tensor[[deferred_to_int_or_optional(Int[3], Int[7], True)]]: ...
+def deferred_optional() -> Tensor[[deferred_to_int_or_optional(Int[3], Int[7], False)]]: ...
+def direct_flag_subset() -> Tensor[[flag_subset(Int[3], 1)]]: ...
+def narrowed_flag() -> Tensor[[narrowed_flag_subset(Int[3], 1)]]: ...
+def deferred_flag() -> Tensor[[deferred_flag_to_flag(Int[3], 1)]]: ...
+def deferred_wider_flag() -> Tensor[[deferred_flag_to_wider_flag(Int[3], 1)]]: ...
+def deferred_optional_from_flag() -> Tensor[[deferred_flag_to_optional(Int[3], 1)]]: ...
+def symbolic_shape_to_flag[N: IntVar](x: Tensor[[N]]) -> Tensor[[shape_to_flag(Int[N])]]: ...  # E: Expected a type-level DSL function
+def symbolic[M: IntVar](x: Tensor[[M]]) -> Tensor[[direct_optional(Int[M], Int[7])]]: ...
+def concrete_symbolic[M: IntVar](x: Tensor[[M]]) -> Tensor[[concrete_to_int(Int[M], Int[7])]]: ...
+def unresolved[N: Int | None]() -> Tensor[[direct_optional(N, Int[7])]]: ...
+
+def check() -> None:
+    assert_type(literal(), Tensor[[3]])
+    assert_type(omitted(), Tensor[[7]])
+    assert_type(gradual(), Tensor[[int]])
+    assert_type(int_widened(), Tensor[[3]])
+    assert_type(narrowed(), Tensor[[3]])
+    assert_type(narrowed_optional(), Tensor[[3]])
+    assert_type(local_none(), Tensor[[7]])
+    assert_type(mixed_sources_true(), Tensor[[3]])
+    assert_type(mixed_sources_false(), Tensor[[4]])
+    assert_type(mixed_none_true(), Tensor[[3]])
+    assert_type(mixed_none_false(), Tensor[[7]])
+    assert_type(concrete(), Tensor[[3]])
+    assert_type(concrete_none(), Tensor[[7]])
+    assert_type(dynamic(), Tensor[[int]])
+    assert_type(redundant(), Tensor[[3]])
+    assert_type(deferred_int(), Tensor[[4]])
+    assert_type(deferred_optional(), Tensor[[4]])
+    assert_type(direct_flag_subset(), Tensor[[3]])
+    assert_type(narrowed_flag(), Tensor[[3]])
+    assert_type(deferred_flag(), Tensor[[3]])
+    assert_type(deferred_wider_flag(), Tensor[[3]])
+    assert_type(deferred_optional_from_flag(), Tensor[[2]])
+    assert_type(unresolved(), Tensor[[int]])
+
+def check_symbolic[M: IntVar](x: Tensor[[M]]) -> None:
+    assert_type(symbolic(x), Tensor[[M]])
+    assert_type(concrete_symbolic(x), Tensor[[7]])
 "#,
 );
 
@@ -2837,12 +3015,12 @@ def flag_helper(n: Int, k: int) -> Int:
 def inconsistent_helper(n: Int, shape: IntTuple, k: int) -> Int:
     result = n + k
     dimension = result + shape[0]
-    return flag_helper(dimension, result)  # E: DSL helper argument domains must exactly match
+    return flag_helper(dimension, result)  # E: DSL helper argument domains are incompatible
 
 @type_shape_dsl_function
 def defaulted_helper_mismatch(n: Int, k: int) -> Int:
     result = n + k
-    return flag_helper(n, result)  # E: DSL helper argument domains must exactly match
+    return flag_helper(n, result)  # E: DSL helper argument domains are incompatible
 
 @type_shape_dsl_function
 def int_helper(n: Int) -> Int:
@@ -2853,7 +3031,7 @@ def inconsistent_helper_branches(n: Int, k: int, first: bool) -> Int:
     result = n + k
     if first:
         return int_helper(result)
-    return flag_helper(n, result)  # E: DSL helper argument domains must exactly match
+    return flag_helper(n, result)  # E: DSL helper argument domains are incompatible
 
 @type_shape_dsl_function
 def conflicting_branch_return_dimension_first(
@@ -3612,7 +3790,7 @@ def add_dimensions(n: Int, m: Int) -> Int:
 @type_shape_dsl_function
 def call_flag_helper(n: Int, k: int, first: bool) -> Int:
     scaled = (n if first else n) + k
-    return scale(n, scaled)  # E: DSL helper argument domains must exactly match `scale`
+    return scale(n, scaled)  # E: DSL helper argument domains are incompatible with `scale`
 
 @type_shape_dsl_function
 def call_dimension_helper(n: Int, k: int, first: bool) -> Int:
@@ -10072,7 +10250,7 @@ def inferred_optional_to_required(
     shape: IntTuple, mode: str | None, choose: bool
 ) -> IntTuple:
     selected = mode if choose else "keep"
-    return required_string_helper(shape, selected)  # E: DSL helper argument domains must exactly match  # E: is not assignable to parameter
+    return required_string_helper(shape, selected)  # E: DSL helper argument domains are incompatible  # E: is not assignable to parameter
 
 @type_shape_dsl_function
 def diamond(shape: IntTuple, choice: int) -> IntTuple:
@@ -10155,11 +10333,11 @@ def fixed_tuple_helper(shape: IntTuple, axes: tuple[int, int]) -> IntTuple:
 
 @type_shape_dsl_function
 def wrong_argument(shape: IntTuple) -> IntTuple:
-    return shape_helper(shape, shape)  # E: DSL helper argument domains must exactly match  # E: Expected 1 positional
+    return shape_helper(shape, shape)  # E: DSL helper argument domains are incompatible  # E: Expected 1 positional
 
 @type_shape_dsl_function
 def wrong_domain(shape: IntTuple) -> IntTuple:
-    return int_helper(shape)  # E: DSL helper argument domains must exactly match  # E: Returned type  # E: is not assignable to parameter
+    return int_helper(shape)  # E: DSL helper argument domains are incompatible  # E: Returned type  # E: is not assignable to parameter
 
 @type_shape_dsl_function
 def wrong_result(dimension: Int) -> IntTuple:
@@ -10167,7 +10345,7 @@ def wrong_result(dimension: Int) -> IntTuple:
 
 @type_shape_dsl_function
 def unbounded_tuple_argument(shape: IntTuple, axes: tuple[int, ...]) -> IntTuple:
-    return fixed_tuple_helper(shape, axes)  # E: DSL helper argument domains must exactly match  # E: is not assignable to parameter
+    return fixed_tuple_helper(shape, axes)  # E: DSL helper argument domains are incompatible  # E: is not assignable to parameter
 
 def ordinary(shape: IntTuple) -> IntTuple: ...
 
@@ -10459,7 +10637,7 @@ def invalid_join_helper(
     shape: IntTuple, candidate: tuple[int, ...], choose_branch: bool,
 ) -> IntTuple:
     index = candidate if choose_branch else 0
-    return select(shape, index)  # E: helper argument domains must exactly match  # E: not assignable to parameter `index`
+    return select(shape, index)  # E: helper argument domains are incompatible  # E: not assignable to parameter `index`
 
 @type_shape_dsl_function
 def narrowed_int_equality(

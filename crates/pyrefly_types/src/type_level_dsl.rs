@@ -99,6 +99,15 @@ impl TypeShapeDslInputDomain {
                 && result == TypeShapeDslDomain::Int
                 && narrowing.proves_not_none())
     }
+
+    /// Whether a value from this domain can be passed to a helper parameter in `expected`.
+    fn can_forward_to(self, expected: Self) -> bool {
+        match (self, expected) {
+            (Self::Flag(actual), Self::Flag(expected)) => actual.is_subset_of(expected),
+            (Self::Value(TypeShapeDslDomain::Int), Self::OptionalInt) => true,
+            _ => self == expected,
+        }
+    }
 }
 
 /// A syntactically valid helper call retained until ordinary name resolution is available.
@@ -156,6 +165,16 @@ struct TypeShapeDslHelperArgument {
     source: TypeShapeDslHelperArgumentSource,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeShapeDslHelperArgumentError {
+    Arity,
+    IncompatibleDomain {
+        argument: usize,
+        actual: TypeShapeDslInputDomain,
+        expected: TypeShapeDslInputDomain,
+    },
+}
+
 impl TypeShapeDslHelperCall {
     pub fn callee(&self) -> &Expr {
         &self.callee
@@ -166,100 +185,178 @@ impl TypeShapeDslHelperCall {
         caller_domains: &[TypeShapeDslInputDomain],
         expected_domains: &[TypeShapeDslInputDomain],
         deferred_domains: &mut HashMap<usize, TypeShapeDslInputDomain>,
-    ) -> Option<Vec<TypeShapeDslInputDomain>> {
+    ) -> Result<Vec<TypeShapeDslInputDomain>, TypeShapeDslHelperArgumentError> {
         if self.arguments.len() != expected_domains.len() {
-            return None;
+            return Err(TypeShapeDslHelperArgumentError::Arity);
         }
-        let compatible = |actual, expected| match (actual, expected) {
-            (TypeShapeDslInputDomain::Flag(actual), TypeShapeDslInputDomain::Flag(expected)) => {
-                actual.is_subset_of(expected)
-            }
-            _ => actual == expected,
-        };
+        let effective_parameter_domain =
+            |use_: TypeShapeDslParameterUse, observed_flag_domain: FlagDomain| match caller_domains
+                [use_.parameter]
+            {
+                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => {
+                    Some(TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int))
+                }
+                TypeShapeDslInputDomain::OptionalInt if use_.narrowing.proves_not_none() => {
+                    Some(TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int))
+                }
+                TypeShapeDslInputDomain::Flag(domain)
+                    if use_.narrowing != TypeShapeDslParameterNarrowing::Unnarrowed =>
+                {
+                    domain
+                        .intersection(observed_flag_domain)
+                        .map(TypeShapeDslInputDomain::Flag)
+                }
+                domain => Some(domain),
+            };
         self.arguments
             .iter()
             .zip(expected_domains)
-            .map(|(argument, expected)| match &argument.source {
-                TypeShapeDslHelperArgumentSource::Exact(domain) => {
-                    compatible(*domain, *expected).then_some(*domain)
-                }
-                TypeShapeDslHelperArgumentSource::ParametersWithRequiredDomain {
-                    parameters,
-                    domain,
-                } => parameters
-                    .iter()
-                    .all(|parameter| caller_domains[*parameter] == *domain)
-                    .then_some(*domain)
-                    .filter(|domain| compatible(*domain, *expected)),
-                TypeShapeDslHelperArgumentSource::ValueSources {
-                    sources,
-                    observed_domain,
-                } => {
-                    let actual = TypeShapeDslInputDomain::Flag(*observed_domain);
-                    if sources.all_narrowed() {
-                        let TypeShapeDslInputDomain::Flag(expected) = expected else {
-                            return None;
-                        };
-                        sources
-                            .parameter_uses
+            .enumerate()
+            .map(|(argument_index, (argument, expected))| {
+                let incompatible = |actual| TypeShapeDslHelperArgumentError::IncompatibleDomain {
+                    argument: argument_index,
+                    actual,
+                    expected: *expected,
+                };
+                match &argument.source {
+                    TypeShapeDslHelperArgumentSource::Exact(domain) => domain
+                        .can_forward_to(*expected)
+                        .then_some(*expected)
+                        .ok_or_else(|| incompatible(*domain)),
+                    TypeShapeDslHelperArgumentSource::ParametersWithRequiredDomain {
+                        parameters,
+                        domain,
+                    } => {
+                        if let Some(actual) = parameters
                             .iter()
-                            .all(|use_| {
-                                matches!(caller_domains[use_.parameter], TypeShapeDslInputDomain::Flag(actual)
-                                    if actual.intersection(*observed_domain)
-                                        .is_some_and(|actual| actual.is_subset_of(*expected)))
-                            })
-                            .then_some(TypeShapeDslInputDomain::Flag(*expected))
-                    } else {
-                        sources
-                            .parameter_uses
-                            .iter()
-                            .all(|use_| caller_domains[use_.parameter] == actual)
-                            .then_some(actual)
-                            .filter(|domain| compatible(*domain, *expected))
-                    }
-                }
-                TypeShapeDslHelperArgumentSource::NoneLiteral => {
-                    let actual = TypeShapeDslInputDomain::Flag(FlagDomain::of(
-                        FlagMember::NoneType,
-                    ));
-                    compatible(actual, *expected).then_some(actual)
-                }
-                TypeShapeDslHelperArgumentSource::Parameters(parameters) => {
-                    let mut domains = parameters
-                        .iter()
-                        .map(|parameter| caller_domains[*parameter]);
-                    let first = domains
-                        .next()
-                        .expect("validated helper argument source is nonempty");
-                    (domains.all(|domain| domain == first) && compatible(first, *expected))
-                        .then_some(first)
-                }
-                TypeShapeDslHelperArgumentSource::DeferredInteger {
-                    index,
-                    parameter_uses,
-                    resolved_domain,
-                } => {
-                    let accepts_expected = match expected {
-                        TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => true,
-                        TypeShapeDslInputDomain::Flag(domain)
-                            if *domain == FlagDomain::of(FlagMember::Int) =>
+                            .map(|parameter| caller_domains[*parameter])
+                            .find(|actual| *actual != *domain)
                         {
-                            parameter_uses.iter().all(|use_| {
-                                caller_domains[use_.parameter]
-                                    == TypeShapeDslInputDomain::Flag(FlagDomain::of(
-                                        FlagMember::Int,
-                                    ))
-                            })
+                            Err(incompatible(actual))
+                        } else {
+                            domain
+                                .can_forward_to(*expected)
+                                .then_some(*expected)
+                                .ok_or_else(|| incompatible(*domain))
                         }
-                        _ => false,
-                    };
-                    if !accepts_expected
-                        || resolved_domain.is_some_and(|domain| domain != *expected)
-                    {
-                        return None;
                     }
-                    let previous = deferred_domains.entry(*index).or_insert(*expected);
-                    (*previous == *expected).then_some(*expected)
+                    TypeShapeDslHelperArgumentSource::ValueSources {
+                        sources,
+                        observed_domain,
+                    } => {
+                        if let Some(actual) = sources.parameter_uses.iter().find_map(|use_| {
+                            let actual = effective_parameter_domain(*use_, *observed_domain)
+                                .unwrap_or(caller_domains[use_.parameter]);
+                            (!actual.can_forward_to(*expected)).then_some(actual)
+                        }) {
+                            return Err(incompatible(actual));
+                        }
+                        if sources.non_parameter_kinds != 0 {
+                            let Some(domain) = flag_domain_from_kinds(sources.non_parameter_kinds)
+                            else {
+                                unreachable!("nonempty non-parameter Flag kinds are representable")
+                            };
+                            let compatible = (*expected == TypeShapeDslInputDomain::OptionalInt
+                                && domain == FlagDomain::of(FlagMember::NoneType))
+                                || TypeShapeDslInputDomain::Flag(domain).can_forward_to(*expected);
+                            if !compatible {
+                                return Err(incompatible(TypeShapeDslInputDomain::Flag(domain)));
+                            }
+                        }
+                        Ok(*expected)
+                    }
+                    TypeShapeDslHelperArgumentSource::NoneLiteral => match expected {
+                        TypeShapeDslInputDomain::OptionalInt => Ok(*expected),
+                        TypeShapeDslInputDomain::Flag(domain)
+                            if domain.contains(FlagMember::NoneType) =>
+                        {
+                            Ok(*expected)
+                        }
+                        _ => Err(incompatible(TypeShapeDslInputDomain::Flag(FlagDomain::of(
+                            FlagMember::NoneType,
+                        )))),
+                    },
+                    TypeShapeDslHelperArgumentSource::Parameters(parameters) => {
+                        if let Some(actual) = parameters
+                            .iter()
+                            .map(|parameter| caller_domains[*parameter])
+                            .find(|actual| !actual.can_forward_to(*expected))
+                        {
+                            Err(incompatible(actual))
+                        } else {
+                            Ok(*expected)
+                        }
+                    }
+                    TypeShapeDslHelperArgumentSource::DeferredInteger {
+                        index,
+                        parameter_uses,
+                        resolved_domain,
+                        ..
+                    } => {
+                        let selected_domain = match expected {
+                            TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
+                            | TypeShapeDslInputDomain::OptionalInt => {
+                                if let Some(actual) = parameter_uses.iter().find_map(|use_| {
+                                    let actual = effective_parameter_domain(
+                                        *use_,
+                                        FlagDomain::of(FlagMember::Int),
+                                    )
+                                    .unwrap_or(caller_domains[use_.parameter]);
+                                    let is_integer = match actual {
+                                        TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => {
+                                            true
+                                        }
+                                        TypeShapeDslInputDomain::Flag(domain) => {
+                                            domain.is_subset_of(FlagDomain::of(FlagMember::Int))
+                                        }
+                                        _ => false,
+                                    };
+                                    (!is_integer).then_some(actual)
+                                }) {
+                                    return Err(incompatible(actual));
+                                }
+                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int)
+                            }
+                            TypeShapeDslInputDomain::Flag(domain)
+                                if FlagDomain::of(FlagMember::Int).is_subset_of(*domain) =>
+                            {
+                                if let Some(actual) = parameter_uses.iter().find_map(|use_| {
+                                    let actual = effective_parameter_domain(
+                                        *use_,
+                                        FlagDomain::of(FlagMember::Int),
+                                    )
+                                    .unwrap_or(caller_domains[use_.parameter]);
+                                    (!actual.can_forward_to(*expected)).then_some(actual)
+                                }) {
+                                    return Err(incompatible(actual));
+                                }
+                                TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Int))
+                            }
+                            _ => {
+                                let actual = parameter_uses
+                                    .first()
+                                    .and_then(|use_| {
+                                        effective_parameter_domain(
+                                            *use_,
+                                            FlagDomain::of(FlagMember::Int),
+                                        )
+                                    })
+                                    .unwrap_or(TypeShapeDslInputDomain::Value(
+                                        TypeShapeDslDomain::Int,
+                                    ));
+                                return Err(incompatible(actual));
+                            }
+                        };
+                        if let Some(domain) = *resolved_domain
+                            && domain != selected_domain
+                        {
+                            return Err(incompatible(domain));
+                        }
+                        let previous = deferred_domains.entry(*index).or_insert(selected_domain);
+                        (*previous == selected_domain)
+                            .then_some(selected_domain)
+                            .ok_or_else(|| incompatible(*previous))
+                    }
                 }
             })
             .collect()
@@ -1999,7 +2096,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 let (root, domain) = self.deferred_integer_domain(index);
                 Ok((
                     index,
-                    (root, self.deferred_integer_parameter_uses(root)?, domain),
+                    (
+                        root,
+                        self.deferred_integer_parameter_uses(root)?,
+                        domain.map(DslIntegerDomain::input_domain),
+                    ),
                 ))
             })
             .collect::<Result<HashMap<_, _>, TypeShapeDslDefinitionError>>()?;
@@ -2021,7 +2122,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             // so later resolution observes the shared domain.
             *index = *root;
             *parameter_uses = final_parameter_uses.clone();
-            *resolved_domain = domain.map(DslIntegerDomain::input_domain);
+            *resolved_domain = *domain;
         }
         Ok(())
     }
@@ -6919,6 +7020,69 @@ mod tests {
         ] {
             assert!(int.can_use_as(TypeShapeDslDomain::Int, narrowing));
             assert!(!int.can_use_as(TypeShapeDslDomain::IntTuple, narrowing));
+        }
+    }
+
+    #[test]
+    fn helper_argument_domain_compatibility() {
+        let int = TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int);
+        let shape = TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple);
+        let optional_int = TypeShapeDslInputDomain::OptionalInt;
+        let flag_int = TypeShapeDslInputDomain::Flag(FlagDomain::of(FlagMember::Int));
+        let flag_optional_int = TypeShapeDslInputDomain::Flag(
+            FlagDomain::of(FlagMember::Int).join(FlagDomain::of(FlagMember::NoneType)),
+        );
+
+        assert!(int.can_forward_to(int));
+        assert!(int.can_forward_to(optional_int));
+        assert!(optional_int.can_forward_to(optional_int));
+        assert!(flag_int.can_forward_to(flag_optional_int));
+        assert!(!optional_int.can_forward_to(int));
+        assert!(!flag_optional_int.can_forward_to(flag_int));
+        assert!(!flag_int.can_forward_to(int));
+        assert!(!int.can_forward_to(flag_int));
+        assert!(!shape.can_forward_to(optional_int));
+    }
+
+    #[test]
+    fn deferred_integer_dimension_selection_rejects_non_integer_sources() {
+        let helper_call = TypeShapeDslHelperCall {
+            callee: Expr::Name(ExprName {
+                node_index: ruff_python_ast::AtomicNodeIndex::default(),
+                range: TextRange::default(),
+                id: Name::new("helper"),
+                ctx: ruff_python_ast::ExprContext::Load,
+            }),
+            arguments: vec![TypeShapeDslHelperArgument {
+                slot: 0,
+                source: TypeShapeDslHelperArgumentSource::DeferredInteger {
+                    index: 0,
+                    parameter_uses: vec![TypeShapeDslParameterUse {
+                        parameter: 0,
+                        narrowing: TypeShapeDslParameterNarrowing::Unnarrowed,
+                    }]
+                    .into_boxed_slice(),
+                    resolved_domain: None,
+                },
+            }],
+        };
+        let int = TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int);
+        let optional_int = TypeShapeDslInputDomain::OptionalInt;
+        let broad_flag = TypeShapeDslInputDomain::Flag(
+            FlagDomain::of(FlagMember::Int)
+                .join(FlagDomain::of(FlagMember::IntTuple))
+                .join(FlagDomain::of(FlagMember::NoneType)),
+        );
+
+        for actual in [optional_int, broad_flag] {
+            assert_eq!(
+                helper_call.argument_domains(&[actual], &[int], &mut HashMap::new()),
+                Err(TypeShapeDslHelperArgumentError::IncompatibleDomain {
+                    argument: 0,
+                    actual,
+                    expected: int,
+                })
+            );
         }
     }
 

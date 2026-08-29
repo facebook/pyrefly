@@ -26,6 +26,7 @@ use pyrefly_types::type_level_dsl::TypeShapeDslConditionKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslExpressionKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslFlagValueKind;
+use pyrefly_types::type_level_dsl::TypeShapeDslHelperArgumentError;
 use pyrefly_types::type_level_dsl::TypeShapeDslInputDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslIntrinsic;
 use pyrefly_types::type_level_dsl::TypeShapeDslParameterNarrowing;
@@ -184,22 +185,38 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let callee = self.expr_infer(helper_call.callee(), &swallowed_errors);
             match callee.callee_kind() {
                 Some(CalleeKind::Function(FunctionKind::TypeShapeDsl(helper_id, helper))) => {
-                    let Some(argument_domains) = helper_call.argument_domains(
+                    let argument_domains = match helper_call.argument_domains(
                         &parameter_domains,
                         helper.parameter_domains(),
                         &mut deferred_integer_domains,
-                    ) else {
-                        self.error(
-                            errors,
-                            helper_call.callee().range(),
-                            ErrorKind::InvalidArgument,
-                            format!(
-                                "DSL helper argument domains must exactly match `{}`",
-                                helper.name()
-                            ),
-                        );
-                        valid = false;
-                        continue;
+                    ) {
+                        Ok(domains) => domains,
+                        Err(error) => {
+                            let detail = match error {
+                                TypeShapeDslHelperArgumentError::Arity => String::new(),
+                                TypeShapeDslHelperArgumentError::IncompatibleDomain {
+                                    argument,
+                                    actual,
+                                    expected,
+                                } => {
+                                    format!(
+                                        ": argument {} has domain `{actual}`, expected `{expected}`",
+                                        argument + 1,
+                                    )
+                                }
+                            };
+                            self.error(
+                                errors,
+                                helper_call.callee().range(),
+                                ErrorKind::InvalidArgument,
+                                format!(
+                                    "DSL helper argument domains are incompatible with `{}`{detail}",
+                                    helper.name()
+                                ),
+                            );
+                            valid = false;
+                            continue;
+                        }
                     };
                     if helper.result_domain() != result_domain {
                         self.error(
