@@ -6,7 +6,7 @@
 from typing import Literal, overload
 
 from numpy._shapes import int_min
-from shape_extensions import IntVar
+from shape_extensions import Int, IntVar
 
 from .. import ndarray
 
@@ -37,7 +37,7 @@ def svd[M: IntVar, N: IntVar, DType](
     compute_uv: Literal[True] = True,
     hermitian: Literal[False] = False,
 ) -> tuple[
-    ndarray[[M, int_min(M, N)], DType],
-    ndarray[[int_min(M, N)], DType],
-    ndarray[[int_min(M, N), N], DType],
+    ndarray[[M, int_min(Int[M], Int[N])], DType],
+    ndarray[[int_min(Int[M], Int[N])], DType],
+    ndarray[[int_min(Int[M], Int[N]), N], DType],
 ]: ...

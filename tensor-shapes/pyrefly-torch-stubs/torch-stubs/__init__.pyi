@@ -1831,7 +1831,7 @@ def full[Shape: IntTuple](size: Shape, fill_value: float) -> Tensor[Shape]:
 @overload
 def arange[End: IntVar](
     end: _Int[End], *, dtype: int | None = None, device: Any = None
-) -> Tensor[[arange_extent(End)]]:
+) -> Tensor[[arange_extent(_Int[End])]]:
     """Create 1D tensor with range [0, end). Shape inference via meta-shape: torch.arange"""
     ...
 
@@ -1843,7 +1843,7 @@ def arange[Start: IntVar, End: IntVar, Step: Flag[builtins.int]](
     *,
     dtype: int | None = None,
     device: Any = None,
-) -> Tensor[[arange_step_extent(Start, End, Step)]]:
+) -> Tensor[[arange_step_extent(_Int[Start], _Int[End], Step)]]:
     """Create 1D tensor with range [start, end) with step. Shape inference via meta-shape: torch.arange"""
     ...
 

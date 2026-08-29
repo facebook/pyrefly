@@ -31,7 +31,7 @@ def rfft[Shape: IntTuple, Dim: Flag[int]](
 @overload
 def rfft[Shape: IntTuple, N: IntVar, Dim: Flag[int]](
     self: Tensor[Shape], n: _Int[N], dim: Dim = -1, norm: str = None
-) -> Tensor[rfft_n_shape(Shape, N, Dim)]: ...
+) -> Tensor[rfft_n_shape(Shape, _Int[N], Dim)]: ...
 @overload
 def rfft[Shape: IntTuple, N: Flag[int], Dim: Flag[int]](
     self: Tensor[Shape], n: N, dim: Dim = -1, norm: str = None
@@ -45,7 +45,7 @@ def irfft[Shape: IntTuple, Dim: Flag[int]](
 @overload
 def irfft[Shape: IntTuple, N: IntVar, Dim: Flag[int]](
     self: Tensor[Shape], n: _Int[N], dim: Dim = -1, norm: str = None
-) -> Tensor[irfft_n_shape(Shape, N, Dim)]: ...
+) -> Tensor[irfft_n_shape(Shape, _Int[N], Dim)]: ...
 @overload
 def irfft[Shape: IntTuple, N: Flag[int], Dim: Flag[int]](
     self: Tensor[Shape], n: N, dim: Dim = -1, norm: str = None
@@ -59,7 +59,7 @@ def hfft[Shape: IntTuple, Dim: Flag[int]](
 @overload
 def hfft[Shape: IntTuple, N: IntVar, Dim: Flag[int]](
     self: Tensor[Shape], n: _Int[N], dim: Dim = -1, norm: str = None
-) -> Tensor[irfft_n_shape(Shape, N, Dim)]: ...
+) -> Tensor[irfft_n_shape(Shape, _Int[N], Dim)]: ...
 @overload
 def hfft[Shape: IntTuple, N: Flag[int], Dim: Flag[int]](
     self: Tensor[Shape], n: N, dim: Dim = -1, norm: str = None
@@ -73,7 +73,7 @@ def ihfft[Shape: IntTuple, Dim: Flag[int]](
 @overload
 def ihfft[Shape: IntTuple, N: IntVar, Dim: Flag[int]](
     self: Tensor[Shape], n: _Int[N], dim: Dim = -1, norm: str = None
-) -> Tensor[rfft_n_shape(Shape, N, Dim)]: ...
+) -> Tensor[rfft_n_shape(Shape, _Int[N], Dim)]: ...
 @overload
 def ihfft[Shape: IntTuple, N: Flag[int], Dim: Flag[int]](
     self: Tensor[Shape], n: N, dim: Dim = -1, norm: str = None
