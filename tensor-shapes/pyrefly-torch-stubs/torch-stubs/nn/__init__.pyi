@@ -28,13 +28,12 @@ if TYPE_CHECKING:
     from torch._shapes import (
         flatten_shape,
         glu_shape,
-        nn_avgpool_forward_ir,
         nn_gru_forward_ir,
         nn_lstm_forward_ir,
         nn_lstmcell_forward_ir,
-        nn_maxpool_forward_ir,
         nn_upsample_forward_ir,
         pixel_shuffle_shape,
+        pool_shape,
         symmetric_pad2d_shape,
     )
 
@@ -741,103 +740,133 @@ class ConvTranspose3d[
 # Pooling Modules
 # ==============================================================================
 
-class MaxPool1d(Module):
-    """1D max pooling. Shape inference via DSL + NNModule init capture."""
+class MaxPool1d[
+    KernelSize: Flag[int],
+    Stride: Flag[int | None] = None,
+    Padding: Flag[int] = 0,
+    Dilation: Flag[int] = 1,
+    CeilMode: Flag[bool] = False,
+](Module):
+    """1D max pooling with scalar controls tracked by the type-level DSL."""
     def __init__(
         self,
-        kernel_size: int,
-        stride: int | None = None,
-        padding: int = 0,
-        dilation: int = 1,
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        dilation: Dilation = 1,
         return_indices: bool = False,
-        ceil_mode: bool = False,
+        ceil_mode: CeilMode = False,
     ) -> None: ...
-    @uses_shape_dsl(
-        nn_maxpool_forward_ir,
-        capture_init=["kernel_size", "stride", "padding", "dilation"],
-    )
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[
+        pool_shape(Shape, 1, KernelSize, Stride, Padding, Dilation, CeilMode)
+    ]: ...
 
-class MaxPool2d(Module):
-    """2D max pooling. Shape inference via DSL + NNModule init capture."""
+class MaxPool2d[
+    KernelSize: Flag[int],
+    Stride: Flag[int | None] = None,
+    Padding: Flag[int] = 0,
+    Dilation: Flag[int] = 1,
+    CeilMode: Flag[bool] = False,
+](Module):
+    """2D max pooling with scalar controls tracked by the type-level DSL."""
     def __init__(
         self,
-        kernel_size: int,
-        stride: int | None = None,
-        padding: int = 0,
-        dilation: int = 1,
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        dilation: Dilation = 1,
         return_indices: bool = False,
-        ceil_mode: bool = False,
+        ceil_mode: CeilMode = False,
     ) -> None: ...
-    @uses_shape_dsl(
-        nn_maxpool_forward_ir,
-        capture_init=["kernel_size", "stride", "padding", "dilation"],
-    )
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[
+        pool_shape(Shape, 2, KernelSize, Stride, Padding, Dilation, CeilMode)
+    ]: ...
 
-class MaxPool3d(Module):
-    """3D max pooling. Shape inference via DSL + NNModule init capture."""
+class MaxPool3d[
+    KernelSize: Flag[int],
+    Stride: Flag[int | None] = None,
+    Padding: Flag[int] = 0,
+    Dilation: Flag[int] = 1,
+    CeilMode: Flag[bool] = False,
+](Module):
+    """3D max pooling with scalar controls tracked by the type-level DSL."""
     def __init__(
         self,
-        kernel_size: int,
-        stride: int | None = None,
-        padding: int = 0,
-        dilation: int = 1,
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        dilation: Dilation = 1,
         return_indices: bool = False,
-        ceil_mode: bool = False,
+        ceil_mode: CeilMode = False,
     ) -> None: ...
-    @uses_shape_dsl(
-        nn_maxpool_forward_ir,
-        capture_init=["kernel_size", "stride", "padding", "dilation"],
-    )
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[
+        pool_shape(Shape, 3, KernelSize, Stride, Padding, Dilation, CeilMode)
+    ]: ...
 
-class AvgPool1d(Module):
-    """1D average pooling. Shape inference via DSL + NNModule init capture."""
+class AvgPool1d[
+    KernelSize: Flag[int],
+    Stride: Flag[int | None] = None,
+    Padding: Flag[int] = 0,
+    CeilMode: Flag[bool] = False,
+](Module):
+    """1D average pooling with scalar controls tracked by the type-level DSL."""
     def __init__(
         self,
-        kernel_size: int,
-        stride: int | None = None,
-        padding: int = 0,
-        ceil_mode: bool = False,
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        ceil_mode: CeilMode = False,
         count_include_pad: bool = True,
     ) -> None: ...
-    @uses_shape_dsl(
-        nn_avgpool_forward_ir, capture_init=["kernel_size", "stride", "padding"]
-    )
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[pool_shape(Shape, 1, KernelSize, Stride, Padding, 1, CeilMode)]: ...
 
-class AvgPool2d(Module):
-    """2D average pooling. Shape inference via DSL + NNModule init capture."""
+class AvgPool2d[
+    KernelSize: Flag[int],
+    Stride: Flag[int | None] = None,
+    Padding: Flag[int] = 0,
+    CeilMode: Flag[bool] = False,
+](Module):
+    """2D average pooling with scalar controls tracked by the type-level DSL."""
     def __init__(
         self,
-        kernel_size: int,
-        stride: int | None = None,
-        padding: int = 0,
-        ceil_mode: bool = False,
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        ceil_mode: CeilMode = False,
         count_include_pad: bool = True,
         divisor_override: int | None = None,
     ) -> None: ...
-    @uses_shape_dsl(
-        nn_avgpool_forward_ir, capture_init=["kernel_size", "stride", "padding"]
-    )
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[pool_shape(Shape, 2, KernelSize, Stride, Padding, 1, CeilMode)]: ...
 
-class AvgPool3d(Module):
-    """3D average pooling. Shape inference via DSL + NNModule init capture."""
+class AvgPool3d[
+    KernelSize: Flag[int],
+    Stride: Flag[int | None] = None,
+    Padding: Flag[int] = 0,
+    CeilMode: Flag[bool] = False,
+](Module):
+    """3D average pooling with scalar controls tracked by the type-level DSL."""
     def __init__(
         self,
-        kernel_size: int,
-        stride: int | None = None,
-        padding: int = 0,
-        ceil_mode: bool = False,
+        kernel_size: KernelSize,
+        stride: Stride = None,
+        padding: Padding = 0,
+        ceil_mode: CeilMode = False,
         count_include_pad: bool = True,
         divisor_override: int | None = None,
     ) -> None: ...
-    @uses_shape_dsl(
-        nn_avgpool_forward_ir, capture_init=["kernel_size", "stride", "padding"]
-    )
-    def forward(self, input: Tensor) -> Tensor: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> Tensor[pool_shape(Shape, 3, KernelSize, Stride, Padding, 1, CeilMode)]: ...
 
 class AdaptiveAvgPool1d[OL: IntVar](Module):
     """1D adaptive average pooling"""

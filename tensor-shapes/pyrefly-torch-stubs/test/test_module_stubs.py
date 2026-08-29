@@ -9,12 +9,12 @@ convolution, pooling, loss, and misc modules.
 """
 
 from collections.abc import Callable
-from typing import assert_type, TYPE_CHECKING
+from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from shape_extensions import IntTuple, IntVar
+from shape_extensions import Int, IntTuple, IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -293,6 +293,118 @@ def test_maxpool2d_with_padding():
     assert_type(y, Tensor[[4, 64, 32, 32]])
 
 
+def test_maxpool1d_padding_and_dilation():
+    pool = nn.MaxPool1d(3, stride=2, padding=1, dilation=2)
+    x: Tensor[[2, 3, 17]] = torch.randn(2, 3, 17)
+    assert_type(pool(x), Tensor[[2, 3, 8]])
+    assert_type(nn.MaxPool1d(3, padding=1, dilation=2)(x), Tensor[[2, 3, 5]])
+    assert_type(
+        nn.MaxPool1d(3, stride=None, padding=1, dilation=2)(x), Tensor[[2, 3, 5]]
+    )
+
+
+def test_maxpool3d_padding_and_dilation():
+    pool = nn.MaxPool3d(3, stride=2, padding=1, dilation=2)
+    x: Tensor[[2, 3, 9, 11, 13]] = torch.randn(2, 3, 9, 11, 13)
+    assert_type(pool(x), Tensor[[2, 3, 4, 5, 6]])
+
+
+def test_maxpool_explicit_none_stride():
+    x: Tensor[[2, 3, 16, 20]] = torch.randn(2, 3, 16, 20)
+    assert_type(nn.MaxPool2d(2, stride=None)(x), Tensor[[2, 3, 8, 10]])
+
+
+def test_maxpool_symbolic_parameters[
+    B: IntVar,
+    C: IntVar,
+    L: IntVar,
+    K: IntVar,
+    S: IntVar,
+    P: IntVar,
+    D: IntVar,
+](
+    x: Tensor[[B, C, L]],
+    kernel: Int[K],
+    stride: Int[S],
+    padding: Int[P],
+    dilation: Int[D],
+) -> None:
+    # A symbolic parameter cannot be checked against its range, and the DSL is not
+    # re-evaluated once the parameter is specialized, so the whole call recovers
+    # gradually rather than deferring arithmetic no validation would revisit.
+    pool = nn.MaxPool1d(kernel, stride, padding, dilation)
+    assert_type(pool(x), Tensor)
+
+
+def test_maxpool_gradual_parameters(
+    x: Tensor[[2, 3, 16, 20]],
+    bare: Tensor,
+    kernel: int,
+    stride: int,
+    optional_stride: int | None,
+    padding: int,
+    dilation: int,
+    ceil_mode: bool,
+    dynamic: Any,
+) -> None:
+    # An argument with no known value cannot be validated, and neither can an unknown
+    # `ceil_mode` choose a rounding rule, so every result here is fully gradual.
+    assert_type(nn.MaxPool2d(kernel, stride, padding, dilation)(x), Tensor)
+    assert_type(nn.MaxPool2d(kernel, optional_stride)(x), Tensor)
+    assert_type(nn.MaxPool2d(2, 2, ceil_mode=ceil_mode)(x), Tensor[[2, 3, int, int]])
+    assert_type(nn.MaxPool2d(dynamic, stride=dynamic)(x), Tensor)
+    assert_type(nn.MaxPool2d(2)(bare), Tensor)
+
+
+def test_maxpool_return_indices_limitation():
+    x: Tensor[[2, 3, 5]] = torch.randn(2, 3, 5)
+    # Module stubs do not yet model the return_indices output tuple.
+    assert_type(nn.MaxPool1d(2, stride=2, return_indices=True)(x), Tensor[[2, 3, 2]])
+
+
+def test_pool_batched_and_unbatched_ranks():
+    one_unbatched: Tensor[[3, 16]] = torch.randn(3, 16)
+    one_batched: Tensor[[2, 3, 16]] = torch.randn(2, 3, 16)
+    two_unbatched: Tensor[[3, 16, 20]] = torch.randn(3, 16, 20)
+    two_batched: Tensor[[2, 3, 16, 20]] = torch.randn(2, 3, 16, 20)
+    three_unbatched: Tensor[[3, 8, 10, 12]] = torch.randn(3, 8, 10, 12)
+    three_batched: Tensor[[2, 3, 8, 10, 12]] = torch.randn(2, 3, 8, 10, 12)
+    assert_type(nn.MaxPool1d(2)(one_unbatched), Tensor[[3, 8]])
+    assert_type(nn.MaxPool1d(2)(one_batched), Tensor[[2, 3, 8]])
+    assert_type(nn.MaxPool2d(2)(two_unbatched), Tensor[[3, 8, 10]])
+    assert_type(nn.MaxPool2d(2)(two_batched), Tensor[[2, 3, 8, 10]])
+    assert_type(nn.MaxPool3d(2)(three_unbatched), Tensor[[3, 4, 5, 6]])
+    assert_type(nn.MaxPool3d(2)(three_batched), Tensor[[2, 3, 4, 5, 6]])
+    assert_type(nn.AvgPool1d(2)(one_unbatched), Tensor[[3, 8]])
+    assert_type(nn.AvgPool1d(2)(one_batched), Tensor[[2, 3, 8]])
+    assert_type(nn.AvgPool2d(2)(two_unbatched), Tensor[[3, 8, 10]])
+    assert_type(nn.AvgPool2d(2)(two_batched), Tensor[[2, 3, 8, 10]])
+    assert_type(nn.AvgPool3d(2)(three_unbatched), Tensor[[3, 4, 5, 6]])
+    assert_type(nn.AvgPool3d(2)(three_batched), Tensor[[2, 3, 4, 5, 6]])
+
+
+def test_pool_ceil_mode_and_last_window_correction():
+    adds_window: Tensor[[2, 3, 6]] = torch.randn(2, 3, 6)
+    corrects_window: Tensor[[2, 3, 5]] = torch.randn(2, 3, 5)
+    assert_type(nn.MaxPool1d(3, stride=2)(adds_window), Tensor[[2, 3, 2]])
+    assert_type(
+        nn.MaxPool1d(3, stride=2, ceil_mode=True)(adds_window), Tensor[[2, 3, 3]]
+    )
+    assert_type(nn.AvgPool1d(3, stride=2)(adds_window), Tensor[[2, 3, 2]])
+    assert_type(
+        nn.AvgPool1d(3, stride=2, ceil_mode=True)(adds_window), Tensor[[2, 3, 3]]
+    )
+    # A naive ceil result is 4; ATen drops the padding-only final window.
+    assert_type(
+        nn.MaxPool1d(2, stride=2, padding=1, ceil_mode=True)(corrects_window),
+        Tensor[[2, 3, 3]],
+    )
+    assert_type(
+        nn.AvgPool1d(2, stride=2, padding=1, ceil_mode=True)(corrects_window),
+        Tensor[[2, 3, 3]],
+    )
+
+
 def test_avgpool2d():
     """AvgPool2d(2, 2): 32x32 → 16x16"""
     pool = nn.AvgPool2d(2, 2)
@@ -307,6 +419,69 @@ def test_avgpool2d_stride_default():
     x: Tensor[[4, 64, 32, 32]] = torch.randn(4, 64, 32, 32)
     y = pool(x)
     assert_type(y, Tensor[[4, 64, 16, 16]])
+
+
+def test_avgpool1d_padding():
+    pool = nn.AvgPool1d(3, stride=2, padding=1)
+    x: Tensor[[2, 3, 17]] = torch.randn(2, 3, 17)
+    assert_type(pool(x), Tensor[[2, 3, 9]])
+
+
+def test_avgpool3d_padding():
+    pool = nn.AvgPool3d(3, stride=2, padding=1)
+    x: Tensor[[2, 3, 9, 11, 13]] = torch.randn(2, 3, 9, 11, 13)
+    assert_type(pool(x), Tensor[[2, 3, 5, 6, 7]])
+
+
+def test_avgpool_explicit_none_stride():
+    x: Tensor[[2, 3, 16, 20]] = torch.randn(2, 3, 16, 20)
+    assert_type(nn.AvgPool2d(2, stride=None)(x), Tensor[[2, 3, 8, 10]])
+
+
+def test_avgpool_symbolic_parameters[
+    B: IntVar,
+    C: IntVar,
+    L: IntVar,
+    K: IntVar,
+    S: IntVar,
+    P: IntVar,
+](
+    x: Tensor[[B, C, L]],
+    kernel: Int[K],
+    stride: Int[S],
+    padding: Int[P],
+) -> None:
+    pool = nn.AvgPool1d(kernel, stride, padding)
+    assert_type(pool(x), Tensor)
+
+
+def test_avgpool_gradual_parameters(
+    x: Tensor[[2, 3, 16, 20]],
+    bare: Tensor,
+    kernel: int,
+    stride: int,
+    optional_stride: int | None,
+    padding: int,
+    ceil_mode: bool,
+    dynamic: Any,
+) -> None:
+    assert_type(nn.AvgPool2d(kernel, stride, padding)(x), Tensor)
+    assert_type(nn.AvgPool2d(kernel, optional_stride, padding)(x), Tensor)
+    assert_type(nn.AvgPool2d(2, 2, ceil_mode=ceil_mode)(x), Tensor[[2, 3, int, int]])
+    assert_type(nn.AvgPool2d(dynamic, stride=dynamic, padding=dynamic)(x), Tensor)
+    assert_type(nn.AvgPool2d(2)(bare), Tensor)
+
+
+def test_avgpool_shape_neutral_parameters():
+    x: Tensor[[2, 3, 5]] = torch.randn(2, 3, 5)
+    # These parameters are accepted but do not alter the output shape.
+    assert_type(
+        nn.AvgPool1d(2, stride=2, count_include_pad=False)(x), Tensor[[2, 3, 2]]
+    )
+    image: Tensor[[2, 3, 5, 5]] = torch.randn(2, 3, 5, 5)
+    assert_type(
+        nn.AvgPool2d(2, stride=2, divisor_override=7)(image), Tensor[[2, 3, 2, 2]]
+    )
 
 
 def test_adaptive_avg_pool2d():

@@ -1073,6 +1073,114 @@ def pool_ir(
     return ShapedArray(shape=out)
 
 @type_shape_dsl_function
+def pool_shape(
+    input: IntTuple,
+    spatial_dims: int,
+    kernel_size: int | tuple[int, ...] | None,
+    stride: int | tuple[int, ...] | None,
+    padding: int | tuple[int, ...] | None,
+    dilation: int | tuple[int, ...] | None,
+    ceil_mode: bool,
+) -> IntTuple:
+    rank = len(input)
+    if rank != spatial_dims + 1 and rank != spatial_dims + 2:
+        return dsl.Invalid("pooling requires spatial rank + 1 or + 2 input")
+    # A scalar argument applies to every axis, so it normalizes to a fixed tuple; an
+    # omitted stride pools with adjacent windows of the normalized kernel. Only the
+    # stride is optional: the DSL narrows an argument to its sequence shape solely by
+    # ruling `None` out first, so every argument spells `None` and the ones that have
+    # no omitted meaning reject it.
+    if kernel_size is None:
+        return dsl.Invalid("pooling kernel cannot be None")
+    elif dsl.is_int_value(kernel_size):
+        kernels = tuple((kernel_size for _ in range(spatial_dims)))
+    else:
+        kernels = kernel_size
+    if stride is None:
+        strides = kernels
+    elif dsl.is_int_value(stride):
+        strides = tuple((stride for _ in range(spatial_dims)))
+    else:
+        strides = stride
+    if padding is None:
+        return dsl.Invalid("pooling padding cannot be None")
+    elif dsl.is_int_value(padding):
+        paddings = tuple((padding for _ in range(spatial_dims)))
+    else:
+        paddings = padding
+    if dilation is None:
+        return dsl.Invalid("pooling dilation cannot be None")
+    elif dsl.is_int_value(dilation):
+        dilations = tuple((dilation for _ in range(spatial_dims)))
+    else:
+        dilations = dilation
+    if len(kernels) != spatial_dims:
+        return dsl.Invalid("pooling kernel must match the spatial rank")
+    if len(strides) != spatial_dims:
+        return dsl.Invalid("pooling stride must match the spatial rank")
+    if len(paddings) != spatial_dims:
+        return dsl.Invalid("pooling padding must match the spatial rank")
+    if len(dilations) != spatial_dims:
+        return dsl.Invalid("pooling dilation must match the spatial rank")
+    # Every check below is a direct predicate rather than one gated on concreteness:
+    # a value the checker cannot decide makes the whole call recover gradually. The
+    # DSL is not re-evaluated after a type parameter is specialized, so a deferred
+    # expression would be arithmetic that no validation ever revisits.
+    if any(size < 1 for size in kernels):
+        return dsl.Invalid("pooling kernel must be positive")
+    if any(step < 1 for step in strides):
+        return dsl.Invalid("pooling stride must be positive")
+    if any(pad < 0 for pad in paddings):
+        return dsl.Invalid("pooling padding must be nonnegative")
+    if any(rate < 1 for rate in dilations):
+        return dsl.Invalid("pooling dilation must be positive")
+    # ATen caps padding at half of the raw kernel. That bound is what keeps the ceil
+    # correction below dividing by 1 or 2 rather than by zero. `any` cannot iterate a
+    # `zip`, so the per-axis slack is materialized first.
+    slack = dsl.IntTuple((size - 2 * pad for size, pad in zip(kernels, paddings)))
+    if any(value < 0 for value in slack):
+        return dsl.Invalid("pooling padding must be at most half the kernel size")
+    input_spatial = input[rank - spatial_dims :]
+    if ceil_mode and any(not dsl.is_concrete_int(extent) for extent in input_spatial):
+        # The ceil correction expands rapidly when composed, so keep its rank while
+        # making only the spatial dimensions gradual.
+        return dsl.concat(
+            input[: rank - spatial_dims],
+            dsl.IntTuple((dsl.Int.gradual() for _index in range(spatial_dims))),
+        )
+    # `ceil_mode` rounds the window count up, but ATen drops a final window that
+    # starts inside the padding; valid padding makes the naive ceil result exceed
+    # that last-window limit by at most one, so the correction is 1 // (2 - excess).
+    spatial = dsl.IntTuple(
+        (
+            (
+                (extent + 2 * pad - (rate * (size - 1) + 1) + step - 1) // step
+                + 1
+                - 1
+                // (
+                    2
+                    - (
+                        (extent + 2 * pad - (rate * (size - 1) + 1) + step - 1) // step
+                        + 1
+                        - ((extent + pad - 1) // step + 1)
+                    )
+                )
+            )
+            if ceil_mode
+            else (extent + 2 * pad - (rate * (size - 1) + 1)) // step + 1
+            for extent, size, step, pad, rate in zip(
+                input_spatial, kernels, strides, paddings, dilations
+            )
+        )
+    )
+    # TODO(stroxler): Validate output positivity once the DSL can prove symbolic inequalities
+    # without discarding the computed shape formula.
+    if rank == spatial_dims + 1:
+        return dsl.concat(input[:1], spatial)
+    else:
+        return dsl.concat(input[:2], spatial)
+
+@type_shape_dsl_function
 def adaptive_pool1d_shape(input_shape: IntTuple, output: Int) -> IntTuple:
     if len(input_shape) != 2 and len(input_shape) != 3:
         return dsl.Invalid("adaptive_pool1d requires 2D or 3D input")
@@ -1355,25 +1463,6 @@ def item_ir(self: ShapedArray) -> ShapedArray:
             + "D tensor"
         )
     return Unknown
-
-@shape_dsl_function
-def nn_maxpool_forward_ir(
-    input: ShapedArray,
-    kernel_size: symint = 1,
-    stride: symint | None = None,
-    padding: symint = 0,
-    dilation: symint = 1,
-) -> ShapedArray:
-    return pool_ir(input, kernel_size, stride, padding, dilation)
-
-@shape_dsl_function
-def nn_avgpool_forward_ir(
-    input: ShapedArray,
-    kernel_size: symint = 1,
-    stride: symint | None = None,
-    padding: symint = 0,
-) -> ShapedArray:
-    return pool_ir(input, kernel_size, stride, padding, 1)
 
 @shape_dsl_function
 def nn_upsample_forward_ir(

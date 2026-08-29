@@ -11,13 +11,12 @@ SqueezeNet 1.0 from torchvision with shape annotations.
 
 Original: pytorch/vision/torchvision/models/squeezenet.py
 
-MaxPool2d ceil_mode=True is not captured by DSL (uses floor formula),
-but spatial dims collapse to 1x1 via AdaptiveAvgPool2d so the
-off-by-one in intermediate spatial dims does not affect the output; the
-gap is in the typing of `features`.
+MaxPool2d ceil_mode=True is captured by the DSL. Pooling a symbolic extent
+cannot be validated, so each pool recovers gradually rather than nesting a
+ceil correction per stage; the classifier restores the exact output shape.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -119,18 +118,14 @@ class SqueezeNet[NC: IntVar = 1000](nn.Module):
     def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, 3, H, W]]
     ) -> Tensor[[B, NC]]:
-        x1 = self.features(x)
-        assert_type(
-            x1,
-            Tensor[
-                [
-                    B,
-                    512,
-                    ((-3 + ((-7 + H) // 4)) // 4),
-                    ((-3 + ((-7 + W) // 4)) // 4),
-                ]
-            ],
-        )
+        pooled = self.features(x)
+        # `features` pools three times with `ceil_mode=True`. Each pool of a
+        # symbolic extent is undecidable, so the whole shape computation recovers
+        # gradually: the extents stay a compact `int` instead of carrying a ceil
+        # correction that nests once per stage, and the batch dimension is
+        # recovered from the trailing convolutions rather than from `B`.
+        assert_type(pooled, Tensor[[B, 512, int, int]])
+        x1: Tensor[[B, 512, Any, Any]] = pooled
         x2 = self.classifier(x1)
         assert_type(x2, Tensor[[B, NC, 1, 1]])
         result = torch.flatten(x2, 1)

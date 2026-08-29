@@ -67,6 +67,30 @@ def test_upsample_direct():
     assert_type(out, Tensor[[2, 64, 64, 64]])
 
 
+def test_maxpool_modules_in_sequential():
+    one = nn.Sequential(nn.MaxPool1d(2))
+    two = nn.Sequential(nn.MaxPool2d(2, stride=2))
+    three = nn.Sequential(nn.MaxPool3d(2, padding=1))
+    x1: Tensor[[2, 3, 16]] = torch.randn(2, 3, 16)
+    x2: Tensor[[2, 3, 16, 20]] = torch.randn(2, 3, 16, 20)
+    x3: Tensor[[2, 3, 8, 10, 12]] = torch.randn(2, 3, 8, 10, 12)
+    assert_type(one(x1), Tensor[[2, 3, 8]])
+    assert_type(two(x2), Tensor[[2, 3, 8, 10]])
+    assert_type(three(x3), Tensor[[2, 3, 5, 6, 7]])
+
+
+def test_avgpool_modules_in_sequential():
+    one = nn.Sequential(nn.AvgPool1d(2))
+    two = nn.Sequential(nn.AvgPool2d(2, stride=2))
+    three = nn.Sequential(nn.AvgPool3d(2, padding=1))
+    x1: Tensor[[2, 3, 16]] = torch.randn(2, 3, 16)
+    x2: Tensor[[2, 3, 16, 20]] = torch.randn(2, 3, 16, 20)
+    x3: Tensor[[2, 3, 8, 10, 12]] = torch.randn(2, 3, 8, 10, 12)
+    assert_type(one(x1), Tensor[[2, 3, 8]])
+    assert_type(two(x2), Tensor[[2, 3, 8, 10]])
+    assert_type(three(x3), Tensor[[2, 3, 5, 6, 7]])
+
+
 # Test 7: Sequential with only typed-stub module (Conv2d alone)
 def test_conv_only():
     seq = nn.Sequential(nn.Conv2d(64, 128, kernel_size=3, padding=1))
