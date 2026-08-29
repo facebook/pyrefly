@@ -4,10 +4,10 @@
 # LICENSE file in the root directory of this source tree.
 
 # Phase 1.1: Missing shape operations tests
-from typing import Any, assert_type, reveal_type
+from typing import Any, assert_type, Literal, reveal_type
 
 import torch
-from shape_extensions import IntTuple, IntVar
+from shape_extensions import Int, IntTuple, IntVar
 from torch import Tensor
 
 
@@ -81,11 +81,36 @@ def test_movedim_method_function_alias_parity():
     )
     assert_type(x.movedim((0, 2), (2, 0)), Tensor[[4, 3, 2, 5]])
     assert_type(x.moveaxis((0, 2), (2, 0)), Tensor[[4, 3, 2, 5]])
+    assert_type(x.movedim(source=(0, 2), destination=(2, 0)), Tensor[[4, 3, 2, 5]])
 
 
 def test_movedim_negative_tuple_axes():
     x: Tensor[[2, 3, 4, 5]] = torch.randn(2, 3, 4, 5)
     assert_type(torch.movedim(x, (-1, -3), (0, 2)), Tensor[[5, 2, 3, 4]])
+
+
+def test_movedim_empty_tuple_identity():
+    scalar: Tensor[[]] = torch.tensor(1)
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    assert_type(torch.movedim(scalar, (), ()), Tensor[[]])
+    assert_type(x.moveaxis((), ()), Tensor[[2, 3, 4]])
+
+
+def test_movedim_full_axis_permutations():
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    assert_type(torch.movedim(x, (0, 1, 2), (0, 1, 2)), Tensor[[2, 3, 4]])
+    assert_type(torch.movedim(x, (0, 1, 2), (0, 2, 1)), Tensor[[2, 4, 3]])
+    assert_type(torch.movedim(x, (0, 1, 2), (1, 0, 2)), Tensor[[3, 2, 4]])
+    assert_type(torch.movedim(x, (0, 1, 2), (1, 2, 0)), Tensor[[4, 2, 3]])
+    assert_type(torch.movedim(x, (0, 1, 2), (2, 0, 1)), Tensor[[3, 4, 2]])
+    assert_type(torch.movedim(x, (0, 1, 2), (2, 1, 0)), Tensor[[4, 3, 2]])
+
+
+def test_movedim_tuple_symbolic_shape[A: IntVar, B: IntVar, C: IntVar, D: IntVar](
+    x: Tensor[[A, B, C, D]],
+) -> None:
+    assert_type(torch.moveaxis(x, (0, 2), (2, 0)), Tensor[[C, B, A, D]])
+    assert_type(x.movedim((-1, -3), (0, 2)), Tensor[[D, A, B, C]])
 
 
 def test_movedim_scalar_rank0():
@@ -100,25 +125,59 @@ def test_movedim_scalar_rank0():
     assert_type(scalar.moveaxis(-1, -1), Tensor[[]])
 
 
+def test_movedim_tuple_rank0():
+    scalar: Tensor[[]] = torch.tensor(1)
+    # The tuple overloads name the same implicit axis as the scalar ones, so
+    # every one-axis move is a legal no-op.
+    assert_type(torch.movedim(scalar, (0,), (0,)), Tensor[[]])
+    assert_type(torch.movedim(scalar, (-1,), (-1,)), Tensor[[]])
+    assert_type(torch.moveaxis(scalar, (0,), (-1,)), Tensor[[]])
+    assert_type(scalar.movedim((-1,), (0,)), Tensor[[]])
+    assert_type(scalar.moveaxis((0,), (0,)), Tensor[[]])
+
+
 def movedim_symbolic[A: IntVar, B: IntVar, C: IntVar](
     x: Tensor[[A, B, C]],
 ) -> Tensor[[B, C, A]]:
     return torch.moveaxis(x, 0, 2)
 
 
-def test_movedim_gradual_and_broad_controls(
+def test_movedim_gradual_and_broad_arguments[
+    S0: IntVar,
+    S1: IntVar,
+    D0: IntVar,
+    D1: IntVar,
+](
     scalar_source: int,
     scalar_destination: int,
+    fixed_source: tuple[int, int],
+    fixed_destination: tuple[int, int],
+    symbolic_source: tuple[Int[S0], Int[S1]],
+    symbolic_destination: tuple[Int[D0], Int[D1]],
+    mixed_source: tuple[Literal[0], Int[S0]],
+    mixed_destination: tuple[Int[D0], Literal[2]],
     tuple_source: tuple[int, ...],
     tuple_destination: tuple[int, ...],
     dynamic: Any,
 ):
     x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    scalar: Tensor[[]] = torch.tensor(1)
     gradual: Tensor[IntTuple] = x
     assert_type(torch.movedim(gradual, 0, 2), Tensor[IntTuple])
     assert_type(torch.movedim(x, scalar_source, scalar_destination), Tensor[IntTuple])
-    assert_type(torch.moveaxis(x, tuple_source, tuple_destination), Tensor)
+    assert_type(torch.moveaxis(x, fixed_source, fixed_destination), Tensor[IntTuple])
+    assert_type(
+        torch.movedim(x, symbolic_source, symbolic_destination), Tensor[IntTuple]
+    )
+    assert_type(x.moveaxis(mixed_source, mixed_destination), Tensor[IntTuple])
+    assert_type(torch.moveaxis(x, tuple_source, tuple_destination), Tensor[IntTuple])
     assert_type(x.movedim(dynamic, dynamic), Tensor[IntTuple])
+    # A rank-0 tensor with a non-literal axis degrades instead of guessing, and
+    # must not reach the permutation arithmetic that divides by the rank.
+    assert_type(
+        torch.movedim(scalar, (scalar_source,), (scalar_destination,)),
+        Tensor[IntTuple],
+    )
 
 
 # Test: torch.unfold (sliding window view)

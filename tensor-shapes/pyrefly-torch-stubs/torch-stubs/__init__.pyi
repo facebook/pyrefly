@@ -45,9 +45,8 @@ from torch._shapes import (
     index_select_shape,
     item_ir,
     matmul_shape,
-    movedim_input_ir,
-    movedim_ir,
     movedim_scalar_shape,
+    movedim_tuple_shape,
     multinomial_shape,
     numel_shape,
     permute_shape,
@@ -666,11 +665,10 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Move a single dimension to a new position."""
         ...
 
-    @uses_shape_dsl(movedim_ir)
     @overload
-    def movedim(
-        self: Tensor, source: tuple[int, ...], destination: tuple[int, ...]
-    ) -> Tensor:
+    def movedim[Shape: IntTuple, Source: IntTuple, Destination: IntTuple](
+        self: Tensor[Shape], source: Source, destination: Destination
+    ) -> Tensor[movedim_tuple_shape(Shape, Source, Destination)]:
         """Move multiple dimensions to new positions. Shape inference via meta-shape: torch.Tensor.movedim"""
         ...
 
@@ -685,11 +683,10 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Alias for movedim with a single source and destination."""
         ...
 
-    @uses_shape_dsl(movedim_ir)
     @overload
-    def moveaxis(
-        self: Tensor, source: tuple[int, ...], destination: tuple[int, ...]
-    ) -> Tensor:
+    def moveaxis[Shape: IntTuple, Source: IntTuple, Destination: IntTuple](
+        self: Tensor[Shape], source: Source, destination: Destination
+    ) -> Tensor[movedim_tuple_shape(Shape, Source, Destination)]:
         """Alias for movedim. Shape inference via meta-shape: torch.Tensor.moveaxis"""
         ...
 
@@ -1960,11 +1957,10 @@ def movedim[
     """Move a single dimension to a new position."""
     ...
 
-@uses_shape_dsl(movedim_input_ir)
 @overload
-def movedim(
-    input: Tensor, source: tuple[int, ...], destination: tuple[int, ...]
-) -> Tensor:
+def movedim[Shape: IntTuple, Source: IntTuple, Destination: IntTuple](
+    input: Tensor[Shape], source: Source, destination: Destination
+) -> Tensor[movedim_tuple_shape(Shape, Source, Destination)]:
     """Move multiple dimensions to new positions. Shape inference via meta-shape: torch.movedim"""
     ...
 
@@ -1979,11 +1975,10 @@ def moveaxis[
     """Alias for movedim with a single source and destination."""
     ...
 
-@uses_shape_dsl(movedim_input_ir)
 @overload
-def moveaxis(
-    input: Tensor, source: tuple[int, ...], destination: tuple[int, ...]
-) -> Tensor:
+def moveaxis[Shape: IntTuple, Source: IntTuple, Destination: IntTuple](
+    input: Tensor[Shape], source: Source, destination: Destination
+) -> Tensor[movedim_tuple_shape(Shape, Source, Destination)]:
     """Alias for movedim. Shape inference via meta-shape: torch.moveaxis"""
     ...
 

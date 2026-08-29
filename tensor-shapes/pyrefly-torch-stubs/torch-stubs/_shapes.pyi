@@ -73,14 +73,6 @@ def broadcast(a: list[int | symint], b: list[int | symint]) -> list[int | symint
     padded_b = [1 for _ in range(max_len - len(b))] + b
     return [bd if ad == 1 else ad for ad, bd in zip(padded_a, padded_b)]
 
-@shape_dsl_function
-def broadcast_int(
-    expr: int | symint | list[int | symint], n: int
-) -> list[int | symint]:
-    if isinstance(expr, list):
-        return expr
-    return [expr for _ in range(n)]
-
 @type_shape_dsl_function
 def reduce_shape(
     shape: IntTuple,
@@ -150,28 +142,6 @@ def cosine_similarity_shape(shape: IntTuple, dim: int) -> IntTuple:
             if index != (dim + len(shape) if dim < 0 else dim)
         )
     )
-
-@shape_dsl_function
-def contains(lst: list[int], val: int) -> bool:
-    return len([x for x in lst if x == val]) > 0
-
-@shape_dsl_function
-def scatter(size: int, indices: list[int], values: list[int], fill: int) -> list[int]:
-    matches = [[k for k in range(len(indices)) if indices[k] == i] for i in range(size)]
-    return [values[m[0]] if len(m) > 0 else fill for m in matches]
-
-@shape_dsl_function
-def move_dims(
-    dims: list[int | symint], source: int | list[int], dest: int | list[int], rank: int
-) -> list[int | symint]:
-    src = broadcast_int(source, 1)
-    dst = broadcast_int(dest, 1)
-    src_norm = [normalize_dim(rank, s) for s in src]
-    dst_norm = [normalize_dim(rank, d) for d in dst]
-    non_dst = [i for i in range(rank) if not contains(dst_norm, i)]
-    remaining = [i for i in range(rank) if not contains(src_norm, i)]
-    perm = scatter(rank, dst_norm + non_dst, src_norm + remaining, 0)
-    return [dims[p] for p in perm]
 
 @type_shape_dsl_function
 def reshape_shape(shape: IntTuple, target: IntTuple) -> IntTuple:
@@ -392,7 +362,7 @@ def movedim_scalar_shape(shape: IntTuple, source: int, destination: int) -> IntT
     rank = len(shape)
     if rank == 0:
         # A rank-0 tensor still admits one implicit axis, so both spellings of it
-        # (0 and -1) are legal and the move is a no-op. Each control is checked
+        # (0 and -1) are legal and the move is a no-op. Each argument is checked
         # independently so the reported axis matches the offending argument.
         if source != 0 and source != -1:
             return dsl.Invalid("movedim source dimension out of range")
@@ -422,24 +392,98 @@ def movedim_scalar_shape(shape: IntTuple, source: int, destination: int) -> IntT
         )
     )
 
-@shape_dsl_function
-def movedim_ir(
-    self: ShapedArray, source: int | list[int], destination: int | list[int]
-) -> ShapedArray:
-    return ShapedArray(
-        shape=move_dims(self.shape, source, destination, len(self.shape))
+@type_shape_dsl_function
+def movedim_tuple_shape(
+    shape: IntTuple, source: IntTuple, destination: IntTuple
+) -> IntTuple:
+    if len(source) != len(destination):
+        return dsl.Invalid("movedim source and destination must have equal length")
+    rank = len(shape)
+    if rank == 0:
+        # A rank-0 tensor admits one implicit axis that only 0 and -1 name, so the
+        # permutation arithmetic below (which divides by `rank`) must stay
+        # unreached. Each sequence is checked independently so the reported axis
+        # matches the offending argument.
+        if any(
+            dsl.is_concrete_int(axis) and axis != 0 and axis != -1 for axis in source
+        ):
+            return dsl.Invalid("movedim source dimension out of range")
+        if any(
+            dsl.is_concrete_int(axis) and axis != 0 and axis != -1
+            for axis in destination
+        ):
+            return dsl.Invalid("movedim destination dimension out of range")
+        concrete_source = tuple((axis for axis in source if dsl.is_concrete_int(axis)))
+        concrete_destination = tuple(
+            (axis for axis in destination if dsl.is_concrete_int(axis))
+        )
+        if len(concrete_source) > 1:
+            return dsl.Invalid("movedim source dimensions must be unique")
+        if len(concrete_destination) > 1:
+            return dsl.Invalid("movedim destination dimensions must be unique")
+        if any(not dsl.is_concrete_int(axis) for axis in source) or any(
+            not dsl.is_concrete_int(axis) for axis in destination
+        ):
+            return dsl.IntTuple.gradual()
+        return shape
+    if any(
+        dsl.is_concrete_int(axis) and (axis < 0 - rank or axis >= rank)
+        for axis in source
+    ):
+        return dsl.Invalid("movedim source dimension out of range")
+    if any(
+        dsl.is_concrete_int(axis) and (axis < 0 - rank or axis >= rank)
+        for axis in destination
+    ):
+        return dsl.Invalid("movedim destination dimension out of range")
+    concrete_source = tuple(
+        (
+            axis + rank if axis < 0 else axis
+            for axis in source
+            if dsl.is_concrete_int(axis)
+        )
     )
-
-@shape_dsl_function
-def movedim_input_ir(
-    input: ShapedArray, source: int | list[int], destination: int | list[int]
-) -> ShapedArray:
-    # TODO(stroxler): Delete this wrapper when tuple-valued movedim is migrated to the type-level
-    # DSL. The legacy decorator binds arguments by name, and the public function uses `input`
-    # while the method uses `self`.
-    return ShapedArray(
-        shape=move_dims(input.shape, source, destination, len(input.shape))
+    concrete_destination = tuple(
+        (
+            axis + rank if axis < 0 else axis
+            for axis in destination
+            if dsl.is_concrete_int(axis)
+        )
     )
+    if any(concrete_source.count(axis) > 1 for axis in concrete_source):
+        return dsl.Invalid("movedim source dimensions must be unique")
+    if any(concrete_destination.count(axis) > 1 for axis in concrete_destination):
+        return dsl.Invalid("movedim destination dimensions must be unique")
+    if len(concrete_source) != len(source) or len(concrete_destination) != len(
+        destination
+    ):
+        return dsl.IntTuple.gradual()
+    normalized_source = concrete_source
+    normalized_destination = concrete_destination
+    non_destination = tuple(
+        (axis for axis in range(rank) if axis not in normalized_destination)
+    )
+    remaining = tuple((axis for axis in range(rank) if axis not in normalized_source))
+    moved_keys = tuple(
+        (
+            dst * rank + src
+            for src, dst in zip(normalized_source, normalized_destination)
+        )
+    )
+    # Membership guards must short-circuit before calling .index on either tuple.
+    permutation = tuple(
+        (
+            pair % rank
+            for pair in range(rank * rank)
+            if pair in moved_keys
+            or (
+                pair // rank in non_destination
+                and pair % rank in remaining
+                and non_destination.index(pair // rank) == remaining.index(pair % rank)
+            )
+        )
+    )
+    return dsl.IntTuple((shape[axis] for axis in permutation))
 
 @type_shape_dsl_function
 def unfold_checked_shape(
