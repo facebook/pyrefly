@@ -13,6 +13,7 @@ use pyrefly_build::handle::Handle;
 use pyrefly_python::sys_info::PythonVersion;
 use ruff_text_size::TextSize;
 
+use crate::lsp::wasm::completion::CompletionOptions;
 use crate::state::lsp::ImportFormat;
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -4193,5 +4194,133 @@ def users() -> None:
     assert!(
         trimmed.contains("status_code"),
         "missing status_code in completions:\n{trimmed}"
+    );
+}
+
+fn get_triple_quoted_string_report(
+    supports_snippets: bool,
+) -> impl Fn(&State, &Handle, TextSize) -> String {
+    move |state: &State, handle: &Handle, position: TextSize| {
+        let mut report = "Completion Results:".to_owned();
+        for item in state
+            .transaction()
+            .completion_with_incomplete(
+                handle,
+                position,
+                ImportFormat::Absolute,
+                CompletionOptions {
+                    supports_snippet_completions: supports_snippets,
+                    ..Default::default()
+                },
+                None,
+            )
+            .0
+        {
+            if item.detail.as_deref() != Some("triple-quoted string") {
+                continue;
+            }
+            report.push_str("\n- (");
+            report.push_str(&format!("{:?}", item.kind.unwrap()));
+            report.push_str(") ");
+            report.push_str(&item.label);
+            if let Some(detail) = item.detail {
+                report.push_str(": ");
+                report.push_str(&detail);
+            }
+            if let Some(text_edit) = item.text_edit {
+                report.push_str(" with text edit: ");
+                report.push_str(&format!("{:?}", text_edit));
+            }
+            if let Some(fmt) = item.insert_text_format {
+                report.push_str(&format!(" format={fmt:?}"));
+            }
+        }
+        report
+    }
+}
+
+#[test]
+fn completion_closes_triple_quoted_string() {
+    let code = r#"
+x = """
+#      ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code)],
+        get_triple_quoted_string_report(true),
+    );
+    let trimmed = report.trim();
+    assert!(
+        trimmed.contains("triple-quoted string"),
+        "missing triple-quoted string completion:\n{trimmed}"
+    );
+    assert!(
+        trimmed.contains("new_text: \"$0"),
+        "expected snippet closer after opening quotes:\n{trimmed}"
+    );
+}
+
+#[test]
+fn completion_expands_partial_quotes_to_triple_quoted_string() {
+    let code = r#"
+x = "
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code)],
+        get_triple_quoted_string_report(true),
+    );
+    let trimmed = report.trim();
+    assert!(
+        trimmed.contains("new_text: \"\\\"\\\"\\\"$0"),
+        "expected expansion to a triple-quoted pair:\n{trimmed}"
+    );
+}
+
+#[test]
+fn completion_skips_triple_quoted_string_when_closer_exists() {
+    let code = r#"
+x = """"""
+#      ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code)],
+        get_triple_quoted_string_report(false),
+    );
+    assert!(
+        !report.contains("triple-quoted string"),
+        "should not offer a closer when one is already present:\n{report}"
+    );
+}
+
+#[test]
+fn completion_skips_quotes_after_identifier() {
+    let code = r#"
+foo"
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code)],
+        get_triple_quoted_string_report(false),
+    );
+    assert!(
+        !report.contains("triple-quoted string"),
+        "should not treat identifier-adjacent quotes as a string opener:\n{report}"
+    );
+}
+
+#[test]
+fn completion_closes_prefixed_triple_quoted_string() {
+    let code = r#"
+x = f"""
+#       ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(
+        &[("main", code)],
+        get_triple_quoted_string_report(false),
+    );
+    assert!(
+        report.contains("triple-quoted string"),
+        "missing closer after an f-string prefix:\n{report}"
     );
 }
