@@ -110,7 +110,7 @@ Changing the matching mode makes the column-only baseline invalid.
 ```scrut {output_stream: stderr}
 $ printf 'baseline = "baseline.json"\nbaseline-format = "minimal"\nbaseline-matching-mode = "concise_description"\n' > $TMPDIR/baseline_minimal/pyrefly.toml && \
 > cd $TMPDIR/baseline_minimal && \
-> $PYREFLY check --summary=none
+> $PYREFLY check bad.py --summary=none
 *failed to read baseline file*baseline file is invalid*rerun with `--update-baseline`*missing field `concise_description`* (glob)
 [1]
 ```
@@ -135,7 +135,7 @@ different column.
 ```scrut {output_stream: stderr}
 $ printf 'if True:\n    x: str = 1\n' > $TMPDIR/baseline_minimal/bad.py && \
 > cd $TMPDIR/baseline_minimal && \
-> $PYREFLY check --summary=none
+> $PYREFLY check bad.py --summary=none
 [0]
 ```
 
