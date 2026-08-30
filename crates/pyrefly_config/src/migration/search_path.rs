@@ -49,6 +49,7 @@ impl ConfigOptionMigrater for SearchPath {
         &self,
         pyright_cfg: &PyrightConfig,
         pyrefly_cfg: &mut ConfigFile,
+        _basedpyright: bool,
     ) -> anyhow::Result<()> {
         // In pyright, search path is specified in the "extraPaths" field
         let search_path = match &pyright_cfg.search_path {
@@ -224,7 +225,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let search_path = SearchPath;
-        let result = search_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = search_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         assert_eq!(
@@ -244,7 +245,7 @@ mod tests {
         let default_search_path = pyrefly_cfg.search_path_from_file.clone();
 
         let search_path = SearchPath;
-        let result = search_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = search_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_err());
         assert_eq!(pyrefly_cfg.search_path_from_file, default_search_path);
@@ -259,7 +260,7 @@ mod tests {
         let default_search_path = pyrefly_cfg.search_path_from_file.clone();
 
         let search_path = SearchPath;
-        let result = search_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = search_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_err());
         assert_eq!(pyrefly_cfg.search_path_from_file, default_search_path);
@@ -277,7 +278,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let search_path = SearchPath;
-        let result = search_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = search_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         assert_eq!(
@@ -297,7 +298,7 @@ mod tests {
         let default_search_path = pyrefly_cfg.search_path_from_file.clone();
 
         let search_path = SearchPath;
-        let result = search_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = search_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_err());
         assert_eq!(pyrefly_cfg.search_path_from_file, default_search_path);
@@ -312,7 +313,7 @@ mod tests {
         let default_search_path = pyrefly_cfg.search_path_from_file.clone();
 
         let search_path = SearchPath;
-        let result = search_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = search_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_err());
         assert_eq!(pyrefly_cfg.search_path_from_file, default_search_path);

@@ -33,14 +33,19 @@ impl ConfigOptionMigrater for PythonPlatformConfig {
         &self,
         pyright_cfg: &PyrightConfig,
         pyrefly_cfg: &mut ConfigFile,
+        basedpyright: bool,
     ) -> anyhow::Result<()> {
         // In pyright, python platform is specified in the "pythonPlatform" field
         let platform = match &pyright_cfg.python_platform {
             Some(p) => p,
             None => {
-                return Err(anyhow::anyhow!(
-                    "No python_platform found in pyright config"
-                ));
+                if basedpyright {
+                    "all"
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "No python_platform found in pyright config"
+                    ));
+                }
             }
         };
 
@@ -106,7 +111,7 @@ mod tests {
 
             let python_platform_config = PythonPlatformConfig;
             let result =
-                python_platform_config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+                python_platform_config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
             assert!(result.is_ok());
             assert_eq!(
@@ -125,7 +130,8 @@ mod tests {
         let default_platform = pyrefly_cfg.python_environment.python_platform.clone();
 
         let python_platform_config = PythonPlatformConfig;
-        let result = python_platform_config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result =
+            python_platform_config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_err());
         assert_eq!(

@@ -224,6 +224,12 @@ pub fn derive_v2_response(
                         "Default",
                         "default",
                     ),
+                    MigratedFromKind::BasedPyright(MigratedConfigSource::DedicatedFile) => unreachable!("no such thing as basedpyrightconfig.json"),
+                    MigratedFromKind::BasedPyright(MigratedConfigSource::PyprojectToml) => (
+                        "`[tool.basedpyright]` in your `pyproject.toml`",
+                        "Default",
+                        "default",
+                    ),
                 };
                 (
                     Some(preset_label.to_owned()),
