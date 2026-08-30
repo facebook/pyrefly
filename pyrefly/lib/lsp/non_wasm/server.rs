@@ -272,6 +272,7 @@ use vec1::Vec1;
 use crate::ModuleInfo;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::KeyClassMro;
+use crate::commands::check::Handles;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
@@ -3327,6 +3328,66 @@ impl Server {
         }
     }
 
+    fn queue(
+        server: &Server,
+        telemetry_event: &mut TelemetryEvent,
+        open_handles: Vec<Handle>,
+        f: Option<impl FnOnce(&mut Transaction) + Send + Sync + 'static>,
+    ) {
+        let streaming_handles: SmallSet<Handle> = open_handles
+            .iter()
+            .filter(|h| {
+                server
+                    .workspaces
+                    .should_stream_diagnostics(h.path().as_path())
+            })
+            .cloned()
+            .collect();
+        // Store the snapshot so non-committable transactions know not to publish
+        // diagnostics for these files (they'll be streamed by this transaction)
+        let has_streaming = !streaming_handles.is_empty();
+        if has_streaming {
+            *server.currently_streaming_diagnostics_for_handles.write() =
+                Some(streaming_handles.clone());
+        }
+        let publish_callback =
+            move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
+                if changed && streaming_handles.contains(handle) {
+                    server.publish_for_handles(
+                        transaction,
+                        std::slice::from_ref(handle),
+                        DiagnosticSource::Streaming,
+                    )
+                }
+            };
+        let subscriber = server.make_recheck_subscriber(publish_callback);
+        let mut transaction = server
+            .state
+            .new_committable_transaction(Require::Exports, Some(subscriber));
+        let invalidate_start = Instant::now();
+
+        if let Some(i) = f {
+            i(transaction.as_mut());
+        } else {
+            transaction.as_mut().invalidate_config();
+        }
+
+        telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
+        server.validate_in_memory_for_transaction(transaction.as_mut(), telemetry_event, None);
+
+        for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
+            cancellation_handle.cancel();
+        }
+        // we have to run, not just commit to process updates
+        server.state.run_with_committing_transaction(
+            transaction,
+            &[],
+            Require::Everything,
+            Some(telemetry_event),
+            None,
+        );
+    }
+
     fn invalidate(
         &self,
         kind: TelemetryEventKind,
@@ -3340,48 +3401,47 @@ impl Server {
                 if let Some(reason) = invalidate_find_reason {
                     telemetry_event.set_invalidate_find_reason(reason);
                 }
-                // Filter to only include handles from workspaces with streaming enabled
-                let streaming_handles: SmallSet<Handle> = open_handles
-                    .iter()
-                    .filter(|h| {
-                        server
-                            .workspaces
-                            .should_stream_diagnostics(h.path().as_path())
-                    })
-                    .cloned()
-                    .collect();
-                // Store the snapshot so non-committable transactions know not to publish
-                // diagnostics for these files (they'll be streamed by this transaction)
-                let has_streaming = !streaming_handles.is_empty();
-                if has_streaming {
-                    *server.currently_streaming_diagnostics_for_handles.write() =
-                        Some(streaming_handles.clone());
-                }
-                let publish_callback =
-                    move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
-                        if changed && streaming_handles.contains(handle) {
-                            server.publish_for_handles(
-                                transaction,
-                                std::slice::from_ref(handle),
-                                DiagnosticSource::Streaming,
-                            )
-                        }
-                    };
-                let subscriber = server.make_recheck_subscriber(publish_callback);
-                let mut transaction = server
-                    .state
-                    .new_committable_transaction(Require::Exports, Some(subscriber));
-                let invalidate_start = Instant::now();
+
+                // f(&transaction.as_mut());
+
+                Self::queue(server, telemetry_event, open_handles, Some(f));
+
+                // // Filter to only include handles from workspaces with streaming enabled
+                // let streaming_handles: SmallSet<Handle> = open_handles
+                //     .iter()
+                //     .filter(|h| {
+                //         server
+                //             .workspaces
+                //             .should_stream_diagnostics(h.path().as_path())
+                //     })
+                //     .cloned()
+                //     .collect();
+                // // Store the snapshot so non-committable transactions know not to publish
+                // // diagnostics for these files (they'll be streamed by this transaction)
+                // let has_streaming = !streaming_handles.is_empty();
+                // if has_streaming {
+                //     *server.currently_streaming_diagnostics_for_handles.write() =
+                //         Some(streaming_handles.clone());
+                // }
+                // let publish_callback =
+                //     move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
+                //         if changed && streaming_handles.contains(handle) {
+                //             server.publish_for_handles(
+                //                 transaction,
+                //                 std::slice::from_ref(handle),
+                //                 DiagnosticSource::Streaming,
+                //             )
+                //         }
+                //     };
+                // let subscriber = server.make_recheck_subscriber(publish_callback);
+                // let mut transaction = server
+                //     .state
+                //     .new_committable_transaction(Require::Exports, Some(subscriber));
+                // let invalidate_start = Instant::now();
                 // Mark files as dirty
-                f(transaction.as_mut());
-                telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
+                // telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
 
                 // Run transaction prioritizing currently-open files, sending diagnostics as soon as they are available via the subscriber
-                server.validate_in_memory_for_transaction(
-                    transaction.as_mut(),
-                    telemetry_event,
-                    None,
-                );
 
                 // Wait in a loop while do_not_commit_recheck flag is set (testing only)
                 while server.do_not_commit_recheck.load(Ordering::SeqCst) {
@@ -3395,13 +3455,13 @@ impl Server {
                     cancellation_handle.cancel();
                 }
                 // we have to run, not just commit to process updates
-                server.state.run_with_committing_transaction(
-                    transaction,
-                    &[],
-                    Require::Everything,
-                    Some(telemetry_event),
-                    None,
-                );
+                // server.state.run_with_committing_transaction(
+                //     transaction,
+                //     &[],
+                //     Require::Everything,
+                //     Some(telemetry_event),
+                //     None,
+                // );
                 *server.currently_streaming_diagnostics_for_handles.write() = None;
 
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
@@ -5927,56 +5987,62 @@ impl Server {
             TelemetryEventKind::InvalidateConfig,
             Box::new(move |server, _telemetry, telemetry_event| {
                 // Filter to only include handles from workspaces with streaming enabled
-                let streaming_handles: SmallSet<Handle> = open_handles
-                    .iter()
-                    .filter(|h| {
-                        server
-                            .workspaces
-                            .should_stream_diagnostics(h.path().as_path())
-                    })
-                    .cloned()
-                    .collect();
-                let has_streaming = !streaming_handles.is_empty();
-                if has_streaming {
-                    *server.currently_streaming_diagnostics_for_handles.write() =
-                        Some(streaming_handles.clone());
-                }
-                let publish_callback =
-                    move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
-                        if changed && streaming_handles.contains(handle) {
-                            server.publish_for_handles(
-                                transaction,
-                                std::slice::from_ref(handle),
-                                DiagnosticSource::Streaming,
-                            )
-                        }
-                    };
-                let subscriber = server.make_recheck_subscriber(publish_callback);
-                let mut transaction = server
-                    .state
-                    .new_committable_transaction(Require::Exports, Some(subscriber));
-                let invalidate_start = Instant::now();
-                transaction.as_mut().invalidate_config();
-                telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
-                server.validate_in_memory_for_transaction(
-                    transaction.as_mut(),
+                Self::queue(
+                    server,
                     telemetry_event,
-                    None,
+                    open_handles,
+                    None::<fn(&mut Transaction)>,
                 );
+                // let streaming_handles: SmallSet<Handle> = open_handles
+                //     .iter()
+                //     .filter(|h| {
+                //         server
+                //             .workspaces
+                //             .should_stream_diagnostics(h.path().as_path())
+                //     })
+                //     .cloned()
+                //     .collect();
+                // let has_streaming = !streaming_handles.is_empty();
+                // if has_streaming {
+                //     *server.currently_streaming_diagnostics_for_handles.write() =
+                //         Some(streaming_handles.clone());
+                // }
+                // let publish_callback =
+                //     move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
+                //         if changed && streaming_handles.contains(handle) {
+                //             server.publish_for_handles(
+                //                 transaction,
+                //                 std::slice::from_ref(handle),
+                //                 DiagnosticSource::Streaming,
+                //             )
+                //         }
+                //     };
+                // let subscriber = server.make_recheck_subscriber(publish_callback);
+                // let mut transaction = server
+                //     .state
+                //     .new_committable_transaction(Require::Exports, Some(subscriber));
+                // let invalidate_start = Instant::now();
+                // transaction.as_mut().invalidate_config();
+                // telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
+                // server.validate_in_memory_for_transaction(
+                //     transaction.as_mut(),
+                //     telemetry_event,
+                //     None,
+                // );
                 // Commit will be blocked until there are no ongoing reads.
                 // If we have some long running read jobs that can be cancelled, we should cancel them
                 // to unblock committing transactions.
-                for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
-                    cancellation_handle.cancel();
-                }
+                // for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
+                //     cancellation_handle.cancel();
+                // }
                 // we have to run, not just commit to process updates
-                server.state.run_with_committing_transaction(
-                    transaction,
-                    &[],
-                    Require::Everything,
-                    Some(telemetry_event),
-                    None,
-                );
+                // server.state.run_with_committing_transaction(
+                //     transaction,
+                //     &[],
+                //     Require::Everything,
+                //     Some(telemetry_event),
+                //     None,
+                // );
                 *server.currently_streaming_diagnostics_for_handles.write() = None;
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
                 // the main event loop of the server. As a result, the server can do a revalidation of
