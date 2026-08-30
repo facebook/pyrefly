@@ -476,6 +476,45 @@ g(f)
 );
 
 testcase!(
+    test_decorator_missing_concatenate_parameters,
+    r#"
+from typing import Callable, Concatenate
+
+def inject_one[T, **P, R](
+    view: Callable[Concatenate[T, str, P], R],
+) -> Callable[Concatenate[T, P], R]: ...
+
+class C:
+    @inject_one  # E: Callable is missing a positional parameter with type `str`
+    def one(self) -> int:
+        return 0
+
+def inject_two[**P, R](
+    view: Callable[Concatenate[str, bool, P], R],
+) -> Callable[P, R]: ...
+
+@inject_two  # E: Callable is missing 2 positional parameters with types `str` and `bool`
+def two() -> int:
+    return 0
+    "#,
+);
+
+testcase!(
+    test_decorator_concatenate_parameter_mismatch_is_not_missing,
+    r#"
+from typing import Callable, Concatenate
+
+def inject[**P, R](
+    view: Callable[Concatenate[str, int, P], R],
+) -> Callable[P, R]: ...
+
+@inject  # E: Argument `(x: bool) -> None` is not assignable
+         # N: Callable is missing
+def f(x: bool) -> None: ...
+    "#,
+);
+
+testcase!(
     bug = "This error message is confusing, I think we need to be clearer when we are printing the *type* of an argument",
     test_decorator_error_message,
     r#"

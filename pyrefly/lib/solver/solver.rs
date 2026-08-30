@@ -2885,6 +2885,8 @@ impl OpenTypedDictSubsetError {
 pub enum SubsetError {
     /// The name of a positional parameter differs between `got` and `want`.
     PosParamName(Name, Name),
+    /// `got` does not accept positional parameters that `want` allows callers to pass.
+    CallableMissingPositionalParameters(Vec<Type>),
     /// Instantiations for quantified vars are incompatible with bounds
     TypeVarSpecialization(Vec1<TypeVarSpecializationError>),
     /// `got` is missing an attribute that the Protocol `want` requires
@@ -2924,6 +2926,21 @@ impl SubsetError {
             SubsetError::PosParamName(got, want) => Some(format!(
                 "Positional parameter name mismatch: got `{got}`, want `{want}`"
             )),
+            SubsetError::CallableMissingPositionalParameters(types) => {
+                let count = types.len();
+                let types = types
+                    .iter()
+                    .map(|ty| format!("`{}`", ty.clone().deterministic_printing()))
+                    .join(" and ");
+                Some(if count == 1 {
+                    format!("Callable is missing a positional parameter with type {types}")
+                } else {
+                    format!(
+                        "Callable is missing {} positional parameters with types {types}",
+                        count
+                    )
+                })
+            }
             SubsetError::TypeVarSpecialization(_) => {
                 // TODO
                 None
