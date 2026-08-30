@@ -214,3 +214,8 @@ It will only use import hooks if you set
 Pyrefly has a `dump-config` command that dumps the import-related config options it is using for
 each file it is checking. To use it, simply replace `check` with `dump-config` in your
 command-line invocation.
+
+Pass `--full` to also print every other resolved configuration setting, including error
+severity overrides, path-scoped `sub-config` overrides, and any config keys Pyrefly did not
+recognize. This is useful when a setting does not appear to take effect and you need to see
+the value Pyrefly actually resolved.
