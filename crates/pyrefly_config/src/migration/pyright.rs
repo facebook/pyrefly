@@ -47,6 +47,19 @@ impl ExecEnv {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TypeCheckingMode {
+    Off,
+    Basic,
+    Standard,
+    Strict,
+    /// basedpyright only
+    Recommended,
+    /// basedpyright only
+    All,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct PyrightConfig {
     #[serde(rename = "include")]
     pub project_includes: Option<Globs>,
@@ -60,6 +73,8 @@ pub struct PyrightConfig {
     pub python_platform: Option<String>,
     #[serde(rename = "pythonVersion")]
     pub python_version: Option<PythonVersion>,
+    #[serde(rename = "typeCheckingMode")]
+    pub type_checking_mode: Option<TypeCheckingMode>,
     #[serde(flatten)]
     pub errors: RuleOverrides,
     #[serde(default, rename = "executionEnvironments")]
@@ -83,7 +98,7 @@ impl PyrightConfig {
         Ok(serde_jsonrc::from_str::<Self>(text)?)
     }
 
-    pub fn convert(self) -> ConfigFile {
+    pub fn convert(self, basedpyright: bool) -> ConfigFile {
         let mut cfg = ConfigFile::default();
 
         // Create a list of all config options
@@ -103,7 +118,7 @@ impl PyrightConfig {
         // Iterate through all config options and apply them to the config
         for option in config_options {
             // Ignore errors for now, we can use this in the future if we want to print out error messages or use for logging purpose
-            let _ = option.migrate_from_pyright(&self, &mut cfg);
+            let _ = option.migrate_from_pyright(&self, &mut cfg, basedpyright);
         }
 
         // Pyright does not infer empty container types and unsolved type variables based on their first use.
@@ -573,6 +588,7 @@ pub fn parse_pyproject_toml(raw_file: &str) -> anyhow::Result<ConfigFile> {
     #[derive(Deserialize)]
     struct Tool {
         pyright: Option<PyrightConfig>,
+        basedpyright: Option<PyrightConfig>,
     }
 
     #[derive(Deserialize)]
@@ -580,11 +596,21 @@ pub fn parse_pyproject_toml(raw_file: &str) -> anyhow::Result<ConfigFile> {
         tool: Option<Tool>,
     }
 
-    toml::from_str::<PyProject>(raw_file)?
+    let tool = toml::from_str::<PyProject>(raw_file)?
         .tool
-        .and_then(|tool| tool.pyright)
-        .ok_or(anyhow::anyhow!(PyrightNotFoundError {}))
-        .map(PyrightConfig::convert)
+        .ok_or(anyhow::anyhow!(PyrightNotFoundError {}))?;
+
+    match tool {
+        Tool {
+            pyright: Some(pyright),
+            ..
+        } => Ok(PyrightConfig::convert(pyright, false)),
+        Tool {
+            basedpyright: Some(basedpyright),
+            ..
+        } => Ok(PyrightConfig::convert(basedpyright, true)),
+        _ => Err(anyhow::anyhow!(PyrightNotFoundError {})),
+    }
 }
 
 #[cfg(test)]
@@ -593,7 +619,7 @@ mod tests {
     use pyrefly_python::sys_info::PythonPlatform;
 
     use super::*;
-    use crate::environment::environment::PythonEnvironment;
+    use crate::{base::Preset, environment::environment::PythonEnvironment};
 
     #[test]
     fn test_convert_pyright_config() -> anyhow::Result<()> {
@@ -614,7 +640,7 @@ mod tests {
             }
             "#;
         let pyr = serde_json::from_str::<PyrightConfig>(raw_file)?;
-        let config = pyr.convert();
+        let config = pyr.convert(false);
         assert_eq!(
             config,
             ConfigFile {
@@ -660,7 +686,7 @@ mod tests {
             }
             "#;
         let pyr = serde_json::from_str::<PyrightConfig>(raw_file)?;
-        let config = pyr.convert();
+        let config = pyr.convert(false);
         assert_eq!(
             config,
             ConfigFile {
@@ -719,7 +745,32 @@ executionEnvironments = [
   { root = "src" }
 ]
 "#;
-        parse_pyproject_toml(src).map(|_| ())
+        parse_pyproject_toml(src).map(|result| {
+            assert!(result.preset == None);
+            ()
+        })
+    }
+
+    #[test]
+    fn test_convert_from_pyproject_basedpyright() -> anyhow::Result<()> {
+        let src = r#"[tool.basedpyright]
+"#;
+        parse_pyproject_toml(src).map(|result| {
+            assert!(result.preset == Some(Preset::All));
+            ()
+        })
+    }
+
+    #[test]
+    fn test_convert_from_pyproject_explicit_type_checking_mode_basedpyright() -> anyhow::Result<()>
+    {
+        let src = r#"[tool.basedpyright]
+typeCheckingMode = "basic"
+"#;
+        parse_pyproject_toml(src).map(|result| {
+            assert!(result.preset == None);
+            ()
+        })
     }
 
     #[test]
@@ -735,7 +786,7 @@ executionEnvironments = [
             }
             "#;
         let pyr = serde_jsonrc::from_str::<PyrightConfig>(raw_file)?;
-        let config = pyr.convert();
+        let config = pyr.convert(false);
         assert!(!config.project_includes.is_empty());
         Ok(())
     }

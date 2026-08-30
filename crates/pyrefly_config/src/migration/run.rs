@@ -39,6 +39,7 @@ use crate::pyproject::PyProject;
 pub enum MigratedFromKind {
     Mypy(MigratedConfigSource),
     Pyright(MigratedConfigSource),
+    BasedPyright(MigratedConfigSource),
 }
 
 /// Where the migrated mypy / pyright settings physically lived: a
@@ -105,7 +106,9 @@ pub fn find_and_migrate_in_memory(
         let pyr = PyrightConfig::parse(&raw_file)
             .with_context(|| format!("While parsing pyright config at {}", path.display()))?;
         Ok(Some((
-            pyr.convert(),
+            // unlike with pyproject.toml we have no easy way to tell whether a pyrightconfig.json
+            // is supposed to be for pyright or basedpyright, so we just assume regular pyright
+            pyr.convert(false),
             MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile),
         )))
     } else if path.file_name() == Some("mypy.ini".as_ref()) {
@@ -124,19 +127,29 @@ pub fn find_and_migrate_in_memory(
         // `Args::load_from_pyproject`.
         let has_mypy = has_toml_section(&raw_file, "tool.mypy");
         let has_pyright = has_toml_section(&raw_file, "tool.pyright");
+        let has_basedpyright = has_toml_section(&raw_file, "tool.basedpyright");
         let ctx = || format!("While parsing pyproject.toml at {}", path.display());
-        match (has_mypy, has_pyright) {
-            (true, _) => Ok(Some((
+        match (has_mypy, has_pyright, has_basedpyright) {
+            (true, _, _) => Ok(Some((
                 mypy::parse_pyproject_config(&raw_file).with_context(ctx)?,
                 MigratedFromKind::Mypy(MigratedConfigSource::PyprojectToml),
             ))),
-            (false, true) => Ok(Some((
+            (false, true, false) => Ok(Some((
                 pyright::parse_pyproject_toml(&raw_file).with_context(ctx)?,
                 MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml),
             ))),
+            (false, false, true) => Ok(Some((
+                pyright::parse_pyproject_toml(&raw_file).with_context(ctx)?,
+                MigratedFromKind::BasedPyright(MigratedConfigSource::PyprojectToml),
+            ))),
             // No tool sections at all — not a migrate-able config and not a
             // parse error. Treat as "nothing nearby."
-            (false, false) => Ok(None),
+            (false, false, false) => Ok(None),
+            // Both basedpyright and pyright config detected. This is invalid and
+            // is an error in basedpyright so we don't support it.
+            (false, true, true) => Err(anyhow::anyhow!(
+                "Both `[tool.pyright]` and `[tool.basedpyright]` sections are not supported."
+            )),
         }
     } else {
         // `find_upward_config(_, Auto)` only returns one of the three
@@ -310,7 +323,8 @@ impl Args {
             );
             let raw_file = fs_anyhow::read_to_string(&original_config_path)?;
             let pyr = PyrightConfig::parse(&raw_file)?;
-            pyr.convert()
+            // assume pyrightconfig.json is for pyright, not basedpyright
+            pyr.convert(false)
         } else if original_config_path.file_name() == Some("mypy.ini".as_ref()) {
             info!(
                 "Migrating mypy config file from: `{}`",

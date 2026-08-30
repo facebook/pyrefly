@@ -31,5 +31,6 @@ pub trait ConfigOptionMigrater {
         &self,
         pyright_cfg: &PyrightConfig,
         pyrefly_cfg: &mut ConfigFile,
+        basedpyright: bool,
     ) -> anyhow::Result<()>;
 }

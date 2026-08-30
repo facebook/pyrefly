@@ -12,7 +12,7 @@ use crate::config::ConfigFile;
 use crate::migration::config_option_migrater::ConfigOptionMigrater;
 use crate::migration::mypy::util;
 use crate::migration::mypy::util::MypyErrorConfigFlags;
-use crate::migration::pyright::PyrightConfig;
+use crate::migration::pyright::{PyrightConfig, TypeCheckingMode};
 
 /// Configuration option for error codes
 pub struct ErrorCodes;
@@ -67,7 +67,26 @@ impl ConfigOptionMigrater for ErrorCodes {
         &self,
         pyright_cfg: &PyrightConfig,
         pyrefly_cfg: &mut ConfigFile,
+        basedpyright: bool,
     ) -> anyhow::Result<()> {
+        pyrefly_cfg.preset = match pyright_cfg.type_checking_mode {
+            // TODO: "recommended" in basedpyright does enable all rules, but sets the severity to warning
+            // and turns on failOnWarnings. we could do the same here, but for now we just treat both "All"
+            // and "recommended" the same way.
+            Some(TypeCheckingMode::All) | Some(TypeCheckingMode::Recommended) | None => {
+                if basedpyright {
+                    // should also be treated the same as
+                    Some(Preset::All)
+                } else {
+                    None
+                }
+            }
+            Some(TypeCheckingMode::Off) => Some(Preset::Off),
+            // we intentionally don't match other typeCheckingModes such as "strict", because pyright's
+            // isn't necessarily the same as pyrefly's "Strict" preset
+            Some(_) => None,
+        };
+
         // In pyright, error settings are specified in various "report*" fields
         // The PyrightConfig struct already has a method to convert these to an ErrorDisplayConfig
         let error_config = pyright_cfg
@@ -253,7 +272,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let error_codes = ErrorCodes;
-        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         assert!(pyrefly_cfg.root.errors.is_some());
@@ -270,7 +289,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let error_codes = ErrorCodes;
-        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
@@ -288,7 +307,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let error_codes = ErrorCodes;
-        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
@@ -306,7 +325,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let error_codes = ErrorCodes;
-        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
@@ -325,7 +344,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let error_codes = ErrorCodes;
-        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
@@ -343,7 +362,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let error_codes = ErrorCodes;
-        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
@@ -361,7 +380,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let error_codes = ErrorCodes;
-        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
@@ -383,7 +402,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let error_codes = ErrorCodes;
-        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         assert!(pyrefly_cfg.root.errors.is_some());
@@ -408,7 +427,7 @@ mod tests {
         let default_errors = pyrefly_cfg.root.errors.clone();
 
         let error_codes = ErrorCodes;
-        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         // If RuleOverrides.to_config() returns None when all fields are None,
         // this should fail with an error
@@ -556,7 +575,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let error_codes = ErrorCodes;
-        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         assert!(pyrefly_cfg.root.errors.is_some());
