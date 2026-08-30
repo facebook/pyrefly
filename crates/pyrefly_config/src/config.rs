@@ -845,6 +845,9 @@ impl ConfigFile {
         Self::PYREFLY_HIDDEN_FILE_NAME,
         Self::PYPROJECT_FILE_NAME,
     ];
+
+    pub const UV_LOCK: &str = "uv.lock";
+
     /// Files that don't contain pyrefly-specific config information but indicate that we're at the
     /// root of a Python project, which should be added to the search path.
     pub const ADDITIONAL_ROOT_FILE_NAMES: &[&str] = &["mypy.ini", "pyrightconfig.json"];
@@ -1211,6 +1214,10 @@ impl ConfigFile {
                 ConfigFile::CONFIG_FILE_NAMES.iter().for_each(|config| {
                     result.insert(WatchPattern::root(config_root, format!("**/{config}")));
                 });
+                result.insert(WatchPattern::root(
+                    config_root,
+                    format!("**/{}", ConfigFile::UV_LOCK),
+                ));
             }
             config
                 .search_path()
@@ -1978,6 +1985,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use pyrefly_util::includes::Includes;
     use pyrefly_util::test_path::TestPath;
+    use starlark_map::smallset;
     use tempfile::TempDir;
     use toml::Table;
     use toml::Value;
@@ -4388,6 +4396,23 @@ output-format = "omit-errors"
             errors.severity(ErrorKind::PytorchEfficiencyLintItemCall),
             Severity::Ignore,
             "without pytorch-efficiency-lints flag, lints should default to Ignore"
+        );
+    }
+
+    #[test]
+    fn test_uv_lock_is_watched() {
+        let mut config: ConfigFile = ConfigFile::default();
+        config.configure();
+        let root = TempDir::new().unwrap();
+
+        config.source = ConfigSource::File(PathBuf::from(root.path().join(ConfigFile::UV_LOCK)));
+        let configs = smallset! {ArcId::new(config)};
+
+        assert!(
+            ConfigFile::get_paths_to_watch(&configs).contains(&WatchPattern::root(
+                InternedPath::from_path(root.path()),
+                String::from(format!("**/{}", ConfigFile::UV_LOCK))
+            ))
         );
     }
 }
