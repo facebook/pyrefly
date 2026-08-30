@@ -984,6 +984,256 @@ impl ConfigFile {
         result
     }
 
+    /// Render every user-facing setting as `label: value` lines for
+    /// `dump-config --full`, indented relative to the caller's own indentation.
+    ///
+    /// This omits what `dump-config` already prints — the config source, the
+    /// interpreter, the covered files, and everything reported by
+    /// `structured_import_lookup_path` — so that `--full` adds information
+    /// rather than repeating it.
+    pub fn structured_settings(&self) -> Vec<String> {
+        fn value<T: Display>(value: &Option<T>) -> Option<String> {
+            value.as_ref().map(T::to_string)
+        }
+
+        fn path(value: &Option<PathBuf>) -> Option<String> {
+            value.as_ref().map(|p| p.display().to_string())
+        }
+
+        // Render an enum by its config-file spelling (`skip-and-infer-return-any`)
+        // rather than its Rust variant name, so that it matches what a user writes.
+        fn variant<T: ValueEnum>(value: &Option<T>) -> Option<String> {
+            value.as_ref().map(|v| {
+                v.to_possible_value()
+                    .expect("config enums do not skip variants")
+                    .get_name()
+                    .to_owned()
+            })
+        }
+
+        fn list<T: Display>(values: impl IntoIterator<Item = T>) -> String {
+            format!("[{}]", values.into_iter().join(", "))
+        }
+
+        fn or_unset(value: Option<String>) -> String {
+            value.unwrap_or_else(|| "(unset)".to_owned())
+        }
+
+        // Every setting a `ConfigBase` carries, labelled by its config-file key so
+        // that it can be matched against what the user wrote. A `None` value means
+        // the setting is unspecified, which for a sub-config means "not overridden".
+        fn base_settings(base: &ConfigBase) -> Vec<(&'static str, Option<String>)> {
+            vec![
+                (
+                    "check-unannotated-defs",
+                    value(&base.check_unannotated_defs),
+                ),
+                ("infer-return-types", variant(&base.infer_return_types)),
+                ("infer-with-first-use", value(&base.infer_with_first_use)),
+                ("check-all-matches", value(&base.check_all_matches)),
+                (
+                    "strict-callable-subtyping",
+                    value(&base.strict_callable_subtyping),
+                ),
+                (
+                    "strict-partial-subtyping",
+                    value(&base.strict_partial_subtyping),
+                ),
+                (
+                    "spec-compliant-overloads",
+                    value(&base.spec_compliant_overloads),
+                ),
+                (
+                    "legacy-overload-expansion",
+                    value(&base.legacy_overload_expansion),
+                ),
+                (
+                    "treat-all-caps-as-final",
+                    value(&base.treat_all_caps_as_final),
+                ),
+                (
+                    "disable-type-errors-in-ide",
+                    value(&base.disable_type_errors_in_ide),
+                ),
+                (
+                    "ignore-errors-in-generated-code",
+                    value(&base.ignore_errors_in_generated_code),
+                ),
+                ("permissive-ignores", value(&base.permissive_ignores)),
+                (
+                    "enabled-ignores",
+                    base.enabled_ignores.as_ref().map(|tools| {
+                        list(tools.iter().map(|t| {
+                            t.to_possible_value()
+                                .expect("Tool does not skip variants")
+                                .get_name()
+                                .to_owned()
+                        }))
+                    }),
+                ),
+                (
+                    "replace-imports-with-any",
+                    base.replace_imports_with_any.as_ref().map(list),
+                ),
+                (
+                    "ignore-missing-imports",
+                    base.ignore_missing_imports.as_ref().map(list),
+                ),
+                ("recursion-depth-limit", value(&base.recursion_depth_limit)),
+                (
+                    "recursion-overflow-handler",
+                    variant(&base.recursion_overflow_handler),
+                ),
+                (
+                    "untyped-def-behavior (deprecated)",
+                    variant(&base.untyped_def_behavior),
+                ),
+                (
+                    "pytorch-efficiency-lints (deprecated)",
+                    value(&base.pytorch_efficiency_lints),
+                ),
+            ]
+        }
+
+        let mut lines = vec![
+            format!(
+                "Required version: {}",
+                or_unset(value(&self.required_version))
+            ),
+            "Project files:".to_owned(),
+            format!("  Includes: {}", self.project_includes),
+            format!("  Excludes: {}", self.project_excludes),
+            format!(
+                "  Excludes heuristics disabled: {}",
+                self.disable_project_excludes_heuristics
+            ),
+            format!("  Respecting ignore files: {}", self.use_ignore_files),
+            format!(
+                "  Extra file extensions: {}",
+                list(&self.extra_file_extensions)
+            ),
+            "Python environment:".to_owned(),
+            format!(
+                "  Version: {}",
+                or_unset(value(&self.python_environment.python_version))
+            ),
+            format!(
+                "  Platform: {}",
+                or_unset(value(&self.python_environment.python_platform))
+            ),
+            "Import settings:".to_owned(),
+            format!(
+                "  Search path heuristics disabled: {}",
+                self.disable_search_path_heuristics
+            ),
+            format!(
+                "  Fallback search path enabled: {}",
+                self.enable_fallback_search_path
+            ),
+            format!("  Typeshed path: {}", or_unset(path(&self.typeshed_path))),
+            "Reporting:".to_owned(),
+            format!(
+                "  Output format: {}",
+                or_unset(variant(&self.output_format))
+            ),
+            format!(
+                "  Minimum severity: {}",
+                or_unset(variant(&self.min_severity))
+            ),
+            format!("  Baseline: {}", or_unset(path(&self.baseline))),
+            format!(
+                "  Baseline error level: {}",
+                or_unset(variant(&self.baseline_error_level))
+            ),
+            format!(
+                "  Skip LSP config indexing: {}",
+                self.skip_lsp_config_indexing
+            ),
+            "Type checking:".to_owned(),
+            format!("  Preset: {}", or_unset(variant(&self.preset))),
+        ];
+        lines.extend(
+            base_settings(&self.root)
+                .into_iter()
+                .map(|(key, setting)| format!("  {key}: {}", or_unset(setting))),
+        );
+
+        // `ErrorDisplayConfig` is backed by a `HashMap`, so sort to keep the output
+        // stable from run to run.
+        let errors = self
+            .root
+            .errors
+            .iter()
+            .flat_map(|errors| errors.iter())
+            .map(|(kind, severity)| (kind.to_name(), severity))
+            .sorted();
+        lines.push("Error severity overrides:".to_owned());
+        lines.extend(errors.map(|(kind, severity)| {
+            format!(
+                "  {kind}: {}",
+                severity
+                    .to_possible_value()
+                    .expect("Severity does not skip variants")
+                    .get_name()
+            )
+        }));
+
+        lines.push("Path-scoped overrides:".to_owned());
+        for sub in &self.sub_configs {
+            lines.push(format!("  Matching `{}`:", sub.matches));
+            lines.extend(
+                base_settings(&sub.settings)
+                    .into_iter()
+                    .filter_map(|(key, setting)| {
+                        setting.map(|setting| format!("    {key}: {setting}"))
+                    }),
+            );
+        }
+
+        lines.push("Coverage overrides:".to_owned());
+        lines.push(format!(
+            "  Includes: {}",
+            or_unset(value(&self.coverage.includes))
+        ));
+        lines.push(format!(
+            "  Excludes: {}",
+            or_unset(value(&self.coverage.excludes))
+        ));
+
+        lines.push("Build system:".to_owned());
+        match &self.build_system {
+            None => lines.push("  (none)".to_owned()),
+            Some(build_system) => {
+                lines.push(format!("  Args: {}", build_system.args));
+                lines.push(format!(
+                    "  Ignore if missing: {}",
+                    build_system.ignore_if_build_system_missing
+                ));
+                lines.push(format!(
+                    "  Search path prefix: {}",
+                    list(build_system.search_path_prefix.iter().map(|p| p.display()))
+                ));
+                lines.push(format!(
+                    "  Catch-all targets: {}",
+                    list(&build_system.catch_all_targets)
+                ));
+                lines.push(format!(
+                    "  Catch-all targets only: {}",
+                    build_system.catch_all_targets_only
+                ));
+            }
+        }
+
+        // Unrecognized keys are silently ignored when a config is parsed, so
+        // surfacing them here is often the fastest way to spot a typo.
+        lines.push(format!(
+            "Unrecognized config keys: {}",
+            list(self.root.extras.0.keys())
+        ));
+
+        lines
+    }
+
     pub fn get_sys_info(&self) -> SysInfo {
         SysInfo::new(self.python_version(), self.python_platform().clone())
     }
