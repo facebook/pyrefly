@@ -3364,11 +3364,8 @@ impl Server {
             .state
             .new_committable_transaction(Require::Exports, Some(subscriber));
         let invalidate_start = Instant::now();
-
+        let has_f = f.is_some();
         if let Some(i) = f {
-            while server.do_not_commit_recheck.load(Ordering::SeqCst) {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
             i(transaction.as_mut());
         } else {
             transaction.as_mut().invalidate_config();
@@ -3377,6 +3374,11 @@ impl Server {
         telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
         server.validate_in_memory_for_transaction(transaction.as_mut(), telemetry_event, None);
 
+        if has_f {
+            while server.do_not_commit_recheck.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
         for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
             cancellation_handle.cancel();
         }
