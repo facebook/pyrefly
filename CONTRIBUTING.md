@@ -86,6 +86,34 @@ development. `pip install .` in the inner `pyrefly` directory works as well. You
 can also run `maturin` from the repo root by adding `-m pyrefly/Cargo.toml` to
 the command line.
 
+### Profile-guided optimized builds
+
+The standalone native release binaries use profile-guided optimization (PGO).
+The training workload checks the Python sources under `pyrefly/lib/test` and
+`conformance/third_party`, covering parsing, binding, solving, import resolution,
+and diagnostic rendering. Cross-compiled release binaries use the normal release
+profile because an instrumented binary must run on its target architecture to
+collect a profile.
+
+To reproduce the native build locally, install the LLVM tools for the active
+Rust toolchain and run:
+
+```bash
+rustup component add llvm-tools-preview
+python3 scripts/build_pgo.py
+```
+
+Additional positional arguments replace the default training workload. For
+example, to optimize for a particular project:
+
+```bash
+python3 scripts/build_pgo.py path/to/project
+```
+
+Always benchmark the resulting `target/<host>/release/pyrefly` binary against a
+normal release build on a representative workload. PGO's effect depends on how
+closely the training workload resembles the workload being measured.
+
 ## Coding conventions
 
 We follow the
