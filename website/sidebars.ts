@@ -39,7 +39,7 @@ let docsSidebar = [
         description:
             'Never used a type system before or just new to Pyrefly? Start here!',
         collapsed: false,
-        items: ['installation', 'configuration'],
+        items: ['installation', 'configuration', 'wasm'],
     },
     {
         type: 'doc' as const,
