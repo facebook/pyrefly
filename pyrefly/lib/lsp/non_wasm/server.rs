@@ -272,7 +272,6 @@ use vec1::Vec1;
 use crate::ModuleInfo;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::KeyClassMro;
-use crate::commands::check::Handles;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
@@ -3328,7 +3327,7 @@ impl Server {
         }
     }
 
-    fn queue(
+    fn invalidate_queue(
         server: &Server,
         telemetry_event: &mut TelemetryEvent,
         open_handles: Vec<Handle>,
@@ -3367,6 +3366,9 @@ impl Server {
         let invalidate_start = Instant::now();
 
         if let Some(i) = f {
+            while server.do_not_commit_recheck.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
             i(transaction.as_mut());
         } else {
             transaction.as_mut().invalidate_config();
@@ -3386,6 +3388,9 @@ impl Server {
             Some(telemetry_event),
             None,
         );
+
+        *server.currently_streaming_diagnostics_for_handles.write() = None;
+
     }
 
     fn invalidate(
@@ -3444,16 +3449,12 @@ impl Server {
                 // Run transaction prioritizing currently-open files, sending diagnostics as soon as they are available via the subscriber
 
                 // Wait in a loop while do_not_commit_recheck flag is set (testing only)
-                while server.do_not_commit_recheck.load(Ordering::SeqCst) {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
+
 
                 // Commit will be blocked until there are no ongoing reads.
                 // If we have some long running read jobs that can be cancelled, we should cancel them
                 // to unblock committing transactions.
-                for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
-                    cancellation_handle.cancel();
-                }
+
                 // we have to run, not just commit to process updates
                 // server.state.run_with_committing_transaction(
                 //     transaction,
@@ -3462,7 +3463,6 @@ impl Server {
                 //     Some(telemetry_event),
                 //     None,
                 // );
-                *server.currently_streaming_diagnostics_for_handles.write() = None;
 
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
                 // the main event loop of the server. As a result, the server can do a revalidation of
@@ -6043,7 +6043,7 @@ impl Server {
                 //     Some(telemetry_event),
                 //     None,
                 // );
-                *server.currently_streaming_diagnostics_for_handles.write() = None;
+
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
                 // the main event loop of the server. As a result, the server can do a revalidation of
                 // all the in-memory files based on the fresh main State as soon as possible.
