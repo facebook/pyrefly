@@ -3390,7 +3390,6 @@ impl Server {
         );
 
         *server.currently_streaming_diagnostics_for_handles.write() = None;
-
     }
 
     fn invalidate(
@@ -3409,7 +3408,7 @@ impl Server {
 
                 // f(&transaction.as_mut());
 
-                Self::queue(server, telemetry_event, open_handles, Some(f));
+                Self::invalidate_queue(server, telemetry_event, open_handles, Some(f));
 
                 // // Filter to only include handles from workspaces with streaming enabled
                 // let streaming_handles: SmallSet<Handle> = open_handles
@@ -3449,7 +3448,6 @@ impl Server {
                 // Run transaction prioritizing currently-open files, sending diagnostics as soon as they are available via the subscriber
 
                 // Wait in a loop while do_not_commit_recheck flag is set (testing only)
-
 
                 // Commit will be blocked until there are no ongoing reads.
                 // If we have some long running read jobs that can be cancelled, we should cancel them
@@ -5987,7 +5985,7 @@ impl Server {
             TelemetryEventKind::InvalidateConfig,
             Box::new(move |server, _telemetry, telemetry_event| {
                 // Filter to only include handles from workspaces with streaming enabled
-                Self::queue(
+                Self::invalidate_queue(
                     server,
                     telemetry_event,
                     open_handles,
