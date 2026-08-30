@@ -95,7 +95,7 @@ jobs:
       - name: Install container dependencies
         if: matrix.container == 'ubuntu:20.04'
         run: |
-          apt-get update && apt-get -y install curl build-essential git
+          apt-get update && apt-get -y install curl build-essential git python3
           curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
           chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
@@ -107,6 +107,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Install LLVM profile tools
+        if: ${{ !matrix.cross }}
+        run: rustup component add llvm-tools-preview
 
       - name: Set up Rust cache
         uses: Swatinem/rust-cache@v2
@@ -127,7 +131,7 @@ jobs:
 
       - name: Build binary (native)
         if: ${{ !matrix.cross }}
-        run: cargo build --release --manifest-path pyrefly/Cargo.toml -p pyrefly --target ${{ matrix.target }}
+        run: python3 scripts/build_pgo.py --target ${{ matrix.target }}
 
       - name: Build binary (cross-compile)
         if: ${{ matrix.cross }}
