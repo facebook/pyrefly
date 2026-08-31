@@ -1069,7 +1069,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         match (left, right) {
             // If both are literals/None, check for predictable results
             (Type::Literal(l1), Type::Literal(l2)) => {
-                if l1 != l2 {
+                // Explicit/implicit literal style is typing metadata, not runtime identity.
+                if l1.value != l2.value {
                     emit_literal_warning(
                         &l1.value.to_string(),
                         &l2.value.to_string(),
