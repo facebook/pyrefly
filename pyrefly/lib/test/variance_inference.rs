@@ -171,6 +171,20 @@ vinv5_1: ShouldBeInvariant5[float] = ShouldBeInvariant5[int](1)  # E:
 );
 
 testcase!(
+    test_dunder_new_does_not_constrain_variance,
+    r#"
+from typing import Self
+
+class ShouldBeCovariant[T]:
+    def __new__(cls, value: T) -> Self: ...
+    def get(self) -> T: ...
+
+upcast: ShouldBeCovariant[float] = ShouldBeCovariant[int](1)
+downcast: ShouldBeCovariant[int] = ShouldBeCovariant[float](1.0)  # E:
+"#,
+);
+
+testcase!(
     test_attrs_set_and_get,
     r#"
 class ShouldBeCovariant1[T]:
