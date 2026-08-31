@@ -5,7 +5,7 @@
 
 """Test if size(-1) works with literal"""
 
-from typing import assert_type, Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, assert_type
 
 import torch
 from shape_extensions import IntTuple

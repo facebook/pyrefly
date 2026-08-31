@@ -10,7 +10,7 @@ Pyrefly does not yet model the broadcast shape of multiple tensor indices.
 
 from __future__ import annotations
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 from shape_extensions import IntVar

@@ -27,7 +27,7 @@ Port notes:
 """
 
 import math
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

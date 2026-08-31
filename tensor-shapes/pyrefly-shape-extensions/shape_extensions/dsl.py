@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import typing
 
-from . import Int as _IntSchema, IntTuple as _IntTupleSchema
+from . import Int as _IntSchema
+from . import IntTuple as _IntTupleSchema
 
 
 def shape_dsl_function(fn: typing.Callable) -> typing.Callable:

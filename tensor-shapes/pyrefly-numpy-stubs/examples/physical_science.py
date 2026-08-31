@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import numpy as np
-from shape_extensions import assert_shape, Int, IntVar
+from shape_extensions import Int, IntVar, assert_shape
 
 N = IntVar("N")
 D = IntVar("D")

@@ -18,7 +18,7 @@ syntax, providing runtime-safe type variable declarations that support arithmeti
 import inspect
 import math
 from dataclasses import dataclass
-from typing import Any, assert_type, Generic, TYPE_CHECKING, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypedDict, TypeVar, assert_type
 
 import torch
 import torch.nn as nn

@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 from shape_extensions import IntVar

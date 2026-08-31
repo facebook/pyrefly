@@ -3,10 +3,9 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 from shape_extensions import IntVar
-
 
 if TYPE_CHECKING:
     from shape_extensions import Int

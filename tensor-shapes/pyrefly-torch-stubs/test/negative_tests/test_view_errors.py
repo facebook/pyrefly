@@ -5,7 +5,7 @@
 
 """Test view/reshape validation errors"""
 
-from typing import assert_type, reveal_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type, reveal_type
 
 import torch
 import torch.nn as nn

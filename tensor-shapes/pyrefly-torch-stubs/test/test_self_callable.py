@@ -10,7 +10,7 @@ This tests that when a method in an nn.Module subclass calls self(x),
 it properly redirects to self.forward(x) and type checks correctly.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

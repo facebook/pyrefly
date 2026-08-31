@@ -5,7 +5,7 @@
 
 """Test that .size() works on tensors with variadic shapes"""
 
-from typing import assert_type, Literal
+from typing import Literal, assert_type
 
 import torch
 import torch.nn as nn

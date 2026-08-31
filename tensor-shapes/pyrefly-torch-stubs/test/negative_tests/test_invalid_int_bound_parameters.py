@@ -12,7 +12,7 @@ bounded by exactly `Int` names a dimension. Anything else fails the bound check,
 and no shape ever comes back carrying the caller's unrelated type parameter.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn.functional as F

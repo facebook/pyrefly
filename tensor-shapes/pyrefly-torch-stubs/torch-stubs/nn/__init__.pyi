@@ -8,22 +8,23 @@ Type stubs for torch.nn module.
 """
 
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
     Generic,
     Iterable,
     Iterator,
-    overload,
     Self,
-    TYPE_CHECKING,
     TypedDict,
     TypeVar,
+    overload,
 )
 
 from shape_extensions import Elements, Flag, IntTuple, IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Int as _Int, ProxyMethod, uses_shape_dsl
+    from shape_extensions import Int as _Int
+    from shape_extensions import ProxyMethod, uses_shape_dsl
     from torch import Tensor
     from torch._shapes import (
         flatten_shape,
@@ -38,7 +39,8 @@ if TYPE_CHECKING:
     )
 
 # Re-export submodules
-from . import functional as functional, init as init
+from . import functional as functional
+from . import init as init
 
 # Base class for all neural network modules
 class Module:

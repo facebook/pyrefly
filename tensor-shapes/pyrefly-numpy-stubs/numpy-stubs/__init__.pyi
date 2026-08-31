@@ -7,9 +7,10 @@ from typing import Any, Literal, overload
 
 import shape_extensions
 from numpy._shapes import diag_extent, matmul_shape, reduce_shape
-from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar
+from shape_extensions import Flag, Int, IntTuple, IntVar, broadcast
 
-from . import linalg as linalg, random as random
+from . import linalg as linalg
+from . import random as random
 
 type _Shape = IntTuple
 type _AnyShape = tuple[Any, ...]

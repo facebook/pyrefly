@@ -8,7 +8,6 @@ from typing import cast, reveal_type
 import torch.nn.functional as F
 from torch import Tensor
 
-
 rank_one = cast(Tensor[[8]], ...)
 rank_two = cast(Tensor[[3, 8]], ...)
 rank_three = cast(Tensor[[2, 3, 8]], ...)

@@ -24,7 +24,7 @@ Port notes:
     negation, permute all work; tensor-as-index (t[ind]) returns shapeless Tensor
 """
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_type
 
 import torch
 import torch.nn as nn

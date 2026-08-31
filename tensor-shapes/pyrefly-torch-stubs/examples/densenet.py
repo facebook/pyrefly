@@ -25,7 +25,7 @@ Port notes:
     num_layers=[6,6,6,6], num_classes=10) since channel arithmetic is dynamic
 """
 
-from typing import Any, assert_type, overload, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_type, overload
 
 import torch
 import torch.nn as nn

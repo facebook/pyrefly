@@ -37,7 +37,7 @@ Now ported (previously omitted):
 - center_trim: symbolic slice bounds from .size() diffs, returns Tensor[[B, C, R]]
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

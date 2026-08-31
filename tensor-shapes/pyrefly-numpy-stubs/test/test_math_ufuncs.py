@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-from typing import Any, assert_type, cast, Literal
+from typing import Any, Literal, assert_type, cast
 
 import numpy as np
-from shape_extensions import assert_shape, IntTuple
+from shape_extensions import IntTuple, assert_shape
 
 GRADUAL_SHAPE_RUNTIME_TESTS = {
     "test_binary_ufuncs_fall_back_for_unknown_shapes",

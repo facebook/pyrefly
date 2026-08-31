@@ -9,7 +9,7 @@ GRU output shapes depend on input_size, hidden_size, num_layers, and
 bidirectional — all captured from __init__ and used in nn_gru_forward_ir.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

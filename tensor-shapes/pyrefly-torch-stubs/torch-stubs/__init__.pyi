@@ -14,10 +14,10 @@ extend that legacy path.
 
 import builtins
 from collections.abc import Sequence
-from typing import Any, overload, Self, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Self, overload
 
 import shape_extensions
-from shape_extensions import broadcast, Elements, Flag, IntTuple, IntVar, uses_shape_dsl
+from shape_extensions import Elements, Flag, IntTuple, IntVar, broadcast, uses_shape_dsl
 
 # `Generator` is not defined anywhere in this package, and resolving it relies
 # on how a partial stub package is looked up. The `py.typed` file here contains

@@ -5,7 +5,7 @@
 
 """Simple test for @ operator"""
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 

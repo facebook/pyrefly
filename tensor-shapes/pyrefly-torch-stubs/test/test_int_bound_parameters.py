@@ -12,7 +12,7 @@ no dimension to keep and lowers to the gradual size — widening only the extent
 that the argument feeds, never the rank or the untouched axes.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn.functional as F

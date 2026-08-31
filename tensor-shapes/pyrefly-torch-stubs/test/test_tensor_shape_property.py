@@ -9,10 +9,9 @@ The .shape property on a shaped Tensor should return a tuple type
 where each element is Literal[n] for the corresponding dimension.
 """
 
-from typing import Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from shape_extensions import IntVar
-
 
 if TYPE_CHECKING:
     from shape_extensions import Int

@@ -22,9 +22,17 @@ from torch import Tensor
 # pyd.beta.Beta, pyd.categorical.Categorical, etc. access patterns
 from . import (
     beta as beta,
+)
+from . import (
     categorical as categorical,
+)
+from . import (
     constraints as constraints,
+)
+from . import (
     transformed_distribution as transformed_distribution,
+)
+from . import (
     transforms as transforms,
 )
 

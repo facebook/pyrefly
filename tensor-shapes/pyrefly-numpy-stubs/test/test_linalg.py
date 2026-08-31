@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import assert_type
 
 import numpy as np
-from shape_extensions import assert_shape, Int, IntTuple, IntVar
+from shape_extensions import Int, IntTuple, IntVar, assert_shape
 
 N = IntVar("N")
 M = IntVar("M")

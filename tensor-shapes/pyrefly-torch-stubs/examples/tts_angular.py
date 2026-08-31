@@ -47,7 +47,7 @@ Key patterns exercised:
 - Sliding window embedding extraction for inference
 """
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_type
 
 import torch
 import torch.nn as nn

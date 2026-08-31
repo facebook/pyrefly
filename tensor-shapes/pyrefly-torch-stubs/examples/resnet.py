@@ -9,7 +9,7 @@ Phlippe ResNet from TorchBenchmark with shape annotations.
 Original: pytorch/benchmark/torchbenchmark/models/phlippe_resnet/__init__.py
 """
 
-from typing import Any, assert_type, overload, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_type, overload
 
 import torch
 import torch.nn as nn

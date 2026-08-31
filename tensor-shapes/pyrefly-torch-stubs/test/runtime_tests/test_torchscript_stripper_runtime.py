@@ -10,7 +10,7 @@ import inspect
 import textwrap
 import typing
 import unittest
-from typing import assert_type, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, assert_type
 
 import shape_extensions.torchscript
 import torch

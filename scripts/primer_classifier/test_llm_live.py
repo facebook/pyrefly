@@ -21,8 +21,8 @@ from .test_helpers import (
     GT_BAD_OVERRIDE_ARGS_DIFF,
     GT_PROTOCOL_SUBTYPING_DIFF,
     GT_TYPE_CHECKING_DIFF,
-    VARIANCE_DIFF,
     TYPE_CHECKING_DIFF,
+    VARIANCE_DIFF,
     assert_actionable,
     build_all_improvements_scenario,
     build_gt_all_neutral_scenario,
@@ -30,10 +30,9 @@ from .test_helpers import (
     build_gt_protocol_subtyping_scenario,
     build_gt_pure_improvement_scenario,
     build_gt_type_checking_scenario,
-    build_variance_scenario,
     build_type_checking_scenario,
+    build_variance_scenario,
 )
-
 
 # ---------------------------------------------------------------------------
 # Live LLM suggestion quality tests (Pass 3)
@@ -58,9 +57,9 @@ class TestSuggestionQualityLive:
         assert "protocol" in text.lower(), f"Expected 'protocol', got: {text}"
         # Should reference the actual file from the diff
         all_files = [f for s in suggestion.suggestions for f in s.files]
-        assert any(
-            "variance" in f for f in all_files
-        ), f"Expected variance file reference, got: {all_files}"
+        assert any("variance" in f for f in all_files), (
+            f"Expected variance file reference, got: {all_files}"
+        )
 
     def test_type_checking_exempt_live(self):
         result = build_type_checking_scenario()
@@ -70,14 +69,14 @@ class TestSuggestionQualityLive:
         text = " ".join(
             s.description + " " + s.reasoning for s in suggestion.suggestions
         )
-        assert any(
-            kw in text.lower() for kw in ["type_checking", "exempt", "final"]
-        ), f"Expected TYPE_CHECKING/exempt/final, got: {text}"
+        assert any(kw in text.lower() for kw in ["type_checking", "exempt", "final"]), (
+            f"Expected TYPE_CHECKING/exempt/final, got: {text}"
+        )
         # Should reference the actual file from the diff
         all_files = [f for s in suggestion.suggestions for f in s.files]
-        assert any(
-            "stmt" in f or "binding" in f for f in all_files
-        ), f"Expected stmt/binding file reference, got: {all_files}"
+        assert any("stmt" in f or "binding" in f for f in all_files), (
+            f"Expected stmt/binding file reference, got: {all_files}"
+        )
 
     def test_no_regressions_skips_live(self):
         result = build_all_improvements_scenario()
@@ -109,12 +108,17 @@ class TestGroundTruthLive:
         )
         assert any(
             kw in text.lower()
-            for kw in ["calculate_abstract_members", "class_metadata", "synthesized", "class_body_fields"]
+            for kw in [
+                "calculate_abstract_members",
+                "class_metadata",
+                "synthesized",
+                "class_body_fields",
+            ]
         ), f"Expected function/file reference, got: {text}"
         all_files = [f for s in suggestion.suggestions for f in s.files]
-        assert any(
-            "class_metadata" in f for f in all_files
-        ), f"Expected class_metadata file reference, got: {all_files}"
+        assert any("class_metadata" in f for f in all_files), (
+            f"Expected class_metadata file reference, got: {all_files}"
+        )
         # Actionability check on first suggestion
         assert_actionable(suggestion.suggestions[0])
 
@@ -129,12 +133,16 @@ class TestGroundTruthLive:
         )
         assert any(
             kw in text.lower()
-            for kw in ["check_for_imported_final_reassignment", "bindings", "type_checking"]
+            for kw in [
+                "check_for_imported_final_reassignment",
+                "bindings",
+                "type_checking",
+            ]
         ), f"Expected function/file reference, got: {text}"
         all_files = [f for s in suggestion.suggestions for f in s.files]
-        assert any(
-            "bindings" in f for f in all_files
-        ), f"Expected bindings file reference, got: {all_files}"
+        assert any("bindings" in f for f in all_files), (
+            f"Expected bindings file reference, got: {all_files}"
+        )
         # Check affected projects
         all_projects = [p for s in suggestion.suggestions for p in s.affected_projects]
         for proj in ["urllib3", "trio", "zulip", "ibis"]:
@@ -153,10 +161,9 @@ class TestGroundTruthLive:
         text = " ".join(
             s.description + " " + s.reasoning for s in suggestion.suggestions
         )
-        assert any(
-            kw in text.lower()
-            for kw in ["subset", "args", "kwargs", "any"]
-        ), f"Expected override/args reference, got: {text}"
+        assert any(kw in text.lower() for kw in ["subset", "args", "kwargs", "any"]), (
+            f"Expected override/args reference, got: {text}"
+        )
         assert_actionable(suggestion.suggestions[0])
 
     def test_scenario_d_pure_improvement_skips_live(self):

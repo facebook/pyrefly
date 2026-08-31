@@ -5,7 +5,7 @@
 
 # Tests for literal int support in meta-shapes
 # Demonstrates: size() literal tracking, numel() literals, dim() literals
-from typing import assert_type, cast, Literal
+from typing import Literal, assert_type, cast
 
 import torch
 from shape_extensions import Elements, Int, IntTuple, IntVar

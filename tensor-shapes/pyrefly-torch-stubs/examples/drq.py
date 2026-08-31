@@ -39,7 +39,7 @@ Key patterns exercised:
 """
 
 import math
-from typing import Any, assert_type, cast, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_type, cast
 
 import torch
 import torch.nn as nn

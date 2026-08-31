@@ -31,7 +31,7 @@ Port notes:
 - np.power(d_k, 0.5) replaced with d_k ** 0.5 (no numpy dependency)
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

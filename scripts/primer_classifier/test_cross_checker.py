@@ -21,23 +21,20 @@ from unittest.mock import patch
 import pytest
 
 from .cross_checker import (
+    _MATCH_SYSTEM_PROMPT,
     _filter_to_relevant_files,
     _format_checker_errors,
     _format_pyrefly_errors,
     _match_errors_with_llm,
-    _MATCH_SYSTEM_PROMPT,
 )
 from .parser import ErrorEntry
-
 
 # ---------------------------------------------------------------------------
 # Test data helpers
 # ---------------------------------------------------------------------------
 
 
-def _make_pyrefly_entry(
-    file: str, line: int, kind: str, message: str
-) -> ErrorEntry:
+def _make_pyrefly_entry(file: str, line: int, kind: str, message: str) -> ErrorEntry:
     return ErrorEntry(
         severity="ERROR",
         file_path=file,
@@ -179,7 +176,9 @@ class TestMatchErrorsMocked:
         ]
 
         mypy_errors = [_make_checker_error("a.py", 10, "return-value", "bad return")]
-        pyright_errors = [_make_checker_error("a.py", 10, "reportReturnType", "bad return")]
+        pyright_errors = [
+            _make_checker_error("a.py", 10, "reportReturnType", "bad return")
+        ]
         result = _match_errors_with_llm(entries, mypy_errors, pyright_errors)
         assert len(result) == 2
         assert result[0]["mypy"] is True
@@ -309,77 +308,109 @@ class TestMatchErrorsLive:
         """All 3 checkers flag the same obvious errors — should all match."""
         pyrefly_entries = [
             _make_pyrefly_entry(
-                "test.py", 2, "bad-return",
-                "Returned type `str` is not assignable to declared return type `int`"
+                "test.py",
+                2,
+                "bad-return",
+                "Returned type `str` is not assignable to declared return type `int`",
             ),
             _make_pyrefly_entry(
-                "test.py", 7, "bad-assignment",
-                "`str` is not assignable to variable `x` with type `int`"
+                "test.py",
+                7,
+                "bad-assignment",
+                "`str` is not assignable to variable `x` with type `int`",
             ),
             _make_pyrefly_entry(
-                "test.py", 9, "bad-argument-type",
-                "Argument `int` is not assignable to parameter `name` with type `str`"
+                "test.py",
+                9,
+                "bad-argument-type",
+                "Argument `int` is not assignable to parameter `name` with type `str`",
             ),
             _make_pyrefly_entry(
-                "test.py", 15, "missing-attribute",
-                "Object of class `Foo` has no attribute `nonexistent_method`"
+                "test.py",
+                15,
+                "missing-attribute",
+                "Object of class `Foo` has no attribute `nonexistent_method`",
             ),
         ]
 
         mypy_errors = [
             _make_checker_error(
-                "test.py", 2, "return-value",
-                'Incompatible return value type (got "str", expected "int")'
+                "test.py",
+                2,
+                "return-value",
+                'Incompatible return value type (got "str", expected "int")',
             ),
             _make_checker_error(
-                "test.py", 7, "assignment",
-                'Incompatible types in assignment (expression has type "str", variable has type "int")'
+                "test.py",
+                7,
+                "assignment",
+                'Incompatible types in assignment (expression has type "str", variable has type "int")',
             ),
             _make_checker_error(
-                "test.py", 9, "arg-type",
-                'Argument 1 to "greet" has incompatible type "int"; expected "str"'
+                "test.py",
+                9,
+                "arg-type",
+                'Argument 1 to "greet" has incompatible type "int"; expected "str"',
             ),
             _make_checker_error(
-                "test.py", 15, "attr-defined",
-                '"Foo" has no attribute "nonexistent_method"'
+                "test.py",
+                15,
+                "attr-defined",
+                '"Foo" has no attribute "nonexistent_method"',
             ),
         ]
 
         pyright_errors = [
             _make_checker_error(
-                "test.py", 2, "reportReturnType",
-                'Type "Literal[\'hello\']" is not assignable to return type "int"'
+                "test.py",
+                2,
+                "reportReturnType",
+                'Type "Literal[\'hello\']" is not assignable to return type "int"',
             ),
             _make_checker_error(
-                "test.py", 7, "reportAssignmentType",
-                'Type "Literal[\'not an int\']" is not assignable to declared type "int"'
+                "test.py",
+                7,
+                "reportAssignmentType",
+                'Type "Literal[\'not an int\']" is not assignable to declared type "int"',
             ),
             _make_checker_error(
-                "test.py", 9, "reportArgumentType",
-                'Argument of type "Literal[42]" cannot be assigned to parameter "name" of type "str"'
+                "test.py",
+                9,
+                "reportArgumentType",
+                'Argument of type "Literal[42]" cannot be assigned to parameter "name" of type "str"',
             ),
             _make_checker_error(
-                "test.py", 15, "reportAttributeAccessIssue",
-                'Cannot access attribute "nonexistent_method" for class "Foo"'
+                "test.py",
+                15,
+                "reportAttributeAccessIssue",
+                'Cannot access attribute "nonexistent_method" for class "Foo"',
             ),
         ]
 
         matches = _match_errors_with_llm(pyrefly_entries, mypy_errors, pyright_errors)
         assert len(matches) == 4
         for m in matches:
-            assert m.get("mypy") is True, f"Expected mypy=True for index {m.get('index')}"
-            assert m.get("pyright") is True, f"Expected pyright=True for index {m.get('index')}"
+            assert m.get("mypy") is True, (
+                f"Expected mypy=True for index {m.get('index')}"
+            )
+            assert m.get("pyright") is True, (
+                f"Expected pyright=True for index {m.get('index')}"
+            )
 
     def test_pyrefly_only_errors(self):
         """Errors unique to pyrefly — mypy/pyright don't flag them."""
         pyrefly_entries = [
             _make_pyrefly_entry(
-                "test.py", 5, "inconsistent-overload-default",
-                "Default value for parameter `x` is inconsistent across overloads"
+                "test.py",
+                5,
+                "inconsistent-overload-default",
+                "Default value for parameter `x` is inconsistent across overloads",
             ),
             _make_pyrefly_entry(
-                "test.py", 10, "redundant-cast",
-                "Redundant cast: `int` is the same type as `int`"
+                "test.py",
+                10,
+                "redundant-cast",
+                "Redundant cast: `int` is the same type as `int`",
             ),
         ]
 
@@ -389,38 +420,52 @@ class TestMatchErrorsLive:
             _make_checker_error("other.py", 200, "syntax", "Syntax error"),
         ]
         pyright_errors = [
-            _make_checker_error("other.py", 100, "reportMissingImports", "Import not found"),
+            _make_checker_error(
+                "other.py", 100, "reportMissingImports", "Import not found"
+            ),
         ]
 
         matches = _match_errors_with_llm(pyrefly_entries, mypy_errors, pyright_errors)
         assert len(matches) == 2
         for m in matches:
-            assert m.get("mypy") is not True, f"Expected mypy=False for index {m.get('index')}"
-            assert m.get("pyright") is not True, f"Expected pyright=False for index {m.get('index')}"
+            assert m.get("mypy") is not True, (
+                f"Expected mypy=False for index {m.get('index')}"
+            )
+            assert m.get("pyright") is not True, (
+                f"Expected pyright=False for index {m.get('index')}"
+            )
 
     def test_mixed_co_reported_and_unique(self):
         """Mix of co-reported and pyrefly-only errors."""
         pyrefly_entries = [
             _make_pyrefly_entry(
-                "main.py", 10, "bad-return",
-                "Returned type `str` is not assignable to declared return type `int`"
+                "main.py",
+                10,
+                "bad-return",
+                "Returned type `str` is not assignable to declared return type `int`",
             ),
             _make_pyrefly_entry(
-                "main.py", 50, "redundant-cast",
-                "Redundant cast: `int` is the same type as `int`"
+                "main.py",
+                50,
+                "redundant-cast",
+                "Redundant cast: `int` is the same type as `int`",
             ),
         ]
 
         mypy_errors = [
             _make_checker_error(
-                "main.py", 10, "return-value",
-                'Incompatible return value type (got "str", expected "int")'
+                "main.py",
+                10,
+                "return-value",
+                'Incompatible return value type (got "str", expected "int")',
             ),
         ]
         pyright_errors = [
             _make_checker_error(
-                "main.py", 10, "reportReturnType",
-                'Type "str" is not assignable to return type "int"'
+                "main.py",
+                10,
+                "reportReturnType",
+                'Type "str" is not assignable to return type "int"',
             ),
         ]
 
@@ -439,21 +484,27 @@ class TestMatchErrorsLive:
         """Errors on slightly different lines should still match."""
         pyrefly_entries = [
             _make_pyrefly_entry(
-                "utils.py", 100, "bad-argument-type",
-                "Argument `int` is not assignable to parameter `name` with type `str`"
+                "utils.py",
+                100,
+                "bad-argument-type",
+                "Argument `int` is not assignable to parameter `name` with type `str`",
             ),
         ]
 
         mypy_errors = [
             _make_checker_error(
-                "utils.py", 102, "arg-type",
-                'Argument 1 to "process" has incompatible type "int"; expected "str"'
+                "utils.py",
+                102,
+                "arg-type",
+                'Argument 1 to "process" has incompatible type "int"; expected "str"',
             ),
         ]
         pyright_errors = [
             _make_checker_error(
-                "utils.py", 97, "reportArgumentType",
-                'Argument of type "int" cannot be assigned to parameter "name" of type "str"'
+                "utils.py",
+                97,
+                "reportArgumentType",
+                'Argument of type "int" cannot be assigned to parameter "name" of type "str"',
             ),
         ]
 
@@ -466,15 +517,19 @@ class TestMatchErrorsLive:
         """Only mypy was run (no pyright errors) — pyright should be False."""
         pyrefly_entries = [
             _make_pyrefly_entry(
-                "test.py", 5, "bad-return",
-                "Returned type `str` is not assignable to declared return type `int`"
+                "test.py",
+                5,
+                "bad-return",
+                "Returned type `str` is not assignable to declared return type `int`",
             ),
         ]
 
         mypy_errors = [
             _make_checker_error(
-                "test.py", 5, "return-value",
-                'Incompatible return value type (got "str", expected "int")'
+                "test.py",
+                5,
+                "return-value",
+                'Incompatible return value type (got "str", expected "int")',
             ),
         ]
 
@@ -487,15 +542,19 @@ class TestMatchErrorsLive:
         """Only pyright was run (no mypy errors) — mypy should be False."""
         pyrefly_entries = [
             _make_pyrefly_entry(
-                "test.py", 5, "missing-attribute",
-                "Object of class `Foo` has no attribute `bar`"
+                "test.py",
+                5,
+                "missing-attribute",
+                "Object of class `Foo` has no attribute `bar`",
             ),
         ]
 
         pyright_errors = [
             _make_checker_error(
-                "test.py", 5, "reportAttributeAccessIssue",
-                'Cannot access attribute "bar" for class "Foo"'
+                "test.py",
+                5,
+                "reportAttributeAccessIssue",
+                'Cannot access attribute "bar" for class "Foo"',
             ),
         ]
 

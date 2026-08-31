@@ -5,7 +5,7 @@
 
 """Test that bare Tensor and nn.Parameter(bare_tensor) have consistent representations"""
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

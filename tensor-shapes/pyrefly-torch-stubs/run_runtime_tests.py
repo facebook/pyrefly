@@ -10,7 +10,6 @@ import sys
 import unittest
 from pathlib import Path
 
-
 SUITES = {
     "annotation": [
         "test_annotation_runtime.py",

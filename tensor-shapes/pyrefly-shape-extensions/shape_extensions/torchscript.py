@@ -28,7 +28,9 @@ import ast
 import textwrap
 
 from . import *  # noqa: F401, F403
-from . import __all__ as _shape_extensions_all, _return_int, Int as _Int
+from . import Int as _Int
+from . import __all__ as _shape_extensions_all
+from . import _return_int
 
 __all__ = [*_shape_extensions_all, "remove_shape_types_from_torch_sources"]
 

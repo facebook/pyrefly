@@ -9,7 +9,7 @@ DCGAN from TorchBenchmark with shape annotations.
 Original: pytorch/benchmark/torchbenchmark/models/dcgan/__init__.py
 """
 
-from typing import Any, assert_type, Final, overload, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Final, assert_type, overload
 
 import torch
 import torch.nn as nn

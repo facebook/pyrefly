@@ -5,7 +5,7 @@
 
 """Test matmul with mixed shaped and shapeless tensors"""
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 from shape_extensions import IntVar
 

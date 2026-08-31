@@ -9,7 +9,7 @@ Integer indexing reduces dimensionality by 1.
 Slice indexing preserves rank: result dim = stop - start.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 from shape_extensions import Elements, IntTuple, IntVar
 

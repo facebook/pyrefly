@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Test meta-shape function integration
-from typing import Any, assert_type, Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, assert_type
 
 import torch
 import torch.nn.functional as F

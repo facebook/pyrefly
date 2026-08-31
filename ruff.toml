@@ -1,2 +1,17 @@
-target-version = "py312"
-extend-exclude = ["tensor-shapes/skills"]
+target-version = "py313"
+line-length = 88
+extend-exclude = [
+    "**/*.md",
+    "conformance/**",
+    "crates/pyrefly_bundled/**",
+    "crates/tsp_types/**",
+    "pyrefly/lib/test/**",
+    "test/**",
+    "website/**",
+]
+
+[lint]
+select = ["I"]
+fixable = ["I"]
+
+[lint.isort]

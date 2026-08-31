@@ -9,10 +9,9 @@ These operations must work with symbolic dimensions like Int[N] returned from x.
 Previously failed when iter_shape_dims() filtered out Type::Quantified dimensions.
 """
 
-from typing import assert_type, cast, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type, cast
 
 from shape_extensions import Elements, IntTuple, IntVar
-
 
 if TYPE_CHECKING:
     from torch import Tensor

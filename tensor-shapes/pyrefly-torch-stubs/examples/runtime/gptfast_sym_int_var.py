@@ -14,24 +14,23 @@ syntax, providing runtime-safe type variable declarations that support arithmeti
 import math
 from dataclasses import dataclass
 from typing import (
+    TYPE_CHECKING,
     Any,
-    assert_type,
     Generic,
     Optional,
-    TYPE_CHECKING,
     TypedDict,
     TypeVar,
+    assert_type,
 )
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from torch.nn.attention.flex_attention import (
-    _mask_mod_signature,
     BlockMask,
+    _mask_mod_signature,
     flex_attention,
 )
-
 
 if TYPE_CHECKING:
     from shape_extensions import Elements, Int, IntTuple, IntVar

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, assert_type
 
 import numpy as np
-from shape_extensions import assert_shape, IntVar
+from shape_extensions import IntVar, assert_shape
 
 GRADUAL_SHAPE_RUNTIME_TESTS = {
     "test_diag_dtype_and_broad_offset",

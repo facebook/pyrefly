@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from collections.abc import Sequence
-from typing import assert_type, reveal_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type, reveal_type
 
 import torch
 from shape_extensions import IntTuple

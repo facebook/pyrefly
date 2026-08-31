@@ -5,7 +5,7 @@
 
 """Test if .matmul() method works vs @ operator"""
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 from shape_extensions import IntVar

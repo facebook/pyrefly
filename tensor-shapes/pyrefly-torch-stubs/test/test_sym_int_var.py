@@ -13,7 +13,7 @@ This test verifies that:
 4. Shape arithmetic (N+1, N*2) works in annotations
 """
 
-from typing import assert_type, Generic, TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic, assert_type
 
 from shape_extensions import Elements, IntTuple, IntVar
 

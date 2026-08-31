@@ -8,7 +8,7 @@ Test remaining ~35 operations with symbolic dimensions
 Covers FFT variants, loss functions, creation ops, indexing, and specialized operations
 """
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_type
 
 import torch
 import torch.fft

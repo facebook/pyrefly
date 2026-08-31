@@ -34,7 +34,7 @@ Key patterns exercised:
 - Dual-head discriminator: patch source + domain classifier
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

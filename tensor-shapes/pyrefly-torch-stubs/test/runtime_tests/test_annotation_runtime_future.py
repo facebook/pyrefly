@@ -17,10 +17,10 @@ annotations when using PEP 695 TypeVar (shape_extensions.IntVar solves it differ
 from __future__ import annotations
 
 import unittest
-from typing import assert_type, Generic
+from typing import Generic, assert_type
 
 import torch
-from shape_extensions import assert_shape, Int, IntVar
+from shape_extensions import Int, IntVar, assert_shape
 
 
 class TestSubscriptRuntime(unittest.TestCase):

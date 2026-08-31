@@ -9,7 +9,7 @@ This test documents that int literals can be assigned to Int types,
 including bare Int, Int[Any], or passed to functions with type parameters.
 """
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_type
 
 from shape_extensions import IntVar
 

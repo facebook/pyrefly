@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Phase 1.1: Missing shape operations tests
-from typing import Any, assert_type, Literal, reveal_type
+from typing import Any, Literal, assert_type, reveal_type
 
 import torch
 from shape_extensions import Int, IntTuple, IntVar

@@ -10,7 +10,7 @@ broadcasting should degrade to shapeless batch dims rather than erroring.
 The concrete suffix dims should still be broadcast correctly.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

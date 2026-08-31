@@ -77,6 +77,27 @@ Coding style: All code must be clean, documented and minimal. That means:
   overhead. Even if a piece of code is logically correct, it is not ready for
   review until it is also clean, elegant, and maintainable.
 
+### Formatting
+
+- **Rust:** `cargo fmt` (enforced by `cargo fmt -- --check` in CI)
+- **Python:** All Python is formatted with **ruff** (both code and import sorting):
+  - OSS: `ruff.toml` at repo root — `target-version = py312`, `line-length = 88`, `[lint] select = ["I"]` for isort
+  - Run locally:
+    ```bash
+    ruff format .          # code formatting
+    ruff check --fix --select I .  # import sorting
+    ruff format --check . && ruff check --select I .  # what CI runs
+    ```
+  - Internal (fbsource): formatting is via `pyfmt`, which reads `tools/lint/pyfmt/config.toml`:
+    ```toml
+    ["fbcode/pyrefly"]
+    formatter = "ruff-api"
+    sorter = "ruff-api"
+    target_version = "3.12"
+    ```
+    This matches OSS `ruff.toml` (`target-version = py312`, `line-length = 88`, `lint.select = ["I"]`), and both exclude `crates/pyrefly_bundled` (vendored typeshed stubs).
+    Run `arc f` or `buck2 run fbcode//tools/pyfmt:pyfmt -- fbcode/pyrefly/...`. The linter code still appears as `BLACK` historically, but it now runs ruff-api for both formatting and sorting, matching OSS ruff.
+
 ## Comments and Documentation
 
 - Code should have comments and functions should have docstrings, but both should be

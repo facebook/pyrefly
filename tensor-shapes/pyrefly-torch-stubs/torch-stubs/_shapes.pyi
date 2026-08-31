@@ -7,13 +7,13 @@ import shape_extensions.dsl as dsl
 from shape_extensions import Int, IntTuple, type_shape_dsl_function
 from shape_extensions.dsl import (
     Error,
+    ShapedArray,
+    Unknown,
     parse_einsum_equation,
     prod,
     shape_dsl_function,
-    ShapedArray,
     sum,
     symint,
-    Unknown,
 )
 
 # TODO(stroxler): Use `IntTuple` slicing here once it preserves the symbolic-rank cases covered by

@@ -19,7 +19,7 @@ Two fixes are tested:
 
 from __future__ import annotations
 
-from typing import assert_type, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, assert_type
 
 import torch.nn as nn
 import torch.nn.functional as F

@@ -20,7 +20,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from llm_transport import call_llm_json, get_backend, LLMError
+from llm_transport import LLMError, call_llm_json, get_backend
 
 OPUS_MODEL = "claude-opus-4-20250514"
 

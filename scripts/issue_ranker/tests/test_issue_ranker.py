@@ -40,8 +40,8 @@ from passes.rank import _mechanical_tier
 from relationship_resolver import (
     _BLOCKED_BY_RE,
     _BLOCKS_RE,
-    _build_duplicate_clusters,
     _DUPLICATE_RE,
+    _build_duplicate_clusters,
     resolve_relationships,
 )
 from report_formatter import format_json, format_markdown

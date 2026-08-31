@@ -24,8 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from shape_testing import pyrefly_command, TENSOR_SHAPES_ROOT, venv_python
-
+from shape_testing import TENSOR_SHAPES_ROOT, pyrefly_command, venv_python
 
 PACKAGES: tuple[str, ...] = (
     "pyrefly-torch-stubs",

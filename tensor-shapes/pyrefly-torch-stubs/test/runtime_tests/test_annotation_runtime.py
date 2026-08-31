@@ -26,13 +26,13 @@ from typing import Generic, TypedDict
 
 import torch
 from shape_extensions import (
-    assert_shape,
     D,
-    defines_assert_shape,
     Int,
     IntTuple,
     IntVar,
     TypeVarTuple,
+    assert_shape,
+    defines_assert_shape,
 )
 
 

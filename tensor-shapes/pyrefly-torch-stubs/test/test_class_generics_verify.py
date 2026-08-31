@@ -8,7 +8,7 @@ Verify: Do class-level generics work properly?
 Testing user's claim that class generics DO propagate to methods
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 from shape_extensions import IntVar

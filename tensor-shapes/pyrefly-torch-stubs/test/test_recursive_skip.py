@@ -16,7 +16,7 @@ C + i*K channels (avoids needing exponentials in the expression language).
 Keeps things 1D (just [B, C]) to focus on the recursion, not spatial dims.
 """
 
-from typing import assert_type, overload, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type, overload
 
 import torch
 import torch.nn as nn

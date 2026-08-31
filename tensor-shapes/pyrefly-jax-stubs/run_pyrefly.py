@@ -12,12 +12,10 @@ import argparse
 import sys
 from pathlib import Path
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from shape_testing import check_suites, pyrefly_command  # noqa: E402
 from suites import SUITES  # noqa: E402
-
 
 PACKAGE_ROOT: Path = Path(__file__).resolve().parent
 

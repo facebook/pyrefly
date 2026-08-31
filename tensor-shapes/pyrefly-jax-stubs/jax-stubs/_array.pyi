@@ -7,11 +7,11 @@
 # `jax.numpy` can refer to it without importing its own parent package. Real
 # JAX splits it out for the same reason, as `jax._src.basearray`.
 
-from typing import Any, overload, Sequence
+from typing import Any, Sequence, overload
 
 import shape_extensions
 from jax._shapes import permute_shape, reduce_shape, reshape_shape, reverse_shape
-from shape_extensions import broadcast, Flag, IntTuple, IntVar
+from shape_extensions import Flag, IntTuple, IntVar, broadcast
 
 type _Shape = IntTuple
 type _AnyShape = tuple[Any, ...]

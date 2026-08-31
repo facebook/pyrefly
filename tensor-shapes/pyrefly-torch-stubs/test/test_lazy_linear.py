@@ -9,7 +9,7 @@ LazyLinear accepts any input features (in_features inferred at first forward)
 but preserves out_features in the output shape.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

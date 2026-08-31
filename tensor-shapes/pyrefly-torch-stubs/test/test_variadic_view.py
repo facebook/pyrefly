@@ -9,7 +9,7 @@ The view DSL computes prod(self.shape) for -1 inference. When the tensor has
 variadic batch dims (*Bs), it preserves the fixed target rank and known dimensions.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

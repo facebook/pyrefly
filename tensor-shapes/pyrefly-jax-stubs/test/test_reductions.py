@@ -7,8 +7,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-from shape_extensions import assert_shape, IntVar
-
+from shape_extensions import IntVar, assert_shape
 
 N = IntVar("N")
 M = IntVar("M")

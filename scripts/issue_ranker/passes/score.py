@@ -22,7 +22,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from llm_transport import call_llm_json, get_backend, LLMError
+from llm_transport import LLMError, call_llm_json, get_backend
 from spec_fetcher import get_spec_excerpt
 
 SONNET_MODEL = "claude-sonnet-4-6"

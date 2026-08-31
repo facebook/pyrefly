@@ -11,7 +11,7 @@ Original: pytorch/benchmark/torchbenchmark/models/BERT_pytorch/bert_pytorch/mode
 
 import math
 from collections.abc import Callable
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

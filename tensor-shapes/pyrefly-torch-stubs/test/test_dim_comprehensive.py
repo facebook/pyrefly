@@ -8,10 +8,9 @@
 This file tests the Int/Int type system independent of Tensor shapes.
 """
 
-from typing import Any, assert_type, Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, assert_type
 
 from shape_extensions import IntVar
-
 
 if TYPE_CHECKING:
     from shape_extensions import Int

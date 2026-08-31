@@ -8,11 +8,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from shape_testing import Suite  # noqa: E402
-
 
 _PACKAGE_ROOT: Path = Path(__file__).resolve().parent
 

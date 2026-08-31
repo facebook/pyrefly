@@ -5,7 +5,7 @@
 
 """Test what happens when we use wrong expected type"""
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_type
 
 import torch
 from shape_extensions import IntVar

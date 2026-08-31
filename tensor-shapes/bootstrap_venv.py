@@ -28,7 +28,6 @@ from pathlib import Path
 
 from shape_testing import DEFAULT_VENV, TENSOR_SHAPES_ROOT
 
-
 PYTHON_VERSION = "3.12"
 REQUIREMENTS: Path = TENSOR_SHAPES_ROOT / "test-requirements.txt"
 

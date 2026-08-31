@@ -5,7 +5,7 @@
 
 """Test that assert_type works with Tensor types for automated type checking"""
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_type
 
 import torch
 import torch.nn as nn

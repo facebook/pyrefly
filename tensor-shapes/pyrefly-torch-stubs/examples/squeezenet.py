@@ -16,7 +16,7 @@ cannot be validated, so each pool recovers gradually rather than nesting a
 ceil correction per stage; the classifier restores the exact output shape.
 """
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_type
 
 import torch
 import torch.nn as nn

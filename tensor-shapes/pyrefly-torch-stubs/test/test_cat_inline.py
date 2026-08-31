@@ -5,7 +5,7 @@
 
 """Test cat with inline tuple literal"""
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 if TYPE_CHECKING:
     import torch

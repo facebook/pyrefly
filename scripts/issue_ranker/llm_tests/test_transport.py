@@ -14,7 +14,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from llm_transport import call_llm, call_llm_json, LLMError
+from llm_transport import LLMError, call_llm, call_llm_json
 
 _HAS_API_KEY = bool(
     os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("LLAMA_API_KEY")

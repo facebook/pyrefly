@@ -9,7 +9,7 @@ When a scalar expression evaluates to Any (e.g. 2**n where n is a non-literal
 int), it could also be an unknown-rank Tensor, so broadcasting is gradual.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 

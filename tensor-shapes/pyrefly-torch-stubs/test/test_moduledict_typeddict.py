@@ -12,7 +12,7 @@ This tests that ModuleDict[T: TypedDict] allows:
 3. Item access also returns the TypedDict field type: module_dict["key"] → FieldType
 """
 
-from typing import Any, assert_type, TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict, assert_type
 
 import torch
 import torch.nn as nn

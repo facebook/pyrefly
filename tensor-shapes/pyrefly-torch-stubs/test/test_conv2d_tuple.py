@@ -11,7 +11,7 @@ Scalar inputs continue to bind normally. This test verifies both paths work
 without errors.
 """
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_type
 
 import torch
 import torch.nn as nn

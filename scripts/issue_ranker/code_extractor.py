@@ -20,7 +20,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from llm_transport import call_llm, LLMError
+from llm_transport import LLMError, call_llm
 
 # Matches ```python or ```py fenced code blocks (optionally indented).
 _PYTHON_FENCE_RE = re.compile(

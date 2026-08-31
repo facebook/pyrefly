@@ -3,9 +3,10 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, overload, Sequence
+from typing import Any, Sequence, overload
 
-from jax._array import Array as Array, Array as ndarray
+from jax._array import Array as Array
+from jax._array import Array as ndarray
 from jax._shapes import (
     matmul_shape,
     permute_shape,
@@ -13,7 +14,7 @@ from jax._shapes import (
     reshape_shape,
     reverse_shape,
 )
-from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar
+from shape_extensions import Flag, Int, IntTuple, IntVar, broadcast
 
 from . import fft as fft
 

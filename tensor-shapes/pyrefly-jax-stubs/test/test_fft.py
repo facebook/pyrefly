@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-from shape_extensions import assert_shape, IntTuple
+from shape_extensions import IntTuple, assert_shape
 
 
 def generic_fft_preserves_shape[Shape: IntTuple](

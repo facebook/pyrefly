@@ -9,7 +9,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-
 rank_two = cast(Tensor[[3, 8]], ...)
 rank_three = cast(Tensor[[2, 3, 8]], ...)
 rank_four = cast(Tensor[[2, 3, 8, 8]], ...)

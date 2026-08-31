@@ -10,7 +10,7 @@ Key question: How do runtime dimension values (passed to __init__)
 connect to generic type parameters?
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

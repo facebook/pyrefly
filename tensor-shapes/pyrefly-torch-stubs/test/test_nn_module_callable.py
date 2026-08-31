@@ -7,7 +7,7 @@
 Test that nn.Module instances are callable (automatically redirect to forward method).
 """
 
-from typing import assert_type, Protocol, TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, assert_type
 
 import torch
 import torch.nn as nn

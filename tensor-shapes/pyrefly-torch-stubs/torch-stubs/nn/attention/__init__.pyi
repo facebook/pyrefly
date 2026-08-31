@@ -6,7 +6,11 @@
 """Type stubs for torch.nn.attention module."""
 
 from torch.nn.attention.flex_attention import (
-    _mask_mod_signature as _mask_mod_signature,
     BlockMask as BlockMask,
+)
+from torch.nn.attention.flex_attention import (
+    _mask_mod_signature as _mask_mod_signature,
+)
+from torch.nn.attention.flex_attention import (
     flex_attention as flex_attention,
 )

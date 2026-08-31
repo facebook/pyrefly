@@ -21,8 +21,8 @@ from shape_extensions import Elements, Int, IntTuple, IntVar
 from torch import Tensor
 from torch.nn import functional as F
 from torch.nn.attention.flex_attention import (
-    _mask_mod_signature,
     BlockMask,
+    _mask_mod_signature,
     flex_attention,
 )
 

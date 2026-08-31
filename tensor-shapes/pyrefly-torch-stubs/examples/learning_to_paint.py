@@ -23,7 +23,7 @@ Port notes:
   torch.sigmoid and scalar __rsub__ are shape-preserving and work correctly
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

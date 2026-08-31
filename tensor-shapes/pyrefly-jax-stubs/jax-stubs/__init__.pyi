@@ -5,4 +5,5 @@
 
 from jax._array import Array as Array
 
-from . import nn as nn, numpy as numpy
+from . import nn as nn
+from . import numpy as numpy

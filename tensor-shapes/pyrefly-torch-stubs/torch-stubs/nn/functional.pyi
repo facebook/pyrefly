@@ -12,7 +12,8 @@ import builtins
 from typing import Literal, overload
 
 import shape_extensions
-from shape_extensions import Elements, Flag, Int as _Int, IntTuple, IntVar
+from shape_extensions import Elements, Flag, IntTuple, IntVar
+from shape_extensions import Int as _Int
 from torch._shapes import (
     adaptive_pool1d_shape,
     adaptive_pool2d_shape,

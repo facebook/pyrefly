@@ -5,7 +5,7 @@
 
 """Test tensor arithmetic shape behavior, including scalar preservation and broadcasting."""
 
-from typing import Any, assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, assert_type
 
 from shape_extensions import Elements, IntTuple, IntVar
 

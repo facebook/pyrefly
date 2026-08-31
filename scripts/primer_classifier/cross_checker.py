@@ -37,13 +37,13 @@ from compare_typecheckers import (
     setup_project,
 )
 from llm_transport import (
-    get_backend,
-    call_llama_api,
     call_anthropic_api,
+    call_llama_api,
     extract_text,
+    get_backend,
     parse_json_list,
 )
-from projects import get_mypy_primer_projects, Project
+from projects import Project, get_mypy_primer_projects
 
 _CHECKER_TIMEOUT = 300  # 5 minutes per checker
 _BATCH_SIZE = 80  # max pyrefly errors per LLM call to avoid output truncation
@@ -77,9 +77,7 @@ def _run_checker(
             timeout=_CHECKER_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
-        logging.warning(
-            f"  [cross-check] {checker_name} timed out for {project_name}"
-        )
+        logging.warning(f"  [cross-check] {checker_name} timed out for {project_name}")
         return subprocess.CompletedProcess(full_cmd, 1, stdout="", stderr="")
 
 
@@ -110,9 +108,7 @@ def _collect_checker_errors(
         paths = extract_paths_from_cmd(project.pyright_cmd)
         path_args = " ".join(paths) if paths else "."
         python_path = os.path.join(repo_dir, ".venv", "bin", "python")
-        pyright_cmd = (
-            f"pyright --outputjson --pythonpath {python_path} {path_args}"
-        )
+        pyright_cmd = f"pyright --outputjson --pythonpath {python_path} {path_args}"
         result = _run_checker(pyright_cmd, repo_dir, "pyright", project.name)
         pyright_errors = parse_full_errors_pyright(result.stdout or "", repo_dir)
         if result.returncode != 0 and not pyright_errors:
@@ -121,15 +117,14 @@ def _collect_checker_errors(
                 f"stderr={result.stderr if result.stderr else '(empty)'}"
             )
     else:
-        logging.debug(
-            f"  [cross-check] {project.name}: no pyright_cmd configured"
-        )
+        logging.debug(f"  [cross-check] {project.name}: no pyright_cmd configured")
 
     return mypy_errors, pyright_errors
 
 
 def _format_checker_errors(
-    errors: list[dict[str, object]], checker_name: str,
+    errors: list[dict[str, object]],
+    checker_name: str,
 ) -> str:
     """Format checker errors for the LLM prompt."""
     if not errors:
@@ -202,9 +197,7 @@ def _match_errors_batch(
 
     try:
         if backend == "llama":
-            result = call_llama_api(
-                api_key, _MATCH_SYSTEM_PROMPT, user_prompt, model
-            )
+            result = call_llama_api(api_key, _MATCH_SYSTEM_PROMPT, user_prompt, model)
         else:
             result = call_anthropic_api(
                 api_key, _MATCH_SYSTEM_PROMPT, user_prompt, model
@@ -258,7 +251,9 @@ def _match_errors_with_llm(
     # 200K token API limit without this filtering.
     filtered_mypy = _filter_to_relevant_files(mypy_errors, pyrefly_entries)
     filtered_pyright = _filter_to_relevant_files(pyright_errors, pyrefly_entries)
-    if len(filtered_mypy) != len(mypy_errors) or len(filtered_pyright) != len(pyright_errors):
+    if len(filtered_mypy) != len(mypy_errors) or len(filtered_pyright) != len(
+        pyright_errors
+    ):
         logging.info(
             f"  [cross-check] Filtered to relevant files: "
             f"mypy {len(mypy_errors)}->{len(filtered_mypy)}, "
@@ -294,9 +289,7 @@ def _match_errors_with_llm(
     mypy_matches = sum(1 for m in all_matches if m.get("mypy") is True)
     pyright_matches = sum(1 for m in all_matches if m.get("pyright") is True)
     both = sum(
-        1
-        for m in all_matches
-        if m.get("mypy") is True and m.get("pyright") is True
+        1 for m in all_matches if m.get("mypy") is True and m.get("pyright") is True
     )
     neither = sum(
         1

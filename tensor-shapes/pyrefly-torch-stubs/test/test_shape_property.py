@@ -5,7 +5,7 @@
 
 """Test that .shape property returns literal dimensions like .size()"""
 
-from typing import assert_type, Literal
+from typing import Literal, assert_type
 
 import torch
 from torch import Tensor

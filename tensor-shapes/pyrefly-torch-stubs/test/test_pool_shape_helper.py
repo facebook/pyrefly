@@ -10,7 +10,7 @@ shared surface is pinned here through a local stub that matches the functional
 pooling surface.
 """
 
-from typing import assert_type, reveal_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type, reveal_type
 
 import torch
 import torch.nn as nn

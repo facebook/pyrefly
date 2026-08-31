@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Phase 6: Specialized operations tests (FFT, Loss, Padding, Random, Properties)
-from typing import Any, assert_type, Literal
+from typing import Any, Literal, assert_type
 
 import torch
 import torch.fft

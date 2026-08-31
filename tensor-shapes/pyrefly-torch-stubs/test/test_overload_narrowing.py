@@ -7,7 +7,7 @@
 Test overload-based narrowing as an alternative to generic parameter narrowing.
 """
 
-from typing import assert_type, overload, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type, overload
 
 import torch
 import torch.nn as nn

@@ -23,7 +23,7 @@ import time
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
-from typing import final, Generator, Iterable
+from typing import Generator, Iterable, final
 
 SCRIPT_PATH: Path = Path(__file__).parent
 

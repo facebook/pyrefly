@@ -8,7 +8,7 @@ Test nn.Module parameters and buffers with typed shapes
 Critical for models with learnable weights
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

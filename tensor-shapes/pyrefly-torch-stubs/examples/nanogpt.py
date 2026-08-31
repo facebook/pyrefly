@@ -15,7 +15,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import inspect
 import math
 from dataclasses import dataclass
-from typing import Any, assert_type, TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict, assert_type
 
 import torch
 import torch.nn as nn

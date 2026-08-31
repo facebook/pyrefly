@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-from typing import Any, assert_type, cast, Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, assert_type, cast
 
 import numpy as np
-from shape_extensions import assert_shape, Int, IntTuple, IntVar
+from shape_extensions import Int, IntTuple, IntVar, assert_shape
 
 
 def make_array(shape: Any) -> Any:

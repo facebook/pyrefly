@@ -5,7 +5,7 @@
 
 """Test concat and flatten actual return types."""
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 from shape_extensions import IntVar

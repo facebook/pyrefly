@@ -8,7 +8,6 @@ from __future__ import annotations
 import jax.numpy as jnp
 from shape_extensions import assert_shape
 
-
 # A multi-argument `arange` has a length the DSL cannot compute, and a shape
 # outside the exact ranks is gradual, so `assert_shape` cannot be used for
 # either. See `arange` and the constructors in `jax/numpy/__init__.pyi`.

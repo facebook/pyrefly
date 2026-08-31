@@ -8,7 +8,7 @@ Test nn.Module with proper class-level generics
 This tests the USER'S correct pattern, not my buggy one!
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_type
 
 import torch
 import torch.nn as nn

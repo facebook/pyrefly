@@ -46,7 +46,7 @@ import time
 import venv
 from datetime import datetime, timezone
 
-from projects import get_mypy_primer_projects, Project
+from projects import Project, get_mypy_primer_projects
 
 
 def run(

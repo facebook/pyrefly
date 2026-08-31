@@ -42,8 +42,8 @@ try:
     # Buck build: use fully-qualified module path
     from pyrefly.scripts.github_utils import (
         ContributorAnalyzer,
-        get_tag_date,
         GitHubClient,
+        get_tag_date,
         load_env_file,
     )
     from pyrefly.scripts.version_helpers import is_prerelease
@@ -52,8 +52,8 @@ except ImportError:
     sys.path.insert(0, str(_SCRIPT_DIR))
     from github_utils import (  # type: ignore[import-not-found]  # noqa: F811
         ContributorAnalyzer,  # pyrefly: ignore
-        get_tag_date,  # pyrefly: ignore
         GitHubClient,  # pyrefly: ignore
+        get_tag_date,  # pyrefly: ignore
         load_env_file,  # pyrefly: ignore
     )
     from version_helpers import (  # type: ignore[import-not-found]  # noqa: F811  # pyrefly: ignore

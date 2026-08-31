@@ -5,18 +5,17 @@
 
 import math
 from dataclasses import dataclass
-from typing import Any, assert_type, TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict, assert_type
 
 import torch
 import torch.nn as nn
 from shape_extensions import Elements, IntTuple
 from torch.nn import functional as F
 from torch.nn.attention.flex_attention import (
-    _mask_mod_signature,
     BlockMask,
+    _mask_mod_signature,
     flex_attention,
 )
-
 
 if TYPE_CHECKING:
     from shape_extensions import Int, IntVar

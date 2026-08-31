@@ -3,10 +3,10 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, overload, Sequence
+from typing import Any, Sequence, overload
 
 from jax._array import Array
-from shape_extensions import broadcast, IntTuple
+from shape_extensions import IntTuple, broadcast
 
 type _Shape = IntTuple
 

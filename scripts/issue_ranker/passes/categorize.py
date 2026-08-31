@@ -18,7 +18,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from llm_transport import call_llm_json, LLMError
+from llm_transport import LLMError, call_llm_json
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
