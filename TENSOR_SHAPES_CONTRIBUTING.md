@@ -321,15 +321,18 @@ The Torch package opts out for now, via `check_stubs=False` in its
 `@shape_dsl_function` bodies are not valid Python. Type-level DSL files do check
 cleanly, so migrating those rules is what removes the opt-out.
 
-Build Pyrefly first, then run:
-
 ```bash
-cargo build
 python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py
 ```
 
+The runner builds Pyrefly itself, with `cargo build` by default and with Buck
+under `--buck`, so it always checks against your working copy. Building
+separately first is unnecessary, and skipping the build is what makes a run
+report results from an older Pyrefly.
+
 If your build uses a custom target directory, `run_pyrefly.py` respects
-`CARGO_TARGET_DIR`. You can also pass the binary explicitly:
+`CARGO_TARGET_DIR`. Passing a binary explicitly is the one mode that does not
+build, since a bare path says nothing about how to rebuild it:
 
 ```bash
 python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --pyrefly /path/to/pyrefly

@@ -66,8 +66,7 @@ def select_mode(mode: str) -> str:
 
 
 def run_cargo_rust_tests() -> None:
-    print_step("Cargo build")
-    run(["cargo", "build", "-p", "pyrefly"])
+    # No build step: the static corpus below builds the binary it checks with.
     print_step("Cargo pyrefly_types shape tests")
     run(["cargo", "test", "-p", "pyrefly_types", "--", *TYPES_TEST_FILTERS])
     for test_filter in RUST_TEST_FILTERS:

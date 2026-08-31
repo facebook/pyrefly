@@ -24,16 +24,21 @@ PACKAGE_ROOT: Path = Path(__file__).resolve().parent
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--pyrefly", type=Path, default=None)
+    parser.add_argument(
+        "--pyrefly",
+        type=Path,
+        default=None,
+        help="use this binary as is; the only mode that does not build Pyrefly first",
+    )
     parser.add_argument(
         "--buck",
         action="store_true",
-        help="run Pyrefly out of Buck instead of a locally built binary",
+        help="build and run Pyrefly with Buck instead of Cargo",
     )
     parser.add_argument(
         "--release",
         action="store_true",
-        help="use the Cargo release build instead of debug",
+        help="build with the Cargo release profile instead of debug",
     )
     parser.add_argument(
         "--suite",
