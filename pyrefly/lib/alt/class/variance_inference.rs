@@ -422,7 +422,7 @@ fn on_class<'s>(
     // todo zeina: check if we need to check for things like __init_subclass__
     // in pyre 1, we didn't need to.
     for (name, field) in fields.iter() {
-        if name == &dunder::INIT {
+        if name == &dunder::INIT || name == &dunder::NEW {
             continue;
         }
 
