@@ -15,7 +15,7 @@ from jax._shapes import (
 )
 from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar
 
-from . import fft as fft
+from . import fft as fft, linalg as linalg
 
 type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
@@ -482,6 +482,9 @@ def logaddexp2[Shape: _Shape](
 def logaddexp2[Shape1: _Shape, Shape2: _Shape](
     x1: Array[Shape1], x2: Array[Shape2], /
 ) -> Array[broadcast(Shape1, Shape2)]: ...
+def matmul[LeftShape: _Shape, RightShape: _Shape](
+    a: Array[LeftShape], b: Array[RightShape]
+) -> Array[matmul_shape(LeftShape, RightShape)]: ...
 @overload
 def maximum[Shape: _Shape](
     x1: Array[Shape], x2: int | float | complex, /
@@ -614,11 +617,6 @@ def true_divide[Shape: _Shape](
 def true_divide[Shape1: _Shape, Shape2: _Shape](
     x1: Array[Shape1], x2: Array[Shape2], /
 ) -> Array[broadcast(Shape1, Shape2)]: ...
-
-# This MVP models only two-dimensional operands, matching the NumPy stubs.
-def matmul[LeftShape: _Shape, RightShape: _Shape](
-    a: Array[LeftShape], b: Array[RightShape]
-) -> Array[matmul_shape(LeftShape, RightShape)]: ...
 @overload
 def transpose[Shape: _Shape](
     a: Array[Shape], axes: None = None

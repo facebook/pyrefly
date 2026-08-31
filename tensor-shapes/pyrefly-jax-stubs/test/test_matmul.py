@@ -38,13 +38,9 @@ def reject_mismatched_inner_dimension(
 
 
 def batched_matmul_is_not_rejected(
-    x: jax.Array[[N, M, P]], y: jax.Array[[M, P]]
+    x: jax.Array[[N, M, P]], y: jax.Array[[P, M]]
 ) -> None:
-    """Batched matmul is unmodeled, so its result is gradual rather than an error.
-
-    There is deliberately no expected error here: the suite runs with
-    `--expectations`, so this call failing to check would fail the test.
-    """
+    """Batched matmul with matching contracting dimension."""
 
     jnp.matmul(x, y)
 
@@ -63,6 +59,30 @@ def test_function_matmul() -> None:
     assert_shape(jnp.matmul(left, right), (2, 7))
     # JAX names both operands, unlike the ufuncs, which are positional-only.
     assert_shape(jnp.matmul(a=left, b=right), (2, 7))
+
+
+def test_batched_matmul() -> None:
+    vec4 = jnp.ones(4)
+    mat34 = jnp.ones((3, 4))
+    mat45 = jnp.ones((4, 5))
+    batch_234 = jnp.ones((2, 3, 4))
+    batch_245 = jnp.ones((2, 4, 5))
+
+    # 1D @ 1D -> ()
+    assert_shape(jnp.matmul(vec4, vec4), ())
+
+    # 1D @ ND -> (*batch, m)
+    assert_shape(jnp.matmul(vec4, mat45), (5,))
+    assert_shape(jnp.matmul(vec4, batch_245), (2, 5))
+
+    # ND @ 1D -> (*batch, n)
+    assert_shape(jnp.matmul(mat34, vec4), (3,))
+    assert_shape(jnp.matmul(batch_234, vec4), (2, 3))
+
+    # ND @ ND -> (*broadcast(batch_left, batch_right), n, m)
+    assert_shape(jnp.matmul(mat34, mat45), (3, 5))
+    assert_shape(jnp.matmul(batch_234, mat45), (2, 3, 5))
+    assert_shape(jnp.matmul(batch_234, batch_245), (2, 3, 5))
 
 
 def test_matmul_contracts_vector_operands() -> None:

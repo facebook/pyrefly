@@ -4,34 +4,89 @@
 # LICENSE file in the root directory of this source tree.
 
 import shape_extensions.dsl as dsl
-from shape_extensions import IntTuple, type_shape_dsl_function
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def int_min(a: Int, b: Int) -> Int:
+    if a == b:
+        return a
+    if dsl.is_concrete_int(a) and dsl.is_concrete_int(b):
+        if a < b:
+            return a
+        return b
+    return dsl.Int.gradual()
 
 @type_shape_dsl_function
 def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
-    # TODO(stroxler): Model batched matmul, which broadcasts the leading
-    # dimensions. Batched calls are common in JAX, so an unmodeled rank yields a
-    # gradual shape rather than an error: rejecting valid code would be worse
-    # than not checking it.
-    if len(left) > 2 or len(right) > 2 or len(left) == 0 or len(right) == 0:
-        return dsl.IntTuple.gradual()
-    # The contracted dimension is the last of the left operand and the first of
-    # the right, whatever the ranks. A 1-D operand contributes no axis to the
-    # result, so `(N, M) @ (M,)` is `(N,)` and `(M,) @ (M,)` is a scalar.
-    left_inner = left[len(left) - 1]
-    right_inner = right[0]
+    # 1. Reject operands with rank 0 (scalars)
+    if len(left) == 0 or len(right) == 0:
+        return dsl.Invalid("matmul requires at least 1-D operands")
+
+    # (k)(*batch,k,m) -> (*batch,m)
+    if len(left) == 1:
+        k_left = left[0]
+        k_right = right[len(right) - 2]
+        if (
+            dsl.is_concrete_int(k_left)
+            and dsl.is_concrete_int(k_right)
+            and k_left != k_right
+        ):
+            return dsl.Invalid("matmul inner dimensions must match")
+        return dsl.IntTuple(
+            right[i] if i < len(right) - 2 else right[len(right) - 1]
+            for i in range(len(right) - 1)
+        )
+
+    # (*batch,k)(k) -> (*batch,)
+    if len(right) == 1:
+        k_left = left[len(left) - 1]
+        k_right = right[0]
+        if (
+            dsl.is_concrete_int(k_left)
+            and dsl.is_concrete_int(k_right)
+            and k_left != k_right
+        ):
+            return dsl.Invalid("matmul inner dimensions must match")
+        return dsl.IntTuple(left[i] for i in range(len(left) - 1))
+
+    # (*batch_left,n,k)(*batch_right,k,m) -> (*broadcast(batch_left,batch_right),n,m)
+    k_left = left[len(left) - 1]
+    k_right = right[len(right) - 2]
     if (
-        dsl.is_concrete_int(left_inner)
-        and dsl.is_concrete_int(right_inner)
-        and left_inner != right_inner
+        dsl.is_concrete_int(k_left)
+        and dsl.is_concrete_int(k_right)
+        and k_left != k_right
     ):
         return dsl.Invalid("matmul inner dimensions must match")
-    if len(left) == 1 and len(right) == 1:
-        return dsl.IntTuple(())
-    if len(left) == 1:
-        return dsl.IntTuple((right[1],))
-    if len(right) == 1:
-        return dsl.IntTuple((left[0],))
-    return dsl.IntTuple((left[0], right[1]))
+    if len(left) >= len(right):
+        n_batch = len(left) - 2
+        diff = len(left) - len(right)
+        return dsl.IntTuple(
+            (
+                (
+                    (right[i - diff] if left[i] == 1 else left[i])
+                    if i >= diff
+                    else left[i]
+                )
+                if i < n_batch
+                else (left[len(left) - 2] if i == n_batch else right[len(right) - 1])
+            )
+            for i in range(len(left))
+        )
+    n_batch = len(right) - 2
+    diff = len(right) - len(left)
+    return dsl.IntTuple(
+        (
+            (
+                (right[i] if left[i - diff] == 1 else left[i - diff])
+                if i >= diff
+                else right[i]
+            )
+            if i < n_batch
+            else (left[len(left) - 2] if i == n_batch else right[len(right) - 1])
+        )
+        for i in range(len(right))
+    )
 
 @type_shape_dsl_function
 def reverse_shape(shape: IntTuple) -> IntTuple:
