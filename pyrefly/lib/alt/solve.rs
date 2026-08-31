@@ -6757,17 +6757,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.untype(ty, TextRange::default(), &self.error_swallower())
     }
 
-    // Approximate the result of calling `type()` on something of type T
-    // In many cases the result is just type[T] with generics erased, but sometimes
-    // we'll fall back to builtins.type. We can add more cases here as-needed.
+    // Approximate the result of calling `type()` on something of type T.
     pub fn type_of(&self, ty: Type) -> Type {
         match ty {
-            // A protocol value's runtime class is an unknown concrete implementation.
-            Type::ClassType(cls) if cls.class_object().is_protocol() => {
-                self.heap.mk_type_of(Type::ClassType(cls))
-            }
-            Type::ClassType(cls) => self.heap.mk_class_def(cls.class_object().clone()),
-            Type::SelfType(_) => self.heap.mk_type(ty),
+            Type::ClassType(_) | Type::SelfType(_) => self.heap.mk_type_of(ty),
             Type::Literal(lit) => self.heap.mk_class_def(
                 lit.value
                     .general_class_type(self.stdlib)

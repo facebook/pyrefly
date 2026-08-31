@@ -889,3 +889,13 @@ def test2(cls: T2) -> str:
     return cls.name  # E:
     "#,
 );
+
+testcase!(
+    test_instantiate_type_of,
+    r#"
+from typing import assert_type
+class A[T]: ...
+def f(a: A[int]):
+    assert_type(type(a)(), A[int])
+    "#,
+);
