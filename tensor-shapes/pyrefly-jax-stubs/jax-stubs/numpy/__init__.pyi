@@ -3,10 +3,11 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, overload, Sequence
+from typing import Any, Callable, Literal, overload, Sequence
 
 from jax._array import Array as Array, Array as ndarray
 from jax._shapes import (
+    int_min,
     matmul_shape,
     permute_shape,
     reduce_shape,
@@ -32,6 +33,8 @@ type _NewShape = int | tuple[int, ...] | None
 # downstream shaped-array operations without degrading to unknown. The NumPy
 # stubs carry the same limitation.
 @overload
+def zeros(shape: tuple[()], dtype: Any = ..., *, device: Any = ...) -> Array[[]]: ...
+@overload
 def zeros[N: IntVar](
     shape: Int[N], dtype: Any = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
@@ -51,6 +54,8 @@ def zeros[N: IntVar, M: IntVar, K: IntVar](
 def zeros(
     shape: Sequence[int], dtype: Any = ..., *, device: Any = ...
 ) -> Array[IntTuple]: ...
+@overload
+def ones(shape: tuple[()], dtype: Any = ..., *, device: Any = ...) -> Array[[]]: ...
 @overload
 def ones[N: IntVar](
     shape: Int[N], dtype: Any = ..., *, device: Any = ...
@@ -72,6 +77,58 @@ def ones(
     shape: Sequence[int], dtype: Any = ..., *, device: Any = ...
 ) -> Array[IntTuple]: ...
 @overload
+def empty(
+    shape: tuple[()],
+    dtype: Any = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[]]: ...
+@overload
+def empty[N: IntVar](
+    shape: Int[N],
+    dtype: Any = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def empty[N: IntVar](
+    shape: IntTuple[N],
+    dtype: Any = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def empty[N: IntVar, M: IntVar](
+    shape: IntTuple[N, M],
+    dtype: Any = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N, M]]: ...
+@overload
+def empty[N: IntVar, M: IntVar, K: IntVar](
+    shape: IntTuple[N, M, K],
+    dtype: Any = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N, M, K]]: ...
+@overload
+def empty(
+    shape: Sequence[int],
+    dtype: Any = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[IntTuple]: ...
+@overload
+def full(
+    shape: tuple[()], fill_value: Any, dtype: Any = ..., *, device: Any = ...
+) -> Array[[]]: ...
+@overload
 def full[N: IntVar](
     shape: Int[N], fill_value: Any, dtype: Any = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
@@ -85,50 +142,274 @@ def full[N: IntVar, M: IntVar](
 ) -> Array[[N, M]]: ...
 @overload
 def full[N: IntVar, M: IntVar, K: IntVar](
-    shape: IntTuple[N, M, K], fill_value: Any, dtype: Any = ..., *, device: Any = ...
+    shape: IntTuple[N, M, K], dtype: Any = ..., *, device: Any = ...
 ) -> Array[[N, M, K]]: ...
 @overload
 def full(
     shape: Sequence[int], fill_value: Any, dtype: Any = ..., *, device: Any = ...
 ) -> Array[IntTuple]: ...
 
-# `fill_value` stays `Any` because the rule JAX enforces is that it broadcasts
-# *to* the requested shape, which is a constraint on the result rather than a
-# computation of it. `broadcast(...)` computes a shape and cannot require that it
-# equal the target, so `jnp.full((2, 3), jnp.ones(2))` is not rejected here. Using
-# `broadcast(...)` anyway would trade this missed error for a wrong shape on
-# `jnp.full((2, 3), jnp.ones((4, 2, 3)))`, which JAX also rejects.
+# `_like` constructors
+@overload
+def empty_like[Shape: _Shape](
+    prototype: Array[Shape],
+    dtype: Any = ...,
+    shape: None = None,
+    *,
+    device: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def empty_like(
+    prototype: Any,
+    dtype: Any = ...,
+    shape: tuple[()] = ...,
+    *,
+    device: Any = ...,
+) -> Array[[]]: ...
+@overload
+def empty_like[N: IntVar](
+    prototype: Any,
+    dtype: Any = ...,
+    shape: Int[N] = ...,
+    *,
+    device: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def empty_like[N: IntVar](
+    prototype: Any,
+    dtype: Any = ...,
+    shape: IntTuple[N] = ...,
+    *,
+    device: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def empty_like[N: IntVar, M: IntVar](
+    prototype: Any,
+    dtype: Any = ...,
+    shape: IntTuple[N, M] = ...,
+    *,
+    device: Any = ...,
+) -> Array[[N, M]]: ...
+@overload
+def empty_like[N: IntVar, M: IntVar, K: IntVar](
+    prototype: Any,
+    dtype: Any = ...,
+    shape: IntTuple[N, M, K] = ...,
+    *,
+    device: Any = ...,
+) -> Array[[N, M, K]]: ...
+@overload
+def empty_like(
+    prototype: Any,
+    dtype: Any = ...,
+    shape: Sequence[int] | None = None,
+    *,
+    device: Any = ...,
+) -> Array[IntTuple]: ...
+@overload
+def zeros_like[Shape: _Shape](
+    a: Array[Shape],
+    dtype: Any = ...,
+    shape: None = None,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def zeros_like(
+    a: Any,
+    dtype: Any = ...,
+    shape: tuple[()] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[]]: ...
+@overload
+def zeros_like[N: IntVar](
+    a: Any,
+    dtype: Any = ...,
+    shape: Int[N] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def zeros_like[N: IntVar](
+    a: Any,
+    dtype: Any = ...,
+    shape: IntTuple[N] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def zeros_like[N: IntVar, M: IntVar](
+    a: Any,
+    dtype: Any = ...,
+    shape: IntTuple[N, M] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N, M]]: ...
+@overload
+def zeros_like[N: IntVar, M: IntVar, K: IntVar](
+    a: Any,
+    dtype: Any = ...,
+    shape: IntTuple[N, M, K] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N, M, K]]: ...
+@overload
+def zeros_like(
+    a: Any,
+    dtype: Any = ...,
+    shape: Sequence[int] | None = None,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[IntTuple]: ...
+@overload
+def ones_like[Shape: _Shape](
+    a: Array[Shape],
+    dtype: Any = ...,
+    shape: None = None,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def ones_like(
+    a: Any,
+    dtype: Any = ...,
+    shape: tuple[()] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[]]: ...
+@overload
+def ones_like[N: IntVar](
+    a: Any,
+    dtype: Any = ...,
+    shape: Int[N] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def ones_like[N: IntVar](
+    a: Any,
+    dtype: Any = ...,
+    shape: IntTuple[N] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def ones_like[N: IntVar, M: IntVar](
+    a: Any,
+    dtype: Any = ...,
+    shape: IntTuple[N, M] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N, M]]: ...
+@overload
+def ones_like[N: IntVar, M: IntVar, K: IntVar](
+    a: Any,
+    dtype: Any = ...,
+    shape: IntTuple[N, M, K] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N, M, K]]: ...
+@overload
+def ones_like(
+    a: Any,
+    dtype: Any = ...,
+    shape: Sequence[int] | None = None,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[IntTuple]: ...
+@overload
+def full_like[Shape: _Shape](
+    a: Array[Shape],
+    fill_value: Any,
+    dtype: Any = ...,
+    shape: None = None,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def full_like(
+    a: Any,
+    fill_value: Any,
+    dtype: Any = ...,
+    shape: tuple[()] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[]]: ...
+@overload
+def full_like[N: IntVar](
+    a: Any,
+    fill_value: Any,
+    dtype: Any = ...,
+    shape: Int[N] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def full_like[N: IntVar](
+    a: Any,
+    fill_value: Any,
+    dtype: Any = ...,
+    shape: IntTuple[N] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def full_like[N: IntVar, M: IntVar](
+    a: Any,
+    fill_value: Any,
+    dtype: Any = ...,
+    shape: IntTuple[N, M] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N, M]]: ...
+@overload
+def full_like[N: IntVar, M: IntVar, K: IntVar](
+    a: Any,
+    fill_value: Any,
+    dtype: Any = ...,
+    shape: IntTuple[N, M, K] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N, M, K]]: ...
+@overload
+def full_like(
+    a: Any,
+    fill_value: Any,
+    dtype: Any = ...,
+    shape: Sequence[int] | None = None,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[IntTuple]: ...
 
-# The single-argument form is the common one, so it carries its length exactly.
-# The cost is that a negative literal infers a negative dimension where JAX
-# returns an empty array: `jnp.arange(-3)` is `[-3]` here and `(0,)` at runtime.
-# Clamping instead would cost the exact length on every ordinary call.
-# TODO(stroxler): Represent an empty dimension, then clamp here. Pyrefly's shape
-# domain currently excludes both negative and zero dimensions in a written
-# annotation, so the correct answer for this call, `[0]`, is as unrepresentable
-# as the wrong one. Note the ordering this implies: extending that check to
-# inferred shapes before the clamp exists would turn today's wrong shape into a
-# rejection of valid code. The NumPy stubs model `arange` the same way.
+# `arange`, `linspace`, `logspace`, `geomspace`
 @overload
 def arange[N: IntVar](
     start: Int[N], *, dtype: Any = ..., device: Any = ...
 ) -> Array[[N]]: ...
-
-# A float `arange` is valid and its length is not an integer expression at all,
-# so it is rank-1 with a gradual length.
 @overload
 def arange(start: float, *, dtype: Any = ..., device: Any = ...) -> Array[[int]]: ...
-
-# The multi-argument forms mean `range(start, stop, step)`, whose length the DSL
-# cannot compute. It needs a floor division and a clamp at zero: an
-# `Int`-returning DSL function is restricted to an exact `Int +/- Flag[int]`, and
-# an `Int` cannot be compared against a literal at all. Inferring `stop - start`
-# without the clamp would claim a negative dimension for an empty range such as
-# `jnp.arange(7, 2)`, which is worse than not knowing, so the result is rank-1
-# with a gradual length.
-# TODO(stroxler): Compute the length once the type-level DSL admits division and
-# comparison in an `Int` return. The Torch migration is extending dimension
-# arithmetic, so this should become expressible.
 @overload
 def arange(
     start: int | float,
@@ -136,6 +417,106 @@ def arange(
     step: int | float = ...,
     dtype: Any = ...,
 ) -> Array[[int]]: ...
+@overload
+def linspace[N: IntVar](
+    start: Any,
+    stop: Any,
+    num: Int[N],
+    endpoint: bool = True,
+    retstep: Literal[False] = False,
+    dtype: Any = None,
+    axis: int = 0,
+    *,
+    device: Any = None,
+) -> Array[[N]]: ...
+@overload
+def linspace[N: IntVar](
+    start: Any,
+    stop: Any,
+    num: Int[N],
+    endpoint: bool,
+    retstep: Literal[True],
+    dtype: Any = None,
+    axis: int = 0,
+    *,
+    device: Any = None,
+) -> tuple[Array[[N]], Array[[]]]: ...
+@overload
+def linspace(
+    start: Any,
+    stop: Any,
+    num: int = 50,
+    endpoint: bool = True,
+    retstep: Literal[False] = False,
+    dtype: Any = None,
+    axis: int = 0,
+    *,
+    device: Any = None,
+) -> Array[[int]]: ...
+@overload
+def linspace(
+    start: Any,
+    stop: Any,
+    num: int,
+    endpoint: bool,
+    retstep: Literal[True],
+    dtype: Any = None,
+    axis: int = 0,
+    *,
+    device: Any = None,
+) -> tuple[Array[[int]], Array[[]]]: ...
+@overload
+def linspace(
+    start: Any,
+    stop: Any,
+    num: int = 50,
+    endpoint: bool = True,
+    retstep: bool = False,
+    dtype: Any = None,
+    axis: int = 0,
+    *,
+    device: Any = None,
+) -> Array[IntTuple] | tuple[Array[IntTuple], Array[[]]]: ...
+@overload
+def logspace[N: IntVar](
+    start: Any,
+    stop: Any,
+    num: Int[N],
+    endpoint: bool = True,
+    base: Any = 10.0,
+    dtype: Any = None,
+    axis: int = 0,
+) -> Array[[N]]: ...
+@overload
+def logspace(
+    start: Any,
+    stop: Any,
+    num: int = 50,
+    endpoint: bool = True,
+    base: Any = 10.0,
+    dtype: Any = None,
+    axis: int = 0,
+) -> Array[[int]]: ...
+@overload
+def geomspace[N: IntVar](
+    start: Any,
+    stop: Any,
+    num: Int[N],
+    endpoint: bool = True,
+    dtype: Any = None,
+    axis: int = 0,
+) -> Array[[N]]: ...
+@overload
+def geomspace(
+    start: Any,
+    stop: Any,
+    num: int = 50,
+    endpoint: bool = True,
+    dtype: Any = None,
+    axis: int = 0,
+) -> Array[[int]]: ...
+
+# `eye`, `identity`, `diag`, `diagflat`, `tri`, `tril`, `triu`, `vander`
 @overload
 def eye[N: IntVar](
     N: Int[N], M: None = ..., k: int = ..., dtype: Any = ..., *, device: Any = ...
@@ -147,6 +528,181 @@ def eye[N: IntVar, M: IntVar](
 def identity[N: IntVar](
     n: Int[N], dtype: Any = ..., *, device: Any = ...
 ) -> Array[[N, N]]: ...
+@overload
+def diag[N: IntVar](v: Array[[N]], k: int = 0) -> Array[[N, N]]: ...
+@overload
+def diag[N: IntVar, M: IntVar](
+    v: Array[[N, M]], k: int = 0
+) -> Array[[int_min(Int[N], Int[M])]]: ...
+@overload
+def diag(v: Any, k: int = 0) -> Array[IntTuple]: ...
+@overload
+def diagflat[N: IntVar](v: Array[[N]], k: int = 0) -> Array[[N, N]]: ...
+@overload
+def diagflat(v: Any, k: int = 0) -> Array[IntTuple]: ...
+@overload
+def tri[N: IntVar](
+    N: Int[N], M: None = None, k: int = 0, dtype: Any = None
+) -> Array[[N, N]]: ...
+@overload
+def tri[N: IntVar, M: IntVar](
+    N: Int[N], M: Int[M], k: int = 0, dtype: Any = None
+) -> Array[[N, M]]: ...
+@overload
+def tri(
+    N: int, M: int | None = None, k: int = 0, dtype: Any = None
+) -> Array[IntTuple]: ...
+def tril[Shape: _Shape](m: Array[Shape], k: int = 0) -> Array[Shape]: ...
+def triu[Shape: _Shape](m: Array[Shape], k: int = 0) -> Array[Shape]: ...
+@overload
+def vander[M: IntVar](
+    x: Array[[M]], N: None = None, increasing: bool = False
+) -> Array[[M, M]]: ...
+@overload
+def vander[M: IntVar, N: IntVar](
+    x: Array[[M]], N: Int[N], increasing: bool = False
+) -> Array[[M, N]]: ...
+@overload
+def vander(
+    x: Any, N: int | None = None, increasing: bool = False
+) -> Array[IntTuple]: ...
+
+# `indices`, `meshgrid`
+@overload
+def indices[N: IntVar](
+    dimensions: IntTuple[N],
+    dtype: Any = None,
+    sparse: Literal[False] = False,
+) -> Array[[1, N]]: ...
+@overload
+def indices[N: IntVar, M: IntVar](
+    dimensions: IntTuple[N, M],
+    dtype: Any = None,
+    sparse: Literal[False] = False,
+) -> Array[[2, N, M]]: ...
+@overload
+def indices[N: IntVar, M: IntVar, K: IntVar](
+    dimensions: IntTuple[N, M, K],
+    dtype: Any = None,
+    sparse: Literal[False] = False,
+) -> Array[[3, N, M, K]]: ...
+@overload
+def indices(
+    dimensions: Sequence[int], dtype: Any = None, sparse: bool = False
+) -> Array[IntTuple] | tuple[Array[IntTuple], ...]: ...
+@overload
+def meshgrid[N: IntVar, M: IntVar](
+    x1: Array[[N]],
+    x2: Array[[M]],
+    /,
+    *,
+    copy: bool = True,
+    sparse: Literal[False] = False,
+    indexing: Literal["xy"] = "xy",
+) -> tuple[Array[[M, N]], Array[[M, N]]]: ...
+@overload
+def meshgrid[N: IntVar, M: IntVar](
+    x1: Array[[N]],
+    x2: Array[[M]],
+    /,
+    *,
+    copy: bool = True,
+    sparse: Literal[False] = False,
+    indexing: Literal["ij"],
+) -> tuple[Array[[N, M]], Array[[N, M]]]: ...
+@overload
+def meshgrid[N: IntVar, M: IntVar, K: IntVar](
+    x1: Array[[N]],
+    x2: Array[[M]],
+    x3: Array[[K]],
+    /,
+    *,
+    copy: bool = True,
+    sparse: Literal[False] = False,
+    indexing: Literal["xy"] = "xy",
+) -> tuple[Array[[M, N, K]], Array[[M, N, K]], Array[[M, N, K]]]: ...
+@overload
+def meshgrid[N: IntVar, M: IntVar, K: IntVar](
+    x1: Array[[N]],
+    x2: Array[[M]],
+    x3: Array[[K]],
+    /,
+    *,
+    copy: bool = True,
+    sparse: Literal[False] = False,
+    indexing: Literal["ij"],
+) -> tuple[Array[[N, M, K]], Array[[N, M, K]], Array[[N, M, K]]]: ...
+@overload
+def meshgrid(
+    *xi: Any, copy: bool = True, sparse: bool = False, indexing: str = "xy"
+) -> tuple[Array[IntTuple], ...]: ...
+
+# `from_*` constructors
+def from_dlpack(
+    x: Any, /, *, device: Any = None, copy: bool | None = None
+) -> Array[IntTuple]: ...
+def frombuffer(
+    buffer: Any, dtype: Any = float, count: int = -1, offset: int = 0
+) -> Array[IntTuple]: ...
+def fromfile(*args: Any, **kwargs: Any) -> Array[IntTuple]: ...
+@overload
+def fromfunction[N: IntVar](
+    function: Callable[..., Any],
+    shape: IntTuple[N],
+    *,
+    dtype: Any = float,
+    **kwargs: Any,
+) -> Array[[N]]: ...
+@overload
+def fromfunction[N: IntVar, M: IntVar](
+    function: Callable[..., Any],
+    shape: IntTuple[N, M],
+    *,
+    dtype: Any = float,
+    **kwargs: Any,
+) -> Array[[N, M]]: ...
+@overload
+def fromfunction[N: IntVar, M: IntVar, K: IntVar](
+    function: Callable[..., Any],
+    shape: IntTuple[N, M, K],
+    *,
+    dtype: Any = float,
+    **kwargs: Any,
+) -> Array[[N, M, K]]: ...
+@overload
+def fromfunction(
+    function: Callable[..., Any],
+    shape: Sequence[int],
+    *,
+    dtype: Any = float,
+    **kwargs: Any,
+) -> Array[IntTuple]: ...
+def fromiter(*args: Any, **kwargs: Any) -> Array[IntTuple]: ...
+def fromstring(
+    string: str, dtype: Any = float, count: int = -1, *, sep: str
+) -> Array[IntTuple]: ...
+
+# Window functions
+@overload
+def bartlett[N: IntVar](M: Int[N]) -> Array[[N]]: ...
+@overload
+def bartlett(M: int) -> Array[IntTuple]: ...
+@overload
+def blackman[N: IntVar](M: Int[N]) -> Array[[N]]: ...
+@overload
+def blackman(M: int) -> Array[IntTuple]: ...
+@overload
+def hamming[N: IntVar](M: Int[N]) -> Array[[N]]: ...
+@overload
+def hamming(M: int) -> Array[IntTuple]: ...
+@overload
+def hanning[N: IntVar](M: Int[N]) -> Array[[N]]: ...
+@overload
+def hanning(M: int) -> Array[IntTuple]: ...
+@overload
+def kaiser[N: IntVar](M: Int[N], beta: Any) -> Array[[N]]: ...
+@overload
+def kaiser(M: int, beta: Any) -> Array[IntTuple]: ...
 
 # Shape-preserving elementwise unary functions.
 def abs[Shape: _Shape](x: Array[Shape], /) -> Array[Shape]: ...
