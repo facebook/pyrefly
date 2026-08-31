@@ -27,7 +27,6 @@ from pathlib import Path
 
 from shape_testing import pyrefly_command, TENSOR_SHAPES_ROOT, venv_python
 
-
 PACKAGES: tuple[str, ...] = (
     "pyrefly-torch-stubs",
     "pyrefly-numpy-stubs",

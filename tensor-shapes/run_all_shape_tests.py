@@ -15,7 +15,6 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-
 SCRIPT_DIR: Path = Path(__file__).resolve().parent
 REPO_ROOT: Path = SCRIPT_DIR.parent
 

@@ -41,10 +41,10 @@ jobs:
       with:
         enable-cache: true
       if: ${{ matrix.os == 'ubuntu-latest' }}
-    - name: Check tensor-shape formatting
-      run: >
-        uv tool run --from ruff==0.16.5 ruff format --check
-        tensor-shapes
+    - name: Check Python formatting (ruff)
+      run: |
+        uv tool run --from ruff==0.14.3 ruff format --check --config ruff.toml .
+        uv tool run --from ruff==0.14.3 ruff check --select I --config ruff.toml .
       if: ${{ matrix.os == 'ubuntu-latest' }}
     - name: set windows cargo home
       # we need to set CARGO_HOME to a high-up directory on Windows machines, since some dependencies cloned

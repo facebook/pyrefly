@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 
 from shape_extensions import IntVar
 
-
 if TYPE_CHECKING:
     from torch import Tensor
 

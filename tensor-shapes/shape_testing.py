@@ -27,7 +27,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
 
-
 TENSOR_SHAPES_ROOT: Path = Path(__file__).resolve().parent
 REPO_ROOT: Path = TENSOR_SHAPES_ROOT.parent
 SHAPE_EXTENSIONS_ROOT: Path = TENSOR_SHAPES_ROOT / "pyrefly-shape-extensions"

@@ -31,9 +31,7 @@ _VERDICT_LABEL = {
 }
 
 # Matches full pyrefly source paths (starting with pyrefly/, crates/, or lsp/)
-_SOURCE_FILE_PATTERN = re.compile(
-    r"(?:pyrefly/|crates/|lsp/)[\w/]+\.\w+"
-)
+_SOURCE_FILE_PATTERN = re.compile(r"(?:pyrefly/|crates/|lsp/)[\w/]+\.\w+")
 
 # Matches function names that look like pyrefly internals: must contain an
 # underscore (e.g. check_for_imported_final_reassignment, attr_subset_check).
@@ -92,6 +90,7 @@ def _linkify_files_in_text(text: str) -> str:
 
     # Step 2: linkify internal function names (must contain underscore)
     if file_path:
+
         def func_replacer(match: re.Match) -> str:
             func_name = match.group(1)
             full_match = match.group(0)
@@ -223,8 +222,7 @@ def _build_high_level_summary(result: ClassificationResult) -> str:
 
         reg_parts = []
         reg_parts.append(
-            f"**{len(regressions)} regression(s)** "
-            f"across {', '.join(proj_names)}"
+            f"**{len(regressions)} regression(s)** across {', '.join(proj_names)}"
         )
         if top_kinds:
             kinds_str = ", ".join(f"`{k}`" for k in top_kinds)
@@ -236,8 +234,7 @@ def _build_high_level_summary(result: ClassificationResult) -> str:
     if improvements:
         proj_names = [c.project_name for c in improvements]
         parts.append(
-            f"**{len(improvements)} improvement(s)** "
-            f"across {', '.join(proj_names)}."
+            f"**{len(improvements)} improvement(s)** across {', '.join(proj_names)}."
         )
 
     return " ".join(parts) + "\n"
@@ -250,7 +247,7 @@ def format_markdown(result: ClassificationResult) -> str:
     suggested fixes, and a footer.
     """
     if not result.classifications:
-        return "## Primer Diff Classification\n\n" "No diffs to classify. All clear."
+        return "## Primer Diff Classification\n\nNo diffs to classify. All clear."
 
     lines: list[str] = []
     lines.append("## Primer Diff Classification\n")
@@ -331,8 +328,7 @@ def format_markdown(result: ClassificationResult) -> str:
                 lines.append(f"> {_format_reason(c.reason)}")
                 if c.pr_attribution and c.pr_attribution != "N/A":
                     lines.append(
-                        f"> **Attribution:** "
-                        f"{_linkify_files_in_text(c.pr_attribution)}"
+                        f"> **Attribution:** {_linkify_files_in_text(c.pr_attribution)}"
                     )
                 lines.append("")
 
@@ -350,9 +346,7 @@ def format_markdown(result: ClassificationResult) -> str:
                 lines.append(f"> Files: {linked_files}")
             lines.append(f"> Confidence: {s.confidence}")
             if s.affected_projects:
-                lines.append(
-                    f"> Affected projects: {', '.join(s.affected_projects)}"
-                )
+                lines.append(f"> Affected projects: {', '.join(s.affected_projects)}")
             if s.error_kinds_fixed:
                 kinds_str = ", ".join(f"`{k}`" for k in s.error_kinds_fixed)
                 lines.append(f"> Fixes: {kinds_str}")
@@ -364,8 +358,7 @@ def format_markdown(result: ClassificationResult) -> str:
     lines.append("---")
     lines.append("Was this helpful? React with 👍 or 👎\n")
     lines.append(
-        "<sub>Classification by primer-classifier"
-        f" ({_method_summary(result)})</sub>"
+        f"<sub>Classification by primer-classifier ({_method_summary(result)})</sub>"
     )
 
     return "\n".join(lines)

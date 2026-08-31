@@ -13,7 +13,6 @@ from typing import assert_type, cast, TYPE_CHECKING
 
 from shape_extensions import Elements, IntTuple, IntVar
 
-
 if TYPE_CHECKING:
     from torch import Tensor
 
