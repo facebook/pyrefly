@@ -497,6 +497,9 @@ enum AttributeBase1 {
     TypedDict(TypedDictInner),
     /// Attribute lookup on a base as part of a subset check against a protocol.
     ProtocolSubset(Box<AttributeBase1>),
+    /// A parameterized class object, which exposes attributes from both `GenericAlias` and its
+    /// origin class using runtime lookup precedence.
+    GenericAlias(ClassBase),
     Intersect(Vec<AttributeBase1>, Vec<AttributeBase1>),
     /// Bound methods prefer exposing builtin `types.MethodType` attributes but fall back to the
     /// underlying function's attributes when the builtin ones are missing.
@@ -724,6 +727,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             AttributeBase1::ProtocolSubset(inner) => {
                 self.collect_attribute_candidates_from_base(inner, candidates);
+            }
+            AttributeBase1::GenericAlias(origin) => {
+                self.add_class_fields(self.stdlib.generic_alias().class_object(), candidates);
+                self.add_class_fields(origin.class_object(), candidates);
             }
             AttributeBase1::Intersect(options, fallback) => {
                 for b in options {
@@ -1988,30 +1995,36 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                 }
             },
-            AttributeBase1::Intersect(bases, fallback) => {
-                // Try each base and collect successful lookups, filtering out
-                // GenericAlias lookups when the found attribute is inherited from
-                // `object`. Parametrized classes like `Foo[int]` are an intersection of
-                // a GenericAlias instance + the Foo class object. GenericAlias inherits
-                // dunders from `object` (e.g. `__init__`) that would shadow the class's
-                // own definitions, so we exclude those to let the class's version win.
+            AttributeBase1::GenericAlias(origin) => {
+                let generic_alias =
+                    AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
+                let origin = AttributeBase1::ClassObject(origin.clone());
                 let mut candidates = Vec::new();
-                for b in bases.iter() {
-                    let exclude = match b {
-                        AttributeBase1::ClassInstance(cls)
-                            if cls.has_qname("types", "GenericAlias") =>
-                        {
-                            self.field_is_inherited_from(
-                                cls.class_object(),
-                                attr_name,
-                                ("builtins", "object"),
-                            )
-                        }
-                        _ => false,
-                    };
+                let inherited_from_object = self.field_is_inherited_from(
+                    self.stdlib.generic_alias().class_object(),
+                    attr_name,
+                    ("builtins", "object"),
+                );
+                for (b, exclude) in [(&generic_alias, inherited_from_object), (&origin, false)] {
                     if exclude {
                         continue;
                     }
+                    let mut acc_candidate = LookupResult::empty();
+                    self.lookup_attr_static1(b.clone(), attr_name, &mut acc_candidate);
+                    if acc_candidate.not_found.is_empty() && acc_candidate.internal_error.is_empty()
+                    {
+                        candidates.push(acc_candidate.found);
+                    }
+                }
+                if candidates.len() == 1 {
+                    acc.found.extend(candidates.into_iter().next().unwrap());
+                } else {
+                    self.lookup_attr_static1(generic_alias, attr_name, acc);
+                }
+            }
+            AttributeBase1::Intersect(bases, fallback) => {
+                let mut candidates = Vec::new();
+                for b in bases {
                     let mut acc_candidate = LookupResult::empty();
                     self.lookup_attr_static1(b.clone(), attr_name, &mut acc_candidate);
                     if acc_candidate.not_found.is_empty() && acc_candidate.internal_error.is_empty()
@@ -2677,13 +2690,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     // Therefore, if we ever have a value of `type[C[int]]`
                     // (e.g. via inheritance), we should not treat it as a
                     // `GenericAlias`. However, such cases are rare in practice.
-                    let generic_alias_base =
-                        AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
-                    // Since GenericAlias also exposes all class attributes, we need to intersect the two bases
-                    acc.push(AttributeBase1::Intersect(
-                        vec![generic_alias_base.clone(), class_base],
-                        vec![generic_alias_base],
-                    ));
+                    acc.push(AttributeBase1::GenericAlias(ClassBase::ClassType(
+                        class.clone(),
+                    )));
                 } else {
                     acc.push(class_base)
                 }
@@ -3240,6 +3249,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             AttributeBase1::Property(_) => {
                 // TODO(samzhou19815): Support autocomplete for properties
                 {}
+            }
+            AttributeBase1::GenericAlias(origin) => {
+                self.completions_class_type(
+                    self.stdlib.generic_alias(),
+                    expected_attribute_name,
+                    res,
+                );
+                self.completions_class(origin.class_object(), expected_attribute_name, res);
             }
             AttributeBase1::Intersect(bases, _) => {
                 for b in bases {
