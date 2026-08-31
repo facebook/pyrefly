@@ -37,7 +37,7 @@ takes_tensor(p1)  # param(bare) → bare
 takes_tensor(p2)  # param(bare) → bare
 
 # All should display as bare Tensor or with known shape
-assert_type(t1, Tensor[10])
+assert_type(t1, Tensor[[10]])
 assert_type(t2, Tensor)
-assert_type(p1, Tensor[10])
+assert_type(p1, Tensor[[10]])
 assert_type(p2, Tensor)

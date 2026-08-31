@@ -15,12 +15,12 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
-use crate::callable::FuncFlags;
-use crate::callable::FuncMetadata;
-use crate::callable::Function;
-use crate::callable::FunctionKind;
 use crate::callable::Params;
 use crate::callable::PrefixParam;
+use crate::function::FuncFlags;
+use crate::function::FuncMetadata;
+use crate::function::Function;
+use crate::function::FunctionKind;
 use crate::heap::TypeHeap;
 use crate::quantified::Quantified;
 use crate::simplify::unions;
@@ -278,16 +278,17 @@ impl Type {
     /// Returns `None` if any branch type cannot be converted to an overload signature.
     fn try_combine_reconstructed_overload(&self, reconstructed: &[Type]) -> Option<Type> {
         let metadata = self
-            .visit_toplevel_func_metadata(&|metadata| Some(metadata.clone()))
-            .unwrap_or(FuncMetadata {
-                kind: FunctionKind::Overload,
-                flags: FuncFlags::default(),
-            });
+            .toplevel_func_metadata()
+            .cloned()
+            .unwrap_or_else(|| FuncMetadata::new(FunctionKind::Overload, FuncFlags::default()));
         let signatures = reconstructed
             .iter()
             .cloned()
-            .map(|branch_ty| branch_ty.into_overload_signature(&metadata))
-            .collect::<Option<Vec<_>>>()?;
+            .map(|branch_ty| branch_ty.into_overload_signatures(&metadata))
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         let signatures = Vec1::try_from_vec(signatures).ok()?;
         Some(Type::Overload(Overload {
             signatures,
@@ -295,27 +296,28 @@ impl Type {
         }))
     }
 
-    fn into_overload_signature(self, metadata: &FuncMetadata) -> Option<OverloadType> {
+    fn into_overload_signatures(self, metadata: &FuncMetadata) -> Option<Vec<OverloadType>> {
         match self {
-            Type::Function(function) => Some(OverloadType::Function(*function)),
+            Type::Function(function) => Some(vec![OverloadType::Function(*function)]),
             Type::Forall(forall) => match forall.body {
-                Forallable::Function(function) => Some(OverloadType::Forall(Forall {
+                Forallable::Function(function) => Some(vec![OverloadType::Forall(Forall {
                     tparams: forall.tparams,
                     body: function,
-                })),
-                Forallable::Callable(callable) => Some(OverloadType::Forall(Forall {
+                })]),
+                Forallable::Callable(callable) => Some(vec![OverloadType::Forall(Forall {
                     tparams: forall.tparams,
                     body: Function {
                         signature: callable,
                         metadata: metadata.clone(),
                     },
-                })),
+                })]),
                 Forallable::TypeAlias(_) => None,
             },
-            Type::Callable(callable) => Some(OverloadType::Function(Function {
+            Type::Callable(callable) => Some(vec![OverloadType::Function(Function {
                 signature: *callable,
                 metadata: metadata.clone(),
-            })),
+            })]),
+            Type::Overload(overload) => Some(overload.signatures.into_vec()),
             _ => None,
         }
     }
@@ -600,7 +602,7 @@ impl Callable {
         let mut changed = false;
         let mut consumed_residual = false;
         match &mut self.params {
-            Params::List(params) => {
+            Params::List(params) | Params::Partial(params) => {
                 for param in params.items_mut() {
                     let (param_changed, param_consumed) = param
                         .as_type_mut()

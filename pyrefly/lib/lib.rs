@@ -25,6 +25,7 @@
 #![deny(clippy::trivially_copy_pass_by_ref)]
 
 pub mod alt;
+mod annotation;
 pub mod binding;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
@@ -48,6 +49,7 @@ mod solver;
 pub mod state;
 #[cfg(not(target_arch = "wasm32"))]
 mod stubgen;
+#[cfg(test)]
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tsp;

@@ -4,6 +4,9 @@
 # Preset (named collection of defaults applied as the base config)
 preset = "legacy"
 
+# Runtime version requirement
+required-version = ">=0.0.0.dev0"
+
 # Basic project configuration
 project-includes = ["src", "tests"]
 project-excludes = ["**/node_modules", "**/__pycache__"]
@@ -19,6 +22,7 @@ python-platform = "linux"
 python-version = "3.12.0"
 skip-interpreter-query = false
 python-interpreter-path = "venv/bin/python3"
+python-interpreter-find-command = ["poetry", "env", "info", "-e"]
 conda-environment = "myenv"
 fallback-python-interpreter-name = "python3"
 typeshed-path = "/path/to/typeshed"
@@ -26,6 +30,7 @@ typeshed-path = "/path/to/typeshed"
 # Type checking behavior
 untyped-def-behavior = "check-and-infer-return-type"
 infer-with-first-use = true
+check-all-matches = false
 ignore-errors-in-generated-code = false
 disable-type-errors-in-ide = false
 strict-callable-subtyping = false
@@ -45,6 +50,7 @@ skip-lsp-config-indexing = false
 
 # Baseline
 baseline = "baseline.json"
+baseline-error-level = "warn"
 
 # Error configuration
 [errors]
@@ -52,6 +58,11 @@ bad-assignment = false
 bad-return = true
 missing-import = "warn"
 invalid-argument = "error"
+
+# Coverage command include/exclude overrides
+[coverage]
+includes = ["src/**"]
+excludes = ["src/vendored/**"]
 
 # SubConfig example 1: Test files
 [[sub-config]]

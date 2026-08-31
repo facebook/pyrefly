@@ -13,6 +13,7 @@ use enum_iterator::all;
 use pyrefly_python::ignore::Tool;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_with::skip_serializing_none;
 use starlark_map::small_set::SmallSet;
 use toml::Table;
 
@@ -169,20 +170,24 @@ impl Preset {
                     errors: Some(ErrorDisplayConfig::new(errors)),
                     check_unannotated_defs: Some(false),
                     infer_return_types: Some(InferReturnTypes::Never),
+                    legacy_overload_expansion: Some(true),
                     ..Default::default()
                 }
             }
             Preset::Default => ConfigBase::default(),
             Preset::Strict => {
                 let errors = HashMap::from([
+                    (ErrorKind::DirectAbstractBaseInstantiation, Severity::Error),
                     (ErrorKind::ImplicitAny, Severity::Error),
                     (ErrorKind::MissingOverrideDecorator, Severity::Error),
+                    (ErrorKind::OpenUnpacking, Severity::Error),
                     (ErrorKind::PotentialBadKeywordArgument, Severity::Error),
                     (ErrorKind::UnusedIgnore, Severity::Error),
                 ]);
                 ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(errors)),
                     strict_callable_subtyping: Some(true),
+                    strict_partial_subtyping: Some(true),
                     ..Default::default()
                 }
             }
@@ -199,6 +204,7 @@ impl Preset {
                 ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(errors)),
                     strict_callable_subtyping: Some(true),
+                    strict_partial_subtyping: Some(true),
                     ..Default::default()
                 }
             }
@@ -206,25 +212,22 @@ impl Preset {
     }
 }
 
+#[skip_serializing_none]
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct ConfigBase {
     /// Errors to silence (or not) when printing errors.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub errors: Option<ErrorDisplayConfig>,
 
     /// Consider any ignore (including from other tools) to ignore an error.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permissive_ignores: Option<bool>,
 
     /// Respect ignore directives from only these tools.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_ignores: Option<SmallSet<Tool>>,
 
     /// Modules from which import errors should be ignored
     /// and the module should always be replaced with `typing.Any`
     #[serde(
-        default,
         skip_serializing_if = "crate::util::none_or_empty",
         // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
         // alias while we migrate existing fields from snake case to kebab case.
@@ -234,14 +237,12 @@ pub struct ConfigBase {
 
     /// Modules from which import errors should be
     /// ignored. The module is only replaced with `typing.Any` if it can't be found.
-    #[serde(default, skip_serializing_if = "crate::util::none_or_empty")]
+    #[serde(skip_serializing_if = "crate::util::none_or_empty")]
     pub(crate) ignore_missing_imports: Option<Vec<ModuleWildcard>>,
 
     /// Deprecated: use `check-unannotated-defs` and `infer-return-types` instead.
     /// How should we handle analyzing and inferring the function signature if it's untyped?
     #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
         // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
         // alias while we migrate existing fields from snake case to kebab case.
         alias = "untyped_def_behavior"
@@ -250,7 +251,6 @@ pub struct ConfigBase {
 
     /// Whether to type check the bodies of unannotated function definitions.
     /// Defaults to true.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_unannotated_defs: Option<bool>,
 
     /// Controls when Pyrefly infers return types for functions without explicit return annotations.
@@ -259,18 +259,14 @@ pub struct ConfigBase {
     /// - `checked`: infer return types for all checked functions (default).
     ///   Only applies to functions whose bodies are checked; unannotated functions
     ///   are only eligible when `check-unannotated-defs` is true.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infer_return_types: Option<InferReturnTypes>,
 
     /// Whether to disable type errors in language server. By default errors will be shown in IDEs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disable_type_errors_in_ide: Option<bool>,
 
     /// Whether to ignore type errors in generated code. By default this is disabled.
     /// Generated code is defined as code that contains the marker string `@` immediately followed by `generated`.
     #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
         // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
         // alias while we migrate existing fields from snake case to kebab case.
         alias = "ignore_errors_in_generated_code"
@@ -279,40 +275,54 @@ pub struct ConfigBase {
 
     /// Whether to infer empty container types as Any instead of creating type variables.
     /// By default this is enabled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub infer_with_first_use: Option<bool>,
 
+    /// Whether to check every match statement for exhaustiveness.
+    /// By default, only matches over closed subject types are checked.
+    pub check_all_matches: Option<bool>,
+
+    /// Deprecated: set the `pytorch-efficiency-lints` error kind in `[errors]` instead.
     /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
     /// When true, all `pytorch-efficiency-lint-*` error kinds are set to `Warn` severity
     /// unless individually overridden in `[errors]`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pytorch_efficiency_lints: Option<bool>,
 
     /// Maximum recursion depth before triggering overflow protection.
     /// Set to 0 to disable (default). This helps detect potential stack overflow situations.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recursion_depth_limit: Option<u32>,
 
     /// How to handle when recursion depth limit is exceeded.
     /// Only used when `recursion-depth-limit` is set to a non-zero value.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recursion_overflow_handler: Option<RecursionOverflowHandler>,
 
     /// Whether to strictly check callable subtyping for signatures with `*args: Any, **kwargs: Any`.
     /// When false (the default), callables with `*args: Any, **kwargs: Any` are treated as
     /// compatible with any signature (similar to `...` behavior).
     /// When true, parameter list compatibility is checked strictly even when `*args: Any, **kwargs: Any` is present.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict_callable_subtyping: Option<bool>,
+
+    /// Whether to strictly check the parameters of a `functools.partial(...)` residual when it is
+    /// assigned to a callable. When false (the default), the residual is treated as gradual (like
+    /// `...`) for subtyping, matching the typeshed `partial` stub. When true, the residual's
+    /// parameter types and arity are checked precisely.
+    pub strict_partial_subtyping: Option<bool>,
 
     /// Whether to use spec-compliant overload evaluation semantics.
     /// When false (the default), Pyrefly attempts to resolve ambiguous calls precisely.
     /// When true, overload evaluation follows the typing spec exactly, falling back to `Any` more frequently.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_compliant_overloads: Option<bool>,
 
+    /// Whether to expand union arguments to narrow an already-matched overloaded call.
+    /// Off by default; enabled by the `legacy` preset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_overload_expansion: Option<bool>,
+
+    /// Whether to treat ALL_CAPS names as final after their first assignment, in any scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub treat_all_caps_as_final: Option<bool>,
+
     /// Any unknown config items
-    #[serde(default, flatten)]
+    #[serde(flatten)]
     pub(crate) extras: ExtraConfigs,
 }
 
@@ -391,6 +401,10 @@ impl ConfigBase {
         base.infer_with_first_use
     }
 
+    pub fn get_check_all_matches(base: &Self) -> Option<bool> {
+        base.check_all_matches
+    }
+
     pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {
         base.enabled_ignores.as_ref()
     }
@@ -416,8 +430,20 @@ impl ConfigBase {
         base.strict_callable_subtyping
     }
 
+    pub fn get_strict_partial_subtyping(base: &Self) -> Option<bool> {
+        base.strict_partial_subtyping
+    }
+
     pub fn get_spec_compliant_overloads(base: &Self) -> Option<bool> {
         base.spec_compliant_overloads
+    }
+
+    pub fn get_legacy_overload_expansion(base: &Self) -> Option<bool> {
+        base.legacy_overload_expansion
+    }
+
+    pub fn get_treat_all_caps_as_final(base: &Self) -> Option<bool> {
+        base.treat_all_caps_as_final
     }
 }
 
@@ -443,6 +469,88 @@ mod tests {
             .expect("Preset is a ValueEnum")
             .get_name()
             .to_owned()
+    }
+
+    /// Render the contents of `scripts/error_presets.json`: for every error
+    /// kind, which presets report it.
+    ///
+    /// Written by hand rather than with `to_string_pretty` to keep each kind on
+    /// one line, so that adding an error kind is a one-line diff.
+    fn render_error_presets() -> String {
+        const COMMENT: [&str; 3] = [
+            "Generated from Preset::apply() and ErrorKind::default_severity().",
+            "Do not edit by hand; run `UPDATE_EXPECT=1 cargo test -p pyrefly_config test_error_presets_json`.",
+            "Lists, for each error kind, the presets that report it.",
+        ];
+
+        // `Preset::apply()` rebuilds its severity map on every call, so do it
+        // once per preset rather than once per (preset, kind) pair.
+        let presets: Vec<(String, Option<ErrorDisplayConfig>)> = all::<Preset>()
+            .map(|preset| (preset_name(preset), preset.apply().errors))
+            .collect();
+        // `ErrorKind` is declared in lexicographic order, so the rendered file
+        // comes out sorted.
+        let enabled_by: Vec<(&'static str, Vec<&str>)> = all::<ErrorKind>()
+            .map(|kind| {
+                let enabling = presets
+                    .iter()
+                    .filter(|(_, errors)| match errors {
+                        Some(errors) => errors.severity(kind).is_enabled(),
+                        // A preset that overrides nothing leaves the kind's own default.
+                        None => kind.default_severity().is_enabled(),
+                    })
+                    .map(|(name, _)| name.as_str())
+                    .collect();
+                (kind.to_name(), enabling)
+            })
+            .collect();
+
+        // Every name involved is a kebab-case identifier, but go through serde
+        // so the output is quoted and escaped like real JSON regardless.
+        let quote = |s: &str| serde_json::to_string(s).expect("a string is serializable");
+        let mut out = String::from("{\n  \"comment\": [\n");
+        for (i, line) in COMMENT.iter().enumerate() {
+            let comma = if i + 1 == COMMENT.len() { "" } else { "," };
+            out.push_str(&format!("    {}{comma}\n", quote(line)));
+        }
+        out.push_str("  ],\n  \"enabled_by\": {\n");
+        for (i, (kind, enabling)) in enabled_by.iter().enumerate() {
+            let comma = if i + 1 == enabled_by.len() { "" } else { "," };
+            let list = enabling
+                .iter()
+                .map(|p| quote(p))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!("    {}: [{list}]{comma}\n", quote(kind)));
+        }
+        out.push_str("  }\n}\n");
+        out
+    }
+
+    /// Keeps `scripts/error_presets.json` in step with the presets. CI tooling
+    /// reads that file to attribute mypy_primer results to presets, and has no
+    /// other way to know which kinds a preset reports.
+    #[test]
+    fn test_error_presets_json() {
+        let path = std::env::var("ERROR_PRESETS_PATH").expect(
+            "ERROR_PRESETS_PATH env var not set: cargo or buck should set this automatically",
+        );
+        let actual = render_error_presets();
+        if std::env::var("UPDATE_EXPECT").is_ok() {
+            std::fs::write(&path, &actual)
+                .unwrap_or_else(|e| panic!("Failed to write {path}: {e}"));
+            return;
+        }
+        let expected = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Failed to read {path}: {e}"))
+            // Normalize Windows line endings so the test passes on all platforms.
+            .replace("\r\n", "\n");
+        pretty_assertions::assert_eq!(
+            expected,
+            actual,
+            "{path} is out of date. To update, run: \
+             UPDATE_EXPECT=1 cargo test -p pyrefly_config test_error_presets_json"
+        );
     }
 
     /// Verifies that every Preset variant has a corresponding `#### Preset: \`name\``

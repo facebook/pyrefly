@@ -23,6 +23,41 @@
       ]
     },
     {
+      "anchor": "https://pyrefly.org/en/docs/",
+      "item": [
+        {
+          "href": "https://pyrefly.org/en/docs/compare/",
+          "type": "text/html",
+          "title": "Mypy vs Pyright vs Pyrefly"
+        },
+        {
+          "href": "https://pyrefly.org/en/docs/migrating-to-pyrefly/",
+          "type": "text/html",
+          "title": "Migrating to Pyrefly"
+        },
+        {
+          "href": "https://pyrefly.org/en/docs/migrating-from-mypy/",
+          "type": "text/html",
+          "title": "Migrate from mypy"
+        },
+        {
+          "href": "https://pyrefly.org/en/docs/migrating-from-pyright/",
+          "type": "text/html",
+          "title": "Migrate from Pyright"
+        },
+        {
+          "href": "https://pyrefly.org/en/docs/configuration/",
+          "type": "text/html",
+          "title": "Configuration reference"
+        },
+        {
+          "href": "https://pyrefly.org/en/docs/error-kinds/",
+          "type": "text/html",
+          "title": "Error kinds reference"
+        }
+      ]
+    },
+    {
       "anchor": "https://pyrefly.org/sandbox/",
       "service-doc": [
         {

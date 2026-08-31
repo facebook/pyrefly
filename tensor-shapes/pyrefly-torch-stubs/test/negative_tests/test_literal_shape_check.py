@@ -13,17 +13,17 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-def test_literal_shape_mismatch() -> Tensor[4, 3]:
+def test_literal_shape_mismatch() -> Tensor[[4, 3]]:
     """Literal shape mismatch is rejected."""
-    x: Tensor[2, 3] = torch.randn(2, 3)
-    assert_type(x, Tensor[2, 3])
+    x: Tensor[[2, 3]] = torch.randn(2, 3)
+    assert_type(x, Tensor[[2, 3]])
 
-    # E: Returned type `Tensor[2, 3]` is not assignable
-    #    to declared return type `Tensor[4, 3]`
+    # E: Returned type `Tensor[[2, 3]]` is not assignable
+    #    to declared return type `Tensor[[4, 3]]`
     return x
 
 
-def test_literal_correct() -> Tensor[2, 3]:
+def test_literal_correct() -> Tensor[[2, 3]]:
     """Literal shapes match."""
-    x: Tensor[2, 3] = torch.randn(2, 3)
+    x: Tensor[[2, 3]] = torch.randn(2, 3)
     return x

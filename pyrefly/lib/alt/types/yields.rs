@@ -9,18 +9,19 @@ use std::fmt;
 use std::fmt::Display;
 
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_types::heap::TypeHeap;
 
 use crate::types::types::Type;
 
-#[derive(Clone, Debug, VisitMut, TypeEq, Eq, PartialEq)]
+#[derive(Clone, Debug, Visit, VisitMut, TypeEq, Eq, PartialEq)]
 pub struct YieldResult {
     pub yield_ty: Type,
     pub send_ty: Type,
 }
 
-#[derive(Clone, Debug, VisitMut, TypeEq, Eq, PartialEq)]
+#[derive(Clone, Debug, Visit, VisitMut, TypeEq, Eq, PartialEq)]
 pub struct YieldFromResult {
     pub yield_ty: Type,
     pub send_ty: Type,
