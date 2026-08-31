@@ -243,6 +243,8 @@ enum Attribute {
     /// A read-write attribute with a closed form type for both get and set actions. Used
     /// for non-class-attribute cases (for example, reads against Any, Never, or module objects)
     Simple(Type),
+    /// A module attribute that exists but was imported without being re-exported.
+    ImplicitReexport(ModuleName, Type),
     /// The attribute being looked up is not defined explicitly, but it may be defined via a
     /// `__getattr__` or `__getattribute__` fallback.
     /// The `NotFound` field stores the (failed) lookup result on the original attribute for
@@ -1088,7 +1090,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     );
                     should_narrow = false;
                 }
-                Attribute::Simple(attr_ty) => {
+                Attribute::Simple(attr_ty) | Attribute::ImplicitReexport(_, attr_ty) => {
                     self.check_set_read_write_and_infer_narrow(
                         attr_ty,
                         attr_name,
@@ -1350,7 +1352,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         context,
                     );
                 }
-                Attribute::Simple(_) => {
+                Attribute::Simple(_) | Attribute::ImplicitReexport(_, _) => {
                     // Allow deleting most attributes for now, for compatibility with mypy.
                 }
                 Attribute::ClassAttribute(class_attr) => {
@@ -1506,7 +1508,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Attribute::ClassAttribute(got_class_attr) => {
                 self.is_class_attribute_subset(got_class_attr, want, false, is_subset)
             }
-            Attribute::Simple(got_ty) => {
+            Attribute::Simple(got_ty) | Attribute::ImplicitReexport(_, got_ty) => {
                 // Treat Simple attributes (which come up for cases like attribute access
                 // on modules, Any, and Never) as if they were read-write class attributes
                 // for the purpose of protocol subtyping.
@@ -1555,6 +1557,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 self.resolve_get_class_attr(attr_name, class_attr, range, errors, context)
             }
             Attribute::Simple(ty) => Ok(ty),
+            Attribute::ImplicitReexport(module, ty) => {
+                errors
+                    .error_builder(
+                        range,
+                        ErrorKind::ImplicitReexport,
+                        format!("`{attr_name}` is not exported from module `{module}`"),
+                    )
+                    .with_detail(format!(
+                        "`{attr_name}` is imported by `{module}` but not re-exported (via `import ... as {attr_name}`, `__all__`, or a wildcard import)"
+                    ))
+                    .with_context(context)
+                    .emit();
+                Ok(ty)
+            }
             Attribute::ModuleFallback(_, name, ty) => {
                 self.error_with_context(
                     errors,
@@ -1648,7 +1664,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 return None;
             };
             let ty = match attribute {
-                Attribute::Simple(ty) => ty,
+                Attribute::Simple(ty) | Attribute::ImplicitReexport(_, ty) => ty,
                 Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty)) => {
                     is_class_attribute = true;
                     ty
@@ -2308,7 +2324,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
 
         if let Some(attr) = self.try_get_from_export(module_name, attr_name.clone()) {
-            Some(Attribute::simple(attr.clone()))
+            if self.exports.is_implicit_reexport(module_name, attr_name) {
+                Some(Attribute::ImplicitReexport(module_name, attr.clone()))
+            } else {
+                Some(Attribute::simple(attr.clone()))
+            }
         } else if self
             .exports
             .is_submodule_imported_implicitly(module_name, attr_name)
@@ -3210,6 +3230,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty))
                             | Attribute::ClassAttribute(ClassAttribute::ReadOnly(ty, _))
                             | Attribute::Simple(ty)
+                            | Attribute::ImplicitReexport(_, ty)
                             | Attribute::ClassAttribute(ClassAttribute::Property(ty, _, _))
                                 if ty.function_deprecation().is_some() =>
                             {
