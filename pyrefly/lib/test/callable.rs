@@ -1035,18 +1035,90 @@ testcase!(
     test_forwarding_unpack_kwargs_to_fixed_signature,
     TestEnv::new().enable_open_unpacking_error(),
     r#"
-from typing import TypedDict, Unpack
+from typing import Never, TypedDict, Unpack
 class Open(TypedDict):
     name: str
 class Closed(TypedDict, closed=True):
+    name: str
+class ExtraNever(TypedDict, extra_items=Never):
     name: str
 def has_kwargs(**kwargs: Unpack[Open]) -> None: ...
 def takes_name(name: str) -> None: ...
 def forward_open(**kwargs: Unpack[Open]) -> None:
     has_kwargs(**kwargs)  # OK: target accepts **kwargs
-    takes_name(**kwargs)  # E: `Open` is an open TypedDict with unknown extra items, which cannot be unpacked into a callable without `**kwargs`
+    takes_name(**kwargs)  # E: `Open` may contain extra items of type `object`, which cannot be unpacked into a callable that accepts no extra keyword arguments
 def forward_closed(**kwargs: Unpack[Closed]) -> None:
     takes_name(**kwargs)  # OK: closed TypedDict has no extra keys
+def forward_extra_never(**kwargs: Unpack[ExtraNever]) -> None:
+    takes_name(**kwargs)  # OK: `extra_items=Never` means the same as `closed=True`
+    "#,
+);
+
+testcase!(
+    test_unpacking_open_typed_dict_into_call,
+    TestEnv::new().enable_open_unpacking_error(),
+    r#"
+from typing import TypedDict, Unpack
+class Open(TypedDict):
+    name: str
+class Closed(TypedDict, closed=True):
+    name: str
+def takes_name(name: str) -> None: ...
+def takes_closed(**kwargs: Unpack[Closed]) -> None: ...
+def takes_untyped_kwargs(name: str, **kwargs) -> None: ...
+def takes_object_kwargs(name: str, **kwargs: object) -> None: ...
+def takes_str_kwargs(name: str, **kwargs: str) -> None: ...
+def f(open: Open, closed: Closed) -> None:
+    takes_name(**open)  # E: `Open` may contain extra items of type `object`, which cannot be unpacked into a callable that accepts no extra keyword arguments
+    takes_closed(**open)  # E: `Open` may contain extra items of type `object`, which cannot be unpacked into a callable that accepts no extra keyword arguments
+    takes_str_kwargs(**open)  # E: Extra items of type `object` are not assignable to parameter `kwargs` with type `str`
+    takes_untyped_kwargs(**open)  # OK
+    takes_object_kwargs(**open)  # OK
+    takes_closed(**closed)  # OK
+    takes_closed(bogus=1)  # E: Missing argument `name`  # E: Unexpected keyword argument `bogus`
+    "#,
+);
+
+// An open TypedDict's extra items are only speculative, so they are reported under the opt-in
+// `open-unpacking` kind. Extra items declared with `extra_items` are always reported.
+testcase!(
+    test_unpacking_open_typed_dict_into_call_without_open_unpacking,
+    r#"
+from typing import TypedDict, Unpack
+class Open(TypedDict):
+    name: str
+class ExtraInt(TypedDict, extra_items=int):
+    name: str
+def takes_name(name: str) -> None: ...
+def takes_str_kwargs(name: str, **kwargs: str) -> None: ...
+def f(open: Open, extra_int: ExtraInt) -> None:
+    takes_name(**open)  # OK
+    takes_str_kwargs(**open)  # OK
+    takes_name(**extra_int)  # E: `ExtraInt` may contain extra items of type `int`, which cannot be unpacked into a callable that accepts no extra keyword arguments
+    takes_str_kwargs(**extra_int)  # E: Extra items of type `int` are not assignable to parameter `kwargs` with type `str`
+    "#,
+);
+
+testcase!(
+    test_unpacking_typed_dict_extra_items_into_call,
+    r#"
+from typing import TypedDict, Unpack
+class Closed(TypedDict, closed=True):
+    name: str
+class ExtraInt(TypedDict, extra_items=int):
+    name: str
+def takes_closed(**kwargs: Unpack[Closed]) -> None: ...
+def takes_int_kwargs(name: str, **kwargs: int) -> None: ...
+def takes_label(name: str, *, label: str = "", **kwargs: int) -> None: ...
+def takes_count(name: str, *, count: int = 0, **kwargs: int) -> None: ...
+def takes_other(name: str, *, other: str, **kwargs: int) -> None: ...
+def f(extra_int: ExtraInt) -> None:
+    takes_closed(**extra_int)  # E: `ExtraInt` may contain extra items of type `int`, which cannot be unpacked into a callable that accepts no extra keyword arguments
+    takes_int_kwargs(**extra_int)  # OK
+    takes_count(**extra_int)  # OK
+    takes_label(**extra_int)  # E: Extra items of type `int` are not assignable to parameter `label` with type `str`
+    # Extra items don't excuse a missing required argument.
+    takes_other(**extra_int)  # E: Missing argument `other`  # E: Extra items of type `int` are not assignable to parameter `other` with type `str`
     "#,
 );
 

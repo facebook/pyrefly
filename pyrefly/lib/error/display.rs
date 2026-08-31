@@ -159,6 +159,19 @@ impl TypeCheckKind {
                 ctx.display(want),
                 function_suffix(func_id.as_ref(), current_module),
             ),
+            Self::CallExtraItems(_, param, func_id) => {
+                let param_desc = match param {
+                    Some(param) => format!("parameter `{param}` with type"),
+                    None => "kwargs type".to_owned(),
+                };
+                format!(
+                    "Extra items of type `{}` are not assignable to {} `{}`{}",
+                    ctx.display(got),
+                    param_desc,
+                    ctx.display(want),
+                    function_suffix(func_id.as_ref(), current_module),
+                )
+            }
             Self::FunctionParameterDefault(param) => format!(
                 "Default `{}` is not assignable to parameter `{}` with type `{}`",
                 ctx.display(got),
