@@ -79,14 +79,14 @@ impl Restriction {
 
     /// Indicate whether this restriction can reject any type. A bound of `Any` or `object`
     /// restricts nothing (despite being syntactically a `Bound`) because *every* type
-    /// satisfies it. Constraints always restrict, admitting only their own members, as does
-    /// a `Flag` domain, which admits only its own builtin categories.
+    /// satisfies it. Constraints and shape extension restrictions always restrict to their
+    /// respective domains.
     pub fn can_reject(&self) -> bool {
         match self {
             Self::Bound(b) => {
                 !b.is_any() && !matches!(b, Type::ClassType(cls) if cls.is_builtin("object"))
             }
-            Self::Constraints(_) | Self::Flag(_) => true,
+            Self::Constraints(_) | Self::ShapeExtension(_) => true,
             Self::Unrestricted => false,
         }
     }
