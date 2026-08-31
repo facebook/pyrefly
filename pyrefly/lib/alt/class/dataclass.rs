@@ -1089,7 +1089,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Finalizing the fresh vars is required; its specialization errors are dropped because this
         // is best-effort param inference with no call site to report them against.
         let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
-        matched.then(|| self.heap.mk_type(self.heap.mk_class_type(class_type)))
+        matched.then(|| self.heap.mk_type_of(self.heap.mk_class_type(class_type)))
     }
 
     /// A generic function converter is solved by constraining its return type against the declared

@@ -569,7 +569,7 @@ impl ClassBase {
     pub fn to_type(self, heap: &TypeHeap) -> Type {
         match self {
             ClassBase::ClassDef(c) => heap.mk_class_def(c.into_class_object()),
-            ClassBase::ClassType(c) => heap.mk_type(heap.mk_class_type(c)),
+            ClassBase::ClassType(c) => heap.mk_type_of(heap.mk_class_type(c)),
             ClassBase::Quantified(q, _) => heap.mk_type_of(q.to_type(heap)),
             ClassBase::SelfType(c) => heap.mk_type_of(heap.mk_self_type(c)),
             ClassBase::Protocol(_, self_type) => heap.mk_type_of(self_type),

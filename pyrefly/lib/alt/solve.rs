@@ -6117,7 +6117,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 .any(|(c, _)| matches!(&c.ret, Type::Type(inner) if matches!(&**inner, Type::Any(AnyStyle::Explicit))))
                     });
                     if erases_class {
-                        self.heap.mk_type(self.heap.mk_any_explicit())
+                        self.heap.mk_type_of(self.heap.mk_any_explicit())
                     } else {
                         self.heap.mk_class_def(cls.dupe())
                     }
@@ -6634,7 +6634,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     f.display_name = Some((self.module().name(), (*ta.name).clone()));
                 }
                 if preserve_aliases {
-                    let alias = ta.with_type(self.heap.mk_type(aliased_type));
+                    let alias = ta.with_type(self.heap.mk_type_of(aliased_type));
                     Some(Type::UntypedAlias(Box::new(TypeAliasData::Value(alias))))
                 } else {
                     Some(aliased_type)

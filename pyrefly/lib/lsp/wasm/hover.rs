@@ -1131,7 +1131,7 @@ mod tests {
     #[test]
     fn fallback_recurses_through_type_wrapper() {
         let heap = TypeHeap::new();
-        let ty = heap.mk_type(make_function_type(&heap, "pkg.subpkg", "run"));
+        let ty = heap.mk_type_of(make_function_type(&heap, "pkg.subpkg", "run"));
         let fallback = fallback_hover_name_from_type(&ty);
         assert_eq!(fallback.as_deref(), Some("run"));
     }
