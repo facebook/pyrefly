@@ -15,6 +15,7 @@ use pyrefly_types::literal::LitEnum;
 use pyrefly_types::shaped_array::ShapedArrayType;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier_arg;
+use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forallable;
@@ -1629,6 +1630,54 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .unwrap_or_else(fallback)
     }
 
+    /// Fold one attribute per base into a single attribute, or `None` when they cannot be combined.
+    fn fold_attribute_candidates(
+        &self,
+        candidates: &[Vec<(Attribute, AttributeBase1)>],
+    ) -> Option<(Attribute, AttributeBase1)> {
+        let [(_, found_on)] = candidates.first()?.as_slice() else {
+            return None;
+        };
+        let found_on = found_on.clone();
+
+        let mut types = Vec::with_capacity(candidates.len());
+        let mut read_only_reason = None;
+        let mut is_class_attribute = false;
+        for base_results in candidates {
+            let [(attribute, _)] = base_results.as_slice() else {
+                return None;
+            };
+            let ty = match attribute {
+                Attribute::Simple(ty) => ty,
+                Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty)) => {
+                    is_class_attribute = true;
+                    ty
+                }
+                Attribute::ClassAttribute(ClassAttribute::ReadOnly(ty, reason)) => {
+                    is_class_attribute = true;
+                    // A write has to be valid for every base, so the result is read-only if any of
+                    // them are.
+                    read_only_reason.get_or_insert_with(|| reason.clone());
+                    ty
+                }
+                _ => return None,
+            };
+            types.push(ty.clone());
+        }
+        let combined = intersect(types, Type::any_implicit(), self.heap);
+        let attribute = if is_class_attribute {
+            match read_only_reason {
+                Some(reason) => {
+                    Attribute::class_attribute(ClassAttribute::read_only(combined, reason))
+                }
+                None => Attribute::class_attribute(ClassAttribute::read_write(combined)),
+            }
+        } else {
+            Attribute::simple(combined)
+        };
+        Some((attribute, found_on))
+    }
+
     /// Look up an attribute on a single `AttributeBase1` using only class field declarations.
     /// Does not fall back to `__getattr__`/`__getattribute__`.
     fn lookup_attr_static1(&self, base: AttributeBase1, attr_name: &Name, acc: &mut LookupResult) {
@@ -2034,8 +2083,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 if candidates.len() == 1 {
                     acc.found.extend(candidates.into_iter().next().unwrap());
+                } else if let Some(folded) = self.fold_attribute_candidates(candidates.as_slice()) {
+                    acc.found.push(folded);
                 } else {
-                    // TODO: Intersect the candidates instead of using the fallback.
+                    // Properties and descriptors require access-specific resolution, so use the
+                    // intersection's fallback instead of combining their declarations.
                     for b in fallback {
                         self.lookup_attr_static1(b.clone(), attr_name, acc);
                     }

@@ -4175,7 +4175,6 @@ def f[T: A | B](x: T):
 );
 
 testcase!(
-    bug = "We can't handle a quantified intersected with multiple concrete types",
     test_narrow_typevar_multiple_times,
     r#"
 class A:
@@ -4189,12 +4188,12 @@ class B:
 def f[T: (A, B)](x: T, y: T) -> T | None:
     if isinstance(x, A):
         if isinstance(x, B):
-            return x + y  # E: `B` is not assignable to declared return type `T | None`
+            return x + y
 
 def g[T: (A, B)](x: T) -> T | None:
     if isinstance(x, A):
         if isinstance(x, B):
-            return x.f()  # E: `B` is not assignable to declared return type `T | None`
+            return x.f()
     "#,
 );
 
@@ -4433,5 +4432,21 @@ class MyClass(Enum):
 
 def myfn(x: MyClass | None):
     assert_type(x and x.name, str | None)
+    "#,
+);
+
+testcase!(
+    test_attribute_lookup_on_intersection,
+    r#"
+from typing import reveal_type
+class A: ...
+class B: ...
+class C:
+    x: A
+class D:
+    x: B
+def f(c: C):
+    if isinstance(c, D):
+        reveal_type(c.x)  # E: A & B
     "#,
 );
