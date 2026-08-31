@@ -1113,7 +1113,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
             let matched_hint = self.is_subset_eq(&self.heap.mk_class_type(cls.clone()), hint);
             self.solver()
-                .generalize_class_targs(cls.targs_mut(), &SmallSet::new(), true);
+                .generalize_class_targs_for_constructor_hint(cls.targs_mut(), &SmallSet::new());
             (vs, matched_hint)
         } else {
             (QuantifiedHandle::empty(), false)
@@ -1444,8 +1444,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .solver()
                 .freshen_class_targs(typed_dict.targs_mut(), self.uniques);
             let matched_hint = self.is_subset_eq(&typed_dict.clone().to_type(self.heap), hint);
-            self.solver()
-                .generalize_class_targs(typed_dict.targs_mut(), &SmallSet::new(), true);
+            self.solver().generalize_class_targs_for_constructor_hint(
+                typed_dict.targs_mut(),
+                &SmallSet::new(),
+            );
             (vs, matched_hint)
         } else {
             (QuantifiedHandle::empty(), false)

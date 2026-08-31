@@ -2786,3 +2786,58 @@ def h(x: Any):
     assert_type(f3(B(), x), B)
     "#,
 );
+
+// A gradual type argument supplies the solution for its own type parameter, and keeping that
+// solution is the point of the expected type. Here `V` must stay `Any`: were it instead solved
+// from the first argument, it would become `bool` and reject the second one.
+testcase!(
+    test_gradual_expected_type_solution_is_kept,
+    r#"
+from typing import Any, MutableMapping
+
+class ChainMap[K, V: bool | dict]:
+    def __init__(self, *mappings: MutableMapping[K, V]): ...
+
+mapping: ChainMap[str, Any] = ChainMap(
+    {"flag": True},
+    {"nested": {"value": 1}},
+)
+ "#,
+);
+
+// The restriction is checked against each argument, so nesting the gradual type inside a container
+// does not suppress the check.
+testcase!(
+    test_nested_gradual_expected_type_checks_restriction,
+    r#"
+from typing import Any, assert_type
+
+class Nested[T: list[str]]:
+    def __init__(self, value: T) -> None: ...
+
+def bad(v: list[int]) -> None:
+    x: Nested[list[Any]] = Nested(v)  # E: `list[int]` is not assignable to upper bound `list[str]` of type variable `T`
+
+def good(v: list[str]) -> None:
+    y: Nested[list[Any]] = Nested(v)
+    assert_type(y, Nested[list[Any]])
+ "#,
+);
+
+// A container literal is contextually typed by the expected type before the restriction can be
+// checked: the element variable of `[1]` is pinned to `Any` by the `list[Any]` type argument, so
+// `list[int]` is never the argument type that argument matching sees. Passing an expression whose
+// type is already fixed, as in `test_nested_gradual_expected_type_checks_restriction`, is caught.
+testcase!(
+    bug = "the literal's element type is absorbed by the gradual type argument",
+    test_nested_gradual_expected_type_misses_literal,
+    r#"
+from typing import Any
+
+class Nested[T: list[str]]:
+    def __init__(self, value: T) -> None: ...
+
+def bad() -> None:
+    x: Nested[list[Any]] = Nested([1])  # Should be an error
+ "#,
+);
