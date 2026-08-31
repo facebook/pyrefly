@@ -909,11 +909,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let _ = matched_overloads.split_off(split_point);
                 }
             }
-            let selected_overload = if spec_compliant {
-                self.disambiguate_overloads_spec_compliant(&matched_overloads)
-            } else {
-                self.disambiguate_overloads(&matched_overloads)
-            };
+            let selected_overload = self.disambiguate_overloads(&matched_overloads);
             if let Some(idx) = selected_overload {
                 let overload = matched_overloads
                     .into_iter()
@@ -959,23 +955,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    fn disambiguate_overloads_spec_compliant(
-        &self,
-        matched_overloads: &[CalledOverload<'_>],
-    ) -> Option<usize> {
-        // Step 5, part 2: are all remaining return types equivalent to one another?
-        // If not, the call is ambiguous.
-        let mut matched_overloads = matched_overloads.iter();
-        let first_overload = matched_overloads
-            .next()
-            .expect("Expected at least one overload");
-        if matched_overloads.any(|o| !self.is_equivalent(&first_overload.res, &o.res)) {
-            return None;
-        }
-        // Step 6: if there are still multiple matches, pick the first one.
-        Some(0)
-    }
-
     fn disambiguate_overloads(&self, matched_overloads: &[CalledOverload<'_>]) -> Option<usize> {
         // When a call to an overloaded function may match multiple overloads, the spec says to
         // return Any when the return types are not all equivalent.
@@ -983,12 +962,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // third-party libraries have come to rely on mypy and pyright's behavior. So we do the
         // following for ecosystem compatibility:
         //
-        // Step 6 (non-spec-compliant): does there exist a return type such that all
-        // materializations of every other return type are assignable to it? If so, use this
-        // return type. Else, return Any.
+        // Step 6: does there exist a return type such that (1) all materializations of every other
+        // return type are assignable to it, and (2) the return type is assignable to every other
+        // return type? If so, use this return type. Else, return Any.
         //
-        // We check materializations rather than assignability so that we end up with the most
-        // "general" return type. E.g., if the candidates are `A[None]` and `A[Any]`, we want
+        // We check materializations rather than assignability for (1) so that we end up with the
+        // most "general" return type. E.g., if the candidates are `A[None]` and `A[Any]`, we want
         // to select `A[Any]`.
         //
         // First, find a candidate return type.
@@ -1002,6 +981,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Check every return type before the candidate.
         for o in matched_overloads.iter().take(candidate) {
             if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
+                return None;
+            }
+        }
+        // Check that the candidate is assignable to every other return type.
+        for o in matched_overloads.iter() {
+            if !self.is_subset_eq(&matched_overloads[candidate].res, &o.res) {
                 return None;
             }
         }
