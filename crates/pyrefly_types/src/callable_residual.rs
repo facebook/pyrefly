@@ -284,8 +284,11 @@ impl Type {
         let signatures = reconstructed
             .iter()
             .cloned()
-            .map(|branch_ty| branch_ty.into_overload_signature(&metadata))
-            .collect::<Option<Vec<_>>>()?;
+            .map(|branch_ty| branch_ty.into_overload_signatures(&metadata))
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         let signatures = Vec1::try_from_vec(signatures).ok()?;
         Some(Type::Overload(Overload {
             signatures,
@@ -293,27 +296,28 @@ impl Type {
         }))
     }
 
-    fn into_overload_signature(self, metadata: &FuncMetadata) -> Option<OverloadType> {
+    fn into_overload_signatures(self, metadata: &FuncMetadata) -> Option<Vec<OverloadType>> {
         match self {
-            Type::Function(function) => Some(OverloadType::Function(*function)),
+            Type::Function(function) => Some(vec![OverloadType::Function(*function)]),
             Type::Forall(forall) => match forall.body {
-                Forallable::Function(function) => Some(OverloadType::Forall(Forall {
+                Forallable::Function(function) => Some(vec![OverloadType::Forall(Forall {
                     tparams: forall.tparams,
                     body: function,
-                })),
-                Forallable::Callable(callable) => Some(OverloadType::Forall(Forall {
+                })]),
+                Forallable::Callable(callable) => Some(vec![OverloadType::Forall(Forall {
                     tparams: forall.tparams,
                     body: Function {
                         signature: callable,
                         metadata: metadata.clone(),
                     },
-                })),
+                })]),
                 Forallable::TypeAlias(_) => None,
             },
-            Type::Callable(callable) => Some(OverloadType::Function(Function {
+            Type::Callable(callable) => Some(vec![OverloadType::Function(Function {
                 signature: *callable,
                 metadata: metadata.clone(),
-            })),
+            })]),
+            Type::Overload(overload) => Some(overload.signatures.into_vec()),
             _ => None,
         }
     }
