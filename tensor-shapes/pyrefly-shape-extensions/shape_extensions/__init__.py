@@ -288,9 +288,18 @@ def broadcast(*_args: typing.Any) -> IntTuple:
 class MapIntTuples:
     """Map a unary type lambda over an ``IntTuples`` value.
 
-    Pyrefly reduces this form in ordinary type annotations. At runtime it is a
-    placeholder that does not inspect its arguments, because valid static
-    sources such as ``Any`` and ``Never`` cannot be mapped as Python values.
+    A forward map preserves each source shape::
+
+        MapIntTuples[lambda S: Tensor[S], tuple[IntTuple[2], IntTuple[3, 4]]]
+
+    A map used directly as a parameter annotation reverses that relationship, so
+    passing ``(Tensor[IntTuple[2]], Tensor[IntTuple[3, 4]])`` infers the source
+    as ``tuple[IntTuple[2], IntTuple[3, 4]]``. Each symbolic source may occur in
+    only one parameter pattern, keeping inference unambiguous.
+
+    At runtime this is a placeholder that does not inspect its arguments,
+    because valid static sources such as ``Any`` and ``Never`` cannot be mapped
+    as Python values.
     """
 
     def __class_getitem__(cls, params):

@@ -859,7 +859,7 @@ impl Solver {
     /// snapshot remain owned by the caller and are not restored by this operation. The snapshot
     /// covers variable nodes, values, and instantiation errors; it does not capture caches or
     /// other solver state.
-    pub fn snapshot_for_speculative_inference(&self, types: &[&Type]) -> VarSnapshot {
+    pub(crate) fn snapshot_for_speculative_inference(&self, types: &[&Type]) -> VarSnapshot {
         let mut pending: Vec<Var> = types.iter().flat_map(|ty| ty.collect_all_vars()).collect();
         if pending.is_empty() {
             return VarSnapshot(Vec::new());

@@ -1268,7 +1268,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         Type::TypeLevelDslCall(Box::new(TypeLevelDslCall::broadcast(args)))
     }
 
-    fn is_int_tuple_dsl_argument(&self, ty: &Type) -> bool {
+    pub(crate) fn is_int_tuple_dsl_argument(&self, ty: &Type) -> bool {
         let restriction = match ty {
             Type::Any(_) | Type::IntTuple(_) => return true,
             Type::TypeLevelDslCall(call) => {

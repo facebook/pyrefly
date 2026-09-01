@@ -3753,7 +3753,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .emit();
     }
 
-    fn report_type_error(
+    pub(crate) fn report_type_error(
         &self,
         got: &Type,
         want: &Type,

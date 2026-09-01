@@ -41,6 +41,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::TypeCheckOptions;
 use crate::alt::expr::ExprOptions;
 use crate::alt::expr::TypeOrExpr;
+use crate::alt::map_int_tuples::map_int_tuples_parameter_pattern;
 use crate::alt::shape_flag::extend_shape_flag_vars_from_targs;
 use crate::alt::shape_flag::shape_flag_vars;
 use crate::alt::solve::Iterable;
@@ -491,6 +492,50 @@ impl CallArgPreEval<'_> {
             })
             .with_context(context.map(|ctx| ctx()))
         };
+        // A shape-extension map at a parameter root carries an ordinary `Sequence` view, but its
+        // source must be recovered from the argument before that view is checked.
+        if let Some(pattern) = map_int_tuples_parameter_pattern(hint) {
+            let actual = match self {
+                Self::Type(ty, done) => {
+                    *done = true;
+                    (*ty).clone()
+                }
+                Self::Expr(expr, done) => {
+                    *done = true;
+                    solver.expr_infer(expr, arg_errors)
+                }
+                Self::Star {
+                    prefix,
+                    middle,
+                    suffix,
+                    consumed,
+                    done,
+                } => {
+                    let ty = Self::star_element(solver, prefix, middle, suffix, *consumed, vararg);
+                    if !vararg && *consumed < prefix.len() {
+                        *consumed += 1;
+                    }
+                    *done = vararg;
+                    ty
+                }
+                Self::Fixed(tys, index) => {
+                    let ty = tys[*index].clone();
+                    *index += 1;
+                    ty
+                }
+            };
+            let arg_ty = solver.check_map_int_tuples_parameter_pattern(
+                pattern,
+                actual,
+                range,
+                call_errors,
+                tcc,
+                call_context,
+                context,
+            );
+            solver.maybe_error_unknown_argument_type(&arg_ty, range, arg_errors);
+            return Some(arg_ty);
+        }
         match self {
             Self::Type(ty, done) => {
                 *done = true;
@@ -1568,35 +1613,51 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         })
                         .with_context(context.map(|ctx| ctx()))
                     };
-                    let arg_ty = match kw.value {
-                        TypeOrExpr::Expr(x) => self
-                            .expr_with_options(
-                                x,
-                                match hint {
-                                    Some((_, ty)) => ExprOptions::check(
-                                        ty,
-                                        arg_errors,
-                                        call_errors,
-                                        tcc,
-                                        Some(call_context),
-                                    ),
-                                    None => ExprOptions::infer(arg_errors, None),
-                                },
-                            )
-                            .into_ty(),
-                        TypeOrExpr::Type(x, range) => {
-                            if let Some((_, hint)) = &hint
-                                && !hint.is_any()
-                            {
-                                self.check_type_with_options(
+                    let arg_ty = if let Some(pattern) = hint
+                        .as_ref()
+                        .and_then(|(_, hint)| map_int_tuples_parameter_pattern(hint))
+                    {
+                        let actual = kw.value.infer(self, arg_errors);
+                        self.check_map_int_tuples_parameter_pattern(
+                            pattern,
+                            actual,
+                            kw.range,
+                            call_errors,
+                            tcc,
+                            call_context,
+                            context,
+                        )
+                    } else {
+                        match kw.value {
+                            TypeOrExpr::Expr(x) => self
+                                .expr_with_options(
                                     x,
-                                    hint,
-                                    range,
-                                    TypeCheckOptions::new(call_errors, tcc)
-                                        .with_call_context(call_context),
-                                );
+                                    match hint {
+                                        Some((_, ty)) => ExprOptions::check(
+                                            ty,
+                                            arg_errors,
+                                            call_errors,
+                                            tcc,
+                                            Some(call_context),
+                                        ),
+                                        None => ExprOptions::infer(arg_errors, None),
+                                    },
+                                )
+                                .into_ty(),
+                            TypeOrExpr::Type(x, range) => {
+                                if let Some((_, hint)) = &hint
+                                    && !hint.is_any()
+                                {
+                                    self.check_type_with_options(
+                                        x,
+                                        hint,
+                                        range,
+                                        TypeCheckOptions::new(call_errors, tcc)
+                                            .with_call_context(call_context),
+                                    );
+                                }
+                                (*x).clone()
                             }
-                            (*x).clone()
                         }
                     };
                     self.maybe_error_unknown_argument_type(&arg_ty, kw.range, arg_errors);

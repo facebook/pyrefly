@@ -73,7 +73,7 @@ fn normalized_mapper(depth: u32) -> Quantified {
 /// and the map computes the return type. In
 /// `def consume[S: IntTuples](xs: MapIntTuples[lambda T: Box[T], S]) -> S`, the argument is known;
 /// the parameter pattern derives an ordinary `Sequence[Box[IntTuple]]` view from the mapped member
-/// stored here and retains `S` as the source for parameter inference.
+/// stored here, and parameter inference recovers `S` from the argument's elements.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut)]
 pub enum MapIntTuplesInterpretation {
@@ -249,11 +249,13 @@ impl TypeLambda {
         }
     }
 
-    pub(crate) fn parameter(&self) -> &Quantified {
+    /// The synthetic parameter introduced by the mapper lambda.
+    pub fn parameter(&self) -> &Quantified {
         &self.parameter
     }
 
-    pub(crate) fn body(&self) -> &Type {
+    /// The type expression produced by applying the mapper.
+    pub fn body(&self) -> &Type {
         &self.body
     }
 

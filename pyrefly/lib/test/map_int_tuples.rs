@@ -314,3 +314,296 @@ def middle[*Ts](
     pass
 "#,
 );
+
+testcase!(
+    test_map_int_tuples_pattern_infers_fixed_empty_and_keyword_arguments,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Box[Shape: IntTuple]: ...
+
+def shapes[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def check(x2: Box[IntTuple[2]], x34: Box[IntTuple[3, 4]]) -> None:
+    assert_type(shapes((x2, x34)), tuple[IntTuple[2], IntTuple[3, 4]])
+    assert_type(shapes(()), tuple[()])
+    assert_type(shapes(values=(x34, x2)), tuple[IntTuple[3, 4], IntTuple[2]])
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_preserves_inferred_sequence_structure,
+    shape_extensions_env(),
+    r#"
+from collections.abc import Sequence
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Box[Shape: IntTuple]: ...
+
+def shapes[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def fixed(xs: tuple[Box[IntTuple[1]], Box[IntTuple[2, 3]]]) -> None:
+    assert_type(shapes(xs), tuple[IntTuple[1], IntTuple[2, 3]])
+
+def unbounded(xs: Sequence[Box[IntTuple[4]]]) -> None:
+    assert_type(shapes(xs), tuple[IntTuple[4], ...])
+
+def unpacked(
+    xs: tuple[
+        Box[IntTuple[1]],
+        *tuple[Box[IntTuple[2]], ...],
+        Box[IntTuple[3, 4]],
+    ],
+) -> None:
+    assert_type(
+        shapes(xs),
+        tuple[IntTuple[1], *tuple[IntTuple[2], ...], IntTuple[3, 4]],
+    )
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_projects_fixed_and_generic_subclasses,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Box[Shape: IntTuple]: ...
+class Fixed(Box[IntTuple[2, 3]]): ...
+class Generic[Shape: IntTuple](Box[Shape]): ...
+
+def shapes[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def check(fixed: Fixed, generic: Generic[IntTuple[4, 5]]) -> None:
+    assert_type(shapes((fixed,)), tuple[IntTuple[2, 3]])
+    assert_type(shapes((generic,)), tuple[IntTuple[4, 5]])
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_checks_captured_parameters_and_source_bound,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Tagged[Metadata, Value]: ...
+
+def consume[Metadata, Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Tagged[Metadata, S], Shapes],
+    metadata: Metadata,
+) -> tuple[Metadata, Shapes]: ...
+
+def consume_bounded[Metadata: str, Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Tagged[Metadata, S], Shapes],
+) -> Shapes: ...
+
+def accepted(value: Tagged[int, IntTuple[2]]) -> None:
+    assert_type(consume((value,), 3), tuple[int, tuple[IntTuple[2]]])
+    consume((value,), "text")  # E: is not assignable to parameter `metadata`
+
+def rejected(value: Tagged[int, str]) -> None:
+    metadata, _ = consume((value,), "text")  # E: is not assignable to parameter `values`
+    assert_type(metadata, str)
+
+def captured_bound_mismatch(value: Tagged[int, IntTuple[3]]) -> None:
+    # The captured Metadata bound fails during inversion, but the recovered Shapes source is valid.
+    # The diagnostic therefore concerns Metadata rather than claiming the source is not assignable
+    # to itself.
+    consume_bounded((value,))  # E: is not assignable to parameter `values`
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_rejects_invalid_members_and_non_sequences,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+
+class Box[Shape: IntTuple]: ...
+
+def shapes[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def check(x: Box[IntTuple[2]], bad: tuple[Box[IntTuple[2]], int]) -> None:
+    shapes(bad)  # E: is not assignable to parameter `values`
+    shapes(1)  # E: is not assignable to parameter `values`
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_overload_selection_and_rollback,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import Any, Literal, assert_type, overload
+
+class Tagged[Metadata, Value]: ...
+
+@overload
+def choose[Metadata, Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Tagged[Metadata, S], Shapes],
+    metadata: Metadata,
+    flag: Literal[0],
+) -> tuple[Metadata, Shapes]: ...
+@overload
+def choose[Metadata](values: object, metadata: Metadata, flag: Literal[1]) -> Metadata: ...
+def choose(values: Any, metadata: Any, flag: Any) -> Any: ...
+
+def check(value: Tagged[int, IntTuple[2]]) -> None:
+    assert_type(choose((value,), 3, 0), tuple[int, tuple[IntTuple[2]]])
+    assert_type(choose((value,), "text", 1), str)
+    choose((value,), "text", 0)  # E: No matching overload found for function `choose`
+"#,
+);
+
+// Every inversion probe creates and finalizes a synthetic mapper variable. Repeated rejected
+// overload candidates exercise the rollback boundary that must not resurrect those variables.
+testcase!(
+    test_map_int_tuples_pattern_repeated_failed_probes_finish_temporary_variables,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import Any, Literal, assert_type, overload
+
+class Box[Shape: IntTuple]: ...
+
+@overload
+def choose[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes], flag: Literal[0],
+) -> Shapes: ...
+@overload
+def choose[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes], flag: Literal[1],
+) -> tuple[Shapes]: ...
+@overload
+def choose(values: object, flag: Literal[2]) -> str: ...
+def choose(values: Any, flag: Any) -> Any: ...
+
+def check(x: Box[IntTuple[2]]) -> None:
+    assert_type(choose((x,), 2), str)
+    assert_type(choose((x,), 0), tuple[IntTuple[2]])
+    assert_type(choose((x,), 1), tuple[tuple[IntTuple[2]]])
+"#,
+);
+
+// The view can bind a captured variable before the recovered source fails its narrower bound.
+// Both effects belong to one match, so rejecting the source must release the captured variable
+// for the following parameter to solve independently.
+testcase!(
+    test_map_int_tuples_pattern_source_bound_failure_rolls_back_captured_parameters,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, MapIntTuples
+from typing import assert_type
+
+class Tagged[Metadata, Shape: IntTuple]: ...
+
+def consume[Metadata, Shapes: tuple[IntTuple[2]]](
+    values: MapIntTuples[lambda S: Tagged[Metadata, S], Shapes],
+    metadata: Metadata,
+) -> Metadata: ...
+
+def check(value: Tagged[int, IntTuple[3]]) -> None:
+    result = consume((value,), "text")  # E: Shapes `tuple[IntTuple[3]]` recovered from this argument are not assignable
+    assert_type(result, str)
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_allows_one_evidence_source_per_parameter,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Box[Shape: IntTuple]: ...
+
+def duplicate[Shapes: IntTuples](
+    first: MapIntTuples[lambda S: Box[S], Shapes],
+    second: MapIntTuples[lambda S: Box[S], Shapes],  # E: may have only one `MapIntTuples` parameter pattern
+) -> Shapes: ...
+
+def distinct[Left: IntTuples, Right: IntTuples](
+    first: MapIntTuples[lambda S: Box[S], Left],
+    second: MapIntTuples[lambda S: Box[S], Right],
+) -> tuple[Left, Right]: ...
+
+def check(left: Box[IntTuple[2]], right: Box[IntTuple[3, 4]]) -> None:
+    assert_type(
+        distinct((left,), (right,)),
+        tuple[tuple[IntTuple[2]], tuple[IntTuple[3, 4]]],
+    )
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_gradual_inputs,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import Any, assert_type
+
+class Box[Shape: IntTuple]: ...
+
+def shapes[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def check(
+    dynamic: Any,
+    alternatives: tuple[Box[IntTuple[2]]] | tuple[Box[IntTuple[3, 4]]],
+) -> None:
+    assert_type(shapes(dynamic), tuple[IntTuple, ...])
+    assert_type(shapes(alternatives), tuple[IntTuple, ...])
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_in_callable_return,
+    shape_extensions_env(),
+    r#"
+from collections.abc import Callable
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Box[Shape: IntTuple]: ...
+
+def factory[Shapes: IntTuples](
+    shapes: Shapes,
+) -> Callable[[], MapIntTuples[lambda S: Box[S], Shapes]]: ...
+
+def check(shapes: tuple[IntTuple[2], IntTuple[3, 4]]) -> None:
+    assert_type(factory(shapes)(), tuple[Box[IntTuple[2]], Box[IntTuple[3, 4]]])
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_through_alias,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Box[Shape: IntTuple]: ...
+type Mapped[Shapes: IntTuples] = MapIntTuples[lambda S: Box[S], Shapes]
+
+def forward[Shapes: IntTuples](shapes: Shapes) -> Mapped[Shapes]: ...
+def reverse[Shapes: IntTuples](values: Mapped[Shapes]) -> Shapes: ...
+
+def check(shapes: tuple[IntTuple[2]], value: Box[IntTuple[2]]) -> None:
+    assert_type(forward(shapes)[0], Box[IntTuple[2]])
+    assert_type(reverse((value,)), tuple[IntTuple[2]])
+"#,
+);

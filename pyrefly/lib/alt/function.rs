@@ -1531,6 +1531,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             params.push(Param::Kwargs(Some(x.name.id().clone()), ty));
         }
 
+        self.validate_map_int_tuples_parameter_patterns(
+            &params,
+            def.parameters
+                .posonlyargs
+                .iter()
+                .map(|x| x.parameter.name.range)
+                .chain(def.parameters.args.iter().map(|x| x.parameter.name.range))
+                .chain(def.parameters.vararg.iter().map(|x| x.name.range))
+                .chain(
+                    def.parameters
+                        .kwonlyargs
+                        .iter()
+                        .map(|x| x.parameter.name.range),
+                )
+                .chain(def.parameters.kwarg.iter().map(|x| x.name.range)),
+            errors,
+        );
+
         let paramspec = if let Some(q) = &paramspec_args
             && paramspec_args == paramspec_kwargs
         {
