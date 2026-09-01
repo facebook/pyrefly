@@ -197,7 +197,7 @@ fn any<T>(
 struct FreshForall {
     handle: QuantifiedHandle,
     ty: Type,
-    witness: ResidualWitnessContext,
+    witness: Option<ResidualWitnessContext>,
 }
 
 impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
@@ -1532,10 +1532,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             if successful_branch_captures.is_empty() {
                 unreachable!("successful overload probe must produce a branch capture");
             }
-            self.active_call_context.persist_overload_witness_captures(
-                witness.witness_hash(),
-                successful_branch_captures,
-            );
+            self.active_call_context
+                .persist_overload_witness_captures(witness.argument(), successful_branch_captures);
             true
         } else {
             false
@@ -1551,6 +1549,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             let argument_side = self.active_call_context.argument_side();
             let can_synthesize_witness = !matches!(argument_side, ArgumentSide::NotAnalyzingACall);
             if can_synthesize_witness
+                && let Some(argument) = self.active_call_context.argument()
                 && let eligible_vars = want
                     .collect_maybe_placeholder_vars()
                     .into_iter()
@@ -1558,12 +1557,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     .collect::<Vec<_>>()
                 && !eligible_vars.is_empty()
             {
-                let overload_type = Type::Overload(overload.clone());
-                let synthesized = ResidualWitnessContext::for_overload(
-                    &overload_type,
-                    &eligible_vars,
-                    argument_side,
-                );
+                let synthesized =
+                    ResidualWitnessContext::for_overload(argument, &eligible_vars, argument_side);
                 self.with_active_call_context(
                     self.active_call_context
                         .clone()
@@ -1669,12 +1664,14 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
     fn instantiate_fresh_forall(&self, forall: Forall<Forallable>, want: &Type) -> FreshForall {
         let (vs, got) = self.type_order.instantiate_fresh_forall(forall.clone());
-        let witness = ResidualWitnessContext::for_forall(
-            &Type::Forall(Box::new(forall)),
-            &vs,
-            want,
-            self.active_call_context.argument_side(),
-        );
+        let witness = self.active_call_context.argument().map(|argument| {
+            ResidualWitnessContext::for_forall(
+                argument,
+                &vs,
+                want,
+                self.active_call_context.argument_side(),
+            )
+        });
         FreshForall {
             handle: vs,
             ty: got,
@@ -1688,17 +1685,21 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             ty,
             witness,
         } = got;
-        let (result, mut maybe_witness) = self.with_active_call_context(
-            self.active_call_context
-                .clone()
-                .with_residual_witness(witness),
-            |me| {
-                (
-                    me.is_subset_eq(&ty, want),
-                    me.active_call_context.take_residual_witness(),
-                )
-            },
-        );
+        let (result, mut maybe_witness) = if let Some(witness) = witness {
+            self.with_active_call_context(
+                self.active_call_context
+                    .clone()
+                    .with_residual_witness(witness),
+                |me| {
+                    (
+                        me.is_subset_eq(&ty, want),
+                        me.active_call_context.take_residual_witness(),
+                    )
+                },
+            )
+        } else {
+            (self.is_subset_eq(&ty, want), None)
+        };
         let in_call_analysis = !matches!(
             self.active_call_context.argument_side(),
             ArgumentSide::NotAnalyzingACall
@@ -1707,7 +1708,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             && in_call_analysis
             && let Some(witness) = maybe_witness.as_mut()
         {
-            if let Some(deferred_vars) = self.take_witness_deferred_vars(witness.witness_hash()) {
+            if let Some(deferred_vars) = self.take_witness_deferred_vars(witness.argument()) {
                 witness.extend_deferred_vars(deferred_vars);
             }
             self.active_call_context.record_generic_residuals(witness);

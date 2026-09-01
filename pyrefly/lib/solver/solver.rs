@@ -11,11 +11,9 @@ use std::cell::Ref;
 use std::cell::RefCell;
 use std::cell::RefMut;
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::fmt::Display;
 use std::hash::Hash;
-use std::hash::Hasher;
 use std::mem;
 use std::sync::Arc;
 
@@ -150,7 +148,7 @@ impl Bounds {
 /// target vars that are allowed to observe the residualized answer.
 #[derive(Clone, Debug)]
 struct GenericWitnessCapture {
-    witness_hash: u64,
+    argument: ArgumentKey,
     target_vars: SmallSet<Var>,
     /// Union of origin_vars and deferred_vars from the witness — the quantified
     /// vars constrained by this Forall instantiation.
@@ -168,12 +166,12 @@ pub struct OverloadBranchCapture {
     generic_residual_vars: SmallSet<Var>,
 }
 
-type OverloadWitnessCapturesByHash = SmallMap<u64, Vec<OverloadBranchCapture>>;
+type OverloadWitnessCapturesByArgument = SmallMap<ArgumentKey, Vec<OverloadBranchCapture>>;
 
 /// Witness captures collected during subset checking and consumed at solve boundaries.
 #[derive(Debug, Default)]
 struct WitnessCaptures {
-    overload: OverloadWitnessCapturesByHash,
+    overload: OverloadWitnessCapturesByArgument,
     generic: Vec<GenericWitnessCapture>,
 }
 
@@ -1783,12 +1781,14 @@ impl Solver {
     /// Materialize an overload residual type for a single var from branch captures.
     fn materialize_overload_residual(
         &self,
-        witness_hash: u64,
+        argument: ArgumentKey,
         var: Var,
         branch_captures: &[OverloadBranchCapture],
         overload_pruning_by_witness: &OverloadPruningByWitness,
     ) -> Type {
-        let identity = OverloadResidualIdentity { witness_hash };
+        let identity = OverloadResidualIdentity {
+            argument_index: argument.index(),
+        };
         let pruning_decision = overload_pruning_by_witness.get(&identity);
         let surviving_branch_indices = match pruning_decision {
             Some(OverloadWitnessPruningDecision::AllPruned(_)) => {
@@ -1936,16 +1936,15 @@ impl Solver {
     fn prune_overload_witnesses(
         &self,
         solved_vars: &SmallMap<Var, SolvedVarInfo>,
-        overload_witness_captures: &OverloadWitnessCapturesByHash,
+        overload_witness_captures: &OverloadWitnessCapturesByArgument,
         check_subset: &mut dyn FnMut(&[(Type, Type)], OverloadPruningSubsetMode) -> bool,
     ) -> OverloadPruningByWitness {
         let mut witnesses = overload_witness_captures.iter();
-        let (Some((witness_hash, branch_captures)), None) = (witnesses.next(), witnesses.next())
-        else {
+        let (Some((argument, branch_captures)), None) = (witnesses.next(), witnesses.next()) else {
             return HashMap::new();
         };
         let identity = OverloadResidualIdentity {
-            witness_hash: *witness_hash,
+            argument_index: argument.index(),
         };
         let solved_vars_in_witness = solved_vars
             .iter()
@@ -2237,22 +2236,22 @@ impl Solver {
             });
         }
 
-        // Reverse map from var to its unique witness hash. If a var appears in
-        // multiple witnesses, it maps to None so we skip it — ambiguous witnesses
-        // should not produce an overload residual.
-        let var_to_witness: SmallMap<Var, Option<u64>> = {
-            let mut map: SmallMap<Var, Option<u64>> = SmallMap::new();
-            for (&wh, captures) in captures.overload.iter() {
+        // Reverse map from var to the unique argument that recorded it. If a var appears under
+        // more than one argument, it maps to None so we skip it — an ambiguous record should not
+        // produce an overload residual.
+        let var_to_witness: SmallMap<Var, Option<ArgumentKey>> = {
+            let mut map: SmallMap<Var, Option<ArgumentKey>> = SmallMap::new();
+            for (&key, captures) in captures.overload.iter() {
                 for capture in captures {
                     for &v in capture.values.keys() {
                         match map.entry(v) {
                             Entry::Occupied(mut e) => {
-                                if *e.get() != Some(wh) {
+                                if *e.get() != Some(key) {
                                     *e.get_mut() = None;
                                 }
                             }
                             Entry::Vacant(e) => {
-                                e.insert(Some(wh));
+                                e.insert(Some(key));
                             }
                         }
                     }
@@ -2288,24 +2287,24 @@ impl Solver {
             {
                 let solved_bound = self.solve_bounds(mem::take(bounds));
 
-                let witness_hash = if solved_bound.is_none() {
+                let witness_argument = if solved_bound.is_none() {
                     var_to_witness.get(&v).copied().flatten()
                 } else {
                     None
                 };
-                let all_pruned_witness = witness_hash.and_then(|witness_hash| {
-                    match overload_pruning_by_witness
-                        .get(&OverloadResidualIdentity { witness_hash })
-                    {
+                let all_pruned_witness = witness_argument.and_then(|argument| {
+                    match overload_pruning_by_witness.get(&OverloadResidualIdentity {
+                        argument_index: argument.index(),
+                    }) {
                         Some(OverloadWitnessPruningDecision::AllPruned(cause)) => {
-                            Some((witness_hash, cause))
+                            Some((argument, cause))
                         }
                         _ => None,
                     }
                 });
 
-                if let Some((witness_hash, all_pruned_cause)) = all_pruned_witness
-                    && reported_all_pruned_witnesses.insert(witness_hash)
+                if let Some((argument, all_pruned_cause)) = all_pruned_witness
+                    && reported_all_pruned_witnesses.insert(argument)
                 {
                     err.push(TypeVarSpecializationError::IncompatibleOverloadResidual {
                         solved_constraints: all_pruned_cause.solved_constraints.map(|constraint| {
@@ -2321,17 +2320,16 @@ impl Solver {
                     Variable::answer(bound)
                 } else if all_pruned_witness.is_some() {
                     Variable::answer(Type::never())
-                } else if let Some(witness_hash) = witness_hash {
-                    let overload_captures =
-                        captures.overload.get(&witness_hash).unwrap_or_else(|| {
-                            unreachable!("overload materialization requires witness captures")
-                        });
+                } else if let Some(argument) = witness_argument {
+                    let overload_captures = captures.overload.get(&argument).unwrap_or_else(|| {
+                        unreachable!("overload materialization requires witness captures")
+                    });
                     let target_vars: SmallSet<Var> = overload_captures
                         .iter()
                         .flat_map(|c| c.values.keys().copied())
                         .collect();
                     let ty = self.materialize_overload_residual(
-                        witness_hash,
+                        argument,
                         v,
                         overload_captures,
                         &overload_pruning_by_witness,
@@ -3010,6 +3008,20 @@ pub enum ArgumentSide {
     NotAnalyzingACall,
 }
 
+/// Which argument of the call being checked is in hand.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ArgumentKey(u32);
+
+impl ArgumentKey {
+    pub fn new(index: usize) -> Self {
+        Self(index as u32)
+    }
+
+    fn index(self) -> u32 {
+        self.0
+    }
+}
+
 impl ArgumentSide {
     pub(crate) fn negated(self) -> Self {
         match self {
@@ -3025,14 +3037,13 @@ pub(crate) enum SubsetCacheContext {
     #[default]
     Default,
     Witness {
-        witness_hash: u64,
+        argument: ArgumentKey,
         argument_side: ArgumentSide,
     },
 }
 
 // The context in which we are collecting residuals.
-// - The `witness_hash` identifies the particular Forall type that appeared as
-//   an argument in a higher-order call
+// - The `argument` identifies which argument of the higher-order call this is
 // - The `target_vars` are vars allowed to observe the residualized answer
 // - The `origin_vars` are `Vars` that correspond to scoped type parameters
 //   inside of that argument (the "origin" of the generic behavior)
@@ -3044,7 +3055,7 @@ pub(crate) enum SubsetCacheContext {
 // TODO(stroxler): Rethink the names of fields here. It would be difficult to restack.
 #[derive(Clone, Debug)]
 pub struct ResidualWitnessContext {
-    witness_hash: u64,
+    argument: ArgumentKey,
     /// Vars that are allowed to observe the residualized answer for this candidate.
     target_vars: SmallSet<Var>,
     argument_side: ArgumentSide,
@@ -3053,15 +3064,9 @@ pub struct ResidualWitnessContext {
 }
 
 impl ResidualWitnessContext {
-    fn type_witness_hash(ty: &Type) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        ty.hash(&mut hasher);
-        hasher.finish()
-    }
-
     /// Build a witness for a Forall instantiation during subset checking.
     pub fn for_forall(
-        got: &Type,
+        argument: ArgumentKey,
         vars: &QuantifiedHandle,
         want: &Type,
         argument_side: ArgumentSide,
@@ -3070,7 +3075,7 @@ impl ResidualWitnessContext {
             want.collect_maybe_placeholder_vars().into_iter().collect();
         target_vars.extend(vars.0.iter().copied());
         Self {
-            witness_hash: Self::type_witness_hash(got),
+            argument,
             target_vars,
             argument_side,
             origin_vars: vars.0.iter().copied().collect(),
@@ -3079,11 +3084,15 @@ impl ResidualWitnessContext {
     }
 
     /// Build a witness for an overload residual during subset checking.
-    pub fn for_overload(got: &Type, eligible_vars: &[Var], argument_side: ArgumentSide) -> Self {
+    pub fn for_overload(
+        argument: ArgumentKey,
+        eligible_vars: &[Var],
+        argument_side: ArgumentSide,
+    ) -> Self {
         let target_vars: SmallSet<Var> = eligible_vars.iter().copied().collect();
         let origin_vars = target_vars.clone();
         Self {
-            witness_hash: Self::type_witness_hash(got),
+            argument,
             target_vars,
             argument_side,
             origin_vars,
@@ -3091,8 +3100,8 @@ impl ResidualWitnessContext {
         }
     }
 
-    pub(crate) fn witness_hash(&self) -> u64 {
-        self.witness_hash
+    pub(crate) fn argument(&self) -> ArgumentKey {
+        self.argument
     }
 
     fn capture_candidate_vars(&self) -> SmallSet<Var> {
@@ -3132,6 +3141,7 @@ impl CallBoundary {
         CallContext {
             witness: None,
             argument_side: ArgumentSide::default(),
+            argument: None,
             boundary: Some(self),
             shape_flag_vars: None,
             shape_flag_binding_source: None,
@@ -3152,28 +3162,27 @@ impl CallBoundary {
 
     fn persist_overload_witness_captures(
         &self,
-        witness_hash: u64,
+        argument: ArgumentKey,
         branch_captures: Vec<OverloadBranchCapture>,
     ) {
         self.state()
             .lock()
             .witness_captures
             .overload
-            .insert(witness_hash, branch_captures);
+            .insert(argument, branch_captures);
     }
 
     fn record_generic_residuals(&self, witness: &ResidualWitnessContext) {
         let mut state = self.state().lock();
         let capture = GenericWitnessCapture {
-            witness_hash: witness.witness_hash,
+            argument: witness.argument,
             target_vars: witness.target_vars.clone(),
             witness_vars: witness.capture_candidate_vars(),
         };
-        // Dedup: if an existing entry has the same (witness_hash, target_vars),
+        // Dedup: if an existing entry has the same (argument, target_vars),
         // merge witness_vars into it instead of pushing a new entry.
         for existing in state.witness_captures.generic.iter_mut() {
-            if existing.witness_hash == capture.witness_hash
-                && existing.target_vars == capture.target_vars
+            if existing.argument == capture.argument && existing.target_vars == capture.target_vars
             {
                 existing.witness_vars.extend(capture.witness_vars);
                 return;
@@ -3220,6 +3229,8 @@ impl Drop for CallBoundary {
 pub struct CallContext<'subset> {
     witness: Option<ResidualWitnessContext>,
     argument_side: ArgumentSide,
+    /// Which argument of the call is being checked, when one is.
+    argument: Option<ArgumentKey>,
     boundary: Option<&'subset CallBoundary>,
     shape_flag_vars: Option<Arc<SmallSet<Var>>>,
     shape_flag_binding_source: Option<Var>,
@@ -3228,6 +3239,15 @@ pub struct CallContext<'subset> {
 impl<'subset> CallContext<'subset> {
     pub fn outside() -> Self {
         Self::default()
+    }
+
+    pub fn with_argument(mut self, argument: ArgumentKey) -> Self {
+        self.argument = Some(argument);
+        self
+    }
+
+    pub(crate) fn argument(&self) -> Option<ArgumentKey> {
+        self.argument
     }
 
     /// Context for checking a call argument without a call boundary.
@@ -3330,7 +3350,7 @@ impl<'subset> CallContext<'subset> {
             // witness/polarity-sensitive side effects isolated. Most checks run
             // under Default context and keep prior cache behavior.
             SubsetCacheContext::Witness {
-                witness_hash: witness.witness_hash,
+                argument: witness.argument,
                 argument_side: self.argument_side,
             }
         } else {
@@ -3342,7 +3362,7 @@ impl<'subset> CallContext<'subset> {
     /// authoritative pruning source.
     pub(crate) fn persist_overload_witness_captures(
         &self,
-        witness_hash: u64,
+        argument: ArgumentKey,
         branch_captures: Vec<OverloadBranchCapture>,
     ) {
         assert!(
@@ -3350,7 +3370,7 @@ impl<'subset> CallContext<'subset> {
             "overload residual capture requires an active witness"
         );
         if let Some(boundary) = &self.boundary {
-            boundary.persist_overload_witness_captures(witness_hash, branch_captures);
+            boundary.persist_overload_witness_captures(argument, branch_captures);
         }
     }
 
@@ -3419,15 +3439,18 @@ pub struct Subset<'solver, 'subset, Ans: LookupAnswer> {
     /// the current computation. Used to avoid caching protocol results in the
     /// persistent cross-call cache when they depend on coinductive assumptions.
     pub coinductive_assumptions_used: bool,
-    witness_deferred_vars: SmallMap<u64, SmallSet<Var>>,
+    witness_deferred_vars: SmallMap<ArgumentKey, SmallSet<Var>>,
 }
 
 impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
-    fn snapshot_witness_deferred_vars(&self) -> SmallMap<u64, SmallSet<Var>> {
+    fn snapshot_witness_deferred_vars(&self) -> SmallMap<ArgumentKey, SmallSet<Var>> {
         self.witness_deferred_vars.clone()
     }
 
-    fn restore_witness_deferred_vars(&mut self, deferred_vars: SmallMap<u64, SmallSet<Var>>) {
+    fn restore_witness_deferred_vars(
+        &mut self,
+        deferred_vars: SmallMap<ArgumentKey, SmallSet<Var>>,
+    ) {
         self.witness_deferred_vars = deferred_vars;
     }
 
@@ -3537,9 +3560,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
     pub(crate) fn take_witness_deferred_vars(
         &mut self,
-        witness_hash: u64,
+        argument: ArgumentKey,
     ) -> Option<SmallSet<Var>> {
-        self.witness_deferred_vars.shift_remove(&witness_hash)
+        self.witness_deferred_vars.shift_remove(&argument)
     }
 
     pub(crate) fn active_overload_residual_witness(&self) -> Option<ResidualWitnessContext> {
@@ -3547,7 +3570,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             return None;
         }
         let mut witness = self.active_call_context.residual_witness()?.clone();
-        if let Some(deferred_vars) = self.witness_deferred_vars.get(&witness.witness_hash()) {
+        if let Some(deferred_vars) = self.witness_deferred_vars.get(&witness.argument()) {
             witness.extend_deferred_vars(deferred_vars.clone());
         }
         Some(witness)
@@ -3563,9 +3586,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         if !witness.origin_vars.contains(&origin_var) {
             return;
         }
-        let witness_hash = witness.witness_hash;
+        let argument = witness.argument;
         let target_vars = witness.target_vars.clone();
-        let deferred_vars = self.witness_deferred_vars.entry(witness_hash).or_default();
+        let deferred_vars = self.witness_deferred_vars.entry(argument).or_default();
         for var in other.collect_maybe_placeholder_vars() {
             if target_vars.contains(&var) {
                 deferred_vars.insert(var);

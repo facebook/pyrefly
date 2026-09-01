@@ -54,6 +54,7 @@ use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::display::function_suffix;
+use crate::solver::solver::ArgumentKey;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallBoundary;
 use crate::solver::solver::CallContext;
@@ -1027,11 +1028,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             };
             Ok(param_list_owner.push(ps).items().iter().rev().collect())
         };
-        for (arg, is_self_arg) in self_arg
+        for (argument_index, (arg, is_self_arg)) in self_arg
             .iter()
             .map(|arg| (arg, true))
             .chain(args.iter().map(|arg| (arg, false)))
+            .enumerate()
         {
+            let argument = ArgumentKey::new(argument_index);
+            let call_context = &call_context.clone().with_argument(argument);
             let mut arg_pre = arg.pre_eval(self, arg_errors);
             while arg_pre.step() {
                 let param = if let Some(p) = rparams.last() {
@@ -1096,7 +1100,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         let arg_ty = if matches!(arg_pre, CallArgPreEval::Expr(Expr::Lambda(_), _))
                             && bound_args.is_none()
                         {
-                            deferred_lambdas.push((arg_pre.clone(), ty, name, arg.range()));
+                            deferred_lambdas.push((
+                                arg_pre.clone(),
+                                ty,
+                                name,
+                                arg.range(),
+                                argument,
+                            ));
                             arg_pre.mark_done();
                             None
                         } else {
@@ -1447,7 +1457,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
         let mut splat_kwargs = Vec::new();
-        for kw in keywords {
+        let keyword_argument_offset = usize::from(self_arg.is_some()) + args.len();
+        for (keyword_index, kw) in keywords.iter().enumerate() {
+            let call_context = &call_context
+                .clone()
+                .with_argument(ArgumentKey::new(keyword_argument_offset + keyword_index));
             match kw.arg {
                 None => {
                     let ty = kw.value.infer(self, arg_errors);
@@ -1780,7 +1794,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .with_call_context(call_context),
             );
         }
-        for (mut arg, hint, name, range) in deferred_lambdas {
+        for (mut arg, hint, name, range, argument) in deferred_lambdas {
+            let call_context = &call_context.clone().with_argument(argument);
             let mut hint = hint.clone();
             // Read parameter bounds collected from the other arguments while leaving the return
             // type open for the lambda body to constrain.

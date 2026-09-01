@@ -56,7 +56,7 @@ pub enum CallableResidualKind {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct OverloadResidualIdentity {
-    pub witness_hash: u64,
+    pub argument_index: u32,
 }
 
 /// Per-branch result for a single var in an overload residual.

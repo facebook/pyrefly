@@ -1137,3 +1137,29 @@ assert_type(wrapper(0, "x"), int)
 assert_type(wrapper(1, "x"), list[int])
     "#,
 );
+
+testcase!(
+    test_same_overload_argument_is_recorded_separately,
+    r#"
+from typing import Callable, assert_type, overload
+
+def pair[A, R, B, S](
+    f: Callable[[A], R], g: Callable[[B], S]
+) -> tuple[Callable[[A], R], Callable[[B], S]]: ...
+
+@overload
+def h(x: int) -> str: ...
+@overload
+def h(x: str) -> int: ...
+def h(x: int | str) -> int | str: ...
+
+assert_type(
+    pair(h, h),
+    tuple[Callable[[int | str], int | str], Callable[[int | str], int | str]],
+)
+assert_type(
+    pair(f=h, g=h),
+    tuple[Callable[[int | str], int | str], Callable[[int | str], int | str]],
+)
+    "#,
+);
