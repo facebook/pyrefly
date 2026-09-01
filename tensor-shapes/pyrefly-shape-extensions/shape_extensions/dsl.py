@@ -11,6 +11,7 @@ Only used inside DSL definition files (e.g. torch/_shapes.pyi), not in
 normal stubs or user code.
 """
 
+# TODO(stroxler): Unquote `typing.TypeIs` when Python 3.13+ is the minimum version.
 import typing
 
 from . import (
@@ -61,7 +62,7 @@ class IntTuples(_IntTuplesSchema):
 def is_concrete_int(value: object) -> typing.TypeGuard[_IntSchema]: ...
 
 
-def is_int_value(value: object) -> typing.TypeIs[int]: ...
+def is_int_value(value: object) -> "typing.TypeIs[int]": ...
 
 
 def concat(

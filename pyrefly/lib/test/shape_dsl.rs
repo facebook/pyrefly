@@ -13559,3 +13559,44 @@ def parameter_shadow(gufunc_alias: Int, spec: str, shapes: IntTuples) -> IntTupl
     return gufunc_alias(spec, shapes)  # E: DSL helper callee must be a validated  # E: Expected a callable
 "#,
 );
+
+testcase!(
+    test_type_shape_dsl_gufunc_public_wrapper,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions as shapes
+from shape_extensions import Flag, IntTuple, IntTuples, gufunc_broadcast
+from shape_extensions import gufunc_broadcast as imported_gufunc_broadcast
+from shape_extensions import type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+gufunc_alias = imported_gufunc_broadcast
+
+@type_shape_dsl_function
+def forwarded(spec: str, operands: IntTuples) -> IntTuple:
+    return gufunc_broadcast(spec, operands)
+
+def direct() -> ShapeBox[gufunc_broadcast("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+def module_import() -> ShapeBox[shapes.gufunc_broadcast("(n)->(n)", tuple[IntTuple[4]])]: ...
+def imported_alias() -> ShapeBox[imported_gufunc_broadcast("(n)->(n)", tuple[IntTuple[5]])]: ...
+def assigned_alias() -> ShapeBox[gufunc_alias("(n)->(n)", tuple[IntTuple[6]])]: ...
+def composed() -> ShapeBox[forwarded("(),()->()", tuple[IntTuple[2, 1, 4], IntTuple[3, 4]])]: ...
+def unbounded() -> ShapeBox[gufunc_broadcast("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, 3], ...])]: ...
+
+assert_type(direct(), ShapeBox[IntTuple[2, 5]])
+assert_type(module_import(), ShapeBox[IntTuple[4]])
+assert_type(imported_alias(), ShapeBox[IntTuple[5]])
+assert_type(assigned_alias(), ShapeBox[IntTuple[6]])
+assert_type(composed(), ShapeBox[IntTuple[2, 3, 4]])
+assert_type(unbounded(), ShapeBox[IntTuple])
+
+def forwarded_flag[Spec: Flag[str]](spec: Spec) -> ShapeBox[forwarded(Spec, tuple[IntTuple[7]])]: ...
+
+assert_type(forwarded_flag("(n)->(n)"), ShapeBox[IntTuple[7]])
+
+def check_unknown_flag[Spec: Flag[str]](spec: Spec) -> None:
+    assert_type(forwarded_flag(spec), ShapeBox[IntTuple])
+"#,
+);

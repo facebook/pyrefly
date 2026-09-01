@@ -29,6 +29,7 @@ __all__ = [
     "assert_shape",
     "broadcast",
     "defines_assert_shape",
+    "gufunc_broadcast",
     "shaped_array",
     "type_shape_dsl_function",
 ]
@@ -309,6 +310,15 @@ def type_shape_dsl_function[F: typing.Callable](fn: F) -> F:
     """Runtime no-op for a user-defined type-level shape DSL function."""
 
     return fn
+
+
+from . import dsl as _dsl
+
+
+# Compute the output shape described by a generalized ufunc signature.
+@type_shape_dsl_function
+def gufunc_broadcast(spec: str, shapes: IntTuples) -> IntTuple:
+    return _dsl._gufunc_broadcast(spec, shapes)
 
 
 class IntVar:
