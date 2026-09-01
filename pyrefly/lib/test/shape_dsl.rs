@@ -12184,15 +12184,15 @@ from shape_extensions.dsl import prod as official_prod
 
 @type_shape_dsl_function
 def missing(shape: IntTuple) -> Int:
-    return official_prod()  # E: `dsl.prod` requires exactly one positional IntTuple argument  # E: No matching overload found
+    return official_prod()  # E: `dsl.prod` requires exactly one positional IntTuple argument  # E: Missing positional argument `xs`
 
 @type_shape_dsl_function
 def extra(shape: IntTuple) -> Int:
-    return official_prod(shape, shape)  # E: `dsl.prod` requires exactly one positional IntTuple argument  # E: No matching overload found
+    return official_prod(shape, shape)  # E: `dsl.prod` requires exactly one positional IntTuple argument  # E: Expected 1 positional argument, got 2
 
 @type_shape_dsl_function
 def keyword(shape: IntTuple) -> Int:
-    return official_prod(x=shape)  # E: `dsl.prod` requires exactly one positional IntTuple argument  # E: Missing argument `xs`  # E: Unexpected keyword argument `x`
+    return official_prod(x=shape)  # E: `dsl.prod` requires exactly one positional IntTuple argument  # E: Missing positional argument `xs`  # E: Unexpected keyword argument `x`
 
 @type_shape_dsl_function
 def starred(shape: IntTuple) -> Int:
@@ -12200,7 +12200,7 @@ def starred(shape: IntTuple) -> Int:
 
 @type_shape_dsl_function
 def wrong_domain(dimension: Int) -> Int:
-    return official_prod(dimension)  # E: shape expression operands must be annotated as `IntTuple`  # E: No matching overload found
+    return official_prod(dimension)  # E: shape expression operands must be annotated as `IntTuple`  # E: not assignable to parameter `xs`
 
 @type_shape_dsl_function
 def wrong_result(shape: IntTuple) -> IntTuple:
@@ -12288,24 +12288,23 @@ def builtin_lookalike(shape: IntTuple) -> Int:
 );
 
 testcase!(
-    test_type_shape_dsl_invalid_sum_and_legacy_list_overload,
+    test_type_shape_dsl_invalid_sum,
     shape_dsl_tensor_env(),
     r#"
 from shape_extensions import Int, IntTuple, type_shape_dsl_function
 from shape_extensions.dsl import sum as official_sum
-from typing import assert_type
 
 @type_shape_dsl_function
 def missing(shape: IntTuple) -> Int:
-    return official_sum()  # E: `dsl.sum` requires exactly one positional IntTuple argument  # E: No matching overload found
+    return official_sum()  # E: `dsl.sum` requires exactly one positional IntTuple argument  # E: Missing positional argument `xs`
 
 @type_shape_dsl_function
 def extra(shape: IntTuple) -> Int:
-    return official_sum(shape, shape)  # E: `dsl.sum` requires exactly one positional IntTuple argument  # E: No matching overload found
+    return official_sum(shape, shape)  # E: `dsl.sum` requires exactly one positional IntTuple argument  # E: Expected 1 positional argument, got 2
 
 @type_shape_dsl_function
 def keyword(shape: IntTuple) -> Int:
-    return official_sum(xs=shape)  # E: `dsl.sum` requires exactly one positional IntTuple argument  # E: Argument `IntTuple` is not assignable to parameter `xs`
+    return official_sum(xs=shape)  # E: `dsl.sum` requires exactly one positional IntTuple argument  # E: Expected argument `xs` to be positional
 
 @type_shape_dsl_function
 def starred(shape: IntTuple) -> Int:
@@ -12313,16 +12312,12 @@ def starred(shape: IntTuple) -> Int:
 
 @type_shape_dsl_function
 def wrong_domain(dimension: Int) -> Int:
-    return official_sum(dimension)  # E: shape expression operands must be annotated as `IntTuple`  # E: No matching overload found
+    return official_sum(dimension)  # E: shape expression operands must be annotated as `IntTuple`  # E: not assignable to parameter `xs`
 
 @type_shape_dsl_function
 def wrong_result(shape: IntTuple) -> IntTuple:
     return official_sum(shape)  # E: returned expression requires a result in the `Int` domain  # E: Returned type
 
-dimensions: list[int] = [1, 2, 3]
-assert_type(official_sum([1, 2, 3]), int)
-assert_type(official_sum(dimensions), int)
-assert_type(official_sum(xs=dimensions), int)
 "#,
 );
 

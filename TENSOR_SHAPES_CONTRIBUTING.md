@@ -24,10 +24,11 @@ Shape tracking uses three complementary mechanisms:
    `.size()`, `assert_shape`, and decorator interpretation.
 
 The first two mechanisms live in `tensor-shapes/` and are the normal way to add
-or improve shape coverage. Some stubs still use the older
-`@shape_dsl_function` and `@uses_shape_dsl(...)` mechanism while they are being
-migrated. Do not add new V1 rules. Special handlers require Pyrefly
-implementation changes and should be treated as kernel work.
+or improve shape coverage. Shipped stubs use the type-level DSL exclusively.
+Pyrefly temporarily retains kernel support and isolated tests for the older
+`@shape_dsl_function` and `@uses_shape_dsl(...)` mechanism so pinned V1 stubs
+remain compatible during the rollout. Do not add new V1 rules. Special handlers
+require Pyrefly implementation changes and should be treated as kernel work.
 
 ## Fixture Stubs
 
@@ -425,6 +426,9 @@ The focused Pyrefly unit tests live in:
 ```text
 pyrefly/lib/test/shape_dsl.rs
 ```
+
+Tests for the retained V1 compatibility path are isolated in that file's
+`legacy` module and use private in-memory stubs.
 
 Run them with Cargo:
 
