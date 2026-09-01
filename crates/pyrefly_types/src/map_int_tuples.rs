@@ -47,6 +47,7 @@ use crate::shaped_array::IntTuple;
 use crate::tuple::Tuple;
 use crate::type_level_dsl::TypeLevelDslCall;
 use crate::type_level_dsl::TypeLevelDslFunction;
+use crate::type_level_dsl::TypeShapeDslDomain;
 use crate::type_var::PreInferenceVariance;
 use crate::type_var::Restriction;
 use crate::types::Type;
@@ -118,6 +119,22 @@ impl MapIntTuples {
             MapIntTuplesInterpretation::ParameterPattern { mapped_member } => {
                 Type::unbounded_tuple(mapped_member.clone())
             }
+        }
+    }
+
+    /// Returns `IntTuples` when every mapped element is structurally an `IntTuple`.
+    pub(crate) fn result_domain(&self) -> Option<TypeShapeDslDomain> {
+        let result = self.mapper.apply(IntTuple::shapeless().to_shape_arg_type());
+        match result {
+            result if IntTuple::from_shape_arg_or_tuple_carrier(&result).is_some() => {
+                Some(TypeShapeDslDomain::IntTuples)
+            }
+            Type::TypeLevelDslCall(call)
+                if call.result_domain() == Some(TypeShapeDslDomain::IntTuple) =>
+            {
+                Some(TypeShapeDslDomain::IntTuples)
+            }
+            _ => None,
         }
     }
 

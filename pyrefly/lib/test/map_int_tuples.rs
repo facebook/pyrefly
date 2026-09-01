@@ -520,20 +520,39 @@ def check(value: Pair[IntTuple[2], tuple[Box[IntTuple], ...]]) -> None:
 "#,
 );
 
-// TODO(stroxler): Give `MapIntTuples` a result domain so one deferred map can be the source of
-// another. For now its result may contain arbitrary types and cannot satisfy `IntTuples`.
 testcase!(
-    test_deferred_map_is_not_an_int_tuples_source,
+    test_deferred_int_tuple_map_composes_as_an_int_tuples_source,
     shape_extensions_env(),
     r#"
-from shape_extensions import IntTuple, IntTuples, MapIntTuples
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, MapIntTuples, type_shape_dsl_function
+from typing import Literal, assert_type
 
 class Box[Shape]: ...
 
-def nested[Shapes: IntTuples]() -> MapIntTuples[
+@type_shape_dsl_function
+def append_one(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[0], 1))
+
+def nested[Shapes: IntTuples](shapes: Shapes) -> MapIntTuples[
     lambda S: Box[S],
-    MapIntTuples[lambda S: S, Shapes],  # E: Source argument to `MapIntTuples` must be an `IntTuples` value
+    MapIntTuples[lambda S: S, Shapes],
 ]: ...
+
+def nested_dsl[Shapes: IntTuples](shapes: Shapes) -> MapIntTuples[
+    lambda S: Box[S],
+    MapIntTuples[lambda S: append_one(S), Shapes],
+]: ...
+
+def nested_structural[Shapes: IntTuples](shapes: Shapes) -> MapIntTuples[
+    lambda S: Box[S],
+    MapIntTuples[lambda S: tuple[Literal[7]], Shapes],
+]: ...
+
+def check(shapes: tuple[IntTuple[2], IntTuple[3, 4]]) -> None:
+    assert_type(nested(shapes), tuple[Box[IntTuple[2]], Box[IntTuple[3, 4]]])
+    assert_type(nested_dsl(shapes), tuple[Box[IntTuple[2, 1]], Box[IntTuple[3, 1]]])
+    assert_type(nested_structural(shapes), tuple[Box[IntTuple[7]], Box[IntTuple[7]]])
 "#,
 );
 
@@ -625,7 +644,40 @@ def check(
     middle: tuple[Box[IntTuple[2, 3]], ...],
 ) -> None:
     assert_type(collect(x, x), Box[IntTuple[2, 3]])
-    assert_type(collect(x, *middle, x), Box[IntTuple])
+    assert_type(collect(x, *middle, x), Box[IntTuple[2, 3]])
+"#,
+);
+
+testcase!(
+    test_structural_int_tuples_union_composes_with_shape_dsl,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+from typing import assert_type
+
+class Box[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def first(shapes: IntTuples) -> IntTuple:
+    return shapes[0]
+
+def project[
+    Shapes: tuple[IntTuple[2, 3]] | tuple[IntTuple[2, 3], IntTuple[2, 3]],
+](shapes: Shapes) -> Box[first(Shapes)]: ...
+
+def project_mixed[
+    Shapes: tuple[IntTuple[2]] | tuple[IntTuple[3, 4]],
+](shapes: Shapes) -> Box[first(Shapes)]: ...
+
+def check(
+    shapes: tuple[IntTuple[2, 3]] | tuple[IntTuple[2, 3], IntTuple[2, 3]],
+) -> None:
+    assert_type(project(shapes), Box[IntTuple[2, 3]])
+
+def check_mixed(
+    shapes: tuple[IntTuple[2]] | tuple[IntTuple[3, 4]],
+) -> None:
+    assert_type(project_mixed(shapes), Box[IntTuple])
 "#,
 );
 

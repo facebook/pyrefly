@@ -19,6 +19,7 @@ use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::shaped_array::IntTuple;
+use pyrefly_types::shaped_array::is_int_tuples_type;
 use pyrefly_types::shaped_array::tuple_carrier_to_shape;
 use pyrefly_types::simplify::unions;
 use pyrefly_types::stdlib::Stdlib;
@@ -59,15 +60,6 @@ fn shape_int_bound_solution(ty: &Type) -> Option<Type> {
 pub(crate) struct ShapeIntBoundSolution {
     pub(crate) answer: Type,
     pub(crate) precise_union: Option<Type>,
-}
-
-/// Whether this is the broad structural bound denoted by `shape_extensions.IntTuples`.
-pub(crate) fn is_broad_int_tuples_bound(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Tuple(Tuple::Unbounded(member))
-            if matches!(member.as_ref(), Type::IntTuple(shape) if shape.is_shapeless())
-    )
 }
 
 /// Whether `q` is a `TypeVar` whose bound represents one entire shape.
@@ -121,7 +113,8 @@ fn canonicalize_int_tuples_sequence(candidate: &Type, heap: &TypeHeap) -> Type {
     }
 }
 
-/// Normalize a candidate for a type variable bounded by `IntTuple` or broad `IntTuples`.
+/// Normalize a candidate for a type variable bounded by `IntTuple` or a structural `IntTuples`
+/// type.
 ///
 /// Under `IntTuples`, for example, `tuple[tuple[Literal[2]], tuple[Literal[3], Literal[4]]]`
 /// becomes `tuple[IntTuple[2], IntTuple[3, 4]]`. Bound checking remains responsible for rejecting
@@ -136,7 +129,7 @@ pub(crate) fn normalize_shape_tuple_bound_candidate(
     }
     match quantified.restriction() {
         Restriction::Bound(Type::IntTuple(_)) => Some(candidate.clone()),
-        Restriction::Bound(bound) if is_broad_int_tuples_bound(bound) => {
+        Restriction::Bound(bound) if is_int_tuples_type(bound) => {
             Some(canonicalize_int_tuples_sequence(candidate, heap))
         }
         _ => None,

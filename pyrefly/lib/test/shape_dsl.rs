@@ -12419,10 +12419,12 @@ class ShapeTuple[Shapes]: ...
 class Narrow[Shapes: tuple[IntTuple[2], ...]]: ...
 
 def capture[Shapes: IntTuples](shapes: Shapes) -> ShapeTuple[Shapes]: ...
+def capture_narrow[Shapes: tuple[IntTuple[2], ...]](shapes: Shapes) -> ShapeTuple[Shapes]: ...
 
 assert_type(capture(()), ShapeTuple[tuple[()]])
 assert_type(capture(((),)), ShapeTuple[tuple[IntTuple[()]]])
 assert_type(capture(((2,), (3, 4))), ShapeTuple[tuple[IntTuple[2], IntTuple[3, 4]]])
+assert_type(capture_narrow(((2,), (2,))), ShapeTuple[tuple[IntTuple[2], IntTuple[2]]])
 
 def unbounded(shapes: tuple[tuple[int, ...], ...]) -> None:
     assert_type(capture(shapes), ShapeTuple[tuple[IntTuple, ...]])
@@ -12448,6 +12450,29 @@ capture(((2,), ("bad",)))  # E: is not assignable to upper bound `tuple[IntTuple
 capture((2, 3))  # E: is not assignable to upper bound `tuple[IntTuple, ...]`
 
 narrow: Narrow[tuple[IntTuple[3], ...]]  # E: is not assignable to upper bound `tuple[IntTuple[2], ...]`
+"#,
+);
+
+// The evaluator currently lowers variadic `IntTuples` inputs to one homogeneous member type, so
+// it cannot retain a known prefix when the variadic middle has a different shape.
+testcase!(
+    bug = "IntTuples lowering loses fixed unpacked members",
+    test_type_shape_dsl_unpacked_int_tuples_lowering,
+    shape_dsl_base_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def first(shapes: IntTuples) -> IntTuple:
+    return shapes[0]
+
+def result[Shapes: IntTuples](shapes: Shapes) -> ShapeBox[first(Shapes)]: ...
+
+def check(middle: tuple[IntTuple[3], ...]) -> None:
+    assert_type(result(((2,), *middle, (4,))), ShapeBox[IntTuple])
 "#,
 );
 

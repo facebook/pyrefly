@@ -5679,14 +5679,73 @@ enum DslValue {
     DimensionTuple(Vec<Int>),
 }
 
-#[derive(Debug, Clone)]
 /// The evaluator's value for the `IntTuples` domain.
 ///
 /// For example, `dsl.IntTuples((IntTuple[2], IntTuple[3, 4]))` produces
 /// `tuple[IntTuple[2], IntTuple[3, 4]]`; a gradual value produces `tuple[IntTuple, ...]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum DslIntTuples {
     Fixed(Vec<IntTuple>),
     Unbounded(IntTuple),
+}
+
+impl DslIntTuples {
+    /// Lowers every structural `IntTuples` representation accepted by validation.
+    ///
+    /// When an unpacked tuple has a fixed middle, its prefix, middle, and suffix are flattened into
+    /// one fixed sequence. The evaluator represents an `IntTuples` value as either fixed or
+    /// unbounded with one homogeneous member type. An unpacked tuple with unknown cardinality
+    /// therefore loses its fixed prefix and suffix and retains only a common member shape, falling
+    /// back to shapeless members when the parts differ.
+    fn from_type(ty: &Type) -> Option<Self> {
+        let shape = |ty: &Type| IntTuple::from_shape_arg_or_tuple_carrier(ty);
+        match ty {
+            Type::Tuple(Tuple::Concrete(elements)) => elements
+                .iter()
+                .map(shape)
+                .collect::<Option<Vec<_>>>()
+                .map(Self::Fixed),
+            Type::Tuple(Tuple::Unbounded(element)) => shape(element).map(Self::Unbounded),
+            Type::Tuple(Tuple::Unpacked(unpacked)) => {
+                let (prefix, middle, suffix) = unpacked.parts();
+                let mut prefix = prefix.iter().map(shape).collect::<Option<Vec<_>>>()?;
+                let suffix = suffix.iter().map(shape).collect::<Option<Vec<_>>>()?;
+                match Self::from_type(middle)? {
+                    Self::Fixed(middle) => {
+                        prefix.extend(middle);
+                        prefix.extend(suffix);
+                        Some(Self::Fixed(prefix))
+                    }
+                    Self::Unbounded(middle) => {
+                        prefix.push(middle);
+                        prefix.extend(suffix);
+                        Some(Self::Unbounded(common_int_tuple_member(&prefix)))
+                    }
+                }
+            }
+            Type::Union(union) => {
+                let alternatives = union
+                    .members
+                    .iter()
+                    .map(Self::from_type)
+                    .collect::<Option<Vec<_>>>()?;
+                let first = alternatives.first()?;
+                if alternatives.iter().all(|alternative| alternative == first) {
+                    return Some(first.clone());
+                }
+                let members = alternatives
+                    .iter()
+                    .flat_map(|alternative| match alternative {
+                        Self::Fixed(shapes) => shapes.as_slice(),
+                        Self::Unbounded(shape) => std::slice::from_ref(shape),
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                Some(Self::Unbounded(common_int_tuple_member(&members)))
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -5804,9 +5863,7 @@ impl TypeLevelDslCall {
         match &self.function {
             TypeLevelDslFunction::Broadcast => Some(TypeShapeDslDomain::IntTuple),
             TypeLevelDslFunction::UserDefined(function) => Some(function.result_domain()),
-            // TODO(stroxler): Track the mapper's result domain so a deferred map whose mapper
-            // returns `IntTuple` can itself be used as an `IntTuples` source.
-            TypeLevelDslFunction::MapIntTuples(_) => None,
+            TypeLevelDslFunction::MapIntTuples(map) => map.result_domain(),
         }
     }
 
@@ -8158,22 +8215,9 @@ impl DslValue {
                 None => Self::Unknown,
             },
             TypeShapeDslDomain::IntTuple => Self::from_shape_type(ty),
-            TypeShapeDslDomain::IntTuples => match ty {
-                Type::Tuple(Tuple::Concrete(elements)) => elements
-                    .iter()
-                    .map(IntTuple::from_shape_arg_or_tuple_carrier)
-                    .collect::<Option<Vec<_>>>()
-                    .map_or(Self::Unknown, |shapes| {
-                        Self::IntTuples(DslIntTuples::Fixed(shapes))
-                    }),
-                Type::Tuple(Tuple::Unbounded(element)) => {
-                    IntTuple::from_shape_arg_or_tuple_carrier(element)
-                        .map_or(Self::Unknown, |shape| {
-                            Self::IntTuples(DslIntTuples::Unbounded(shape))
-                        })
-                }
-                _ => Self::Unknown,
-            },
+            TypeShapeDslDomain::IntTuples => {
+                DslIntTuples::from_type(ty).map_or(Self::Unknown, Self::IntTuples)
+            }
         }
     }
 
