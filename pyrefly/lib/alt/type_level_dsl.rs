@@ -173,21 +173,21 @@ struct TypeShapeDslArgumentContext<'a> {
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
-    /// Resolves helper calls and rebuilds metadata affected by their selected argument domains.
+    /// Resolves helper calls and their selected argument domains.
     ///
     /// Resolving callees through the ordinary function model gives imports and aliases normal
     /// name-resolution semantics while keeping the helper graph and evaluator entirely in the
     /// shape DSL representation.
-    fn resolve_and_finalize_type_shape_dsl_helpers(
+    fn resolve_type_shape_dsl_helpers(
         &self,
         func_id: &Arc<FuncDefId>,
-        definition: Arc<StructurallyValidatedTypeShapeDslFunction>,
+        definition: &StructurallyValidatedTypeShapeDslFunction,
         parameter_domains: &[TypeShapeDslInputDomain],
         result_domain: TypeShapeDslDomain,
         errors: &ErrorCollector,
     ) -> Option<(
-        Arc<StructurallyValidatedTypeShapeDslFunction>,
         Vec<(Arc<FuncDefId>, Arc<ResolvedTypeShapeDslFunction>)>,
+        Vec<Vec<TypeShapeDslInputDomain>>,
     )> {
         let mut helpers = Vec::new();
         let mut helper_argument_domains = Vec::new();
@@ -282,26 +282,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if !valid {
             return None;
         }
-        let definition = if deferred_integer_domains.is_empty() {
-            definition
-        } else {
-            match definition.finalize_helper_argument_domains(
-                |expr| self.resolve_type_shape_dsl_intrinsic(expr),
-                &helper_argument_domains,
-            ) {
-                Ok(definition) => Arc::new(definition),
-                Err(error) => {
-                    self.error(
-                        errors,
-                        error.range,
-                        ErrorKind::InvalidArgument,
-                        format!("@type_shape_dsl_function {}", error.message),
-                    );
-                    return None;
-                }
-            }
-        };
-        Some((definition, helpers))
+        Some((helpers, helper_argument_domains))
     }
 
     /// Validates resolved DSL annotations, emitting diagnostics and metadata only on success.
@@ -376,20 +357,46 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
         }
         if valid_parameters && let Some(result) = return_domain {
-            let (validated, helpers, valid_helpers) = match function_kind {
-                FunctionKind::Def(func_id) => {
-                    match self.resolve_and_finalize_type_shape_dsl_helpers(
-                        func_id,
-                        validated.clone(),
+            let validate_body =
+                |definition: &StructurallyValidatedTypeShapeDslFunction,
+                 helper_argument_domains: Option<&[Vec<TypeShapeDslInputDomain>]>| {
+                    match definition.validate_with_resolved_domains(
+                        |expr| self.resolve_type_shape_dsl_intrinsic(expr),
                         &parameter_domains,
-                        result,
-                        errors,
+                        helper_argument_domains,
                     ) {
-                        Some((validated, helpers)) => (validated, helpers, true),
-                        None => (validated, Vec::new(), false),
+                        Ok(validated) => Some(Arc::new(validated)),
+                        Err(error) => {
+                            self.error(
+                                errors,
+                                error.range,
+                                ErrorKind::InvalidArgument,
+                                format!("@type_shape_dsl_function {}", error.message),
+                            );
+                            None
+                        }
                     }
-                }
-                _ => (validated, Vec::new(), true),
+                };
+            let validated = validate_body(&validated, None)?;
+            let (helpers, valid_helpers, helper_argument_domains) = match function_kind {
+                FunctionKind::Def(func_id) => match self.resolve_type_shape_dsl_helpers(
+                    func_id,
+                    &validated,
+                    &parameter_domains,
+                    result,
+                    errors,
+                ) {
+                    Some((helpers, helper_argument_domains)) => {
+                        (helpers, true, helper_argument_domains)
+                    }
+                    None => (Vec::new(), false, Vec::new()),
+                },
+                _ => (Vec::new(), true, Vec::new()),
+            };
+            let validated = if valid_helpers && !helper_argument_domains.is_empty() {
+                validate_body(&validated, Some(&helper_argument_domains))?
+            } else {
+                validated
             };
             let mut valid_body = valid_helpers;
             for condition in validated.conditions() {

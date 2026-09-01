@@ -8428,7 +8428,7 @@ def incompatible_branch_alias(left: Int, right: IntTuple, choose: int) -> IntTup
         result = left
     else:
         result = right
-    return result  # E: local alias return domain must match the declared result  # E: Returned type
+    return result  # E: contributing parameters to use the `IntTuple` domain  # E: Returned type
 "#,
 );
 
@@ -12578,5 +12578,55 @@ def condition_generator(shapes: IntTuples) -> IntTuple:
     if any(len(shape) == 0 for shape in shapes):  # E: generator source must be an `IntTuple` or Flag sequence
         return dsl.IntTuple(())
     return dsl.IntTuple(())
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_body_validation_uses_resolved_shape_domains,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, IntTuples, type_shape_dsl_function
+
+@type_shape_dsl_function
+def rank(shape: IntTuple) -> Int:
+    return len(shape)
+
+@type_shape_dsl_function
+def concrete_dimension(value: Int, fallback: Int) -> Int:
+    if dsl.is_concrete_int(value):
+        return value
+    return fallback
+
+@type_shape_dsl_function
+def invalid_concrete_shape(shape: IntTuple, fallback: IntTuple) -> IntTuple:
+    if dsl.is_concrete_int(shape):  # E: `is_concrete_int` requires an `Int` or `Int | None` value
+        return fallback
+    return shape
+
+@type_shape_dsl_function
+def unsupported_index(shapes: IntTuples) -> IntTuple:
+    selected = shapes[0]  # E: IntTuples subscripts are not supported
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def constructor_slice(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((1, 2))[1:]
+
+@type_shape_dsl_function
+def concat_slice(shape: IntTuple) -> IntTuple:
+    return dsl.concat(dsl.IntTuple((1,)), shape)[1:]
+
+@type_shape_dsl_function
+def choose(
+    left: IntTuples,
+    right: IntTuples,
+    choose_left: bool,
+) -> IntTuples:
+    if choose_left:
+        result = left
+    else:
+        result = right
+    return result
 "#,
 );
