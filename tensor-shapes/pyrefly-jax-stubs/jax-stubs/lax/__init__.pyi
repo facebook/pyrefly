@@ -9,6 +9,8 @@ from jax._array import Array
 from jax._shapes import lax_broadcast
 from shape_extensions import IntTuple
 
+from . import linalg as linalg
+
 type _Shape = IntTuple
 type _Scalar = int | float | complex
 

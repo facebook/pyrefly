@@ -143,3 +143,148 @@ def test_binary_rejects_incompatible_dimensions() -> None:
         raise AssertionError(
             "expected JAX to reject incompatible dimensions in lax.add"
         )
+
+
+def test_lax_linalg() -> None:
+    x = jnp.ones((2, 2))
+    x_batch = jnp.ones((4, 2, 2))
+    x_rec = jnp.ones((2, 3))
+    x_rec_batch = jnp.ones((4, 2, 3))
+
+    assert_shape(lax.linalg.cholesky(x), (2, 2))
+    assert_shape(lax.linalg.cholesky(x_batch), (4, 2, 2))
+
+    r = jnp.ones((2, 2))
+    w = jnp.ones(2)
+    assert_shape(lax.linalg.cholesky_update(r, w), (2, 2))
+
+    eig_out = lax.linalg.eig(x)
+    assert [e.shape for e in eig_out] == [(2,), (2, 2), (2, 2)]
+
+    eig_out_batch = lax.linalg.eig(x_batch)
+    assert [e.shape for e in eig_out_batch] == [(4, 2), (4, 2, 2), (4, 2, 2)]
+
+    v, eig_w = lax.linalg.eigh(x)
+    assert_shape(v, (2, 2))
+    assert_shape(eig_w, (2,))
+
+    v_batch, eig_w_batch = lax.linalg.eigh(x_batch)
+    assert_shape(v_batch, (4, 2, 2))
+    assert_shape(eig_w_batch, (4, 2))
+
+    h_mat, taus = lax.linalg.hessenberg(x)
+    assert_shape(h_mat, (2, 2))
+    assert_shape(taus, (1,))
+
+    a_house = jnp.ones((3, 2))
+    taus_house = jnp.ones(2)
+    assert_shape(lax.linalg.householder_product(a_house, taus_house), (3, 2))
+
+    lu_out, piv, perm = lax.linalg.lu(x_rec)
+    assert_shape(lu_out, (2, 3))
+    assert_shape(piv, (2,))
+    assert_shape(perm, (2,))
+
+    assert_shape(lax.linalg.lu_pivots_to_permutation(piv, 2), (2,))
+
+    c_mat = jnp.ones((3, 4))
+    assert_shape(lax.linalg.ormqr(a_house, taus_house, c_mat, left=True), (3, 4))
+
+    u_qdwh, h_qdwh, iters, conv = lax.linalg.qdwh(x)
+    assert_shape(u_qdwh, (2, 2))
+    assert_shape(h_qdwh, (2, 2))
+    assert_shape(iters, ())
+    assert_shape(conv, ())
+
+    q, r_qr = lax.linalg.qr(x_rec, full_matrices=True)
+    assert_shape(q, (2, 2))
+    assert_shape(r_qr, (2, 3))
+
+    q_red, r_red = lax.linalg.qr(x_rec, full_matrices=False)
+    assert_shape(q_red, (2, 2))
+    assert_shape(r_red, (2, 3))
+
+    t_schur, z_schur = lax.linalg.schur(x)
+    assert_shape(t_schur, (2, 2))
+    assert_shape(z_schur, (2, 2))
+
+    u_svd, s_svd, vt_svd = lax.linalg.svd(x_rec, full_matrices=True)
+    assert_shape(u_svd, (2, 2))
+    assert_shape(s_svd, (2,))
+    assert_shape(vt_svd, (3, 3))
+
+    u_svd_r, s_svd_r, vt_svd_r = lax.linalg.svd(x_rec, full_matrices=False)
+    assert_shape(u_svd_r, (2, 2))
+    assert_shape(s_svd_r, (2,))
+    assert_shape(vt_svd_r, (2, 3))
+
+    assert_shape(lax.linalg.svd(x_rec, compute_uv=False), (2,))
+
+    a_sym = jnp.ones((2, 3))
+    c_sym = jnp.ones((2, 2))
+    assert_shape(lax.linalg.symmetric_product(a_sym, c_sym), (2, 2))
+    assert_shape(
+        lax.linalg.symmetric_product(jnp.ones((4, 2, 3)), jnp.ones((4, 2, 2))),
+        (4, 2, 2),
+    )
+
+    b_left = jnp.ones((2, 3))
+    assert_shape(lax.linalg.triangular_solve(r, b_left, left_side=True), (2, 3))
+    b_right = jnp.ones((3, 2))
+    assert_shape(lax.linalg.triangular_solve(r, b_right, left_side=False), (3, 2))
+
+    tri_a, tri_d, tri_e, tri_tau = lax.linalg.tridiagonal(x)
+    assert_shape(tri_a, (2, 2))
+    assert_shape(tri_d, (2,))
+    assert_shape(tri_e, (1,))
+    assert_shape(tri_tau, (1,))
+
+    dl = jnp.ones(2)
+    d = jnp.ones(2)
+    du = jnp.ones(2)
+    b_tri = jnp.ones((2, 3))
+    assert_shape(lax.linalg.tridiagonal_solve(dl, d, du, b_tri), (2, 3))
+    assert_shape(
+        lax.linalg.tridiagonal_solve(
+            jnp.ones((4, 2)), jnp.ones((4, 2)), jnp.ones((4, 2)), jnp.ones((4, 2, 3))
+        ),
+        (4, 2, 3),
+    )
+
+
+def test_lax_linalg_shape_errors() -> None:
+    assert_shape(
+        lax.linalg.symmetric_product(jnp.ones((2, 3)), jnp.ones((2, 2))), (2, 2)
+    )
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: leading core dimensions of a_matrix and c_matrix must match
+        lax.linalg.symmetric_product(jnp.ones((2, 3)), jnp.ones((3, 3)))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: c_matrix must be square
+        lax.linalg.symmetric_product(jnp.ones((2, 3)), jnp.ones((2, 4)))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: incompatible shapes for triangular_solve
+        lax.linalg.triangular_solve(jnp.ones((2, 2)), jnp.ones((3, 3)), left_side=True)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError")
+
+    try:
+        # E: Cannot evaluate type-level shape DSL call: r_matrix must be square
+        lax.linalg.cholesky_update(jnp.ones((2, 3)), jnp.ones(2))
+    except (TypeError, ValueError):
+        pass
+    else:
+        raise AssertionError("expected error")
