@@ -2697,3 +2697,69 @@ fn test_dunder_all_module_entry_change_invalidates() {
     // main should be recomputed because the wildcard set changed
     i.check_ignoring_expectations(&["foo"], &["foo", "main"]);
 }
+
+#[test]
+fn test_type_shape_dsl_parameter_domain_edit_revalidates_indexed_locals() {
+    let mut i = Incremental::with_files(vec![
+        "consumer".to_owned(),
+        "helpers".to_owned(),
+        "main".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+class IntTuple: pass
+class IntTuples: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+
+@type_shape_dsl_function
+def first(shapes: IntTuples) -> IntTuple:
+    selected = shapes[0]
+    return selected
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from helpers import first
+from shape_extensions import IntTuple
+
+class ShapeBox[Shape: IntTuple]: ...
+def result() -> ShapeBox[first(tuple[IntTuple[2, 3], IntTuple[4]])]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import ShapeBox, result
+from shape_extensions import IntTuple
+
+expected: ShapeBox[IntTuple[2, 3]] = result()
+"#,
+    );
+    let initial = i.unchecked(&["consumer", "helpers"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def first(shapes: IntTuple) -> IntTuple:
+    selected = shapes[0]
+    return selected  # E: local return domain must match  # E: Returned type `Int[int]` is not assignable
+"#,
+    );
+    let changed = i.unchecked(&["consumer", "helpers"]);
+    changed.check_recompute(&["consumer", "helpers", "main"]);
+    changed.check_errors();
+}

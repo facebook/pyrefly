@@ -30,6 +30,7 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprGenerator;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprSlice;
 use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Number;
 use ruff_python_ast::Operator;
@@ -1200,6 +1201,9 @@ pub enum TypeShapeDslExpressionKind {
         shape: usize,
         parameter_origins: Option<Box<[usize]>>,
     },
+    IntTuplesIndex {
+        shapes: usize,
+    },
     DimensionTuple,
     IntTupleConstructor,
     IntTuplesConstructor,
@@ -1826,6 +1830,33 @@ enum DslLengthOperand<'a> {
     FlagSequence,
 }
 
+/// The source domain and result domain of a validated DSL subscript expression.
+enum DslSubscriptKind<'a> {
+    /// An unresolved integer-like source whose domain is selected by later uses.
+    UnresolvedIndex {
+        source: usize,
+        parameter_origins: Box<[usize]>,
+        index: &'a Expr,
+    },
+    /// Indexing an `IntTuple` produces an `Int`.
+    IntTupleIndex { source: usize, index: &'a Expr },
+    /// Slicing an `IntTuple` produces an `IntTuple`.
+    IntTupleSlice {
+        source: DslIntTupleSliceSource<'a>,
+        slice: &'a ExprSlice,
+    },
+    /// Indexing `IntTuples` produces an `IntTuple`.
+    IntTuplesIndex { source: usize, index: &'a Expr },
+}
+
+/// An `IntTuple` slice source that is either stored in a local slot or evaluated directly.
+enum DslIntTupleSliceSource<'a> {
+    /// A previously validated local slot.
+    Slot(usize),
+    /// An expression whose value is not stored in a local slot.
+    Expression(&'a Expr),
+}
+
 #[derive(Clone)]
 /// Validation-time state for an integer-valued local that may be either a symbolic `Int`
 /// dimension or a Flag integer. Validation retains its expression until a later use selects the
@@ -2437,8 +2468,17 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 TypeShapeDslExpressionKind::DimensionArithmetic(op)
             }
             Expr::Subscript(subscript) => {
-                self.reject_int_tuples_subscript(subscript, flow)?;
-                let shape = self.slot(&subscript.value, flow)?;
+                let shape = match self.classify_subscript(subscript, flow)? {
+                    DslSubscriptKind::UnresolvedIndex { source, .. }
+                    | DslSubscriptKind::IntTupleIndex { source, .. } => source,
+                    DslSubscriptKind::IntTupleSlice { .. }
+                    | DslSubscriptKind::IntTuplesIndex { .. } => {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: subscript.value.range(),
+                            message: "indexed dimension source must be an `IntTuple` value",
+                        });
+                    }
+                };
                 let kind = &flow.kinds[shape];
                 let parameter_origins = if let Some(parameters) =
                     kind.unnarrowed_parameter_origins()
@@ -3344,23 +3384,99 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         }
     }
 
-    fn reject_int_tuples_subscript(
+    fn classify_subscript<'b>(
         &self,
-        subscript: &ExprSubscript,
+        subscript: &'b ExprSubscript,
         flow: &DslValidationFlow,
-    ) -> Result<(), TypeShapeDslDefinitionError> {
+    ) -> Result<DslSubscriptKind<'b>, TypeShapeDslDefinitionError> {
+        let slice = match subscript.slice.as_ref() {
+            Expr::Slice(slice) => Some(slice),
+            _ => None,
+        };
         let Expr::Name(_) = subscript.value.as_ref() else {
-            return Ok(());
+            return slice.map_or_else(
+                || {
+                    Err(TypeShapeDslDefinitionError {
+                        range: subscript.value.range(),
+                        message: "value must be a bare parameter or local name",
+                    })
+                },
+                |slice| {
+                    Ok(DslSubscriptKind::IntTupleSlice {
+                        source: DslIntTupleSliceSource::Expression(subscript.value.as_ref()),
+                        slice,
+                    })
+                },
+            );
         };
         let source = self.slot(&subscript.value, flow)?;
-        if matches!(flow.kinds[source], DslStaticKind::IntTuples { .. }) {
-            Err(TypeShapeDslDefinitionError {
+        match (&flow.kinds[source], slice) {
+            (DslStaticKind::IntTuples { .. }, Some(_)) => Err(TypeShapeDslDefinitionError {
                 range: subscript.range,
-                message: "IntTuples subscripts are not supported",
-            })
-        } else {
-            Ok(())
+                message: "`IntTuples` does not support slicing",
+            }),
+            (DslStaticKind::IntTuples { .. }, None) => Ok(DslSubscriptKind::IntTuplesIndex {
+                source,
+                index: &subscript.slice,
+            }),
+            (DslStaticKind::UnknownParameters(parameter_origins), None) => {
+                Ok(DslSubscriptKind::UnresolvedIndex {
+                    source,
+                    parameter_origins: parameter_origins.clone(),
+                    index: &subscript.slice,
+                })
+            }
+            (_, Some(slice)) => Ok(DslSubscriptKind::IntTupleSlice {
+                source: DslIntTupleSliceSource::Slot(source),
+                slice,
+            }),
+            (_, None) => Ok(DslSubscriptKind::IntTupleIndex {
+                source,
+                index: &subscript.slice,
+            }),
         }
+    }
+
+    fn validate_int_tuple_slot(
+        &mut self,
+        expression: &Expr,
+        slot: usize,
+        flow: &DslValidationFlow,
+    ) -> Result<Option<Box<[usize]>>, TypeShapeDslDefinitionError> {
+        let kind = &flow.kinds[slot];
+        let parameter_origins = if let Some(parameters) = kind.unnarrowed_parameter_origins() {
+            Some(parameters.into())
+        } else {
+            match kind {
+                DslStaticKind::IntTuple { parameter_origins } => parameter_origins.clone(),
+                DslStaticKind::GeneratorElement {
+                    source_parameter_uses: Some(source_parameter_uses),
+                } => {
+                    self.expressions.push(TypeShapeDslExpression {
+                        range: expression.range(),
+                        kind: TypeShapeDslExpressionKind::GeneratorElementAsIntTuple {
+                            slot,
+                            source_parameter_uses: source_parameter_uses.clone(),
+                        },
+                    });
+                    return Ok(None);
+                }
+                _ => {
+                    return Err(TypeShapeDslDefinitionError {
+                        range: expression.range(),
+                        message: "shape expression names must be `IntTuple` parameters or shape locals",
+                    });
+                }
+            }
+        };
+        self.expressions.push(TypeShapeDslExpression {
+            range: expression.range(),
+            kind: TypeShapeDslExpressionKind::IntTupleSlot {
+                slot,
+                parameter_origins: parameter_origins.clone(),
+            },
+        });
+        Ok(parameter_origins)
     }
 
     fn validate_int_tuple_expression(
@@ -3371,71 +3487,52 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         let parameter_origins = match expression {
             Expr::Name(_) => {
                 let slot = self.slot(expression, flow)?;
-                let kind = &flow.kinds[slot];
-                let parameter_origins = if let Some(parameters) =
-                    kind.unnarrowed_parameter_origins()
-                {
-                    Some(parameters.into())
-                } else {
-                    match kind {
-                        DslStaticKind::IntTuple { parameter_origins } => parameter_origins.clone(),
-                        DslStaticKind::GeneratorElement {
-                            source_parameter_uses: Some(source_parameter_uses),
-                        } => {
-                            self.expressions.push(TypeShapeDslExpression {
-                                range: expression.range(),
-                                kind: TypeShapeDslExpressionKind::GeneratorElementAsIntTuple {
-                                    slot,
-                                    source_parameter_uses: source_parameter_uses.clone(),
-                                },
-                            });
-                            return Ok(None);
-                        }
-                        _ => {
-                            return Err(TypeShapeDslDefinitionError {
-                                range: expression.range(),
-                                message: "shape expression names must be `IntTuple` parameters or shape locals",
-                            });
-                        }
-                    }
-                };
-                self.expressions.push(TypeShapeDslExpression {
-                    range: expression.range(),
-                    kind: TypeShapeDslExpressionKind::IntTupleSlot {
-                        slot,
-                        parameter_origins: parameter_origins.clone(),
-                    },
-                });
-                parameter_origins
+                self.validate_int_tuple_slot(expression, slot, flow)?
             }
-            Expr::Subscript(subscript) => {
-                self.reject_int_tuples_subscript(subscript, flow)?;
-                let parameter_origins =
-                    self.validate_int_tuple_expression(&subscript.value, flow)?;
-                let Expr::Slice(slice) = subscript.slice.as_ref() else {
+            Expr::Subscript(subscript) => match self.classify_subscript(subscript, flow)? {
+                DslSubscriptKind::IntTuplesIndex { source, index } => {
+                    self.validate_flag_int(index, flow)?;
+                    self.expressions.push(TypeShapeDslExpression {
+                        range: expression.range(),
+                        kind: TypeShapeDslExpressionKind::IntTuplesIndex { shapes: source },
+                    });
+                    return Ok(None);
+                }
+                DslSubscriptKind::IntTupleSlice { source, slice } => {
+                    let parameter_origins = match source {
+                        DslIntTupleSliceSource::Slot(source) => {
+                            self.validate_int_tuple_slot(&subscript.value, source, flow)?
+                        }
+                        DslIntTupleSliceSource::Expression(source) => {
+                            self.validate_int_tuple_expression(source, flow)?
+                        }
+                    };
+                    if slice.step.is_some() {
+                        return Err(TypeShapeDslDefinitionError {
+                            range: slice.range,
+                            message: "IntTuple slices do not support steps",
+                        });
+                    }
+                    if let Some(lower) = slice.lower.as_deref() {
+                        self.validate_flag_int(lower, flow)?;
+                    }
+                    if let Some(upper) = slice.upper.as_deref() {
+                        self.validate_flag_int(upper, flow)?;
+                    }
+                    self.expressions.push(TypeShapeDslExpression {
+                        range: expression.range(),
+                        kind: TypeShapeDslExpressionKind::IntTupleSlice,
+                    });
+                    return Ok(parameter_origins);
+                }
+                DslSubscriptKind::UnresolvedIndex { index, .. }
+                | DslSubscriptKind::IntTupleIndex { index, .. } => {
                     return Err(TypeShapeDslDefinitionError {
-                        range: subscript.slice.range(),
+                        range: index.range(),
                         message: "IntTuple shape expression subscripts must use slice syntax",
                     });
-                };
-                if slice.step.is_some() {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: slice.range,
-                        message: "IntTuple slices do not support steps",
-                    });
                 }
-                if let Some(lower) = slice.lower.as_deref() {
-                    self.validate_flag_int(lower, flow)?;
-                }
-                if let Some(upper) = slice.upper.as_deref() {
-                    self.validate_flag_int(upper, flow)?;
-                }
-                self.expressions.push(TypeShapeDslExpression {
-                    range: expression.range(),
-                    kind: TypeShapeDslExpressionKind::IntTupleSlice,
-                });
-                parameter_origins
-            }
+            },
             Expr::Call(call)
                 if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::IntTuple) =>
             {
@@ -3556,16 +3653,25 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     })
                 }
             }
-            Expr::Subscript(_) => {
-                if matches!(expression, Expr::Subscript(subscript) if matches!(subscript.slice.as_ref(), Expr::Slice(_)))
-                {
+            Expr::Subscript(subscript) => match self.classify_subscript(subscript, flow)? {
+                DslSubscriptKind::UnresolvedIndex {
+                    parameter_origins,
+                    index,
+                    ..
+                } => {
+                    self.validate_flag_int(index, flow)?;
+                    Ok(DslStaticKind::UnknownParameters(parameter_origins))
+                }
+                DslSubscriptKind::IntTupleSlice { .. }
+                | DslSubscriptKind::IntTuplesIndex { .. } => {
                     let parameter_origins = self.validate_int_tuple_expression(expression, flow)?;
                     Ok(DslStaticKind::IntTuple { parameter_origins })
-                } else {
+                }
+                DslSubscriptKind::IntTupleIndex { .. } => {
                     self.validate_dimension(expression, flow)?;
                     Ok(DslStaticKind::Dimension)
                 }
-            }
+            },
             Expr::Call(call)
                 if matches!(
                     self.intrinsic(&call.func),
@@ -3799,21 +3905,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             Expr::Name(name) => self.slots.get(&name.id).is_some_and(|slot| {
                 matches!(flow.kinds.get(*slot), Some(DslStaticKind::Dimension))
             }),
-            Expr::Subscript(subscript) if !matches!(subscript.slice.as_ref(), Expr::Slice(_)) => {
-                let Expr::Name(name) = &*subscript.value else {
-                    return false;
-                };
-                self.slots.get(&name.id).is_some_and(|slot| {
-                    matches!(
-                        flow.kinds.get(*slot),
-                        Some(
-                            DslStaticKind::UnknownParameters(_)
-                                | DslStaticKind::IntTuple { .. }
-                                | DslStaticKind::IntTuples { .. }
-                        )
-                    )
-                })
-            }
+            Expr::Subscript(subscript) => matches!(
+                self.classify_subscript(subscript, flow),
+                Ok(DslSubscriptKind::UnresolvedIndex { .. }
+                    | DslSubscriptKind::IntTupleIndex { .. })
+            ),
             Expr::BinOp(binop) => {
                 self.is_dimension_expression(&binop.left, flow)
                     || self.is_dimension_expression(&binop.right, flow)
@@ -4784,11 +4880,20 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     });
                 }
             },
-            Some(returned @ Expr::Subscript(subscript))
-                if matches!(subscript.slice.as_ref(), Expr::Slice(_)) =>
-            {
-                self.validate_int_tuple_expression(returned, flow)?;
-                TypeShapeDslReturnKind::Expression(TypeShapeDslDomain::IntTuple)
+            Some(returned @ Expr::Subscript(subscript)) => {
+                let domain = match self.classify_subscript(subscript, flow)? {
+                    DslSubscriptKind::IntTupleSlice { .. }
+                    | DslSubscriptKind::IntTuplesIndex { .. } => {
+                        self.validate_int_tuple_expression(returned, flow)?;
+                        TypeShapeDslDomain::IntTuple
+                    }
+                    DslSubscriptKind::UnresolvedIndex { .. }
+                    | DslSubscriptKind::IntTupleIndex { .. } => {
+                        self.validate_dimension(returned, flow)?;
+                        TypeShapeDslDomain::Int
+                    }
+                };
+                TypeShapeDslReturnKind::Expression(domain)
             }
             Some(Expr::BinOp(_)) => {
                 self.validate_dimension(
@@ -6178,6 +6283,57 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     }
                 }
             }
+            TypeShapeDslExpressionKind::IntTuplesIndex { shapes } => {
+                let Expr::Subscript(subscript) = expression else {
+                    unreachable!("validated IntTuples index expression is a subscript")
+                };
+                let index = match integer_literal(&subscript.slice) {
+                    IntegerLiteral::Unrepresentable { negative } => {
+                        if negative {
+                            i64::MIN
+                        } else {
+                            i64::MAX
+                        }
+                    }
+                    IntegerLiteral::NotLiteral | IntegerLiteral::Value(_) => {
+                        match self.evaluate_expression(&subscript.slice, environment, budget) {
+                            DslOutcome::Value(DslValue::FlagInt(index)) => index,
+                            DslOutcome::Value(DslValue::Unknown | DslValue::GradualInt) => {
+                                return DslOutcome::Value(DslValue::Unknown);
+                            }
+                            DslOutcome::ExplicitGradual => {
+                                unreachable!(
+                                    "validated Flag integer index cannot be explicitly gradual"
+                                )
+                            }
+                            invalid @ DslOutcome::Invalid(_) => return invalid,
+                            DslOutcome::Value(_) => {
+                                unreachable!(
+                                    "validated IntTuples index evaluates to a Flag integer"
+                                )
+                            }
+                        }
+                    }
+                };
+                match environment.value(shapes) {
+                    DslValue::IntTuples(DslIntTuples::Fixed(shapes)) => {
+                        let length = shapes.len() as i128;
+                        let index = i128::from(index);
+                        let index = if index < 0 { index + length } else { index };
+                        if index < 0 || index >= length {
+                            return DslOutcome::Invalid(ShapeError::ShapeComputation {
+                                message: "`IntTuples` index out of bounds".to_owned(),
+                            });
+                        }
+                        DslOutcome::Value(DslValue::Shape(shapes[index as usize].clone()))
+                    }
+                    DslValue::IntTuples(DslIntTuples::Unbounded(shape)) => {
+                        DslOutcome::Value(DslValue::Shape(shape.clone()))
+                    }
+                    DslValue::Unknown => DslOutcome::Value(DslValue::Unknown),
+                    _ => unreachable!("validated IntTuples index operand is an IntTuples value"),
+                }
+            }
             TypeShapeDslExpressionKind::DimensionTuple => {
                 let Expr::Tuple(tuple) = expression else {
                     unreachable!("validated dimension tuple expression is a tuple")
@@ -6282,18 +6438,25 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 }
             }
             TypeShapeDslExpressionKind::IntTupleLength { shape, domain, .. } => {
-                let shape = match environment.value(shape) {
-                    DslValue::Shape(shape) => shape,
+                let length = match environment.value(shape) {
+                    DslValue::Shape(shape) => match shape.view() {
+                        IntTupleView::Concrete(shape) => Some(shape.len()),
+                        IntTupleView::Unpacked { .. } | IntTupleView::Gradual => None,
+                    },
+                    DslValue::IntTuples(DslIntTuples::Fixed(shapes)) => Some(shapes.len()),
+                    DslValue::IntTuples(DslIntTuples::Unbounded(_)) => None,
                     DslValue::Unknown => return DslOutcome::Value(DslValue::Unknown),
                     _ => {
-                        unreachable!("validated IntTuple length parameter evaluates to a shape")
+                        unreachable!(
+                            "validated length parameter evaluates to an IntTuple or IntTuples value"
+                        )
                     }
                 };
-                let IntTupleView::Concrete(shape) = shape.view() else {
+                let Some(length) = length else {
                     return DslOutcome::Value(DslValue::Unknown);
                 };
-                let length = i64::try_from(shape.len())
-                    .expect("concrete IntTuple length must fit in an i64");
+                let length = i64::try_from(length)
+                    .expect("concrete IntTuple or IntTuples length must fit in an i64");
                 DslOutcome::Value(match domain {
                     DslIntegerDomain::Flag => DslValue::FlagInt(length),
                     DslIntegerDomain::Dimension => DslValue::Dimension(Int::Literal(length)),
@@ -7155,10 +7318,18 @@ impl StructurallyValidatedTypeShapeDslFunction {
                         Some(_) => DslCondition::False,
                         None => DslCondition::Unknown,
                     },
+                    DslValue::IntTuples(DslIntTuples::Fixed(shapes)) => {
+                        if i64::try_from(shapes.len()).ok() == Some(literal) {
+                            DslCondition::True
+                        } else {
+                            DslCondition::False
+                        }
+                    }
+                    DslValue::IntTuples(DslIntTuples::Unbounded(_)) => DslCondition::Unknown,
                     DslValue::Unknown => DslCondition::Unknown,
                     _ => {
                         unreachable!(
-                            "validated length equality evaluates an IntTuple or Flag sequence"
+                            "validated length equality evaluates an IntTuple, IntTuples, or Flag sequence"
                         )
                     }
                 }

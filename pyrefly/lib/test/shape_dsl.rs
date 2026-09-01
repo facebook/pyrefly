@@ -9659,7 +9659,7 @@ def wrong_index_domain(dim: Int) -> IntTuple:
 
 @type_shape_dsl_function
 def wrong_len_domain(dim: Int) -> IntTuple:
-    if len(dim) == 1:  # E: len and indexing require an `IntTuple` parameter  # E: not assignable
+    if len(dim) == 1:  # E: `len` requires an `IntTuple` or `IntTuples` parameter  # E: not assignable
         return dsl.IntTuple((dim,))
     return dsl.IntTuple(())
 
@@ -11802,7 +11802,7 @@ def local_shape_is_not_int(shape: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def indexed_return(shape: IntTuple) -> Int:
-    return shape[0]  # E: return value must be a bare parameter name
+    return shape[0]
 
 @type_shape_dsl_function
 def step(shape: IntTuple) -> IntTuple:
@@ -12605,11 +12605,6 @@ def invalid_concrete_shape(shape: IntTuple, fallback: IntTuple) -> IntTuple:
     return shape
 
 @type_shape_dsl_function
-def unsupported_index(shapes: IntTuples) -> IntTuple:
-    selected = shapes[0]  # E: IntTuples subscripts are not supported
-    return dsl.IntTuple(())
-
-@type_shape_dsl_function
 def constructor_slice(shape: IntTuple) -> IntTuple:
     return dsl.IntTuple((1, 2))[1:]
 
@@ -12628,5 +12623,149 @@ def choose(
     else:
         result = right
     return result
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_int_tuples_indexed_locals,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, IntTuples, IntVar, MapIntTuples, type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+class DimensionBox[Dimension: Int]: ...
+
+@type_shape_dsl_function
+def identity(shape: IntTuple) -> IntTuple:
+    return shape
+
+@type_shape_dsl_function
+def first(shapes: IntTuples) -> IntTuple:
+    selected = shapes[0]
+    return selected
+
+@type_shape_dsl_function
+def first_direct(shapes: IntTuples) -> IntTuple:
+    return shapes[0]
+
+@type_shape_dsl_function
+def indexed(shapes: IntTuples, index: int) -> IntTuple:
+    return shapes[index]
+
+@type_shape_dsl_function
+def last(shapes: IntTuples) -> IntTuple:
+    return shapes[-1]
+
+@type_shape_dsl_function
+def first_rank(shapes: IntTuples) -> Int:
+    selected = shapes[0]
+    return len(selected)
+
+@type_shape_dsl_function
+def first_dimension(shapes: IntTuples) -> Int:
+    selected = shapes[0]
+    return selected[0]
+
+@type_shape_dsl_function
+def shape_count(shapes: IntTuples) -> Int:
+    return len(shapes)
+
+@type_shape_dsl_function
+def require_nonempty(shapes: IntTuples) -> IntTuple:
+    if len(shapes) == 0:
+        return dsl.Invalid("expected a non-empty IntTuples value")
+    return shapes[0]
+
+@type_shape_dsl_function
+def sum_first_dimensions(shapes: IntTuples) -> IntTuple:
+    first_shape = shapes[0]
+    return dsl.IntTuple(
+        (
+            dsl.sum(dsl.IntTuple((shape[0] for shape in shapes))),
+            first_shape[1],
+        )
+    )
+
+@type_shape_dsl_function
+def copy_first(shapes: IntTuples) -> IntTuple:
+    selected = shapes[0]
+    return dsl.IntTuple((dimension for dimension in selected))
+
+@type_shape_dsl_function
+def helper_first(shapes: IntTuples) -> IntTuple:
+    selected = shapes[0]
+    return identity(selected)
+
+@type_shape_dsl_function
+def choose(shapes: IntTuples, choose_first: bool) -> IntTuple:
+    if choose_first:
+        selected = shapes[0]
+    else:
+        selected = shapes[1]
+    return selected
+
+@type_shape_dsl_function
+def shape_first(shape: IntTuple) -> Int:
+    selected = shape[0]
+    return selected
+
+@type_shape_dsl_function
+def invalid_slice(shapes: IntTuples) -> IntTuples:
+    selected = shapes[1:]  # E: `IntTuples` does not support slicing
+    return dsl.IntTuples(())
+
+@type_shape_dsl_function
+def int_from_shapes(shapes: IntTuples) -> Int:
+    return shapes[0]  # E: returned expression requires a result in the `IntTuple` domain  # E: Returned type
+
+@type_shape_dsl_function
+def shape_from_dimension(shape: IntTuple) -> IntTuple:
+    return shape[0]  # E: returned expression requires a result in the `Int` domain  # E: Returned type
+
+def fixed_first() -> ShapeBox[first(tuple[IntTuple[2, 3], IntTuple[4]])]: ...
+def direct_first() -> ShapeBox[first_direct(tuple[IntTuple[2, 3], IntTuple[4]])]: ...
+def indexed_result() -> ShapeBox[indexed(tuple[IntTuple[2, 3], IntTuple[4]], 1)]: ...
+def last_result() -> ShapeBox[last(tuple[IntTuple[2, 3], IntTuple[4]])]: ...
+def fixed_rank() -> DimensionBox[first_rank(tuple[IntTuple[2, 3], IntTuple[4]])]: ...
+def fixed_dimension() -> DimensionBox[first_dimension(tuple[IntTuple[2, 3], IntTuple[4]])]: ...
+def fixed_copy() -> ShapeBox[copy_first(tuple[IntTuple[2, 3], IntTuple[4]])]: ...
+def helper_result() -> ShapeBox[helper_first(tuple[IntTuple[2, 3], IntTuple[4]])]: ...
+def branch_result() -> ShapeBox[choose(tuple[IntTuple[2, 3], IntTuple[4]], False)]: ...
+def unbounded_first() -> ShapeBox[first(tuple[IntTuple[2, 3], ...])]: ...
+def empty_first() -> ShapeBox[first(tuple[()])]: ...
+def negative_oob() -> ShapeBox[last(tuple[()])]: ...
+def parameter_index() -> DimensionBox[shape_first(IntTuple[5, 6])]: ...
+def fixed_count() -> DimensionBox[shape_count(tuple[IntTuple[2, 3], IntTuple[4]])]: ...
+def nonempty_first() -> ShapeBox[require_nonempty(tuple[IntTuple[2, 3]])]: ...
+def empty_required() -> ShapeBox[require_nonempty(tuple[()])]: ...
+
+def concatenate[Shapes: IntTuples](
+    values: MapIntTuples[lambda Shape: ShapeBox[Shape], Shapes],
+) -> ShapeBox[sum_first_dimensions(Shapes)]: ...
+
+def symbolic_composition[N: IntVar, M: IntVar](
+    left: ShapeBox[IntTuple[N, 3]],
+    right: ShapeBox[IntTuple[M, 3]],
+) -> None:
+    assert_type(concatenate((left, right)), ShapeBox[IntTuple[N + M, 3]])
+
+assert_type(fixed_first(), ShapeBox[IntTuple[2, 3]])
+assert_type(direct_first(), ShapeBox[IntTuple[2, 3]])
+assert_type(indexed_result(), ShapeBox[IntTuple[4]])
+assert_type(last_result(), ShapeBox[IntTuple[4]])
+assert_type(fixed_rank(), DimensionBox[Int[2]])
+assert_type(fixed_dimension(), DimensionBox[Int[2]])
+assert_type(fixed_copy(), ShapeBox[IntTuple[2, 3]])
+assert_type(helper_result(), ShapeBox[IntTuple[2, 3]])
+assert_type(branch_result(), ShapeBox[IntTuple[4]])
+assert_type(unbounded_first(), ShapeBox[IntTuple[2, 3]])
+assert_type(parameter_index(), DimensionBox[Int[5]])
+assert_type(fixed_count(), DimensionBox[Int[2]])
+assert_type(nonempty_first(), ShapeBox[IntTuple[2, 3]])
+empty_required()  # E: Cannot evaluate type-level shape DSL call: expected a non-empty IntTuples value
+empty_first()  # E: Cannot evaluate type-level shape DSL call: `IntTuples` index out of bounds
+negative_oob()  # E: Cannot evaluate type-level shape DSL call: `IntTuples` index out of bounds
 "#,
 );

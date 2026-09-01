@@ -568,8 +568,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ..
                     } => {
                         if shapes.iter().all(|shape| {
-                            parameter_domains[*shape]
-                                == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple)
+                            matches!(
+                                parameter_domains[*shape],
+                                TypeShapeDslInputDomain::Value(
+                                    TypeShapeDslDomain::IntTuple
+                                        | TypeShapeDslDomain::IntTuples
+                                )
+                            )
                         }) {
                             None
                         } else if shapes.iter().any(|shape| {
@@ -580,7 +585,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         }) {
                             Some("`@type_shape_dsl_function` `len` of a Flag value requires control-flow narrowing to a sequence")
                         } else {
-                            Some("`@type_shape_dsl_function` len and indexing require an `IntTuple` parameter")
+                            Some("`@type_shape_dsl_function` `len` requires an `IntTuple` or `IntTuples` parameter")
                         }
                     }
                     TypeShapeDslExpressionKind::IntTupleSlot {
@@ -684,6 +689,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslExpressionKind::DimensionSlot { .. }
                     | TypeShapeDslExpressionKind::IntegerSlot { .. }
                     | TypeShapeDslExpressionKind::IntTupleIndex { .. }
+                    | TypeShapeDslExpressionKind::IntTuplesIndex { .. }
                     | TypeShapeDslExpressionKind::IntTupleLength { .. }
                     | TypeShapeDslExpressionKind::GeneratorSourceSlot { .. }
                     | TypeShapeDslExpressionKind::GeneratorElementAsDimension { .. }
