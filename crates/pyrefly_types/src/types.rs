@@ -683,26 +683,13 @@ pub struct Forall<T> {
 
 impl Forall<Forallable> {
     pub fn apply_targs(self, targs: TArgs) -> Type {
-        match self.body {
-            Forallable::TypeAlias(TypeAliasData::Value(mut alias)) => {
-                alias.set_display_args(targs.as_slice().to_vec().into_boxed_slice());
-                targs
-                    .substitution()
-                    .substitute_into_mut(alias.as_type_mut());
-                Type::TypeAlias(Box::new(TypeAliasData::Value(alias)))
-            }
-            body => targs.substitute_into(body.as_type()),
-        }
+        targs.substitute_into(self.body.as_type())
     }
 }
 
 /// These are things that can have Forall around them, so often you see `Forall<Forallable>`
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "shape Flag constructor metadata adds one pointer; boxing every generic function would add indirection to the common path"
-)]
 pub enum Forallable {
     TypeAlias(TypeAliasData),
     Function(Function),

@@ -280,7 +280,10 @@ impl Type {
         let metadata = self
             .toplevel_func_metadata()
             .cloned()
-            .unwrap_or_else(|| FuncMetadata::new(FunctionKind::Overload, FuncFlags::default()));
+            .unwrap_or(FuncMetadata {
+                kind: FunctionKind::Overload,
+                flags: FuncFlags::default(),
+            });
         let signatures = reconstructed
             .iter()
             .cloned()

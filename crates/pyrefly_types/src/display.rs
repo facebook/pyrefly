@@ -32,7 +32,6 @@ use crate::callable::Required;
 use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
 use crate::data_frame::SchemaCompleteness;
-use crate::function::FuncMetadata;
 use crate::function::Function;
 use crate::function::FunctionKind;
 use crate::heap::TypeHeap;
@@ -865,18 +864,6 @@ impl<'a> TypeDisplayContext<'a> {
         self.fmt_helper_generic(&value_type, false, output)
     }
 
-    fn function_signature_for_display<'b>(
-        &self,
-        signature: &'b Callable,
-        metadata: &'b FuncMetadata,
-    ) -> &'b Callable {
-        if self.lsp_display_mode == LspDisplayMode::Hover {
-            metadata.display_signature.as_deref().unwrap_or(signature)
-        } else {
-            signature
-        }
-    }
-
     fn fmt_hover_type<O: TypeOutput>(
         &self,
         t: &Type,
@@ -1134,7 +1121,6 @@ impl<'a> TypeDisplayContext<'a> {
                     signature,
                     metadata,
                 } = &**func;
-                let signature = self.function_signature_for_display(signature, metadata);
                 // A singledispatch dispatcher is modeled as a callback protocol over the fallback
                 // signature, but should still reveal as `_SingleDispatchCallable[T]`.
                 if let FunctionKind::CallbackProtocol(cls) = &metadata.kind
@@ -1256,8 +1242,6 @@ impl<'a> TypeDisplayContext<'a> {
                                 metadata,
                             }) => {
                                 let func_name = metadata.kind.function_name();
-                                let signature =
-                                    self.function_signature_for_display(signature, metadata);
                                 output.write_str("def ")?;
                                 self.write_func_fqn(output, &func_name, &metadata.kind)?;
                                 // Strip the `self` parameter only in ProvideType mode;
@@ -1294,8 +1278,6 @@ impl<'a> TypeDisplayContext<'a> {
                                         metadata,
                                     },
                             }) => {
-                                let signature =
-                                    self.function_signature_for_display(signature, metadata);
                                 let func_name = metadata.kind.function_name();
                                 output.write_str("def ")?;
                                 self.write_func_fqn(output, &func_name, &metadata.kind)?;
@@ -1512,8 +1494,6 @@ impl<'a> TypeDisplayContext<'a> {
                         | LspDisplayMode::ProvideType
                             if is_toplevel =>
                         {
-                            let signature =
-                                self.function_signature_for_display(signature, metadata);
                             let func_name = metadata.kind.function_name();
                             output.write_str("def ")?;
                             self.write_func_fqn(output, &func_name, &metadata.kind)?;
@@ -1700,29 +1680,7 @@ impl<'a> TypeDisplayContext<'a> {
             Type::UntypedAlias(ta) if let TypeAliasData::Ref(r) = &**ta => {
                 self.fmt_helper_type_alias_ref(r, output)
             }
-            Type::UntypedAlias(ta) => {
-                let TypeAliasData::Value(alias) = &**ta else {
-                    unreachable!("type alias references are handled above")
-                };
-                if self.always_display_expanded_unions
-                    && let Type::Type(inner) = alias.as_type_ref()
-                    && matches!(&**inner, Type::Union(_))
-                {
-                    return self.fmt_helper_generic(inner, false, output);
-                }
-                output.write_str(alias.name.as_str())?;
-                if let Some(args) = alias.display_args() {
-                    output.write_str("[")?;
-                    for (index, arg) in args.iter().enumerate() {
-                        if index > 0 {
-                            output.write_str(", ")?;
-                        }
-                        self.fmt_helper_generic(arg, false, output)?;
-                    }
-                    output.write_str("]")?;
-                }
-                Ok(())
-            }
+            Type::UntypedAlias(ta) => output.write_str(ta.name().as_str()),
             Type::SuperInstance(s) => {
                 let (cls, obj) = &**s;
                 if self.always_display_builtins_module_name {
