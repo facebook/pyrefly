@@ -150,49 +150,6 @@ fn shaped_array_env_with_shaped_torch_and_jaxtyping() -> TestEnv {
     env
 }
 
-fn shaped_array_env_with_numpy() -> TestEnv {
-    let mut env = shaped_array_env();
-    env.add_with_path(
-        "numpy",
-        "numpy/__init__.pyi",
-        r#"
-from shape_extensions import uses_shape_dsl
-from shape_extensions import shaped_array
-from shape_extensions import IntTuple
-from shape_extensions.dsl import ShapedArray, shape_dsl_function
-from typing import Any
-
-type AnyShape = tuple[Any, ...]
-
-@shape_dsl_function
-def add_leading_axis_ir(x: ShapedArray) -> ShapedArray:
-    return ShapedArray(shape=[1] + x.shape)
-
-@shaped_array(shape="Shape")
-class ndarray[Shape: IntTuple, DType]:
-    shape: Shape
-    def copy(self) -> ndarray[Shape, DType]: ...
-    def item(self) -> DType: ...
-
-@uses_shape_dsl(add_leading_axis_ir)
-def add_leading_axis[Shape: IntTuple, DType](x: ndarray[Shape, DType]) -> ndarray[Shape, DType]: ...
-
-@shaped_array(shape="Shape")
-class tcarray[Shape: IntTuple = AnyShape, DType = int]:
-    shape: Shape
-    def dtype(self) -> DType: ...
-    @uses_shape_dsl(add_leading_axis_ir)
-    def add_leading_axis(self) -> tcarray[Shape, DType]: ...
-
-@uses_shape_dsl(add_leading_axis_ir)
-def tc_add_leading_axis[Shape: IntTuple, DType](x: tcarray[Shape, DType]) -> tcarray[Shape, DType]: ...
-
-def tc_identity[Shape: IntTuple, DType](x: tcarray[Shape, DType]) -> tcarray[Shape, DType]: ...
-"#,
-    );
-    env
-}
-
 fn shape_dsl_base_env() -> TestEnv {
     shaped_array_env()
 }
@@ -7331,9 +7288,113 @@ def named_variadic(x: Float[Array, "*batch channels"]) -> None:
 mod legacy {
     use super::*;
 
+    fn legacy_shape_dsl_env() -> TestEnv {
+        let mut env = TestEnv::new();
+        env.add_with_path(
+            "shape_extensions",
+            "shape_extensions/__init__.pyi",
+            r#"
+from typing import Callable
+
+class Int[T]: ...
+class IntVar: ...
+class IntTuple: ...
+class Elements: ...
+
+def shaped_array(*, shape: str) -> Callable[[type], type]: ...
+def uses_shape_dsl(
+    ir_fn: Callable,
+    *,
+    capture_init: list[str] | None = None,
+) -> Callable[[Callable], Callable]: ...
+def type_shape_dsl_function[F: Callable](fn: F) -> F: ...
+"#,
+        );
+        env.add_with_path(
+            "shape_extensions.dsl",
+            "shape_extensions/dsl.pyi",
+            r#"
+from typing import Any, Callable
+
+class symint:
+    def __mul__(self, other: symint) -> symint: ...
+
+class ShapedArray:
+    shape: list[Any]
+    def __init__(self, *, shape: list[Any]) -> None: ...
+
+class Error(Exception): ...
+Unknown: Any
+
+def shape_dsl_function(fn: Callable) -> Callable: ...
+def prod(xs: list[int]) -> int: ...
+def sum(xs: list[int]) -> int: ...
+def parse_einsum_equation(spec: str) -> list[list[list[int]]]: ...
+"#,
+        );
+        env
+    }
+
+    fn legacy_shape_dsl_tensor_env() -> TestEnv {
+        let mut env = legacy_shape_dsl_env();
+        env.add_with_path(
+            "torch",
+            "torch.pyi",
+            r#"
+from shape_extensions import IntTuple, shaped_array
+
+@shaped_array(shape="Shape")
+class Tensor[Shape: IntTuple]:
+    shape: Shape
+"#,
+        );
+        env
+    }
+
+    fn legacy_shape_dsl_numpy_env() -> TestEnv {
+        let mut env = legacy_shape_dsl_env();
+        env.add_with_path(
+            "numpy",
+            "numpy/__init__.pyi",
+            r#"
+from shape_extensions import IntTuple, shaped_array, uses_shape_dsl
+from shape_extensions.dsl import ShapedArray, shape_dsl_function
+from typing import Any
+
+type AnyShape = tuple[Any, ...]
+
+@shape_dsl_function
+def add_leading_axis_ir(x: ShapedArray) -> ShapedArray:
+    return ShapedArray(shape=[1] + x.shape)
+
+@shaped_array(shape="Shape")
+class ndarray[Shape: IntTuple, DType]:
+    shape: Shape
+    def copy(self) -> ndarray[Shape, DType]: ...
+    def item(self) -> DType: ...
+
+@uses_shape_dsl(add_leading_axis_ir)
+def add_leading_axis[Shape: IntTuple, DType](x: ndarray[Shape, DType]) -> ndarray[Shape, DType]: ...
+
+@shaped_array(shape="Shape")
+class tcarray[Shape: IntTuple = AnyShape, DType = int]:
+    shape: Shape
+    def dtype(self) -> DType: ...
+    @uses_shape_dsl(add_leading_axis_ir)
+    def add_leading_axis(self) -> tcarray[Shape, DType]: ...
+
+@uses_shape_dsl(add_leading_axis_ir)
+def tc_add_leading_axis[Shape: IntTuple, DType](x: tcarray[Shape, DType]) -> tcarray[Shape, DType]: ...
+
+def tc_identity[Shape: IntTuple, DType](x: tcarray[Shape, DType]) -> tcarray[Shape, DType]: ...
+"#,
+        );
+        env
+    }
+
     #[test]
     fn test_conflicting_shape_dsl_decorators_recover_as_def() {
-        let mut env = shaped_array_env();
+        let mut env = legacy_shape_dsl_env();
         env.add(
             "main",
             r#"
@@ -7362,7 +7423,7 @@ def conflicting(x: Int) -> Int:
 
     testcase!(
         test_conflicting_shape_dsl_decorators_error,
-        shaped_array_env(),
+        legacy_shape_dsl_env(),
         r#"
 from shape_extensions import Int, type_shape_dsl_function
 from shape_extensions.dsl import shape_dsl_function
@@ -7376,7 +7437,7 @@ def conflicting(x: Int) -> Int:  # E: `@shape_dsl_function` and `@type_shape_dsl
 
     testcase!(
         test_numpy_shaped_array_fixture,
-        shaped_array_env_with_numpy(),
+        legacy_shape_dsl_numpy_env(),
         r#"
 import numpy as np
 from typing import reveal_type
@@ -7393,7 +7454,7 @@ def f(x: np.ndarray[[2, 3], float]) -> None:
 
     testcase!(
         test_numpy_tuple_carrier_meta_shape_keeps_shape_coherent,
-        shaped_array_env_with_numpy(),
+        legacy_shape_dsl_numpy_env(),
         r#"
 import numpy as np
 from typing import Literal, reveal_type
@@ -7411,7 +7472,7 @@ def f(x: np.tcarray[[2, 3], int]) -> None:
 
     testcase!(
         test_tuple_carrier_generic_return_feeds_meta_shape,
-        shaped_array_env_with_numpy(),
+        legacy_shape_dsl_numpy_env(),
         r#"
 import numpy as np
 from typing import reveal_type
@@ -7425,7 +7486,7 @@ def f(x: np.tcarray[[2, 3], int]) -> None:
     );
 
     fn shape_dsl_env() -> TestEnv {
-        let mut env = shape_dsl_base_env();
+        let mut env = legacy_shape_dsl_env();
         env.add_with_path(
         "my_shapes",
         "my_shapes.pyi",
@@ -8093,7 +8154,7 @@ assert_type(dotted_fn(1), int)
     // ── Recursion-safety tests ────────────────────────────────────────────────────
 
     fn shape_dsl_recursion_env() -> TestEnv {
-        let mut env = shape_dsl_base_env();
+        let mut env = legacy_shape_dsl_env();
         env.add_with_path(
         "recursive_shapes",
         "recursive_shapes.pyi",
@@ -8269,7 +8330,7 @@ BadCaptureInit()
     testcase!(
         test_shape_dsl_shape_specific_primitives,
         {
-            let mut env = shape_dsl_tensor_env();
+            let mut env = legacy_shape_dsl_tensor_env();
             env.add_with_path(
             "shape_ops",
             "shape_ops.pyi",
@@ -8307,7 +8368,7 @@ def f(x: Tensor[[2, 3]]) -> None:
     testcase!(
         test_shape_dsl_numpy_matmul_2d_helper,
         {
-            let mut env = shape_dsl_base_env();
+            let mut env = legacy_shape_dsl_env();
             env.add_with_path(
                 "numpy_like",
                 "numpy_like.pyi",
