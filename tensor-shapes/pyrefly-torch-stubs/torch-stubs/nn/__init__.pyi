@@ -920,7 +920,7 @@ class AdaptiveMaxPool3d[OD: IntVar, OH: IntVar, OW: IntVar](Module):
 # Upsampling / Rearrangement Modules
 # ==============================================================================
 
-class PixelShuffle[UpscaleFactor: Flag[int]](Module):
+class PixelShuffle[UpscaleFactor: _Int](Module):
     """Rearranges channels into spatial dimensions.
 
     [B, C * r * r, H, W] → [B, C, H * r, W * r]

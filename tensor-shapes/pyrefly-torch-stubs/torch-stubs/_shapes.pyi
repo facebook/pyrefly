@@ -1408,14 +1408,19 @@ def symmetric_pad2d_shape(input: IntTuple, padding: int) -> IntTuple:
     )
 
 @type_shape_dsl_function
-def pixel_shuffle_shape(input: IntTuple, upscale_factor: int) -> IntTuple:
+def pixel_shuffle_shape(input: IntTuple, upscale_factor: Int) -> IntTuple:
     if len(input) < 3:
         return dsl.Invalid("PixelShuffle requires at least 3D input")
-    if upscale_factor <= 0:
+    if any(
+        dsl.is_concrete_int(factor) and factor <= 0
+        for factor in dsl.IntTuple((upscale_factor,))
+    ):
         return dsl.Invalid("PixelShuffle upscale_factor must be positive")
     channels = input[-3]
-    factor_squared = upscale_factor * upscale_factor
-    if dsl.is_concrete_int(channels) and channels % factor_squared != 0:
+    if (
+        dsl.is_concrete_int(channels)
+        and channels % (upscale_factor * upscale_factor) != 0
+    ):
         return dsl.Invalid(
             "PixelShuffle input channels must be divisible by upscale_factor squared"
         )
@@ -1423,7 +1428,7 @@ def pixel_shuffle_shape(input: IntTuple, upscale_factor: int) -> IntTuple:
         input[:-3],
         dsl.IntTuple(
             (
-                channels // factor_squared,
+                channels // (upscale_factor * upscale_factor),
                 input[-2] * upscale_factor,
                 input[-1] * upscale_factor,
             )
