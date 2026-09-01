@@ -470,6 +470,27 @@ impl CallArgPreEval<'_> {
         }
     }
 
+    /// Advance past one matched parameter without changing how its argument is interpreted.
+    fn advance_after_match(&mut self, vararg: bool) {
+        match self {
+            Self::Type(_, done) | Self::Expr(_, done) => *done = true,
+            Self::Star {
+                prefix,
+                consumed,
+                done,
+                ..
+            } => {
+                if !vararg && *consumed < prefix.len() {
+                    // A prefix element is consumed once matched; the variadic tail remains on
+                    // offer to every later parameter.
+                    *consumed += 1;
+                }
+                *done = vararg;
+            }
+            Self::Fixed(_, index) => *index += 1,
+        }
+    }
+
     /// Check the argument against a parameter hint and return the inferred argument type.
     fn post_check<Ans: LookupAnswer>(
         &mut self,
@@ -497,34 +518,21 @@ impl CallArgPreEval<'_> {
         // source must be recovered from the argument before that view is checked.
         if let Some(pattern) = map_int_tuples_parameter_pattern(hint) {
             let argument = match self {
-                Self::Type(ty, done) => {
-                    *done = true;
-                    MapIntTuplesPatternArgument::Type((*ty).clone())
-                }
-                Self::Expr(expr, done) => {
-                    *done = true;
-                    MapIntTuplesPatternArgument::Expr(expr)
-                }
+                Self::Type(ty, _) => MapIntTuplesPatternArgument::Type((*ty).clone()),
+                Self::Expr(expr, _) => MapIntTuplesPatternArgument::Expr(expr),
                 Self::Star {
                     prefix,
                     middle,
                     suffix,
                     consumed,
-                    done,
+                    ..
                 } => {
                     let ty = Self::star_element(solver, prefix, middle, suffix, *consumed, vararg);
-                    if !vararg && *consumed < prefix.len() {
-                        *consumed += 1;
-                    }
-                    *done = vararg;
                     MapIntTuplesPatternArgument::Type(ty)
                 }
-                Self::Fixed(tys, index) => {
-                    let ty = tys[*index].clone();
-                    *index += 1;
-                    MapIntTuplesPatternArgument::Type(ty)
-                }
+                Self::Fixed(tys, index) => MapIntTuplesPatternArgument::Type(tys[*index].clone()),
             };
+            self.advance_after_match(vararg);
             let arg_ty = solver.check_map_int_tuples_parameter_pattern(
                 pattern,
                 argument,
@@ -539,11 +547,12 @@ impl CallArgPreEval<'_> {
             return Some(arg_ty);
         }
         match self {
-            Self::Type(ty, done) => {
-                *done = true;
+            Self::Type(ty, _) => {
+                let ty = (*ty).clone();
+                self.advance_after_match(vararg);
                 let fresh_call_errors = solver.error_collector();
                 let res = solver.check_type_with_options(
-                    ty,
+                    &ty,
                     hint,
                     range,
                     TypeCheckOptions::new(&fresh_call_errors, tcc).with_call_context(call_context),
@@ -555,11 +564,12 @@ impl CallArgPreEval<'_> {
                 {
                     call_errors.extend(fresh_call_errors);
                 }
-                solver.maybe_error_unknown_argument_type(ty, range, arg_errors);
-                Some((*ty).clone())
+                solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                Some(ty)
             }
-            Self::Expr(x, done) => {
-                *done = true;
+            Self::Expr(x, _) => {
+                let x = *x;
+                self.advance_after_match(vararg);
                 // PEP 747: when the parameter type is TypeForm, evaluate
                 // string literal arguments as forward-reference type forms.
                 if matches!(hint, Type::TypeForm(_))
@@ -605,15 +615,10 @@ impl CallArgPreEval<'_> {
                 middle,
                 suffix,
                 consumed,
-                done,
+                ..
             } => {
                 let ty = Self::star_element(solver, prefix, middle, suffix, *consumed, vararg);
-                if !vararg && *consumed < prefix.len() {
-                    // A prefix element is consumed once matched; the variadic tail
-                    // is not, since it stays on offer to every later parameter.
-                    *consumed += 1;
-                }
-                *done = vararg;
+                self.advance_after_match(vararg);
                 solver.check_type_with_options(
                     &ty,
                     hint,
@@ -622,15 +627,15 @@ impl CallArgPreEval<'_> {
                 );
                 Some(ty)
             }
-            Self::Fixed(tys, i) => {
-                let arg_ty = tys[*i].clone();
+            Self::Fixed(tys, index) => {
+                let arg_ty = tys[*index].clone();
+                self.advance_after_match(vararg);
                 solver.check_type_with_options(
                     &arg_ty,
                     hint,
                     range,
                     TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
                 );
-                *i += 1;
                 solver.maybe_error_unknown_argument_type(&arg_ty, range, arg_errors);
                 Some(arg_ty)
             }

@@ -58,7 +58,7 @@ fn normalized_mapper(depth: u32) -> Quantified {
         QuantifiedIdentity::new(
             ModuleName::from_str(NORMALIZED_MAPPER_MODULE),
             AnchorIndex::new(TextRange::default(), depth),
-            QuantifiedOrigin::NormalizedIntTuplesMapper,
+            QuantifiedOrigin::NormalizedMapIntTuplesParameter,
         ),
         None,
         Restriction::Unrestricted,
@@ -278,7 +278,7 @@ impl TypeLambda {
         let mut body = body.clone();
         body.transform_mut(&mut |ty| {
             if let Type::Quantified(q) = ty
-                && let Some(depth) = q.normalized_int_tuples_mapper_depth()
+                && let Some(depth) = q.normalized_map_int_tuples_parameter_depth()
             {
                 *ty = Type::Quantified(Box::new(normalized_mapper(depth + 1)));
             }

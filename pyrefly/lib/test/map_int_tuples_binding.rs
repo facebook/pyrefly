@@ -247,11 +247,11 @@ second: MapIntTuples[lambda S: list[S], int]
     assert!(
         parameters
             .iter()
-            .all(|parameter| parameter.1.id.as_str() == "S")
+            .all(|parameter| parameter.identifier.id.as_str() == "S")
     );
     let mut ids = parameters
         .iter()
-        .map(|parameter| parameter.0.0)
+        .map(|parameter| parameter.id.0)
         .collect::<Vec<_>>();
     ids.sort_unstable();
     ids.dedup();

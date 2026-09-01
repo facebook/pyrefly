@@ -48,6 +48,7 @@ mod literal;
 mod lsp;
 mod map_int_tuples;
 mod map_int_tuples_binding;
+mod map_int_tuples_evaluation;
 mod marshmallow;
 mod mro;
 mod named_tuple;

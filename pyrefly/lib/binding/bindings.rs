@@ -91,6 +91,7 @@ use crate::binding::binding::LegacyTypeParamModule;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeAliasRefBinding;
+use crate::binding::binding::TypeLevelLambdaParameter;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::metadata::BindingsMetadata;
@@ -575,7 +576,7 @@ impl Bindings {
         let b = self.get(self.key_to_idx(&Key::Definition(ShortIdentifier::new(name))));
         match b {
             Binding::LambdaParameter(id, _) => *id,
-            Binding::TypeLevelLambdaParameter(parameter) => parameter.0,
+            Binding::TypeLevelLambdaParameter(parameter) => parameter.id,
             _ => panic!(
                 "Internal error: unexpected binding for lambda parameter `{}` @  {:?}: {}, module={}, path={}",
                 name.id,
@@ -2225,7 +2226,10 @@ impl<'a> BindingsBuilder<'a> {
         let binding = match kind {
             LambdaKind::Ordinary => Binding::LambdaParameter(id, usage.current_idx()),
             LambdaKind::TypeLevel => {
-                Binding::TypeLevelLambdaParameter(Box::new((id, name.clone())))
+                Binding::TypeLevelLambdaParameter(Box::new(TypeLevelLambdaParameter {
+                    id,
+                    identifier: name.clone(),
+                }))
             }
         };
         let idx = self.insert_binding(Key::Definition(ShortIdentifier::new(name)), binding);

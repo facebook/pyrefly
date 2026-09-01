@@ -6189,7 +6189,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Binding::LambdaParameter(id, owner) => self.resolve_lambda_param_type(*id, *owner),
             Binding::TypeLevelLambdaParameter(parameter) => {
-                self.resolve_map_int_tuples_mapper_parameter(&parameter.1)
+                self.resolve_map_int_tuples_mapper_parameter(&parameter.identifier)
             }
             Binding::FunctionParameter(param) => self.binding_to_type_function_parameter(param),
             Binding::SuperInstance(x) => self.solve_super_binding(&x.0, x.1, errors),

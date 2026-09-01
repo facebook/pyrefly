@@ -47,7 +47,7 @@ pub enum QuantifiedOrigin {
     /// Synthetic binder for the parameter of an `IntTuples` mapper.
     MapIntTuplesParameter,
     /// De Bruijn sentinel used only while comparing `MapIntTuples` lambdas.
-    NormalizedIntTuplesMapper,
+    NormalizedMapIntTuplesParameter,
 }
 
 impl QuantifiedOrigin {
@@ -425,8 +425,8 @@ impl Quantified {
         &self.identity
     }
 
-    pub(crate) fn normalized_int_tuples_mapper_depth(&self) -> Option<u32> {
-        (self.identity.origin == QuantifiedOrigin::NormalizedIntTuplesMapper)
+    pub(crate) fn normalized_map_int_tuples_parameter_depth(&self) -> Option<u32> {
+        (self.identity.origin == QuantifiedOrigin::NormalizedMapIntTuplesParameter)
             .then_some(self.identity.anchor.index)
     }
 

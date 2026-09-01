@@ -8,6 +8,23 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+// `CallArgPreEval::advance_after_match` is shared with shape-specific call matching. Keep this
+// regression in the general callable suite so the refactor cannot change ordinary variadic
+// type-variable consumption.
+testcase!(
+    ordinary_type_var_tuple_argument_advancement_is_unchanged,
+    r#"
+from typing import assert_type
+
+def pack[*Ts](*args: *Ts) -> tuple[*Ts]: ...
+
+assert_type(pack(1, "x"), tuple[int, str])
+
+def check(xs: tuple[int, str]) -> None:
+    assert_type(pack(*xs), tuple[int, str])
+"#,
+);
+
 testcase!(
     test_lambda,
     r#"

@@ -2293,6 +2293,15 @@ pub enum LambdaKind {
     TypeLevel,
 }
 
+/// Binding data for a parameter introduced by a type-level lambda.
+#[derive(Clone, Debug)]
+pub struct TypeLevelLambdaParameter {
+    /// Retained because the lambda expression can still pass through ordinary callable inference.
+    pub id: LambdaParamId,
+    /// Determines the synthetic type binder independently of solve order.
+    pub identifier: Identifier,
+}
+
 /// Data for `Binding::Import`. Carries the `(module, name)` of an imported
 /// symbol, plus metadata for downstream consumers.
 #[derive(Clone, Debug)]
@@ -2503,7 +2512,7 @@ pub enum Binding {
     /// Parameter of a type-level lambda. It denotes a deterministic synthetic type binder rather
     /// than a contextual value type. The experimental `shape_extensions.MapIntTuples` operation
     /// is currently the only syntax that creates this binding.
-    TypeLevelLambdaParameter(Box<(LambdaParamId, Identifier)>),
+    TypeLevelLambdaParameter(Box<TypeLevelLambdaParameter>),
     /// Binding for a function parameter. We either have an annotation, or we will determine the
     /// parameter type when solving the function type.
     FunctionParameter(Box<FunctionParameter>),

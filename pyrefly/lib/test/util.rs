@@ -56,6 +56,12 @@ use crate::state::subscriber::TestSubscriber;
 use crate::types::class::Class;
 use crate::types::types::Type;
 
+pub fn shape_extensions_env() -> TestEnv {
+    let path = std::env::var("SHAPE_EXTENSIONS_TEST_PATH")
+        .expect("SHAPE_EXTENSIONS_TEST_PATH must be set");
+    TestEnv::new_with_site_package_paths(&[&path])
+}
+
 #[macro_export]
 macro_rules! testcase {
     (bug = $explanation:literal, $name:ident, $imports:expr, $contents:literal,) => {
