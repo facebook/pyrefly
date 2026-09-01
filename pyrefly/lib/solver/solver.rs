@@ -65,6 +65,7 @@ use crate::solver::shape::ShapeIntBoundSolution;
 use crate::solver::shape::canonicalize_ints_in_type;
 use crate::solver::shape::has_int_tuple_bound;
 use crate::solver::shape::normalize_shape_int_bound_solution;
+use crate::solver::shape::normalize_shape_tuple_bound_candidate;
 use crate::solver::shape::simplify_shape_type;
 use crate::solver::shape::type_as_intvar_solution;
 use crate::solver::type_order::TypeOrder;
@@ -3566,10 +3567,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         upper_bound: Option<&Type>,
         is_shape_flag_binding_source: bool,
     ) -> (Type, Option<TypeVarSpecializationError>) {
-        // An `IntTuple`-bounded actual is a dimension sequence. Literal promotion would erase
-        // those dimensions, and the probe guarding promotion binds variables as a side effect.
-        let t1_p = if has_int_tuple_bound(q) {
-            t1.clone()
+        let bound = q.upper_bound(self.type_order.stdlib(), &self.solver.heap);
+        let t1_p = if let Some(normalized) =
+            normalize_shape_tuple_bound_candidate(q, t1, &self.solver.heap)
+        {
+            normalized
         } else if let Some(normalized) =
             normalize_shape_int_bound_solution(q, t1, self.type_order.stdlib(), &self.solver.heap)
         {
@@ -3599,7 +3601,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 t1_p
             }
         };
-        let bound = q.upper_bound(self.type_order.stdlib(), &self.solver.heap);
         match q.restriction() {
             Restriction::Constraints(constraints) => {
                 // For constrained TypeVars, promote to the matching constraint type.

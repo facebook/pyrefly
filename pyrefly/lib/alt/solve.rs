@@ -6467,9 +6467,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         cls.has_toplevel_qname("shape_extensions", "IntTuple")
     }
 
+    pub(crate) fn is_int_tuples_class(&self, cls: &Class) -> bool {
+        cls.has_toplevel_qname("shape_extensions", "IntTuples")
+    }
+
     pub(crate) fn bare_int_tuple_carrier(&self) -> Type {
         self.heap.mk_tuple(Tuple::Unbounded(Box::new(
             self.heap.mk_class_type(self.stdlib.int().clone()),
+        )))
+    }
+
+    pub(crate) fn bare_int_tuples(&self) -> Type {
+        self.heap.mk_tuple(Tuple::Unbounded(Box::new(
+            self.heap.mk_int_tuple(IntTuple::shapeless()),
         )))
     }
 
@@ -6588,6 +6598,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     Type::ClassType(cls) => {
                         if self.is_int_tuple_class(cls.class_object()) {
                             Some(self.heap.mk_int_tuple(IntTuple::shapeless()))
+                        } else if self.is_int_tuples_class(cls.class_object()) {
+                            Some(self.bare_int_tuples())
                         } else if cls.has_qname("shape_extensions", "Int") {
                             Some(gradual_size())
                         } else if self.shaped_array_shape_for_class_type(cls).is_some() {

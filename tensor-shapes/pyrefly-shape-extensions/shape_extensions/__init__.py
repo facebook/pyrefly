@@ -20,6 +20,7 @@ __all__ = [
     "Elements",
     "Int",
     "IntTuple",
+    "IntTuples",
     "IntVar",
     "ProxyMethod",
     "SymbolicArithExpr",
@@ -98,6 +99,13 @@ class IntTuple:
 
     def __class_getitem__(cls, params):
         return cls
+
+
+class IntTuples:
+    """An immutable tuple whose elements are `IntTuple` values."""
+
+    def __new__(cls, iterable=()):
+        return tuple(iterable)
 
 
 class Elements:

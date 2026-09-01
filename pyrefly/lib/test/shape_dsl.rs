@@ -12206,3 +12206,46 @@ def f(
     assert_type(select(unbounded), str)
 "#,
 );
+
+testcase!(
+    test_int_tuples_generic_bound,
+    shaped_array_env(),
+    r#"
+from shape_extensions import Int, IntTuple, IntTuples, IntVar
+from typing import assert_type
+
+class ShapeTuple[Shapes]: ...
+class Narrow[Shapes: tuple[IntTuple[2], ...]]: ...
+
+def capture[Shapes: IntTuples](shapes: Shapes) -> ShapeTuple[Shapes]: ...
+
+assert_type(capture(()), ShapeTuple[tuple[()]])
+assert_type(capture(((),)), ShapeTuple[tuple[IntTuple[()]]])
+assert_type(capture(((2,), (3, 4))), ShapeTuple[tuple[IntTuple[2], IntTuple[3, 4]]])
+
+def unbounded(shapes: tuple[tuple[int, ...], ...]) -> None:
+    assert_type(capture(shapes), ShapeTuple[tuple[IntTuple, ...]])
+
+def precise_unbounded(shapes: tuple[IntTuple[2], ...]) -> None:
+    assert_type(capture(shapes), ShapeTuple[tuple[IntTuple[2], ...]])
+
+def symbolic[N: IntVar](shapes: tuple[tuple[Int[N]], tuple[Int[N], Int[3]]]) -> None:
+    assert_type(capture(shapes), ShapeTuple[tuple[IntTuple[N], IntTuple[N, 3]]])
+
+def union(condition: bool) -> None:
+    shapes = ((2,),) if condition else ((3, 4),)
+    assert_type(capture(shapes), ShapeTuple[tuple[IntTuple[2]] | tuple[IntTuple[3, 4]]])
+
+def unpacked(middle: tuple[tuple[int, ...], ...]) -> None:
+    shapes = ((2,), *middle, (3, 4))
+    assert_type(
+        capture(shapes),
+        ShapeTuple[tuple[IntTuple[2], *tuple[IntTuple, ...], IntTuple[3, 4]]],
+    )
+
+capture(((2,), ("bad",)))  # E: is not assignable to upper bound `tuple[IntTuple, ...]`
+capture((2, 3))  # E: is not assignable to upper bound `tuple[IntTuple, ...]`
+
+narrow: Narrow[tuple[IntTuple[3], ...]]  # E: is not assignable to upper bound `tuple[IntTuple[2], ...]`
+"#,
+);
