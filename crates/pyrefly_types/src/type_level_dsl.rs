@@ -1900,11 +1900,24 @@ struct DeferredIntegerClassification {
     dependencies: Vec<usize>,
 }
 
+/// Sources that determine how a validated integer expression behaves in the DSL.
+///
+/// Parameter uses preserve narrowing until resolved annotations are available. `has_shape_source`
+/// records syntax rooted in a shape-domain value. Validation separately checks whether the
+/// expression actually produces an `Int`; for example, indexing `IntTuples` is routed here so it
+/// can receive a specific invalid-source diagnostic.
+#[derive(Default)]
+struct DslIntegerExpressionSources {
+    parameter_uses: Vec<TypeShapeDslParameterUse>,
+    has_shape_source: bool,
+}
+
 // TODO(stroxler): Isolate deferred integer union-find state and AST revalidation behind a
 // dedicated abstraction. They remain on `DslValidator` while evaluation consumes the retained AST;
 // compiling to a typed IR should remove the need to revisit expressions after resolving domains.
 struct DslValidator<'a, F> {
     parameters: &'a Parameters,
+    parameter_domains: Option<&'a [TypeShapeDslInputDomain]>,
     intrinsic: &'a F,
     helper_argument_domains: Option<&'a [Vec<TypeShapeDslInputDomain>]>,
     returns: Vec<TypeShapeDslReturn>,
@@ -1921,7 +1934,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
     fn new(
         parameters: &'a Parameters,
         intrinsic: &'a F,
-        parameter_domains: Option<&[TypeShapeDslInputDomain]>,
+        parameter_domains: Option<&'a [TypeShapeDslInputDomain]>,
         helper_argument_domains: Option<&'a [Vec<TypeShapeDslInputDomain>]>,
     ) -> (Self, DslValidationFlow) {
         if let Some(parameter_domains) = parameter_domains {
@@ -1956,6 +1969,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         (
             Self {
                 parameters,
+                parameter_domains,
                 intrinsic,
                 helper_argument_domains,
                 returns: Vec::new(),
@@ -2132,11 +2146,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok(left)
     }
 
-    fn collect_integer_parameter_uses(
+    fn collect_integer_expression_sources(
         &self,
         expression: &Expr,
         flow: &DslValidationFlow,
-        parameter_uses: &mut Vec<TypeShapeDslParameterUse>,
+        sources: &mut DslIntegerExpressionSources,
         expanded_deferred: &mut HashSet<usize>,
     ) -> bool {
         match expression {
@@ -2149,7 +2163,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 if let Some(origins) = kind.unnarrowed_parameter_origins() {
                     for &parameter in origins {
                         record_parameter_use(
-                            parameter_uses,
+                            &mut sources.parameter_uses,
                             TypeShapeDslParameterUse {
                                 parameter,
                                 narrowing: TypeShapeDslParameterNarrowing::Unnarrowed,
@@ -2160,59 +2174,136 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 } else {
                     match kind {
                         DslStaticKind::ValueSet {
-                            sources,
+                            sources: value_sources,
                             kinds: FLAG_INT,
                         } => {
-                            if !sources.non_parameter_values_are(FLAG_INT) {
+                            if !value_sources.non_parameter_values_are(FLAG_INT) {
                                 return false;
                             }
-                            for use_ in &sources.parameter_uses {
-                                record_parameter_use(parameter_uses, *use_);
+                            for use_ in &value_sources.parameter_uses {
+                                record_parameter_use(&mut sources.parameter_uses, *use_);
                             }
                             true
                         }
                         DslStaticKind::DeferredInteger(index) => {
                             let root = self.deferred_integer_root(*index);
+                            let mut helper_compatible = true;
                             for (index, deferred) in self.deferred_integers.iter().enumerate() {
                                 if self.deferred_integer_root(index) == root
                                     && expanded_deferred.insert(index)
-                                    && !self.collect_integer_parameter_uses(
+                                {
+                                    helper_compatible &= self.collect_integer_expression_sources(
                                         &deferred.expression,
                                         &deferred.flow,
-                                        parameter_uses,
+                                        sources,
                                         expanded_deferred,
-                                    )
-                                {
-                                    return false;
+                                    );
                                 }
                             }
-                            true
+                            helper_compatible
+                        }
+                        DslStaticKind::Dimension => {
+                            sources.has_shape_source = true;
+                            false
                         }
                         _ => false,
                     }
                 }
             }
             Expr::BinOp(binop) => {
-                self.collect_integer_parameter_uses(
+                let left = self.collect_integer_expression_sources(
                     &binop.left,
                     flow,
-                    parameter_uses,
+                    sources,
                     expanded_deferred,
-                ) && self.collect_integer_parameter_uses(
+                );
+                let right = self.collect_integer_expression_sources(
                     &binop.right,
                     flow,
-                    parameter_uses,
+                    sources,
                     expanded_deferred,
-                )
+                );
+                left && right
+            }
+            Expr::If(if_expr) => {
+                // Conditional expressions are valid integer values, but helpers retain their
+                // existing narrower forwarding syntax.
+                self.collect_integer_expression_sources(
+                    &if_expr.body,
+                    flow,
+                    sources,
+                    expanded_deferred,
+                );
+                self.collect_integer_expression_sources(
+                    &if_expr.orelse,
+                    flow,
+                    sources,
+                    expanded_deferred,
+                );
+                false
             }
             // `len(shape)` creates a new integer cardinality; the shape operand is not an
             // integer-value dependency of that result. Other `len` operands are not
             // domain-polymorphic deferred integers.
             Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len) => {
-                self.length_has_int_tuple_operand(call, flow)
+                let has_int_tuple_operand = self.length_has_int_tuple_operand(call, flow);
+                sources.has_shape_source |= has_int_tuple_operand;
+                has_int_tuple_operand
+            }
+            Expr::Subscript(subscript) if !matches!(subscript.slice.as_ref(), Expr::Slice(_)) => {
+                if matches!(
+                    self.classify_subscript(subscript, flow),
+                    Ok(DslSubscriptKind::UnresolvedIndex { .. }
+                        | DslSubscriptKind::IntTupleIndex { .. }
+                        | DslSubscriptKind::IntTuplesIndex { .. })
+                ) {
+                    sources.has_shape_source = true;
+                }
+                false
+            }
+            Expr::Call(call)
+                if matches!(
+                    self.intrinsic(&call.func),
+                    Some(
+                        TypeShapeDslIntrinsic::Prod
+                            | TypeShapeDslIntrinsic::Sum
+                            | TypeShapeDslIntrinsic::Gradual(TypeShapeDslDomain::Int)
+                    )
+                ) =>
+            {
+                sources.has_shape_source = true;
+                false
             }
             _ => !matches!(integer_literal(expression), IntegerLiteral::NotLiteral),
         }
+    }
+
+    /// Whether an integer-syntax expression contains a shape-domain source.
+    ///
+    /// This is deliberately separate from deciding whether the expression is a valid integer:
+    /// both `count: Flag[int]` and `size: Int` may be used in integer syntax, but only the latter
+    /// carries symbolic shape dimensions. Resolved parameter domains supply that distinction,
+    /// while the shared source traversal handles narrowed parameters and cyclic deferred locals.
+    fn integer_expression_has_shape_source(
+        &self,
+        expression: &Expr,
+        flow: &DslValidationFlow,
+    ) -> bool {
+        let Some(parameter_domains) = self.parameter_domains else {
+            return false;
+        };
+        let mut sources = DslIntegerExpressionSources::default();
+        self.collect_integer_expression_sources(
+            expression,
+            flow,
+            &mut sources,
+            &mut HashSet::new(),
+        );
+        sources.has_shape_source
+            || sources.parameter_uses.iter().any(|use_| {
+                parameter_domains[use_.parameter]
+                    .can_use_as(TypeShapeDslDomain::Int, use_.narrowing)
+            })
     }
 
     fn deferred_integer_parameter_uses(
@@ -2220,15 +2311,15 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         index: usize,
     ) -> Result<Box<[TypeShapeDslParameterUse]>, TypeShapeDslDefinitionError> {
         let root = self.deferred_integer_root(index);
-        let mut parameter_uses = Vec::new();
+        let mut sources = DslIntegerExpressionSources::default();
         let mut expanded_deferred = HashSet::new();
         for (index, deferred) in self.deferred_integers.iter().enumerate() {
             if self.deferred_integer_root(index) == root
                 && expanded_deferred.insert(index)
-                && !self.collect_integer_parameter_uses(
+                && !self.collect_integer_expression_sources(
                     &deferred.expression,
                     &deferred.flow,
-                    &mut parameter_uses,
+                    &mut sources,
                     &mut expanded_deferred,
                 )
             {
@@ -2238,8 +2329,10 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 });
             }
         }
-        parameter_uses.sort_unstable_by_key(|use_| use_.parameter);
-        Ok(parameter_uses.into_boxed_slice())
+        sources
+            .parameter_uses
+            .sort_unstable_by_key(|use_| use_.parameter);
+        Ok(sources.parameter_uses.into_boxed_slice())
     }
 
     fn finalize_helper_deferred_domains(&mut self) -> Result<(), TypeShapeDslDefinitionError> {
@@ -3988,20 +4081,21 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok((slot, parameter_origins))
     }
 
-    /// Selects the expression comparison path when syntax and local flow identify a dimension.
-    /// This is intentionally narrower than `validate_dimension`: bare parameters and literals do
-    /// not establish a domain by themselves, though the other operand can select this path for
-    /// them. This only routes the comparison; `validate_dimension` still checks assignment and
-    /// records the expression's complete validation metadata.
+    /// Selects dimension validation when syntax and local flow identify a shape-domain value.
+    ///
+    /// This includes malformed shape subscripts so `validate_dimension` can emit its specific
+    /// domain diagnostic. Bare parameters and literals do not establish a domain by themselves,
+    /// though the other operand can select this path for them.
     fn is_dimension_expression(&self, expression: &Expr, flow: &DslValidationFlow) -> bool {
-        match expression {
+        let is_dimension = match expression {
             Expr::Name(name) => self.slots.get(&name.id).is_some_and(|slot| {
                 matches!(flow.kinds.get(*slot), Some(DslStaticKind::Dimension))
             }),
             Expr::Subscript(subscript) => matches!(
                 self.classify_subscript(subscript, flow),
                 Ok(DslSubscriptKind::UnresolvedIndex { .. }
-                    | DslSubscriptKind::IntTupleIndex { .. })
+                    | DslSubscriptKind::IntTupleIndex { .. }
+                    | DslSubscriptKind::IntTuplesIndex { .. })
             ),
             Expr::BinOp(binop) => {
                 self.is_dimension_expression(&binop.left, flow)
@@ -4020,7 +4114,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     || self.is_dimension_expression(&if_expr.orelse, flow)
             }
             _ => false,
+        };
+        if is_dimension && self.parameter_domains.is_some() {
+            debug_assert!(self.integer_expression_has_shape_source(expression, flow));
         }
+        is_dimension
     }
 
     fn classify_deferred_integer_expression(

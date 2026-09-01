@@ -3543,7 +3543,7 @@ testcase!(
     test_type_shape_dsl_invalid_if_declarations,
     shape_dsl_tensor_env(),
     r#"
-from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions import Int, IntTuple, IntTuples, type_shape_dsl_function
 from shape_extensions.dsl import IntTuple as DslIntTuple
 
 @type_shape_dsl_function
@@ -3616,6 +3616,18 @@ def local_derived_order(shape: IntTuple) -> IntTuple:
     if item < shape[1]:  # E: derived dimension comparisons support only `==` and `!=`
         return shape
     return shape
+
+@type_shape_dsl_function
+def int_tuples_member_condition(shapes: IntTuples) -> IntTuple:
+    if shapes[0] == 0:  # E: indexed dimension source must be an `IntTuple` value
+        return DslIntTuple(())
+    return DslIntTuple(())
+
+@type_shape_dsl_function
+def right_hand_shape_source(keep: bool, shape: IntTuple) -> IntTuple:
+    if keep + shape[0] == 0:  # E: dimension arithmetic operands must be annotated as `Int`
+        return DslIntTuple(())
+    return DslIntTuple(())
 
 @type_shape_dsl_function
 def branch_local(shape: IntTuple, choose: bool) -> IntTuple:
