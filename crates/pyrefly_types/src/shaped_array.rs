@@ -479,6 +479,31 @@ impl IntTuple {
         }
     }
 
+    /// Add all dimensions, returning a gradual dimension when the shape has symbolic rank.
+    pub(crate) fn sum(&self) -> Int {
+        let IntTupleView::Concrete(dimensions) = self.view() else {
+            return Int::Int;
+        };
+        let terms = dimensions
+            .iter()
+            .map(|dimension| canonicalize_int_dim(dimension.clone()))
+            .filter(|dimension| !matches!(dimension, Int::Literal(0)))
+            .collect::<Vec<_>>();
+        match terms.as_slice() {
+            [] => Int::Literal(0),
+            [term] => term.clone(),
+            terms => {
+                let sum = terms.iter().cloned().fold(Int::Literal(0), |left, right| {
+                    Int::add(Type::Int(left), Type::Int(right))
+                });
+                match canonicalize(Type::Int(sum)) {
+                    Type::Int(sum) => sum,
+                    _ => unreachable!("canonicalized IntTuple sum must remain an Int"),
+                }
+            }
+        }
+    }
+
     /// Project this shape to the ordinary tuple type it denotes.
     pub fn to_tuple_type(&self) -> Type {
         match &self.0 {

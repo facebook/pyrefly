@@ -1165,6 +1165,7 @@ pub enum TypeShapeDslIntrinsic {
     IntTuple,
     IntTuples,
     Prod,
+    Sum,
     Invalid,
     Len,
     Range,
@@ -1202,6 +1203,7 @@ pub enum TypeShapeDslExpressionKind {
     IntTupleConstructor,
     IntTuplesConstructor,
     IntTupleProduct,
+    IntTupleSum,
     IntTupleLength {
         shape: usize,
         parameter_origins: Option<Box<[usize]>>,
@@ -2399,9 +2401,13 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     parameter_origins,
                 }
             }
-            Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Prod) => {
-                self.validate_int_tuple_product(call, flow)?;
-                TypeShapeDslExpressionKind::IntTupleProduct
+            Expr::Call(call)
+                if matches!(
+                    self.intrinsic(&call.func),
+                    Some(TypeShapeDslIntrinsic::Prod | TypeShapeDslIntrinsic::Sum)
+                ) =>
+            {
+                self.validate_int_tuple_reduction(call, flow)?
             }
             Expr::Call(call)
                 if self.intrinsic(&call.func)
@@ -3221,22 +3227,34 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok(())
     }
 
-    fn validate_int_tuple_product(
+    /// Validates a `dsl.prod` or `dsl.sum` call and returns its evaluation operation.
+    fn validate_int_tuple_reduction(
         &mut self,
         call: &ExprCall,
         flow: &DslValidationFlow,
-    ) -> Result<(), TypeShapeDslDefinitionError> {
+    ) -> Result<TypeShapeDslExpressionKind, TypeShapeDslDefinitionError> {
+        let (message, kind) = match self.intrinsic(&call.func) {
+            Some(TypeShapeDslIntrinsic::Prod) => (
+                "`dsl.prod` requires exactly one positional IntTuple argument",
+                TypeShapeDslExpressionKind::IntTupleProduct,
+            ),
+            Some(TypeShapeDslIntrinsic::Sum) => (
+                "`dsl.sum` requires exactly one positional IntTuple argument",
+                TypeShapeDslExpressionKind::IntTupleSum,
+            ),
+            _ => unreachable!("IntTuple reduction validation requires `dsl.prod` or `dsl.sum`"),
+        };
         if call.arguments.args.len() != 1
             || !call.arguments.keywords.is_empty()
             || matches!(call.arguments.args.first(), Some(Expr::Starred(_)))
         {
             return Err(TypeShapeDslDefinitionError {
                 range: call.arguments.range,
-                message: "`dsl.prod` requires exactly one positional IntTuple argument",
+                message,
             });
         }
         self.validate_int_tuple_expression(&call.arguments.args[0], flow)?;
-        Ok(())
+        Ok(kind)
     }
 
     fn validate_gradual_call(call: &ExprCall) -> Result<(), TypeShapeDslDefinitionError> {
@@ -3470,11 +3488,16 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     kinds: FLAG_SEQUENCE,
                 })
             }
-            Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Prod) => {
-                self.validate_int_tuple_product(call, flow)?;
+            Expr::Call(call)
+                if matches!(
+                    self.intrinsic(&call.func),
+                    Some(TypeShapeDslIntrinsic::Prod | TypeShapeDslIntrinsic::Sum)
+                ) =>
+            {
+                let kind = self.validate_int_tuple_reduction(call, flow)?;
                 self.expressions.push(TypeShapeDslExpression {
                     range: call.range(),
-                    kind: TypeShapeDslExpressionKind::IntTupleProduct,
+                    kind,
                 });
                 Ok(DslStaticKind::Dimension)
             }
@@ -3674,6 +3697,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 self.intrinsic(&call.func),
                 Some(
                     TypeShapeDslIntrinsic::Prod
+                        | TypeShapeDslIntrinsic::Sum
                         | TypeShapeDslIntrinsic::Gradual(TypeShapeDslDomain::Int)
                 )
             ),
@@ -4459,11 +4483,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     self.validate_int_tuples_constructor(call, flow)?;
                     TypeShapeDslReturnKind::Expression(TypeShapeDslDomain::IntTuples)
                 }
-                Some(TypeShapeDslIntrinsic::Prod) => {
-                    self.validate_int_tuple_product(call, flow)?;
+                Some(TypeShapeDslIntrinsic::Prod | TypeShapeDslIntrinsic::Sum) => {
+                    let kind = self.validate_int_tuple_reduction(call, flow)?;
                     self.expressions.push(TypeShapeDslExpression {
                         range: call.range(),
-                        kind: TypeShapeDslExpressionKind::IntTupleProduct,
+                        kind,
                     });
                     TypeShapeDslReturnKind::Expression(TypeShapeDslDomain::Int)
                 }
@@ -6089,6 +6113,25 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     invalid @ DslOutcome::Invalid(_) => invalid,
                     DslOutcome::Value(_) => {
                         unreachable!("validated IntTuple product receives a shape")
+                    }
+                }
+            }
+            TypeShapeDslExpressionKind::IntTupleSum => {
+                let Expr::Call(call) = expression else {
+                    unreachable!("validated IntTuple sum expression is a call")
+                };
+                match self.evaluate_expression(&call.arguments.args[0], environment, budget) {
+                    DslOutcome::Value(DslValue::Shape(shape)) => match shape.sum() {
+                        Int::Int => DslOutcome::Value(DslValue::Unknown),
+                        sum => DslOutcome::Value(DslValue::Dimension(sum)),
+                    },
+                    DslOutcome::Value(DslValue::Unknown) => DslOutcome::Value(DslValue::Unknown),
+                    DslOutcome::ExplicitGradual => {
+                        unreachable!("validated IntTuple sum operand cannot return gradual")
+                    }
+                    invalid @ DslOutcome::Invalid(_) => invalid,
+                    DslOutcome::Value(_) => {
+                        unreachable!("validated IntTuple sum receives a shape")
                     }
                 }
             }

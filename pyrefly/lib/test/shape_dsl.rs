@@ -12045,6 +12045,114 @@ def parameter_shadow(official_prod: IntTuple, shape: IntTuple) -> Int:
 );
 
 testcase!(
+    test_type_shape_dsl_sum,
+    shape_dsl_tensor_env(),
+    r#"
+import builtins
+import shape_extensions.dsl as dsl
+from shape_extensions import Elements, Int, IntTuple, IntTuples, IntVar, type_shape_dsl_function
+from shape_extensions.dsl import sum as imported_sum
+from torch import Tensor
+from typing import assert_type, reveal_type
+
+sum_alias = imported_sum
+
+@type_shape_dsl_function
+def total(shape: IntTuple) -> Int:
+    return dsl.sum(shape)
+
+@type_shape_dsl_function
+def aliased(shape: IntTuple) -> Int:
+    return sum_alias(shape)
+
+@type_shape_dsl_function
+def empty(_shape: IntTuple) -> Int:
+    return imported_sum(dsl.IntTuple(()))
+
+@type_shape_dsl_function
+def wrapped(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((imported_sum(shape),))
+
+@type_shape_dsl_function
+def column_sums(shapes: IntTuples) -> IntTuple:
+    return dsl.IntTuple(
+        imported_sum(dsl.IntTuple(shape[index] for shape in shapes))
+        for index in range(2)
+    )
+
+def apply_total[S: IntTuple](x: Tensor[S]) -> Tensor[[total(S)]]: ...
+def apply_aliased[S: IntTuple](x: Tensor[S]) -> Tensor[[aliased(S)]]: ...
+def empty_result() -> Int[empty(IntTuple[2])]: ...
+def apply_wrapped[S: IntTuple](x: Tensor[S]) -> Tensor[wrapped(S)]: ...
+def columns() -> Tensor[column_sums(tuple[IntTuple[2, 3], IntTuple[5, 7]])]: ...
+
+def check[S: IntTuple, N: IntVar](
+    concrete: Tensor[[2, 3]],
+    symbolic: Tensor[[2, N, 3]],
+    gradual: Tensor[IntTuple],
+    unpacked: Tensor[[2, *Elements[S], 3]],
+) -> None:
+    assert_type(apply_total(concrete), Tensor[[5]])
+    assert_type(apply_aliased(concrete), Tensor[[5]])
+    reveal_type(empty_result())  # E: revealed type: Int[0]
+    assert_type(apply_wrapped(concrete), Tensor[[5]])
+    reveal_type(apply_total(symbolic))  # E: revealed type: Tensor[[(5 + N)]]
+    reveal_type(apply_total(gradual))  # E: revealed type: Tensor[[int]]
+    reveal_type(apply_total(unpacked))  # E: revealed type: Tensor[[int]]
+    assert_type(columns(), Tensor[[7, 10]])
+
+def ordinary_sum(shape: IntTuple) -> Int: ...
+
+@type_shape_dsl_function
+def ordinary_lookalike(shape: IntTuple) -> Int:
+    return ordinary_sum(shape)  # E: DSL helper callee must be a validated
+
+@type_shape_dsl_function
+def builtin_lookalike(shape: IntTuple) -> Int:
+    return builtins.sum(shape)  # E: DSL helper callee must be a validated
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_sum_and_legacy_list_overload,
+    shape_dsl_tensor_env(),
+    r#"
+from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions.dsl import sum as official_sum
+from typing import assert_type
+
+@type_shape_dsl_function
+def missing(shape: IntTuple) -> Int:
+    return official_sum()  # E: `dsl.sum` requires exactly one positional IntTuple argument  # E: No matching overload found
+
+@type_shape_dsl_function
+def extra(shape: IntTuple) -> Int:
+    return official_sum(shape, shape)  # E: `dsl.sum` requires exactly one positional IntTuple argument  # E: No matching overload found
+
+@type_shape_dsl_function
+def keyword(shape: IntTuple) -> Int:
+    return official_sum(xs=shape)  # E: `dsl.sum` requires exactly one positional IntTuple argument  # E: Argument `IntTuple` is not assignable to parameter `xs`
+
+@type_shape_dsl_function
+def starred(shape: IntTuple) -> Int:
+    return official_sum(*(shape,))  # E: `dsl.sum` requires exactly one positional IntTuple argument
+
+@type_shape_dsl_function
+def wrong_domain(dimension: Int) -> Int:
+    return official_sum(dimension)  # E: shape expression operands must be annotated as `IntTuple`  # E: No matching overload found
+
+@type_shape_dsl_function
+def wrong_result(shape: IntTuple) -> IntTuple:
+    return official_sum(shape)  # E: returned expression requires a result in the `Int` domain  # E: Returned type
+
+dimensions: list[int] = [1, 2, 3]
+assert_type(official_sum([1, 2, 3]), int)
+assert_type(official_sum(dimensions), int)
+assert_type(official_sum(xs=dimensions), int)
+"#,
+);
+
+testcase!(
     test_inttuple_carrier_call_inference,
     shaped_array_env(),
     r#"

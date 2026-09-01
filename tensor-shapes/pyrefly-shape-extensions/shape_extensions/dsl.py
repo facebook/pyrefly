@@ -128,8 +128,16 @@ def prod(xs: _IntTupleSchema | list[int]) -> _IntSchema | int:
     ...
 
 
-def sum(xs: list[int]) -> int:
-    """Compute the sum of a list of dimension sizes."""
+@typing.overload
+def sum(xs: _IntTupleSchema, /) -> _IntSchema: ...
+
+
+@typing.overload
+def sum(xs: list[int]) -> int: ...
+
+
+def sum(xs: _IntTupleSchema | list[int]) -> _IntSchema | int:
+    """Compute the sum of IntTuple dimensions or legacy list integer values."""
     ...
 
 

@@ -673,6 +673,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslExpressionKind::IntTupleConstructor
                     | TypeShapeDslExpressionKind::IntTuplesConstructor
                     | TypeShapeDslExpressionKind::IntTupleProduct
+                    | TypeShapeDslExpressionKind::IntTupleSum
                     | TypeShapeDslExpressionKind::DimensionSlot { .. }
                     | TypeShapeDslExpressionKind::IntegerSlot { .. }
                     | TypeShapeDslExpressionKind::IntTupleIndex { .. }
@@ -959,6 +960,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         if id.has_toplevel_qname("shape_extensions.dsl", "prod") {
             return Some(TypeShapeDslIntrinsic::Prod);
+        }
+        if id.has_toplevel_qname("shape_extensions.dsl", "sum") {
+            return Some(TypeShapeDslIntrinsic::Sum);
         }
         let class = id.cls.as_ref()?;
         if id.qname.id().as_str() != "gradual" {
