@@ -1491,6 +1491,28 @@ def glu_shape(input: IntTuple, dim: int) -> IntTuple:
     halved = extent // 2
     return replace_axis_extent(input, dim, halved)
 
+@type_shape_dsl_function
+def recurrent_output_shape(
+    input: IntTuple, hidden_size: Int, bidirectional: bool
+) -> IntTuple:
+    if bidirectional:
+        return dsl.IntTuple((input[0], input[1], hidden_size * 2))
+    else:
+        return dsl.IntTuple((input[0], input[1], hidden_size))
+
+@type_shape_dsl_function
+def recurrent_state_shape(
+    input: IntTuple, hidden_size: Int, num_layers: Int, bidirectional: bool
+) -> IntTuple:
+    if bidirectional:
+        return dsl.IntTuple((num_layers * 2, input[0], hidden_size))
+    else:
+        return dsl.IntTuple((num_layers, input[0], hidden_size))
+
+@type_shape_dsl_function
+def lstm_cell_state_shape(input: IntTuple, hidden_size: Int) -> IntTuple:
+    return dsl.IntTuple((input[0], hidden_size))
+
 # `n` defaults to the existing extent of the transformed axis, so `None` and an
 # explicit length differ only in which value feeds the halved output extent.
 @type_shape_dsl_function
@@ -1558,38 +1580,3 @@ def item_ir(self: ShapedArray) -> ShapedArray:
             + "D tensor"
         )
     return Unknown
-
-@shape_dsl_function
-def nn_lstm_forward_ir(
-    input: ShapedArray,
-    input_size: symint,
-    hidden_size: symint,
-    num_layers: symint = 1,
-    bidirectional: bool = False,
-) -> [ShapedArray, ShapedArray, ShapedArray]:
-    nd = 2 if bidirectional else 1
-    output = ShapedArray(shape=[input.shape[0], input.shape[1], hidden_size * nd])
-    h_n = ShapedArray(shape=[num_layers * nd, input.shape[0], hidden_size])
-    c_n = ShapedArray(shape=[num_layers * nd, input.shape[0], hidden_size])
-    return [output, h_n, c_n]
-
-@shape_dsl_function
-def nn_gru_forward_ir(
-    input: ShapedArray,
-    input_size: symint,
-    hidden_size: symint,
-    num_layers: symint = 1,
-    bidirectional: bool = False,
-) -> [ShapedArray, ShapedArray]:
-    nd = 2 if bidirectional else 1
-    output = ShapedArray(shape=[input.shape[0], input.shape[1], hidden_size * nd])
-    h_n = ShapedArray(shape=[num_layers * nd, input.shape[0], hidden_size])
-    return [output, h_n]
-
-@shape_dsl_function
-def nn_lstmcell_forward_ir(
-    input: ShapedArray, input_size: symint, hidden_size: symint
-) -> [ShapedArray, ShapedArray]:
-    h = ShapedArray(shape=[input.shape[0], hidden_size])
-    c = ShapedArray(shape=[input.shape[0], hidden_size])
-    return [h, c]

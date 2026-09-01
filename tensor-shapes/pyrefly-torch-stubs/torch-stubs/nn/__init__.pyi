@@ -23,17 +23,17 @@ from typing import (
 from shape_extensions import Elements, Flag, IntTuple, IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Int as _Int, ProxyMethod, uses_shape_dsl
+    from shape_extensions import Int as _Int, ProxyMethod
     from torch import Tensor
     from torch._shapes import (
         flatten_shape,
         glu_shape,
         interpolate_scalar_shape,
-        nn_gru_forward_ir,
-        nn_lstm_forward_ir,
-        nn_lstmcell_forward_ir,
+        lstm_cell_state_shape,
         pixel_shuffle_shape,
         pool_shape,
+        recurrent_output_shape,
+        recurrent_state_shape,
         symmetric_pad2d_shape,
     )
 
@@ -947,7 +947,12 @@ class GLU[Dim: Flag[int]](Module):
         self, input: Tensor[Shape]
     ) -> Tensor[glu_shape(Shape, Dim)]: ...
 
-class LSTM(Module):
+class LSTM[
+    InputSize: _Int,
+    HiddenSize: _Int,
+    NumLayers: _Int = 1,
+    Bidirectional: Flag[bool] = False,
+](Module):
     """Long Short-Term Memory RNN.
 
     Input:  Tensor[[B, T, InputSize]]  (batch_first=True assumed)
@@ -957,51 +962,60 @@ class LSTM(Module):
 
     ND (num_directions) = 1 for unidirectional, 2 for bidirectional.
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via the type-level DSL and class type parameters.
     """
 
     def __init__(
         self,
-        input_size: int,
-        hidden_size: int,
-        num_layers: int = 1,
+        input_size: InputSize,
+        hidden_size: HiddenSize,
+        num_layers: NumLayers = 1,
         bias: bool = True,
         batch_first: bool = False,
         dropout: float = 0.0,
-        bidirectional: bool = False,
+        bidirectional: Bidirectional = False,
     ) -> None: ...
     def flatten_parameters(self) -> None:
         """Reset parameter data pointer for CUDA contiguous memory. No-op on CPU."""
         ...
-    @uses_shape_dsl(
-        nn_lstm_forward_ir,
-        capture_init=["input_size", "hidden_size", "num_layers", "bidirectional"],
-    )
-    def forward(self, input: Tensor) -> tuple[Tensor, Tensor, Tensor]: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape]
+    ) -> tuple[
+        Tensor[recurrent_output_shape(Shape, HiddenSize, Bidirectional)],
+        Tensor[recurrent_state_shape(Shape, HiddenSize, NumLayers, Bidirectional)],
+        Tensor[recurrent_state_shape(Shape, HiddenSize, NumLayers, Bidirectional)],
+    ]: ...
 
-class LSTMCell(Module):
+class LSTMCell[InputSize: _Int, HiddenSize: _Int](Module):
     """Long Short-Term Memory cell.
 
     Input:  Tensor[[B, InputSize]]
     Output: (Tensor[[B, HiddenSize]], Tensor[[B, HiddenSize]])
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via the type-level DSL and class type parameters.
     """
 
     def __init__(
         self,
-        input_size: int,
-        hidden_size: int,
+        input_size: InputSize,
+        hidden_size: HiddenSize,
         bias: bool = True,
         device: Any = None,
         dtype: Any = None,
     ) -> None: ...
-    @uses_shape_dsl(nn_lstmcell_forward_ir, capture_init=["input_size", "hidden_size"])
-    def forward(
-        self, input: Tensor, hx: tuple[Tensor, Tensor] | None = None
-    ) -> tuple[Tensor, Tensor]: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape], hx: tuple[Tensor, Tensor] | None = None
+    ) -> tuple[
+        Tensor[lstm_cell_state_shape(Shape, HiddenSize)],
+        Tensor[lstm_cell_state_shape(Shape, HiddenSize)],
+    ]: ...
 
-class GRU(Module):
+class GRU[
+    InputSize: _Int,
+    HiddenSize: _Int,
+    NumLayers: _Int = 1,
+    Bidirectional: Flag[bool] = False,
+](Module):
     """Gated Recurrent Unit RNN.
 
     Input:  Tensor[[B, T, InputSize]]  (batch_first=True assumed)
@@ -1010,29 +1024,28 @@ class GRU(Module):
 
     ND (num_directions) = 1 for unidirectional, 2 for bidirectional.
 
-    Shape inference via DSL + NNModule init capture.
+    Shape inference via the type-level DSL and class type parameters.
     """
 
     def __init__(
         self,
-        input_size: int,
-        hidden_size: int,
-        num_layers: int = 1,
+        input_size: InputSize,
+        hidden_size: HiddenSize,
+        num_layers: NumLayers = 1,
         bias: bool = True,
         batch_first: bool = False,
         dropout: float = 0.0,
-        bidirectional: bool = False,
+        bidirectional: Bidirectional = False,
     ) -> None: ...
     def flatten_parameters(self) -> None:
         """Reset parameter data pointer for CUDA contiguous memory. No-op on CPU."""
         ...
-    @uses_shape_dsl(
-        nn_gru_forward_ir,
-        capture_init=["input_size", "hidden_size", "num_layers", "bidirectional"],
-    )
-    def forward(
-        self, input: Tensor, hx: Tensor | None = None
-    ) -> tuple[Tensor, Tensor]: ...
+    def forward[Shape: IntTuple](
+        self, input: Tensor[Shape], hx: Tensor | None = None
+    ) -> tuple[
+        Tensor[recurrent_output_shape(Shape, HiddenSize, Bidirectional)],
+        Tensor[recurrent_state_shape(Shape, HiddenSize, NumLayers, Bidirectional)],
+    ]: ...
 
 class GRUCell(Module):
     """Gated Recurrent Unit cell.

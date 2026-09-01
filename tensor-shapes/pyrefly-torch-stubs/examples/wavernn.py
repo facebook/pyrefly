@@ -310,13 +310,13 @@ class WaveRNN[
         assert_type(x, Tensor[[*Elements[IntTuple], NR]])
         res = x
         x, _ = self.rnn1(x, h1)
-        assert_type(x, Tensor)
+        assert_type(x, Tensor[[int, int, NR]])
 
         x = x + res
         res = x
         x = torch.cat((x, a2), dim=-1)
         x, _ = self.rnn2(x, h2)
-        assert_type(x, Tensor)
+        assert_type(x, Tensor[[int, int, NR]])
 
         x = x + res
         x = torch.cat((x, a3), dim=-1)
