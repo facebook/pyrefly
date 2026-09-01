@@ -1317,7 +1317,7 @@ fn gradual_shape_middle() -> Type {
     IntTuple::shapeless().to_shape_arg_type()
 }
 
-fn is_gradual_shape_middle(middle: &Type) -> bool {
+pub(crate) fn is_gradual_shape_middle(middle: &Type) -> bool {
     match middle {
         Type::IntTuple(shape) => shape.is_shapeless(),
         Type::Tuple(Tuple::Unbounded(elt)) => elt.is_any() || is_gradual_size(elt),
@@ -1567,7 +1567,7 @@ fn broadcast_concrete(a_dims: &[Int], b_dims: &[Int]) -> Result<IntTuple, ShapeE
 
 /// Broadcast a single pair of dimensions.
 /// Canonicalizes both sides so symbolic expressions that reduce to literals are caught.
-fn broadcast_dim(a_ty: &Int, b_ty: &Int, position: usize) -> Result<Int, ShapeError> {
+pub(crate) fn broadcast_dim(a_ty: &Int, b_ty: &Int, position: usize) -> Result<Int, ShapeError> {
     let a_ty = canonicalize_int_dim(a_ty.clone());
     let b_ty = canonicalize_int_dim(b_ty.clone());
     match (&a_ty, &b_ty) {

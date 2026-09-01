@@ -12,17 +12,29 @@
 
 #![cfg_attr(
     not(test),
-    expect(dead_code, reason = "used by the next stacked gufunc evaluator change")
+    expect(
+        dead_code,
+        reason = "used by the next stacked gufunc DSL integration change"
+    )
 )]
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::iter::repeat_n;
+
+use crate::dimension::Int;
+use crate::dimension::ShapeError;
+use crate::shaped_array::IntTuple;
+use crate::shaped_array::IntTupleView;
+use crate::shaped_array::broadcast_dim;
+use crate::shaped_array::broadcast_shapes;
+use crate::shaped_array::is_gradual_shape_middle;
 
 /// A gufunc signature in the single-output, named-dimension subset supported by shape evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GufuncSignature {
-    pub(crate) inputs: Vec<Vec<String>>,
-    pub(crate) output: Vec<String>,
+    inputs: Vec<Vec<String>>,
+    output: Vec<String>,
 }
 
 /// A well-formed signature that shape evaluation does not yet model.
@@ -355,9 +367,240 @@ pub(crate) fn parse_gufunc_signature(spec: &str) -> GufuncClassification {
     })
 }
 
+struct GufuncOperand {
+    batch: IntTuple,
+    core: Vec<Option<Int>>,
+}
+
+fn split_operand(
+    shape: &IntTuple,
+    core_rank: usize,
+    index: usize,
+) -> Result<GufuncOperand, ShapeError> {
+    match shape.view() {
+        IntTupleView::Concrete(dimensions) => {
+            if dimensions.len() < core_rank {
+                return Err(ShapeError::ShapeComputation {
+                    message: format!(
+                        "gufunc: operand {index} requires at least rank {core_rank}, got {}",
+                        dimensions.len()
+                    ),
+                });
+            }
+            let split = dimensions.len() - core_rank;
+            Ok(GufuncOperand {
+                batch: IntTuple::new(dimensions[..split].to_vec()),
+                core: dimensions[split..].iter().cloned().map(Some).collect(),
+            })
+        }
+        IntTupleView::Gradual => Ok(GufuncOperand {
+            batch: IntTuple::shapeless(),
+            core: vec![None; core_rank],
+        }),
+        IntTupleView::Unpacked {
+            prefix,
+            middle,
+            suffix,
+        } if suffix.len() >= core_rank => {
+            let split = suffix.len() - core_rank;
+            Ok(GufuncOperand {
+                batch: IntTuple::unpacked(
+                    prefix.to_vec(),
+                    middle.clone(),
+                    suffix[..split].to_vec(),
+                ),
+                core: suffix[split..].iter().cloned().map(Some).collect(),
+            })
+        }
+        IntTupleView::Unpacked { suffix, .. } => Ok(GufuncOperand {
+            // The variadic middle may supply any of the trailing core dimensions. Neither its
+            // boundary nor the batch dimensions to its left can be aligned soundly, but the
+            // fixed suffix still occupies the rightmost core positions.
+            batch: IntTuple::shapeless(),
+            core: repeat_n(None, core_rank - suffix.len())
+                .chain(suffix.iter().cloned().map(Some))
+                .collect(),
+        }),
+    }
+}
+
+fn known_batch_suffix(batch: &IntTuple) -> &[Int] {
+    match batch.view() {
+        IntTupleView::Concrete(dimensions) => dimensions,
+        IntTupleView::Gradual => &[],
+        IntTupleView::Unpacked { suffix, .. } => suffix,
+    }
+}
+
+/// Broadcast three or more batches collectively so abstract precision and errors do not depend on
+/// operand order. A variadic operand makes the leading rank gradual, while all known right-aligned
+/// dimensions remain available for reconciliation.
+fn broadcast_batches(batches: &[IntTuple]) -> Result<IntTuple, ShapeError> {
+    match batches {
+        [] => unreachable!("a parsed gufunc signature has at least one input"),
+        [batch] => return Ok(batch.clone()),
+        [left, right] => return broadcast_shapes(left, right),
+        _ => {}
+    }
+    if batches.windows(2).all(|pair| pair[0] == pair[1]) {
+        return Ok(batches[0].clone());
+    }
+
+    // A named variadic cannot absorb unmatched concrete batch dimensions because their alignment
+    // with the unknown middle is ambiguous. Preserve that binary-broadcast constraint before the
+    // collective calculation widens variadic ranks to gradual ones.
+    for batch in batches {
+        if let IntTupleView::Unpacked { middle, .. } = batch.view()
+            && !is_gradual_shape_middle(middle)
+        {
+            for concrete in batches {
+                if matches!(concrete.view(), IntTupleView::Concrete(_)) {
+                    broadcast_shapes(batch, concrete)?;
+                }
+            }
+        }
+    }
+
+    let has_variadic_rank = batches
+        .iter()
+        .any(|batch| !matches!(batch.view(), IntTupleView::Concrete(_)));
+    let suffix_rank = batches
+        .iter()
+        .map(|batch| known_batch_suffix(batch).len())
+        .max()
+        .unwrap_or(0);
+    let result = (0..suffix_rank)
+        .rev()
+        .map(|offset| {
+            let mut dimensions = batches
+                .iter()
+                .filter_map(|batch| {
+                    let suffix = known_batch_suffix(batch);
+                    suffix
+                        .len()
+                        .checked_sub(offset + 1)
+                        .map(|index| suffix[index].clone())
+                        .or_else(|| {
+                            (!matches!(batch.view(), IntTupleView::Concrete(_))).then_some(Int::Int)
+                        })
+                })
+                .collect::<Vec<_>>();
+            dimensions.sort();
+            dimensions
+                .into_iter()
+                .try_fold(Int::Literal(1), |result, dimension| {
+                    broadcast_dim(&result, &dimension, suffix_rank - offset - 1)
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(if has_variadic_rank {
+        IntTuple::unpacked(
+            Vec::new(),
+            IntTuple::shapeless().to_shape_arg_type(),
+            result,
+        )
+    } else {
+        IntTuple::new(result)
+    })
+}
+
+/// Evaluate the output shape of a supported single-output gufunc signature.
+pub(crate) fn evaluate_gufunc(
+    signature: &GufuncSignature,
+    operands: &[IntTuple],
+) -> Result<IntTuple, ShapeError> {
+    if operands.len() != signature.inputs.len() {
+        return Err(ShapeError::ShapeComputation {
+            message: format!(
+                "gufunc: expected {} operands, got {}",
+                signature.inputs.len(),
+                operands.len()
+            ),
+        });
+    }
+
+    // This is the historical broadcast operation and must retain its exact behavior for gradual
+    // and variadic shapes as well as concrete ones.
+    if signature.inputs.len() == 2
+        && signature.inputs.iter().all(Vec::is_empty)
+        && signature.output.is_empty()
+    {
+        return broadcast_shapes(&operands[0], &operands[1]);
+    }
+
+    let operands = operands
+        .iter()
+        .zip(&signature.inputs)
+        .enumerate()
+        .map(|(index, (shape, dimensions))| split_operand(shape, dimensions.len(), index))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut extents: HashMap<&str, Option<Int>> = HashMap::new();
+    let mut literals: HashMap<&str, i64> = HashMap::new();
+    for (operand, names) in operands.iter().zip(&signature.inputs) {
+        for (name, dimension) in names.iter().zip(&operand.core) {
+            let Some(dimension) = dimension else {
+                continue;
+            };
+            if let Int::Literal(value) = dimension
+                && let Some(previous) = literals.insert(name, *value)
+                && previous != *value
+            {
+                return Err(ShapeError::ShapeComputation {
+                    message: format!(
+                        "gufunc: core dimension '{name}' has conflicting extents {previous} and {value}"
+                    ),
+                });
+            }
+            extents
+                .entry(name)
+                .and_modify(|extent| {
+                    if extent.as_ref().is_some_and(|known| known != dimension) {
+                        *extent = None;
+                    }
+                })
+                .or_insert_with(|| Some(dimension.clone()));
+        }
+    }
+
+    let output_core = IntTuple::new(
+        signature
+            .output
+            .iter()
+            .map(|name| {
+                literals
+                    .get(name.as_str())
+                    .copied()
+                    .map(Int::Literal)
+                    .or_else(|| extents.get(name.as_str()).cloned().flatten())
+                    .unwrap_or(Int::Int)
+            })
+            .collect(),
+    );
+    let batches = operands
+        .iter()
+        .map(|operand| operand.batch.clone())
+        .collect::<Vec<_>>();
+    Ok(broadcast_batches(&batches)?.concat(&output_core))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use pyrefly_python::module::Module;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_python::module_path::ModulePath;
+    use ruff_python_ast::Identifier;
+    use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
+
     use super::*;
+    use crate::type_var_tuple::TypeVarTuple;
+    use crate::types::Type;
 
     fn classify(spec: &str) -> String {
         match parse_gufunc_signature(spec) {
@@ -372,6 +615,37 @@ mod tests {
             }
             GufuncClassification::Invalid(error) => format!("invalid: {}", error.message()),
         }
+    }
+
+    fn signature(spec: &str) -> GufuncSignature {
+        let GufuncClassification::Supported(signature) = parse_gufunc_signature(spec) else {
+            panic!("expected a supported gufunc signature: {spec}");
+        };
+        signature
+    }
+
+    fn shape(dimensions: &[i64]) -> IntTuple {
+        IntTuple::new(dimensions.iter().copied().map(Int::Literal).collect())
+    }
+
+    fn symbolic(ty: Type) -> Int {
+        Int::Symbolic(Box::new(ty))
+    }
+
+    fn gradual_middle() -> Type {
+        IntTuple::shapeless().to_shape_arg_type()
+    }
+
+    fn named_variadic_middle(name: &str) -> Type {
+        Type::TypeVarTuple(TypeVarTuple::new(
+            Identifier::new(Name::new(name), TextRange::empty(TextSize::new(0))),
+            Module::new(
+                ModuleName::from_str("__test__"),
+                ModulePath::filesystem(PathBuf::from("__test__")),
+                Arc::new("fake module contents".to_owned()),
+            ),
+            None,
+        ))
     }
 
     #[test]
@@ -507,5 +781,296 @@ mod tests {
             classify("(n)->(n"),
             "invalid: gufunc: expected ',' or ')', got end of signature"
         );
+    }
+
+    #[test]
+    fn evaluates_scalar_core_and_batched_matrix_multiplication() {
+        assert_eq!(
+            evaluate_gufunc(&signature("(),()->()"), &[shape(&[2, 1]), shape(&[3])])
+                .expect("the batch dimensions should broadcast"),
+            shape(&[2, 3])
+        );
+        assert_eq!(
+            evaluate_gufunc(
+                &signature("(m,n),(n,p)->(m,p)"),
+                &[shape(&[5, 2, 3]), shape(&[1, 3, 4])],
+            )
+            .expect("the batch and core dimensions should be compatible"),
+            shape(&[5, 2, 4])
+        );
+    }
+
+    #[test]
+    fn binary_scalar_core_evaluation_is_exactly_broadcast_shapes() {
+        let signature = signature("(),()->()");
+        let gradual = IntTuple::shapeless();
+        let unpacked = IntTuple::unpacked(
+            vec![Int::Literal(2)],
+            gradual_middle(),
+            vec![Int::Literal(3)],
+        );
+        let cases = [
+            (gradual.clone(), shape(&[2, 3])),
+            (shape(&[4, 1]), unpacked.clone()),
+            (unpacked.clone(), gradual),
+            (unpacked, shape(&[5, 3])),
+            (shape(&[2]), shape(&[3])),
+        ];
+        for (left, right) in cases {
+            assert_eq!(
+                evaluate_gufunc(&signature, &[left.clone(), right.clone()]),
+                broadcast_shapes(&left, &right)
+            );
+        }
+    }
+
+    #[test]
+    fn validates_operand_count_and_minimum_concrete_rank() {
+        assert_eq!(
+            evaluate_gufunc(&signature("(),()->()"), &[shape(&[2])])
+                .expect_err("one operand is missing")
+                .to_string(),
+            "gufunc: expected 2 operands, got 1"
+        );
+        assert_eq!(
+            evaluate_gufunc(
+                &signature("(m,n),(n,p)->(m,p)"),
+                &[shape(&[3]), shape(&[3, 4])],
+            )
+            .expect_err("the first operand has insufficient rank")
+            .to_string(),
+            "gufunc: operand 0 requires at least rank 2, got 1"
+        );
+    }
+
+    #[test]
+    fn core_dimensions_are_exact_and_do_not_broadcast() {
+        assert_eq!(
+            evaluate_gufunc(&signature("(n),(n)->()"), &[shape(&[1]), shape(&[5])])
+                .expect_err("core dimension one must not broadcast")
+                .to_string(),
+            "gufunc: core dimension 'n' has conflicting extents 1 and 5"
+        );
+        assert_eq!(
+            evaluate_gufunc(&signature("(n,n)->(n)"), &[shape(&[3, 4])])
+                .expect_err("repeated core dimensions must agree")
+                .to_string(),
+            "gufunc: core dimension 'n' has conflicting extents 3 and 4"
+        );
+    }
+
+    #[test]
+    fn reconciles_symbolic_core_dimensions_independently() {
+        let n = symbolic(Type::None);
+        let other_n = symbolic(Type::Ellipsis);
+        let p = symbolic(Type::Materialization);
+
+        assert_eq!(
+            evaluate_gufunc(
+                &signature("(m,n),(n,p)->(m,p)"),
+                &[
+                    IntTuple::new(vec![Int::Literal(2), n.clone()]),
+                    IntTuple::new(vec![n.clone(), p.clone()]),
+                ],
+            )
+            .expect("equal symbolic dimensions should remain precise"),
+            IntTuple::new(vec![Int::Literal(2), p.clone()])
+        );
+        assert_eq!(
+            evaluate_gufunc(
+                &signature("(m,n),(n,p)->(m,n,p)"),
+                &[
+                    IntTuple::new(vec![Int::Literal(2), n]),
+                    IntTuple::new(vec![other_n, p.clone()]),
+                ],
+            )
+            .expect("unresolved symbolic equality should widen only its label"),
+            IntTuple::new(vec![Int::Literal(2), Int::Int, p])
+        );
+        assert_eq!(
+            evaluate_gufunc(
+                &signature("(n),(n)->(n)"),
+                &[IntTuple::new(vec![symbolic(Type::None)]), shape(&[7])],
+            )
+            .expect("a literal should constrain an unresolved symbolic dimension"),
+            shape(&[7])
+        );
+    }
+
+    #[test]
+    fn preserves_known_core_suffix_with_gradual_or_variadic_rank() {
+        let equation = signature("(m,n),(n,p)->(m,p)");
+        assert_eq!(
+            evaluate_gufunc(
+                &equation,
+                &[
+                    IntTuple::unpacked(
+                        vec![Int::Literal(7)],
+                        gradual_middle(),
+                        vec![Int::Literal(8), Int::Literal(2), Int::Literal(3)],
+                    ),
+                    shape(&[3, 4]),
+                ],
+            )
+            .expect("the known variadic suffix contains the full core"),
+            IntTuple::unpacked(
+                vec![Int::Literal(7)],
+                gradual_middle(),
+                vec![Int::Literal(8), Int::Literal(2), Int::Literal(4)],
+            )
+        );
+        assert_eq!(
+            evaluate_gufunc(
+                &equation,
+                &[
+                    IntTuple::unpacked(
+                        vec![Int::Literal(2)],
+                        gradual_middle(),
+                        vec![Int::Literal(3)],
+                    ),
+                    shape(&[3, 4]),
+                ],
+            )
+            .expect("an ambiguous core boundary should fall back conservatively"),
+            IntTuple::unpacked(
+                Vec::new(),
+                gradual_middle(),
+                vec![Int::Int, Int::Literal(4)],
+            )
+        );
+        assert_eq!(
+            evaluate_gufunc(&equation, &[IntTuple::shapeless(), shape(&[3, 4])])
+                .expect("a gradual operand should preserve core dimensions known elsewhere"),
+            IntTuple::unpacked(
+                Vec::new(),
+                gradual_middle(),
+                vec![Int::Int, Int::Literal(4)],
+            )
+        );
+        assert_eq!(
+            evaluate_gufunc(
+                &signature("(m,n)->(n)"),
+                &[IntTuple::unpacked(
+                    Vec::new(),
+                    gradual_middle(),
+                    vec![Int::Literal(5)],
+                )],
+            )
+            .expect("a short fixed suffix still determines the rightmost core dimension"),
+            IntTuple::unpacked(Vec::new(), gradual_middle(), vec![Int::Literal(5)])
+        );
+    }
+
+    #[test]
+    fn arbitrary_arity_batch_broadcasting_is_permutation_invariant() {
+        let signature = signature("(),(),()->()");
+        let operands = [
+            IntTuple::shapeless(),
+            IntTuple::unpacked(Vec::new(), gradual_middle(), vec![Int::Literal(3)]),
+            shape(&[1, 3]),
+        ];
+        for permutation in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let permuted = permutation.map(|index| operands[index].clone());
+            assert_eq!(
+                evaluate_gufunc(&signature, &permuted)
+                    .expect("variadic batch fallback should not depend on operand order"),
+                IntTuple::unpacked(
+                    Vec::new(),
+                    gradual_middle(),
+                    vec![Int::Int, Int::Literal(3)],
+                )
+            );
+        }
+
+        let fixed_rank = [
+            IntTuple::new(vec![Int::Int, Int::Literal(1)]),
+            shape(&[1, 5]),
+            shape(&[7, 1]),
+        ];
+        for permutation in [[0, 1, 2], [2, 0, 1], [1, 2, 0]] {
+            let permuted = permutation.map(|index| fixed_rank[index].clone());
+            assert_eq!(
+                evaluate_gufunc(&signature, &permuted)
+                    .expect("fixed-rank batches should broadcast exactly"),
+                shape(&[7, 5])
+            );
+        }
+
+        let conflicting = [shape(&[2, 3]), IntTuple::shapeless(), shape(&[4, 3])];
+        for permutation in [[0, 1, 2], [2, 0, 1], [1, 2, 0]] {
+            let permuted = permutation.map(|index| conflicting[index].clone());
+            assert!(
+                evaluate_gufunc(&signature, &permuted).is_err(),
+                "known incompatible suffixes must conflict in every operand order"
+            );
+        }
+
+        let forced_suffix = [
+            IntTuple::unpacked(
+                Vec::new(),
+                gradual_middle(),
+                vec![Int::Literal(1), Int::Literal(5)],
+            ),
+            IntTuple::unpacked(
+                Vec::new(),
+                gradual_middle(),
+                vec![Int::Literal(3), Int::Literal(1)],
+            ),
+            shape(&[4, 3, 5]),
+        ];
+        assert_eq!(
+            evaluate_gufunc(&signature, &forced_suffix)
+                .expect("known suffix dimensions should constrain gradual dimensions"),
+            IntTuple::unpacked(
+                Vec::new(),
+                gradual_middle(),
+                vec![Int::Literal(4), Int::Literal(3), Int::Literal(5)],
+            )
+        );
+
+        let identical = IntTuple::unpacked(
+            vec![Int::Literal(2)],
+            gradual_middle(),
+            vec![Int::Literal(3)],
+        );
+        assert_eq!(
+            evaluate_gufunc(
+                &signature,
+                &[identical.clone(), identical.clone(), identical.clone()]
+            )
+            .expect("identical variadic batches should retain their full representation"),
+            identical
+        );
+    }
+
+    #[test]
+    fn scalar_operand_does_not_hide_named_variadic_batch_ambiguity() {
+        let signature = signature("(),(),()->()");
+        let operands = [
+            IntTuple::unpacked(Vec::new(), named_variadic_middle("Batch"), Vec::new()),
+            shape(&[2]),
+            shape(&[]),
+        ];
+        for permutation in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let permuted = permutation.map(|index| operands[index].clone());
+            assert!(
+                evaluate_gufunc(&signature, &permuted).is_err(),
+                "a scalar operand must not hide ambiguous named-variadic alignment"
+            );
+        }
     }
 }
