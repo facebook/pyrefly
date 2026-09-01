@@ -35,6 +35,7 @@ pub mod heap;
 pub mod keywords;
 pub mod lit_int;
 pub mod literal;
+pub mod map_int_tuples;
 pub mod meta_shape_dsl;
 pub mod module;
 pub mod param_spec;
