@@ -264,3 +264,19 @@ def rfftfreq_shape(n: int) -> IntTuple:
     if n < 0:
         return dsl.Invalid("n must be non-negative")
     return dsl.IntTuple((n // 2 + 1,))
+
+@type_shape_dsl_function
+def lax_broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    if len(left) == 0:
+        return right
+    if len(right) == 0:
+        return left
+    if len(left) != len(right):
+        return dsl.Invalid("arrays must have the same number of dimensions")
+    if any(
+        left[i] != right[i] and left[i] != 1 and right[i] != 1 for i in range(len(left))
+    ):
+        return dsl.Invalid("incompatible shapes for broadcasting")
+    return dsl.IntTuple(
+        (right[i] if left[i] == 1 else left[i]) for i in range(len(left))
+    )
