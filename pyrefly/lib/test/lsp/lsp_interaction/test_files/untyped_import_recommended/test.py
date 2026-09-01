@@ -4,3 +4,4 @@
 # LICENSE file in the root directory of this source tree.
 
 import django  # noqa: F401
+import scipy  # noqa: F401

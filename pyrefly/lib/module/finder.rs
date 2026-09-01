@@ -642,6 +642,7 @@ pub fn find_import_prefixes(config: &ConfigFile, module: ModuleName) -> Vec<Modu
 fn recommended_stubs_package(module: ModuleName) -> Option<ModuleName> {
     match module.first_component().as_str() {
         "django" => Some(ModuleName::from_str("django-stubs")),
+        "scipy" => Some(ModuleName::from_str("scipy-stubs")),
         _ => {
             // If the module has stubs in typeshed, recommend types-<package>
             if let Ok(ts) = typeshed_third_party()
