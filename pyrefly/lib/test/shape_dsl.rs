@@ -597,7 +597,6 @@ fn test_invalid_type_shape_dsl_function_recovers_as_def() {
         "main",
         r#"
 from shape_extensions import Int, type_shape_dsl_function
-from shape_extensions.dsl import shape_dsl_function
 
 @type_shape_dsl_function
 def invalid(x: Int) -> Int:
@@ -611,10 +610,6 @@ def invalid_domain(x: str) -> str:
 def duplicate(x: Int, x: Int) -> Int:
     return x
 
-@shape_dsl_function
-@type_shape_dsl_function
-def conflicting(x: Int) -> Int:
-    return x
 "#,
     );
     let (state, handle) = env.to_state();
@@ -623,7 +618,7 @@ def conflicting(x: Int) -> Int:
         .transaction()
         .get_solutions(&main)
         .expect("module should solve");
-    for name in ["invalid", "invalid_domain", "duplicate", "conflicting"] {
+    for name in ["invalid", "invalid_domain", "duplicate"] {
         let ty = solutions.get(&KeyExport(Name::new(name)));
         assert!(
             matches!(ty, Type::Function(function)
@@ -638,7 +633,6 @@ testcase!(
     shaped_array_env(),
     r#"
 from shape_extensions import Int, type_shape_dsl_function
-from shape_extensions.dsl import shape_dsl_function
 
 @type_shape_dsl_function
 async def asynchronous(x: Int) -> Int:  # E: @type_shape_dsl_function does not support async functions
@@ -689,10 +683,6 @@ def outer() -> None:
     def nested(x: Int) -> Int:  # E: @type_shape_dsl_function must decorate a top-level function
         return x
 
-@shape_dsl_function
-@type_shape_dsl_function
-def conflicting(x: Int) -> Int:  # E: `@shape_dsl_function` and `@type_shape_dsl_function` cannot be combined
-    return x
 "#,
 );
 
@@ -7305,23 +7295,6 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
 );
 
 testcase!(
-    test_numpy_shaped_array_fixture,
-    shaped_array_env_with_numpy(),
-    r#"
-import numpy as np
-from typing import reveal_type
-
-def f(x: np.ndarray[[2, 3], float]) -> None:
-    reveal_type(x)  # E: revealed type: ndarray[[2, 3], float]
-    reveal_type(x.copy())  # E: revealed type: ndarray[[2, 3], float]
-    reveal_type(x.item())  # E: revealed type: float
-    reveal_type(x.shape)  # E: revealed type: IntTuple[2, 3]
-    reveal_type(x[0])  # E: revealed type: ndarray[[3], float]
-    reveal_type(np.add_leading_axis(x))  # E: revealed type: ndarray[[1, 2, 3], float]
-"#,
-);
-
-testcase!(
     test_jaxtyping_inttuple_carrier_shapes,
     {
         let mut env = shaped_array_env();
@@ -7355,10 +7328,73 @@ def named_variadic(x: Float[Array, "*batch channels"]) -> None:
 "#,
 );
 
-testcase!(
-    test_numpy_tuple_carrier_meta_shape_keeps_shape_coherent,
-    shaped_array_env_with_numpy(),
-    r#"
+mod legacy {
+    use super::*;
+
+    #[test]
+    fn test_conflicting_shape_dsl_decorators_recover_as_def() {
+        let mut env = shaped_array_env();
+        env.add(
+            "main",
+            r#"
+from shape_extensions import Int, type_shape_dsl_function
+from shape_extensions.dsl import shape_dsl_function
+
+@shape_dsl_function
+@type_shape_dsl_function
+def conflicting(x: Int) -> Int:
+    return x
+"#,
+        );
+        let (state, handle) = env.to_state();
+        let main = handle("main");
+        let solutions = state
+            .transaction()
+            .get_solutions(&main)
+            .expect("module should solve");
+        let ty = solutions.get(&KeyExport(Name::new("conflicting")));
+        assert!(
+            matches!(ty, Type::Function(function)
+                if matches!(&function.metadata.kind, FunctionKind::Def(_))),
+            "expected conflicting DSL decorators to recover as an ordinary function, got `{ty}`"
+        );
+    }
+
+    testcase!(
+        test_conflicting_shape_dsl_decorators_error,
+        shaped_array_env(),
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+from shape_extensions.dsl import shape_dsl_function
+
+@shape_dsl_function
+@type_shape_dsl_function
+def conflicting(x: Int) -> Int:  # E: `@shape_dsl_function` and `@type_shape_dsl_function` cannot be combined
+    return x
+"#,
+    );
+
+    testcase!(
+        test_numpy_shaped_array_fixture,
+        shaped_array_env_with_numpy(),
+        r#"
+import numpy as np
+from typing import reveal_type
+
+def f(x: np.ndarray[[2, 3], float]) -> None:
+    reveal_type(x)  # E: revealed type: ndarray[[2, 3], float]
+    reveal_type(x.copy())  # E: revealed type: ndarray[[2, 3], float]
+    reveal_type(x.item())  # E: revealed type: float
+    reveal_type(x.shape)  # E: revealed type: IntTuple[2, 3]
+    reveal_type(x[0])  # E: revealed type: ndarray[[3], float]
+    reveal_type(np.add_leading_axis(x))  # E: revealed type: ndarray[[1, 2, 3], float]
+"#,
+    );
+
+    testcase!(
+        test_numpy_tuple_carrier_meta_shape_keeps_shape_coherent,
+        shaped_array_env_with_numpy(),
+        r#"
 import numpy as np
 from typing import Literal, reveal_type
 
@@ -7371,12 +7407,12 @@ def f(x: np.tcarray[[2, 3], int]) -> None:
     reveal_type(y.shape)  # E: revealed type: IntTuple[1, 2, 3]
     reveal_type(y.dtype())  # E: revealed type: int
 "#,
-);
+    );
 
-testcase!(
-    test_tuple_carrier_generic_return_feeds_meta_shape,
-    shaped_array_env_with_numpy(),
-    r#"
+    testcase!(
+        test_tuple_carrier_generic_return_feeds_meta_shape,
+        shaped_array_env_with_numpy(),
+        r#"
 import numpy as np
 from typing import reveal_type
 
@@ -7386,11 +7422,11 @@ def f(x: np.tcarray[[2, 3], int]) -> None:
     y = np.tc_add_leading_axis(np.tc_identity(x))
     reveal_type(y)  # E: revealed type: tcarray[[1, 2, 3]]
 "#,
-);
+    );
 
-fn shape_dsl_env() -> TestEnv {
-    let mut env = shape_dsl_base_env();
-    env.add_with_path(
+    fn shape_dsl_env() -> TestEnv {
+        let mut env = shape_dsl_base_env();
+        env.add_with_path(
         "my_shapes",
         "my_shapes.pyi",
         r#"
@@ -7602,7 +7638,7 @@ def two_errors_ir(x: int) -> int:  # E: @shape_dsl_function type error: undefine
     return missing_one(x) + missing_two(x)  # E: Could not find name `missing_one`  # E: Could not find name `missing_two`
 "#,
     );
-    env.add_with_path(
+        env.add_with_path(
         "my_lib",
         "my_lib.pyi",
         r#"
@@ -7741,13 +7777,13 @@ def dotted_fn(x: int) -> int: ...
 
 "#,
     );
-    env
-}
+        env
+    }
 
-testcase!(
-    test_uses_shape_dsl_preserves_type,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_uses_shape_dsl_preserves_type,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type
 from my_lib import plain_fn
 
@@ -7756,103 +7792,103 @@ from my_lib import plain_fn
 # type), the result is Literal[1], not int.
 assert_type(plain_fn(1), Literal[1])
 "#,
-);
+    );
 
-testcase!(
-    test_uses_shape_dsl_overload_with_implementation,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_uses_shape_dsl_overload_with_implementation,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type
 from my_lib import overloaded_with_impl
 
 assert_type(overloaded_with_impl(1), Literal[1])
 assert_type(overloaded_with_impl("a"), str)
 "#,
-);
+    );
 
-testcase!(
-    test_uses_shape_dsl_overload_no_implementation,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_uses_shape_dsl_overload_no_implementation,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type
 from my_lib import overloaded_no_impl
 
 assert_type(overloaded_no_impl(1), Literal[1])
 assert_type(overloaded_no_impl("a"), str)
 "#,
-);
+    );
 
-testcase!(
-    test_uses_shape_dsl_cross_function_call,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_uses_shape_dsl_cross_function_call,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type
 from my_lib import double_fn
 
 assert_type(double_fn(3), Literal[6])
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_scalar_arithmetic_and_comparisons,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_scalar_arithmetic_and_comparisons,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type
 from my_lib import scalar_kernel_fn
 
 assert_type(scalar_kernel_fn(3), Literal[3])
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_strings_defaults_conditionals_and_raise,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_strings_defaults_conditionals_and_raise,
+        shape_dsl_env(),
+        r#"
 from typing import assert_type
 from my_lib import string_guard_fn
 
 assert_type(string_guard_fn(3), str)
 string_guard_fn(4)  # E: n4
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_list_primitives,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_list_primitives,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type
 from my_lib import list_kernel_fn
 
 assert_type(list_kernel_fn((2, 3, 5, 7)), Literal[21])
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_iterator_builtins,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_iterator_builtins,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type
 from my_lib import iterator_kernel_fn
 
 assert_type(iterator_kernel_fn((2, 3, 5), (7, 11, 13)), Literal[24])
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_reduction_builtins,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_reduction_builtins,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type
 from my_lib import reductions_fn
 
 assert_type(reductions_fn((2, 3, 4)), Literal[33])
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_int_return_uses_canonical_size,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_int_return_uses_canonical_size,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type, reveal_type
 from shape_extensions import Int, IntVar
 from my_lib import identity_int_fn, product_int_fn
@@ -7865,12 +7901,12 @@ def f[N: IntVar, M: IntVar](n: Int[N], m: Int[M]) -> None:
     assert_type(identity_int_fn(3), Literal[3])
     assert_type(product_int_fn(3, 4), Literal[12])
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_int_equality,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_int_equality,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type
 from shape_extensions import Int, IntVar
 from my_lib import same_int_or_one_fn
@@ -7879,12 +7915,12 @@ def f[N: IntVar, M: IntVar](n: Int[N], m: Int[M]) -> None:
     assert_type(same_int_or_one_fn(n, n), Int[N])
     assert_type(same_int_or_one_fn(n, m), Literal[1])
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_svd_reduced_2d_shapes,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_svd_reduced_2d_shapes,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, reveal_type
 from my_lib import Array, svd_fn
 
@@ -7904,12 +7940,12 @@ def f(tall: Array[[5, 3], float], wide: Array[[3, 5], float], square: Array[[4, 
     reveal_type(square_s)  # E: revealed type: Array[[4], float]
     reveal_type(square_vt)  # E: revealed type: Array[[4, 4], float]
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_svd_rejects_unsupported_modes,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_svd_rejects_unsupported_modes,
+        shape_dsl_env(),
+        r#"
 from my_lib import Array, svd_raw_flags_fn
 
 def f(x: Array[[5, 3], float], vector: Array[[5], float]) -> None:
@@ -7918,12 +7954,12 @@ def f(x: Array[[5, 3], float], vector: Array[[5], float]) -> None:
     svd_raw_flags_fn(x, full_matrices=False, compute_uv=False)  # E: svd without singular vectors is not modeled
     svd_raw_flags_fn(x, full_matrices=False, hermitian=True)  # E: hermitian svd shapes are not modeled
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_diag_1d_shapes,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_diag_1d_shapes,
+        shape_dsl_env(),
+        r#"
 from typing import reveal_type
 from my_lib import Array, diag_fn
 
@@ -7933,23 +7969,23 @@ def f(vector: Array[[4], float], matrix: Array[[4, 4], float]) -> None:
     reveal_type(diag_fn(vector, -1))  # E: revealed type: Array[[5, 5], float]
     diag_fn(matrix)  # E: diag expects a 1-D array
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_parse_einsum_equation_builtin,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_parse_einsum_equation_builtin,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type
 from my_lib import einsum_kernel_fn
 
 assert_type(einsum_kernel_fn(), Literal[7])
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_parse_einsum_equation_classification,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_parse_einsum_equation_classification,
+        shape_dsl_env(),
+        r#"
 from typing import assert_type
 from my_lib import einsum_implicit_kernel_fn, einsum_malformed_kernel_fn, einsum_repeated_output_kernel_fn, einsum_ellipsis_masked_kernel_fn, einsum_ellipsis_kernel_fn
 
@@ -7959,12 +7995,12 @@ einsum_malformed_kernel_fn()  # E: einsum: equation must contain exactly one '->
 einsum_repeated_output_kernel_fn()  # E: einsum: output index 'a' appears more than once
 einsum_ellipsis_masked_kernel_fn()  # E: einsum: output index 'a' appears more than once
 "#,
-);
+    );
 
-testcase!(
-    test_uses_shape_dsl_not_a_dsl_function,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_uses_shape_dsl_not_a_dsl_function,
+        shape_dsl_env(),
+        r#"
 from typing import assert_type
 from my_lib import bad_fn
 
@@ -7972,12 +8008,12 @@ from my_lib import bad_fn
 # transform is applied and the declared return type (int) is used instead.
 assert_type(bad_fn(1), int)
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_unsupported_syntax,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_unsupported_syntax,
+        shape_dsl_env(),
+        r#"
 from typing import assert_type
 from my_lib import bad_syntax_fn
 
@@ -7985,12 +8021,12 @@ from my_lib import bad_syntax_fn
 # bad_syntax_fn falls back to the declared return type.
 assert_type(bad_syntax_fn(1), int)
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_kwargs_warning,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_kwargs_warning,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type
 from my_lib import kwargs_fn
 
@@ -7998,12 +8034,12 @@ from my_lib import kwargs_fn
 # still succeeds (kwargs are silently dropped), so shape inference works.
 assert_type(kwargs_fn(1), Literal[1])
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_uses_failing_function,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_uses_failing_function,
+        shape_dsl_env(),
+        r#"
 from typing import assert_type
 from my_lib import calls_undefined_fn
 
@@ -8012,12 +8048,12 @@ from my_lib import calls_undefined_fn
 # return type.
 assert_type(calls_undefined_fn(1), int)
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_function_requires_return_annotation,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_function_requires_return_annotation,
+        shape_dsl_env(),
+        r#"
 from typing import assert_type
 from my_lib import no_ret_fn
 
@@ -8025,12 +8061,12 @@ from my_lib import no_ret_fn
 # no_ret_fn falls back to its declared return type.
 assert_type(no_ret_fn(1), int)
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_reports_multiple_errors,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_reports_multiple_errors,
+        shape_dsl_env(),
+        r#"
 from typing import assert_type
 from my_lib import two_errors_fn
 
@@ -8038,13 +8074,13 @@ from my_lib import two_errors_fn
 # the consumer falls back to the declared return type.
 assert_type(two_errors_fn(1), int)
 "#,
-);
+    );
 
-testcase!(
-    bug = "dotted-name arguments to @uses_shape_dsl silent-noop; should emit a diagnostic",
-    test_shape_dsl_dotted_name_silent_noop,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        bug = "dotted-name arguments to @uses_shape_dsl silent-noop; should emit a diagnostic",
+        test_shape_dsl_dotted_name_silent_noop,
+        shape_dsl_env(),
+        r#"
 from typing import assert_type
 from my_lib import dotted_fn
 
@@ -8052,13 +8088,13 @@ from my_lib import dotted_fn
 # transform is applied and the declared return type is used.
 assert_type(dotted_fn(1), int)
 "#,
-);
+    );
 
-// ── Recursion-safety tests ────────────────────────────────────────────────────
+    // ── Recursion-safety tests ────────────────────────────────────────────────────
 
-fn shape_dsl_recursion_env() -> TestEnv {
-    let mut env = shape_dsl_base_env();
-    env.add_with_path(
+    fn shape_dsl_recursion_env() -> TestEnv {
+        let mut env = shape_dsl_base_env();
+        env.add_with_path(
         "recursive_shapes",
         "recursive_shapes.pyi",
         r#"
@@ -8093,7 +8129,7 @@ def triple_ir(x: int) -> int:
     return triple_mid(x)
 "#,
     );
-    env.add_with_path(
+        env.add_with_path(
         "recursive_lib",
         "recursive_lib.pyi",
         r#"
@@ -8110,13 +8146,13 @@ def mutual_fn(x: int) -> int: ...
 def triple_fn(x: int) -> int: ...
 "#,
     );
-    env
-}
+        env
+    }
 
-testcase!(
-    test_shape_dsl_self_recursive_rejected,
-    shape_dsl_recursion_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_self_recursive_rejected,
+        shape_dsl_recursion_env(),
+        r#"
 from typing import assert_type
 from recursive_lib import self_recursive_fn
 
@@ -8124,24 +8160,24 @@ from recursive_lib import self_recursive_fn
 # back to its declared return type rather than crashing the evaluator.
 assert_type(self_recursive_fn(1), int)
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_mutual_recursive_rejected,
-    shape_dsl_recursion_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_mutual_recursive_rejected,
+        shape_dsl_recursion_env(),
+        r#"
 from typing import assert_type
 from recursive_lib import mutual_fn
 
 # mutual_a_ir / mutual_b_ir form a cycle; mutual_fn falls back to int.
 assert_type(mutual_fn(1), int)
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_non_recursive_chain,
-    shape_dsl_recursion_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_non_recursive_chain,
+        shape_dsl_recursion_env(),
+        r#"
 from typing import Literal, assert_type
 from recursive_lib import triple_fn
 
@@ -8149,12 +8185,12 @@ from recursive_lib import triple_fn
 # cycles.  triple_leaf(x) = x+x+x, so triple_fn(4) evaluates to Literal[12].
 assert_type(triple_fn(4), Literal[12])
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_wrong_return_type,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_wrong_return_type,
+        shape_dsl_env(),
+        r#"
 from typing import assert_type
 from my_lib import returns_wrong_type_fn
 
@@ -8163,12 +8199,12 @@ from my_lib import returns_wrong_type_fn
 # returns_wrong_type_fn falls back to its declared bool return type.
 assert_type(returns_wrong_type_fn(1), bool)
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_list_return_for_scalar_union,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_list_return_for_scalar_union,
+        shape_dsl_env(),
+        r#"
 from typing import Literal, assert_type
 from my_lib import dims_as_scalar_union_fn
 
@@ -8177,12 +8213,12 @@ from my_lib import dims_as_scalar_union_fn
 # concrete tuple of dimensions".
 assert_type(dims_as_scalar_union_fn((1, 2)), tuple[Literal[1], Literal[2]])
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_unknown_return_fallback,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_unknown_return_fallback,
+        shape_dsl_env(),
+        r#"
 from typing import assert_type
 from my_lib import unknown_fallback_fn
 
@@ -8190,12 +8226,12 @@ from my_lib import unknown_fallback_fn
 # the DSL function invalid just because it evaluates to Val::None internally.
 assert_type(unknown_fallback_fn(1), int)
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_arg_count_too_few,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_arg_count_too_few,
+        shape_dsl_env(),
+        r#"
 from typing import assert_type
 from my_lib import too_few_args_fn
 
@@ -8203,12 +8239,12 @@ from my_lib import too_few_args_fn
 # so the DSL compile-time check fires and the consumer falls back to int.
 assert_type(too_few_args_fn(), int)
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_arg_count_too_many,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_arg_count_too_many,
+        shape_dsl_env(),
+        r#"
 from typing import assert_type
 from my_lib import too_many_args_fn
 
@@ -8216,25 +8252,25 @@ from my_lib import too_many_args_fn
 # so the DSL compile-time check fires and the consumer falls back to int.
 assert_type(too_many_args_fn(1), int)
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_capture_init_requires_string_literals,
-    shape_dsl_env(),
-    r#"
+    testcase!(
+        test_shape_dsl_capture_init_requires_string_literals,
+        shape_dsl_env(),
+        r#"
 from my_lib import BadCaptureInit
 
 # capture_init is read during class binding. Non-literal entries are rejected
 # instead of silently dropping them from the captured __init__ field list.
 BadCaptureInit()
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_shape_specific_primitives,
-    {
-        let mut env = shape_dsl_tensor_env();
-        env.add_with_path(
+    testcase!(
+        test_shape_dsl_shape_specific_primitives,
+        {
+            let mut env = shape_dsl_tensor_env();
+            env.add_with_path(
             "shape_ops",
             "shape_ops.pyi",
 r#"
@@ -8255,9 +8291,9 @@ def replace_leading_dim_ir(x: ShapedArray, dim: int | symint) -> ShapedArray:
 def replace_leading_dim[Shape: IntTuple](x: Tensor[Shape], dim: int) -> Tensor[Shape]: ...
 "#,
         );
-        env
-    },
-    r#"
+            env
+        },
+        r#"
 from shape_ops import replace_leading_dim
 from torch import Tensor
 from typing import Literal, assert_type
@@ -8266,16 +8302,16 @@ def f(x: Tensor[[2, 3]]) -> None:
     assert_type(x.shape, tuple[Literal[2], Literal[3]])
     assert_type(replace_leading_dim(x, 4), Tensor[[4, 3]])
 "#,
-);
+    );
 
-testcase!(
-    test_shape_dsl_numpy_matmul_2d_helper,
-    {
-        let mut env = shape_dsl_base_env();
-        env.add_with_path(
-            "numpy_like",
-            "numpy_like.pyi",
-            r#"
+    testcase!(
+        test_shape_dsl_numpy_matmul_2d_helper,
+        {
+            let mut env = shape_dsl_base_env();
+            env.add_with_path(
+                "numpy_like",
+                "numpy_like.pyi",
+                r#"
 from shape_extensions import shaped_array, uses_shape_dsl
 from shape_extensions.dsl import ShapedArray, shape_dsl_function
 
@@ -8295,10 +8331,10 @@ class Array[Shape]: ...
 @uses_shape_dsl(matmul_2d_ir)
 def matmul(a: Array, b: Array) -> Array: ...
 "#,
-        );
-        env
-    },
-    r#"
+            );
+            env
+        },
+        r#"
 from numpy_like import Array, matmul
 from typing import Literal, assert_type
 
@@ -8312,7 +8348,8 @@ def f(
     matmul(good_left, bad_right)  # E: matmul inner dimensions must match
     matmul(good_left, vector)  # E: matmul expects 2-D arrays
 "#,
-);
+    );
+}
 
 testcase!(
     test_assert_type_gradual_shape_not_equivalent_to_concrete,
