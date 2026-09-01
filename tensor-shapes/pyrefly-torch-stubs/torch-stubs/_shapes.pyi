@@ -803,28 +803,84 @@ def split_size_shapes(shape: IntTuple, split_size: Int, dim: int) -> IntTuples:
         )
     )
 
-@shape_dsl_function
-def chunk_ir(self: ShapedArray, chunks: int, dim: int = 0) -> list[ShapedArray]:
-    d = normalize_dim(len(self.shape), dim)
-    dim_val = self.shape[d]
-    if isinstance(dim_val, int):
-        chunk_size = (dim_val + chunks - 1) // chunks
-        return [
-            ShapedArray(
-                shape=replace_dim(
-                    self.shape,
-                    d,
-                    chunk_size
-                    if i < chunks - 1
-                    else dim_val - (chunks - 1) * chunk_size,
+@type_shape_dsl_function
+def chunk_shapes(shape: IntTuple, chunks: Int, dim: int) -> IntTuples:
+    if not dsl.is_int_value(dim):
+        return dsl.IntTuples.gradual()
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("chunk dimension out of range")
+    chunk_counts = dsl.IntTuple((chunks,))
+    if any(dsl.is_concrete_int(count) and count <= 0 for count in chunk_counts):
+        return dsl.Invalid("chunk count must be greater than zero")
+    if dim < 0:
+        axis = dim + len(shape)
+    else:
+        axis = dim + 0
+    extent = shape[axis]
+    if dsl.is_concrete_int(extent) and extent == 0:
+        return dsl.IntTuples(
+            (
+                dsl.IntTuple(
+                    (
+                        0 if index == axis else shape[index]
+                        for index in range(len(shape))
+                    )
+                )
+                for _ in range(chunks)
+            )
+        )
+    if dsl.is_concrete_int(extent) and dsl.is_concrete_int(chunks):
+        chunk_size = (extent + chunks - 1) // chunks
+        count = (extent + chunk_size - 1) // chunk_size
+        return dsl.IntTuples(
+            (
+                dsl.IntTuple(
+                    (
+                        (
+                            chunk_size
+                            if chunk_index != count - 1
+                            else extent - (count - 1) * chunk_size
+                        )
+                        if index == axis
+                        else shape[index]
+                        for index in range(len(shape))
+                    )
+                )
+                for chunk_index in range(count)
+            )
+        )
+    quotient = extent // chunks
+    remainders = dsl.IntTuple((extent - quotient * chunks,))
+    if any(
+        dsl.is_concrete_int(remainder) and remainder == 0 for remainder in remainders
+    ):
+        return dsl.IntTuples(
+            (
+                dsl.IntTuple(
+                    (
+                        quotient if index == axis else shape[index]
+                        for index in range(len(shape))
+                    )
+                )
+                for _ in range(chunks)
+            )
+        )
+    chunk_size = (extent + chunks - 1) // chunks
+    count = (extent + chunk_size - 1) // chunk_size
+    # The output count and shorter final chunk depend on inequalities that the
+    # symbolic evaluator cannot currently prove.
+    # TODO(stroxler): Recover precision when the DSL supports such constraints.
+    return dsl.IntTuples(
+        (
+            dsl.IntTuple(
+                (
+                    dsl.Int.gradual() if index == axis else shape[index]
+                    for index in range(len(shape))
                 )
             )
-            for i in range(chunks)
-        ]
-    return [
-        ShapedArray(shape=replace_dim(self.shape, d, dim_val // chunks))
-        for i in range(chunks)
-    ]
+            for _chunk_index in range(count)
+        )
+    )
 
 @type_shape_dsl_function
 def index_select_shape(shape: IntTuple, dim: int, index_shape: IntTuple) -> IntTuple:

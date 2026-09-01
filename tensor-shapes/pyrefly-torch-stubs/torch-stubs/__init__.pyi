@@ -44,7 +44,7 @@ from torch._shapes import (
     arange_extent,
     arange_step_extent,
     cat_shape,
-    chunk_ir,
+    chunk_shapes,
     diag_embed_shape,
     dim_shape,
     eig_shape,
@@ -643,9 +643,14 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Split tensor into variable-sized chunks. Shape inference unavailable for lists."""
         ...
 
-    @uses_shape_dsl(chunk_ir)
-    def chunk(self: Tensor, chunks: int, dim: int = 0) -> tuple[Tensor, ...]:
-        """Split tensor into chunks. Shape inference via meta-shape: torch.Tensor.chunk"""
+    def chunk[
+        Shape: IntTuple,
+        Chunks: _Int,
+        Dim: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], chunks: Chunks, dim: Dim = 0
+    ) -> MapIntTuples[lambda S: Tensor[S], chunk_shapes(Shape, Chunks, Dim)]:
+        """Split tensor into chunks. Shape inference via the type-level DSL."""
         ...
 
     def index_select[
@@ -1964,9 +1969,14 @@ def split(
     """Split tensor into variable-sized chunks. Shape inference unavailable for lists."""
     ...
 
-@uses_shape_dsl(chunk_ir)
-def chunk(self: Tensor, chunks: int, dim: int = 0) -> tuple[Tensor, ...]:
-    """Split tensor into chunks. Shape inference via meta-shape: torch.chunk"""
+def chunk[
+    Shape: IntTuple,
+    Chunks: _Int,
+    Dim: Flag[builtins.int],
+](
+    self: Tensor[Shape], chunks: Chunks, dim: Dim = 0
+) -> MapIntTuples[lambda S: Tensor[S], chunk_shapes(Shape, Chunks, Dim)]:
+    """Split tensor into chunks. Shape inference via the type-level DSL."""
     ...
 
 def index_select[
