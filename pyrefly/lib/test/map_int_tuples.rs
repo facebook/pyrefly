@@ -536,3 +536,185 @@ def nested[Shapes: IntTuples]() -> MapIntTuples[
 ]: ...
 "#,
 );
+
+testcase!(
+    test_map_int_tuples_pattern_unpacked_varargs_exact_and_empty,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import Unpack, assert_type
+
+class Box[Shape: IntTuple]: ...
+
+def starred[Shapes: IntTuples](
+    *values: *MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def explicit[Shapes: IntTuples](
+    *values: Unpack[MapIntTuples[lambda S: Box[S], Shapes]],
+) -> Shapes: ...
+
+def with_required_keyword[Shapes: IntTuples](
+    *values: *MapIntTuples[lambda S: Box[S], Shapes],
+    required: int,
+) -> Shapes: ...
+
+def check(x2: Box[IntTuple[2]], x34: Box[IntTuple[3, 4]]) -> None:
+    assert_type(starred(x2, x34), tuple[IntTuple[2], IntTuple[3, 4]])
+    assert_type(starred(), tuple[()])
+    assert_type(starred(*[]), tuple[()])
+    assert_type(explicit(x34, x2), tuple[IntTuple[3, 4], IntTuple[2]])
+    assert_type(explicit(), tuple[()])
+    assert_type(with_required_keyword(x2, required=0), tuple[IntTuple[2]])
+    with_required_keyword(x2)  # E: Missing argument `required`
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_unpacked_varargs_starred_sequences,
+    shape_extensions_env(),
+    r#"
+from collections.abc import Sequence
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Box[Shape: IntTuple]: ...
+
+def consume[Shapes: IntTuples](
+    equation: str,
+    *values: *MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def fixed(xs: tuple[Box[IntTuple[2]], Box[IntTuple[3, 4]]]) -> None:
+    assert_type(consume("", *xs), tuple[IntTuple[2], IntTuple[3, 4]])
+
+def homogeneous(xs: Sequence[Box[IntTuple[5]]]) -> None:
+    assert_type(consume("", *xs), tuple[IntTuple[5], ...])
+
+def mixed(
+    x: Box[IntTuple[1]],
+    middle: tuple[Box[IntTuple[2]], Box[IntTuple[3]]],
+    y: Box[IntTuple[4, 5]],
+) -> None:
+    assert_type(
+        consume("", x, *middle, y),
+        tuple[IntTuple[1], IntTuple[2], IntTuple[3], IntTuple[4, 5]],
+    )
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_unpacked_varargs_compose_with_shape_dsl,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples, type_shape_dsl_function
+from typing import assert_type
+
+class Box[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def first(shapes: IntTuples) -> IntTuple:
+    return shapes[0]
+
+def collect[Shapes: IntTuples](
+    *values: *MapIntTuples[lambda S: Box[S], Shapes],
+) -> Box[first(Shapes)]: ...
+
+def check(
+    x: Box[IntTuple[2, 3]],
+    middle: tuple[Box[IntTuple[2, 3]], ...],
+) -> None:
+    assert_type(collect(x, x), Box[IntTuple[2, 3]])
+    assert_type(collect(x, *middle, x), Box[IntTuple])
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_unpacked_varargs_body_tuple_view,
+    shape_extensions_env(),
+    r#"
+from collections.abc import Iterator
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Box[Shape: IntTuple]: ...
+
+def inspect[Shapes: IntTuples](
+    *values: *MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes:
+    assert_type(values, tuple[Box[IntTuple], ...])
+    assert_type(iter(values), Iterator[Box[IntTuple]])
+    assert_type(values[0], Box[IntTuple])
+    raise NotImplementedError
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_unpacked_varargs_diagnostics,
+    shape_extensions_env().enable_unknown_argument_type_error(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import Any
+
+class Box[Shape: IntTuple]: ...
+class Other[Shape: IntTuple]: ...
+
+def consume[Shapes: IntTuples](
+    *values: *MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def untyped(value):
+    return value
+
+def check(
+    wrong: Other[IntTuple[2]],
+    explicit_any: Any,
+    box: Box[IntTuple[2]],
+    boxes: tuple[Box[IntTuple[2]], ...],
+) -> None:
+    consume(wrong)  # E: is not assignable
+    consume(untyped(1))  # E: The type of this argument is unknown
+    consume(explicit_any)
+    consume(*(untyped(1), *boxes, box))  # E: The type of this argument is unknown
+    consume(*(box, *untyped(()), box))  # E: The type of this argument is unknown
+    consume(*(box, *boxes, untyped(1)))  # E: The type of this argument is unknown
+
+consume(1 + "bad")  # E: `+` is not supported between `Literal[1]` and `Literal['bad']`
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_unpacked_varargs_boundaries,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import Annotated, TypeVarTuple, Unpack, assert_type
+
+class Box[Shape: IntTuple]: ...
+
+type Mapped[Shapes: IntTuples] = MapIntTuples[lambda S: Box[S], Shapes]
+
+def aliased[Shapes: IntTuples](*values: Unpack[Mapped[Shapes]]) -> Shapes:
+    assert_type(values, tuple[Box[IntTuple], ...])
+    raise NotImplementedError
+
+def annotated[Shapes: IntTuples](
+    *values: Unpack[Annotated[Mapped[Shapes], "metadata"]],
+) -> Shapes:
+    assert_type(values, tuple[Box[IntTuple], ...])
+    raise NotImplementedError
+
+def duplicate[Shapes: IntTuples](
+    first: MapIntTuples[lambda S: Box[S], Shapes],
+    *rest: *MapIntTuples[lambda S: Box[S], Shapes],  # E: may have only one
+) -> Shapes: ...
+
+Ts = TypeVarTuple("Ts")
+def ordinary[*Ts](*values: *Ts) -> tuple[*Ts]: ...
+
+def check(x: Box[IntTuple[2]], y: Box[IntTuple[3, 4]]) -> None:
+    assert_type(aliased(x), tuple[IntTuple[2]])
+    assert_type(annotated(y), tuple[IntTuple[3, 4]])
+    assert_type(ordinary(1, "x"), tuple[int, str])
+"#,
+);

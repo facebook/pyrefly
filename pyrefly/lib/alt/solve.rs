@@ -7161,6 +7161,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
+        if self.should_preserve_unpacked_map_int_tuples_call(&inferred_ty, type_form_context) {
+            return inferred_ty;
+        }
         // Check if this is a scoped type alias in base class context
         // We do this check here instead of `validate_type_form` because it
         // substitutes type aliases with the aliased type

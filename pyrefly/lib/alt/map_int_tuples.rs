@@ -52,6 +52,10 @@ pub(crate) struct MapIntTuplesParameterPattern<'a> {
 pub(crate) fn map_int_tuples_parameter_pattern(
     ty: &Type,
 ) -> Option<MapIntTuplesParameterPattern<'_>> {
+    let ty = match ty {
+        Type::Unpack(inner) => inner.as_ref(),
+        ty => ty,
+    };
     let Type::TypeLevelDslCall(call) = ty else {
         return None;
     };
@@ -276,9 +280,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         Type::TypeLevelDslCall(call)
     }
 
-    /// Applies the experimental `MapIntTuples` interpretation associated with an annotation
-    /// root. Keeping this policy here lets future supported roots, such as variadic parameters,
-    /// compose without adding shape-extension-specific cases to annotation parsing.
+    /// Whether runtime untyping must preserve an unpacked `MapIntTuples` call until the variadic
+    /// parameter annotation root interprets it. Other calls in this variadic-parameter annotation
+    /// remain invalid.
+    pub(crate) fn should_preserve_unpacked_map_int_tuples_call(
+        &self,
+        ty: &Type,
+        type_form_context: TypeFormContext<'_>,
+    ) -> bool {
+        type_form_context == TypeFormContext::ParameterArgsAnnotation
+            && matches!(ty, Type::Unpack(inner)
+                if matches!(inner.as_ref(), Type::TypeLevelDslCall(call)
+                    if call.as_map_int_tuples().is_some()))
+    }
+
+    /// Applies the experimental `MapIntTuples` interpretation at its two supported annotation
+    /// roots: ordinary parameters and unpacked variadic parameters.
     pub(crate) fn interpret_map_int_tuples_at_annotation_root(
         &self,
         ty: Type,
@@ -286,23 +303,52 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) -> Type {
         match type_form_context {
             TypeFormContext::ParameterAnnotation => self.make_map_int_tuples_parameter_pattern(ty),
+            TypeFormContext::ParameterArgsAnnotation => {
+                let Type::Unpack(inner) = ty else {
+                    return ty;
+                };
+                self.heap
+                    .mk_unpack(self.make_map_int_tuples_parameter_pattern(*inner))
+            }
             _ => ty,
         }
     }
 
-    /// Projects a `MapIntTuples` parameter pattern to the ordinary sequence type visible inside
-    /// the function body. The callable signature retains the pattern for later argument solving.
+    /// Projects a `MapIntTuples` pattern to the ordinary collection type visible in the function
+    /// body: `Sequence[...]` for an ordinary parameter or `tuple[..., ...]` for an unpacked
+    /// variadic parameter. The callable signature retains the pattern for later argument solving.
     pub(crate) fn map_int_tuples_parameter_body_type(&self, ty: Type) -> Type {
-        let Type::TypeLevelDslCall(call) = &ty else {
-            return ty;
+        let (call, unpacked) = match &ty {
+            Type::TypeLevelDslCall(call) => (call, false),
+            Type::Unpack(inner) => {
+                let Type::TypeLevelDslCall(call) = inner.as_ref() else {
+                    return ty;
+                };
+                (call, true)
+            }
+            Type::Tuple(Tuple::Unpacked(tuple)) => {
+                let (prefix, middle, suffix) = tuple.parts();
+                if !prefix.is_empty() || !suffix.is_empty() {
+                    return ty;
+                }
+                let Type::TypeLevelDslCall(call) = middle else {
+                    return ty;
+                };
+                (call, true)
+            }
+            _ => return ty,
         };
         let Some((_, MapIntTuplesInterpretation::ParameterPattern { mapped_member }, _)) =
             call.as_map_int_tuples()
         else {
             return ty;
         };
-        self.heap
-            .mk_class_type(self.stdlib.sequence(mapped_member.clone()))
+        if unpacked {
+            Type::unbounded_tuple(mapped_member.clone())
+        } else {
+            self.heap
+                .mk_class_type(self.stdlib.sequence(mapped_member.clone()))
+        }
     }
 
     /// Attempts to recover the `IntTuple` used to construct one mapped argument member.

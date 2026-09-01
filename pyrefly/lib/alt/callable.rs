@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::mem;
 
 use itertools::Itertools;
 use pyrefly_python::dunder;
@@ -1139,7 +1140,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         // Matched args are typechecked separately later
                         argmap.insert(arg.range(), ty.clone(), name.cloned());
                         unpacked_vararg = Some((name, ty));
-                        unpacked_vararg_matched_args.push(arg_pre.clone());
+                        unpacked_vararg_matched_args.push((arg_pre.clone(), arg.range()));
                         arg_pre.post_skip();
                     }
                     Some(PosParam {
@@ -1212,32 +1213,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         let has_matched_unpacked_vararg = unpacked_vararg.is_some();
         if let Some((unpacked_name, unpacked_param_ty)) = unpacked_vararg {
+            let map_pattern = map_int_tuples_parameter_pattern(unpacked_param_ty);
             let mut prefix = Vec::new();
             let mut middle = Vec::new();
             let mut suffix = Vec::new();
-            for arg in unpacked_vararg_matched_args {
-                match arg {
-                    CallArgPreEval::Type(ty, _) => {
-                        if middle.is_empty() {
-                            prefix.push(ty.clone())
-                        } else {
-                            suffix.push(ty.clone())
-                        }
-                    }
+            for (arg, range) in unpacked_vararg_matched_args {
+                let ty = match arg {
+                    CallArgPreEval::Type(ty, _) => ty.clone(),
                     CallArgPreEval::Expr(e, _) => {
-                        if middle.is_empty() {
-                            prefix.push(self.expr_infer(e, arg_errors))
+                        let before = arg_errors.len_hard();
+                        let ty = self.expr_infer(e, arg_errors);
+                        if map_pattern.is_some() && arg_errors.len_hard() > before {
+                            self.heap.mk_any_error()
                         } else {
-                            suffix.push(self.expr_infer(e, arg_errors))
+                            ty
                         }
                     }
-                    CallArgPreEval::Fixed(tys, idx) => {
-                        if middle.is_empty() {
-                            prefix.push(tys[idx].clone());
-                        } else {
-                            suffix.push(tys[idx].clone());
-                        }
-                    }
+                    CallArgPreEval::Fixed(tys, idx) => tys[idx].clone(),
                     CallArgPreEval::Star {
                         prefix: star_prefix,
                         middle: star_middle,
@@ -1245,19 +1237,36 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         consumed,
                         ..
                     } => {
+                        let report_unknown = |ty: &Type| {
+                            if map_pattern.is_some() {
+                                self.maybe_error_unknown_argument_type(ty, range, arg_errors);
+                            }
+                        };
                         // Only elements landing between two variadic portions lose
                         // their position; the rest stay in the prefix or suffix.
-                        let unmatched_prefix = star_prefix.into_iter().skip(consumed);
+                        let unmatched_prefix = star_prefix
+                            .into_iter()
+                            .skip(consumed)
+                            .inspect(|ty| report_unknown(ty));
                         if middle.is_empty() {
                             prefix.extend(unmatched_prefix);
                         } else {
-                            middle.extend(suffix);
-                            suffix = Vec::new();
+                            middle.extend(mem::take(&mut suffix));
                             middle.extend(unmatched_prefix);
                         }
+                        report_unknown(&star_middle);
                         middle.push(star_middle);
-                        suffix.extend(star_suffix);
+                        suffix.extend(star_suffix.into_iter().inspect(|ty| report_unknown(ty)));
+                        continue;
                     }
+                };
+                if map_pattern.is_some() {
+                    self.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                }
+                if middle.is_empty() {
+                    prefix.push(ty)
+                } else {
+                    suffix.push(ty)
                 }
             }
             let unpacked_args_ty = match middle.len() {
@@ -1287,14 +1296,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     )
                 }
             };
-            // The args side (unpacked_args_ty) is always a tuple built from call
-            // arguments, e.g., tuple[*Cs] or tuple[int, str]. The param side
-            // (unpacked_param_ty) is the raw Ts from stripping * off the type
-            // annotation *Ts. Wrap it in a tuple so both sides have the same
-            // structure: tuple[*Cs] ⊆ tuple[*Ts] or tuple[int, str] ⊆ tuple[*Ts].
-            let unpacked_param_tuple =
-                self.heap
-                    .mk_unpacked_tuple(Vec::new(), unpacked_param_ty.clone(), Vec::new());
             let check_context = || {
                 TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
                     true,
@@ -1303,24 +1304,42 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 ))
                 .with_context(context.map(|ctx| ctx()))
             };
-            if let Some(flag_source_context) =
-                call_context.for_shape_flag_binding_source(unpacked_param_ty)
-            {
-                self.check_type_with_options(
-                    &unpacked_args_ty,
-                    &unpacked_param_tuple,
+            if let Some(pattern) = map_pattern {
+                self.check_map_int_tuples_parameter_pattern(
+                    pattern,
+                    MapIntTuplesPatternArgument::Type(unpacked_args_ty),
                     arguments_range,
-                    TypeCheckOptions::new(call_errors, &check_context)
-                        .with_call_context(&flag_source_context),
-                );
-            } else {
-                self.check_type_as_call_argument(
-                    &unpacked_args_ty,
-                    &unpacked_param_tuple,
-                    arguments_range,
+                    arg_errors,
                     call_errors,
                     &check_context,
+                    call_context,
+                    context,
                 );
+            } else {
+                // The args side is a tuple built from call arguments, while the parameter side is
+                // the raw type under `Unpack`. Wrap it so both sides have the same structure.
+                let unpacked_param_tuple =
+                    self.heap
+                        .mk_unpacked_tuple(Vec::new(), unpacked_param_ty.clone(), Vec::new());
+                if let Some(flag_source_context) =
+                    call_context.for_shape_flag_binding_source(unpacked_param_ty)
+                {
+                    self.check_type_with_options(
+                        &unpacked_args_ty,
+                        &unpacked_param_tuple,
+                        arguments_range,
+                        TypeCheckOptions::new(call_errors, &check_context)
+                            .with_call_context(&flag_source_context),
+                    );
+                } else {
+                    self.check_type_as_call_argument(
+                        &unpacked_args_ty,
+                        &unpacked_param_tuple,
+                        arguments_range,
+                        call_errors,
+                        &check_context,
+                    );
+                }
             }
         }
         // Missing positional-only arguments, split by whether the corresponding parameters
@@ -1379,32 +1398,51 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     Required::Optional(None) => {}
                 },
                 Param::Varargs(name, Type::Unpack(unpacked)) => {
-                    // An unmatched Flag vararg still has an authoritative empty-tuple source;
-                    // matched varargs and ordinary TypeVarTuples retain their existing path.
-                    if !has_matched_unpacked_vararg
-                        && let Some(flag_source_context) =
+                    if !has_matched_unpacked_vararg {
+                        if let Some(pattern) = map_int_tuples_parameter_pattern(unpacked) {
+                            self.check_map_int_tuples_parameter_pattern(
+                                pattern,
+                                MapIntTuplesPatternArgument::Type(
+                                    self.heap.mk_concrete_tuple(Vec::new()),
+                                ),
+                                arguments_range,
+                                arg_errors,
+                                call_errors,
+                                &|| {
+                                    TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
+                                        true,
+                                        name.clone(),
+                                        callable_name.cloned(),
+                                    ))
+                                    .with_context(context.map(|ctx| ctx()))
+                                },
+                                call_context,
+                                context,
+                            );
+                        } else if let Some(flag_source_context) =
                             call_context.for_shape_flag_binding_source(unpacked)
-                    {
-                        self.check_type_with_options(
-                            &self.heap.mk_concrete_tuple(Vec::new()),
-                            &self.heap.mk_unpacked_tuple(
-                                Vec::new(),
-                                unpacked.as_ref().clone(),
-                                Vec::new(),
-                            ),
-                            arguments_range,
-                            TypeCheckOptions::new(call_errors, &|| {
-                                TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
-                                    true,
-                                    name.clone(),
-                                    callable_name.cloned(),
-                                ))
-                                .with_context(context.map(|ctx| ctx()))
-                            })
-                            .with_call_context(&flag_source_context),
-                        );
-                    } else {
-                        self.is_subset_eq(unpacked, &self.heap.mk_concrete_tuple(Vec::new()));
+                        {
+                            self.check_type_with_options(
+                                &self.heap.mk_concrete_tuple(Vec::new()),
+                                &self.heap.mk_unpacked_tuple(
+                                    Vec::new(),
+                                    unpacked.as_ref().clone(),
+                                    Vec::new(),
+                                ),
+                                arguments_range,
+                                TypeCheckOptions::new(call_errors, &|| {
+                                    TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
+                                        true,
+                                        name.clone(),
+                                        callable_name.cloned(),
+                                    ))
+                                    .with_context(context.map(|ctx| ctx()))
+                                })
+                                .with_call_context(&flag_source_context),
+                            );
+                        } else {
+                            self.is_subset_eq(unpacked, &self.heap.mk_concrete_tuple(Vec::new()));
+                        }
                     }
                 }
                 Param::Varargs(..) => {}

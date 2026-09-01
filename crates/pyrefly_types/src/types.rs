@@ -946,7 +946,8 @@ pub enum Type {
     /// appears in a callable type later. Otherwise, we should *flatten* to a fallback type.
     CallableResidual(Box<CallableResidual>),
     /// A deferred type-level shape DSL application. Calls are normally forced at callable return
-    /// boundaries; experimental `MapIntTuples` parameter patterns instead expose a sequence view.
+    /// boundaries; experimental `MapIntTuples` parameter patterns instead expose the ordinary
+    /// collection view appropriate to regular or unpacked variadic parameters.
     TypeLevelDslCall(Box<TypeLevelDslCall>),
     /// A function declared using the `def` keyword.
     /// Note that the FunctionKind metadata doesn't participate in subtyping, and thus two types with distinct metadata are still subtypes.

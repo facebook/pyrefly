@@ -13,8 +13,9 @@
 //! - Forward mapping composes over an `IntTuples` value, including one returned by a DSL function,
 //!   and constructs the corresponding tuple of result types.
 //! - In a parameter annotation, the same syntax is retained as a pattern. The pattern stores its
-//!   mapped member type and source while exposing an ordinary `Sequence` view for argument
-//!   checking.
+//!   mapped member type and source while exposing the ordinary collection view appropriate to the
+//!   parameter: `Sequence[...]` for an ordinary parameter or `tuple[..., ...]` for an unpacked
+//!   variadic parameter.
 //!
 //! Concrete sources reduce eagerly, while symbolic sources stay deferred until enough type
 //! information is available. The underlying concept is more general: a future operator could map
