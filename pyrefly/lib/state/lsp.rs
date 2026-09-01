@@ -4644,7 +4644,6 @@ impl<'a> Transaction<'a> {
         (results, is_incomplete)
     }
 
-
     pub fn text_occurrences_in_comments_and_strings(
         &self,
         module: &ModuleInfo,
