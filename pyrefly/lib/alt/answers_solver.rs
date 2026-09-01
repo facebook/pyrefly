@@ -1940,6 +1940,10 @@ pub struct ThreadState {
     /// currently in progress, used as a coinductive guard against recursive protocol checks
     /// (e.g. `__getattr__` annotated with a protocol).
     protocol_member_guard_stack: RefCell<FxHashSet<(Type, ClassType, Name)>>,
+    /// Class-level protocol member checks for generic protocol specializations
+    /// containing placeholder vars. Fresh placeholder vars can otherwise make
+    /// each recursive specialization distinct and bypass the exact guard above.
+    protocol_member_class_guard_stack: RefCell<FxHashSet<(Type, Class, Name)>>,
     /// Tracks whether any coinductive assumption was used during solving
     /// (e.g. recursive protocol member resolution via dynamic fallback).
     coinductive_assumptions_used: Cell<bool>,
@@ -1957,6 +1961,7 @@ impl ThreadState {
             trace_sink_stack: RefCell::new(Vec::new()),
             overload_self_filter_stack: RefCell::new(FxHashSet::default()),
             protocol_member_guard_stack: RefCell::new(FxHashSet::default()),
+            protocol_member_class_guard_stack: RefCell::new(FxHashSet::default()),
             coinductive_assumptions_used: Cell::new(false),
         }
     }
@@ -2442,14 +2447,36 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Mark a protocol member check `(got, protocol_class_type, attr_name)` as in progress.
     /// Returns `true` if it was already active, signaling a coinductive cycle.
     pub(crate) fn enter_protocol_member_check(&self, key: (Type, ClassType, Name)) -> bool {
+        // A generic protocol in an explicit `self` annotation may receive a fresh
+        // placeholder var on every recursive subset query:
+        //
+        //     P[@1] -> P[@2] -> P[@3] -> ...
+        //
+        // These ClassTypes never compare equal, so also use a class-level guard
+        // when the protocol specialization contains placeholder vars.
+        if Type::ClassType(key.1.clone()).may_contain_placeholder_var() {
+            let class_key = (key.0.clone(), key.1.class_object().clone(), key.2.clone());
+            if !self
+                .thread_state
+                .protocol_member_class_guard_stack
+                .borrow_mut()
+                .insert(class_key)
+            {
+                self.thread_state.coinductive_assumptions_used.set(true);
+                return true;
+            }
+        }
+
         let is_cycle = !self
             .thread_state
             .protocol_member_guard_stack
             .borrow_mut()
-            .insert(key);
+            .insert(key.clone());
+
         if is_cycle {
             self.thread_state.coinductive_assumptions_used.set(true);
         }
+
         is_cycle
     }
 
@@ -2458,6 +2485,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .protocol_member_guard_stack
             .borrow_mut()
             .remove(key);
+
+        if Type::ClassType(key.1.clone()).may_contain_placeholder_var() {
+            let class_key = (key.0.clone(), key.1.class_object().clone(), key.2.clone());
+            self.thread_state
+                .protocol_member_class_guard_stack
+                .borrow_mut()
+                .remove(&class_key);
+        }
     }
 
     pub(crate) fn coinductive_assumptions_used(&self) -> bool {
