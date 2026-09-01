@@ -6,10 +6,8 @@
 """
 Comprehensive type stubs for PyTorch with shape inference.
 
-New shape inference rules use `@type_shape_dsl_function` definitions from
-`torch/_shapes.pyi`, called directly from public return annotations. Some existing rules still use
-the older `@uses_shape_dsl(...)` decorator while the stub library is migrated; new rules should not
-extend that legacy path.
+Shape inference is expressed through type-level functions in annotations. Library-specific
+functions are defined in `torch/_shapes.pyi`.
 """
 
 import builtins
@@ -25,7 +23,6 @@ from shape_extensions import (
     IntTuples,
     IntVar,
     MapIntTuples,
-    uses_shape_dsl,
 )
 
 # `Generator` is not defined anywhere in this package, and resolving it relies
@@ -52,7 +49,6 @@ from torch._shapes import (
     expand_shape,
     flatten_shape,
     index_select_shape,
-    item_ir,
     matmul_shape,
     movedim_scalar_shape,
     movedim_tuple_shape,
@@ -579,9 +575,8 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Enable/disable gradient tracking in-place. Shape-preserving."""
         ...
 
-    @uses_shape_dsl(item_ir)
-    def item(self: Tensor) -> float | int:
-        """Returns Python scalar from 0-dimensional tensor. Shape inference via meta-shape: torch.Tensor.item"""
+    def item(self: Tensor[[]]) -> builtins.float | builtins.int:
+        """Return a Python scalar from a rank-zero tensor."""
         ...
 
     def tolist(self: Tensor) -> Any:

@@ -5,14 +5,6 @@
 
 import shape_extensions.dsl as dsl
 from shape_extensions import Int, IntTuple, IntTuples, type_shape_dsl_function
-from shape_extensions.dsl import (
-    Error,
-    prod,
-    shape_dsl_function,
-    ShapedArray,
-    symint,
-    Unknown,
-)
 
 # TODO(stroxler): Use `IntTuple` slicing here once it preserves the symbolic-rank cases covered by
 # these generators, then share the common rank validation among the three helpers.
@@ -39,31 +31,6 @@ def slogdet_shape(shape: IntTuple) -> IntTuple:
             return dsl.Invalid("slogdet requires at least 2D input, got 0D tensor")
         return dsl.Invalid("slogdet requires at least 2D input, got 1D tensor")
     return dsl.IntTuple((shape[i] for i in range(len(shape) - 2)))
-
-@shape_dsl_function
-def normalize_dim(rank: int, dim: int) -> int:
-    if dim < 0:
-        return dim + rank
-    return dim
-
-@shape_dsl_function
-def int_max(a: int, b: int) -> int:
-    if a > b:
-        return a
-    return b
-
-@shape_dsl_function
-def replace_dim(
-    dims: list[int | symint], i: int, value: int | symint
-) -> list[int | symint]:
-    return dims[:i] + [value] + dims[i + 1 :]
-
-@shape_dsl_function
-def broadcast(a: list[int | symint], b: list[int | symint]) -> list[int | symint]:
-    max_len = int_max(len(a), len(b))
-    padded_a = [1 for _ in range(max_len - len(a))] + a
-    padded_b = [1 for _ in range(max_len - len(b))] + b
-    return [bd if ad == 1 else ad for ad, bd in zip(padded_a, padded_b)]
 
 @type_shape_dsl_function
 def reduce_shape(
@@ -1693,13 +1660,3 @@ def numel_shape(shape: IntTuple) -> Int:
 @type_shape_dsl_function
 def dim_shape(shape: IntTuple) -> Int:
     return len(shape)
-
-@shape_dsl_function
-def item_ir(self: ShapedArray) -> ShapedArray:
-    if len(self.shape) != 0:
-        raise Error(
-            "item() only works on 0-dimensional tensors, got "
-            + str(len(self.shape))
-            + "D tensor"
-        )
-    return Unknown

@@ -45,53 +45,64 @@ patterns:
 - `Int[N]` capture — binds a runtime int arg to a type-level dim
 
 **How to check if an op is supported:** Open the `.pyi` file and search for the
-class or function. If the return type is bare `Tensor`, shapes aren't tracked —
-unless the declaration has `@uses_shape_dsl(...)`. If it uses `Self`, a
-whole-shape `Tensor[S]` (`S: IntTuple`), generics, or a `@uses_shape_dsl(...)`
-decorator, it's tracked.
+class or function. If the return type is bare `Tensor`, shapes aren't tracked. If
+it uses `Self`, a whole-shape `Tensor[S]` (`S: IntTuple`), generics, or a call to
+a shape function (`Tensor[reshape_shape(Shape, NewShape)]`), it's tracked.
 
 **How to recover a missing shape (only if the user opted into stub changes):**
 Change the stub's return type. Use `Self` for identity ops, `Tensor[S]`
-(`S: IntTuple`) for shape-preserving ops, generic params for transforms, or `@uses_shape_dsl(...)`
-for shape functions that need argument-dependent computation. If stubs are
+(`S: IntTuple`) for shape-preserving ops, generic params for transforms, or a
+shape function call for argument-dependent computation. If stubs are
 off-limits, leave the op untracked — it degrades to a bare `Tensor`, which you
 record as a gap rather than fixing.
 
-### 2. DSL functions
+### 2. Type-level shape functions
 
-**Location:** declarations use `@uses_shape_dsl(ir_fn)` in
-`tensor-shapes/pyrefly-torch-stubs/torch-stubs/**/*.pyi`; IR functions live in
+**Location:** stub declarations call them directly in their return annotations,
+in `tensor-shapes/pyrefly-torch-stubs/torch-stubs/**/*.pyi`; the functions live in
 `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi` and are imported from stubs as
 `torch._shapes` because `torch-stubs` provides the `torch` package for type
 checking.
 
-Python-like shape functions interpreted at type-check time. Two parts:
+Python-like shape functions evaluated at type-check time. Two parts:
 
-- **Declaration** (in the relevant stub file): imports an IR function and
-  attaches it to a function or method with `@uses_shape_dsl(ir_fn)`. For
-  `nn.Module` classes, the decorator can capture constructor arguments with
-  `capture_init=[...]` and connect them to `forward`.
+- **Call site** (in the relevant stub file): the return annotation applies the
+  function to the signature's own type parameters, so shape computation is part
+  of the declared type rather than an attachment to it:
 
-- **DSL definitions** (`_shapes.pyi`): Python-like functions that compute
-  output shapes from input shapes and arguments. For example, `reshape_ir`
-  handles `-1` inference, `cat_ir` sums along the concat dim.
+  ```python
+  def reshape[Shape: IntTuple, NewShape: IntTuple](
+      self: Tensor[Shape], *shape: *NewShape
+  ) -> Tensor[reshape_shape(Shape, NewShape)]: ...
+  ```
+
+  An argument the function needs as a literal is captured with `Flag[int]`
+  (`dim: Dim` with `Dim: Flag[builtins.int]`); a collection of input shapes
+  arrives as an `IntTuples` value through
+  `MapIntTuples[lambda S: Tensor[S], Shapes]` (see `torch.cat`).
+
+- **Definitions** (`_shapes.pyi`): functions decorated with
+  `@type_shape_dsl_function` that compute an output `IntTuple` (or `Int`) from
+  input shapes and arguments. For example, `reshape_shape` handles `-1`
+  inference and `cat_shape` sums along the concat dim.
 
 **How to check if an op is supported:** Open the relevant stub declaration and
-look for `@uses_shape_dsl(...)`. If it has a decorator, confirm the named IR
-function exists in `_shapes.pyi`.
+read its return annotation. If it calls a shape function, confirm that function
+exists in `_shapes.pyi`.
 
-**How to add support:** Write a DSL function in `_shapes.pyi` that computes
-the output shape, decorate it with `@shape_dsl_function`, then attach it from
-the stub declaration with `@uses_shape_dsl(...)`. DSL functions are
-Python-like — look at existing ones for patterns. The DSL supports conditionals
-(`x if cond else y`), list comprehensions, and calls to helper functions like
-`normalize_dim`.
+**How to add support:** Write the function in `_shapes.pyi`, decorate it with
+`@type_shape_dsl_function`, and call it from the stub's return annotation. These
+functions are Python-like — look at existing ones for patterns. They support
+conditionals (`x if cond else y`), comprehensions, calls to other
+`@type_shape_dsl_function`s, and the `shape_extensions.dsl` helpers
+(`dsl.IntTuple`, `dsl.concat`, `dsl.prod`, `dsl.is_concrete_int`, and
+`dsl.Invalid("...")` to report an ill-formed call).
 
 ### 3. Special handlers
 
 **Location:** `pyrefly/lib/alt/` (various `.rs` files)
 
-Hard-coded Rust logic for patterns that don't fit stubs or DSL:
+Hard-coded Rust logic for patterns that don't fit stubs or shape functions:
 - `nn.Sequential` chaining (`nn_module_specials.rs`)
 - `.shape` attribute returning typed tuple (`attr.rs`)
 - Tensor indexing — integer, slice, tensor, multi-axis (`expr.rs`)
@@ -114,11 +125,11 @@ not the problem. Trace back:
    Fix: compute output in each branch independently, or use Optional narrowing.
 5. **Inlined expressions?** `f(g(x))` sometimes loses shapes that
    `y = g(x); f(y)` preserves. Fix: break into separate assignments.
-6. **Stub returning bare?** Check whether it has `@uses_shape_dsl(...)`. If
-   not, fix the `.pyi` signature or add DSL support.
-7. **DSL missing?** Add the IR function in `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`,
-   decorate it with `@shape_dsl_function`, and attach it with
-   `@uses_shape_dsl(...)`.
+6. **Stub returning bare?** Check whether its return annotation computes a
+   shape. If not, fix the `.pyi` signature or add a shape function.
+7. **Shape function missing?** Add it in `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`,
+   decorate it with `@type_shape_dsl_function`, and call it from the stub's
+   return annotation.
 
 ## What IS genuinely shapeless
 
@@ -131,7 +142,7 @@ Very few patterns truly can't be tracked:
   Note: `(a * b) // b → a` IS simplified (sound).
 
 Everything else should be trackable. If you think something is shapeless, check
-the three mechanisms first — stubs, DSL, special handlers.
+the three mechanisms first — stubs, shape functions, special handlers.
 
 ## Current API surface
 
@@ -156,8 +167,10 @@ The `shape_extensions` package is what your port imports. Its public exports:
   the mode has to be on before an annotated class body is evaluated.
 - **`shaped_array`** — `@shaped_array(shape=...)` class decorator for non-torch
   array types (numpy-style).
-- **`uses_shape_dsl`**, **`ProxyMethod`**, **`TypeVarTuple`** — stub-authoring
-  primitives; you rarely write these in a port.
+- **`IntTuples`**, **`MapIntTuples`**, **`Flag`**, **`ProxyMethod`** —
+  stub-authoring primitives; you rarely write these in a port.
+  `MapIntTuples[lambda S: Tensor[S], Shapes]` is how a stub accepts a
+  collection of tensors and keeps each element's shape.
 
 There is NO exported `TypeVar`; use `IntVar`.
 
@@ -172,8 +185,11 @@ def forward[Bs: IntTuple](
 (see `examples/tacotron2.py`, `examples/nanogpt.py`). The old `*Bs` / `Tensor[*S]`
 / `Tensor[*Bs, D]` PEP-646 style is obsolete.
 
-**DSL internals** live in `shape_extensions.dsl`: `shape_dsl_function`, `symint`,
-`ShapedArray`, `Unknown`, `Error`, `prod`, `sum`, `parse_einsum_equation`. You only touch
-these when authoring a shape-DSL rule (see `modify-shaped-array-dsl`). Note: the
-lowercase DSL surface markers `symint` / `int` inside `_shapes.pyi` and the DSL
-are INTENTIONAL DSL syntax — they are not stale names to purge.
+**Shape-function internals** live in `shape_extensions.dsl` and appear only
+inside `_shapes.pyi`: the constructors `IntTuple` and `IntTuples`, the computations
+`concat`, `prod`, `sum` and `einsum`, the tests `is_concrete_int` and `is_int_value`,
+and `Invalid("...")` to reject an
+ill-formed call. When an argument is too open to determine an answer, return
+`Int.gradual()`, `IntTuple.gradual()` or `IntTuples.gradual()` — a gradual
+result degrades to an unrefined shape, whereas `Invalid` reports an error to the
+user. You only touch these when authoring a shape rule, not when porting a model.
