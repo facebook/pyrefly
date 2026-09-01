@@ -12514,6 +12514,64 @@ assert_type(union_input_result(), Shapes[tuple[IntTuple[2]]])
 );
 
 testcase!(
+    test_type_shape_dsl_int_tuples_generators,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, IntTuples, type_shape_dsl_function
+from typing import assert_type
+
+class Shapes[Value: IntTuples]: ...
+
+@type_shape_dsl_function
+def copy(shapes: IntTuples) -> IntTuples:
+    return dsl.IntTuples(shape for shape in shapes)
+
+@type_shape_dsl_function
+def filtered(shapes: IntTuples, rank: int) -> IntTuples:
+    return dsl.IntTuples(shape for shape in shapes if len(shape) == rank)
+
+@type_shape_dsl_function
+def zipped(left: IntTuple, right: IntTuple) -> IntTuples:
+    return dsl.IntTuples(
+        dsl.IntTuple((left_dim, right_dim))
+        for left_dim, right_dim in zip(left, right)
+    )
+
+@type_shape_dsl_function
+def filtered_by_flag(shapes: IntTuples, keep: bool) -> IntTuples:
+    return dsl.IntTuples(shape for shape in shapes if keep)
+
+@type_shape_dsl_function
+def unknown_members(shapes: IntTuples) -> IntTuples:
+    return dsl.IntTuples(dsl.einsum("ij,jk", shapes) for shape in shapes)
+
+def exact_result() -> Shapes[copy(tuple[IntTuple[2], IntTuple[3, 4]])]: ...
+def empty_result() -> Shapes[copy(tuple[()])]: ...
+def filtered_result() -> Shapes[filtered(tuple[IntTuple[2], IntTuple[3, 4]], 2)]: ...
+def filtered_empty_result() -> Shapes[filtered(tuple[IntTuple[2]], 3)]: ...
+def zipped_result() -> Shapes[zipped(IntTuple[2, 3], IntTuple[4, 5])]: ...
+def unbounded_result() -> Shapes[copy(tuple[IntTuple[2], ...])]: ...
+def filtered_unknown_result[Keep: Flag[bool]](keep: Keep) -> Shapes[filtered_by_flag(tuple[IntTuple[2], IntTuple[3, 4]], Keep)]: ...
+def unknown_members_result() -> Shapes[unknown_members(tuple[IntTuple[2, 3], IntTuple[3, 4]])]: ...
+
+assert_type(exact_result(), Shapes[tuple[IntTuple[2], IntTuple[3, 4]]])
+assert_type(empty_result(), Shapes[tuple[()]])
+assert_type(filtered_result(), Shapes[tuple[IntTuple[3, 4]]])
+assert_type(filtered_empty_result(), Shapes[tuple[()]])
+assert_type(zipped_result(), Shapes[tuple[IntTuple[2, 4], IntTuple[3, 5]]])
+assert_type(unbounded_result(), Shapes[tuple[IntTuple, ...]])
+
+def gradual_inputs(keep: bool) -> None:
+    assert_type(filtered_unknown_result(keep), Shapes[tuple[IntTuple, ...]])
+    assert_type(
+        unknown_members_result(),
+        Shapes[tuple[IntTuple, IntTuple]],
+    )
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_invalid_int_tuples_construction,
     shape_dsl_base_env(),
     r#"
@@ -12522,7 +12580,7 @@ from shape_extensions import Int, IntTuple, IntTuples, type_shape_dsl_function
 
 @type_shape_dsl_function
 def list_argument(shape: IntTuple) -> IntTuples:
-    return dsl.IntTuples([shape])  # E: `dsl.IntTuples` argument must be a fixed tuple  # E: is not assignable to parameter `values`
+    return dsl.IntTuples([shape])  # E: `dsl.IntTuples` argument must be a fixed tuple or generator expression
 
 @type_shape_dsl_function
 def wrong_element(shape: IntTuple) -> IntTuples:

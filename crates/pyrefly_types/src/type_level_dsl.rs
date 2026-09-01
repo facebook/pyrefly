@@ -1268,6 +1268,10 @@ pub enum TypeShapeDslExpressionKind {
         binder: usize,
         binders: usize,
     },
+    IntTuplesGenerator {
+        binder: usize,
+        binders: usize,
+    },
 }
 
 /// The Flag value domain a validated operation requires of its operand. Reached through
@@ -1391,6 +1395,7 @@ impl DslEvaluationBudget {
 enum GeneratorResultKind {
     Dimensions,
     FlagValues,
+    IntTuples,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1398,6 +1403,7 @@ enum GeneratorValidationKind {
     Condition,
     Dimension,
     FlagValue,
+    IntTuple,
 }
 
 fn flag_domain_from_kinds(kinds: u8) -> Option<FlagDomain> {
@@ -3142,7 +3148,9 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     GeneratorValidationKind::Condition => {
                         "`any` generators require exactly one `for` clause"
                     }
-                    GeneratorValidationKind::Dimension | GeneratorValidationKind::FlagValue => {
+                    GeneratorValidationKind::Dimension
+                    | GeneratorValidationKind::FlagValue
+                    | GeneratorValidationKind::IntTuple => {
                         "constructor generators require exactly one `for` clause"
                     }
                 },
@@ -3161,7 +3169,9 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     GeneratorValidationKind::Condition => {
                         "`any` generators support at most one `if` filter"
                     }
-                    GeneratorValidationKind::Dimension | GeneratorValidationKind::FlagValue => {
+                    GeneratorValidationKind::Dimension
+                    | GeneratorValidationKind::FlagValue
+                    | GeneratorValidationKind::IntTuple => {
                         "constructor generators support at most one `if` filter"
                     }
                 },
@@ -3261,6 +3271,9 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 GeneratorValidationKind::FlagValue => {
                     self.validate_flag_int(&generator.elt, &generator_flow)
                 }
+                GeneratorValidationKind::IntTuple => self
+                    .validate_int_tuple_expression(&generator.elt, &generator_flow)
+                    .map(|_| ()),
             }
         })();
         for (target, old) in previous {
@@ -3335,10 +3348,23 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 message: "`dsl.IntTuples` requires exactly one positional argument",
             });
         }
+        if let Expr::Generator(generator) = &call.arguments.args[0] {
+            let (binder, binders) =
+                self.validate_generator(generator, flow, GeneratorValidationKind::IntTuple)?;
+            self.expressions.push(TypeShapeDslExpression {
+                range: generator.range,
+                kind: TypeShapeDslExpressionKind::IntTuplesGenerator { binder, binders },
+            });
+            self.expressions.push(TypeShapeDslExpression {
+                range: call.range(),
+                kind: TypeShapeDslExpressionKind::IntTuplesConstructor,
+            });
+            return Ok(());
+        }
         let Expr::Tuple(tuple) = &call.arguments.args[0] else {
             return Err(TypeShapeDslDefinitionError {
                 range: call.arguments.args[0].range(),
-                message: "`dsl.IntTuples` argument must be a fixed tuple",
+                message: "`dsl.IntTuples` argument must be a fixed tuple or generator expression",
             });
         };
         for element in &tuple.elts {
@@ -6013,6 +6039,9 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 GeneratorResultKind::FlagValues => {
                     DslOutcome::Value(DslValue::FlagSequence(DslFlagSequence::Values(Vec::new())))
                 }
+                GeneratorResultKind::IntTuples => {
+                    DslOutcome::Value(DslValue::IntTuples(DslIntTuples::Fixed(Vec::new())))
+                }
             };
         }
         let mut sources = Vec::with_capacity(source_expressions.len());
@@ -6040,6 +6069,9 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 GeneratorResultKind::FlagValues => {
                     DslOutcome::Value(DslValue::FlagSequence(DslFlagSequence::Values(Vec::new())))
                 }
+                GeneratorResultKind::IntTuples => {
+                    DslOutcome::Value(DslValue::IntTuples(DslIntTuples::Fixed(Vec::new())))
+                }
             };
         }
         if sources_unknown {
@@ -6061,6 +6093,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
 
         let mut dimensions = Vec::new();
         let mut flag_values = Vec::new();
+        let mut shapes = Vec::new();
         let mut unknown = false;
         let mut iteration = environment.clone();
         for index in 0..length {
@@ -6106,12 +6139,18 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     // Flag sequences have no gradual element representation.
                     unknown = true
                 }
+                (GeneratorResultKind::IntTuples, DslOutcome::Value(DslValue::Unknown)) => {
+                    shapes.push(IntTuple::shapeless())
+                }
                 (
                     GeneratorResultKind::Dimensions,
                     DslOutcome::Value(DslValue::Dimension(value)),
                 ) => dimensions.push(value),
                 (GeneratorResultKind::FlagValues, DslOutcome::Value(DslValue::FlagInt(value))) => {
                     flag_values.push(value)
+                }
+                (GeneratorResultKind::IntTuples, DslOutcome::Value(DslValue::Shape(shape))) => {
+                    shapes.push(shape)
                 }
                 (_, DslOutcome::ExplicitGradual) => {
                     unreachable!("validated generator element cannot return gradual")
@@ -6128,6 +6167,9 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 }
                 GeneratorResultKind::FlagValues => {
                     DslOutcome::Value(DslValue::FlagSequence(DslFlagSequence::Values(flag_values)))
+                }
+                GeneratorResultKind::IntTuples => {
+                    DslOutcome::Value(DslValue::IntTuples(DslIntTuples::Fixed(shapes)))
                 }
             }
         }
@@ -6490,6 +6532,9 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 let Expr::Call(call) = expression else {
                     unreachable!("validated IntTuples constructor expression is a call")
                 };
+                if matches!(&call.arguments.args[0], Expr::Generator(_)) {
+                    return self.evaluate_expression(&call.arguments.args[0], environment, budget);
+                }
                 let Expr::Tuple(tuple) = &call.arguments.args[0] else {
                     unreachable!("validated IntTuples constructor receives a fixed tuple")
                 };
@@ -6875,6 +6920,19 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     binders,
                     environment,
                     GeneratorResultKind::FlagValues,
+                    budget,
+                )
+            }
+            TypeShapeDslExpressionKind::IntTuplesGenerator { binder, binders } => {
+                let Expr::Generator(generator) = expression else {
+                    unreachable!("validated IntTuples generator retains its generator AST")
+                };
+                self.evaluate_generator(
+                    generator,
+                    binder,
+                    binders,
+                    environment,
+                    GeneratorResultKind::IntTuples,
                     budget,
                 )
             }

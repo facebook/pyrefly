@@ -720,7 +720,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslExpressionKind::DimensionTuple
                     | TypeShapeDslExpressionKind::Conditional
                     | TypeShapeDslExpressionKind::DimensionGenerator { .. }
-                    | TypeShapeDslExpressionKind::FlagGenerator { .. } => None,
+                    | TypeShapeDslExpressionKind::FlagGenerator { .. }
+                    | TypeShapeDslExpressionKind::IntTuplesGenerator { .. } => None,
                 };
                 if let Some(message) = invalid_domain {
                     self.error(

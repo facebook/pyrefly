@@ -93,7 +93,7 @@ class IntTuple(_IntTupleSchema):
 class IntTuples(_IntTuplesSchema):
     """Operations that produce tuples of `IntTuple` values in the DSL."""
 
-    def __new__(cls, values: tuple[_IntTupleSchema, ...]) -> _IntTuplesSchema:
+    def __new__(cls, values: typing.Iterable[_IntTupleSchema]) -> _IntTuplesSchema:
         return _IntTuplesSchema(values)
 
     @staticmethod
