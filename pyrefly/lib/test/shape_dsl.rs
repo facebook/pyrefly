@@ -12560,7 +12560,7 @@ assert_type(empty_result(), Shapes[tuple[()]])
 assert_type(filtered_result(), Shapes[tuple[IntTuple[3, 4]]])
 assert_type(filtered_empty_result(), Shapes[tuple[()]])
 assert_type(zipped_result(), Shapes[tuple[IntTuple[2, 4], IntTuple[3, 5]]])
-assert_type(unbounded_result(), Shapes[tuple[IntTuple, ...]])
+assert_type(unbounded_result(), Shapes[tuple[IntTuple[2], ...]])
 
 def gradual_inputs(keep: bool) -> None:
     assert_type(filtered_unknown_result(keep), Shapes[tuple[IntTuple, ...]])
@@ -12568,6 +12568,87 @@ def gradual_inputs(keep: bool) -> None:
         unknown_members_result(),
         Shapes[tuple[IntTuple, IntTuple]],
     )
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_indefinite_int_tuples_generators,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, IntTuple, IntTuples, type_shape_dsl_function
+from typing import Any, assert_type
+
+class Shapes[Value: IntTuples]: ...
+
+@type_shape_dsl_function
+def copy(shapes: IntTuples) -> IntTuples:
+    return dsl.IntTuples(shape for shape in shapes)
+
+@type_shape_dsl_function
+def filtered(shapes: IntTuples, rank: int) -> IntTuples:
+    return dsl.IntTuples(shape for shape in shapes if len(shape) == rank)
+
+@type_shape_dsl_function
+def possibly_invalid(shapes: IntTuples, keep: bool) -> IntTuples:
+    return dsl.IntTuples(
+        dsl.IntTuple((shape[1],)) for shape in shapes if keep
+    )
+
+@type_shape_dsl_function
+def repeated(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples(shape for _index in range(4097))
+
+@type_shape_dsl_function
+def nested_exact(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples(
+        dsl.IntTuple((dimension + index for dimension in shape))
+        for index in range(2)
+    )
+
+@type_shape_dsl_function
+def nested_exhausted(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples(
+        dsl.IntTuple((dimension for dimension in range(4096)))
+        for _index in range(4096)
+    )
+
+def unbounded_result() -> Shapes[copy(tuple[IntTuple[2], ...])]: ...
+def unknown_result() -> Shapes[copy(Any)]: ...
+def homogeneous_filtered_result[Rank: Flag[int]](
+    rank: Rank,
+) -> Shapes[filtered(tuple[IntTuple[2], IntTuple[2]], Rank)]: ...
+def heterogeneous_filtered_result[Rank: Flag[int]](
+    rank: Rank,
+) -> Shapes[filtered(tuple[IntTuple[2], IntTuple[3, 4]], Rank)]: ...
+def possibly_invalid_result[Keep: Flag[bool]](
+    keep: Keep,
+) -> Shapes[possibly_invalid(tuple[IntTuple[2]], Keep)]: ...
+def repeated_result() -> Shapes[repeated(IntTuple[2, 3])]: ...
+def nested_exact_result() -> Shapes[nested_exact(IntTuple[2, 3])]: ...
+def nested_exhausted_result() -> Shapes[nested_exhausted(IntTuple[2, 3])]: ...
+
+def check[Rank: Flag[int], Keep: Flag[bool]](rank: Rank, keep: Keep) -> None:
+    assert_type(unbounded_result(), Shapes[tuple[IntTuple[2], ...]])
+    assert_type(unknown_result(), Shapes[tuple[IntTuple, ...]])
+    assert_type(
+        homogeneous_filtered_result(rank),
+        Shapes[tuple[IntTuple[2], ...]],
+    )
+    assert_type(
+        heterogeneous_filtered_result(rank),
+        Shapes[tuple[IntTuple, ...]],
+    )
+    assert_type(
+        possibly_invalid_result(keep),
+        Shapes[tuple[IntTuple, ...]],
+    )
+    assert_type(repeated_result(), Shapes[tuple[IntTuple, ...]])
+    assert_type(
+        nested_exact_result(),
+        Shapes[tuple[IntTuple[2, 3], IntTuple[3, 4]]],
+    )
+    assert_type(nested_exhausted_result(), Shapes[tuple[IntTuple, ...]])
 "#,
 );
 

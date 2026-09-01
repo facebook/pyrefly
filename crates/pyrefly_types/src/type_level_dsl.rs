@@ -5600,8 +5600,19 @@ enum EvaluatedGeneratorItems {
     Known {
         values: Vec<DslValue>,
         truncated: bool,
+        common_member: DslValue,
     },
-    Unknown,
+    Unknown {
+        common_member: DslValue,
+    },
+}
+
+impl EvaluatedGeneratorItems {
+    fn common_member(&self) -> &DslValue {
+        match self {
+            Self::Known { common_member, .. } | Self::Unknown { common_member } => common_member,
+        }
+    }
 }
 
 enum DslControlFlow {
@@ -5950,20 +5961,32 @@ impl StructurallyValidatedTypeShapeDslFunction {
         let source = self.evaluate_expression(source, environment, budget);
         let item_limit = budget.remaining_generator_steps;
         Ok(match source {
-            DslOutcome::Value(DslValue::Shape(shape)) => {
-                let IntTupleView::Concrete(shape) = shape.view() else {
-                    return Ok(EvaluatedGeneratorItems::Unknown);
-                };
-                EvaluatedGeneratorItems::Known {
-                    values: shape
-                        .iter()
-                        .take(item_limit)
-                        .cloned()
-                        .map(DslValue::Dimension)
-                        .collect(),
-                    truncated: shape.len() > item_limit,
+            DslOutcome::Value(DslValue::Shape(shape)) => match shape.view() {
+                IntTupleView::Concrete(dimensions) => {
+                    let common_member = DslValue::Dimension(
+                        dimensions
+                            .first()
+                            .filter(|first| dimensions.iter().all(|dimension| dimension == *first))
+                            .cloned()
+                            .unwrap_or(Int::Int),
+                    );
+                    EvaluatedGeneratorItems::Known {
+                        values: dimensions
+                            .iter()
+                            .take(item_limit)
+                            .cloned()
+                            .map(DslValue::Dimension)
+                            .collect(),
+                        truncated: dimensions.len() > item_limit,
+                        common_member,
+                    }
                 }
-            }
+                IntTupleView::Gradual | IntTupleView::Unpacked { .. } => {
+                    EvaluatedGeneratorItems::Unknown {
+                        common_member: DslValue::Dimension(Int::Int),
+                    }
+                }
+            },
             DslOutcome::Value(DslValue::IntTuples(DslIntTuples::Fixed(shapes))) => {
                 EvaluatedGeneratorItems::Known {
                     values: shapes
@@ -5973,21 +5996,35 @@ impl StructurallyValidatedTypeShapeDslFunction {
                         .map(DslValue::Shape)
                         .collect(),
                     truncated: shapes.len() > item_limit,
+                    common_member: DslValue::Shape(common_int_tuple_member(&shapes)),
                 }
             }
-            DslOutcome::Value(DslValue::IntTuples(DslIntTuples::Unbounded(_))) => {
-                EvaluatedGeneratorItems::Unknown
+            DslOutcome::Value(DslValue::IntTuples(DslIntTuples::Unbounded(member))) => {
+                EvaluatedGeneratorItems::Unknown {
+                    common_member: DslValue::Shape(member),
+                }
             }
             DslOutcome::Value(DslValue::FlagSequence(sequence)) => {
+                let common_member = match &sequence {
+                    DslFlagSequence::Values(values) => values
+                        .first()
+                        .filter(|first| values.iter().all(|value| value == *first))
+                        .copied()
+                        .map_or(DslValue::Unknown, DslValue::FlagInt),
+                    DslFlagSequence::Range { .. } => DslValue::Unknown,
+                };
                 let Some((values, truncated)) = sequence.bounded_values(item_limit) else {
-                    return Ok(EvaluatedGeneratorItems::Unknown);
+                    return Ok(EvaluatedGeneratorItems::Unknown { common_member });
                 };
                 EvaluatedGeneratorItems::Known {
                     values: values.into_iter().map(DslValue::FlagInt).collect(),
                     truncated,
+                    common_member,
                 }
             }
-            DslOutcome::Value(DslValue::Unknown) => EvaluatedGeneratorItems::Unknown,
+            DslOutcome::Value(DslValue::Unknown) => EvaluatedGeneratorItems::Unknown {
+                common_member: DslValue::Unknown,
+            },
             DslOutcome::Invalid(error) => return Err(error),
             DslOutcome::ExplicitGradual => {
                 unreachable!("validated generator source cannot return gradual")
@@ -6045,22 +6082,15 @@ impl StructurallyValidatedTypeShapeDslFunction {
             };
         }
         let mut sources = Vec::with_capacity(source_expressions.len());
-        let mut sources_unknown = false;
         for source in source_expressions {
             match self.evaluate_generator_items(source, environment, budget) {
-                Ok(EvaluatedGeneratorItems::Known { values, truncated }) => {
-                    sources.push(Some((values, truncated)));
-                }
-                Ok(EvaluatedGeneratorItems::Unknown) => {
-                    sources_unknown = true;
-                    sources.push(None);
-                }
+                Ok(items) => sources.push(items),
                 Err(error) => return DslOutcome::Invalid(error),
             }
         }
         if sources
             .iter()
-            .any(|source| matches!(source, Some((values, false)) if values.is_empty()))
+            .any(|source| matches!(source, EvaluatedGeneratorItems::Known { values, truncated: false, .. } if values.is_empty()))
         {
             return match result {
                 GeneratorResultKind::Dimensions => {
@@ -6074,12 +6104,33 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 }
             };
         }
-        if sources_unknown {
-            return DslOutcome::Value(DslValue::Unknown);
+        let source_members = sources
+            .iter()
+            .map(|source| source.common_member().clone())
+            .collect::<Vec<_>>();
+        if sources
+            .iter()
+            .any(|source| matches!(source, EvaluatedGeneratorItems::Unknown { .. }))
+        {
+            return self.indefinite_generator_output(
+                generator,
+                binder,
+                &source_members,
+                environment,
+                result,
+                budget,
+            );
         }
         let sources = sources
             .into_iter()
-            .map(|source| source.expect("known generator sources were retained"))
+            .map(|source| match source {
+                EvaluatedGeneratorItems::Known {
+                    values, truncated, ..
+                } => (values, truncated),
+                EvaluatedGeneratorItems::Unknown { .. } => {
+                    unreachable!("unknown generator sources returned above")
+                }
+            })
             .collect::<Vec<_>>();
         let length = sources
             .iter()
@@ -6094,11 +6145,18 @@ impl StructurallyValidatedTypeShapeDslFunction {
         let mut dimensions = Vec::new();
         let mut flag_values = Vec::new();
         let mut shapes = Vec::new();
-        let mut unknown = false;
+        let mut unknown_cardinality = false;
         let mut iteration = environment.clone();
         for index in 0..length {
             if !budget.consume_generator_step() {
-                return DslOutcome::Value(DslValue::Unknown);
+                return match result {
+                    GeneratorResultKind::IntTuples => DslOutcome::Value(DslValue::IntTuples(
+                        DslIntTuples::Unbounded(IntTuple::shapeless()),
+                    )),
+                    GeneratorResultKind::Dimensions | GeneratorResultKind::FlagValues => {
+                        DslOutcome::Value(DslValue::Unknown)
+                    }
+                };
             }
             for (lane, (values, _)) in sources.iter().enumerate() {
                 iteration.assign(
@@ -6114,7 +6172,14 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     Err(error) => return DslOutcome::Invalid(error),
                     Ok(DslCondition::False) => continue,
                     Ok(DslCondition::Unknown | DslCondition::UnknownWithPossibleError) => {
-                        unknown = true;
+                        unknown_cardinality = true;
+                        if result == GeneratorResultKind::IntTuples {
+                            shapes.push(self.evaluate_uncertain_int_tuples_generator_member(
+                                &generator.elt,
+                                &iteration,
+                                budget,
+                            ));
+                        }
                         continue;
                     }
                     Ok(DslCondition::True) => {}
@@ -6137,7 +6202,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown),
                 ) => {
                     // Flag sequences have no gradual element representation.
-                    unknown = true
+                    unknown_cardinality = true
                 }
                 (GeneratorResultKind::IntTuples, DslOutcome::Value(DslValue::Unknown)) => {
                     shapes.push(IntTuple::shapeless())
@@ -6158,8 +6223,21 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 _ => unreachable!("validated generator element has its constructor's domain"),
             }
         }
-        if unknown || truncated {
-            DslOutcome::Value(DslValue::Unknown)
+        if unknown_cardinality || truncated {
+            match result {
+                GeneratorResultKind::IntTuples => {
+                    DslOutcome::Value(DslValue::IntTuples(DslIntTuples::Unbounded(if truncated {
+                        // The evaluated prefix says nothing about members beyond the shared
+                        // iteration budget.
+                        IntTuple::shapeless()
+                    } else {
+                        common_int_tuple_member(&shapes)
+                    })))
+                }
+                GeneratorResultKind::Dimensions | GeneratorResultKind::FlagValues => {
+                    DslOutcome::Value(DslValue::Unknown)
+                }
+            }
         } else {
             match result {
                 GeneratorResultKind::Dimensions => {
@@ -6171,6 +6249,50 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 GeneratorResultKind::IntTuples => {
                     DslOutcome::Value(DslValue::IntTuples(DslIntTuples::Fixed(shapes)))
                 }
+            }
+        }
+    }
+
+    fn indefinite_generator_output(
+        &self,
+        generator: &ExprGenerator,
+        binder: usize,
+        source_members: &[DslValue],
+        environment: &DslEnvironment,
+        result: GeneratorResultKind,
+        budget: &mut DslEvaluationBudget,
+    ) -> DslOutcome {
+        if result != GeneratorResultKind::IntTuples {
+            return DslOutcome::Value(DslValue::Unknown);
+        }
+        let mut iteration = environment.clone();
+        for (lane, member) in source_members.iter().enumerate() {
+            iteration.assign(binder + lane, member.clone());
+        }
+        let member =
+            self.evaluate_uncertain_int_tuples_generator_member(&generator.elt, &iteration, budget);
+        DslOutcome::Value(DslValue::IntTuples(DslIntTuples::Unbounded(member)))
+    }
+
+    /// Evaluates an `IntTuples` generator member that may not occur at runtime.
+    ///
+    /// Uncertain membership or cardinality means an unknown or invalid common-member result
+    /// cannot justify another diagnostic. It establishes only that the member is a shapeless
+    /// `IntTuple`.
+    fn evaluate_uncertain_int_tuples_generator_member(
+        &self,
+        element: &Expr,
+        environment: &DslEnvironment,
+        budget: &mut DslEvaluationBudget,
+    ) -> IntTuple {
+        match self.evaluate_expression(element, environment, budget) {
+            DslOutcome::Value(DslValue::Shape(shape)) => shape,
+            DslOutcome::Value(DslValue::Unknown) | DslOutcome::Invalid(_) => IntTuple::shapeless(),
+            DslOutcome::ExplicitGradual => {
+                unreachable!("validated generator element cannot return gradual")
+            }
+            DslOutcome::Value(_) => {
+                unreachable!("validated IntTuples generator element is a shape")
             }
         }
     }
@@ -6951,8 +7073,10 @@ impl StructurallyValidatedTypeShapeDslFunction {
         };
         let (values, truncated) =
             match self.evaluate_generator_items(&comprehension.iter, environment, budget)? {
-                EvaluatedGeneratorItems::Known { values, truncated } => (values, truncated),
-                EvaluatedGeneratorItems::Unknown => return Ok(DslCondition::Unknown),
+                EvaluatedGeneratorItems::Known {
+                    values, truncated, ..
+                } => (values, truncated),
+                EvaluatedGeneratorItems::Unknown { .. } => return Ok(DslCondition::Unknown),
             };
 
         let mut saw_unknown = false;
@@ -7951,6 +8075,17 @@ impl DslEnvironment {
             "validated assignment cannot target a parameter slot"
         );
         self.slots[slot] = value;
+    }
+}
+
+fn common_int_tuple_member(shapes: &[IntTuple]) -> IntTuple {
+    let Some(first) = shapes.first() else {
+        return IntTuple::shapeless();
+    };
+    if shapes.iter().all(|shape| shape == first) {
+        first.clone()
+    } else {
+        IntTuple::shapeless()
     }
 }
 
