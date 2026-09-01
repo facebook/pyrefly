@@ -317,3 +317,161 @@ class Array[Shape: _Shape = _AnyShape]:
         where: Any = ...,
         promote_integers: bool = ...,
     ) -> Array[IntTuple]: ...
+    @overload
+    def all[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+        *,
+        where: Any = None,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def all(
+        self,
+        axis: Sequence[int],
+        out: Any = None,
+        keepdims: bool = False,
+        *,
+        where: Any = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def any[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+        *,
+        where: Any = None,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def any(
+        self,
+        axis: Sequence[int],
+        out: Any = None,
+        keepdims: bool = False,
+        *,
+        where: Any = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def std[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        dtype: Any = None,
+        out: Any = None,
+        ddof: int = 0,
+        keepdims: KeepDims = False,
+        *,
+        where: Any = None,
+        mean: Any = None,
+        correction: Any = None,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def std(
+        self,
+        axis: Sequence[int],
+        dtype: Any = None,
+        out: Any = None,
+        ddof: int = 0,
+        keepdims: bool = False,
+        *,
+        where: Any = None,
+        mean: Any = None,
+        correction: Any = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def var[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        dtype: Any = None,
+        out: Any = None,
+        ddof: int = 0,
+        keepdims: KeepDims = False,
+        *,
+        where: Any = None,
+        mean: Any = None,
+        correction: Any = None,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def var(
+        self,
+        axis: Sequence[int],
+        dtype: Any = None,
+        out: Any = None,
+        ddof: int = 0,
+        keepdims: bool = False,
+        *,
+        where: Any = None,
+        mean: Any = None,
+        correction: Any = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def ptp[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def ptp(
+        self,
+        axis: Sequence[int],
+        out: Any = None,
+        keepdims: bool = False,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def argmax[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def argmax(
+        self,
+        axis: int | None = None,
+        out: Any = None,
+        keepdims: bool | None = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def argmin[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def argmin(
+        self,
+        axis: int | None = None,
+        out: Any = None,
+        keepdims: bool | None = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def cumsum(
+        self,
+        axis: int,
+        dtype: Any = None,
+        out: Any = None,
+    ) -> Array[Shape]: ...
+    @overload
+    def cumsum(
+        self,
+        axis: None = None,
+        dtype: Any = None,
+        out: Any = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def cumprod(
+        self,
+        axis: int,
+        dtype: Any = None,
+        out: Any = None,
+    ) -> Array[Shape]: ...
+    @overload
+    def cumprod(
+        self,
+        axis: None = None,
+        dtype: Any = None,
+        out: Any = None,
+    ) -> Array[IntTuple]: ...
