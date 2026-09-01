@@ -38,6 +38,7 @@ use ruff_python_ast::ExprBinOp;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Operator;
 use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
@@ -7090,6 +7091,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .0
     }
 
+    /// Build a union display type from already flattened annotation operands.
+    fn union_display_type(
+        &self,
+        operands: Vec<&Expr>,
+        type_form_context: TypeFormContext<'_>,
+    ) -> Option<Type> {
+        let swallower = self.error_swallower();
+        let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
+        let mut changed = false;
+        let members = operands.map(|operand| {
+            let (ty, display_ty) =
+                self.expr_untype_with_display(operand, type_argument_context, &swallower);
+            changed |= display_ty.is_some();
+            display_ty.unwrap_or(ty)
+        });
+        changed.then(|| self.unions(members))
+    }
+
     fn expr_untype_with_display(
         &self,
         x: &Expr,
@@ -7139,6 +7158,52 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         type_form_context.untype_context(),
                         true,
                     )
+                } else if let Expr::Subscript(ExprSubscript { value, slice, .. }) = x {
+                    let swallower = self.error_swallower();
+                    let special_form = match self.expr_infer(value, &swallower) {
+                        Type::Type(inner) => match *inner {
+                            Type::SpecialForm(special_form) => Some(special_form),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let arguments = Ast::unpack_slice(slice);
+                    match (special_form, arguments) {
+                        (Some(SpecialForm::Optional), [argument]) => {
+                            let (_, display_ty) = self.expr_untype_with_display(
+                                argument,
+                                TypeFormContext::TypeArgument(&type_form_context),
+                                &swallower,
+                            );
+                            display_ty.map(|display_ty| self.heap.mk_optional(display_ty))
+                        }
+                        (Some(SpecialForm::Union), arguments) => {
+                            self.union_display_type(arguments.iter().collect(), type_form_context)
+                        }
+                        _ => None,
+                    }
+                } else if let Expr::BinOp(ExprBinOp {
+                    op: Operator::BitOr,
+                    ..
+                }) = x
+                {
+                    let mut pending = vec![x];
+                    let mut operands = Vec::new();
+                    while let Some(operand) = pending.pop() {
+                        match operand {
+                            Expr::BinOp(ExprBinOp {
+                                left,
+                                op: Operator::BitOr,
+                                right,
+                                ..
+                            }) => {
+                                pending.push(right);
+                                pending.push(left);
+                            }
+                            _ => operands.push(operand),
+                        }
+                    }
+                    self.union_display_type(operands, type_form_context)
                 } else {
                     None
                 };
