@@ -5,6 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+//! Pure shape-type normalization used at solver boundaries.
+//!
+//! The generic solver remains responsible for variable state and subset traversal. This module
+//! isolates the shape-specific decisions it needs when admitting or simplifying solver values.
+
 use pyrefly_types::dimension::Int;
 use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::dimension::gradual_size;
@@ -18,7 +23,25 @@ use pyrefly_types::stdlib::Stdlib;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::Type;
 
-fn shape_int_solution(ty: &Type) -> Option<Type> {
+/// Normalize a candidate answer for an `IntVar`.
+///
+/// Existing `IntVar` leaves stay as bare quantified/type-var values so substitution preserves
+/// source-level spellings like `Int[N]`; compound dimension expressions are canonicalized to
+/// `Type::Int`.
+pub(crate) fn type_as_intvar_solution(ty: &Type) -> Option<Type> {
+    match ty {
+        _ if ty.is_any() => Some(gradual_size()),
+        Type::ClassType(cls) if cls.is_builtin("int") => Some(gradual_size()),
+        Type::Quantified(q) if q.kind() == QuantifiedKind::IntVar => Some(ty.clone()),
+        Type::TypeVar(tv) if tv.kind() == QuantifiedKind::IntVar => Some(ty.clone()),
+        // An unsolved solver variable has no dimension structure for `Int::from_type` to retain.
+        // Wrap it as a symbolic dimension so later solving can preserve the eventual value.
+        Type::Var(_) => Some(Type::Int(Int::Symbolic(Box::new(ty.clone())))),
+        _ => Int::from_type(ty).map(|dimension| canonicalize(Type::Int(dimension))),
+    }
+}
+
+fn shape_int_bound_solution(ty: &Type) -> Option<Type> {
     match ty {
         Type::Var(_) => None,
         Type::Any(_) => Some(gradual_size()),
@@ -65,7 +88,7 @@ pub(crate) fn normalize_shape_int_bound_solution(
         return None;
     }
     let normalize_member = |member: &Type| {
-        shape_int_solution(member)
+        shape_int_bound_solution(member)
             .unwrap_or_else(|| member.clone().promote_implicit_literals(stdlib))
     };
     if optional_int_bound {
@@ -114,6 +137,48 @@ pub(crate) fn normalize_shape_int_bound_solution(
     })
 }
 
+fn canonicalize_int(ty: &mut Type) {
+    if let Type::Int(_) = ty {
+        let canonical = canonicalize(ty.clone());
+        if &canonical != ty {
+            *ty = canonical;
+        }
+    }
+}
+
+/// Canonicalize dimension expressions after the solver expands their variables.
+pub(crate) fn canonicalize_ints_in_type(ty: &mut Type) {
+    ty.transform_mut(&mut canonicalize_int);
+}
+
+/// Simplify one shape-related node during the solver's post-order type simplification.
+pub(crate) fn simplify_shape_type(ty: &mut Type) {
+    canonicalize_int(ty);
+    if let Type::IntTuple(shape) = ty {
+        **shape = shape.normalize();
+    }
+    if let Type::ShapedArray(tensor) = ty {
+        match tensor.tuple_carrier_shape_arg_index() {
+            Some(index)
+                if !matches!(
+                    tensor.base_class.targs().as_slice().get(index),
+                    Some(Type::IntTuple(_))
+                ) =>
+            {
+                let shape = tensor.shape();
+                tensor.set_shape(shape);
+            }
+            None => {
+                let shape = tensor.shape().normalize();
+                tensor.set_shape(shape);
+            }
+            // This traversal is post-order, so the first-class shape argument was normalized
+            // before its containing shaped array.
+            Some(_) => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pyrefly_types::types::Var;
@@ -124,6 +189,6 @@ mod tests {
     #[test]
     fn unresolved_solver_variable_is_not_a_dimension_solution() {
         let variable = Type::Var(Var::new(&UniqueFactory::new()));
-        assert_eq!(shape_int_solution(&variable), None);
+        assert_eq!(shape_int_bound_solution(&variable), None);
     }
 }

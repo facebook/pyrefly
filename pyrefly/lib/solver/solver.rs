@@ -24,9 +24,7 @@ use itertools::Itertools;
 use pyrefly_python::qname::QName;
 use pyrefly_types::callable_residual::OverloadBranchProjection;
 use pyrefly_types::callable_residual::OverloadResidualIdentity;
-use pyrefly_types::dimension::Int;
 use pyrefly_types::dimension::ShapeError;
-use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::dimension::gradual_size;
 use pyrefly_types::dimension::is_gradual_size;
 use pyrefly_types::heap::TypeHeap;
@@ -64,8 +62,11 @@ use crate::error::collector::ErrorCollector;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::solver::shape::ShapeIntBoundSolution;
+use crate::solver::shape::canonicalize_ints_in_type;
 use crate::solver::shape::has_int_tuple_bound;
 use crate::solver::shape::normalize_shape_int_bound_solution;
+use crate::solver::shape::simplify_shape_type;
+use crate::solver::shape::type_as_intvar_solution;
 use crate::solver::type_order::TypeOrder;
 use crate::types::callable::Callable;
 use crate::types::callable::Param;
@@ -97,26 +98,6 @@ const VAR_LEAK: &str = "Internal error: a variable has leaked from one module to
 /// and each recursive call to is_subset_eq can use several KB of stack space
 /// due to large enums (Type) and lock guards.
 const INITIAL_GAS: Gas = Gas::new(200);
-
-/// Normalize a candidate answer for an `IntVar`.
-///
-/// Existing `IntVar` leaves stay as bare quantified/type-var values so
-/// substitution preserves source-level spellings like `Int[N]`; compound
-/// dimension expressions are canonicalized to `Type::Int`.
-pub(crate) fn type_as_intvar_solution(ty: &Type) -> Option<Type> {
-    match ty {
-        _ if ty.is_any() => Some(gradual_size()),
-        Type::ClassType(cls) if cls.is_builtin("int") => Some(gradual_size()),
-        Type::Quantified(q) if q.kind() == QuantifiedKind::IntVar => Some(ty.clone()),
-        Type::TypeVar(tv) if tv.kind() == QuantifiedKind::IntVar => Some(ty.clone()),
-        // An unsolved `Var` becomes a raw symbolic leaf. This is what the
-        // fallback arm below would also produce (`Int::from_type` wraps a `Var`
-        // as `Int::Symbolic`, and `canonicalize` of a bare `Var` leaf is a
-        // no-op), so this arm only skips that redundant canonical rebuild.
-        Type::Var(_) => Some(Type::Int(Int::Symbolic(Box::new(ty.clone())))),
-        _ => Int::from_type(ty).map(|dim| canonicalize(Type::Int(dim))),
-    }
-}
 
 /// Pin a solver answer for a variable of the given `kind`.
 ///
@@ -1126,18 +1107,7 @@ impl Solver {
             VarExpansionPolicy::ExpandWithBounds,
             &VarRecurser::new(),
         );
-        Self::canonicalize_only_ints_mut(dim_ty);
-    }
-
-    fn canonicalize_only_ints_mut(t: &mut Type) {
-        t.transform_mut(&mut |x| {
-            if let Type::Int(_) = x {
-                let simplified = canonicalize(x.clone());
-                if &simplified != x {
-                    *x = simplified;
-                }
-            }
-        });
+        canonicalize_ints_in_type(dim_ty);
     }
 
     /// Given a `Var`, ensures that the solver has an answer for it (or inserts Any if not already),
@@ -1194,29 +1164,6 @@ impl Solver {
             }
             if let Type::Tuple(tuple) = x {
                 *x = simplify_tuples_and_distribute_unpacking(mem::take(tuple), &self.heap);
-            }
-            if let Type::IntTuple(shape) = x {
-                **shape = shape.normalize();
-            }
-            if let Type::ShapedArray(tensor) = x {
-                match tensor.tuple_carrier_shape_arg_index() {
-                    Some(index)
-                        if !matches!(
-                            tensor.base_class.targs().as_slice().get(index),
-                            Some(Type::IntTuple(_))
-                        ) =>
-                    {
-                        let shape = tensor.shape();
-                        tensor.set_shape(shape);
-                    }
-                    None => {
-                        let shape = tensor.shape().normalize();
-                        tensor.set_shape(shape);
-                    }
-                    // `transform_mut` is post-order, so this first-class carrier was normalized
-                    // by the `IntTuple` arm before its containing shaped array.
-                    Some(_) => {}
-                }
             }
             // When a param spec is resolved, collapse any Concatenate and Callable types that use it
             if let Type::Concatenate(ts, inner) = x
@@ -1295,14 +1242,7 @@ impl Solver {
                 }
                 *param_list = ParamList::new(new_params);
             }
-            // Simplify dimension expressions
-            // This ensures Tensor[(10 * 20)] becomes Tensor[200]
-            if let Type::Int(_) = x {
-                let simplified = canonicalize(x.clone());
-                if &simplified != x {
-                    *x = simplified;
-                }
-            }
+            simplify_shape_type(x);
         });
     }
 
@@ -4305,6 +4245,7 @@ mod tests {
     use pyrefly_types::class::ClassDefIndex;
     use pyrefly_types::class::ClassType;
     use pyrefly_types::dimension::Int;
+    use pyrefly_types::dimension::canonicalize;
     use pyrefly_types::dimension::gradual_size;
     use pyrefly_types::lit_int::LitInt;
     use pyrefly_types::quantified::AnchorIndex;
