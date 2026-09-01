@@ -336,6 +336,69 @@ def check(x2: Box[IntTuple[2]], x34: Box[IntTuple[3, 4]]) -> None:
 );
 
 testcase!(
+    test_map_int_tuples_pattern_preserves_list_literal_element_shapes,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Box[Shape: IntTuple]: ...
+
+def shapes[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def check(x2: Box[IntTuple[2]], x34: Box[IntTuple[3, 4]]) -> None:
+    assert_type(shapes([x2, x34]), tuple[IntTuple[2], IntTuple[3, 4]])
+    assert_type(shapes(values=[x34, x2]), tuple[IntTuple[3, 4], IntTuple[2]])
+    assert_type(shapes([]), tuple[()])
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_list_literal_boundaries,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Box[Shape: IntTuple]: ...
+
+def shapes[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def check(x: Box[IntTuple[2]], values: list[Box[IntTuple[2]]]) -> None:
+    shapes([x, 1])  # E: is not assignable to parameter `values`
+    shapes([*values])  # E: Starred list elements are not supported
+    shapes([*Missing])  # E: Could not find name `Missing` # E: Starred list elements are not supported
+
+result = shapes([Missing])  # E: Could not find name `Missing`
+assert_type(result, tuple[IntTuple])
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_promotes_list_literal_members_for_validation,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Tagged[Metadata, Shape: IntTuple]: ...
+
+def tagged[Metadata](metadata: Metadata) -> Tagged[Metadata, IntTuple[2]]: ...
+
+def consume[Metadata, Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Tagged[Metadata, S], Shapes],
+    metadata: Metadata,
+) -> tuple[Metadata, Shapes]: ...
+
+assert_type(consume([tagged(1)], 2), tuple[int, tuple[IntTuple[2]]])
+"#,
+);
+
+testcase!(
     test_map_int_tuples_pattern_preserves_inferred_sequence_structure,
     shape_extensions_env(),
     r#"

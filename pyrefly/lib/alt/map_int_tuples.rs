@@ -67,6 +67,16 @@ pub(crate) fn map_int_tuples_parameter_pattern(
     })
 }
 
+/// An argument matched against a shape-specific `MapIntTuples` parameter pattern.
+/// Expressions are preserved until inversion so a list literal can act as tuple-like syntax while
+/// retaining each element's shape. Arbitrary list values remain ordinary list types. This
+/// pragmatic exception lets existing Torch call sites adopt shape annotations without changing
+/// their runtime containers.
+pub(crate) enum MapIntTuplesPatternArgument<'a> {
+    Expr(&'a Expr),
+    Type(Type),
+}
+
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn resolve_map_int_tuples_mapper_parameter(&self, name: &Identifier) -> Type {
         let binder = map_int_tuples_mapper_binder(self.module().name(), name);
@@ -322,6 +332,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         mapper: &TypeLambda,
         actual: &Type,
+        exact_members: Option<&[Type]>,
     ) -> (Type, Type) {
         fn invert_member<Ans: LookupAnswer>(
             solver: &AnswersSolver<Ans>,
@@ -406,7 +417,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         });
         let gradual = mapper.apply(IntTuple::shapeless().to_shape_arg_type());
         let mut mapped_member_types = Vec::new();
-        let source = if let Type::Tuple(tuple) = actual {
+        let source = if let Some(members) = exact_members {
+            Type::concrete_tuple(
+                members
+                    .iter()
+                    .map(|member| {
+                        invert_member(
+                            self,
+                            mapper,
+                            mapper_uses_parameter,
+                            &gradual,
+                            &mut mapped_member_types,
+                            member,
+                        )
+                    })
+                    .collect(),
+            )
+        } else if let Type::Tuple(tuple) = actual {
             Type::Tuple(map_tuple(
                 self,
                 mapper,
@@ -510,8 +537,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn check_map_int_tuples_parameter_pattern(
         &self,
         pattern: MapIntTuplesParameterPattern<'_>,
-        actual: Type,
+        argument: MapIntTuplesPatternArgument,
         range: TextRange,
+        arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
         tcc: &dyn Fn() -> TypeCheckContext,
         call_context: &CallContext,
@@ -522,9 +550,59 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             mapped_member,
             source: map_source,
         } = pattern;
-        // Inversion may itself inspect and constrain existing solver state, so the transaction
-        // begins before decomposing the argument. The mapper probe creates its own temporary
-        // variable later and finalizes it independently; it is intentionally absent here.
+        let infer_or_error = |expr| {
+            let error_count = arg_errors.len_hard();
+            let ty = self.expr_infer(expr, arg_errors);
+            if arg_errors.len_hard() > error_count {
+                self.heap.mk_any_error()
+            } else {
+                ty
+            }
+        };
+        let (actual, exact_members) = match argument {
+            MapIntTuplesPatternArgument::Type(ty) => (ty, None),
+            MapIntTuplesPatternArgument::Expr(expr) => match expr {
+                Expr::List(list) if list.elts.iter().any(|elt| matches!(elt, Expr::Starred(_))) => {
+                    // Preserve ordinary expression diagnostics, constraints, and dependencies
+                    // even though exact inversion cannot represent a starred list's cardinality.
+                    let _ = infer_or_error(expr);
+                    (
+                        self.error_with_context(
+                            call_errors,
+                            range,
+                            ErrorKind::BadArgumentType,
+                            "Starred list elements are not supported by a `MapIntTuples` parameter pattern"
+                                .to_owned(),
+                            context,
+                        ),
+                        None,
+                    )
+                }
+                Expr::List(list) if list.elts.is_empty() => {
+                    // Ordinary inference gives an empty list a fresh element variable. Keep that
+                    // validation behavior while exact inversion records its zero cardinality.
+                    (infer_or_error(expr), Some(Vec::new()))
+                }
+                Expr::List(list) => {
+                    let members = list.elts.iter().map(infer_or_error).collect::<Vec<_>>();
+                    let element = self.unions(
+                        members
+                            .iter()
+                            .cloned()
+                            .map(|ty| ty.promote_implicit_literals(self.stdlib))
+                            .collect(),
+                    );
+                    (
+                        self.heap.mk_class_type(self.stdlib.list(element)),
+                        Some(members),
+                    )
+                }
+                _ => (infer_or_error(expr), None),
+            },
+        };
+        // Ordinary argument inference above is not speculative and remains committed. Snapshot
+        // before inversion and validation, which may constrain existing solver state. The mapper
+        // probe creates and finalizes its own temporary variable after this snapshot.
         let transaction_snapshot = self.solver().snapshot_for_speculative_inference(&[
             &actual,
             mapper.body(),
@@ -532,7 +610,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             map_source,
         ]);
         let (source, inferred_validation_type) =
-            self.invert_map_int_tuples_parameter_pattern(mapper, &actual);
+            self.invert_map_int_tuples_parameter_pattern(mapper, &actual, exact_members.as_deref());
         let view_error = self.check_type_with_options(
             &actual,
             &inferred_validation_type,

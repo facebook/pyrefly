@@ -41,6 +41,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::TypeCheckOptions;
 use crate::alt::expr::ExprOptions;
 use crate::alt::expr::TypeOrExpr;
+use crate::alt::map_int_tuples::MapIntTuplesPatternArgument;
 use crate::alt::map_int_tuples::map_int_tuples_parameter_pattern;
 use crate::alt::shape_flag::extend_shape_flag_vars_from_targs;
 use crate::alt::shape_flag::shape_flag_vars;
@@ -495,14 +496,14 @@ impl CallArgPreEval<'_> {
         // A shape-extension map at a parameter root carries an ordinary `Sequence` view, but its
         // source must be recovered from the argument before that view is checked.
         if let Some(pattern) = map_int_tuples_parameter_pattern(hint) {
-            let actual = match self {
+            let argument = match self {
                 Self::Type(ty, done) => {
                     *done = true;
-                    (*ty).clone()
+                    MapIntTuplesPatternArgument::Type((*ty).clone())
                 }
                 Self::Expr(expr, done) => {
                     *done = true;
-                    solver.expr_infer(expr, arg_errors)
+                    MapIntTuplesPatternArgument::Expr(expr)
                 }
                 Self::Star {
                     prefix,
@@ -516,18 +517,19 @@ impl CallArgPreEval<'_> {
                         *consumed += 1;
                     }
                     *done = vararg;
-                    ty
+                    MapIntTuplesPatternArgument::Type(ty)
                 }
                 Self::Fixed(tys, index) => {
                     let ty = tys[*index].clone();
                     *index += 1;
-                    ty
+                    MapIntTuplesPatternArgument::Type(ty)
                 }
             };
             let arg_ty = solver.check_map_int_tuples_parameter_pattern(
                 pattern,
-                actual,
+                argument,
                 range,
+                arg_errors,
                 call_errors,
                 tcc,
                 call_context,
@@ -1617,11 +1619,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .as_ref()
                         .and_then(|(_, hint)| map_int_tuples_parameter_pattern(hint))
                     {
-                        let actual = kw.value.infer(self, arg_errors);
+                        let argument = match kw.value {
+                            TypeOrExpr::Expr(expr) => MapIntTuplesPatternArgument::Expr(expr),
+                            TypeOrExpr::Type(ty, _) => {
+                                MapIntTuplesPatternArgument::Type((*ty).clone())
+                            }
+                        };
                         self.check_map_int_tuples_parameter_pattern(
                             pattern,
-                            actual,
+                            argument,
                             kw.range,
+                            arg_errors,
                             call_errors,
                             tcc,
                             call_context,

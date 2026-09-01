@@ -229,6 +229,83 @@ def identity(x: Int) -> Int:
     i.check(&["main"], &["foo", "main"]);
 }
 
+/// A list literal is inverted from its elements rather than its joined `list` type, so edits
+/// to the elements must invalidate and recompute the call result.
+#[test]
+fn test_map_int_tuples_pattern_list_literal_edits_invalidate_consumer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class IntTuple: pass
+class IntTuples: pass
+class MapIntTuples: pass
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+
+class Box[Shape: IntTuple]: ...
+
+def shapes[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def box2() -> Box[IntTuple[2]]: ...
+def box34() -> Box[IntTuple[3, 4]]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import box2, shapes
+from shape_extensions import IntTuple
+from typing import assert_type
+
+assert_type(shapes([box2()]), tuple[IntTuple[2]])
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "consumer",
+        r#"
+from main import box34, shapes
+from shape_extensions import IntTuple
+from typing import assert_type
+
+assert_type(shapes([box34()]), tuple[IntTuple[2]])
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].msg().contains("assert_type("));
+
+    i.set(
+        "consumer",
+        r#"
+from main import box2, shapes
+from shape_extensions import IntTuple
+from typing import assert_type
+
+assert_type(shapes([box2(), box2()]), tuple[IntTuple[2], IntTuple[2]])
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer"]);
+    let errors = changed.errors.collect_display_errors();
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
 #[test]
 fn test_shape_flag_constructor_source_edit_invalidates_consumers() {
     let mut i = Incremental::with_files(vec!["consumer".to_owned(), "main".to_owned()]);
