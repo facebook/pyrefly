@@ -4,14 +4,13 @@
 # LICENSE file in the root directory of this source tree.
 
 import shape_extensions.dsl as dsl
-from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions import Int, IntTuple, IntTuples, type_shape_dsl_function
 from shape_extensions.dsl import (
     Error,
     parse_einsum_equation,
     prod,
     shape_dsl_function,
     ShapedArray,
-    sum,
     symint,
     Unknown,
 )
@@ -59,12 +58,6 @@ def replace_dim(
     dims: list[int | symint], i: int, value: int | symint
 ) -> list[int | symint]:
     return dims[:i] + [value] + dims[i + 1 :]
-
-@shape_dsl_function
-def insert_dim(
-    dims: list[int | symint], i: int, value: int | symint
-) -> list[int | symint]:
-    return dims[:i] + [value] + dims[i:]
 
 @shape_dsl_function
 def broadcast(a: list[int | symint], b: list[int | symint]) -> list[int | symint]:
@@ -537,22 +530,92 @@ def unfold_shape(shape: IntTuple, dimension: int, size: int, step: int) -> IntTu
     dimension_size = shape[normalized]
     return unfold_checked_shape(shape, dimension_size, normalized, window_size, step)
 
-@shape_dsl_function
-def cat_ir(tensors: list[ShapedArray], dim: int = 0) -> ShapedArray:
-    first = tensors[0]
-    d = normalize_dim(len(first.shape), dim)
-    return ShapedArray(
-        shape=[
-            sum([t.shape[i] for t in tensors]) if i == d else dim_val
-            for i, dim_val in enumerate(first.shape)
-        ]
+# The two shape rules below share one discipline: every member of `shapes` is
+# checked against `shapes[0]` before any result dimension is produced. A member
+# that provably disagrees yields an `Invalid`; a member the checker cannot decide
+# (a symbolic dimension, a gradual member shape, or a sequence of unknown length)
+# makes the deciding `any` undecidable, which returns the whole call gradually
+# rather than reporting `shapes[0]` as if it had been confirmed.
+# TODO(stroxler): Preserve known output axes when another size comparison is unknown. This needs a
+# DSL operation that returns the shared size for equal dimensions, reports proven mismatches, and
+# returns a gradual `Int` when equality cannot be determined.
+
+@type_shape_dsl_function
+def cat_shape(shapes: IntTuples, dim: int) -> IntTuple:
+    if len(shapes) == 0:
+        return dsl.Invalid("cat expects a non-empty sequence of tensors")
+    first = shapes[0]
+    # Unary minus is not supported by the type-level DSL.
+    if dim < 0 - len(first) or dim >= len(first):
+        return dsl.Invalid("cat dimension out of range")
+    if dim < 0:
+        axis = dim + len(first)
+    else:
+        axis = dim + 0
+    ranks = dsl.IntTuple((0 if len(shape) == len(first) else 1 for shape in shapes))
+    if any(rank == 1 for rank in ranks):
+        return dsl.Invalid("cat expects all tensors to have the same rank")
+    # Equal ranks are established above, so indexing every member by an index of
+    # `first` is in bounds.
+    mismatches = dsl.IntTuple(
+        (
+            1
+            if any(
+                shape[index] != first[index]
+                for index in range(len(first))
+                if index != axis
+            )
+            else 0
+            for shape in shapes
+        )
+    )
+    if any(mismatch == 1 for mismatch in mismatches):
+        return dsl.Invalid(
+            "cat expects all tensor sizes to match outside the concatenated dimension"
+        )
+    return dsl.IntTuple(
+        (
+            dsl.sum(dsl.IntTuple((shape[axis] for shape in shapes)))
+            if index == axis
+            else first[index]
+            for index in range(len(first))
+        )
     )
 
-@shape_dsl_function
-def stack_ir(tensors: list[ShapedArray], dim: int = 0) -> ShapedArray:
-    first = tensors[0]
-    d = normalize_dim(len(first.shape) + 1, dim)
-    return ShapedArray(shape=insert_dim(first.shape, d, len(tensors)))
+@type_shape_dsl_function
+def stack_shape(shapes: IntTuples, dim: int) -> IntTuple:
+    if len(shapes) == 0:
+        return dsl.Invalid("stack expects a non-empty sequence of tensors")
+    first = shapes[0]
+    output_rank = len(first) + 1
+    # Unary minus is not supported by the type-level DSL.
+    if dim < 0 - output_rank or dim >= output_rank:
+        return dsl.Invalid("stack dimension out of range")
+    if dim < 0:
+        axis = dim + output_rank
+    else:
+        axis = dim + 0
+    ranks = dsl.IntTuple((0 if len(shape) == len(first) else 1 for shape in shapes))
+    if any(rank == 1 for rank in ranks):
+        return dsl.Invalid("stack expects all tensors to have the same rank")
+    # Equal ranks are established above, so indexing every member by an index of
+    # `first` is in bounds.
+    mismatches = dsl.IntTuple(
+        (
+            1 if any(shape[index] != first[index] for index in range(len(first))) else 0
+            for shape in shapes
+        )
+    )
+    if any(mismatch == 1 for mismatch in mismatches):
+        return dsl.Invalid("stack expects all tensors to have the same shape")
+    return dsl.IntTuple(
+        (
+            len(shapes)
+            if index == axis
+            else first[index if index < axis else index - 1]
+            for index in range(output_rank)
+        )
+    )
 
 @type_shape_dsl_function
 def tile_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:

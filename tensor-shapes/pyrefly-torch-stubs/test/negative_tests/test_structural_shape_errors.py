@@ -30,6 +30,36 @@ def test_invalid_constructor_control_module_shapes() -> None:
     nn.ReplicationPad2d(1)(pad_rank_five)  # E: 2D padding requires 3D or 4D input
 
 
+def check_invalid_cat_stack_controls() -> None:
+    torch.cat(())  # E: cat expects a non-empty sequence of tensors
+    torch.concat([])  # E: cat expects a non-empty sequence of tensors
+    torch.stack(())  # E: stack expects a non-empty sequence of tensors
+
+    x: Tensor[[2, 3]] = torch.randn(2, 3)
+    y: Tensor[[4, 3]] = torch.randn(4, 3)
+    wide: Tensor[[2, 5]] = torch.randn(2, 5)
+    cube: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+
+    torch.cat((x, y), dim=2)  # E: cat dimension out of range
+    torch.concat((x, y), dim=-3)  # E: cat dimension out of range
+    torch.stack((x, x), dim=3)  # E: stack dimension out of range
+
+    torch.cat((x, cube))  # E: cat expects all tensors to have the same rank
+    torch.stack((x, cube))  # E: stack expects all tensors to have the same rank
+
+    # E: cat expects all tensor sizes to match outside the concatenated dimension
+    torch.cat((x, wide))
+    # E: cat expects all tensor sizes to match outside the concatenated dimension
+    torch.concat((x, wide), dim=-2)
+    # `stack` admits no exempt axis, so a difference the matching `cat` accepts is
+    # still a `stack` mismatch.
+    torch.stack((x, wide), dim=1)  # E: stack expects all tensors to have the same shape
+
+    torch.cat((x, 1))  # E: is not assignable to parameter `tensors`
+    torch.concat([x, "not a tensor"])  # E: is not assignable to parameter `tensors`
+    torch.stack((x, object()))  # E: is not assignable to parameter `tensors`
+
+
 def check_invalid_structural_controls(
     x: Tensor[[2, 3]],
     cube: Tensor[[2, 3, 4]],

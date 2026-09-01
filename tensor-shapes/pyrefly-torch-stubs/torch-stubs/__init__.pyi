@@ -17,7 +17,16 @@ from collections.abc import Sequence
 from typing import Any, overload, Self, TYPE_CHECKING
 
 import shape_extensions
-from shape_extensions import broadcast, Elements, Flag, IntTuple, IntVar, uses_shape_dsl
+from shape_extensions import (
+    broadcast,
+    Elements,
+    Flag,
+    IntTuple,
+    IntTuples,
+    IntVar,
+    MapIntTuples,
+    uses_shape_dsl,
+)
 
 # `Generator` is not defined anywhere in this package, and resolving it relies
 # on how a partial stub package is looked up. The `py.typed` file here contains
@@ -34,7 +43,7 @@ from torch._C import Generator
 from torch._shapes import (
     arange_extent,
     arange_step_extent,
-    cat_ir,
+    cat_shape,
     chunk_ir,
     diag_embed_shape,
     dim_shape,
@@ -63,7 +72,7 @@ from torch._shapes import (
     slogdet_shape,
     split_ir,
     squeeze_shape,
-    stack_ir,
+    stack_shape,
     tensordot_shape,
     tile_shape,
     topk_shape,
@@ -1510,18 +1519,21 @@ def matmul[Left: IntTuple, Right: IntTuple](
     """Matrix multiplication function. Shape inference via meta-shape: torch.matmul"""
     ...
 
-@uses_shape_dsl(cat_ir)
-def cat(tensors: list[Tensor] | tuple[Tensor, ...], dim: int = 0) -> Tensor:
+def cat[Shapes: IntTuples, Dim: Flag[builtins.int]](
+    tensors: MapIntTuples[lambda S: Tensor[S], Shapes], dim: Dim = 0
+) -> Tensor[cat_shape(Shapes, Dim)]:
     """Concatenate tensors. Shape inference via meta-shape: torch.cat"""
     ...
 
-@uses_shape_dsl(cat_ir)
-def concat(tensors: list[Tensor] | tuple[Tensor, ...], dim: int = 0) -> Tensor:
+def concat[Shapes: IntTuples, Dim: Flag[builtins.int]](
+    tensors: MapIntTuples[lambda S: Tensor[S], Shapes], dim: Dim = 0
+) -> Tensor[cat_shape(Shapes, Dim)]:
     """Alias for concatenate/cat. Shape inference via meta-shape: torch.cat"""
     ...
 
-@uses_shape_dsl(stack_ir)
-def stack(tensors: list[Tensor] | tuple[Tensor, ...], dim: int = 0) -> Tensor:
+def stack[Shapes: IntTuples, Dim: Flag[builtins.int]](
+    tensors: MapIntTuples[lambda S: Tensor[S], Shapes], dim: Dim = 0
+) -> Tensor[stack_shape(Shapes, Dim)]:
     """Stack tensors (adds new dimension)."""
     ...
 
