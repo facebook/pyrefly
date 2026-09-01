@@ -1406,6 +1406,15 @@ enum GeneratorValidationKind {
     IntTuple,
 }
 
+/// The syntax accepted while validating a generator source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GeneratorSourceValidationKind {
+    Condition,
+    Constructor,
+    IntTuplesConstructor,
+    ZipLane,
+}
+
 fn flag_domain_from_kinds(kinds: u8) -> Option<FlagDomain> {
     if kinds == 0 || kinds & !FLAG_REPRESENTABLE != 0 {
         return None;
@@ -3068,10 +3077,9 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         &mut self,
         source: &Expr,
         flow: &DslValidationFlow,
-        allow_zip: bool,
-        allow_int_tuples: bool,
-        allow_dimension_range: bool,
+        validation_kind: GeneratorSourceValidationKind,
     ) -> Result<TypeShapeDslGeneratorSource, TypeShapeDslDefinitionError> {
+        let allow_int_tuples = validation_kind != GeneratorSourceValidationKind::Condition;
         if let Expr::Name(_) = source {
             let slot = self.slot(source, flow)?;
             let kind = &flow.kinds[slot];
@@ -3135,7 +3143,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         }
         match source {
             Expr::Call(call) if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Zip) => {
-                if !allow_zip {
+                if matches!(
+                    validation_kind,
+                    GeneratorSourceValidationKind::Condition
+                        | GeneratorSourceValidationKind::ZipLane
+                ) {
                     return Err(TypeShapeDslDefinitionError {
                         range: source.range(),
                         message: "`zip` sources are only supported in constructor generators",
@@ -3155,9 +3167,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         let source = self.validate_generator_source(
                             argument,
                             flow,
-                            false,
-                            allow_int_tuples,
-                            false,
+                            GeneratorSourceValidationKind::ZipLane,
                         )?;
                         match source {
                             TypeShapeDslGeneratorSource::Single(kind) => Ok(kind),
@@ -3211,7 +3221,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     .args
                     .iter()
                     .any(|argument| self.integer_expression_has_shape_source(argument, flow));
-                if allow_dimension_range
+                if validation_kind == GeneratorSourceValidationKind::IntTuplesConstructor
                     && (self.parameter_domains.is_none() || has_dimension_bound)
                 {
                     for argument in &call.arguments.args {
@@ -3317,9 +3327,15 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         let source = self.validate_generator_source(
             &comprehension.iter,
             flow,
-            kind != GeneratorValidationKind::Condition,
-            kind != GeneratorValidationKind::Condition,
-            kind == GeneratorValidationKind::IntTuple,
+            match kind {
+                GeneratorValidationKind::Condition => GeneratorSourceValidationKind::Condition,
+                GeneratorValidationKind::Dimension | GeneratorValidationKind::FlagValue => {
+                    GeneratorSourceValidationKind::Constructor
+                }
+                GeneratorValidationKind::IntTuple => {
+                    GeneratorSourceValidationKind::IntTuplesConstructor
+                }
+            },
         )?;
         let (targets, element_kinds) = match (source, &comprehension.target) {
             (TypeShapeDslGeneratorSource::Single(kind), Expr::Name(target)) => {
