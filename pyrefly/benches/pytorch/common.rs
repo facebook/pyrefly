@@ -5,9 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Shared harness for the PyTorch walltime benchmarks (`cold_start` and
-//! `error_propagation`). Both drive the real LSP server over all cores against a
-//! pinned, multi-gigabyte PyTorch checkout, so they share the code that acquires
+//! Shared harness for the PyTorch walltime benchmarks. The interactive cases
+//! drive the real LSP server over all cores against a pinned, multi-gigabyte
+//! PyTorch checkout, so they share the code that acquires
 //! that checkout and the standard LSP args. These are walltime benchmarks —
 //! threads, I/O, a long cold start — distinct from the deterministic,
 //! single-threaded `micro` benchmarks.

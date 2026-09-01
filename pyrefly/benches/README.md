@@ -1,12 +1,11 @@
 # PyTorch benchmarks
 
-Four real-world benchmarks over a large, pinned PyTorch checkout (15k+ Python
-files) across all cores. Two drive the actual Pyrefly LSP server and measure
-interactive latency (`cold_start`, `error_propagation`); one runs a cold batch
-`check` and measures whole-project throughput (`full_check`); one times a cold
-whole-project index (`indexed_memory`). A fifth target, `pytorch_memory`,
-reports the memory that index holds — a separate binary rather than a fifth
-benchmark, for the reason in its section below.
+Five real-world benchmarks run over a large, pinned PyTorch checkout (15k+
+Python files) across all cores. Three drive the actual Pyrefly LSP server and
+measure interactive latency (`cold_start`, `error_propagation`, `rename`); one
+runs a cold batch `check` and measures whole-project throughput (`full_check`);
+one times a cold whole-project index (`indexed_memory`). A sixth target,
+`pytorch_memory`, reports the memory that index holds in a separate process.
 
 For the full command reference (all flags, micro benchmarks, cargo/buck forms),
 see `.claude/skills/benchmark-pyrefly/SKILL.md`.
@@ -28,7 +27,7 @@ one place. Two providers feed the checkout:
 Set `PYREFLY_PYTORCH_BENCH_PATH` to an existing checkout to bypass both. If the
 checkout can't be obtained the bench prints a skip notice and exits cleanly.
 
-## The four benches
+## The five benches
 
 They ship in **one target** — buck `pytorch_bench`, cargo bench `pytorch` — and
 you select an individual one at runtime with a Criterion name filter rather than
@@ -59,6 +58,10 @@ per bench:
   cores. Dependencies default to `Exports` and checked files to `Errors`, matching
   the CLI's require levels. Proxy for whole-project batch throughput (not
   interactive latency). Criterion id `pytorch/full_check`.
+- `pytorch/rename.rs` — paired warm LSP rename measurements with and without
+  `textOccurrences`. Their difference measures the cost of walking and scanning
+  all non-Python files in the workspace on each rename. Criterion ids
+  `pytorch/rename_semantic_only` and `pytorch/rename_with_text_occurrences`.
 
 ## The memory report
 
@@ -66,7 +69,7 @@ per bench:
 `pytorch_memory`. Indexes the checkout once and prints the resident memory the
 indexed project holds.
 
-**Why it is a separate target and not a fifth benchmark.** RSS is a property of
+**Why it is a separate target and not a sixth benchmark.** RSS is a property of
 the process, not of the routine: `VmRSS` counts everything the process still
 holds, and `VmHWM` is the high-water mark over its whole life. Run inside
 `pytorch_bench`, it would report whatever the cold-start, error-propagation and
@@ -91,8 +94,9 @@ parallel.
 These are heavy walltime benchmarks: budget roughly 2-4 minutes each (Criterion's
 sample floor is 10; ~3-5 s per cold-start iteration, ~2-3 s per
 error-propagation iteration after warmup, ~1-1.5 s per full-check iteration).
-They are manual/heavy and are not run in CI Sandcastle by default (the
-`http_archive` dep is labeled `manual`).
+The rename comparison takes about 15 seconds total. They are manual/heavy and
+are not run in CI Sandcastle by default (the `http_archive` dep is labeled
+`manual`).
 
 ```bash
 # All benchmarks
@@ -104,10 +108,12 @@ buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench col
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench error_propagation
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench full_check
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench indexed_memory
+buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench rename
 cargo bench --bench pytorch -- cold_start
 cargo bench --bench pytorch -- error_propagation
 cargo bench --bench pytorch -- full_check
 cargo bench --bench pytorch -- indexed_memory
+cargo bench --bench pytorch -- rename
 
 # The memory report — its own target, so that it gets a clean process
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_memory_bench
