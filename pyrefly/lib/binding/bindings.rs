@@ -587,6 +587,14 @@ impl Bindings {
         }
     }
 
+    /// Whether `name` is bound as an experimental `MapIntTuples` mapper parameter.
+    pub fn is_type_level_lambda_parameter(&self, name: &Identifier) -> bool {
+        matches!(
+            self.get(self.key_to_idx(&Key::Definition(ShortIdentifier::new(name)))),
+            Binding::TypeLevelLambdaParameter(_)
+        )
+    }
+
     pub fn get_function_param(&self, name: &Identifier) -> &FunctionParameter {
         let b = self.get(self.key_to_idx(&Key::Definition(ShortIdentifier::new(name))));
         if let Binding::FunctionParameter(p) = b {

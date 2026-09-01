@@ -6949,6 +6949,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 );
             }
         }
+        // A normal class is a valid annotation without subscripting. `MapIntTuples` is an
+        // experimental shape operation represented by a runtime shim class, but it denotes a
+        // type only when its mapper and source arguments are present.
+        if self.is_bare_map_int_tuples(&ty) {
+            return self.error(
+                errors,
+                range,
+                ErrorKind::InvalidAnnotation,
+                "Expected 2 type arguments for `MapIntTuples`, got 0".to_owned(),
+            );
+        }
         if type_form_context == TypeFormContext::TypeVarConstraint && ty.contains_type_variable() {
             return self.error(
                 errors,

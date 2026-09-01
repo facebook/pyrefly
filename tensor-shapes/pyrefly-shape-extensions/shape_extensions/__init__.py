@@ -22,6 +22,7 @@ __all__ = [
     "IntTuple",
     "IntTuples",
     "IntVar",
+    "MapIntTuples",
     "ProxyMethod",
     "SymbolicArithExpr",
     "TypeVarTuple",
@@ -282,6 +283,18 @@ def broadcast(*_args: typing.Any) -> IntTuple:
     """Runtime placeholder for Pyrefly's native type-level broadcast intrinsic."""
 
     return IntTuple()
+
+
+class MapIntTuples:
+    """Map a unary type lambda over an ``IntTuples`` value.
+
+    Pyrefly reduces this form in ordinary type annotations. At runtime it is a
+    placeholder that does not inspect its arguments, because valid static
+    sources such as ``Any`` and ``Never`` cannot be mapped as Python values.
+    """
+
+    def __class_getitem__(cls, params):
+        return tuple
 
 
 def type_shape_dsl_function[F: typing.Callable](fn: F) -> F:

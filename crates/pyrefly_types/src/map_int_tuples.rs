@@ -76,7 +76,9 @@ impl TypeLambda {
             IntTuple::from_shape_arg_or_tuple_carrier(ty)
                 .map(|shape| self.apply(shape.to_shape_arg_type()))
                 .ok_or_else(|| ShapeError::ShapeComputation {
-                    message: "Mapped tuple must contain only `IntTuple` values".to_owned(),
+                    message:
+                        "Source argument to `MapIntTuples` must contain only `IntTuple` values"
+                            .to_owned(),
                 })
         };
         let map_all = |types: Vec<Type>| types.iter().map(map).collect::<Result<Vec<_>, _>>();
@@ -118,7 +120,8 @@ fn normalize_tuple(tuple: Tuple) -> Result<NormalizedTuple, ShapeError> {
             let (mut prefix, middle, suffix) = unpacked.into_parts();
             if middle.is_kind_type_var_tuple() {
                 return Err(ShapeError::ShapeComputation {
-                    message: "Cannot eagerly map an unresolved `TypeVarTuple`".to_owned(),
+                    message: "`MapIntTuples` does not support an unresolved `TypeVarTuple`"
+                        .to_owned(),
                 });
             }
             let Type::Tuple(middle) = middle else {
@@ -283,7 +286,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "Mapped tuple must contain only `IntTuple` values"
+            "Source argument to `MapIntTuples` must contain only `IntTuple` values"
         );
     }
 
@@ -305,7 +308,7 @@ mod tests {
                 .apply_to_tuple(source)
                 .unwrap_err()
                 .to_string(),
-            "Cannot eagerly map an unresolved `TypeVarTuple`"
+            "`MapIntTuples` does not support an unresolved `TypeVarTuple`"
         );
     }
 }

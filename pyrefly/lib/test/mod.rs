@@ -46,6 +46,7 @@ mod incremental;
 mod inference;
 mod literal;
 mod lsp;
+mod map_int_tuples;
 mod map_int_tuples_binding;
 mod marshmallow;
 mod mro;

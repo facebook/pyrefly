@@ -22,7 +22,7 @@ and the solutions (shape_extensions patches, shape_extensions.IntVar, Generic in
 
 import importlib
 import unittest
-from typing import Generic, TypedDict
+from typing import Any, Generic, Never, TypedDict
 
 import torch
 from shape_extensions import (
@@ -32,6 +32,7 @@ from shape_extensions import (
     Int,
     IntTuple,
     IntVar,
+    MapIntTuples,
     TypeVarTuple,
 )
 
@@ -112,6 +113,13 @@ class TestIntTupleRuntime(unittest.TestCase):
 
     def test_subscript_erases_to_runtime_helper(self):
         self.assertIs(IntTuple[1, 2], IntTuple)
+
+
+class TestMapIntTuplesRuntime(unittest.TestCase):
+    def test_sources_are_not_evaluated(self):
+        self.assertIs(MapIntTuples[lambda s: int, Any], tuple)
+        self.assertIs(MapIntTuples[lambda s: int, Never], tuple)
+        self.assertIs(MapIntTuples[lambda s: int, tuple[int, int]], tuple)
 
 
 class TestTypeVarArithmetic(unittest.TestCase):

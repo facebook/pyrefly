@@ -3424,6 +3424,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     self.proxy_method_subscript_infer(cls, xs, range, errors)
                 }
                 Type::ClassDef(ref cls)
+                    if cls.has_toplevel_qname("shape_extensions", "MapIntTuples") =>
+                {
+                    // Normal class subscripts are generic specializations. This experimental
+                    // shape extension instead reduces its type lambda eagerly, leaving an
+                    // ordinary tuple type for the rest of the checker.
+                    self.heap.mk_type_of(self.parse_map_int_tuples(
+                        xs,
+                        range,
+                        type_form_context,
+                        errors,
+                    ))
+                }
+                Type::ClassDef(ref cls)
                     if let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = slice
                         && self.get_enum_from_class(cls).is_some() =>
                 {
