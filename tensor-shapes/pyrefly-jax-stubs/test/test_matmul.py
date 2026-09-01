@@ -5,13 +5,16 @@
 
 from __future__ import annotations
 
+from typing import assert_type
+
 import jax
 import jax.numpy as jnp
-from shape_extensions import assert_shape, IntVar
+from shape_extensions import assert_shape, IntTuple, IntVar
 
 N = IntVar("N")
 M = IntVar("M")
 P = IntVar("P")
+B = IntVar("B")
 
 
 # A non-tuple sequence of axes is accepted but gradual; see `test_reductions.py`.
@@ -30,11 +33,11 @@ def generic_matmul[N: IntVar, M: IntVar, P: IntVar](
     return left @ right
 
 
-def reject_mismatched_inner_dimension(
+def symbolic_matmul_dimensions_are_not_rejected(
     left: jax.Array[[N, M]],
     unrelated: jax.Array[[P, M]],
 ) -> None:
-    left @ unrelated  # E: `@` is not supported
+    left @ unrelated
 
 
 def batched_matmul_is_not_rejected(
@@ -43,6 +46,40 @@ def batched_matmul_is_not_rejected(
     """Batched matmul with matching contracting dimension."""
 
     jnp.matmul(x, y)
+
+
+def gufunc_matmul_shapes(
+    left_vector: jax.Array[[M]],
+    right_vector: jax.Array[[P]],
+    matrix: jax.Array[[M, P]],
+    batched: jax.Array[[B, N, M]],
+    broadcasted: jax.Array[[1, M, P]],
+) -> None:
+    assert_type(jnp.matmul(left_vector, matrix), jax.Array[[P]])
+    assert_type(jnp.matmul(matrix, right_vector), jax.Array[[M]])
+    assert_type(jnp.matmul(left_vector, left_vector), jax.Array[[]])
+    assert_type(jnp.matmul(batched, broadcasted), jax.Array[[B, N, P]])
+
+
+def gradual_matmul(
+    left: jax.Array[IntTuple], right: jax.Array[IntTuple]
+) -> jax.Array[IntTuple]:
+    return jnp.matmul(left, right)
+
+
+def reject_invalid_gufunc_matmul_shapes(
+    bad_core: jax.Array[[2, 5, 6]],
+    bad_batch: jax.Array[[3, 4, 6]],
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 4 and 5
+    jnp.matmul(jnp.ones((2, 3, 4)), bad_core)
+    # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[3] at position 0
+    jnp.matmul(jnp.ones((2, 3, 4)), bad_batch)
+
+
+def reject_scalar_matmul(scalar: jax.Array[[]], vector: jax.Array[[M]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: matmul expects at least 1-D arrays
+    jnp.matmul(scalar, vector)
 
 
 def test_operator_matmul() -> None:
@@ -83,6 +120,8 @@ def test_batched_matmul() -> None:
     assert_shape(jnp.matmul(mat34, mat45), (3, 5))
     assert_shape(jnp.matmul(batch_234, mat45), (2, 3, 5))
     assert_shape(jnp.matmul(batch_234, batch_245), (2, 3, 5))
+    assert_shape(batch_234 @ mat45, (2, 3, 5))
+    assert_shape(batch_234 @ batch_245, (2, 3, 5))
 
 
 def test_matmul_contracts_vector_operands() -> None:
@@ -101,7 +140,7 @@ def test_function_matmul_rejects_mismatched_inner_dimension() -> None:
 
     assert_shape(jnp.matmul(a, jnp.ones((4, 5))), (3, 5))
     try:
-        # E: Cannot evaluate type-level shape DSL call: matmul inner dimensions must match
+        # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 4 and 7
         jnp.matmul(a, jnp.ones((7, 5)))
     except TypeError:
         pass

@@ -10,7 +10,13 @@
 from typing import Any, overload, Sequence
 
 import shape_extensions
-from jax._shapes import permute_shape, reduce_shape, reshape_shape, reverse_shape
+from jax._shapes import (
+    matmul_shape,
+    permute_shape,
+    reduce_shape,
+    reshape_shape,
+    reverse_shape,
+)
 from shape_extensions import broadcast, Flag, IntTuple, IntVar
 
 type _Shape = IntTuple
@@ -143,25 +149,9 @@ class Array[Shape: _Shape = _AnyShape]:
     def __neg__(self) -> Array[Shape]: ...
     def __pos__(self) -> Array[Shape]: ...
     def __abs__(self) -> Array[Shape]: ...
-    # Declared for 2-D operands only, which makes the operator stricter than
-    # `jnp.matmul`: a batched `@` is reported as unsupported where the function
-    # form is gradual. A gradual fallback overload here would also absorb the
-    # mismatched-inner-dimension error, which is the most valuable check in
-    # these stubs, so the narrower declaration is deliberate.
-    @overload
-    def __matmul__[N: IntVar, M: IntVar, P: IntVar](
-        self: Array[[N, M]], other: Array[[M, P]]
-    ) -> Array[[N, P]]: ...
-    @overload
-    def __matmul__[N: IntVar, M: IntVar](
-        self: Array[[N, M]], other: Array[[M]]
-    ) -> Array[[N]]: ...
-    @overload
-    def __matmul__[M: IntVar, P: IntVar](
-        self: Array[[M]], other: Array[[M, P]]
-    ) -> Array[[P]]: ...
-    @overload
-    def __matmul__[M: IntVar](self: Array[[M]], other: Array[[M]]) -> Array[[]]: ...
+    def __matmul__[OtherShape: _Shape](
+        self, other: Array[OtherShape]
+    ) -> Array[matmul_shape(Shape, OtherShape)]: ...
     @overload
     def transpose(self) -> Array[reverse_shape(Shape)]: ...
     @overload

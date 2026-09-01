@@ -886,6 +886,8 @@ def logaddexp2[Shape: _Shape](
 def logaddexp2[Shape1: _Shape, Shape2: _Shape](
     x1: Array[Shape1], x2: Array[Shape2], /
 ) -> Array[broadcast(Shape1, Shape2)]: ...
+
+# Shape semantics, including vector and batched operands, come from the gufunc-backed helper.
 def matmul[LeftShape: _Shape, RightShape: _Shape](
     a: Array[LeftShape], b: Array[RightShape]
 ) -> Array[matmul_shape(LeftShape, RightShape)]: ...
