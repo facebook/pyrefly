@@ -548,6 +548,31 @@ def diag_extent(n: Int, k: int) -> Int:
 }
 
 #[test]
+fn test_broadcast_is_a_user_defined_type_shape_dsl_function() {
+    let mut env = shape_dsl_base_env();
+    env.add("main", "from shape_extensions import broadcast\n");
+    let (state, handle) = env.to_state();
+    let main = handle("main");
+    let solutions = state
+        .transaction()
+        .get_solutions(&main)
+        .expect("module should solve");
+    let broadcast = solutions.get(&KeyExport(Name::new("broadcast")));
+    assert!(
+        matches!(broadcast, Type::Function(function)
+            if matches!(&function.metadata.kind,
+                FunctionKind::TypeShapeDsl(_, resolved)
+                    if resolved.parameter_domains()
+                        == [
+                            TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple),
+                            TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple),
+                        ]
+                        && resolved.result_domain() == TypeShapeDslDomain::IntTuple)),
+        "expected `broadcast` to be a user-defined type-level DSL function, got `{broadcast}`",
+    );
+}
+
+#[test]
 fn test_invalid_type_shape_dsl_function_recovers_as_def() {
     let mut env = shaped_array_env();
     env.add(
@@ -1400,7 +1425,7 @@ def add_expanded(
 ) -> None:
     add_overloaded(*args)  # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[4] at position 0
 
-def bad_domain[S0: IntTuple](x: Tensor[S0]) -> Tensor[broadcast(int, S0)]: ...  # E: Expected an `IntTuple` argument to `broadcast`
+def bad_domain[S0: IntTuple](x: Tensor[S0]) -> Tensor[broadcast(int, S0)]: ...  # E: Expected an `IntTuple` argument for parameter `left` (position 1) of `broadcast`
 def bad_arity[S0: IntTuple](x: Tensor[S0]) -> Tensor[broadcast(S0)]: ...  # E: Expected 2 arguments for `broadcast`, got 1
 def bad_keyword[S0: IntTuple](x: Tensor[S0]) -> Tensor[broadcast(S0, right=S0)]: ...  # E: `broadcast` does not accept keyword arguments
 
@@ -1595,23 +1620,23 @@ def shadowed(left: IntTuple, right: IntTuple, native_broadcast: IntTuple) -> Int
 
 @type_shape_dsl_function
 def missing(left: IntTuple, right: IntTuple) -> IntTuple:
-    return native_broadcast(left)  # E: `broadcast` requires exactly two positional arguments
+    return native_broadcast(left)  # E: helper argument domains are incompatible  # E: Missing argument `right`
 
 @type_shape_dsl_function
 def keyword(left: IntTuple, right: IntTuple) -> IntTuple:
-    return native_broadcast(left, right=right)  # E: `broadcast` requires exactly two positional arguments  # E: Unexpected keyword argument
+    return native_broadcast(left, right=right)  # E: DSL helper calls accept only positional arguments
 
 @type_shape_dsl_function
 def expression(left: IntTuple, right: IntTuple) -> IntTuple:
-    return native_broadcast(native_broadcast(left, right), right)  # E: `broadcast` arguments must be bare parameter names
+    return native_broadcast(native_broadcast(left, right), right)  # E: helper arguments must be bare parameter or local names
 
 @type_shape_dsl_function
 def wrong_parameter(left: Int, right: IntTuple) -> IntTuple:
-    return native_broadcast(left, right)  # E: broadcast return requires two `IntTuple` parameters
+    return native_broadcast(left, right)  # E: helper argument domains are incompatible  # E: not assignable to parameter `left`
 
 @type_shape_dsl_function
 def wrong_result(left: IntTuple, right: IntTuple) -> Int:
-    return native_broadcast(left, right)  # E: broadcast return requires two `IntTuple` parameters  # E: Returned type
+    return native_broadcast(left, right)  # E: helper result domain must match  # E: Returned type
 
 def invalid_metadata() -> Tensor[local_lookalike(IntTuple[2], IntTuple[2])]: ...  # E: Expected a type-level DSL function
 "#,
@@ -4497,7 +4522,7 @@ def type_is_boundary[S: IntTuple](x: object) -> TypeIs[Tensor[broadcast(S, S)]]:
 
 def bad_arity() -> Tensor[broadcast(IntTuple[2])]: ...  # E: Expected 2 arguments for `broadcast`, got 1
 def bad_keyword() -> Tensor[broadcast(IntTuple[2], right=IntTuple[2])]: ...  # E: `broadcast` does not accept keyword arguments
-def bad_domain() -> Tensor[broadcast(int, IntTuple[2])]: ...  # E: Expected an `IntTuple` argument to `broadcast`
+def bad_domain() -> Tensor[broadcast(int, IntTuple[2])]: ...  # E: Expected an `IntTuple` argument for parameter `left` (position 1) of `broadcast`
 def bad_dimension() -> Tensor[[broadcast(IntTuple[2], IntTuple[2])]]: ...  # E: Expected a type-level shape DSL call with an `Int` result in a shape dimension, got an `IntTuple` result
 "#,
 );
@@ -11247,7 +11272,7 @@ def invalid_join_broadcast(
     shape: IntTuple, candidate: int, choose_branch: bool,
 ) -> IntTuple:
     right = candidate if choose_branch else 0
-    return broadcast(shape, right)  # E: `broadcast` arguments must be IntTuple parameters
+    return broadcast(shape, right)  # E: helper argument domains are incompatible  # E: not assignable to parameter `right`
 
 @type_shape_dsl_function
 def copy_by_binder(shape: IntTuple) -> IntTuple:

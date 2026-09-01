@@ -969,9 +969,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let FunctionKind::Def(id) = function_kind else {
             return None;
         };
-        if id.has_toplevel_qname("shape_extensions", "broadcast") {
-            return Some(TypeShapeDslIntrinsic::Broadcast);
-        }
         if id.has_toplevel_qname("builtins", "any") {
             return Some(TypeShapeDslIntrinsic::Any);
         }
