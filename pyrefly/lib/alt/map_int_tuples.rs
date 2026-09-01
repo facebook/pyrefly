@@ -77,6 +77,26 @@ pub(crate) enum MapIntTuplesPatternArgument<'a> {
     Type(Type),
 }
 
+/// Replaces deferred shape-DSL computations with their gradual results while preserving the
+/// ordinary type structure around them.
+///
+/// For example, the mapper body `Box[append_one(S)]` cannot be inverted through `append_one`, so
+/// its validation view is `Box[IntTuple]`: the unknown call result is a gradual shape, while the
+/// known `Box` constructor still rejects non-box values and boxes whose argument cannot represent
+/// a shape.
+fn approximate_map_int_tuples_pattern_view(mut ty: Type) -> Type {
+    ty.transform_mut(&mut |ty| {
+        if let Type::TypeLevelDslCall(call) = ty {
+            *ty = call.fallback();
+        }
+    });
+    debug_assert!(
+        !ty.any(|ty| matches!(ty, Type::TypeLevelDslCall(_))),
+        "post-order approximation must replace nested shape-DSL calls before their parents"
+    );
+    ty
+}
+
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn resolve_map_int_tuples_mapper_parameter(&self, name: &Identifier) -> Type {
         let binder = map_int_tuples_mapper_binder(self.module().name(), name);
@@ -154,7 +174,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
             return None;
         }
-        let context = TypeFormContext::TypeArgument(&type_form_context);
+        // A mapper is a type-level callable, so its body is its return position. This permits
+        // shape-DSL calls in the body without making them legal in the enclosing annotation.
+        let context = TypeFormContext::TypeLevelLambdaReturn(&type_form_context);
         Some(TypeLambda::new(
             map_int_tuples_mapper_binder(self.module().name(), name),
             self.expr_untype(&lambda.body, context, errors),
@@ -183,6 +205,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
             return fallback();
         };
+        let mapper_range = mapper.range();
         let mapper = self.parse_map_int_tuples_mapper(mapper, type_form_context, errors);
         let source_context = TypeFormContext::TypeArgument(&type_form_context);
         let source_type = self.expr_untype(source, source_context, errors);
@@ -215,7 +238,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return Type::TypeLevelDslCall(Box::new(call));
         }
         match call.evaluate() {
-            Ok(mapped) => mapped,
+            Ok(mut mapped) => {
+                for error in mapped.finalize_type_level_dsl_at_boundary() {
+                    self.error(
+                        errors,
+                        mapper_range,
+                        ErrorKind::InvalidAnnotation,
+                        error.to_string(),
+                    );
+                }
+                mapped
+            }
             Err(error) => {
                 self.error(
                     errors,
@@ -236,7 +269,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return Type::TypeLevelDslCall(call);
         };
         let (mapper, _, _) = map.parts();
-        let member = mapper.apply(IntTuple::shapeless().to_shape_arg_type());
+        let member = approximate_map_int_tuples_pattern_view(
+            mapper.apply(IntTuple::shapeless().to_shape_arg_type()),
+        );
         map.make_parameter_pattern(member);
         Type::TypeLevelDslCall(call)
     }
@@ -345,7 +380,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             match solver.infer_map_int_tuples_pattern_member(mapper, mapper_uses_parameter, member)
             {
                 Some(candidate) => {
-                    mapped_member_types.push(mapper.apply(candidate.clone()));
+                    mapped_member_types.push(approximate_map_int_tuples_pattern_view(
+                        mapper.apply(candidate.clone()),
+                    ));
                     candidate
                 }
                 None => {
@@ -415,7 +452,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         mapper.body().for_each_quantified(&mut |quantified| {
             mapper_uses_parameter |= quantified == mapper.parameter();
         });
-        let gradual = mapper.apply(IntTuple::shapeless().to_shape_arg_type());
+        let gradual = approximate_map_int_tuples_pattern_view(
+            mapper.apply(IntTuple::shapeless().to_shape_arg_type()),
+        );
         let mut mapped_member_types = Vec::new();
         let source = if let Some(members) = exact_members {
             Type::concrete_tuple(

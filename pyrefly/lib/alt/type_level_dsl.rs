@@ -59,7 +59,7 @@ use crate::error::collector::ErrorCollector;
 impl TypeFormContext<'_> {
     pub(crate) fn allows_type_level_dsl_call(self) -> bool {
         match self {
-            Self::ReturnAnnotation => true,
+            Self::ReturnAnnotation | Self::TypeLevelLambdaReturn(_) => true,
             Self::TypeArgument(parent) | Self::TupleElement(parent) | Self::UnionMember(parent) => {
                 parent.allows_type_level_dsl_call()
             }

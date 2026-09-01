@@ -219,6 +219,8 @@ pub enum TypeFormContext<'a> {
     TypeArgumentForType(&'a TypeFormContext<'a>),
     /// Type argument for the return position of a `Callable` type.
     TypeArgumentCallableReturn(&'a TypeFormContext<'a>),
+    /// Body of an experimental shape-extension type-level lambda.
+    TypeLevelLambdaReturn(&'a TypeFormContext<'a>),
     /// Type argument for `TypeGuard` or `TypeIs`.
     TypePredicateArgument(&'a TypeFormContext<'a>),
     /// An element of a tuple type.
@@ -292,6 +294,7 @@ impl TypeFormContext<'_> {
                 | TypeFormContext::TupleElement(_)
                 | TypeFormContext::TypeArgument(_)
                 | TypeFormContext::TypeArgumentCallableReturn(_)
+                | TypeFormContext::TypeLevelLambdaReturn(_)
                 | TypeFormContext::TypeArgumentForType(_)
                 | TypeFormContext::TypePredicateArgument(_)
                 | TypeFormContext::UnionMember(_)

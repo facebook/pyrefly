@@ -670,3 +670,176 @@ def check(shapes: tuple[IntTuple[2]], value: Box[IntTuple[2]]) -> None:
     assert_type(reverse((value,)), tuple[IntTuple[2]])
 "#,
 );
+
+testcase!(
+    test_map_int_tuples_pattern_approximates_dsl_calls_in_mapper_bodies,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, MapIntTuples, type_shape_dsl_function
+from typing import Callable, assert_type
+
+class Box[Shape]: ...
+
+@type_shape_dsl_function
+def append_one(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[0], 1))
+
+def shapes[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[append_one(S)], Shapes],
+) -> Shapes: ...
+
+def nested[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: tuple[Box[append_one(S)]], Shapes],
+) -> Shapes: ...
+
+# A mapper body is the special callable-return position; an ordinary callable nested in a
+# parameter annotation does not make shape-DSL calls legal.
+def ordinary_callable(callback: Callable[[], append_one(IntTuple[1])]) -> None: ...  # E: Function call cannot be used in annotations
+
+def check(box: Box[IntTuple[2, 1]], loose: Box[str]) -> None:
+    # Inversion cannot recover the input of `append_one`, so it records a gradual `IntTuple`.
+    assert_type(shapes((box,)), tuple[IntTuple])
+    shapes((loose,))  # E: is not assignable to parameter `values`
+    shapes((1,))  # E: is not assignable to parameter `values`
+
+    # Approximation retains ordinary constructors around the deferred call.
+    assert_type(nested(((box,),)), tuple[IntTuple])
+    nested((box,))  # E: is not assignable to parameter `values`
+"#,
+);
+
+testcase!(
+    test_eager_map_int_tuples_finalizes_dsl_calls_from_mapper_bodies,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, MapIntTuples, type_shape_dsl_function
+from typing import assert_type
+
+class Box[Shape]: ...
+
+@type_shape_dsl_function
+def append_one(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[0], 1))
+
+@type_shape_dsl_function
+def singleton(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples((shape,))
+
+type Mapped = MapIntTuples[lambda S: Box[append_one(S)], tuple[IntTuple[2]]]
+
+def direct(
+    values: MapIntTuples[lambda S: Box[append_one(S)], tuple[IntTuple[2]]],
+) -> None:
+    assert_type(values, tuple[Box[IntTuple[2, 1]]])
+
+def through_alias(values: Mapped) -> None:
+    assert_type(values, tuple[Box[IntTuple[2, 1]]])
+
+def from_dsl_source() -> MapIntTuples[
+    lambda S: Box[S], singleton(IntTuple[2])
+]: ...
+
+assert_type(from_dsl_source(), tuple[Box[IntTuple[2]]])
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_rejects_dsl_calls_in_parameter_sources,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, MapIntTuples, type_shape_dsl_function
+
+class Box[Shape]: ...
+
+@type_shape_dsl_function
+def singleton(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples((shape,))
+
+def invalid(
+    values: MapIntTuples[
+        lambda S: Box[S], singleton(IntTuple[2])  # E: Function call cannot be used in annotations
+    ],
+) -> None: ...
+"#,
+);
+
+testcase!(
+    test_map_int_tuples_pattern_approximates_residual_maps_in_mapper_bodies,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Box[Shape]: ...
+class Pair[Shape, Values]: ...
+
+def shapes[Shapes: IntTuples, Other: IntTuples](
+    values: MapIntTuples[
+        lambda S: Pair[S, MapIntTuples[lambda T: Box[T], Other]],
+        Shapes,
+    ],
+    other: Other,
+) -> Shapes: ...
+
+def check(value: Pair[IntTuple[2], tuple[Box[IntTuple], ...]]) -> None:
+    assert_type(
+        shapes((value,), ((3,), (4, 5))),
+        tuple[IntTuple],
+    )
+    shapes((1,), ((3,),))  # E: is not assignable to parameter `values`
+"#,
+);
+
+testcase!(
+    test_residual_map_mapper_finalizes_nested_dsl_calls,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, MapIntTuples, type_shape_dsl_function
+from typing import assert_type
+
+class Box[Shape]: ...
+class Pair[Shape, Values]: ...
+
+@type_shape_dsl_function
+def append_one(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((shape[0], 1))
+
+def mapped[Shapes: IntTuples, Other: IntTuples](
+    values: MapIntTuples[
+        lambda S: Pair[
+            S,
+            MapIntTuples[lambda T: Box[append_one(T)], Other],
+        ],
+        Shapes,
+    ],
+    other: Other,
+) -> MapIntTuples[lambda T: Box[append_one(T)], Other]: ...
+
+def check(value: Pair[IntTuple[2], tuple[Box[IntTuple], ...]]) -> None:
+    assert_type(
+        mapped((value,), ((3,), (4, 5))),
+        tuple[Box[IntTuple[3, 1]], Box[IntTuple[4, 1]]],
+    )
+"#,
+);
+
+// TODO(stroxler): Give `MapIntTuples` a result domain so one deferred map can be the source of
+// another. For now its result may contain arbitrary types and cannot satisfy `IntTuples`.
+testcase!(
+    test_deferred_map_is_not_an_int_tuples_source,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+
+class Box[Shape]: ...
+
+def nested[Shapes: IntTuples]() -> MapIntTuples[
+    lambda S: Box[S],
+    MapIntTuples[lambda S: S, Shapes],  # E: Source argument to `MapIntTuples` must be an `IntTuples` value
+]: ...
+"#,
+);

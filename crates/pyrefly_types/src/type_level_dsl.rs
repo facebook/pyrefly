@@ -5289,6 +5289,8 @@ impl TypeLevelDslCall {
         match &self.function {
             TypeLevelDslFunction::Broadcast => Some(TypeShapeDslDomain::IntTuple),
             TypeLevelDslFunction::UserDefined(function) => Some(function.result_domain()),
+            // TODO(stroxler): Track the mapper's result domain so a deferred map whose mapper
+            // returns `IntTuple` can itself be used as an `IntTuples` source.
             TypeLevelDslFunction::MapIntTuples(_) => None,
         }
     }

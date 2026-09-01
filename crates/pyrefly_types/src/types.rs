@@ -1708,13 +1708,15 @@ impl Type {
                 for arg in &mut call.args {
                     force_nested(arg)?;
                 }
+                if let Some(source) = call.map_int_tuples_source_mut() {
+                    force_nested(source)?;
+                }
                 // Mapping can instantiate DSL calls from its lambda body, so the produced type
                 // must cross the same boundary as the source arguments.
                 let mut result = call.evaluate()?;
                 force_nested(&mut result)?;
                 Ok(result)
             }
-            let mut fallback = call.fallback();
             match force_call(call) {
                 Ok(result) => {
                     *ty = result;
@@ -1723,6 +1725,7 @@ impl Type {
                 Err(error) => {
                     // Report only the original error if reducing a structured fallback also
                     // encounters a failing nested call.
+                    let mut fallback = call.fallback();
                     let _ = force_nested(&mut fallback);
                     *ty = fallback;
                     Err(error)

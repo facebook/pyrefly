@@ -199,6 +199,15 @@ impl TypeLevelDslCall {
         };
         Some(map)
     }
+
+    /// Returns the source of an experimental `MapIntTuples` application for recursive
+    /// finalization before the map is evaluated.
+    pub(crate) fn map_int_tuples_source_mut(&mut self) -> Option<&mut Type> {
+        let TypeLevelDslFunction::MapIntTuples(map) = &mut self.function else {
+            return None;
+        };
+        Some(&mut map.source)
+    }
 }
 
 fn invalid_source() -> ShapeError {
