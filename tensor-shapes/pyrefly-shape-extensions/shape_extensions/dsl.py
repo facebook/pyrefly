@@ -81,3 +81,10 @@ def sum(xs: _IntTupleSchema, /) -> _IntSchema: ...
 def einsum(spec: str, shapes: _IntTuplesSchema, /) -> _IntTupleSchema:
     """Compute the output shape described by an explicit einsum equation."""
     ...
+
+
+def _gufunc_broadcast(spec: str, shapes: _IntTuplesSchema, /) -> _IntTupleSchema:
+    """Compute a gufunc result shape inside a type-level shape DSL function."""
+    raise NotImplementedError(
+        "dsl._gufunc_broadcast is only available inside a type-level shape DSL function"
+    )

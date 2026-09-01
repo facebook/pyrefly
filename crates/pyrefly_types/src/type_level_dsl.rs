@@ -56,6 +56,9 @@ use crate::einsum::parse_einsum_equation;
 use crate::equality::TypeEq as TypeEqTrait;
 use crate::equality::TypeEqCtx;
 use crate::function::FuncDefId;
+use crate::gufunc::GufuncClassification;
+use crate::gufunc::evaluate_gufunc;
+use crate::gufunc::parse_gufunc_signature;
 use crate::literal::Lit;
 use crate::map_int_tuples::MapIntTuples;
 use crate::quantified::Quantified;
@@ -1165,6 +1168,7 @@ pub enum TypeShapeDslIntrinsic {
     Broadcast,
     Concat,
     Einsum,
+    GufuncBroadcast,
     Gradual(TypeShapeDslDomain),
     IsConcreteInt,
     IsIntValue,
@@ -1191,6 +1195,10 @@ pub enum TypeShapeDslExpressionKind {
     IntTupleSlice,
     IntTupleConcat,
     Einsum {
+        shapes: usize,
+        parameter_origins: Option<Box<[usize]>>,
+    },
+    GufuncBroadcast {
         shapes: usize,
         parameter_origins: Option<Box<[usize]>>,
     },
@@ -3599,6 +3607,55 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         Ok(())
     }
 
+    fn validate_gufunc_broadcast(
+        &mut self,
+        call: &ExprCall,
+        flow: &DslValidationFlow,
+    ) -> Result<(), TypeShapeDslDefinitionError> {
+        const SHAPES_ERROR: &str =
+            "`dsl._gufunc_broadcast` shapes must be an `IntTuples` parameter or immutable alias";
+        if call.arguments.args.len() != 2
+            || !call.arguments.keywords.is_empty()
+            || call
+                .arguments
+                .args
+                .iter()
+                .any(|argument| matches!(argument, Expr::Starred(_)))
+        {
+            return Err(TypeShapeDslDefinitionError {
+                range: call.arguments.range,
+                message: "`dsl._gufunc_broadcast` requires exactly two positional arguments",
+            });
+        }
+        self.validate_flag_string(&call.arguments.args[0], flow)?;
+        let shapes = &call.arguments.args[1];
+        let Expr::Name(_) = shapes else {
+            return Err(TypeShapeDslDefinitionError {
+                range: shapes.range(),
+                message: SHAPES_ERROR,
+            });
+        };
+        let slot = self.slot(shapes, flow)?;
+        let parameter_origins = match &flow.kinds[slot] {
+            DslStaticKind::UnknownParameters(parameters) => Some(parameters.clone()),
+            DslStaticKind::IntTuples { parameter_origins } => parameter_origins.clone(),
+            _ => {
+                return Err(TypeShapeDslDefinitionError {
+                    range: shapes.range(),
+                    message: SHAPES_ERROR,
+                });
+            }
+        };
+        self.expressions.push(TypeShapeDslExpression {
+            range: call.range(),
+            kind: TypeShapeDslExpressionKind::GufuncBroadcast {
+                shapes: slot,
+                parameter_origins,
+            },
+        });
+        Ok(())
+    }
+
     fn validate_gradual_call(call: &ExprCall) -> Result<(), TypeShapeDslDefinitionError> {
         if call.arguments.args.is_empty() && call.arguments.keywords.is_empty() {
             Ok(())
@@ -3788,10 +3845,16 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 self.validate_einsum(call, flow)?;
                 None
             }
+            Expr::Call(call)
+                if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::GufuncBroadcast) =>
+            {
+                self.validate_gufunc_broadcast(call, flow)?;
+                None
+            }
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: expression.range(),
-                    message: "IntTuple shape expressions support parameters, immutable aliases, restricted slices, `dsl.IntTuple`, `dsl.concat`, and `dsl.einsum`",
+                    message: "IntTuple shape expressions support parameters, immutable aliases, restricted slices, `dsl.IntTuple`, `dsl.concat`, `dsl.einsum`, and `dsl._gufunc_broadcast`",
                 });
             }
         };
@@ -3911,6 +3974,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         TypeShapeDslIntrinsic::IntTuple
                             | TypeShapeDslIntrinsic::Concat
                             | TypeShapeDslIntrinsic::Einsum
+                            | TypeShapeDslIntrinsic::GufuncBroadcast
                     )
                 ) =>
             {
@@ -4952,7 +5016,8 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 Some(
                     TypeShapeDslIntrinsic::IntTuple
                     | TypeShapeDslIntrinsic::Concat
-                    | TypeShapeDslIntrinsic::Einsum,
+                    | TypeShapeDslIntrinsic::Einsum
+                    | TypeShapeDslIntrinsic::GufuncBroadcast,
                 ) => {
                     self.validate_int_tuple_expression(returned, flow)?;
                     TypeShapeDslReturnKind::Expression(TypeShapeDslDomain::IntTuple)
@@ -6678,6 +6743,47 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     return DslOutcome::Value(DslValue::Unknown);
                 };
                 match evaluate_einsum(&equation, operands) {
+                    Ok(shape) => DslOutcome::Value(DslValue::Shape(shape)),
+                    Err(error) => DslOutcome::Invalid(error),
+                }
+            }
+            TypeShapeDslExpressionKind::GufuncBroadcast { shapes, .. } => {
+                let Expr::Call(call) = expression else {
+                    unreachable!("validated gufunc broadcast expression is a call")
+                };
+                let spec =
+                    match self.evaluate_expression(&call.arguments.args[0], environment, budget) {
+                        DslOutcome::Value(DslValue::FlagString(spec)) => Some(spec),
+                        DslOutcome::Value(DslValue::FlagNone | DslValue::Unknown) => None,
+                        invalid @ DslOutcome::Invalid(_) => return invalid,
+                        DslOutcome::ExplicitGradual => {
+                            unreachable!("validated value expression cannot return gradual")
+                        }
+                        DslOutcome::Value(_) => {
+                            unreachable!("validated gufunc signature is a string Flag")
+                        }
+                    };
+                let signature = match spec {
+                    Some(spec) => match parse_gufunc_signature(&spec) {
+                        GufuncClassification::Supported(signature) => Some(signature),
+                        GufuncClassification::Unsupported(_unsupported) => None,
+                        GufuncClassification::Invalid(error) => {
+                            return DslOutcome::Invalid(ShapeError::ShapeComputation {
+                                message: error.message(),
+                            });
+                        }
+                    },
+                    None => None,
+                };
+                let operands = match environment.value(shapes) {
+                    DslValue::IntTuples(DslIntTuples::Fixed(operands)) => Some(operands.as_slice()),
+                    DslValue::IntTuples(DslIntTuples::Unbounded(_)) | DslValue::Unknown => None,
+                    _ => unreachable!("validated gufunc operands are an IntTuples value"),
+                };
+                let Some((signature, operands)) = signature.zip(operands) else {
+                    return DslOutcome::Value(DslValue::Unknown);
+                };
+                match evaluate_gufunc(&signature, operands) {
                     Ok(shape) => DslOutcome::Value(DslValue::Shape(shape)),
                     Err(error) => DslOutcome::Invalid(error),
                 }

@@ -13438,3 +13438,124 @@ def parameter_shadow(einsum_alias: Int, spec: str, shapes: IntTuples) -> IntTupl
     return einsum_alias(spec, shapes)  # E: DSL helper callee must be a validated  # E: Expected a callable
 "#,
 );
+
+testcase!(
+    test_type_shape_dsl_gufunc_primitive,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, Int, IntTuple, IntTuples, IntVar, type_shape_dsl_function
+from typing import assert_type, reveal_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def gufunc(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl._gufunc_broadcast(spec, shapes)
+
+def matrix_product() -> ShapeBox[gufunc("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+def batched_product() -> ShapeBox[gufunc("(m,n),(n,p)->(m,p)", tuple[IntTuple[7, 2, 3], IntTuple[1, 3, 5]])]: ...
+def scalar_broadcast() -> ShapeBox[gufunc("(),()->()", tuple[IntTuple[2, 1, 4], IntTuple[3, 4]])]: ...
+def unbounded() -> ShapeBox[gufunc("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, 3], ...])]: ...
+def unsupported() -> ShapeBox[gufunc("(n)->(n),(n)", tuple[IntTuple[2]])]: ...
+def unknown[Spec: Flag[str]](spec: Spec) -> ShapeBox[gufunc(Spec, tuple[IntTuple[2]])]: ...
+
+assert_type(matrix_product(), ShapeBox[IntTuple[2, 5]])
+assert_type(batched_product(), ShapeBox[IntTuple[7, 2, 5]])
+assert_type(scalar_broadcast(), ShapeBox[IntTuple[2, 3, 4]])
+assert_type(unbounded(), ShapeBox[IntTuple])
+assert_type(unsupported(), ShapeBox[IntTuple])
+assert_type(unknown("(n)->(n)"), ShapeBox[IntTuple[2]])
+
+def check_unknown[Spec: Flag[str]](spec: Spec) -> None:
+    assert_type(unknown(spec), ShapeBox[IntTuple])
+
+def symbolic[N: IntVar](n: Int[N]) -> ShapeBox[gufunc("(n)->(n)", tuple[IntTuple[N]])]: ...
+def gradual_member() -> ShapeBox[gufunc("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, 3], IntTuple])]: ...
+
+def check_symbolic[N: IntVar](n: Int[N]) -> None:
+    assert_type(symbolic(n), ShapeBox[IntTuple[N]])
+
+reveal_type(gradual_member())  # E: revealed type: ShapeBox[IntTuple[*tuple[int, ...], 2, int]]
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_gufunc_primitive_errors,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def gufunc(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl._gufunc_broadcast(spec, shapes)
+
+def malformed() -> ShapeBox[gufunc("(m,n),(n,p)-(m,p)", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+def wrong_count() -> ShapeBox[gufunc("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, 3]])]: ...
+def wrong_rank() -> ShapeBox[gufunc("(m,n),(n,p)->(m,p)", tuple[IntTuple[2], IntTuple[3, 5]])]: ...
+def core_conflict() -> ShapeBox[gufunc("(n),(n)->()", tuple[IntTuple[1], IntTuple[5]])]: ...
+
+malformed()  # E: Cannot evaluate type-level shape DSL call: gufunc: signature must contain exactly one '->', got 0
+wrong_count()  # E: Cannot evaluate type-level shape DSL call: gufunc: expected 2 operands, got 1
+wrong_rank()  # E: Cannot evaluate type-level shape DSL call: gufunc: operand 0 requires at least rank 2, got 1
+core_conflict()  # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 1 and 5
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_gufunc_primitive_surface,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, IntTuples, type_shape_dsl_function
+from shape_extensions.dsl import _gufunc_broadcast as imported_gufunc
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+gufunc_alias = imported_gufunc
+
+@type_shape_dsl_function
+def imported(spec: str, shapes: IntTuples) -> IntTuple:
+    return imported_gufunc(spec, shapes)
+
+@type_shape_dsl_function
+def aliased(spec: str, shapes: IntTuples) -> IntTuple:
+    result = gufunc_alias(spec, shapes)
+    return result
+
+def imported_result() -> ShapeBox[imported("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+def aliased_result() -> ShapeBox[aliased("(n)->(n)", tuple[IntTuple[4]])]: ...
+assert_type(imported_result(), ShapeBox[IntTuple[2, 5]])
+assert_type(aliased_result(), ShapeBox[IntTuple[4]])
+
+def direct() -> ShapeBox[dsl._gufunc_broadcast("(n)->(n)", tuple[IntTuple[4]])]: ...  # E: Expected a type-level DSL function
+
+@type_shape_dsl_function
+def missing(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl._gufunc_broadcast()  # E: `dsl._gufunc_broadcast` requires exactly two positional arguments  # E: Missing positional arguments `spec`, `shapes`
+
+@type_shape_dsl_function
+def keyword(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl._gufunc_broadcast(spec=spec, shapes=shapes)  # E: `dsl._gufunc_broadcast` requires exactly two positional arguments  # E: Expected argument `spec` to be positional  # E: Expected argument `shapes` to be positional
+
+@type_shape_dsl_function
+def wrong_spec(spec: int, shapes: IntTuples) -> IntTuple:
+    return dsl._gufunc_broadcast(spec, shapes)  # E: Flag operation requires a compatible Flag parameter  # E: Argument `int` is not assignable to parameter `spec` with type `str`
+
+@type_shape_dsl_function
+def wrong_shapes(spec: str, shape: IntTuple) -> IntTuple:
+    return dsl._gufunc_broadcast(spec, shape)  # E: shapes must be an `IntTuples` parameter or immutable alias  # E: is not assignable to parameter `shapes`
+
+@type_shape_dsl_function
+def wrong_shapes_tuple_of_int(spec: str, shapes: tuple[int, ...]) -> IntTuple:
+    return dsl._gufunc_broadcast(spec, shapes)  # E: gufunc operands must be annotated as `IntTuples`  # E: is not assignable to parameter `shapes`
+
+@type_shape_dsl_function
+def parameter_shadow(gufunc_alias: Int, spec: str, shapes: IntTuples) -> IntTuple:
+    return gufunc_alias(spec, shapes)  # E: DSL helper callee must be a validated  # E: Expected a callable
+"#,
+);
