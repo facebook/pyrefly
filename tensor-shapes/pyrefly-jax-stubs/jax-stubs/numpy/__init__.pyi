@@ -33,57 +33,29 @@ type _NewShape = int | tuple[int, ...] | None
 # downstream shaped-array operations without degrading to unknown. The NumPy
 # stubs carry the same limitation.
 @overload
-def zeros(shape: tuple[()], dtype: Any = ..., *, device: Any = ...) -> Array[[]]: ...
-@overload
 def zeros[N: IntVar](
     shape: Int[N], dtype: Any = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
 @overload
-def zeros[N: IntVar](
-    shape: IntTuple[N], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N]]: ...
-@overload
-def zeros[N: IntVar, M: IntVar](
-    shape: IntTuple[N, M], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N, M]]: ...
-@overload
-def zeros[N: IntVar, M: IntVar, K: IntVar](
-    shape: IntTuple[N, M, K], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N, M, K]]: ...
+def zeros[Shape: _Shape](
+    shape: Shape, dtype: Any = ..., *, device: Any = ...
+) -> Array[Shape]: ...
 @overload
 def zeros(
-    shape: Sequence[int], dtype: Any = ..., *, device: Any = ...
+    shape: Sequence[int] | int, dtype: Any = ..., *, device: Any = ...
 ) -> Array[IntTuple]: ...
-@overload
-def ones(shape: tuple[()], dtype: Any = ..., *, device: Any = ...) -> Array[[]]: ...
 @overload
 def ones[N: IntVar](
     shape: Int[N], dtype: Any = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
 @overload
-def ones[N: IntVar](
-    shape: IntTuple[N], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N]]: ...
-@overload
-def ones[N: IntVar, M: IntVar](
-    shape: IntTuple[N, M], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N, M]]: ...
-@overload
-def ones[N: IntVar, M: IntVar, K: IntVar](
-    shape: IntTuple[N, M, K], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N, M, K]]: ...
+def ones[Shape: _Shape](
+    shape: Shape, dtype: Any = ..., *, device: Any = ...
+) -> Array[Shape]: ...
 @overload
 def ones(
-    shape: Sequence[int], dtype: Any = ..., *, device: Any = ...
+    shape: Sequence[int] | int, dtype: Any = ..., *, device: Any = ...
 ) -> Array[IntTuple]: ...
-@overload
-def empty(
-    shape: tuple[()],
-    dtype: Any = ...,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[]]: ...
 @overload
 def empty[N: IntVar](
     shape: Int[N],
@@ -93,60 +65,36 @@ def empty[N: IntVar](
     out_sharding: Any = ...,
 ) -> Array[[N]]: ...
 @overload
-def empty[N: IntVar](
-    shape: IntTuple[N],
+def empty[Shape: _Shape](
+    shape: Shape,
     dtype: Any = ...,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
-) -> Array[[N]]: ...
-@overload
-def empty[N: IntVar, M: IntVar](
-    shape: IntTuple[N, M],
-    dtype: Any = ...,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[N, M]]: ...
-@overload
-def empty[N: IntVar, M: IntVar, K: IntVar](
-    shape: IntTuple[N, M, K],
-    dtype: Any = ...,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[N, M, K]]: ...
+) -> Array[Shape]: ...
 @overload
 def empty(
-    shape: Sequence[int],
+    shape: Sequence[int] | int,
     dtype: Any = ...,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
 ) -> Array[IntTuple]: ...
 @overload
-def full(
-    shape: tuple[()], fill_value: Any, dtype: Any = ..., *, device: Any = ...
-) -> Array[[]]: ...
-@overload
 def full[N: IntVar](
     shape: Int[N], fill_value: Any, dtype: Any = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
 @overload
-def full[N: IntVar](
-    shape: IntTuple[N], fill_value: Any, dtype: Any = ..., *, device: Any = ...
-) -> Array[[N]]: ...
-@overload
-def full[N: IntVar, M: IntVar](
-    shape: IntTuple[N, M], fill_value: Any, dtype: Any = ..., *, device: Any = ...
-) -> Array[[N, M]]: ...
-@overload
-def full[N: IntVar, M: IntVar, K: IntVar](
-    shape: IntTuple[N, M, K], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N, M, K]]: ...
+def full[Shape: _Shape](
+    shape: Shape, fill_value: Any, dtype: Any = ..., *, device: Any = ...
+) -> Array[Shape]: ...
 @overload
 def full(
-    shape: Sequence[int], fill_value: Any, dtype: Any = ..., *, device: Any = ...
+    shape: Sequence[int] | int,
+    fill_value: Any,
+    dtype: Any = ...,
+    *,
+    device: Any = ...,
 ) -> Array[IntTuple]: ...
 
 # `_like` constructors
@@ -159,14 +107,6 @@ def empty_like[Shape: _Shape](
     device: Any = ...,
 ) -> Array[Shape]: ...
 @overload
-def empty_like(
-    prototype: Any,
-    dtype: Any = ...,
-    shape: tuple[()] = ...,
-    *,
-    device: Any = ...,
-) -> Array[[]]: ...
-@overload
 def empty_like[N: IntVar](
     prototype: Any,
     dtype: Any = ...,
@@ -175,34 +115,18 @@ def empty_like[N: IntVar](
     device: Any = ...,
 ) -> Array[[N]]: ...
 @overload
-def empty_like[N: IntVar](
+def empty_like[Shape: _Shape](
     prototype: Any,
     dtype: Any = ...,
-    shape: IntTuple[N] = ...,
+    shape: Shape = ...,
     *,
     device: Any = ...,
-) -> Array[[N]]: ...
-@overload
-def empty_like[N: IntVar, M: IntVar](
-    prototype: Any,
-    dtype: Any = ...,
-    shape: IntTuple[N, M] = ...,
-    *,
-    device: Any = ...,
-) -> Array[[N, M]]: ...
-@overload
-def empty_like[N: IntVar, M: IntVar, K: IntVar](
-    prototype: Any,
-    dtype: Any = ...,
-    shape: IntTuple[N, M, K] = ...,
-    *,
-    device: Any = ...,
-) -> Array[[N, M, K]]: ...
+) -> Array[Shape]: ...
 @overload
 def empty_like(
     prototype: Any,
     dtype: Any = ...,
-    shape: Sequence[int] | None = None,
+    shape: Sequence[int] | int | None = None,
     *,
     device: Any = ...,
 ) -> Array[IntTuple]: ...
@@ -216,15 +140,6 @@ def zeros_like[Shape: _Shape](
     out_sharding: Any = ...,
 ) -> Array[Shape]: ...
 @overload
-def zeros_like(
-    a: Any,
-    dtype: Any = ...,
-    shape: tuple[()] = ...,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[]]: ...
-@overload
 def zeros_like[N: IntVar](
     a: Any,
     dtype: Any = ...,
@@ -234,37 +149,19 @@ def zeros_like[N: IntVar](
     out_sharding: Any = ...,
 ) -> Array[[N]]: ...
 @overload
-def zeros_like[N: IntVar](
+def zeros_like[Shape: _Shape](
     a: Any,
     dtype: Any = ...,
-    shape: IntTuple[N] = ...,
+    shape: Shape = ...,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
-) -> Array[[N]]: ...
-@overload
-def zeros_like[N: IntVar, M: IntVar](
-    a: Any,
-    dtype: Any = ...,
-    shape: IntTuple[N, M] = ...,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[N, M]]: ...
-@overload
-def zeros_like[N: IntVar, M: IntVar, K: IntVar](
-    a: Any,
-    dtype: Any = ...,
-    shape: IntTuple[N, M, K] = ...,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[N, M, K]]: ...
+) -> Array[Shape]: ...
 @overload
 def zeros_like(
     a: Any,
     dtype: Any = ...,
-    shape: Sequence[int] | None = None,
+    shape: Sequence[int] | int | None = None,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
@@ -279,15 +176,6 @@ def ones_like[Shape: _Shape](
     out_sharding: Any = ...,
 ) -> Array[Shape]: ...
 @overload
-def ones_like(
-    a: Any,
-    dtype: Any = ...,
-    shape: tuple[()] = ...,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[]]: ...
-@overload
 def ones_like[N: IntVar](
     a: Any,
     dtype: Any = ...,
@@ -297,37 +185,19 @@ def ones_like[N: IntVar](
     out_sharding: Any = ...,
 ) -> Array[[N]]: ...
 @overload
-def ones_like[N: IntVar](
+def ones_like[Shape: _Shape](
     a: Any,
     dtype: Any = ...,
-    shape: IntTuple[N] = ...,
+    shape: Shape = ...,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
-) -> Array[[N]]: ...
-@overload
-def ones_like[N: IntVar, M: IntVar](
-    a: Any,
-    dtype: Any = ...,
-    shape: IntTuple[N, M] = ...,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[N, M]]: ...
-@overload
-def ones_like[N: IntVar, M: IntVar, K: IntVar](
-    a: Any,
-    dtype: Any = ...,
-    shape: IntTuple[N, M, K] = ...,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[N, M, K]]: ...
+) -> Array[Shape]: ...
 @overload
 def ones_like(
     a: Any,
     dtype: Any = ...,
-    shape: Sequence[int] | None = None,
+    shape: Sequence[int] | int | None = None,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
@@ -343,16 +213,6 @@ def full_like[Shape: _Shape](
     out_sharding: Any = ...,
 ) -> Array[Shape]: ...
 @overload
-def full_like(
-    a: Any,
-    fill_value: Any,
-    dtype: Any = ...,
-    shape: tuple[()] = ...,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[]]: ...
-@overload
 def full_like[N: IntVar](
     a: Any,
     fill_value: Any,
@@ -363,41 +223,21 @@ def full_like[N: IntVar](
     out_sharding: Any = ...,
 ) -> Array[[N]]: ...
 @overload
-def full_like[N: IntVar](
+def full_like[Shape: _Shape](
     a: Any,
     fill_value: Any,
     dtype: Any = ...,
-    shape: IntTuple[N] = ...,
+    shape: Shape = ...,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
-) -> Array[[N]]: ...
-@overload
-def full_like[N: IntVar, M: IntVar](
-    a: Any,
-    fill_value: Any,
-    dtype: Any = ...,
-    shape: IntTuple[N, M] = ...,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[N, M]]: ...
-@overload
-def full_like[N: IntVar, M: IntVar, K: IntVar](
-    a: Any,
-    fill_value: Any,
-    dtype: Any = ...,
-    shape: IntTuple[N, M, K] = ...,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[N, M, K]]: ...
+) -> Array[Shape]: ...
 @overload
 def full_like(
     a: Any,
     fill_value: Any,
     dtype: Any = ...,
-    shape: Sequence[int] | None = None,
+    shape: Sequence[int] | int | None = None,
     *,
     device: Any = ...,
     out_sharding: Any = ...,

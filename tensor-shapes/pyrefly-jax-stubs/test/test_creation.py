@@ -35,19 +35,31 @@ def test_like_constructors() -> None:
 
     assert_shape(jnp.empty_like(x23), (2, 3))
     assert_shape(jnp.empty_like(x234), (2, 3, 4))
+    assert_shape(jnp.empty_like(x23, shape=()), ())
+    assert_shape(jnp.empty_like(x23, shape=4), (4,))
     assert_shape(jnp.empty_like(x23, shape=(4, 5)), (4, 5))
+    assert_shape(jnp.empty_like(x23, shape=(2, 3, 4, 5)), (2, 3, 4, 5))
 
     assert_shape(jnp.zeros_like(x23), (2, 3))
     assert_shape(jnp.zeros_like(x234), (2, 3, 4))
+    assert_shape(jnp.zeros_like(x23, shape=()), ())
+    assert_shape(jnp.zeros_like(x23, shape=4), (4,))
     assert_shape(jnp.zeros_like(x23, shape=(4, 5)), (4, 5))
+    assert_shape(jnp.zeros_like(x23, shape=(2, 3, 4, 5)), (2, 3, 4, 5))
 
     assert_shape(jnp.ones_like(x23), (2, 3))
     assert_shape(jnp.ones_like(x234), (2, 3, 4))
+    assert_shape(jnp.ones_like(x23, shape=()), ())
+    assert_shape(jnp.ones_like(x23, shape=4), (4,))
     assert_shape(jnp.ones_like(x23, shape=(4, 5)), (4, 5))
+    assert_shape(jnp.ones_like(x23, shape=(2, 3, 4, 5)), (2, 3, 4, 5))
 
     assert_shape(jnp.full_like(x23, 7.0), (2, 3))
     assert_shape(jnp.full_like(x234, 7.0), (2, 3, 4))
+    assert_shape(jnp.full_like(x23, 7.0, shape=()), ())
+    assert_shape(jnp.full_like(x23, 7.0, shape=4), (4,))
     assert_shape(jnp.full_like(x23, 7.0, shape=(4, 5)), (4, 5))
+    assert_shape(jnp.full_like(x23, 7.0, shape=(2, 3, 4, 5)), (2, 3, 4, 5))
 
 
 def test_shapes_outside_the_exact_ranks_are_gradual() -> None:
