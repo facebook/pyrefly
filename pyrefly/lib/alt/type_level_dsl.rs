@@ -31,6 +31,7 @@ use pyrefly_types::type_level_dsl::TypeShapeDslHelperArgumentError;
 use pyrefly_types::type_level_dsl::TypeShapeDslInputDomain;
 use pyrefly_types::type_level_dsl::TypeShapeDslIntrinsic;
 use pyrefly_types::type_level_dsl::TypeShapeDslParameterNarrowing;
+use pyrefly_types::type_level_dsl::TypeShapeDslParameterUse;
 use pyrefly_types::type_level_dsl::TypeShapeDslProgramError;
 use pyrefly_types::type_level_dsl::TypeShapeDslReturnKind;
 use pyrefly_types::type_level_dsl::TypeShapeDslSlotReturnKind;
@@ -500,6 +501,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             for expression in validated.expressions() {
+                let is_integer_generator_source = |use_: &TypeShapeDslParameterUse| {
+                    matches!(
+                        parameter_domains[use_.parameter()],
+                        TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple)
+                    ) || match parameter_domains[use_.parameter()] {
+                        TypeShapeDslInputDomain::Flag(domain)
+                            if use_.narrowing() != TypeShapeDslParameterNarrowing::Unnarrowed =>
+                        {
+                            domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
+                        }
+                        TypeShapeDslInputDomain::Flag(domain) => {
+                            domain.is_subset_of(FlagDomain::of(FlagMember::IntTuple))
+                        }
+                        _ => false,
+                    }
+                };
                 let invalid_domain = match expression.kind() {
                     TypeShapeDslExpressionKind::DimensionSlot {
                         parameter_uses: Some(uses),
@@ -571,28 +588,44 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     TypeShapeDslExpressionKind::GeneratorSourceSlot {
                         parameter_uses: Some(uses),
+                        allow_int_tuples,
                         ..
                     } => {
                         let valid = uses.iter().all(|use_| {
-                            matches!(
-                                parameter_domains[use_.parameter()],
-                                TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple)
-                            ) || match parameter_domains[use_.parameter()] {
-                                TypeShapeDslInputDomain::Flag(domain)
-                                    if use_.narrowing()
-                                        != TypeShapeDslParameterNarrowing::Unnarrowed =>
-                                {
-                                    domain.is_subset_of(type_shape_dsl_narrowable_flag_domain())
-                                }
-                                TypeShapeDslInputDomain::Flag(domain) => {
-                                    domain.is_subset_of(FlagDomain::of(FlagMember::IntTuple))
-                                }
-                                _ => false,
-                            }
+                            is_integer_generator_source(use_)
+                                || (*allow_int_tuples
+                                && parameter_domains[use_.parameter()]
+                                    == TypeShapeDslInputDomain::Value(
+                                        TypeShapeDslDomain::IntTuples,
+                                    ))
                         });
-                        (!valid).then_some(
-                            "`@type_shape_dsl_function` generator source must be an `IntTuple` or Flag sequence",
-                        )
+                        (!valid).then_some(if *allow_int_tuples {
+                            "`@type_shape_dsl_function` generator source must be an `IntTuple`, `IntTuples`, or Flag sequence"
+                        } else {
+                            "`@type_shape_dsl_function` generator source must be an `IntTuple` or Flag sequence"
+                        })
+                    }
+                    TypeShapeDslExpressionKind::GeneratorElementAsDimension {
+                        source_parameter_uses: Some(uses),
+                        ..
+                    } => (!uses.iter().all(is_integer_generator_source)).then_some(
+                        "`@type_shape_dsl_function` generator item dimension operation requires an `IntTuple` or `Flag[tuple[int, ...]]` source",
+                    ),
+                    TypeShapeDslExpressionKind::GeneratorElementAsFlagInt {
+                        source_parameter_uses: Some(uses),
+                        ..
+                    } => (!uses.iter().all(is_integer_generator_source)).then_some(
+                        "`@type_shape_dsl_function` generator item Flag operation requires an `IntTuple` or `Flag[tuple[int, ...]]` source",
+                    ),
+                    TypeShapeDslExpressionKind::GeneratorElementAsIntTuple {
+                        source_parameter_uses,
+                        ..
+                    } => {
+                        (!source_parameter_uses.iter().all(|use_| {
+                            parameter_domains[use_.parameter()]
+                                == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuples)
+                        }))
+                        .then_some("`@type_shape_dsl_function` generator item shape operation requires an `IntTuples` source")
                     }
                     TypeShapeDslExpressionKind::FlagValueSlot {
                         parameter_uses: Some(uses),
@@ -645,8 +678,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslExpressionKind::IntTupleIndex { .. }
                     | TypeShapeDslExpressionKind::IntTupleLength { .. }
                     | TypeShapeDslExpressionKind::GeneratorSourceSlot { .. }
-                    | TypeShapeDslExpressionKind::GeneratorElementAsDimension(_)
-                    | TypeShapeDslExpressionKind::GeneratorElementAsFlagInt(_)
+                    | TypeShapeDslExpressionKind::GeneratorElementAsDimension { .. }
+                    | TypeShapeDslExpressionKind::GeneratorElementAsFlagInt { .. }
                     | TypeShapeDslExpressionKind::GeneratorZip { .. }
                     | TypeShapeDslExpressionKind::Slot(_)
                     | TypeShapeDslExpressionKind::FlagValueSlot { .. }

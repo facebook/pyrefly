@@ -12385,3 +12385,73 @@ def check(x: ShapeBox[IntTuple[2, 3]]) -> None:
 invalid_result()  # E: Cannot evaluate type-level shape DSL call: invalid shapes
 "#,
 );
+
+testcase!(
+    test_type_shape_dsl_constructor_generators_iterate_int_tuples,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def ranks(shapes: IntTuples) -> IntTuple:
+    return dsl.IntTuple((len(shape) for shape in shapes))
+
+@type_shape_dsl_function
+def local_ranks(first: IntTuple, second: IntTuple) -> IntTuple:
+    shapes = dsl.IntTuples((first, second))
+    return dsl.IntTuple((len(shape) for shape in shapes))
+
+@type_shape_dsl_function
+def direct_ranks(first: IntTuple, second: IntTuple) -> IntTuple:
+    return dsl.IntTuple(
+        (len(shape) for shape in dsl.IntTuples((first, second)))
+    )
+
+@type_shape_dsl_function
+def first_dimensions(shapes: IntTuples, offsets: IntTuple) -> IntTuple:
+    return dsl.IntTuple(
+        (shape[0] + offset for shape, offset in zip(shapes, offsets))
+    )
+
+def ranks_result() -> ShapeBox[ranks(tuple[IntTuple[2], IntTuple[3, 4]])]: ...
+def local_ranks_result() -> ShapeBox[local_ranks(IntTuple[2], IntTuple[3, 4])]: ...
+def direct_ranks_result() -> ShapeBox[direct_ranks(IntTuple[2], IntTuple[3, 4])]: ...
+def unbounded_ranks_result() -> ShapeBox[ranks(tuple[IntTuple[2], ...])]: ...
+def first_dimensions_result() -> ShapeBox[
+    first_dimensions(tuple[IntTuple[2], IntTuple[3, 4]], IntTuple[10, 20])
+]: ...
+
+assert_type(ranks_result(), ShapeBox[IntTuple[1, 2]])
+assert_type(local_ranks_result(), ShapeBox[IntTuple[1, 2]])
+assert_type(direct_ranks_result(), ShapeBox[IntTuple[1, 2]])
+assert_type(unbounded_ranks_result(), ShapeBox[IntTuple])
+assert_type(first_dimensions_result(), ShapeBox[IntTuple[12, 23]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_constructor_generator_item_domains,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+
+@type_shape_dsl_function
+def shape_as_dimension(shapes: IntTuples) -> IntTuple:
+    return dsl.IntTuple((shape for shape in shapes))  # E: generator item dimension operation requires an `IntTuple` or `Flag[tuple[int, ...]]` source
+
+@type_shape_dsl_function
+def dimension_as_shape(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((len(dimension) for dimension in shape))  # E: generator item shape operation requires an `IntTuples` source  # E: Argument `Int[int]` is not assignable to parameter `obj` with type `Sized`
+
+@type_shape_dsl_function
+def condition_generator(shapes: IntTuples) -> IntTuple:
+    if any(len(shape) == 0 for shape in shapes):  # E: generator source must be an `IntTuple` or Flag sequence
+        return dsl.IntTuple(())
+    return dsl.IntTuple(())
+"#,
+);
