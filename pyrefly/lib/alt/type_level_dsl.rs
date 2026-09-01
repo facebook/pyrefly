@@ -639,6 +639,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         }))
                         .then_some("`@type_shape_dsl_function` generator item shape operation requires an `IntTuples` source")
                     }
+                    TypeShapeDslExpressionKind::Einsum {
+                        parameter_origins: Some(parameters),
+                        ..
+                    } => (!parameters.iter().all(|parameter| {
+                        parameter_domains[*parameter]
+                            == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuples)
+                    }))
+                    .then_some("`@type_shape_dsl_function` einsum operands must be annotated as `IntTuples`"),
                     TypeShapeDslExpressionKind::FlagValueSlot {
                         parameter_uses: Some(uses),
                         required,
@@ -682,6 +690,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslExpressionKind::IntTupleSlot { .. }
                     | TypeShapeDslExpressionKind::IntTupleSlice
                     | TypeShapeDslExpressionKind::IntTupleConcat
+                    | TypeShapeDslExpressionKind::Einsum { .. }
                     | TypeShapeDslExpressionKind::IntTupleConstructor
                     | TypeShapeDslExpressionKind::IntTuplesConstructor
                     | TypeShapeDslExpressionKind::IntTupleProduct
@@ -976,6 +985,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         if id.has_toplevel_qname("shape_extensions.dsl", "sum") {
             return Some(TypeShapeDslIntrinsic::Sum);
+        }
+        if id.has_toplevel_qname("shape_extensions.dsl", "einsum") {
+            return Some(TypeShapeDslIntrinsic::Einsum);
         }
         let class = id.cls.as_ref()?;
         if id.qname.id().as_str() != "gradual" {

@@ -141,6 +141,11 @@ def sum(xs: _IntTupleSchema | list[int]) -> _IntSchema | int:
     ...
 
 
+def einsum(spec: str, shapes: _IntTuplesSchema, /) -> _IntTupleSchema:
+    """Compute the output shape described by an explicit einsum equation."""
+    ...
+
+
 def parse_einsum_equation(spec: str) -> list[list[list[int]]]:
     """Parse an einsum equation into output locations, equality pairs, and input ranks."""
     ...

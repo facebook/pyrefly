@@ -12833,3 +12833,170 @@ empty_first()  # E: Cannot evaluate type-level shape DSL call: `IntTuples` index
 negative_oob()  # E: Cannot evaluate type-level shape DSL call: `IntTuples` index out of bounds
 "#,
 );
+
+testcase!(
+    test_type_shape_dsl_einsum,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Flag, Int, IntTuple, IntTuples, IntVar, type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def equation(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl.einsum(spec, shapes)
+
+@type_shape_dsl_function
+def optional_equation(spec: str | None, shapes: IntTuples) -> IntTuple:
+    return dsl.einsum(spec, shapes)  # E: Argument `str | None` is not assignable to parameter `spec` with type `str`
+
+def matrix_product() -> ShapeBox[equation("ij,jk->ik", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+def transposed() -> ShapeBox[equation("ij,jk->ki", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+def scalar() -> ShapeBox[equation("i,i->", tuple[IntTuple[4], IntTuple[4]])]: ...
+def three_operands() -> ShapeBox[equation("ij,jk,kl->il", tuple[IntTuple[2, 3], IntTuple[3, 5], IntTuple[5, 7]])]: ...
+def unbounded() -> ShapeBox[equation("ij,jk->ik", tuple[IntTuple[3, 3], ...])]: ...
+def gradual_member() -> ShapeBox[equation("ij,jk->ik", tuple[IntTuple[2, 3], IntTuple])]: ...
+def unbounded_gradual() -> ShapeBox[equation("ij,jk->ik", tuple[IntTuple, ...])]: ...
+def gradual_sequence() -> ShapeBox[equation("ij,jk->ik", IntTuples)]: ...
+def optional[Spec: Flag[str | None]](spec: Spec) -> ShapeBox[optional_equation(Spec, tuple[IntTuple[2, 3]])]: ...
+
+assert_type(matrix_product(), ShapeBox[IntTuple[2, 5]])
+assert_type(transposed(), ShapeBox[IntTuple[5, 2]])
+assert_type(scalar(), ShapeBox[IntTuple[()]])
+assert_type(three_operands(), ShapeBox[IntTuple[2, 7]])
+assert_type(unbounded(), ShapeBox[IntTuple])
+assert_type(gradual_member(), ShapeBox[IntTuple[2, int]])
+assert_type(unbounded_gradual(), ShapeBox[IntTuple])
+assert_type(gradual_sequence(), ShapeBox[IntTuple])
+assert_type(optional(None), ShapeBox[IntTuple])
+
+def batched[N: IntVar](n: Int[N]) -> ShapeBox[equation("bij,bjk->bik", tuple[IntTuple[N, 2, 3], IntTuple[N, 3, 5]])]: ...
+def repeated_equal[N: IntVar](n: Int[N]) -> ShapeBox[equation("ii->i", tuple[IntTuple[N, N]])]: ...
+def repeated_literal[N: IntVar](n: Int[N]) -> ShapeBox[equation("ii->i", tuple[IntTuple[N, 3]])]: ...
+def repeated_unknown[N: IntVar, M: IntVar](n: Int[N], m: Int[M]) -> ShapeBox[equation("ii->i", tuple[IntTuple[N, M]])]: ...
+
+def symbolic[N: IntVar, M: IntVar](n: Int[N], m: Int[M]) -> None:
+    assert_type(batched(n), ShapeBox[IntTuple[N, 2, 5]])
+    assert_type(repeated_equal(n), ShapeBox[IntTuple[N]])
+    assert_type(repeated_literal(n), ShapeBox[IntTuple[3]])
+    assert_type(repeated_unknown(n, m), ShapeBox[IntTuple[int]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_einsum_unsupported,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def equation(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl.einsum(spec, shapes)
+
+def implicit() -> ShapeBox[equation("ij,jk", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+def ellipsis() -> ShapeBox[equation("...ij,...jk->...ik", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+def unsupported_wrong_count() -> ShapeBox[equation("ij,jk", tuple[IntTuple[2, 3]])]: ...
+
+assert_type(implicit(), ShapeBox[IntTuple])
+assert_type(ellipsis(), ShapeBox[IntTuple])
+assert_type(unsupported_wrong_count(), ShapeBox[IntTuple])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_einsum_errors,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def equation(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl.einsum(spec, shapes)
+
+def multiple_arrows() -> ShapeBox[equation("ij->jk->ik", tuple[IntTuple[2, 3]])]: ...
+def unsupported_symbol() -> ShapeBox[equation("ij,!jk->ik", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+def missing_output() -> ShapeBox[equation("ij,jk->ix", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+def repeated_output() -> ShapeBox[equation("ij->ii", tuple[IntTuple[2, 3]])]: ...
+def wrong_count() -> ShapeBox[equation("ij,jk->ik", tuple[IntTuple[2, 3]])]: ...
+def wrong_rank() -> ShapeBox[equation("ij,jk->ik", tuple[IntTuple[2], IntTuple[3, 5]])]: ...
+def unequal_repeat() -> ShapeBox[equation("ii->i", tuple[IntTuple[2, 3]])]: ...
+def unequal_cross() -> ShapeBox[equation("ij,jk->ik", tuple[IntTuple[2, 3], IntTuple[4, 5]])]: ...
+def malformed_with_ellipsis() -> ShapeBox[equation("...ij,!jk->...ik", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+
+multiple_arrows()  # E: Cannot evaluate type-level shape DSL call: einsum: equation must contain exactly one '->', got 2
+unsupported_symbol()  # E: Cannot evaluate type-level shape DSL call: einsum: unsupported character '!' in equation
+missing_output()  # E: Cannot evaluate type-level shape DSL call: einsum: output index 'x' not found in inputs
+repeated_output()  # E: Cannot evaluate type-level shape DSL call: einsum: output index 'i' appears more than once
+wrong_count()  # E: Cannot evaluate type-level shape DSL call: einsum: expected 2 operands, got 1
+wrong_rank()  # E: Cannot evaluate type-level shape DSL call: einsum: operand 0 expected rank 2, got 1
+unequal_repeat()  # E: Cannot evaluate type-level shape DSL call: einsum: index 'i' has conflicting dimensions 2 and 3
+unequal_cross()  # E: Cannot evaluate type-level shape DSL call: einsum: index 'j' has conflicting dimensions 3 and 4
+malformed_with_ellipsis()  # E: Cannot evaluate type-level shape DSL call: einsum: unsupported character '!' in equation
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_einsum_surface,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, IntTuples, type_shape_dsl_function
+from shape_extensions.dsl import einsum as imported_einsum
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+einsum_alias = imported_einsum
+
+@type_shape_dsl_function
+def imported(spec: str, shapes: IntTuples) -> IntTuple:
+    return imported_einsum(spec, shapes)
+
+@type_shape_dsl_function
+def aliased(spec: str, shapes: IntTuples) -> IntTuple:
+    result = einsum_alias(spec, shapes)
+    return result
+
+def imported_result() -> ShapeBox[imported("ij,jk->ik", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+def aliased_result() -> ShapeBox[aliased("ij,jk->ik", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+assert_type(imported_result(), ShapeBox[IntTuple[2, 5]])
+assert_type(aliased_result(), ShapeBox[IntTuple[2, 5]])
+
+@type_shape_dsl_function
+def missing(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl.einsum()  # E: `dsl.einsum` requires exactly two positional arguments  # E: Missing positional arguments `spec`, `shapes`
+
+@type_shape_dsl_function
+def extra(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl.einsum(spec, shapes, shapes)  # E: `dsl.einsum` requires exactly two positional arguments  # E: Expected 2 positional arguments
+
+@type_shape_dsl_function
+def keyword(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl.einsum(spec=spec, shapes=shapes)  # E: `dsl.einsum` requires exactly two positional arguments  # E: Expected argument `spec` to be positional  # E: Expected argument `shapes` to be positional
+
+@type_shape_dsl_function
+def wrong_spec(spec: int, shapes: IntTuples) -> IntTuple:
+    return dsl.einsum(spec, shapes)  # E: Flag operation requires a compatible Flag parameter  # E: Argument `int` is not assignable to parameter `spec` with type `str`
+
+@type_shape_dsl_function
+def wrong_shapes(spec: str, shape: IntTuple) -> IntTuple:
+    return dsl.einsum(spec, shape)  # E: shapes must be an `IntTuples` parameter or immutable alias  # E: is not assignable to parameter `shapes`
+
+@type_shape_dsl_function
+def wrong_shapes_tuple_of_int(spec: str, shapes: tuple[int, ...]) -> IntTuple:
+    return dsl.einsum(spec, shapes)  # E: einsum operands must be annotated as `IntTuples`  # E: is not assignable to parameter `shapes`
+
+@type_shape_dsl_function
+def parameter_shadow(einsum_alias: Int, spec: str, shapes: IntTuples) -> IntTuple:
+    return einsum_alias(spec, shapes)  # E: DSL helper callee must be a validated  # E: Expected a callable
+"#,
+);

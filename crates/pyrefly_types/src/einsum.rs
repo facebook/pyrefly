@@ -5,14 +5,24 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Parsing for the explicit subset of einsum equations understood by shape evaluation.
+//! Parsing and output-shape projection for the explicit subset of einsum equations understood by
+//! shape evaluation.
 //!
 //! Parsing has three outcomes. A supported equation has a typed representation that evaluators
 //! can consume. An unsupported equation is valid at runtime but uses syntax this implementation
 //! does not model, so shape evaluation should fall back silently. An invalid equation is malformed
 //! and should produce a user-facing error.
+//!
+//! Projection checks the equation against the operand ranks and repeated dimensions, then selects
+//! the dimensions named by the explicit output. It preserves known and symbolic dimensions when
+//! they agree and widens only output dimensions whose equality cannot be established.
 
 use std::collections::HashMap;
+
+use crate::dimension::Int;
+use crate::dimension::ShapeError;
+use crate::shaped_array::IntTuple;
+use crate::shaped_array::IntTupleView;
 
 /// One occurrence of a label: the input term it appears in and its position in that term.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +34,7 @@ pub(crate) struct EinsumLocation {
 /// Every occurrence of one label, in source order.
 #[derive(Debug, Clone)]
 pub(crate) struct EinsumLabel {
+    pub(crate) name: char,
     pub(crate) locations: Vec<EinsumLocation>,
 }
 
@@ -203,6 +214,7 @@ pub(crate) fn parse_einsum_equation(spec: &str) -> EinsumClassification {
                     None => {
                         label_indices.insert(label, labels.len());
                         labels.push(EinsumLabel {
+                            name: label,
                             locations: vec![location],
                         });
                     }
@@ -242,6 +254,87 @@ pub(crate) fn parse_einsum_equation(spec: &str) -> EinsumClassification {
         labels,
         output,
     })
+}
+
+/// Projects the output shape of a supported equation over its operand shapes.
+///
+/// The caller supplies a fixed operand list; an operand sequence with unknown cardinality cannot
+/// justify evaluation. Known operand ranks must match the equation, and repeated literal
+/// dimensions must agree. Symbolic dimensions that cannot be shown equal widen only the output
+/// dimensions they reach unless a repeated literal constrains their value.
+pub(crate) fn evaluate_einsum(
+    equation: &EinsumEquation,
+    operands: &[IntTuple],
+) -> Result<IntTuple, ShapeError> {
+    if operands.len() != equation.input_ranks.len() {
+        return Err(ShapeError::ShapeComputation {
+            message: format!(
+                "einsum: expected {} operands, got {}",
+                equation.input_ranks.len(),
+                operands.len()
+            ),
+        });
+    }
+
+    for (index, expected) in equation.input_ranks.iter().enumerate() {
+        if let IntTupleView::Concrete(dimensions) = operands[index].view()
+            && dimensions.len() != *expected
+        {
+            return Err(ShapeError::ShapeComputation {
+                message: format!(
+                    "einsum: operand {index} expected rank {expected}, got {}",
+                    dimensions.len()
+                ),
+            });
+        }
+    }
+
+    let dimension = |location: &EinsumLocation| match operands[location.input].view() {
+        IntTupleView::Concrete(dimensions) => dimensions.get(location.dimension).cloned(),
+        _ => None,
+    };
+    let extents = equation
+        .labels
+        .iter()
+        .map(|label| {
+            let mut extent: Option<Int> = None;
+            let mut literal = None;
+            let mut agreed = true;
+            for location in &label.locations {
+                let Some(found) = dimension(location) else {
+                    continue;
+                };
+                if let Int::Literal(value) = &found {
+                    match literal {
+                        Some(previous) if previous != *value => {
+                            return Err(ShapeError::ShapeComputation {
+                                message: format!(
+                                    "einsum: index '{}' has conflicting dimensions {previous} and {value}",
+                                    label.name
+                                ),
+                            });
+                        }
+                        _ => literal = Some(*value),
+                    }
+                }
+                match &extent {
+                    None => extent = Some(found),
+                    Some(known) => agreed &= *known == found,
+                }
+            }
+            Ok(literal
+                .map(Int::Literal)
+                .or_else(|| extent.filter(|_| agreed)))
+        })
+        .collect::<Result<Vec<_>, ShapeError>>()?;
+
+    Ok(IntTuple::new(
+        equation
+            .output
+            .iter()
+            .map(|label| extents[*label].clone().unwrap_or(Int::Int))
+            .collect(),
+    ))
 }
 
 #[cfg(test)]
