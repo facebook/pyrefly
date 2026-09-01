@@ -27,6 +27,7 @@ pub mod class;
 pub mod data_frame;
 pub mod dimension;
 pub mod display;
+mod einsum;
 pub mod equality;
 pub mod facet;
 pub mod function;

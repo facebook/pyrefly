@@ -1036,12 +1036,37 @@ def apply_einsum(
     ]
     if len(bad_dims) > 0:
         raise Error("einsum: inconsistent dimensions for repeated index")
+    unresolved = [
+        1
+        for i0, d0, i1, d1 in check_pairs
+        if inputs[i0].shape[d0] != inputs[i1].shape[d1]
+    ]
+    if len(unresolved) > 0:
+        return Unknown
     return ShapedArray(shape=[inputs[inp].shape[dim] for inp, dim in output_map])
 
 @shape_dsl_function
 def einsum_ir(spec: str, operands: list[ShapedArray] | None = None) -> ShapedArray:
     if operands != None:
-        output_map, check_pairs = parse_einsum_equation(spec)
+        output_map, check_pairs, input_ranks = parse_einsum_equation(spec)
+        if len(input_ranks) != len(operands):
+            raise Error(
+                "einsum expected "
+                + str(len(input_ranks))
+                + " operands, got "
+                + str(len(operands))
+            )
+        bad_ranks = [i for i, rank in input_ranks if len(operands[i].shape) != rank]
+        if len(bad_ranks) > 0:
+            first = bad_ranks[0]
+            raise Error(
+                "einsum operand "
+                + str(first)
+                + " expected rank "
+                + str(input_ranks[first][1])
+                + ", got "
+                + str(len(operands[first].shape))
+            )
         return apply_einsum(output_map, check_pairs, operands)
     return Unknown
 

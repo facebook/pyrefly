@@ -142,5 +142,5 @@ def sum(xs: _IntTupleSchema | list[int]) -> _IntSchema | int:
 
 
 def parse_einsum_equation(spec: str) -> list[list[list[int]]]:
-    """Parse an einsum equation string into output map and check pairs."""
+    """Parse an einsum equation into output locations, equality pairs, and input ranks."""
     ...

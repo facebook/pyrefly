@@ -7503,9 +7503,43 @@ def einsum_kernel_ir() -> int:
     parsed = shape_extensions.dsl.parse_einsum_equation("ab,bc->ac")
     output_map = parsed[0]
     checks = parsed[1]
+    input_ranks = parsed[2]
     first = output_map[0]
     second = output_map[1]
-    return first[0] + first[1] + second[0] + second[1] + len(checks)
+    return (
+        first[0]
+        + first[1]
+        + second[0]
+        + second[1]
+        + len(checks)
+        + len(input_ranks)
+        + input_ranks[1][1]
+    )
+
+@shape_dsl_function
+def einsum_implicit_kernel_ir() -> int:
+    parsed = shape_extensions.dsl.parse_einsum_equation("ab,bc")
+    return len(parsed[0])
+
+@shape_dsl_function
+def einsum_malformed_kernel_ir() -> int:
+    parsed = shape_extensions.dsl.parse_einsum_equation("ab->b->c")
+    return len(parsed[0])
+
+@shape_dsl_function
+def einsum_repeated_output_kernel_ir() -> int:
+    parsed = shape_extensions.dsl.parse_einsum_equation("ab->aa")
+    return len(parsed[0])
+
+@shape_dsl_function
+def einsum_ellipsis_masked_kernel_ir() -> int:
+    parsed = shape_extensions.dsl.parse_einsum_equation("...ab->...aa")
+    return len(parsed[0])
+
+@shape_dsl_function
+def einsum_ellipsis_kernel_ir() -> int:
+    parsed = shape_extensions.dsl.parse_einsum_equation("...ab,...bc->...ac")
+    return len(parsed[0])
 
 def not_a_dsl_fn(x: int) -> int: ...
 
@@ -7562,7 +7596,7 @@ def two_errors_ir(x: int) -> int:  # E: @shape_dsl_function type error: undefine
         r#"
 from typing import Any, Literal, overload
 from shape_extensions import Int, IntVar, shaped_array, uses_shape_dsl
-from my_shapes import identity_ir, double_ir, scalar_kernel_ir, string_guard_ir, list_kernel_ir, iterator_kernel_ir, reductions_ir, identity_int_ir, product_int_ir, same_int_or_one_ir, svd_reduced_2d_ir, diag_1d_ir, einsum_kernel_ir, not_a_dsl_fn, bad_syntax_ir, kwargs_ir, calls_undefined, bad_no_ret, two_errors_ir, returns_wrong_type_ir, dims_as_scalar_union_ir, unknown_fallback_ir, helper_exact_one_ir, too_few_args_ir, too_many_args_ir
+from my_shapes import identity_ir, double_ir, scalar_kernel_ir, string_guard_ir, list_kernel_ir, iterator_kernel_ir, reductions_ir, identity_int_ir, product_int_ir, same_int_or_one_ir, svd_reduced_2d_ir, diag_1d_ir, einsum_kernel_ir, einsum_implicit_kernel_ir, einsum_malformed_kernel_ir, einsum_repeated_output_kernel_ir, einsum_ellipsis_masked_kernel_ir, einsum_ellipsis_kernel_ir, not_a_dsl_fn, bad_syntax_ir, kwargs_ir, calls_undefined, bad_no_ret, two_errors_ir, returns_wrong_type_ir, dims_as_scalar_union_ir, unknown_fallback_ir, helper_exact_one_ir, too_few_args_ir, too_many_args_ir
 import my_shapes
 
 non_literal: Any
@@ -7634,6 +7668,21 @@ def diag_fn[Shape, DType](v: Array[Shape, DType], k: int = 0) -> Array[Shape, DT
 
 @uses_shape_dsl(einsum_kernel_ir)
 def einsum_kernel_fn() -> int: ...
+
+@uses_shape_dsl(einsum_implicit_kernel_ir)
+def einsum_implicit_kernel_fn() -> int: ...
+
+@uses_shape_dsl(einsum_malformed_kernel_ir)
+def einsum_malformed_kernel_fn() -> int: ...
+
+@uses_shape_dsl(einsum_repeated_output_kernel_ir)
+def einsum_repeated_output_kernel_fn() -> int: ...
+
+@uses_shape_dsl(einsum_ellipsis_masked_kernel_ir)
+def einsum_ellipsis_masked_kernel_fn() -> int: ...
+
+@uses_shape_dsl(einsum_ellipsis_kernel_ir)
+def einsum_ellipsis_kernel_fn() -> int: ...
 
 @uses_shape_dsl(not_a_dsl_fn)  # E: `@uses_shape_dsl` argument does not resolve to a `@shape_dsl_function`
 def bad_fn(x: int) -> int: ...
@@ -7881,7 +7930,22 @@ testcase!(
 from typing import Literal, assert_type
 from my_lib import einsum_kernel_fn
 
-assert_type(einsum_kernel_fn(), Literal[3])
+assert_type(einsum_kernel_fn(), Literal[7])
+"#,
+);
+
+testcase!(
+    test_shape_dsl_parse_einsum_equation_classification,
+    shape_dsl_env(),
+    r#"
+from typing import assert_type
+from my_lib import einsum_implicit_kernel_fn, einsum_malformed_kernel_fn, einsum_repeated_output_kernel_fn, einsum_ellipsis_masked_kernel_fn, einsum_ellipsis_kernel_fn
+
+assert_type(einsum_implicit_kernel_fn(), int)
+assert_type(einsum_ellipsis_kernel_fn(), int)
+einsum_malformed_kernel_fn()  # E: einsum: equation must contain exactly one '->', got 2
+einsum_repeated_output_kernel_fn()  # E: einsum: output index 'a' appears more than once
+einsum_ellipsis_masked_kernel_fn()  # E: einsum: output index 'a' appears more than once
 "#,
 );
 
