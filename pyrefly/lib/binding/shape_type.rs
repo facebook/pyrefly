@@ -40,6 +40,47 @@ pub(super) struct ShapeFunctionMetadata {
     pub uses_shape_dsl_ir_name: Option<ShortIdentifier>,
 }
 impl BindingsBuilder<'_> {
+    /// Recognizes a shape-extension class through import provenance or in its defining module.
+    ///
+    /// The local-name case is needed while binding `shape_extensions` itself: its class has no
+    /// import provenance, so we additionally require the module-level name to resolve to that
+    /// class definition. Consumers use `SpecialExport` provenance, including through aliases and
+    /// re-exports, rather than relying on a raw imported name.
+    fn is_shape_extensions_class_export_with_provenance(
+        &self,
+        expr: &Expr,
+        special: SpecialExport,
+        provenance: Option<SpecialExport>,
+    ) -> bool {
+        if let Expr::Name(name) = expr
+            && SpecialExport::new(&name.id) == Some(special)
+            && special.defined_in(self.module_info.name())
+        {
+            return self.scopes.current_binding_is_module_binding(&name.id)
+                && matches!(
+                    self.scopes.binding_idx_for_name(&name.id),
+                    Some((idx, _)) if self.binding_is_class_def(idx)
+                );
+        }
+        provenance == Some(special)
+    }
+
+    pub(super) fn is_map_int_tuples(&self, expr: &Expr) -> bool {
+        self.is_map_int_tuples_with_provenance(expr, self.as_special_export(expr))
+    }
+
+    pub(super) fn is_map_int_tuples_with_provenance(
+        &self,
+        expr: &Expr,
+        provenance: Option<SpecialExport>,
+    ) -> bool {
+        self.is_shape_extensions_class_export_with_provenance(
+            expr,
+            SpecialExport::MapIntTuples,
+            provenance,
+        )
+    }
+
     /// Bind shape-specific function decorators before ordinary decorator processing consumes them.
     pub(super) fn record_shape_function_metadata(
         &mut self,
@@ -322,16 +363,10 @@ impl BindingsBuilder<'_> {
     }
 
     fn is_shape_flag(&self, expr: &Expr) -> bool {
-        if let Expr::Name(name) = expr
-            && SpecialExport::new(&name.id) == Some(SpecialExport::Flag)
-            && SpecialExport::Flag.defined_in(self.module_info.name())
-        {
-            return self.scopes.current_binding_is_module_binding(&name.id)
-                && matches!(
-                    self.scopes.binding_idx_for_name(&name.id),
-                    Some((idx, _)) if self.binding_is_class_def(idx)
-                );
-        }
-        self.as_special_export(expr) == Some(SpecialExport::Flag)
+        self.is_shape_extensions_class_export_with_provenance(
+            expr,
+            SpecialExport::Flag,
+            self.as_special_export(expr),
+        )
     }
 }

@@ -80,6 +80,7 @@ pub enum SpecialExport {
     UsesShapeDsl,
     ShapeDslFunction,
     TypeShapeDslFunction,
+    MapIntTuples,
     ShapedArray,
     ProxyMethod,
     Sentinel,
@@ -158,6 +159,7 @@ impl SpecialExport {
             "uses_shape_dsl" => Some(Self::UsesShapeDsl),
             "shape_dsl_function" => Some(Self::ShapeDslFunction),
             "type_shape_dsl_function" => Some(Self::TypeShapeDslFunction),
+            "MapIntTuples" => Some(Self::MapIntTuples),
             "shaped_array" => Some(Self::ShapedArray),
             "ProxyMethod" => Some(Self::ProxyMethod),
             "Sentinel" => Some(Self::Sentinel),
@@ -171,7 +173,9 @@ impl SpecialExport {
 
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
-            Self::IntVar | Self::Flag => matches!(m.as_str(), "shape_extensions"),
+            Self::IntVar | Self::Flag | Self::MapIntTuples => {
+                matches!(m.as_str(), "shape_extensions")
+            }
             Self::TypeVar => matches!(m.as_str(), "typing" | "typing_extensions"),
             Self::TypeVarTuple => {
                 matches!(

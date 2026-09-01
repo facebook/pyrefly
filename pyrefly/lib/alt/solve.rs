@@ -6184,6 +6184,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Forallable::TypeAlias(TypeAliasData::Ref(r)).forall(tparams)
             }
             Binding::LambdaParameter(id, owner) => self.resolve_lambda_param_type(*id, *owner),
+            Binding::TypeLevelLambdaParameter(parameter) => {
+                self.resolve_map_int_tuples_mapper_parameter(&parameter.1)
+            }
             Binding::FunctionParameter(param) => self.binding_to_type_function_parameter(param),
             Binding::SuperInstance(x) => self.solve_super_binding(&x.0, x.1, errors),
             // For first-usage-based type inference, we occasionally just want a way to force

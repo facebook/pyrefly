@@ -44,6 +44,8 @@ pub enum QuantifiedOrigin {
         /// Is this a Self quantified synthesized for `__new__` on a class?
         is_self: bool,
     },
+    /// Synthetic binder for the parameter of an `IntTuples` mapper.
+    MapIntTuplesParameter,
 }
 
 impl QuantifiedOrigin {

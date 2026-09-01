@@ -16,6 +16,7 @@ pub mod expr;
 pub mod function;
 pub mod functools;
 pub mod jaxtyping;
+pub mod map_int_tuples;
 pub mod narrow;
 pub mod nn_module_specials;
 pub mod operators;

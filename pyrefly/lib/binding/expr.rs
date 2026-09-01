@@ -48,6 +48,7 @@ use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyExpect;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
+use crate::binding::binding::LambdaKind;
 use crate::binding::binding::LinkedKey;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::PrivateAttributeAccessCheck;
@@ -537,7 +538,7 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn bind_lambda(&mut self, lambda: &mut ExprLambda, usage: &mut Usage) {
+    pub fn bind_lambda(&mut self, lambda: &mut ExprLambda, usage: &mut Usage, kind: LambdaKind) {
         // Process default values in the enclosing scope before pushing the lambda scope,
         // because default values are evaluated at function definition time.
         if let Some(parameters) = &mut lambda.parameters {
@@ -557,10 +558,9 @@ impl<'a> BindingsBuilder<'a> {
             Identifier::new("<lambda>", lambda.range),
             false,
         ));
-        let owner = usage.current_idx();
         if let Some(parameters) = &lambda.parameters {
             for x in parameters {
-                self.bind_lambda_param(x.name(), owner);
+                self.bind_lambda_param(x.name(), kind, usage);
             }
         }
         self.ensure_expr(&mut lambda.body, usage);
@@ -596,6 +596,45 @@ impl<'a> BindingsBuilder<'a> {
                 yield_keys.into_boxed_slice(),
                 yield_from_keys.into_boxed_slice(),
             );
+        }
+    }
+
+    /// Binds arguments to the experimental `IntTuples` mapping operation.
+    ///
+    /// Its lambda parameter denotes a type binder rather than a value. We record that fact while
+    /// the imported operation is still visible, so resolving the parameter does not depend on
+    /// first solving the enclosing subscript. Binding still visits every argument; arity and
+    /// validity remain solve-time concerns.
+    fn bind_map_int_tuples_arguments(
+        &mut self,
+        slice: &mut Expr,
+        mut tparams_builder: Option<&mut LegacyTParamCollector>,
+        in_string_literal: bool,
+        usage: &mut Usage,
+    ) {
+        let arguments = match slice {
+            Expr::Tuple(tuple) => tuple.elts.as_mut_slice(),
+            single => std::slice::from_mut(single),
+        };
+        for (index, argument) in arguments.iter_mut().enumerate() {
+            if index == 0 && argument.is_lambda_expr() {
+                self.with_semantic_checker(|semantic, context| {
+                    semantic.visit_expr(argument, context)
+                });
+                let lambda = argument
+                    .as_lambda_expr_mut()
+                    .expect("is_lambda_expr established that this is a lambda");
+                self.bind_lambda(lambda, usage, LambdaKind::TypeLevel);
+            } else {
+                self.ensure_type_impl(
+                    argument,
+                    tparams_builder.as_deref_mut(),
+                    in_string_literal,
+                    true,
+                    usage,
+                    false,
+                );
+            }
         }
     }
 
@@ -739,7 +778,17 @@ impl<'a> BindingsBuilder<'a> {
                     _ => None,
                 };
 
-                if let Some(special_export) = special_export
+                if self.is_map_int_tuples_with_provenance(value, special_export) {
+                    self.ensure_expr(&mut *value, usage);
+                    self.bind_map_int_tuples_arguments(
+                        &mut *slice,
+                        None,
+                        false,
+                        &mut Usage::StaticTypeInformation {
+                            is_annotation: false,
+                        },
+                    );
+                } else if let Some(special_export) = special_export
                     && special_export.is_static_type_subscript()
                 {
                     self.ensure_expr(&mut *value, usage);
@@ -1138,7 +1187,7 @@ impl<'a> BindingsBuilder<'a> {
                 }
             }
             Expr::Lambda(x) => {
-                self.bind_lambda(x, usage);
+                self.bind_lambda(x, usage, LambdaKind::Ordinary);
             }
             Expr::ListComp(x) => {
                 self.with_await_context(AwaitContext::General, |this| {
@@ -1373,6 +1422,24 @@ impl<'a> BindingsBuilder<'a> {
                         },
                     );
                 }
+            }
+            Expr::Subscript(ExprSubscript { value, slice, .. })
+                if self.is_map_int_tuples(value) =>
+            {
+                self.ensure_type_impl(
+                    &mut *value,
+                    tparams_builder.as_deref_mut(),
+                    in_string_literal,
+                    true,
+                    usage,
+                    allow_proxy_method,
+                );
+                self.bind_map_int_tuples_arguments(
+                    &mut *slice,
+                    tparams_builder,
+                    in_string_literal,
+                    usage,
+                );
             }
             Expr::Subscript(ExprSubscript { value, slice, .. }) => {
                 self.ensure_type_impl(

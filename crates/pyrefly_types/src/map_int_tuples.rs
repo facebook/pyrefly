@@ -11,11 +11,39 @@
 //! produces an ordinary tuple type immediately, so the type system does not need a persistent
 //! representation for either the function or the mapped result.
 
+use pyrefly_python::module_name::ModuleName;
+use ruff_python_ast::Identifier;
+
 use crate::dimension::ShapeError;
+use crate::quantified::AnchorIndex;
 use crate::quantified::Quantified;
+use crate::quantified::QuantifiedIdentity;
+use crate::quantified::QuantifiedOrigin;
 use crate::shaped_array::IntTuple;
 use crate::tuple::Tuple;
+use crate::type_var::PreInferenceVariance;
+use crate::type_var::Restriction;
 use crate::types::Type;
+
+/// Builds the binder denoted by an `IntTuples` mapper parameter.
+///
+/// The binder depends only on the parameter's module, name, and source location. Binding and
+/// solving can therefore reconstruct the same binder independently, regardless of solve order.
+/// Mapper parsing and standalone parameter resolution must both call this constructor so their
+/// `QuantifiedIdentity` values compare equal during substitution.
+pub fn map_int_tuples_mapper_binder(module: ModuleName, parameter: &Identifier) -> Quantified {
+    Quantified::type_var(
+        parameter.id.clone(),
+        QuantifiedIdentity::new(
+            module,
+            AnchorIndex::first(parameter.range),
+            QuantifiedOrigin::MapIntTuplesParameter,
+        ),
+        None,
+        Restriction::Bound(IntTuple::shapeless().to_shape_arg_type()),
+        PreInferenceVariance::Invariant,
+    )
+}
 
 /// The unary type-level function accepted by experimental `shape_extensions.MapIntTuples`.
 ///

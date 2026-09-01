@@ -2285,6 +2285,14 @@ pub struct SuppressedException {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct LambdaParamId(pub u32);
 
+/// Which rule a lambda's parameters follow, decided while its enclosing expression is bound.
+#[derive(Copy, Clone, Debug)]
+pub enum LambdaKind {
+    Ordinary,
+    /// A lambda whose parameter denotes a type rather than a runtime value.
+    TypeLevel,
+}
+
 /// Data for `Binding::Import`. Carries the `(module, name)` of an imported
 /// symbol, plus metadata for downstream consumers.
 #[derive(Clone, Debug)]
@@ -2487,11 +2495,15 @@ pub enum Binding {
     PatternMatchClassKeyword(Box<(Box<Expr>, Identifier, Idx<Key>)>),
     /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean flag is true) clause
     ExceptionHandler(Box<Expr>, bool),
-    /// Binding for a lambda parameter.
+    /// Binding for an ordinary lambda parameter.
     /// The optional owner is the binding whose expression contains this lambda.
     /// If the parameter is solved before that owner has established thread-local
     /// lambda vars, we can force the owner to solve first.
     LambdaParameter(LambdaParamId, Option<Idx<Key>>),
+    /// Parameter of a type-level lambda. It denotes a deterministic synthetic type binder rather
+    /// than a contextual value type. The experimental `shape_extensions.MapIntTuples` operation
+    /// is currently the only syntax that creates this binding.
+    TypeLevelLambdaParameter(Box<(LambdaParamId, Identifier)>),
     /// Binding for a function parameter. We either have an annotation, or we will determine the
     /// parameter type when solving the function type.
     FunctionParameter(Box<FunctionParameter>),
@@ -2763,6 +2775,9 @@ impl DisplayWith<Bindings> for Binding {
             Self::LambdaParameter(id, owner) => {
                 write!(f, "LambdaParameter(id={id:?}, owner={owner:?})")
             }
+            Self::TypeLevelLambdaParameter(parameter) => {
+                write!(f, "TypeLevelLambdaParameter({parameter:?})")
+            }
             Self::FunctionParameter(x) => write!(
                 f,
                 "FunctionParameter({})",
@@ -2915,9 +2930,9 @@ impl Binding {
                     Some(SymbolKind::Variable)
                 }
             }
-            Binding::LambdaParameter(..) | Binding::FunctionParameter(_) => {
-                Some(SymbolKind::Parameter)
-            }
+            Binding::LambdaParameter(..)
+            | Binding::TypeLevelLambdaParameter(_)
+            | Binding::FunctionParameter(_) => Some(SymbolKind::Parameter),
             Binding::PatternCapture(_) => Some(SymbolKind::Variable),
             Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
                 Some(SymbolKind::Variable)

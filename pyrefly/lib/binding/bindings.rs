@@ -84,6 +84,7 @@ use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
+use crate::binding::binding::LambdaKind;
 use crate::binding::binding::LambdaParamId;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LegacyTypeParamModule;
@@ -572,17 +573,17 @@ impl Bindings {
 
     pub fn get_lambda_param_id(&self, name: &Identifier) -> LambdaParamId {
         let b = self.get(self.key_to_idx(&Key::Definition(ShortIdentifier::new(name))));
-        if let Binding::LambdaParameter(id, _) = b {
-            *id
-        } else {
-            panic!(
+        match b {
+            Binding::LambdaParameter(id, _) => *id,
+            Binding::TypeLevelLambdaParameter(parameter) => parameter.0,
+            _ => panic!(
                 "Internal error: unexpected binding for lambda parameter `{}` @  {:?}: {}, module={}, path={}",
                 name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
                 self.module().path(),
-            )
+            ),
         }
     }
 
@@ -1742,7 +1743,10 @@ impl<'a> BindingsBuilder<'a> {
         let binding = if forward_to_first_use {
             Binding::ForwardToFirstUse(target_idx)
         } else if let Some(b) = self.idx_to_binding(target_idx)
-            && matches!(b, Binding::LambdaParameter(..))
+            && matches!(
+                b,
+                Binding::LambdaParameter(..) | Binding::TypeLevelLambdaParameter(_)
+            )
         {
             // Lambda parameters have special handling in Key::check_shortcut.
             // We bind directly to the definition to ensure the shortcut is always detected.
@@ -2207,13 +2211,16 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn bind_lambda_param(&mut self, name: &Identifier, owner: Option<Idx<Key>>) {
+    pub fn bind_lambda_param(&mut self, name: &Identifier, kind: LambdaKind, usage: &Usage) {
         let id = LambdaParamId(self.next_lambda_param_id);
         self.next_lambda_param_id += 1;
-        let idx = self.insert_binding(
-            Key::Definition(ShortIdentifier::new(name)),
-            Binding::LambdaParameter(id, owner),
-        );
+        let binding = match kind {
+            LambdaKind::Ordinary => Binding::LambdaParameter(id, usage.current_idx()),
+            LambdaKind::TypeLevel => {
+                Binding::TypeLevelLambdaParameter(Box::new((id, name.clone())))
+            }
+        };
+        let idx = self.insert_binding(Key::Definition(ShortIdentifier::new(name)), binding);
         self.scopes.add_parameter_to_current_static(name, None);
         self.bind_name(&name.id, idx, FlowStyle::Other);
     }

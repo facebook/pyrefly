@@ -196,6 +196,10 @@ impl<Ans: LookupAnswer> Solve<Ans> for Key {
                 let ty = answers.resolve_lambda_param_type(*id, *owner);
                 Some(TypeInfo::of_ty(ty))
             }
+            Binding::TypeLevelLambdaParameter(parameter) => {
+                let ty = answers.resolve_map_int_tuples_mapper_parameter(&parameter.1);
+                Some(TypeInfo::of_ty(ty))
+            }
             _ => None,
         }
     }

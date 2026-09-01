@@ -2333,22 +2333,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .cloned()
     }
 
-    /// Resolve a lambda parameter type from thread-local state.
-    ///
-    /// If owner exists, force owner evaluation first so this binding
-    /// participates in the same SCC/fixpoint dynamics as the containing
-    /// lambda expression.
     pub(crate) fn resolve_lambda_param_type(
         &self,
         id: LambdaParamId,
         owner: Option<Idx<Key>>,
     ) -> Type {
         if let Some(owner_idx) = owner {
+            // Contextual lambda types are installed while their enclosing expression is
+            // solved, so resolving the parameter independently must force that owner.
             let _ = self.get_idx(owner_idx);
         }
         self.get_lambda_param_type(id).unwrap_or_else(|| {
-            // Lambda parameter bindings may be solved independently before their lambda
-            // expression has installed a contextual type in this thread state.
+            // Some lambda parameters have no contextual type in the current solve.
             self.heap.mk_any_implicit()
         })
     }
