@@ -32,6 +32,7 @@ pub mod equality;
 pub mod facet;
 pub mod function;
 pub mod globals;
+mod gufunc;
 pub mod heap;
 pub mod keywords;
 pub mod lit_int;
