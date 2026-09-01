@@ -823,6 +823,18 @@ impl Solver {
             .collect()
     }
 
+    fn snapshot_var_state(
+        variables: &Variables,
+        errors: &SmallMap<Var, TypeVarSpecializationError>,
+        var: Var,
+    ) -> VarState {
+        VarState {
+            node: variables.get_node(var).borrow().clone(),
+            variable: variables.get(var).clone(),
+            error: errors.get(&var).cloned(),
+        }
+    }
+
     /// Snapshot the current state of the given vars so they can be restored later.
     pub fn snapshot_vars(&self, vars: &[Var]) -> VarSnapshot {
         if vars.is_empty() {
@@ -832,18 +844,76 @@ impl Solver {
         let errors = self.instantiation_errors.read();
         VarSnapshot(
             vars.iter()
-                .map(|v| {
-                    (
-                        *v,
-                        VarState {
-                            node: variables.get_node(*v).borrow().clone(),
-                            variable: variables.get(*v).clone(),
-                            error: errors.get(v).cloned(),
-                        },
-                    )
-                })
+                .map(|var| (*var, Self::snapshot_var_state(&variables, &errors, *var)))
                 .collect(),
         )
+    }
+
+    /// Snapshots pre-existing variable state that ordinary inference may mutate while processing
+    /// `types`, for rollback after a speculative inference attempt.
+    ///
+    /// Unlike `snapshot_vars`, whose caller supplies the complete set, this follows union-find
+    /// parents and variables referenced by current bounds or answers. Snapshotting only variables
+    /// spelled directly in the input types is insufficient because ordinary inference can mutate
+    /// a variable reached solely through this existing solver state. Variables created after the
+    /// snapshot remain owned by the caller and are not restored by this operation. The snapshot
+    /// covers variable nodes, values, and instantiation errors; it does not capture caches or
+    /// other solver state.
+    pub fn snapshot_for_speculative_inference(&self, types: &[&Type]) -> VarSnapshot {
+        let mut pending: Vec<Var> = types.iter().flat_map(|ty| ty.collect_all_vars()).collect();
+        if pending.is_empty() {
+            return VarSnapshot(Vec::new());
+        }
+
+        let variables = self.variables.lock();
+        let errors = self.instantiation_errors.read();
+        let mut seen = SmallSet::new();
+        let mut states = Vec::new();
+        while let Some(var) = pending.pop() {
+            if !seen.insert(var) {
+                continue;
+            }
+
+            let state = Self::snapshot_var_state(&variables, &errors, var);
+            match &state.node {
+                VariableNode::Goto(parent) => {
+                    pending.push(parent.get());
+                }
+                VariableNode::Root(variable, _) => match variable.as_ref() {
+                    Variable::Quantified { quantified, bounds } => {
+                        pending.extend(
+                            Type::Quantified(Box::new(quantified.clone())).collect_all_vars(),
+                        );
+                        pending.extend(
+                            bounds
+                                .lower
+                                .iter()
+                                .chain(&bounds.upper)
+                                .flat_map(Type::collect_all_vars),
+                        );
+                    }
+                    Variable::Unwrap(bounds) => pending.extend(
+                        bounds
+                            .lower
+                            .iter()
+                            .chain(&bounds.upper)
+                            .flat_map(Type::collect_all_vars),
+                    ),
+                    Variable::Answer { ty, .. } => pending.extend(ty.collect_all_vars()),
+                    Variable::ResidualAnswer {
+                        target_vars, ty, ..
+                    } => {
+                        pending.extend(target_vars.iter().copied());
+                        pending.extend(ty.collect_all_vars());
+                    }
+                    Variable::PartialQuantified(quantified) => pending
+                        .extend(Type::Quantified(Box::new(quantified.clone())).collect_all_vars()),
+                    Variable::PartialContained(_) | Variable::Recursive => {}
+                },
+            }
+            states.push((var, state));
+        }
+        VarSnapshot(states)
     }
 
     /// Restore vars to a previously saved snapshot.
@@ -4429,6 +4499,58 @@ mod tests {
                 Variable::Answer { ty, .. } if *ty == Type::Any(AnyStyle::Explicit)
             ),
             "a var outside the snapshot keeps its own answer"
+        );
+    }
+
+    #[test]
+    fn speculative_inference_snapshot_restores_variables_referenced_only_by_bounds() {
+        let solver = Solver::new(false, true, false, false, false, false, false);
+        let uniques = UniqueFactory::new();
+        let inner = Var::new(&uniques);
+        let inner_alias = Var::new(&uniques);
+        let upper_inner = Var::new(&uniques);
+        let outer = Var::new(&uniques);
+        {
+            let mut variables = solver.variables.lock();
+            variables.insert_fresh(inner, Variable::answer(Type::None));
+            variables.insert_fresh(inner_alias, Variable::answer(Type::None));
+            variables.unify(inner_alias, inner);
+            variables.insert_fresh(upper_inner, Variable::answer(Type::None));
+            variables.insert_fresh(
+                outer,
+                Variable::Quantified {
+                    quantified: quantified(QuantifiedKind::TypeVar, 0),
+                    bounds: Bounds {
+                        lower: vec![Type::Var(inner_alias)],
+                        upper: vec![Type::Var(upper_inner)],
+                    },
+                },
+            );
+        }
+
+        let snapshot = solver.snapshot_for_speculative_inference(&[&Type::Var(outer)]);
+        solver
+            .variables
+            .lock()
+            .update(inner, Variable::answer(Type::Any(AnyStyle::Explicit)));
+        solver
+            .variables
+            .lock()
+            .update(upper_inner, Variable::answer(Type::Any(AnyStyle::Explicit)));
+        solver.restore_vars(snapshot);
+
+        assert!(
+            matches!(&*solver.variables.lock().get(inner), Variable::Answer { ty, .. } if *ty == Type::None),
+            "rollback must include variables reachable only through existing bounds"
+        );
+        assert_eq!(
+            solver.variables.lock().get_root(inner_alias),
+            inner,
+            "rollback must preserve union-find links reached through existing bounds"
+        );
+        assert!(
+            matches!(&*solver.variables.lock().get(upper_inner), Variable::Answer { ty, .. } if *ty == Type::None),
+            "rollback must include variables reachable only through upper bounds"
         );
     }
 
