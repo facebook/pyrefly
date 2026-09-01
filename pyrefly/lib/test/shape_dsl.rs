@@ -4640,6 +4640,23 @@ def f[M: IntVar, N: IntVar](
 );
 
 testcase!(
+    test_int_tuple_type_argument_preserved_in_base_class,
+    shaped_array_env(),
+    r#"
+from shape_extensions import IntTuple
+from typing import assert_type
+
+class Box[S: IntTuple]:
+    def get(self) -> S: ...
+
+class Fixed(Box[IntTuple[2, 3]]): ...
+
+def check(x: Fixed) -> None:
+    assert_type(x.get(), IntTuple[2, 3])
+"#,
+);
+
+testcase!(
     test_tensor_shapes_inttuple_assignability,
     shaped_array_env(),
     r#"

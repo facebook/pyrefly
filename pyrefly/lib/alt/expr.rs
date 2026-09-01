@@ -5138,7 +5138,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .to_type()
     }
 
-    fn parse_int_tuple_type(
+    pub(crate) fn parse_int_tuple_type(
         &self,
         args: &[Expr],
         type_form_context: TypeFormContext<'_>,
