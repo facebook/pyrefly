@@ -714,10 +714,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         // another, which we handle by checking their upper bounds against each other.
                         let arg_for_check = {
                             let arg = arg.clone();
-                            arg.transform(&mut |x| {
-                                if let Type::TypeVar(tv) = x {
+                            arg.transform(&mut |x| match x {
+                                Type::TypeVar(tv) => {
                                     *x = tv.upper_bound(self.stdlib, self.heap);
                                 }
+                                Type::TypeLevelDslCall(call) => {
+                                    *x = call.type_for_generic_bound_check()
+                                }
+                                _ => {}
                             })
                         };
                         self.check_type(

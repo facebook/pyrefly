@@ -5144,6 +5144,16 @@ impl TypeLevelDslCall {
         }
     }
 
+    /// Projects this call to the type used for generic-bound checking.
+    ///
+    /// For example, a call that constructs `IntTuples((IntTuple[2],))` checks against a bound as
+    /// `tuple[IntTuple[2]]`, while the generic argument remains the unevaluated call so later
+    /// specialization can still use its call-site arguments. Invalid calls use their gradual
+    /// fallback here; their evaluation error is reported when the public call result is forced.
+    pub fn type_for_generic_bound_check(&self) -> Type {
+        self.evaluate().unwrap_or_else(|_| self.fallback())
+    }
+
     /// Evaluates the call, reporting incompatible concrete shapes.
     pub fn evaluate(&self) -> Result<Type, ShapeError> {
         let project = |outcome| match outcome {

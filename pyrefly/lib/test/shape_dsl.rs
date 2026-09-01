@@ -12352,3 +12352,36 @@ def wrong_result(shape: IntTuple) -> Int:
     return dsl.IntTuples((shape,))  # E: returned expression requires a result in the `IntTuples` domain  # E: Returned type
 "#,
 );
+
+testcase!(
+    test_type_shape_dsl_int_tuples_calls_respect_generic_bounds,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+class BroadShapes[Shapes: IntTuples]: ...
+class ShapesOfTwo[Shapes: tuple[IntTuple[2], ...]]: ...
+
+@type_shape_dsl_function
+def singleton(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples((shape,))
+
+@type_shape_dsl_function
+def invalid(_shape: IntTuple) -> IntTuples:
+    return dsl.Invalid("invalid shapes")
+
+def broad[Shape: IntTuple](x: ShapeBox[Shape]) -> BroadShapes[singleton(Shape)]: ...
+
+def narrow[Shape: IntTuple](x: ShapeBox[Shape]) -> ShapesOfTwo[singleton(Shape)]: ...  # E: `tuple[IntTuple[*Elements[Shape]]]` is not assignable to upper bound `tuple[IntTuple[2], ...]`
+
+def invalid_result() -> ShapesOfTwo[invalid(IntTuple[2])]: ...
+
+def check(x: ShapeBox[IntTuple[2, 3]]) -> None:
+    assert_type(broad(x), BroadShapes[tuple[IntTuple[2, 3]]])
+
+invalid_result()  # E: Cannot evaluate type-level shape DSL call: invalid shapes
+"#,
+);
