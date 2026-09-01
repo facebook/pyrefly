@@ -4749,7 +4749,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ),
             _ => ty,
         };
-        match param {
+        let ty = match param {
             FunctionParameter::Annotated(key) => {
                 let annotation = self.get_idx(*key);
                 annotation
@@ -4777,7 +4777,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     });
                 finalize(target, ty)
             }
-        }
+        };
+        self.map_int_tuples_parameter_body_type(ty)
     }
 
     /// Handle `Binding::TypeVarTuple` - process TypeVarTuple definition.
@@ -7142,6 +7143,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
         let result = self.validate_type_form(result, x.range(), type_form_context, errors);
+        let result = self.interpret_map_int_tuples_at_annotation_root(result, type_form_context);
         if type_form_context.can_report_explicit_any() {
             self.check_explicit_any(&result, x.range(), errors);
         }

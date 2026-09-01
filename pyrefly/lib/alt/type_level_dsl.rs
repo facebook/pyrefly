@@ -976,6 +976,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             None
         }
     }
+
     pub(crate) fn parse_type_level_dsl_call(
         &self,
         call: &ExprCall,
@@ -1271,7 +1272,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let restriction = match ty {
             Type::Any(_) | Type::IntTuple(_) => return true,
             Type::TypeLevelDslCall(call) => {
-                return call.result_domain() == TypeShapeDslDomain::IntTuple;
+                return call.result_domain() == Some(TypeShapeDslDomain::IntTuple);
             }
             Type::Quantified(q) if q.kind == QuantifiedKind::TypeVar => &q.restriction,
             Type::TypeVar(type_var) => type_var.restriction(),
@@ -1290,12 +1291,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    fn is_int_tuples_dsl_argument(&self, ty: &Type) -> bool {
+    pub(crate) fn is_int_tuples_dsl_argument(&self, ty: &Type) -> bool {
         let restriction = match ty {
             Type::Any(style) => return *style != AnyStyle::Error,
             Type::Tuple(_) | Type::Union(_) if is_int_tuples_type(ty) => return true,
             Type::TypeLevelDslCall(call) => {
-                return call.result_domain() == TypeShapeDslDomain::IntTuples;
+                return call.result_domain() == Some(TypeShapeDslDomain::IntTuples);
             }
             Type::Quantified(q) if q.kind == QuantifiedKind::TypeVar => &q.restriction,
             Type::TypeVar(type_var) => type_var.restriction(),
@@ -1315,7 +1316,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => match ty {
                 Type::Any(_) => true,
                 Type::Int(_) => true,
-                Type::TypeLevelDslCall(call) => call.result_domain() == TypeShapeDslDomain::Int,
+                Type::TypeLevelDslCall(call) => {
+                    call.result_domain() == Some(TypeShapeDslDomain::Int)
+                }
                 Type::Quantified(_) | Type::TypeVar(_) => is_gradual_size_bound_type_var(ty),
                 _ => false,
             },

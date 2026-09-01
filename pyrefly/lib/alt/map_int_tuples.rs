@@ -11,9 +11,11 @@
 //! evaluator. Keeping its solver behavior here prevents the general annotation and DSL paths from
 //! accumulating details of its mapper binding, evaluation, and parameter-pattern semantics.
 
+use pyrefly_types::map_int_tuples::MapIntTuplesInterpretation;
 use pyrefly_types::map_int_tuples::TypeLambda;
 use pyrefly_types::map_int_tuples::map_int_tuples_mapper_binder;
 use pyrefly_types::shaped_array::IntTuple;
+use pyrefly_types::type_level_dsl::TypeLevelDslCall;
 use pyrefly_types::types::Type;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Identifier;
@@ -49,6 +51,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     /// Parses the unary type-level function accepted by `MapIntTuples`.
+    ///
+    /// Its parameter is always constrained to a shapeless `IntTuple`.
     fn parse_map_int_tuples_mapper(
         &self,
         mapper: &Expr,
@@ -109,7 +113,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         ))
     }
 
-    /// Reduces `MapIntTuples[mapper, source]` eagerly to an ordinary tuple type.
+    /// Parses `MapIntTuples[mapper, source]`, reducing concrete sources eagerly and retaining
+    /// symbolic sources until generic specialization supplies their members.
     pub(crate) fn parse_map_int_tuples(
         &self,
         arguments: &[Expr],
@@ -133,15 +138,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mapper = self.parse_map_int_tuples_mapper(mapper, type_form_context, errors);
         let source_context = TypeFormContext::TypeArgument(&type_form_context);
         let source_type = self.expr_untype(source, source_context, errors);
-        let mapped = match source_type {
-            Type::Any(_) => mapper.map(|mapper| {
-                Ok(self
-                    .heap
-                    .mk_unbounded_tuple(mapper.apply(IntTuple::shapeless().to_shape_arg_type())))
-            }),
-            never @ Type::Never(_) => mapper.map(|_| Ok(never)),
-            Type::Tuple(tuple) => mapper.map(|mapper| mapper.apply_to_tuple(tuple)),
-            source_type => {
+        let source_is_deferred = match &source_type {
+            Type::Any(_) | Type::Never(_) | Type::Tuple(_) => false,
+            Type::Quantified(_) | Type::TypeVar(_) | Type::TypeLevelDslCall(_)
+                if self.is_int_tuples_dsl_argument(&source_type) =>
+            {
+                true
+            }
+            Type::Union(_) if self.is_int_tuples_dsl_argument(&source_type) => false,
+            _ => {
                 self.error(
                     errors,
                     source.range(),
@@ -151,12 +156,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         self.for_display(source_type)
                     ),
                 );
-                None
+                return fallback();
             }
         };
-        match mapped.transpose() {
-            Ok(Some(mapped)) => mapped,
-            Ok(None) => fallback(),
+        let Some(mapper) = mapper else {
+            return fallback();
+        };
+        let call = TypeLevelDslCall::map_int_tuples(mapper, source_type);
+        if source_is_deferred {
+            return Type::TypeLevelDslCall(Box::new(call));
+        }
+        match call.evaluate() {
+            Ok(mapped) => mapped,
             Err(error) => {
                 self.error(
                     errors,
@@ -167,5 +178,47 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 fallback()
             }
         }
+    }
+
+    fn make_map_int_tuples_parameter_pattern(&self, ty: Type) -> Type {
+        let Type::TypeLevelDslCall(mut call) = ty else {
+            return ty;
+        };
+        let Some(map) = call.as_map_int_tuples_mut() else {
+            return Type::TypeLevelDslCall(call);
+        };
+        let (mapper, _, _) = map.parts();
+        let member = mapper.apply(IntTuple::shapeless().to_shape_arg_type());
+        map.make_parameter_pattern(member);
+        Type::TypeLevelDslCall(call)
+    }
+
+    /// Applies the experimental `MapIntTuples` interpretation associated with an annotation
+    /// root. Keeping this policy here lets future supported roots, such as variadic parameters,
+    /// compose without adding shape-extension-specific cases to annotation parsing.
+    pub(crate) fn interpret_map_int_tuples_at_annotation_root(
+        &self,
+        ty: Type,
+        type_form_context: TypeFormContext<'_>,
+    ) -> Type {
+        match type_form_context {
+            TypeFormContext::ParameterAnnotation => self.make_map_int_tuples_parameter_pattern(ty),
+            _ => ty,
+        }
+    }
+
+    /// Projects a `MapIntTuples` parameter pattern to the ordinary sequence type visible inside
+    /// the function body. The callable signature retains the pattern for later argument solving.
+    pub(crate) fn map_int_tuples_parameter_body_type(&self, ty: Type) -> Type {
+        let Type::TypeLevelDslCall(call) = &ty else {
+            return ty;
+        };
+        let Some((_, MapIntTuplesInterpretation::ParameterPattern { mapped_member }, _)) =
+            call.as_map_int_tuples()
+        else {
+            return ty;
+        };
+        self.heap
+            .mk_class_type(self.stdlib.sequence(mapped_member.clone()))
     }
 }

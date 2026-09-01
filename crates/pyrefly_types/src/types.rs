@@ -945,8 +945,8 @@ pub enum Type {
     /// of the argument, so that we can resonstruct the same generic/overload structure if it
     /// appears in a callable type later. Otherwise, we should *flatten* to a fallback type.
     CallableResidual(Box<CallableResidual>),
-    /// A type-level shape DSL application that is valid inside callable return annotations.
-    /// Call return-boundary processing forces this to a result-schema projection.
+    /// A deferred type-level shape DSL application. Calls are normally forced at callable return
+    /// boundaries; experimental `MapIntTuples` parameter patterns instead expose a sequence view.
     TypeLevelDslCall(Box<TypeLevelDslCall>),
     /// A function declared using the `def` keyword.
     /// Note that the FunctionKind metadata doesn't participate in subtyping, and thus two types with distinct metadata are still subtypes.
@@ -1636,6 +1636,7 @@ impl Type {
         }
     }
 
+    /// Substitutes free quantified values while respecting `Forall` and `MapIntTuples` binders.
     pub fn subst_mut_fn(&mut self, mp: &mut dyn FnMut(&Quantified) -> Option<Type>) {
         // We are looking up Quantified in a map, and Quantified may contain a Quantified within it.
         // Therefore, to make sure we still get matches, work top-down (not using `transform`).
@@ -1655,6 +1656,8 @@ impl Type {
                 shadowed.extend(forall.tparams.iter().cloned());
                 ty.recurse_mut(&mut |x| f(x, mp, shadowed));
                 shadowed.truncate(old_len);
+            } else if let Type::TypeLevelDslCall(call) = ty {
+                call.subst_parts_mut(shadowed, &mut |x, shadowed| f(x, mp, shadowed));
             } else {
                 ty.recurse_mut(&mut |x| f(x, mp, shadowed));
             }
@@ -1701,19 +1704,27 @@ impl Type {
                     }
                 }
             };
-            for arg in &mut call.args {
-                if let Err(error) = force_nested(arg) {
-                    *ty = call.fallback();
-                    return Err(error);
+            fn force_call(call: &mut TypeLevelDslCall) -> Result<Type, dimension::ShapeError> {
+                for arg in &mut call.args {
+                    force_nested(arg)?;
                 }
+                // Mapping can instantiate DSL calls from its lambda body, so the produced type
+                // must cross the same boundary as the source arguments.
+                let mut result = call.evaluate()?;
+                force_nested(&mut result)?;
+                Ok(result)
             }
-            match call.evaluate() {
+            let mut fallback = call.fallback();
+            match force_call(call) {
                 Ok(result) => {
                     *ty = result;
                     Ok(())
                 }
                 Err(error) => {
-                    *ty = call.fallback();
+                    // Report only the original error if reducing a structured fallback also
+                    // encounters a failing nested call.
+                    let _ = force_nested(&mut fallback);
+                    *ty = fallback;
                     Err(error)
                 }
             }

@@ -52,6 +52,8 @@ use crate::equality::TypeEq as TypeEqTrait;
 use crate::equality::TypeEqCtx;
 use crate::function::FuncDefId;
 use crate::literal::Lit;
+use crate::map_int_tuples::MapIntTuples;
+use crate::quantified::Quantified;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
 use crate::shaped_array::broadcast_shapes;
@@ -5140,7 +5142,7 @@ impl StructurallyValidatedTypeShapeDslFunction {
     }
 }
 
-/// A deferred type-level DSL invocation held until a function-call return boundary.
+/// A deferred type-level DSL invocation retained until the operation's result is consumed.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut)]
 pub struct TypeLevelDslCall {
@@ -5153,6 +5155,8 @@ pub struct TypeLevelDslCall {
 pub enum TypeLevelDslFunction {
     Broadcast,
     UserDefined(Arc<ResolvedTypeShapeDslFunction>),
+    /// A deferred `shape_extensions.MapIntTuples[<lambda>, <source>]` application.
+    MapIntTuples(MapIntTuples),
 }
 
 #[derive(Debug, Clone)]
@@ -5234,13 +5238,21 @@ enum DslControlFlow {
 }
 
 impl Visit<Type> for TypeLevelDslFunction {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        match self {
+            Self::Broadcast | Self::UserDefined(_) => {}
+            Self::MapIntTuples(map) => map.visit(f),
+        }
+    }
 }
 
 impl VisitMut<Type> for TypeLevelDslFunction {
-    const RECURSE_CONTAINS: bool = false;
-    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut Type)) {}
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        match self {
+            Self::Broadcast | Self::UserDefined(_) => {}
+            Self::MapIntTuples(map) => map.visit_mut(f),
+        }
+    }
 }
 
 impl TypeLevelDslCall {
@@ -5268,24 +5280,45 @@ impl TypeLevelDslCall {
         match &self.function {
             TypeLevelDslFunction::Broadcast => "broadcast",
             TypeLevelDslFunction::UserDefined(function) => function.name().as_str(),
+            TypeLevelDslFunction::MapIntTuples(_) => "MapIntTuples",
         }
     }
 
-    pub fn result_domain(&self) -> TypeShapeDslDomain {
+    /// Returns the shape-DSL result domain, or `None` for a map of arbitrary result types.
+    pub fn result_domain(&self) -> Option<TypeShapeDslDomain> {
         match &self.function {
-            TypeLevelDslFunction::Broadcast => TypeShapeDslDomain::IntTuple,
-            TypeLevelDslFunction::UserDefined(function) => function.result_domain(),
+            TypeLevelDslFunction::Broadcast => Some(TypeShapeDslDomain::IntTuple),
+            TypeLevelDslFunction::UserDefined(function) => Some(function.result_domain()),
+            TypeLevelDslFunction::MapIntTuples(_) => None,
         }
     }
 
     /// Returns the gradual result for a call whose precise value cannot be determined.
     pub fn fallback(&self) -> Type {
-        match self.result_domain() {
-            TypeShapeDslDomain::Int => gradual_size(),
-            TypeShapeDslDomain::IntTuple => IntTuple::shapeless().to_shape_arg_type(),
-            TypeShapeDslDomain::IntTuples => Type::Tuple(Tuple::Unbounded(Box::new(
-                IntTuple::shapeless().to_shape_arg_type(),
-            ))),
+        match &self.function {
+            TypeLevelDslFunction::Broadcast => IntTuple::shapeless().to_shape_arg_type(),
+            TypeLevelDslFunction::UserDefined(function) => match function.result_domain() {
+                TypeShapeDslDomain::Int => gradual_size(),
+                TypeShapeDslDomain::IntTuple => IntTuple::shapeless().to_shape_arg_type(),
+                TypeShapeDslDomain::IntTuples => Type::Tuple(Tuple::Unbounded(Box::new(
+                    IntTuple::shapeless().to_shape_arg_type(),
+                ))),
+            },
+            TypeLevelDslFunction::MapIntTuples(map) => map.fallback(),
+        }
+    }
+
+    /// Recurses through the call while respecting the binder introduced by a map's lambda.
+    pub fn subst_parts_mut(
+        &mut self,
+        shadowed: &mut Vec<Quantified>,
+        f: &mut dyn FnMut(&mut Type, &mut Vec<Quantified>),
+    ) {
+        for arg in &mut self.args {
+            f(arg, shadowed);
+        }
+        if let TypeLevelDslFunction::MapIntTuples(map) = &mut self.function {
+            map.subst_parts_mut(shadowed, f);
         }
     }
 
@@ -5318,6 +5351,7 @@ impl TypeLevelDslCall {
                 ))
             }
             TypeLevelDslFunction::UserDefined(function) => project(function.evaluate(&self.args)),
+            TypeLevelDslFunction::MapIntTuples(map) => map.evaluate(),
         }
     }
 }

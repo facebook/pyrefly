@@ -49,6 +49,7 @@ use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
 use crate::type_alias::TypeAliasRef;
 use crate::type_alias::TypeAliasStyle;
+use crate::type_level_dsl::TypeLevelDslFunction;
 use crate::type_output::AnnotationOutput;
 use crate::type_output::AnnotationPart;
 use crate::type_output::DisplayOutput;
@@ -1105,6 +1106,18 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
+            Type::TypeLevelDslCall(call)
+                if let TypeLevelDslFunction::MapIntTuples(map) = &call.function =>
+            {
+                let (mapper, _, source) = map.parts();
+                write!(output, "{}[lambda ", call.function_name())?;
+                output.write_str(mapper.parameter().name.as_str())?;
+                output.write_str(": ")?;
+                self.fmt_helper_generic(mapper.body(), false, output)?;
+                output.write_str(", ")?;
+                self.fmt_helper_generic(source, false, output)?;
+                output.write_str("]")
+            }
             Type::TypeLevelDslCall(call) => {
                 output.write_str(call.function_name())?;
                 output.write_str("(")?;

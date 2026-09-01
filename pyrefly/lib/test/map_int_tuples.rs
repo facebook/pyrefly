@@ -44,6 +44,17 @@ def structural(
     ],
 ) -> None:
     assert_type(x, tuple[Tensor[IntTuple[2]], Tensor[IntTuple[3, 4]]])
+
+def union_source(
+    x: MapIntTuples[
+        lambda S: Tensor[S],
+        tuple[IntTuple[2]] | tuple[IntTuple[3, 4]],
+    ],
+) -> None:
+    assert_type(
+        x,
+        tuple[Tensor[IntTuple[2]]] | tuple[Tensor[IntTuple[3, 4]]],
+    )
 "#,
 );
 
@@ -243,6 +254,48 @@ def nested_capture(
             tuple[tuple[Tensor[IntTuple[2]], Tensor[IntTuple[3]]]],
         ],
     )
+"#,
+);
+
+testcase!(
+    map_int_tuples_symbolic_return_stays_deferred,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type
+
+class Tensor[Shape: IntTuple]: ...
+
+def mapped[Shapes: IntTuples](
+    shapes: Shapes,
+) -> MapIntTuples[lambda S: Tensor[S], Shapes]: ...
+
+assert_type(
+    mapped(((2,), (3, 4))),
+    tuple[Tensor[IntTuple[2]], Tensor[IntTuple[3, 4]]],
+)
+"#,
+);
+
+testcase!(
+    map_int_tuples_parameter_root_exposes_sequence_view,
+    shape_extensions_env(),
+    r#"
+from collections.abc import Sequence
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+from typing import assert_type, reveal_type
+
+class Box[Shape: IntTuple]: ...
+
+def direct[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes],
+) -> None:
+    assert_type(values, Sequence[Box[IntTuple]])
+
+def nested[Shapes: IntTuples](
+    values: tuple[MapIntTuples[lambda S: Box[S], Shapes]],
+) -> None:
+    reveal_type(values)  # E: revealed type: tuple[MapIntTuples[lambda S: Box[S], Shapes]]
 "#,
 );
 

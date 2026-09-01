@@ -4563,7 +4563,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let ty =
                         self.parse_type_level_dsl_call(call, &callee, type_form_context, errors);
                     if let Type::TypeLevelDslCall(call) = &ty
-                        && call.result_domain() != TypeShapeDslDomain::Int
+                        && call.result_domain() != Some(TypeShapeDslDomain::Int)
                     {
                         self.error(
                             errors,
@@ -5051,7 +5051,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 ty
                             }
                             Type::TypeLevelDslCall(call) if i == shape_idx => {
-                                if call.result_domain() == TypeShapeDslDomain::IntTuple {
+                                if call.result_domain() == Some(TypeShapeDslDomain::IntTuple) {
                                     let ty = Type::TypeLevelDslCall(call);
                                     shape_arg_carrier = Some(ty);
                                     shape_validation_arg(
@@ -5128,10 +5128,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         {
             *shape_arg = carrier;
         }
-        if matches!(
-            base_class.targs().as_slice().get(shape_idx),
-            Some(Type::TypeLevelDslCall(_))
-        ) {
+        if let Some(Type::TypeLevelDslCall(call)) = base_class.targs().as_slice().get(shape_idx)
+            && call.result_domain() == Some(TypeShapeDslDomain::IntTuple)
+        {
             return Type::ClassType(base_class);
         }
         self.shaped_array_classtype_to_shaped_array_type(&base_class)
