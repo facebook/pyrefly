@@ -447,3 +447,182 @@ def tridiagonal_diag_minus_one_shape(a_shape: IntTuple) -> IntTuple:
         return dsl.Invalid("tridiagonal requires a square matrix")
     batch = a_shape[: len(a_shape) - 2]
     return dsl.concat(batch, dsl.IntTuple((n1 - 1,)))
+
+@type_shape_dsl_function
+def einsum_shape(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl.einsum(spec, shapes)
+
+@type_shape_dsl_function
+def dot_shape(left: IntTuple, right: IntTuple) -> IntTuple:
+    if len(left) == 0:
+        return right
+    if len(right) == 0:
+        return left
+    if len(left) == 1 and len(right) == 1:
+        if left[0] != right[0]:
+            return dsl.Invalid("dot dimensions must match")
+        return dsl.IntTuple(())
+    if len(right) == 1:
+        if left[len(left) - 1] != right[0]:
+            return dsl.Invalid("dot inner dimensions must match")
+        return left[: len(left) - 1]
+    if len(left) == 1:
+        if left[0] != right[len(right) - 2]:
+            return dsl.Invalid("dot inner dimensions must match")
+        return dsl.concat(
+            right[: len(right) - 2], dsl.IntTuple((right[len(right) - 1],))
+        )
+    if left[len(left) - 1] != right[len(right) - 2]:
+        return dsl.Invalid("dot inner dimensions must match")
+    return dsl.concat(
+        left[: len(left) - 1],
+        dsl.concat(right[: len(right) - 2], dsl.IntTuple((right[len(right) - 1],))),
+    )
+
+@type_shape_dsl_function
+def inner_shape(left: IntTuple, right: IntTuple) -> IntTuple:
+    if len(left) == 0:
+        return right
+    if len(right) == 0:
+        return left
+    if left[len(left) - 1] != right[len(right) - 1]:
+        return dsl.Invalid("inner dimensions must match")
+    if len(left) == 1 and len(right) == 1:
+        return dsl.IntTuple(())
+    return dsl.concat(left[: len(left) - 1], right[: len(right) - 1])
+
+@type_shape_dsl_function
+def kron_shape(a_shape: IntTuple, b_shape: IntTuple) -> IntTuple:
+    if len(a_shape) == 0:
+        return b_shape
+    if len(b_shape) == 0:
+        return a_shape
+    if len(a_shape) >= len(b_shape):
+        diff = len(a_shape) - len(b_shape)
+        return dsl.IntTuple(
+            a_shape[i] * (1 if i < diff else b_shape[i - diff])
+            for i in range(len(a_shape))
+        )
+    diff_pos = len(b_shape) - len(a_shape)
+    return dsl.IntTuple(
+        (1 if i < diff_pos else a_shape[i - diff_pos]) * b_shape[i]
+        for i in range(len(b_shape))
+    )
+
+@type_shape_dsl_function
+def matvec_shape(left: IntTuple, right: IntTuple) -> IntTuple:
+    if len(left) < 2 or len(right) < 1:
+        return dsl.Invalid("matvec requires at least 2-D matrix and 1-D vector")
+    m = left[len(left) - 2]
+    k_left = left[len(left) - 1]
+    k_right = right[len(right) - 1]
+    if (
+        dsl.is_concrete_int(k_left)
+        and dsl.is_concrete_int(k_right)
+        and k_left != k_right
+    ):
+        return dsl.Invalid("matvec inner dimensions must match")
+    b_left_len = len(left) - 2
+    b_right_len = len(right) - 1
+    if b_left_len >= b_right_len:
+        diff = b_left_len - b_right_len
+        return dsl.IntTuple(
+            (
+                (
+                    (right[i - diff] if left[i] == 1 else left[i])
+                    if i >= diff
+                    else left[i]
+                )
+                if i < b_left_len
+                else m
+            )
+            for i in range(b_left_len + 1)
+        )
+    diff = b_right_len - b_left_len
+    return dsl.IntTuple(
+        (
+            (
+                (right[i] if left[i - diff] == 1 else left[i - diff])
+                if i >= diff
+                else right[i]
+            )
+            if i < b_right_len
+            else m
+        )
+        for i in range(b_right_len + 1)
+    )
+
+@type_shape_dsl_function
+def vecmat_shape(left: IntTuple, right: IntTuple) -> IntTuple:
+    if len(left) < 1 or len(right) < 2:
+        return dsl.Invalid("vecmat requires at least 1-D vector and 2-D matrix")
+    k_left = left[len(left) - 1]
+    k_right = right[len(right) - 2]
+    m = right[len(right) - 1]
+    if (
+        dsl.is_concrete_int(k_left)
+        and dsl.is_concrete_int(k_right)
+        and k_left != k_right
+    ):
+        return dsl.Invalid("vecmat inner dimensions must match")
+    b_left_len = len(left) - 1
+    b_right_len = len(right) - 2
+    if b_left_len >= b_right_len:
+        diff = b_left_len - b_right_len
+        return dsl.IntTuple(
+            (
+                (
+                    (right[i - diff] if left[i] == 1 else left[i])
+                    if i >= diff
+                    else left[i]
+                )
+                if i < b_left_len
+                else m
+            )
+            for i in range(b_left_len + 1)
+        )
+    diff = b_right_len - b_left_len
+    return dsl.IntTuple(
+        (
+            (
+                (right[i] if left[i - diff] == 1 else left[i - diff])
+                if i >= diff
+                else right[i]
+            )
+            if i < b_right_len
+            else m
+        )
+        for i in range(b_right_len + 1)
+    )
+
+@type_shape_dsl_function
+def tensordot_shape(left: IntTuple, right: IntTuple, dims: int) -> IntTuple:
+    if dims < 0:
+        return dsl.Invalid("tensordot dims must be non-negative")
+    if dims > len(left) or dims > len(right):
+        return dsl.Invalid("tensordot dims exceeds input rank")
+    if any(left[len(left) - dims + i] != right[i] for i in range(dims)):
+        return dsl.Invalid("tensordot contracted dimensions must match")
+    return dsl.concat(left[: len(left) - dims], right[dims:])
+
+@type_shape_dsl_function
+def diagonal_shape(shape: IntTuple, offset: int, axis1: int, axis2: int) -> IntTuple:
+    if len(shape) < 2:
+        return dsl.Invalid("diagonal requires at least 2-D array")
+    d0 = shape[0]
+    d1 = shape[1]
+    if d0 == d1:
+        return dsl.concat(shape[2:], dsl.IntTuple((d0,)))
+    if dsl.is_concrete_int(d0) and dsl.is_concrete_int(d1):
+        if d0 < d1:
+            return dsl.concat(shape[2:], dsl.IntTuple((d0,)))
+        return dsl.concat(shape[2:], dsl.IntTuple((d1,)))
+    return dsl.concat(shape[2:], dsl.IntTuple((dsl.Int.gradual(),)))
+
+@type_shape_dsl_function
+def trace_shape(shape: IntTuple, offset: int, axis1: int, axis2: int) -> IntTuple:
+    if len(shape) < 2:
+        return dsl.Invalid("trace requires at least 2-D array")
+    if len(shape) == 2:
+        return dsl.IntTuple(())
+    return shape[2:]

@@ -12,10 +12,13 @@ from typing import Any, overload, Sequence
 import shape_extensions
 from jax._shapes import (
     matmul_shape,
+    diagonal_shape,
+    dot_shape,
     permute_shape,
     reduce_shape,
     reshape_shape,
     reverse_shape,
+    trace_shape,
 )
 from shape_extensions import broadcast, Flag, IntTuple, IntVar
 
@@ -464,4 +467,52 @@ class Array[Shape: _Shape = _AnyShape]:
         axis: None = None,
         dtype: Any = None,
         out: Any = None,
+    ) -> Array[IntTuple]: ...
+    def dot[OtherShape: _Shape](
+        self,
+        b: Array[OtherShape],
+        *,
+        precision: Any = None,
+        preferred_element_type: Any = None,
+        out_sharding: Any = None,
+    ) -> Array[dot_shape(Shape, OtherShape)]: ...
+    @overload
+    def diagonal[
+        Offset: Flag[int] = 0,
+        Axis1: Flag[int] = 0,
+        Axis2: Flag[int] = 1,
+    ](
+        self,
+        offset: Offset = 0,
+        axis1: Axis1 = 0,
+        axis2: Axis2 = 1,
+    ) -> Array[diagonal_shape(Shape, Offset, Axis1, Axis2)]: ...
+    @overload
+    def diagonal(
+        self,
+        offset: int = 0,
+        axis1: int = 0,
+        axis2: int = 1,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def trace[
+        Offset: Flag[int] = 0,
+        Axis1: Flag[int] = 0,
+        Axis2: Flag[int] = 1,
+    ](
+        self,
+        offset: Offset = 0,
+        axis1: Axis1 = 0,
+        axis2: Axis2 = 1,
+        dtype: Any = None,
+        out: None = None,
+    ) -> Array[trace_shape(Shape, Offset, Axis1, Axis2)]: ...
+    @overload
+    def trace(
+        self,
+        offset: int = 0,
+        axis1: int = 0,
+        axis2: int = 1,
+        dtype: Any = None,
+        out: None = None,
     ) -> Array[IntTuple]: ...
