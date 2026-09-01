@@ -70,7 +70,8 @@ from torch._shapes import (
     select_shape,
     size_dim_shape,
     slogdet_shape,
-    split_ir,
+    split_sections_shapes,
+    split_size_shapes,
     squeeze_shape,
     stack_shape,
     tensordot_shape,
@@ -609,19 +610,37 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Narrow tensor along dimension. Shape inference via meta-shape: torch.Tensor.narrow"""
         ...
 
-    @uses_shape_dsl(split_ir)
     @overload
-    def split(
-        self: Tensor, split_size_or_sections: int, dim: int = 0
-    ) -> tuple[Tensor, ...]:
-        """Split tensor into chunks. Shape inference via meta-shape: torch.Tensor.split"""
+    def split[
+        Shape: IntTuple,
+        SplitSize: _Int,
+        Dim: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], split_size_or_sections: SplitSize, dim: Dim = 0
+    ) -> MapIntTuples[lambda S: Tensor[S], split_size_shapes(Shape, SplitSize, Dim)]:
+        """Split tensor into chunks. Shape inference via the type-level DSL."""
         ...
 
+    @overload
+    def split[
+        Shape: IntTuple,
+        Sections: IntTuple,
+        Dim: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], split_size_or_sections: Sections, dim: Dim = 0
+    ) -> MapIntTuples[lambda S: Tensor[S], split_sections_shapes(Shape, Sections, Dim)]:
+        """Split tensor into variable-sized chunks. Shape inference via the type-level DSL."""
+        ...
+
+    # A list is mutable, so V2 cannot preserve its element values; this trailing
+    # overload keeps the documented list spelling checking without shape inference.
+    # TODO(stroxler): Route lists through `split_sections_shapes` once list values
+    # survive to the type level.
     @overload
     def split(
         self: Tensor, split_size_or_sections: list[int], dim: int = 0
     ) -> tuple[Tensor, ...]:
-        """Split tensor into variable-sized chunks. Shape inference via meta-shape: torch.Tensor.split"""
+        """Split tensor into variable-sized chunks. Shape inference unavailable for lists."""
         ...
 
     @uses_shape_dsl(chunk_ir)
@@ -1912,11 +1931,37 @@ def narrow[Shape: IntTuple, Dim: Flag[builtins.int], Length: _Int](
     """Narrow tensor along dimension. Shape inference via meta-shape: torch.narrow"""
     ...
 
-@uses_shape_dsl(split_ir)
+@overload
+def split[
+    Shape: IntTuple,
+    SplitSize: _Int,
+    Dim: Flag[builtins.int],
+](
+    self: Tensor[Shape], split_size_or_sections: SplitSize, dim: Dim = 0
+) -> MapIntTuples[lambda S: Tensor[S], split_size_shapes(Shape, SplitSize, Dim)]:
+    """Split tensor into chunks. Shape inference via the type-level DSL."""
+    ...
+
+@overload
+def split[
+    Shape: IntTuple,
+    Sections: IntTuple,
+    Dim: Flag[builtins.int],
+](
+    self: Tensor[Shape], split_size_or_sections: Sections, dim: Dim = 0
+) -> MapIntTuples[lambda S: Tensor[S], split_sections_shapes(Shape, Sections, Dim)]:
+    """Split tensor into variable-sized chunks. Shape inference via the type-level DSL."""
+    ...
+
+# A list is mutable, so V2 cannot preserve its element values; this trailing
+# overload keeps the documented list spelling checking without shape inference.
+# TODO(stroxler): Route lists through `split_sections_shapes` once list values
+# survive to the type level.
+@overload
 def split(
-    self: Tensor, split_size_or_sections: int, dim: int = 0
+    self: Tensor, split_size_or_sections: list[int], dim: int = 0
 ) -> tuple[Tensor, ...]:
-    """Split tensor into chunks. Shape inference via meta-shape: torch.split"""
+    """Split tensor into variable-sized chunks. Shape inference unavailable for lists."""
     ...
 
 @uses_shape_dsl(chunk_ir)

@@ -691,50 +691,117 @@ def multinomial_shape(shape: IntTuple, num_samples: Int) -> IntTuple:
         return dsl.IntTuple((shape[0], num_samples))
     return dsl.Invalid("multinomial expects 1D or 2D input")
 
-@shape_dsl_function
-def split_ir(
-    self: ShapedArray,
-    split_size_or_sections: int | symint | list[int | symint] | None = None,
-    dim: int = 0,
-) -> list[ShapedArray]:
-    d = normalize_dim(len(self.shape), dim)
-    if isinstance(split_size_or_sections, list):
-        return [
-            ShapedArray(shape=replace_dim(self.shape, d, section))
-            for section in split_size_or_sections
-        ]
-    if isinstance(split_size_or_sections, int):
-        dim_val = self.shape[d]
-        if isinstance(dim_val, int):
-            count = (dim_val + split_size_or_sections - 1) // split_size_or_sections
-            return [
-                ShapedArray(
-                    shape=replace_dim(
-                        self.shape,
-                        d,
-                        split_size_or_sections
-                        if i < count - 1
-                        else dim_val - (count - 1) * split_size_or_sections,
+@type_shape_dsl_function
+def split_sections_shapes(shape: IntTuple, sections: IntTuple, dim: int) -> IntTuples:
+    if not dsl.is_int_value(dim):
+        return dsl.IntTuples.gradual()
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("split dimension out of range")
+    if any(dsl.is_concrete_int(section) and section < 0 for section in sections):
+        return dsl.Invalid("split sections must be non-negative")
+    # The dimension range is settled above, so the axis is normalized once here and
+    # every later use - the extent and each output member - reads that name.
+    if dim < 0:
+        axis = dim + len(shape)
+    else:
+        axis = dim
+    extent = shape[axis]
+    total = dsl.sum(sections)
+    if dsl.is_concrete_int(extent) and dsl.is_concrete_int(total) and extent != total:
+        return dsl.Invalid("split sections must sum to the selected dimension")
+    return dsl.IntTuples(
+        (
+            dsl.IntTuple(
+                (
+                    section if index == axis else shape[index]
+                    for index in range(len(shape))
+                )
+            )
+            for section in sections
+        )
+    )
+
+@type_shape_dsl_function
+def split_size_shapes(shape: IntTuple, split_size: Int, dim: int) -> IntTuples:
+    if not dsl.is_int_value(dim):
+        return dsl.IntTuples.gradual()
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("split dimension out of range")
+    # As in `split_sections_shapes`, the axis is normalized once and every extent read
+    # and output member below refers to that name.
+    if dim < 0:
+        axis = dim + len(shape)
+    else:
+        axis = dim
+    extent = shape[axis]
+    # An empty split axis yields exactly one empty chunk, and two different guards
+    # below reach that same result.
+    empty = dsl.IntTuple(
+        (0 if index == axis else shape[index] for index in range(len(shape)))
+    )
+    # Generator filters carry `is_concrete_int` narrowing into the comparison.
+    sizes = dsl.IntTuple((split_size,))
+    if any(dsl.is_concrete_int(size) and size < 0 for size in sizes):
+        return dsl.Invalid("split size must be non-negative")
+    if any(dsl.is_concrete_int(size) and size == 0 for size in sizes):
+        if dsl.is_concrete_int(extent) and extent != 0:
+            return dsl.Invalid(
+                "split size can only be zero when the selected dimension is zero"
+            )
+        return dsl.IntTuples((empty,))
+    if dsl.is_concrete_int(extent) and extent == 0:
+        return dsl.IntTuples((empty,))
+    if dsl.is_concrete_int(extent) and dsl.is_concrete_int(split_size):
+        count = (extent + split_size - 1) // split_size
+        return dsl.IntTuples(
+            (
+                dsl.IntTuple(
+                    (
+                        (
+                            split_size
+                            if chunk_index != count - 1
+                            else extent - (count - 1) * split_size
+                        )
+                        if index == axis
+                        else shape[index]
+                        for index in range(len(shape))
                     )
                 )
-                for i in range(count)
-            ]
-        return [
-            ShapedArray(shape=replace_dim(self.shape, d, split_size_or_sections)),
-            ...,
-        ]
-    if split_size_or_sections != None:
-        quotient = self.shape[d] // split_size_or_sections
-        if isinstance(quotient, int):
-            return [
-                ShapedArray(shape=replace_dim(self.shape, d, split_size_or_sections))
+                for chunk_index in range(count)
+            )
+        )
+    quotient = extent // split_size
+    # A generator binding lets `is_concrete_int` narrow the computed remainder.
+    remainders = dsl.IntTuple((extent - quotient * split_size,))
+    if any(
+        dsl.is_concrete_int(remainder) and remainder == 0 for remainder in remainders
+    ):
+        return dsl.IntTuples(
+            (
+                dsl.IntTuple(
+                    (
+                        split_size if index == axis else shape[index]
+                        for index in range(len(shape))
+                    )
+                )
                 for _ in range(quotient)
-            ]
-        return [
-            ShapedArray(shape=replace_dim(self.shape, d, split_size_or_sections)),
-            ...,
-        ]
-    return Unknown
+            )
+        )
+    count = (extent + split_size - 1) // split_size
+    # Without a divisibility proof, the split-axis dimension must be gradual
+    # because the final chunk may be smaller than split_size.
+    # TODO(stroxler): Recover precision through divisibility constraints or overloads.
+    return dsl.IntTuples(
+        (
+            dsl.IntTuple(
+                (
+                    dsl.Int.gradual() if index == axis else shape[index]
+                    for index in range(len(shape))
+                )
+            )
+            for _chunk_index in range(count)
+        )
+    )
 
 @shape_dsl_function
 def chunk_ir(self: ShapedArray, chunks: int, dim: int = 0) -> list[ShapedArray]:
