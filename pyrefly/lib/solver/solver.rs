@@ -3528,11 +3528,11 @@ struct SubsetSnapshot {
 }
 
 impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
-    /// Record the state a speculative check must be able to roll back. `vars` are the variables
-    /// the check could bind; state that is not var-specific is captured wholesale.
-    fn take_snapshot(&self, vars: &[Var]) -> SubsetSnapshot {
+    /// Record the state a speculative check must be able to roll back. The caller chooses which
+    /// vars to capture; state that is not var-specific is captured wholesale.
+    fn take_snapshot(&self, vars: VarSnapshot) -> SubsetSnapshot {
         SubsetSnapshot {
-            vars: self.solver.snapshot_vars(vars),
+            vars,
             subset_cache: self.subset_cache.clone(),
             class_protocol_assumptions: self.class_protocol_assumptions.clone(),
             witness_deferred_vars: self.witness_deferred_vars.clone(),
@@ -3567,7 +3567,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             vars.extend(got.collect_maybe_placeholder_vars());
             vars.extend(want.collect_maybe_placeholder_vars());
         }
-        let snapshot = self.take_snapshot(&vars.into_iter().collect::<Vec<_>>());
+        // The vars a branch can bind are enumerable here, so snapshot exactly those.
+        let vars = vars.into_iter().collect::<Vec<_>>();
+        let snapshot = self.take_snapshot(self.solver.snapshot_vars(&vars));
         self.subset_cache.clear();
         let compatible = self.with_active_call_context(CallContext::outside(), |me| {
             constraints
@@ -3741,8 +3743,15 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     /// The answer is deliberately kept, so this runs purely for its error: the type the check would
     /// have solved to must not be committed, and neither may the bindings and cached subset results
     /// it produced along the way. The caller must not hold the `variables` lock.
+    ///
+    /// The check can bind a var reachable only through an existing answer or bound, so rollback
+    /// needs the transitive set. `param`'s restriction is the `want` side, so it is seeded too.
     fn check_restricted_answer(&mut self, got: &Type, v: Var, param: &Quantified) {
-        let snapshot = self.take_snapshot(&got.collect_all_vars());
+        let param_ty = Type::Quantified(Box::new(param.clone()));
+        let snapshot = self.take_snapshot(
+            self.solver
+                .snapshot_for_speculative_inference(&[got, &param_ty]),
+        );
         let (_, error) = self.is_subset_eq_quantified(got, param, None, None, false);
         self.restore_snapshot(snapshot);
         let Some(error) = error else { return };

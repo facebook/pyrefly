@@ -1282,6 +1282,27 @@ def f(x: str) -> None:
  "#,
 );
 
+// The restriction check for a gradual expected type should not itself solve.
+testcase!(
+    test_gradual_expected_type_restriction_check_is_rolled_back,
+    r#"
+from typing import Any, assert_type, overload
+
+class Container[T: list[list[int]]]:
+    @overload
+    def __init__(self, x: T) -> None: ...
+    @overload
+    def __init__(self, x: T, y: int) -> None: ...
+    def __init__(self, x: T, y: int = 0) -> None: ...
+
+def f() -> None:
+    v = []
+    c: Container[Any] = Container(list([v]))
+    assert_type(v, list[Any])
+    v.append("s")
+ "#,
+);
+
 testcase!(
     test_any_bound_attribute_access,
     r#"
