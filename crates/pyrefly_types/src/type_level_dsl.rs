@@ -64,7 +64,6 @@ use crate::map_int_tuples::MapIntTuples;
 use crate::quantified::Quantified;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
-use crate::shaped_array::broadcast_shapes;
 use crate::tuple::Tuple;
 use crate::type_var::FlagDomain;
 use crate::type_var::FlagMember;
@@ -1011,13 +1010,6 @@ pub enum TypeShapeDslReturnKind {
         slot: usize,
         kind: TypeShapeDslSlotReturnKind,
     },
-    /// Return the broadcast of two shape parameters.
-    Broadcast {
-        left_slot: usize,
-        right_slot: usize,
-        left_parameters: Box<[usize]>,
-        right_parameters: Box<[usize]>,
-    },
     /// Evaluate a structurally validated expression in the required result domain.
     Expression(TypeShapeDslDomain),
     /// Return an invalid shape computation with a source-provided message.
@@ -1165,7 +1157,6 @@ impl TypeShapeDslComparisonOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeShapeDslIntrinsic {
     Any,
-    Broadcast,
     Concat,
     Einsum,
     GufuncBroadcast,
@@ -1667,16 +1658,6 @@ impl DslStaticKind {
             Self::IntTuple { parameter_origins } | Self::IntTuples { parameter_origins } => {
                 parameter_origins.clone()
             }
-            _ => None,
-        }
-    }
-
-    fn int_tuple_parameter_origins(&self) -> Option<Box<[usize]>> {
-        match self {
-            Self::UnknownParameters(parameters)
-            | Self::IntTuple {
-                parameter_origins: Some(parameters),
-            } => Some(parameters.clone()),
             _ => None,
         }
     }
@@ -4980,39 +4961,6 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     Self::validate_gradual_call(call)?;
                     TypeShapeDslReturnKind::Gradual(domain)
                 }
-                Some(TypeShapeDslIntrinsic::Broadcast) => {
-                    if call.arguments.args.len() != 2 || !call.arguments.keywords.is_empty() {
-                        return Err(TypeShapeDslDefinitionError {
-                            range: call.arguments.range,
-                            message: "`broadcast` requires exactly two positional arguments",
-                        });
-                    }
-                    let (Expr::Name(_), Expr::Name(_)) =
-                        (&call.arguments.args[0], &call.arguments.args[1])
-                    else {
-                        return Err(TypeShapeDslDefinitionError {
-                            range: call.arguments.range,
-                            message: "`broadcast` arguments must be bare parameter names",
-                        });
-                    };
-                    let left = self.slot(&call.arguments.args[0], flow)?;
-                    let right = self.slot(&call.arguments.args[1], flow)?;
-                    let (Some(left_parameters), Some(right_parameters)) = (
-                        flow.kinds[left].int_tuple_parameter_origins(),
-                        flow.kinds[right].int_tuple_parameter_origins(),
-                    ) else {
-                        return Err(TypeShapeDslDefinitionError {
-                            range: call.arguments.range,
-                            message: "`broadcast` arguments must be IntTuple parameters or immutable aliases of them",
-                        });
-                    };
-                    TypeShapeDslReturnKind::Broadcast {
-                        left_slot: left,
-                        right_slot: right,
-                        left_parameters,
-                        right_parameters,
-                    }
-                }
                 Some(
                     TypeShapeDslIntrinsic::IntTuple
                     | TypeShapeDslIntrinsic::Concat
@@ -5186,7 +5134,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 Some(_) => {
                     return Err(TypeShapeDslDefinitionError {
                         range: return_stmt.range,
-                        message: "return value must be a bare parameter name, gradual return, `broadcast(...)`, `dsl.Invalid(...)`, an Int/IntTuple/IntTuples expression, or a validated DSL helper call",
+                        message: "return value must be a bare parameter name, gradual return, `dsl.Invalid(...)`, an Int/IntTuple/IntTuples expression, or a validated DSL helper call",
                     });
                 }
             },
@@ -5215,7 +5163,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: return_stmt.range,
-                    message: "return value must be a bare parameter name, gradual return, `broadcast(...)`, `dsl.Invalid(...)`, an Int/IntTuple/IntTuples expression, or a validated DSL helper call",
+                    message: "return value must be a bare parameter name, gradual return, `dsl.Invalid(...)`, an Int/IntTuple/IntTuples expression, or a validated DSL helper call",
                 });
             }
         };
@@ -5738,7 +5686,6 @@ pub struct TypeLevelDslCall {
 /// The identity of a type-level DSL operation.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 pub enum TypeLevelDslFunction {
-    Broadcast,
     UserDefined(Arc<ResolvedTypeShapeDslFunction>),
     /// A deferred `shape_extensions.MapIntTuples[<lambda>, <source>]` application.
     MapIntTuples(MapIntTuples),
@@ -5895,7 +5842,7 @@ enum DslControlFlow {
 impl Visit<Type> for TypeLevelDslFunction {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
         match self {
-            Self::Broadcast | Self::UserDefined(_) => {}
+            Self::UserDefined(_) => {}
             Self::MapIntTuples(map) => map.visit(f),
         }
     }
@@ -5904,21 +5851,13 @@ impl Visit<Type> for TypeLevelDslFunction {
 impl VisitMut<Type> for TypeLevelDslFunction {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
         match self {
-            Self::Broadcast | Self::UserDefined(_) => {}
+            Self::UserDefined(_) => {}
             Self::MapIntTuples(map) => map.visit_mut(f),
         }
     }
 }
 
 impl TypeLevelDslCall {
-    /// Constructs a native two-argument broadcast call.
-    pub fn broadcast(args: Vec<Type>) -> Self {
-        Self {
-            function: TypeLevelDslFunction::Broadcast,
-            args,
-        }
-    }
-
     pub fn user_defined(function: Arc<ResolvedTypeShapeDslFunction>, args: Vec<Type>) -> Self {
         assert_eq!(
             args.len(),
@@ -5933,7 +5872,6 @@ impl TypeLevelDslCall {
 
     pub fn function_name(&self) -> &str {
         match &self.function {
-            TypeLevelDslFunction::Broadcast => "broadcast",
             TypeLevelDslFunction::UserDefined(function) => function.name().as_str(),
             TypeLevelDslFunction::MapIntTuples(_) => "MapIntTuples",
         }
@@ -5942,7 +5880,6 @@ impl TypeLevelDslCall {
     /// Returns the shape-DSL result domain, or `None` for a map of arbitrary result types.
     pub fn result_domain(&self) -> Option<TypeShapeDslDomain> {
         match &self.function {
-            TypeLevelDslFunction::Broadcast => Some(TypeShapeDslDomain::IntTuple),
             TypeLevelDslFunction::UserDefined(function) => Some(function.result_domain()),
             TypeLevelDslFunction::MapIntTuples(map) => map.result_domain(),
         }
@@ -5951,7 +5888,6 @@ impl TypeLevelDslCall {
     /// Returns the gradual result for a call whose precise value cannot be determined.
     pub fn fallback(&self) -> Type {
         match &self.function {
-            TypeLevelDslFunction::Broadcast => IntTuple::shapeless().to_shape_arg_type(),
             TypeLevelDslFunction::UserDefined(function) => match function.result_domain() {
                 TypeShapeDslDomain::Int => gradual_size(),
                 TypeShapeDslDomain::IntTuple => IntTuple::shapeless().to_shape_arg_type(),
@@ -5996,15 +5932,6 @@ impl TypeLevelDslCall {
             DslOutcome::Invalid(error) => Err(error),
         };
         match &self.function {
-            TypeLevelDslFunction::Broadcast => {
-                let [left, right] = self.args.as_slice() else {
-                    unreachable!("native broadcast DSL calls are constructed with two arguments");
-                };
-                project(evaluate_broadcast(
-                    &DslValue::from_shape_type(left),
-                    &DslValue::from_shape_type(right),
-                ))
-            }
             TypeLevelDslFunction::UserDefined(function) => project(function.evaluate(&self.args)),
             TypeLevelDslFunction::MapIntTuples(map) => map.evaluate(),
         }
@@ -6112,14 +6039,6 @@ impl ResolvedTypeShapeDslProgram {
                             }
                             DslOutcome::Value(environment.value(slot).clone())
                         }
-                        TypeShapeDslReturnKind::Broadcast {
-                            left_slot,
-                            right_slot,
-                            ..
-                        } => evaluate_broadcast(
-                            environment.value(left_slot),
-                            environment.value(right_slot),
-                        ),
                         TypeShapeDslReturnKind::Expression(_) => {
                             let expression = return_stmt
                                 .value
@@ -7952,19 +7871,6 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 }
             }
         })
-    }
-}
-
-fn evaluate_broadcast(left: &DslValue, right: &DslValue) -> DslOutcome {
-    let (DslValue::Shape(left), DslValue::Shape(right)) = (left, right) else {
-        if matches!(left, DslValue::Unknown) || matches!(right, DslValue::Unknown) {
-            return DslOutcome::Value(DslValue::Unknown);
-        }
-        unreachable!("validated broadcast operands evaluate to shapes")
-    };
-    match broadcast_shapes(left, right) {
-        Ok(shape) => DslOutcome::Value(DslValue::Shape(shape)),
-        Err(error) => DslOutcome::Invalid(error),
     }
 }
 

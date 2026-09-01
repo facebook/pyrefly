@@ -3007,7 +3007,7 @@ def bare_qualified_shape(x: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def nested(x: Int) -> Int:
-    return (official_gradual(),)  # E: return value must be a bare parameter name, gradual return, `broadcast(...)`, `dsl.Invalid(...)`, an Int/IntTuple/IntTuples expression, or a validated DSL helper call  # E: Returned type
+    return (official_gradual(),)  # E: return value must be a bare parameter name, gradual return, `dsl.Invalid(...)`, an Int/IntTuple/IntTuples expression, or a validated DSL helper call  # E: Returned type
 
 @type_shape_dsl_function
 def statement(x: Int) -> Int:
