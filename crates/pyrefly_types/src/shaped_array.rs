@@ -1225,6 +1225,27 @@ pub fn tuple_carrier_to_shape(carrier: &Type) -> Option<IntTuple> {
     }
 }
 
+/// Whether `ty` is a structural `IntTuples` value.
+///
+/// Fixed and unbounded tuples contain `IntTuple` values directly. An unpacked tuple is valid when
+/// its fixed members are `IntTuple` values and its middle is itself an `IntTuples` value; unions
+/// are valid when every alternative has that structure.
+pub fn is_int_tuples_type(ty: &Type) -> bool {
+    let is_member = |member: &Type| IntTuple::from_shape_arg_or_tuple_carrier(member).is_some();
+    match ty {
+        Type::Tuple(Tuple::Concrete(elements)) => elements.iter().all(is_member),
+        Type::Tuple(Tuple::Unbounded(element)) => is_member(element),
+        Type::Tuple(Tuple::Unpacked(parts)) => {
+            let (prefix, middle, suffix) = parts.parts();
+            prefix.iter().chain(suffix).all(is_member) && is_int_tuples_type(middle)
+        }
+        Type::Union(union) => {
+            !union.members.is_empty() && union.members.iter().all(is_int_tuples_type)
+        }
+        _ => false,
+    }
+}
+
 fn recover_unbounded_tuple_carrier_middle(middle: Type) -> Type {
     match middle {
         Type::Tuple(Tuple::Unpacked(unpacked)) => {

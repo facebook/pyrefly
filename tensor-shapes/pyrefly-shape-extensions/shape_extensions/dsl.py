@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import typing
 
-from . import Int as _IntSchema, IntTuple as _IntTupleSchema
+from . import (
+    Int as _IntSchema,
+    IntTuple as _IntTupleSchema,
+    IntTuples as _IntTuplesSchema,
+)
 
 
 def shape_dsl_function(fn: typing.Callable) -> typing.Callable:
@@ -81,6 +85,16 @@ class IntTuple(_IntTupleSchema):
 
     def __new__(cls, values: typing.Iterable[typing.Any]) -> _IntTupleSchema:
         return _IntTupleSchema(values)
+
+    @staticmethod
+    def gradual() -> typing.Any: ...
+
+
+class IntTuples(_IntTuplesSchema):
+    """Operations that produce tuples of `IntTuple` values in the DSL."""
+
+    def __new__(cls, values: tuple[_IntTupleSchema, ...]) -> _IntTuplesSchema:
+        return _IntTuplesSchema(values)
 
     @staticmethod
     def gradual() -> typing.Any: ...

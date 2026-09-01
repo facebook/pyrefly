@@ -703,11 +703,11 @@ testcase!(
 from shape_extensions import Int, IntTuple, type_shape_dsl_function
 
 @type_shape_dsl_function
-def missing_parameter(x) -> Int:  # E: parameter `x` must be annotated as `Int`, `Int | None`, `IntTuple`, or a supported Flag value type
+def missing_parameter(x) -> Int:  # E: parameter `x` must be annotated as `Int`, `Int | None`, `IntTuple`, `IntTuples`, or a supported Flag value type
     return x
 
 @type_shape_dsl_function
-def missing_return(x: Int):  # E: `@type_shape_dsl_function` return must be annotated as `Int` or `IntTuple`
+def missing_return(x: Int):  # E: `@type_shape_dsl_function` return must be annotated as `Int`, `IntTuple`, or `IntTuples`
     return x
 
 @type_shape_dsl_function
@@ -719,7 +719,7 @@ def cross_domain(x: Int) -> IntTuple:
     return x  # E: `@type_shape_dsl_function` return annotation must match returned parameter `x`  # E: Returned type `Int[int]` is not assignable to declared return type `IntTuple`
 
 @type_shape_dsl_function
-def missing_second(x: Int, y) -> Int:  # E: parameter `y` must be annotated as `Int`, `Int | None`, `IntTuple`, or a supported Flag value type
+def missing_second(x: Int, y) -> Int:  # E: parameter `y` must be annotated as `Int`, `Int | None`, `IntTuple`, `IntTuples`, or a supported Flag value type
     return x
 
 @type_shape_dsl_function
@@ -3035,7 +3035,7 @@ def bare_qualified_shape(x: IntTuple) -> IntTuple:
 
 @type_shape_dsl_function
 def nested(x: Int) -> Int:
-    return (official_gradual(),)  # E: return value must be a bare parameter name, gradual return, `broadcast(...)`, `dsl.Invalid(...)`, an Int/IntTuple expression, or a validated DSL helper call  # E: Returned type
+    return (official_gradual(),)  # E: return value must be a bare parameter name, gradual return, `broadcast(...)`, `dsl.Invalid(...)`, an Int/IntTuple/IntTuples expression, or a validated DSL helper call  # E: Returned type
 
 @type_shape_dsl_function
 def statement(x: Int) -> Int:
@@ -12247,5 +12247,108 @@ capture(((2,), ("bad",)))  # E: is not assignable to upper bound `tuple[IntTuple
 capture((2, 3))  # E: is not assignable to upper bound `tuple[IntTuple, ...]`
 
 narrow: Narrow[tuple[IntTuple[3], ...]]  # E: is not assignable to upper bound `tuple[IntTuple[2], ...]`
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_construct_and_return_int_tuples,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+from typing import assert_type
+
+class Shapes[Ts]: ...
+
+@type_shape_dsl_function
+def identity(shapes: IntTuples) -> IntTuples:
+    return shapes
+
+@type_shape_dsl_function
+def pair(left: IntTuple, right: IntTuple) -> IntTuples:
+    return dsl.IntTuples((left, right))
+
+@type_shape_dsl_function
+def local_pair(left: IntTuple, right: IntTuple) -> IntTuples:
+    result = dsl.IntTuples((left, right))
+    return result
+
+@type_shape_dsl_function
+def forward_pair(left: IntTuple, right: IntTuple) -> IntTuples:
+    return pair(left, right)
+
+@type_shape_dsl_function
+def forward_identity(shapes: IntTuples) -> IntTuples:
+    return identity(shapes)
+
+@type_shape_dsl_function
+def gradual(shapes: IntTuples) -> IntTuples:
+    return dsl.IntTuples.gradual()
+
+@type_shape_dsl_function
+def narrow_unpacked(
+    shapes: tuple[IntTuple[2], *tuple[IntTuple[3], ...], IntTuple[4]],
+) -> IntTuples:
+    return shapes
+
+@type_shape_dsl_function
+def union_input(
+    shapes: tuple[IntTuple[2]] | tuple[IntTuple[3], ...],
+) -> IntTuples:
+    return shapes
+
+def identity_result() -> Shapes[identity(tuple[IntTuple[2], IntTuple[3, 4]])]: ...
+def unbounded_identity_result() -> Shapes[identity(tuple[IntTuple[2], ...])]: ...
+def pair_result() -> Shapes[pair(IntTuple[2], IntTuple[3, 4])]: ...
+def local_pair_result() -> Shapes[local_pair(IntTuple[2], IntTuple[3, 4])]: ...
+def forward_pair_result() -> Shapes[forward_pair(IntTuple[2], IntTuple[3, 4])]: ...
+def forward_identity_result() -> Shapes[forward_identity(tuple[IntTuple[2], IntTuple[3, 4]])]: ...
+def gradual_result() -> Shapes[gradual(tuple[IntTuple[2], ...])]: ...
+def narrow_unpacked_result() -> Shapes[
+    narrow_unpacked(tuple[IntTuple[2], IntTuple[3], IntTuple[3], IntTuple[4]])
+]: ...
+def union_input_result() -> Shapes[union_input(tuple[IntTuple[2]])]: ...
+
+assert_type(identity_result(), Shapes[tuple[IntTuple[2], IntTuple[3, 4]]])
+assert_type(unbounded_identity_result(), Shapes[tuple[IntTuple[2], ...]])
+assert_type(pair_result(), Shapes[tuple[IntTuple[2], IntTuple[3, 4]]])
+assert_type(local_pair_result(), Shapes[tuple[IntTuple[2], IntTuple[3, 4]]])
+assert_type(forward_pair_result(), Shapes[tuple[IntTuple[2], IntTuple[3, 4]]])
+assert_type(forward_identity_result(), Shapes[tuple[IntTuple[2], IntTuple[3, 4]]])
+assert_type(gradual_result(), Shapes[tuple[IntTuple, ...]])
+assert_type(
+    narrow_unpacked_result(),
+    Shapes[tuple[IntTuple[2], IntTuple[3], IntTuple[3], IntTuple[4]]],
+)
+assert_type(union_input_result(), Shapes[tuple[IntTuple[2]]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_invalid_int_tuples_construction,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, IntTuples, type_shape_dsl_function
+
+@type_shape_dsl_function
+def list_argument(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples([shape])  # E: `dsl.IntTuples` argument must be a fixed tuple  # E: is not assignable to parameter `values`
+
+@type_shape_dsl_function
+def wrong_element(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples((shape[0],))  # E: is not assignable to parameter `values`  # E: IntTuple shape expression subscripts must use slice syntax
+
+@type_shape_dsl_function
+def missing(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples()  # E: `dsl.IntTuples` requires exactly one positional argument  # E: Missing argument `values`
+
+@type_shape_dsl_function
+def extra(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples((shape,), (shape,))  # E: `dsl.IntTuples` requires exactly one positional argument  # E: Expected 1 positional argument
+
+@type_shape_dsl_function
+def wrong_result(shape: IntTuple) -> Int:
+    return dsl.IntTuples((shape,))  # E: returned expression requires a result in the `IntTuples` domain  # E: Returned type
 "#,
 );

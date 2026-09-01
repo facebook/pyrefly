@@ -16,6 +16,7 @@ use pyrefly_types::dimension::is_optional_int_bound_type_var;
 use pyrefly_types::function::FuncDefId;
 use pyrefly_types::function::FunctionKind;
 use pyrefly_types::quantified::QuantifiedKind;
+use pyrefly_types::shaped_array::is_int_tuples_type;
 use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_types::type_level_dsl::ResolvedTypeShapeDslFunction;
 use pyrefly_types::type_level_dsl::StructurallyValidatedTypeShapeDslFunction;
@@ -345,7 +346,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     dsl.parameter_annotation_range(index),
                     ErrorKind::InvalidArgument,
                     format!(
-                        "`@type_shape_dsl_function` parameter `{}` must be annotated as `Int`, `Int | None`, `IntTuple`, or a supported Flag value type (`int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these)",
+                        "`@type_shape_dsl_function` parameter `{}` must be annotated as `Int`, `Int | None`, `IntTuple`, `IntTuples`, or a supported Flag value type (`int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these)",
                         dsl.parameter_name(index)
                     ),
                 );
@@ -365,10 +366,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 dsl.return_annotation_range(),
                 ErrorKind::InvalidArgument,
                 if flag_value {
-                    "`@type_shape_dsl_function` Flag values are input-only; return must be annotated as `Int` or `IntTuple`"
+                    "`@type_shape_dsl_function` Flag values are input-only; return must be annotated as `Int`, `IntTuple`, or `IntTuples`"
                         .to_owned()
                 } else {
-                    "`@type_shape_dsl_function` return must be annotated as `Int` or `IntTuple`"
+                    "`@type_shape_dsl_function` return must be annotated as `Int`, `IntTuple`, or `IntTuples`"
                         .to_owned()
                 },
             );
@@ -637,6 +638,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslExpressionKind::IntTupleSlice
                     | TypeShapeDslExpressionKind::IntTupleConcat
                     | TypeShapeDslExpressionKind::IntTupleConstructor
+                    | TypeShapeDslExpressionKind::IntTuplesConstructor
                     | TypeShapeDslExpressionKind::IntTupleProduct
                     | TypeShapeDslExpressionKind::DimensionSlot { .. }
                     | TypeShapeDslExpressionKind::IntegerSlot { .. }
@@ -869,6 +871,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return Some(TypeShapeDslIntrinsic::IntTuple);
         }
         if let Type::ClassDef(class) = &callee
+            && class.qname().module_name().as_str() == "shape_extensions.dsl"
+            && class.qname().id().as_str() == "IntTuples"
+        {
+            return Some(TypeShapeDslIntrinsic::IntTuples);
+        }
+        if let Type::ClassDef(class) = &callee
             && class.qname().module_name().as_str() == "builtins"
             && class.qname().id().as_str() == "range"
         {
@@ -927,6 +935,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Some(TypeShapeDslIntrinsic::Gradual(TypeShapeDslDomain::Int))
         } else if class.has_toplevel_qname("shape_extensions.dsl", "IntTuple") {
             Some(TypeShapeDslIntrinsic::Gradual(TypeShapeDslDomain::IntTuple))
+        } else if class.has_toplevel_qname("shape_extensions.dsl", "IntTuples") {
+            Some(TypeShapeDslIntrinsic::Gradual(
+                TypeShapeDslDomain::IntTuples,
+            ))
         } else {
             None
         }
@@ -1148,9 +1160,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                 }
             }
-            TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple) => {
-                self.expr_untype(arg, type_form_context, errors)
-            }
+            TypeShapeDslInputDomain::Value(
+                TypeShapeDslDomain::IntTuple | TypeShapeDslDomain::IntTuples,
+            ) => self.expr_untype(arg, type_form_context, errors),
             TypeShapeDslInputDomain::Flag(_) => match arg {
                 Expr::NumberLiteral(_) | Expr::BooleanLiteral(_) | Expr::StringLiteral(_) => {
                     self.expr_infer(arg, errors)
@@ -1245,6 +1257,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    fn is_int_tuples_dsl_argument(&self, ty: &Type) -> bool {
+        let restriction = match ty {
+            Type::Any(style) => return *style != AnyStyle::Error,
+            Type::Tuple(_) | Type::Union(_) if is_int_tuples_type(ty) => return true,
+            Type::TypeLevelDslCall(call) => {
+                return call.result_domain() == TypeShapeDslDomain::IntTuples;
+            }
+            Type::Quantified(q) if q.kind == QuantifiedKind::TypeVar => &q.restriction,
+            Type::TypeVar(type_var) => type_var.restriction(),
+            _ => return false,
+        };
+        match restriction {
+            Restriction::Bound(bound) => is_int_tuples_type(bound),
+            Restriction::Constraints(constraints) => {
+                !constraints.is_empty() && constraints.iter().all(is_int_tuples_type)
+            }
+            Restriction::Flag(_) | Restriction::Unrestricted => false,
+        }
+    }
+
     fn is_type_shape_dsl_argument(&self, ty: &Type, domain: TypeShapeDslInputDomain) -> bool {
         match domain {
             TypeShapeDslInputDomain::Value(TypeShapeDslDomain::Int) => match ty {
@@ -1256,6 +1288,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             },
             TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuple) => {
                 self.is_int_tuple_dsl_argument(ty)
+            }
+            TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuples) => {
+                self.is_int_tuples_dsl_argument(ty)
             }
             TypeShapeDslInputDomain::OptionalInt => match ty {
                 Type::None => true,
@@ -1285,6 +1320,9 @@ fn type_shape_dsl_domain(ty: &Type) -> Option<TypeShapeDslDomain> {
     match ty {
         Type::Int(_) => Some(TypeShapeDslDomain::Int),
         Type::IntTuple(_) => Some(TypeShapeDslDomain::IntTuple),
+        Type::Tuple(_) | Type::Union(_) if is_int_tuples_type(ty) => {
+            Some(TypeShapeDslDomain::IntTuples)
+        }
         _ => None,
     }
 }

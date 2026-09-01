@@ -102,7 +102,7 @@ class IntTuple:
 
 
 class IntTuples:
-    """An immutable tuple whose elements are `IntTuple` values."""
+    """A tuple whose elements are `IntTuple` values."""
 
     def __new__(cls, iterable=()):
         return tuple(iterable)
