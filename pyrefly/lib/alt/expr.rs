@@ -3423,8 +3423,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 {
                     self.proxy_method_subscript_infer(cls, xs, range, errors)
                 }
-                Type::ClassDef(ref cls)
-                    if cls.has_toplevel_qname("shape_extensions", "MapIntTuples") =>
+                Type::ClassDef(ref cls) if self.is_map_int_tuples_class(cls) =>
                 {
                     // Normal class subscripts are generic specializations. This experimental
                     // shape extension instead reduces its type lambda eagerly, leaving an

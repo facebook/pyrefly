@@ -5,11 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Internal support for the experimental `shape_extensions.MapIntTuples` operation.
+//! The experimental `shape_extensions.MapIntTuples` type operator.
 //!
-//! `MapIntTuples` eagerly applies a type-level function to every `IntTuple` in a tuple. Mapping
-//! produces an ordinary tuple type immediately, so the type system does not need a persistent
-//! representation for either the function or the mapped result.
+//! `MapIntTuples[lambda S: F[S], Shapes]` applies a type-level function to every `IntTuple` in the
+//! tuple-like `IntTuples` value `Shapes`. It is motivated by shape-DSL functions such as `cat` and
+//! `stack`, whose inputs or results contain a variable number of tensor shapes, but the operator
+//! is a distinct type-system construct rather than part of the DSL evaluator itself.
+//!
+//! Concrete sources reduce eagerly to ordinary tuple types. The underlying idea is more general:
+//! a future operator could map suitable type-level functions over other tuple element domains.
+//! This implementation deliberately supports only `IntTuple` elements needed by the shape DSL.
 
 use pyrefly_python::module_name::ModuleName;
 use ruff_python_ast::Identifier;

@@ -25,11 +25,17 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::solve::TypeFormContext;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
+use crate::types::class::Class;
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn resolve_map_int_tuples_mapper_parameter(&self, name: &Identifier) -> Type {
         let binder = map_int_tuples_mapper_binder(self.module().name(), name);
         self.heap.mk_type_of(binder.to_type(self.heap))
+    }
+
+    /// Whether this class is the experimental `shape_extensions.MapIntTuples` operation.
+    pub(crate) fn is_map_int_tuples_class(&self, cls: &Class) -> bool {
+        cls.has_toplevel_qname("shape_extensions", "MapIntTuples")
     }
 
     /// Whether this type is the unsubscripted runtime shim for experimental `MapIntTuples`.
@@ -38,9 +44,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ty,
             Type::ClassType(cls)
                 if cls.targs().is_empty()
-                    && cls
-                    .class_object()
-                    .has_toplevel_qname("shape_extensions", "MapIntTuples")
+                    && self.is_map_int_tuples_class(cls.class_object())
         )
     }
 
