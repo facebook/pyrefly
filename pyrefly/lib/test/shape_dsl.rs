@@ -12665,6 +12665,175 @@ def check[Rank: Flag[int], Keep: Flag[bool]](rank: Rank, keep: Keep) -> None:
 );
 
 testcase!(
+    test_type_shape_dsl_int_tuples_dimension_ranges,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, IntTuples, type_shape_dsl_function
+from typing import assert_type
+
+class Shapes[Value: IntTuples]: ...
+
+@type_shape_dsl_function
+def one(stop: Int) -> IntTuples:
+    return dsl.IntTuples(dsl.IntTuple((7, index + 1)) for index in range(stop))
+
+@type_shape_dsl_function
+def two(start: Int, stop: Int) -> IntTuples:
+    return dsl.IntTuples(dsl.IntTuple((index, 9)) for index in range(start, stop))
+
+@type_shape_dsl_function
+def three(start: Int, stop: Int, step: Int) -> IntTuples:
+    return dsl.IntTuples(dsl.IntTuple((5, index)) for index in range(start, stop, step))
+
+@type_shape_dsl_function
+def negative(start: Int, offset: Int, step: Int) -> IntTuples:
+    return dsl.IntTuples(
+        dsl.IntTuple((11, index))
+        for index in range(start, start - offset, step - step - step)
+    )
+
+@type_shape_dsl_function
+def zero_step_value(start: Int, stop: Int) -> IntTuples:
+    return dsl.IntTuples(
+        dsl.IntTuple((11, index)) for index in range(start, stop, start - start)
+    )
+
+@type_shape_dsl_function
+def local(stop: Int) -> IntTuples:
+    count = stop + 1
+    alias = count
+    return dsl.IntTuples(dsl.IntTuple((13, index + 1)) for index in range(alias))
+
+@type_shape_dsl_function
+def shared_local(stop: Int) -> IntTuples:
+    count = stop + 1
+    return dsl.IntTuples(
+        dsl.IntTuple((14, index + 1)) for index in range(count, count + count)
+    )
+
+@type_shape_dsl_function
+def optional(stop: Int | None) -> IntTuples:
+    if stop is None:
+        return dsl.IntTuples(())
+    return dsl.IntTuples(dsl.IntTuple((17, index + 1)) for index in range(stop))
+
+@type_shape_dsl_function
+def indexed(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples(dsl.IntTuple((19, index + 1)) for index in range(shape[0]))
+
+@type_shape_dsl_function
+def product(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples(dsl.IntTuple((23, index + 1)) for index in range(dsl.prod(shape)))
+
+@type_shape_dsl_function
+def summed(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples(dsl.IntTuple((29, index + 1)) for index in range(dsl.sum(shape)))
+
+@type_shape_dsl_function
+def rank(shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples(dsl.IntTuple((31, index + 1)) for index in range(len(shape)))
+
+@type_shape_dsl_function
+def shape_count(shapes: IntTuples) -> IntTuples:
+    return dsl.IntTuples(dsl.IntTuple((33, index + 1)) for index in range(len(shapes)))
+
+@type_shape_dsl_function
+def gradual(_shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples(
+        dsl.IntTuple((37, index + 1)) for index in range(dsl.Int.gradual())
+    )
+
+def exact_one() -> Shapes[one(Int[3])]: ...
+def exact_two() -> Shapes[two(Int[2], Int[5])]: ...
+def exact_empty() -> Shapes[two(Int[5], Int[2])]: ...
+def exact_three() -> Shapes[three(Int[1], Int[6], Int[2])]: ...
+def exact_negative() -> Shapes[negative(Int[5], Int[5], Int[2])]: ...
+def zero_step() -> Shapes[zero_step_value(Int[1], Int[6])]: ...
+def local_result() -> Shapes[local(Int[2])]: ...
+def shared_local_result() -> Shapes[shared_local(Int[2])]: ...
+def optional_none() -> Shapes[optional(None)]: ...
+def optional_int() -> Shapes[optional(Int[2])]: ...
+def indexed_result() -> Shapes[indexed(IntTuple[2, 9])]: ...
+def product_result() -> Shapes[product(IntTuple[2, 2])]: ...
+def sum_result() -> Shapes[summed(IntTuple[2, 1])]: ...
+def rank_result() -> Shapes[rank(IntTuple[2, 3])]: ...
+def shape_count_result() -> Shapes[shape_count(tuple[IntTuple[2], IntTuple[3, 4]])]: ...
+def gradual_result() -> Shapes[gradual(IntTuple[1])]: ...
+def symbolic_result[N: Int](stop: N) -> Shapes[one(N)]: ...
+
+assert_type(exact_one(), Shapes[tuple[IntTuple[7, 1], IntTuple[7, 2], IntTuple[7, 3]]])
+assert_type(exact_two(), Shapes[tuple[IntTuple[2, 9], IntTuple[3, 9], IntTuple[4, 9]]])
+assert_type(exact_empty(), Shapes[tuple[()]])
+assert_type(exact_three(), Shapes[tuple[IntTuple[5, 1], IntTuple[5, 3], IntTuple[5, 5]]])
+assert_type(exact_negative(), Shapes[tuple[IntTuple[11, 5], IntTuple[11, 3], IntTuple[11, 1]]])
+zero_step()  # E: range() arg 3 must not be zero
+assert_type(local_result(), Shapes[tuple[IntTuple[13, 1], IntTuple[13, 2], IntTuple[13, 3]]])
+assert_type(
+    shared_local_result(),
+    Shapes[tuple[IntTuple[14, 4], IntTuple[14, 5], IntTuple[14, 6]]],
+)
+assert_type(optional_none(), Shapes[tuple[()]])
+assert_type(optional_int(), Shapes[tuple[IntTuple[17, 1], IntTuple[17, 2]]])
+assert_type(indexed_result(), Shapes[tuple[IntTuple[19, 1], IntTuple[19, 2]]])
+assert_type(
+    product_result(),
+    Shapes[tuple[IntTuple[23, 1], IntTuple[23, 2], IntTuple[23, 3], IntTuple[23, 4]]],
+)
+assert_type(sum_result(), Shapes[tuple[IntTuple[29, 1], IntTuple[29, 2], IntTuple[29, 3]]])
+assert_type(rank_result(), Shapes[tuple[IntTuple[31, 1], IntTuple[31, 2]]])
+assert_type(shape_count_result(), Shapes[tuple[IntTuple[33, 1], IntTuple[33, 2]]])
+assert_type(gradual_result(), Shapes[tuple[IntTuple[37, int], ...]])
+
+def check_symbolic[N: Int](stop: N) -> None:
+    assert_type(symbolic_result(stop), Shapes[tuple[IntTuple[7, int], ...]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_dimension_ranges_are_int_tuples_only,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, IntTuples, type_shape_dsl_function
+
+@type_shape_dsl_function
+def int_tuple_generator(stop: Int) -> IntTuple:
+    return dsl.IntTuple(
+        (index for index in range(stop))  # E: Flag operation requires a compatible Flag parameter
+    )
+
+@type_shape_dsl_function
+def flag_generator(stop: Int) -> IntTuple:
+    values = tuple(
+        index for index in range(stop)  # E: Flag operation requires a compatible Flag parameter
+    )
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def condition_generator(stop: Int) -> IntTuple:
+    if any(index == 0 for index in range(stop)):  # E: Flag operation requires a compatible Flag parameter
+        return dsl.IntTuple((1,))
+    return dsl.IntTuple(())
+
+@type_shape_dsl_function
+def zip_lane(stop: Int, shape: IntTuple) -> IntTuples:
+    return dsl.IntTuples(
+        dsl.IntTuple((index, dimension))
+        for index, dimension in zip(
+            range(stop),  # E: Flag operation requires a compatible Flag parameter
+            shape,
+        )
+    )
+
+@type_shape_dsl_function
+def indirect(stop: Int) -> IntTuples:
+    values = range(stop)  # E: Flag operation requires a compatible Flag parameter
+    return dsl.IntTuples(dsl.IntTuple((index,)) for index in values)
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_invalid_int_tuples_construction,
     shape_dsl_base_env(),
     r#"

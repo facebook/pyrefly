@@ -1253,7 +1253,7 @@ pub enum TypeShapeDslExpressionKind {
     FlagBool(bool),
     FlagNone,
     FlagTuple,
-    FlagRange,
+    Range(DslIntegerDomain),
     FlagSequenceLength,
     FlagSequenceCount,
     FlagSequenceIndex,
@@ -2175,15 +2175,12 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     match kind {
                         DslStaticKind::ValueSet {
                             sources: value_sources,
-                            kinds: FLAG_INT,
+                            kinds,
                         } => {
-                            if !value_sources.non_parameter_values_are(FLAG_INT) {
-                                return false;
-                            }
                             for use_ in &value_sources.parameter_uses {
                                 record_parameter_use(&mut sources.parameter_uses, *use_);
                             }
-                            true
+                            *kinds == FLAG_INT && value_sources.non_parameter_values_are(FLAG_INT)
                         }
                         DslStaticKind::DeferredInteger(index) => {
                             let root = self.deferred_integer_root(*index);
@@ -2289,9 +2286,6 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         expression: &Expr,
         flow: &DslValidationFlow,
     ) -> bool {
-        let Some(parameter_domains) = self.parameter_domains else {
-            return false;
-        };
         let mut sources = DslIntegerExpressionSources::default();
         self.collect_integer_expression_sources(
             expression,
@@ -2300,9 +2294,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             &mut HashSet::new(),
         );
         sources.has_shape_source
-            || sources.parameter_uses.iter().any(|use_| {
-                parameter_domains[use_.parameter]
-                    .can_use_as(TypeShapeDslDomain::Int, use_.narrowing)
+            || self.parameter_domains.is_some_and(|parameter_domains| {
+                sources.parameter_uses.iter().any(|use_| {
+                    parameter_domains[use_.parameter]
+                        .can_use_as(TypeShapeDslDomain::Int, use_.narrowing)
+                })
             })
     }
 
@@ -3017,20 +3013,13 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             Expr::Call(call)
                 if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Range) =>
             {
-                if !(1..=3).contains(&call.arguments.args.len())
-                    || !call.arguments.keywords.is_empty()
-                {
-                    return Err(TypeShapeDslDefinitionError {
-                        range: call.arguments.range,
-                        message: "`range` requires one to three positional arguments",
-                    });
-                }
+                Self::validate_range_structure(call)?;
                 for argument in &call.arguments.args {
                     self.validate_flag_int(argument, flow)?;
                 }
                 self.expressions.push(TypeShapeDslExpression {
                     range: call.range(),
-                    kind: TypeShapeDslExpressionKind::FlagRange,
+                    kind: TypeShapeDslExpressionKind::Range(DslIntegerDomain::Flag),
                 });
                 Ok(())
             }
@@ -3064,12 +3053,24 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         }
     }
 
+    fn validate_range_structure(call: &ExprCall) -> Result<(), TypeShapeDslDefinitionError> {
+        if (1..=3).contains(&call.arguments.args.len()) && call.arguments.keywords.is_empty() {
+            Ok(())
+        } else {
+            Err(TypeShapeDslDefinitionError {
+                range: call.arguments.range,
+                message: "`range` requires one to three positional arguments",
+            })
+        }
+    }
+
     fn validate_generator_source(
         &mut self,
         source: &Expr,
         flow: &DslValidationFlow,
         allow_zip: bool,
         allow_int_tuples: bool,
+        allow_dimension_range: bool,
     ) -> Result<TypeShapeDslGeneratorSource, TypeShapeDslDefinitionError> {
         if let Expr::Name(_) = source {
             let slot = self.slot(source, flow)?;
@@ -3156,6 +3157,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                             flow,
                             false,
                             allow_int_tuples,
+                            false,
                         )?;
                         match source {
                             TypeShapeDslGeneratorSource::Single(kind) => Ok(kind),
@@ -3199,6 +3201,37 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         parameter_origins: None,
                     },
                 ))
+            }
+            Expr::Call(call)
+                if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Range) =>
+            {
+                Self::validate_range_structure(call)?;
+                let has_dimension_bound = call
+                    .arguments
+                    .args
+                    .iter()
+                    .any(|argument| self.integer_expression_has_shape_source(argument, flow));
+                if allow_dimension_range
+                    && (self.parameter_domains.is_none() || has_dimension_bound)
+                {
+                    for argument in &call.arguments.args {
+                        self.validate_dimension(argument, flow)?;
+                    }
+                    self.expressions.push(TypeShapeDslExpression {
+                        range: call.range(),
+                        kind: TypeShapeDslExpressionKind::Range(DslIntegerDomain::Dimension),
+                    });
+                    Ok(TypeShapeDslGeneratorSource::Single(
+                        DslStaticKind::Dimension,
+                    ))
+                } else {
+                    self.validate_flag_sequence(source, flow)?;
+                    Ok(TypeShapeDslGeneratorSource::Single(
+                        DslStaticKind::GeneratorElement {
+                            source_parameter_uses: None,
+                        },
+                    ))
+                }
             }
             Expr::Call(call)
                 if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Tuple)
@@ -3286,6 +3319,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             flow,
             kind != GeneratorValidationKind::Condition,
             kind != GeneratorValidationKind::Condition,
+            kind == GeneratorValidationKind::IntTuple,
         )?;
         let (targets, element_kinds) = match (source, &comprehension.target) {
             (TypeShapeDslGeneratorSource::Single(kind), Expr::Name(target)) => {
@@ -6915,23 +6949,35 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     DslOutcome::Value(DslValue::FlagSequence(DslFlagSequence::Values(values)))
                 }
             }
-            TypeShapeDslExpressionKind::FlagRange => {
+            TypeShapeDslExpressionKind::Range(domain) => {
                 let Expr::Call(call) = expression else {
                     unreachable!("validated range expression is a call")
                 };
                 let mut values = Vec::with_capacity(call.arguments.args.len());
                 for argument in &call.arguments.args {
-                    match self.evaluate_expression(argument, environment, budget) {
-                        DslOutcome::Value(DslValue::FlagInt(value)) => values.push(Some(value)),
-                        DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown) => {
-                            values.push(None)
-                        }
-                        DslOutcome::ExplicitGradual => {
+                    match (
+                        domain,
+                        self.evaluate_expression(argument, environment, budget),
+                    ) {
+                        (DslIntegerDomain::Flag, DslOutcome::Value(DslValue::FlagInt(value)))
+                        | (
+                            DslIntegerDomain::Dimension,
+                            DslOutcome::Value(DslValue::Dimension(Int::Literal(value))),
+                        ) => values.push(Some(value)),
+                        (
+                            DslIntegerDomain::Flag,
+                            DslOutcome::Value(DslValue::GradualInt | DslValue::Unknown),
+                        )
+                        | (
+                            DslIntegerDomain::Dimension,
+                            DslOutcome::Value(DslValue::Dimension(_) | DslValue::Unknown),
+                        ) => values.push(None),
+                        (_, DslOutcome::ExplicitGradual) => {
                             unreachable!("validated value expression cannot return gradual")
                         }
-                        invalid @ DslOutcome::Invalid(_) => return invalid,
-                        DslOutcome::Value(_) => {
-                            unreachable!("validated range arguments are Flag integers")
+                        (_, invalid @ DslOutcome::Invalid(_)) => return invalid,
+                        (domain, DslOutcome::Value(_)) => {
+                            unreachable!("validated {domain:?} range arguments are integers")
                         }
                     }
                 }
@@ -8189,8 +8235,32 @@ fn common_int_tuple_member(shapes: &[IntTuple]) -> IntTuple {
 
 #[cfg(test)]
 mod tests {
+    use ruff_python_ast::AtomicNodeIndex;
+    use ruff_python_ast::ExprBinOp;
+    use ruff_python_ast::ExprContext;
+    use ruff_python_ast::ExprName;
+
     use super::*;
     use crate::types::Var;
+
+    fn test_name(name: &str) -> Expr {
+        Expr::Name(ExprName {
+            node_index: AtomicNodeIndex::default(),
+            range: TextRange::default(),
+            id: Name::new(name),
+            ctx: ExprContext::Load,
+        })
+    }
+
+    fn test_add(left: Expr, right: Expr) -> Expr {
+        Expr::BinOp(ExprBinOp {
+            node_index: AtomicNodeIndex::default(),
+            range: TextRange::default(),
+            left: Box::new(left),
+            op: Operator::Add,
+            right: Box::new(right),
+        })
+    }
 
     #[test]
     fn optional_int_lowering_preserves_dimension_values() {
@@ -8216,6 +8286,49 @@ mod tests {
             lower_parameter(&Type::any_error(), TypeShapeDslInputDomain::OptionalInt),
             DslValue::Unknown
         ));
+    }
+
+    #[test]
+    fn shape_source_collection_handles_shared_cycles() {
+        let parameters = Parameters::default();
+        let domains = [];
+        let intrinsic = |_: &Expr| None;
+        let (mut validator, _) = DslValidator::new(&parameters, &intrinsic, Some(&domains), None);
+        validator.slots.insert(Name::new_static("base"), 0);
+        validator.slots.insert(Name::new_static("left"), 1);
+        validator.slots.insert(Name::new_static("right"), 2);
+        let flow = DslValidationFlow {
+            assigned: vec![true; 3],
+            maybe_assigned: vec![true; 3],
+            kinds: vec![
+                DslStaticKind::Dimension,
+                DslStaticKind::DeferredInteger(0),
+                DslStaticKind::DeferredInteger(1),
+            ],
+            reachable: true,
+        };
+        validator.deferred_integers = vec![
+            DeferredInteger {
+                expression: test_add(test_name("base"), test_name("right")),
+                flow: flow.clone(),
+                state: DeferredIntegerState::UnresolvedRoot {
+                    default_domain: DslIntegerDomain::Dimension,
+                    dependencies: Vec::new(),
+                },
+                validated: false,
+            },
+            DeferredInteger {
+                expression: test_add(test_name("left"), test_name("left")),
+                flow: flow.clone(),
+                state: DeferredIntegerState::UnresolvedRoot {
+                    default_domain: DslIntegerDomain::Dimension,
+                    dependencies: Vec::new(),
+                },
+                validated: false,
+            },
+        ];
+
+        assert!(validator.integer_expression_has_shape_source(&test_name("right"), &flow));
     }
 
     #[test]

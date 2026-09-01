@@ -711,7 +711,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslExpressionKind::FlagBool(_)
                     | TypeShapeDslExpressionKind::FlagNone
                     | TypeShapeDslExpressionKind::FlagTuple
-                    | TypeShapeDslExpressionKind::FlagRange
+                    | TypeShapeDslExpressionKind::Range(_)
                     | TypeShapeDslExpressionKind::FlagSequenceLength
                     | TypeShapeDslExpressionKind::FlagSequenceCount
                     | TypeShapeDslExpressionKind::FlagSequenceIndex
