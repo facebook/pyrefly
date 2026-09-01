@@ -5,4 +5,4 @@
 
 from jax._array import Array as Array
 
-from . import nn as nn, numpy as numpy
+from . import lax as lax, nn as nn, numpy as numpy
