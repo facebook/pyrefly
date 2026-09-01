@@ -14,7 +14,7 @@ extend that legacy path.
 
 import builtins
 from collections.abc import Sequence
-from typing import Any, overload, Self, TYPE_CHECKING
+from typing import Any, overload, Self, TYPE_CHECKING, Unpack
 
 import shape_extensions
 from shape_extensions import (
@@ -48,7 +48,7 @@ from torch._shapes import (
     diag_embed_shape,
     dim_shape,
     eig_shape,
-    einsum_ir,
+    einsum_shape,
     expand_shape,
     flatten_shape,
     index_select_shape,
@@ -2597,9 +2597,10 @@ def tensordot(self: Tensor, other: Tensor, dims: tuple[list[int], list[int]]) ->
     """
     ...
 
-@uses_shape_dsl(einsum_ir)
-def einsum(spec: str, *operands: Tensor) -> Tensor:
-    """Einstein summation convention. Shape inference via meta-shape: torch.einsum"""
+def einsum[Spec: Flag[str], Shapes: IntTuples](
+    spec: Spec, *operands: Unpack[MapIntTuples[lambda S: Tensor[S], Shapes]]
+) -> Tensor[einsum_shape(Spec, Shapes)]:
+    """Einstein summation convention. Shape inference via type-level DSL."""
     ...
 
 # Eigenvalue decomposition
