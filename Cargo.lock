@@ -2270,6 +2270,7 @@ dependencies = [
  "paste",
  "percent-encoding",
  "pretty_assertions",
+ "pyrefly_bench_harness",
  "pyrefly_build",
  "pyrefly_bundled",
  "pyrefly_config",
@@ -2305,6 +2306,15 @@ dependencies = [
  "web-time",
  "xxhash-rust",
  "yansi",
+]
+
+[[package]]
+name = "pyrefly_bench_harness"
+version = "1.3.0-dev.3"
+dependencies = [
+ "pyrefly",
+ "pyrefly_config",
+ "pyrefly_util",
 ]
 
 [[package]]
