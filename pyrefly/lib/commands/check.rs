@@ -1530,6 +1530,11 @@ impl CheckArgs {
         self.output.has_custom_options() || self.behavior.has_custom_options()
     }
 
+    /// Return the output format selected directly by the client, or the built-in default.
+    pub fn output_format(&self) -> OutputFormat {
+        self.output.output_format.unwrap_or_default()
+    }
+
     /// Return the minimum severity selected directly by the client, or the built-in default.
     pub fn min_severity(&self) -> Severity {
         self.output.min_severity.unwrap_or(Severity::Error)
