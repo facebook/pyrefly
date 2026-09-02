@@ -135,7 +135,7 @@ def test_binary_rejects_incompatible_dimensions() -> None:
 
     assert_shape(lax.add(a, jnp.ones((2, 3))), (2, 3))
     try:
-        # E: Cannot evaluate type-level shape DSL call: incompatible shapes for broadcasting
+        # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[3] with dimension Int[4] at position 1
         lax.add(a, b)
     except TypeError:
         pass
@@ -258,7 +258,7 @@ def test_lax_linalg_shape_errors() -> None:
     )
 
     try:
-        # E: Cannot evaluate type-level shape DSL call: leading core dimensions of a_matrix and c_matrix must match
+        # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'm' has conflicting extents 2 and 3
         lax.linalg.symmetric_product(jnp.ones((2, 3)), jnp.ones((3, 3)))
     except ValueError:
         pass
@@ -266,7 +266,7 @@ def test_lax_linalg_shape_errors() -> None:
         raise AssertionError("expected ValueError")
 
     try:
-        # E: Cannot evaluate type-level shape DSL call: c_matrix must be square
+        # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'm' has conflicting extents 2 and 4
         lax.linalg.symmetric_product(jnp.ones((2, 3)), jnp.ones((2, 4)))
     except ValueError:
         pass
@@ -274,7 +274,7 @@ def test_lax_linalg_shape_errors() -> None:
         raise AssertionError("expected ValueError")
 
     try:
-        # E: Cannot evaluate type-level shape DSL call: incompatible shapes for triangular_solve
+        # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'm' has conflicting extents 2 and 3
         lax.linalg.triangular_solve(jnp.ones((2, 2)), jnp.ones((3, 3)), left_side=True)
     except ValueError:
         pass
@@ -282,7 +282,7 @@ def test_lax_linalg_shape_errors() -> None:
         raise AssertionError("expected ValueError")
 
     try:
-        # E: Cannot evaluate type-level shape DSL call: r_matrix must be square
+        # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 2 and 3
         lax.linalg.cholesky_update(jnp.ones((2, 3)), jnp.ones(2))
     except (TypeError, ValueError):
         pass
