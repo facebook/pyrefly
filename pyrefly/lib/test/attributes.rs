@@ -2951,8 +2951,8 @@ class A:
     def __init__(self):
         self.val = "string"
 def f(a: A):
-    assert_type(a.val, Literal[1, 'string'])
-    assert_type(A.val, Literal['string', 1])
+    assert_type(a.val, int | str)
+    assert_type(A.val, int | str)
 
 class B:
     def __init__(self):
@@ -2961,8 +2961,8 @@ class B:
         cls.val = 1
         return super().__new__(cls)
 def g(b: B):
-    assert_type(b.val, Literal['string', 1])
-    assert_type(B.val, Literal['string', 1])
+    assert_type(b.val, int | str)
+    assert_type(B.val, int | str)
     "#,
 );
 

@@ -1990,7 +1990,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             (value_ty, None)
         } else {
             let mut has_implicit_literal = value_ty.is_implicit_literal();
-            if !has_implicit_literal && matches!(initialization, ClassFieldInitialization::Method) {
+            if !has_implicit_literal
+                && matches!(
+                    initialization,
+                    ClassFieldInitialization::Method | ClassFieldInitialization::ClassMethod
+                )
+            {
                 value_ty.universe(&mut |current_type_node| {
                     has_implicit_literal |= current_type_node.is_implicit_literal();
                 });
