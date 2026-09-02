@@ -647,6 +647,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuples)
                     }))
                     .then_some("`@type_shape_dsl_function` einsum operands must be annotated as `IntTuples`"),
+                    TypeShapeDslExpressionKind::GufuncBroadcast {
+                        parameter_origins: Some(parameters),
+                        ..
+                    } => (!parameters.iter().all(|parameter| {
+                        parameter_domains[*parameter]
+                            == TypeShapeDslInputDomain::Value(TypeShapeDslDomain::IntTuples)
+                    }))
+                    .then_some("`@type_shape_dsl_function` gufunc operands must be annotated as `IntTuples`"),
                     TypeShapeDslExpressionKind::FlagValueSlot {
                         parameter_uses: Some(uses),
                         required,
@@ -691,6 +699,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     | TypeShapeDslExpressionKind::IntTupleSlice
                     | TypeShapeDslExpressionKind::IntTupleConcat
                     | TypeShapeDslExpressionKind::Einsum { .. }
+                    | TypeShapeDslExpressionKind::GufuncBroadcast { .. }
                     | TypeShapeDslExpressionKind::IntTupleConstructor
                     | TypeShapeDslExpressionKind::IntTuplesConstructor
                     | TypeShapeDslExpressionKind::IntTupleProduct
@@ -989,6 +998,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         if id.has_toplevel_qname("shape_extensions.dsl", "einsum") {
             return Some(TypeShapeDslIntrinsic::Einsum);
+        }
+        if id.has_toplevel_qname("shape_extensions.dsl", "_gufunc_broadcast") {
+            return Some(TypeShapeDslIntrinsic::GufuncBroadcast);
         }
         let class = id.cls.as_ref()?;
         if id.qname.id().as_str() != "gradual" {

@@ -10,14 +10,6 @@
 //! Parsing distinguishes the named-dimension subset consumed by shape evaluation from valid
 //! extensions that are not modeled yet and malformed signatures that should produce diagnostics.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the next stacked gufunc DSL integration change"
-    )
-)]
-
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::iter::repeat_n;
@@ -45,6 +37,7 @@ pub(crate) enum GufuncUnsupported {
     FixedSizeDimensions,
 }
 
+#[cfg(test)]
 impl GufuncUnsupported {
     pub(crate) fn message(self) -> String {
         let feature = match self {
