@@ -260,6 +260,19 @@ impl FindResult {
         }
     }
 
+    /// Whether this result provides a stub rather than a Python implementation.
+    pub fn is_stub(&self) -> bool {
+        match self {
+            Self::SingleFilePyiModule(_) => true,
+            Self::RegularPackage(init, _) | Self::LegacyNamespacePackage(init, _) => {
+                ModuleStyle::of_path(init) == ModuleStyle::Interface
+            }
+            Self::SingleFilePyModule(_)
+            | Self::ImplicitNamespacePackage(_)
+            | Self::CompiledModule(_) => false,
+        }
+    }
+
     fn best_result(a: FindResult, b: FindResult) -> Self {
         match (&a, &b) {
             // RegularPackage and LegacyNamespacePackage share the top tier: both

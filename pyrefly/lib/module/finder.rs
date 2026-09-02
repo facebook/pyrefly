@@ -143,6 +143,7 @@ fn combine_normal_and_stub_results(
     normal_result: Option<FindResult>,
     namespaces_found: &mut Vec<PathBuf>,
     dir_cache: &DirEntryCache,
+    replace_untyped: bool,
 ) -> Option<FindingOrError<ModulePath>> {
     match (normal_result, stub_result) {
         // A partial stub that resolved only to a bare namespace does not itself
@@ -171,18 +172,24 @@ fn combine_normal_and_stub_results(
             None
         }
         (Some(normal_result), None) => {
-            if let Some(missing_stub_result) = recommended_stubs_package(module)
-                && !package_has_py_typed(module, &normal_result, dir_cache)
-            {
-                Some(
-                    find_result_module_path(normal_result).with_error(FindError::UntypedImport(
-                        module,
-                        missing_stub_result.as_str().to_owned().into(),
-                    )),
-                )
+            let stubs_package = recommended_stubs_package(module);
+            let untyped = (replace_untyped || stubs_package.is_some())
+                && !normal_result.is_stub()
+                // We call this last because it does a filesystem walk.
+                && !package_has_py_typed(module, &normal_result, dir_cache);
+            let hint = if untyped {
+                stubs_package.map(|package| {
+                    FindError::UntypedImport(module, package.as_str().to_owned().into())
+                })
             } else {
-                Some(find_result_module_path(normal_result))
-            }
+                None
+            };
+            Some(match (untyped && replace_untyped, hint) {
+                (true, Some(hint)) => FindingOrError::Error(hint),
+                (true, None) => FindingOrError::Error(FindError::Ignored),
+                (false, Some(hint)) => find_result_module_path(normal_result).with_error(hint),
+                (false, None) => find_result_module_path(normal_result),
+            })
         }
         (None, _) => None,
     }
@@ -196,6 +203,8 @@ struct SitePackagePolicy {
     typeshed_third_party_stub: Option<FindingOrError<ModulePath>>,
     /// Whether the user wrote a config file.
     from_real_config_file: bool,
+    /// Whether to replace an untyped package with `typing.Any`.
+    replace_untyped: bool,
 }
 
 /// Search for the given [`ModuleName`] in the given `include`, which is
@@ -252,6 +261,7 @@ where
         results.normal_result,
         namespaces_found,
         dir_cache,
+        site_package_policy.replace_untyped,
     )
 }
 
@@ -540,6 +550,11 @@ pub fn find_import_internal(
         SitePackagePolicy {
             typeshed_third_party_stub: find_third_party_stub(module, style_filter),
             from_real_config_file,
+            // A style-filtered search asks where a module's implementation file
+            // lives, not whether to trust the package's types, so it must keep
+            // resolving to the real source.
+            replace_untyped: style_filter.is_none()
+                && config.replace_untyped_imports_with_any(origin, module),
         },
         phantom_paths,
         dir_cache,
@@ -555,6 +570,16 @@ pub fn find_import_internal(
         )
     {
         path
+    } else if style_filter.is_none()
+        && config.replace_untyped_imports_with_any(origin, module)
+        && !namespaces_found.is_empty()
+        && namespaces_found.iter().all(|namespace| {
+            config
+                .site_package_path()
+                .any(|site_package| namespace.starts_with(site_package))
+        })
+    {
+        FindingOrError::Error(FindError::Ignored)
     } else if let Some(namespace) = namespaces_found.into_iter().next() &&
         // only use namespaces if style filter is none, since otherwise we might be
         // skipping a result that's more preferable, but excluded because of the style
@@ -692,6 +717,8 @@ fn suggest_stdlib_import_uncached(missing: ModuleName) -> Option<ModuleName> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use pyrefly_config::config::ConfigSource;
     use pyrefly_config::environment::environment::PythonEnvironment;
     use pyrefly_config::environment::interpreters::Interpreters;
@@ -2739,6 +2766,229 @@ mod tests {
         };
         config.configure();
         config
+    }
+
+    /// A first-party root plus a site package directory holding one package of
+    /// each kind Pyrefly distinguishes when deciding whether it is typed.
+    fn untyped_imports_config(root: &Path, replace_untyped: &[&str]) -> ConfigFile {
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    "src",
+                    vec![TestPath::dir(
+                        "first_party",
+                        vec![TestPath::file("__init__.py")],
+                    )],
+                ),
+                TestPath::dir(
+                    "site_packages",
+                    vec![
+                        TestPath::dir("untyped_package", vec![TestPath::file("__init__.py")]),
+                        TestPath::dir("other_untyped_package", vec![TestPath::file("__init__.py")]),
+                        TestPath::dir(
+                            "typed_package",
+                            vec![TestPath::file("py.typed"), TestPath::file("__init__.py")],
+                        ),
+                        TestPath::dir("stubbed_package", vec![TestPath::file("__init__.pyi")]),
+                        TestPath::dir(
+                            "namespace",
+                            vec![
+                                TestPath::dir(
+                                    "typed_package",
+                                    vec![TestPath::file("py.typed"), TestPath::file("__init__.py")],
+                                ),
+                                TestPath::dir(
+                                    "untyped_package",
+                                    vec![TestPath::file("__init__.py")],
+                                ),
+                            ],
+                        ),
+                        // Typeshed has no stubs for `django`, but Pyrefly still
+                        // recommends the `django-stubs` distribution for it.
+                        TestPath::dir("django", vec![TestPath::file("__init__.py")]),
+                    ],
+                ),
+            ],
+        );
+
+        let mut config = ConfigFile::parse_config(&format!(
+            "replace-untyped-imports-with-any = {replace_untyped:?}"
+        ))
+        .expect("test configuration should parse");
+        config.source = ConfigSource::File(root.join("pyrefly.toml"));
+        config.interpreters.skip_interpreter_query = true;
+        config.search_path_from_file = vec![root.join("src")];
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.disable_search_path_heuristics = true;
+        config.configure();
+        config
+    }
+
+    #[test]
+    fn test_replace_untyped_imports_with_any() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let config = untyped_imports_config(root, &["untyped_package", "namespace.*", "django"]);
+
+        let find = |module| {
+            find_import_filtered(
+                &config,
+                ModuleName::from_str(module),
+                None,
+                None,
+                &DirEntryCache::new(),
+                None,
+            )
+        };
+        let found = |path: PathBuf| FindingOrError::new_finding(ModulePath::filesystem(path));
+
+        // Neither stubs nor a `py.typed` marker, so the package becomes `Any`.
+        assert_eq!(
+            find("untyped_package"),
+            FindingOrError::Error(FindError::Ignored)
+        );
+        assert_eq!(find("namespace"), FindingOrError::Error(FindError::Ignored));
+        assert_eq!(
+            find("namespace.untyped_package"),
+            FindingOrError::Error(FindError::Ignored)
+        );
+        // The setting applies only to matching modules.
+        assert_eq!(
+            find("other_untyped_package"),
+            found(root.join("site_packages/other_untyped_package/__init__.py"))
+        );
+        // Same, but Pyrefly knows which distribution supplies the missing stubs,
+        // so it says so rather than dropping the import silently.
+        assert_eq!(
+            find("django"),
+            FindingOrError::Error(FindError::UntypedImport(
+                ModuleName::from_str("django"),
+                "django-stubs".to_owned().into()
+            ))
+        );
+
+        // Everything that is typed still resolves to its own files.
+        assert_eq!(
+            find("first_party"),
+            found(root.join("src/first_party/__init__.py"))
+        );
+        assert_eq!(
+            find("typed_package"),
+            found(root.join("site_packages/typed_package/__init__.py"))
+        );
+        assert_eq!(
+            find("stubbed_package"),
+            found(root.join("site_packages/stubbed_package/__init__.pyi"))
+        );
+        assert_eq!(
+            find("namespace.typed_package"),
+            found(root.join("site_packages/namespace/typed_package/__init__.py"))
+        );
+    }
+
+    #[test]
+    fn test_untyped_imports_are_followed_by_default() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let config = untyped_imports_config(root, &[]);
+        assert!(
+            !config.replace_untyped_imports_with_any(None, ModuleName::from_str("untyped_package"))
+        );
+
+        let find = |module| {
+            find_import_filtered(
+                &config,
+                ModuleName::from_str(module),
+                None,
+                None,
+                &DirEntryCache::new(),
+                None,
+            )
+        };
+
+        assert_eq!(
+            find("untyped_package"),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("site_packages/untyped_package/__init__.py")
+            ))
+        );
+        assert_eq!(
+            find("namespace.untyped_package"),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("site_packages/namespace/untyped_package/__init__.py")
+            ))
+        );
+        // The recommendation is still attached, but it does not stop resolution.
+        assert_eq!(
+            find("django"),
+            FindingOrError::new_finding(ModulePath::filesystem(
+                root.join("site_packages/django/__init__.py")
+            ))
+            .with_error(FindError::UntypedImport(
+                ModuleName::from_str("django"),
+                "django-stubs".to_owned().into()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_replace_untyped_imports_with_any_keeps_executable_lookup() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        // `requests` is untyped on disk but Pyrefly bundles typeshed stubs for it,
+        // so the option must not apply. The IDE finds the source behind those stubs
+        // with an executable-filtered search, which must keep reaching the source.
+        TestPath::setup_test_directory(
+            root,
+            vec![TestPath::dir(
+                "site_packages",
+                vec![TestPath::dir(
+                    "requests",
+                    vec![TestPath::file("__init__.py")],
+                )],
+            )],
+        );
+
+        let mut config =
+            ConfigFile::parse_config("replace-untyped-imports-with-any = [\"requests\"]")
+                .expect("test configuration should parse");
+        config.source = ConfigSource::File(root.join("pyrefly.toml"));
+        config.interpreters.skip_interpreter_query = true;
+        config.python_environment.site_package_path = Some(vec![root.join("site_packages")]);
+        config.disable_search_path_heuristics = true;
+        config.configure();
+
+        let unfiltered = find_import_filtered(
+            &config,
+            ModuleName::from_str("requests"),
+            None,
+            None,
+            &DirEntryCache::new(),
+            None,
+        );
+        assert!(
+            matches!(
+                unfiltered.finding(),
+                Some(path) if path.style() == ModuleStyle::Interface
+            ),
+            "Expected the bundled typeshed stub for `requests`"
+        );
+
+        let executable = find_import_filtered(
+            &config,
+            ModuleName::from_str("requests"),
+            None,
+            Some(ModuleStyle::Executable),
+            &DirEntryCache::new(),
+            None,
+        );
+        assert_eq!(
+            executable.finding(),
+            Some(ModulePath::filesystem(
+                root.join("site_packages/requests/__init__.py")
+            ))
+        );
     }
 
     #[test]

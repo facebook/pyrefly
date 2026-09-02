@@ -278,6 +278,9 @@ pub struct ConfigOverrideArgs {
     /// related import errors.
     #[arg(long)]
     ignore_missing_imports: Option<Vec<String>>,
+    /// Replace specified third-party imports with typing.Any when no stubs or py.typed marker exist.
+    #[arg(long)]
+    replace_untyped_imports_with_any: Option<Vec<String>>,
     /// Whether to ignore type errors in generated code.
     #[arg(
         long,
@@ -428,6 +431,7 @@ impl ConfigOverrideArgs {
             environment,
             replace_imports_with_any,
             ignore_missing_imports,
+            replace_untyped_imports_with_any,
             ignore_errors_in_generated_code,
             infer_with_first_use,
             check_all_matches,
@@ -455,6 +459,7 @@ impl ConfigOverrideArgs {
         environment.has_overrides()
             || replace_imports_with_any.is_some()
             || ignore_missing_imports.is_some()
+            || replace_untyped_imports_with_any.is_some()
             || ignore_errors_in_generated_code.is_some()
             || infer_with_first_use.is_some()
             || check_all_matches.is_some()
@@ -605,6 +610,14 @@ impl ConfigOverrideArgs {
         }
         if let Some(wildcards) = &self.ignore_missing_imports {
             config.root.ignore_missing_imports = Some(
+                wildcards
+                    .iter()
+                    .filter_map(|x| ModuleWildcard::new(x).ok())
+                    .collect(),
+            );
+        }
+        if let Some(wildcards) = &self.replace_untyped_imports_with_any {
+            config.root.replace_untyped_imports_with_any = Some(
                 wildcards
                     .iter()
                     .filter_map(|x| ModuleWildcard::new(x).ok())

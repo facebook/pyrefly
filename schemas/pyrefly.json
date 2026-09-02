@@ -54,6 +54,14 @@
           },
           "default": []
         },
+        "replace-untyped-imports-with-any": {
+          "description": "Instruct Pyrefly to replace the given module globs with typing.Any when the installed third-party package provides neither stubs nor a py.typed marker.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
         "ignore-errors-in-generated-code": {
           "description": "Whether to ignore type errors in generated code. If enabled, generated files will be treated as if they are included in project-excludes. The generated code status is determined by checking if the file contents contain the substring '@generated'.",
           "type": "boolean",

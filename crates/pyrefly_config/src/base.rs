@@ -240,6 +240,11 @@ pub struct ConfigBase {
     #[serde(skip_serializing_if = "crate::util::none_or_empty")]
     pub(crate) ignore_missing_imports: Option<Vec<ModuleWildcard>>,
 
+    /// Modules to replace with `typing.Any` when the installed package provides
+    /// neither stubs nor a `py.typed` marker.
+    #[serde(skip_serializing_if = "crate::util::none_or_empty")]
+    pub(crate) replace_untyped_imports_with_any: Option<Vec<ModuleWildcard>>,
+
     /// Deprecated: use `check-unannotated-defs` and `infer-return-types` instead.
     /// How should we handle analyzing and inferring the function signature if it's untyped?
     #[serde(
@@ -379,6 +384,10 @@ impl ConfigBase {
 
     pub(crate) fn get_ignore_missing_imports(base: &Self) -> Option<&[ModuleWildcard]> {
         base.ignore_missing_imports.as_deref()
+    }
+
+    pub(crate) fn get_replace_untyped_imports_with_any(base: &Self) -> Option<&[ModuleWildcard]> {
+        base.replace_untyped_imports_with_any.as_deref()
     }
 
     pub fn get_check_unannotated_defs(base: &Self) -> Option<bool> {

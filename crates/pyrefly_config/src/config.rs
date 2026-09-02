@@ -1039,6 +1039,34 @@ impl ConfigFile {
         found_match == Some(true)
     }
 
+    /// Whether an untyped third-party import should be replaced with `typing.Any`.
+    pub fn replace_untyped_imports_with_any(
+        &self,
+        path: Option<&Path>,
+        module: ModuleName,
+    ) -> bool {
+        let wildcards = path
+            .and_then(|path| {
+                self.get_from_sub_configs(ConfigBase::get_replace_untyped_imports_with_any, path)
+            })
+            .unwrap_or_else(|| {
+                self.root
+                    .replace_untyped_imports_with_any
+                    .as_deref()
+                    .expect("configure should set replace_untyped_imports_with_any")
+            });
+        let found_match = wildcards.iter().find_map(|w| {
+            if w.matches(module) == Match::Negative {
+                Some(false)
+            } else if w.matches(module) == Match::Positive {
+                Some(true)
+            } else {
+                None
+            }
+        });
+        found_match == Some(true)
+    }
+
     pub fn check_unannotated_defs(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_check_unannotated_defs, path)
             .unwrap_or_else(|| self.root.check_unannotated_defs.unwrap())
@@ -1526,6 +1554,10 @@ impl ConfigFile {
             self.root.ignore_missing_imports = Some(Default::default());
         }
 
+        if self.root.replace_untyped_imports_with_any.is_none() {
+            self.root.replace_untyped_imports_with_any = Some(Default::default());
+        }
+
         if self.root.check_unannotated_defs.is_none() {
             self.root.check_unannotated_defs = Some(true);
         }
@@ -1933,7 +1965,7 @@ impl Display for ConfigFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{{source: {:?}, project_includes: {}, project_excludes: {}, search_path: [{}], python_interpreter_path: {:?}, python_environment: {}, replace_imports_with_any: [{}], ignore_missing_imports: [{}]}}",
+            "{{source: {:?}, project_includes: {}, project_excludes: {}, search_path: [{}], python_interpreter_path: {:?}, python_environment: {}, replace_imports_with_any: [{}], ignore_missing_imports: [{}], replace_untyped_imports_with_any: [{}]}}",
             self.source,
             self.project_includes,
             self.project_excludes,
@@ -1947,6 +1979,11 @@ impl Display for ConfigFile {
                 .unwrap_or_default(),
             self.root
                 .ignore_missing_imports
+                .as_ref()
+                .map(|r| { r.iter().map(|p| p.as_str()).join(", ") })
+                .unwrap_or_default(),
+            self.root
+                .replace_untyped_imports_with_any
                 .as_ref()
                 .map(|r| { r.iter().map(|p| p.as_str()).join(", ") })
                 .unwrap_or_default(),
@@ -2089,6 +2126,7 @@ mod tests {
                     strict_partial_subtyping: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
                     ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
+                    replace_untyped_imports_with_any: None,
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                     check_unannotated_defs: None,
                     infer_return_types: None,
@@ -2118,6 +2156,7 @@ mod tests {
                         strict_partial_subtyping: None,
                         replace_imports_with_any: Some(Vec::new()),
                         ignore_missing_imports: Some(Vec::new()),
+                        replace_untyped_imports_with_any: None,
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
                         check_unannotated_defs: None,
                         infer_return_types: None,
@@ -2736,6 +2775,7 @@ output-format = "omit-errors"
                 errors: Some(Default::default()),
                 replace_imports_with_any: Some(vec![ModuleWildcard::new("root").unwrap()]),
                 ignore_missing_imports: None,
+                replace_untyped_imports_with_any: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 check_unannotated_defs: None,
                 infer_return_types: None,
@@ -3735,6 +3775,7 @@ output-format = "omit-errors"
                     ModuleWildcard::new("example.path.*").unwrap(),
                 ]),
                 ignore_missing_imports: None,
+                replace_untyped_imports_with_any: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 check_unannotated_defs: None,
                 infer_return_types: None,
@@ -3778,6 +3819,7 @@ output-format = "omit-errors"
                     ModuleWildcard::new("!example.path.specific.*").unwrap(),
                 ]),
                 ignore_missing_imports: None,
+                replace_untyped_imports_with_any: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 check_unannotated_defs: None,
                 infer_return_types: None,
