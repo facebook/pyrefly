@@ -482,7 +482,14 @@ pub trait TspInterface: Send + Sync + 'static {
     ///
     /// Returns `None` when the URI cannot be resolved, the position is invalid,
     /// or no type information is available at that location.
-    fn type_at_position(&self, uri: &str, line: u32, character: u32) -> Option<tsp_types::Type>;
+    fn type_at_position<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> Option<tsp_types::Type>;
 
     /// Return the computed (inferred) type for a node spanning the given range,
     /// converted to the TSP wire format.
@@ -501,8 +508,10 @@ pub trait TspInterface: Send + Sync + 'static {
     /// declaration locations are resolved against the same warm transaction
     /// that produced the type, so the export lookups cannot hit a cold
     /// `get_stdlib`.
-    fn computed_type_at_range(
-        &self,
+    fn computed_type_at_range<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         uri: &str,
         start_line: u32,
         start_character: u32,
@@ -514,8 +523,10 @@ pub trait TspInterface: Send + Sync + 'static {
     /// expected type — a call argument's parameter type, an annotated target's
     /// declared type, etc. — falling back to the computed type where no
     /// expected-type context applies.
-    fn expected_type_at_position(
-        &self,
+    fn expected_type_at_position<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         uri: &str,
         line: u32,
         character: u32,
@@ -6479,64 +6490,81 @@ impl Server {
         )
     }
 
-    /// Build a read transaction and the handle the type checker analyzes `path`
-    /// under, so `(uri, range)` queries resolve for any analyzable file rather
-    /// than only open documents.
+    /// Run `query` in a read-only transaction where `uri` is analyzed, then
+    /// save the transaction for the next IDE request.
     ///
-    /// Open files are served from their in-memory overlay (already committed by
-    /// the recheck that ran on `didOpen`). For anything else we reuse the handle
-    /// the file was already analyzed under — an imported dependency's filesystem
-    /// handle, or a bundled stdlib stub's `BundledTypeshed` handle whose
-    /// `SysInfo` we can't reconstruct here, hence the by-path lookup — and force
-    /// a full solve (`Require::Everything` is the only level that retains
-    /// bindings/answers, which the type lookup reads) so narrowed/computed types
-    /// are available. A file that isn't analyzed yet falls back to a fresh
-    /// filesystem handle read from disk.
-    fn query_transaction_and_handle<'a>(&'a self, path: &Path) -> (Transaction<'a>, Handle) {
-        if self.open_files.read().contains_key(path) {
-            return (
-                self.state.transaction(),
-                make_open_handle(&self.state, path),
-            );
-        }
-        let mut transaction = self.state.transaction();
-        // Imported dependencies live under a filesystem handle we can rebuild
-        // directly; only scan when that misses (bundled stubs, unusual SysInfo).
-        let fs_handle =
-            handle_from_module_path(&self.state, ModulePath::filesystem(path.to_owned()));
-        let handle = if transaction.get_module_info(&fs_handle).is_some() {
-            fs_handle
-        } else {
-            transaction
-                .handles()
-                .into_iter()
-                .find(|h| !h.path().is_memory() && to_real_path(h.path()).as_deref() == Some(path))
-                .unwrap_or(fs_handle)
-        };
-        transaction.run(&[handle.dupe()], Require::Everything, None);
-        (transaction, handle)
-    }
-
-    /// Open `uri` at `(line, character)`: resolve the path, build a handle, and
-    /// start a transaction, returning it alongside the handle and the resolved
-    /// in-file position.
-    fn open_at_position<'a>(
+    /// A file the client never opened may not be retained at
+    /// `Require::Everything` yet. When it isn't we solve it in a committable
+    /// transaction and commit before answering: raising a module's `Require`
+    /// dirties it, so the solve rebuilds the module and its dependencies from
+    /// scratch, and discarding it would repeat that for every query against
+    /// the same file.
+    fn with_query_transaction<'a, T>(
         &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         uri: &str,
-        line: u32,
-        character: u32,
-    ) -> Option<(Transaction<'a>, Handle, TextSize)> {
+        query: impl FnOnce(&Transaction<'a>, &Handle, Option<usize>) -> Option<T>,
+    ) -> Option<T> {
         let url = Url::parse(uri)
             .ok()
             .or_else(|| Url::from_file_path(uri).ok())?;
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
-        let (transaction, handle) = self.query_transaction_and_handle(&path);
-        let module_info = transaction.get_module_info(&handle)?;
-        let position =
-            module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
-        Some((transaction, handle, position))
+        // The config finder picks the config, and so the `SysInfo`, from the
+        // path, so a rebuilt handle matches the one state holds. A bundled stub
+        // is the exception: state holds it under a `bundled_*` `ModulePath`, so
+        // the materialized path the client sends back rebuilds as a separate
+        // filesystem module and the stub is solved twice. Opening one in the
+        // editor already does the same through `ModulePath::memory`.
+        let handle = if self.open_files.read().contains_key(&path) {
+            make_open_handle(&self.state, &path)
+        } else {
+            handle_from_module_path(&self.state, ModulePath::filesystem(path.to_owned()))
+        };
+
+        let (mut transaction, needs_validation) =
+            match ide_transaction_manager.get_possibly_committable_transaction(&self.state) {
+                Ok(mut committable) => {
+                    // Read before validation runs: validation raises open
+                    // files to `Require::Everything`, so checking afterwards
+                    // would see the level it just created.
+                    if committable.as_ref().get_require(&handle) == Some(Require::Everything) {
+                        // Nothing to cache, so the committing lock buys us nothing.
+                        (committable.downgrade(), true)
+                    } else {
+                        let transaction = committable.as_mut();
+                        self.validate_in_memory_for_transaction(transaction, telemetry_event, None);
+                        transaction.run(&[handle.dupe()], Require::Everything, None);
+                        // `commit_transaction_downgrade` holds the state lock
+                        // across the commit, so what it hands back is the state
+                        // validated and solved just above.
+                        (
+                            self.state.commit_transaction_downgrade(
+                                committable,
+                                Some(telemetry_event),
+                                Require::Exports,
+                            ),
+                            false,
+                        )
+                    }
+                }
+                // A recheck holds the committing lock, so there is nothing to
+                // commit into and the solve happens in the read-only transaction.
+                Err(transaction) => (transaction, true),
+            };
+
+        if needs_validation {
+            // `didChange` skips validation when another mutation is already
+            // queued, so the overlay can be behind `open_files` even once the
+            // queue drains.
+            self.validate_in_memory_for_transaction(&mut transaction, telemetry_event, None);
+            transaction.run(&[handle.dupe()], Require::Everything, None);
+        }
+        let result = query(&transaction, &handle, notebook_cell);
+        ide_transaction_manager.save(transaction, telemetry_event);
+        result
     }
 
     /// Convert `ty` to the TSP wire format, resolving every declaration location
@@ -6733,69 +6761,99 @@ impl TspInterface for Server {
         Ok(paths)
     }
 
-    fn type_at_position(&self, uri: &str, line: u32, character: u32) -> Option<tsp_types::Type> {
-        let (transaction, handle, position) = self.open_at_position(uri, line, character)?;
+    fn type_at_position<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> Option<tsp_types::Type> {
         // For TSP, return the raw declared type without coercing callees in
         // call position. This keeps the function's `Declaration::Regular`
         // intact on the wire, which TSP clients need to re-resolve the
         // signature (parameters, overloads) from source.
-        let ty = transaction.get_type_at_preserving_declaration(&handle, position)?;
-        Some(self.convert_type_in_transaction(&transaction, &handle, &ty))
+        self.with_query_transaction(
+            ide_transaction_manager,
+            telemetry_event,
+            uri,
+            |transaction, handle, notebook_cell| {
+                let module_info = transaction.get_module_info(handle)?;
+                let position = module_info
+                    .from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
+                let ty = transaction.get_type_at_preserving_declaration(handle, position)?;
+                Some(self.convert_type_in_transaction(transaction, handle, &ty))
+            },
+        )
     }
 
-    fn computed_type_at_range(
-        &self,
+    fn computed_type_at_range<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         uri: &str,
         start_line: u32,
         start_character: u32,
         end_line: u32,
         end_character: u32,
     ) -> Option<tsp_types::Type> {
-        let url = Url::parse(uri)
-            .ok()
-            .or_else(|| Url::from_file_path(uri).ok())?;
-        let path = self.path_for_uri_or_notebook_cell(&url)?;
-        let notebook_cell = self.maybe_get_code_cell_index(&url);
-
-        let (transaction, handle) = self.query_transaction_and_handle(&path);
-        let module_info = transaction.get_module_info(&handle)?;
-        let start = module_info.from_lsp_position(
-            lsp_types::Position {
-                line: start_line,
-                character: start_character,
+        self.with_query_transaction(
+            ide_transaction_manager,
+            telemetry_event,
+            uri,
+            |transaction, handle, notebook_cell| {
+                let module_info = transaction.get_module_info(handle)?;
+                let start = module_info.from_lsp_position(
+                    lsp_types::Position {
+                        line: start_line,
+                        character: start_character,
+                    },
+                    notebook_cell,
+                );
+                let end = module_info.from_lsp_position(
+                    lsp_types::Position {
+                        line: end_line,
+                        character: end_character,
+                    },
+                    notebook_cell,
+                );
+                let range = TextRange::new(start, end);
+                // Range-aware lookup: a whole call-expression range resolves to the
+                // call's result type, other ranges to the declaration-preserving
+                // type. Convert against the *same* transaction that produced `ty`,
+                // so export location resolution stays warm and cannot hit a cold
+                // `get_stdlib`.
+                let ty = transaction.get_computed_type_at_range(handle, range)?;
+                Some(self.convert_type_in_transaction(transaction, handle, &ty))
             },
-            notebook_cell,
-        );
-        let end = module_info.from_lsp_position(
-            lsp_types::Position {
-                line: end_line,
-                character: end_character,
-            },
-            notebook_cell,
-        );
-        let range = TextRange::new(start, end);
-        // Range-aware lookup: a whole call-expression range resolves to the
-        // call's result type, other ranges to the declaration-preserving type.
-        // Convert against the *same* transaction that produced `ty`, so export
-        // location resolution stays warm and cannot hit a cold `get_stdlib`.
-        let ty = transaction.get_computed_type_at_range(&handle, range)?;
-        Some(self.convert_type_in_transaction(&transaction, &handle, &ty))
+        )
     }
 
-    fn expected_type_at_position(
-        &self,
+    fn expected_type_at_position<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         uri: &str,
         line: u32,
         character: u32,
     ) -> Option<tsp_types::Type> {
-        let (transaction, handle, position) = self.open_at_position(uri, line, character)?;
         // Prefer the contextually expected type; fall back to the computed type
         // (preserving declarations) so the result is meaningful even outside an
         // expected-type context.
-        let ty = transaction
-            .get_expected_type_at(&handle, position)
-            .or_else(|| transaction.get_type_at_preserving_declaration(&handle, position))?;
-        Some(self.convert_type_in_transaction(&transaction, &handle, &ty))
+        self.with_query_transaction(
+            ide_transaction_manager,
+            telemetry_event,
+            uri,
+            |transaction, handle, notebook_cell| {
+                let module_info = transaction.get_module_info(handle)?;
+                let position = module_info
+                    .from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
+                let ty = transaction
+                    .get_expected_type_at(handle, position)
+                    .or_else(|| transaction.get_type_at_preserving_declaration(handle, position))?;
+                Some(self.convert_type_in_transaction(transaction, handle, &ty))
+            },
+        )
     }
 
     fn resolve_uri_to_path(&self, uri: &Url) -> Option<PathBuf> {
