@@ -93,6 +93,20 @@ def test_method_reductions_for_cross_entropy() -> None:
     assert_shape(loss, ())
 
 
+def test_method_reductions_share_free_function_shapes() -> None:
+    a = cast(
+        "np.ndarray[tuple[Literal[2], Literal[3], Literal[4]]]",
+        make_array((2, 3, 4)),
+    )
+
+    assert_shape(a.sum(), ())
+    assert_shape(a.mean(axis=-1), (2, 3))
+    assert_shape(a.min(axis=1), (2, 4))
+    assert_shape(a.max(axis=(0, 2)), (3,))
+    assert_shape(a.sum(axis=(1, 2), keepdims=True), (2, 1, 1))
+    assert_shape(a.mean(keepdims=True), (1, 1, 1))
+
+
 def test_reduce_matrix_axis_one() -> None:
     a = np.ones((3, 4))
 
@@ -238,6 +252,15 @@ def check_generic_reduction_flags[N: IntVar](
     assert_type(np.sum(a, axis=axis), np.ndarray[IntTuple, Any])
     assert_type(np.sum(a, axis=axes), np.ndarray[IntTuple, Any])
     assert_type(np.sum(a, axis=1, keepdims=keepdims), np.ndarray[IntTuple, Any])
+    assert_type(a.sum(), np.ndarray[[], np.dtype[np.float32]])
+    assert_type(a.mean(axis=1), np.ndarray[[N], np.dtype[np.float32]])
+    assert_type(a.min(axis=1), np.ndarray[[N], np.dtype[np.float32]])
+    assert_type(a.max(axis=0, keepdims=True), np.ndarray[[1, 3], np.dtype[np.float32]])
+    assert_type(a.sum(axis=axis), np.ndarray[IntTuple, np.dtype[np.float32]])
+    assert_type(
+        a.mean(axis=axes, keepdims=keepdims),
+        np.ndarray[IntTuple, np.dtype[np.float32]],
+    )
     if TYPE_CHECKING:
         assert_type(
             np.sum(a, axis=999999999999999999999999),

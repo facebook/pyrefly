@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import reveal_type, TYPE_CHECKING
+
 import jax
 import jax.numpy as jnp
 from shape_extensions import assert_shape, IntVar
@@ -12,13 +14,14 @@ from shape_extensions import assert_shape, IntVar
 N = IntVar("N")
 M = IntVar("M")
 
-# A `-1` placeholder and the variadic method spelling both produce a gradual
-# static shape, so `assert_shape` cannot be used for them. See `reshape_shape`
-# in `jax/_shapes.pyi` and `Array.reshape` in `jax/_array.pyi`.
+# The variadic method spelling produces a gradual static shape because its
+# argument list cannot be captured as a `Flag`.
 GRADUAL_SHAPE_RUNTIME_TESTS = {
-    "test_reshape_infers_placeholder_dimension",
     "test_reshape_accepts_the_variadic_method_spelling",
     "test_reshape_accepts_a_sequence_shape",
+    # `assert_shape` cannot express a zero dimension, so this test pins its
+    # precise static result with `reveal_type` instead.
+    "test_reshape_zero_size_placeholder",
 }
 
 
@@ -46,9 +49,10 @@ def test_reshape_method() -> None:
 def test_reshape_infers_placeholder_dimension() -> None:
     a = jnp.ones((3, 4))
 
-    # Statically gradual, so only the runtime shape is asserted here.
-    assert jnp.reshape(a, (2, -1)).shape == (2, 6)
-    assert a.reshape(-1).shape == (12,)
+    assert_shape(jnp.reshape(a, (2, -1)), (2, 6))
+    assert_shape(jnp.reshape(a, -1), (12,))
+    assert_shape(a.reshape((3, -1)), (3, 4))
+    assert_shape(a.reshape(-1), (12,))
 
 
 def test_reshape_accepts_the_variadic_method_spelling() -> None:
@@ -110,12 +114,70 @@ def test_reshape_rejects_incompatible_element_count() -> None:
     a = jnp.ones((3, 4))
 
     assert_shape(jnp.reshape(a, (4, 3)), (4, 3))
-    # TODO(stroxler): Reject this statically as well. `reshape_shape` cannot
-    # compare element counts until the type-level DSL exposes a product
-    # intrinsic, so for now only the runtime half rejects it.
     try:
+        # E: reshape target element count does not match the input
         jnp.reshape(a, (5, 5))
     except TypeError:
         pass
     else:
         raise AssertionError("expected JAX to reject a changed element count")
+
+    try:
+        # E: reshape target element count does not match the input
+        a.reshape((5, 5))
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("expected JAX method to reject a changed element count")
+
+
+def test_reshape_rejects_non_integral_placeholder() -> None:
+    a = jnp.ones((3, 4))
+
+    assert_shape(jnp.reshape(a, (2, -1)), (2, 6))
+    try:
+        # E: could not infer size for dimension -1
+        jnp.reshape(a, (5, -1))
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject a non-integral inferred size")
+
+    try:
+        # E: could not infer size for dimension -1
+        a.reshape((5, -1))
+    except TypeError:
+        pass
+    else:
+        raise AssertionError(
+            "expected JAX method to reject a non-integral inferred size"
+        )
+
+
+def test_reshape_zero_size_placeholder() -> None:
+    empty = jnp.ones((0,))
+    ambiguous = jnp.ones((0, 2))
+
+    assert jnp.reshape(empty, (-1,)).shape == (0,)
+    assert empty.reshape((-1,)).shape == (0,)
+    if TYPE_CHECKING:
+        reveal_type(jnp.reshape(empty, (-1,)))  # E: revealed type: Array[[0]]
+        reveal_type(empty.reshape((-1,)))  # E: revealed type: Array[[0]]
+
+    try:
+        # E: could not infer size for dimension -1
+        jnp.reshape(ambiguous, (0, -1))
+    except ZeroDivisionError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject ambiguous zero-size inference")
+
+    try:
+        # E: could not infer size for dimension -1
+        ambiguous.reshape((0, -1))
+    except ZeroDivisionError:
+        pass
+    else:
+        raise AssertionError(
+            "expected JAX method to reject ambiguous zero-size inference"
+        )

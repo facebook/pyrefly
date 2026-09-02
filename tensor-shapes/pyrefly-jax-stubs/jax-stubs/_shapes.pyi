@@ -105,13 +105,19 @@ def reshape_shape(shape: IntTuple, newshape: int | tuple[int, ...] | None) -> In
     inferred = tuple(dim for dim in dims if dim == 0 - 1)
     if len(inferred) > 1:
         return dsl.Invalid("reshape accepts at most one -1")
-    # TODO(stroxler): Infer the placeholder dimension, and reject a reshape that
-    # changes the number of elements. Both need the product of the dimensions,
-    # which the type-level DSL does not expose yet; the in-flight Torch
-    # migration adds `dsl.prod` as an intrinsic.
-    if len(inferred) == 1:
-        return dsl.IntTuple.gradual()
-    return dsl.IntTuple(dim for dim in dims)
+    known_shape = dsl.IntTuple((dim for dim in dims if dim != 0 - 1))
+    known = dsl.prod(known_shape)
+    total = dsl.prod(shape)
+    if len(inferred) == 0:
+        if dsl.is_concrete_int(total) and dsl.is_concrete_int(known) and total != known:
+            return dsl.Invalid("reshape target element count does not match the input")
+        return dsl.IntTuple(dim for dim in dims)
+    if dsl.is_concrete_int(known):
+        if known == 0:
+            return dsl.Invalid("could not infer size for dimension -1")
+        if dsl.is_concrete_int(total) and total % known != 0:
+            return dsl.Invalid("could not infer size for dimension -1")
+    return dsl.IntTuple((total // known if dim == 0 - 1 else dim for dim in dims))
 
 @type_shape_dsl_function
 def fft_n_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:
