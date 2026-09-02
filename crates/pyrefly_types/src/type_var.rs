@@ -83,9 +83,7 @@ impl Restriction {
     /// respective domains.
     pub fn can_reject(&self) -> bool {
         match self {
-            Self::Bound(b) => {
-                !b.is_any() && !matches!(b, Type::ClassType(cls) if cls.is_builtin("object"))
-            }
+            Self::Bound(b) => !b.is_any() && !b.is_object(),
             Self::Constraints(_) | Self::ShapeExtension(_) => true,
             Self::Unrestricted => false,
         }
