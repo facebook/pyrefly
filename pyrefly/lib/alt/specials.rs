@@ -8,7 +8,6 @@
 use std::slice;
 
 use pyrefly_types::literal::LitStyle;
-use pyrefly_types::types::Union;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::prelude::SliceExt;
 use ruff_python_ast::Expr;
@@ -26,7 +25,6 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::solve::TypeFormContext;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::types::callable::Param;
 use crate::types::callable::PrefixParam;
 use crate::types::callable::Required;
@@ -45,7 +43,7 @@ fn is_chained_attribute_access(x: &Expr) -> bool {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Apply a special form that takes exactly one type argument.
     /// Validates arity, evaluates the argument, wraps the result in a type form.
     pub(crate) fn apply_unary_special_form(
@@ -53,7 +51,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         special_form: String,
         arguments: &[Expr],
         range: TextRange,
-        context: TypeFormContext,
+        context: TypeFormContext<'_>,
         errors: &ErrorCollector,
         wrap: impl FnOnce(Type) -> Type,
     ) -> Type {
@@ -64,7 +62,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                ErrorKind::BadSpecialization,
                 format!(
                     "Expected 1 type argument for `{special_form}`, got {}",
                     arguments.len()
@@ -77,7 +75,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         self.error(
             errors,
             range,
-            ErrorInfo::Kind(ErrorKind::BadUnpacking),
+            ErrorKind::BadUnpacking,
             "Only one unbounded type is allowed to be unpacked".to_owned(),
         )
     }
@@ -88,6 +86,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn check_args_and_construct_tuple(
         &self,
         arguments: &[Expr],
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Option<(Tuple, bool)> {
         let mut prefix: Vec<Type> = Vec::new();
@@ -104,7 +103,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             value.range(),
-                            ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                            ErrorKind::InvalidArgument,
                             "`...` cannot be used with an unpacked `TypeVarTuple` or tuple"
                                 .to_owned(),
                         );
@@ -116,33 +115,46 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         value.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidArgument),
+                        ErrorKind::InvalidArgument,
                         "Invalid position for `...`".to_owned(),
                     );
                     return None;
                 }
             }
-            let ty = self.expr_untype(value, TypeFormContext::TupleOrCallableParam, errors);
+            let ty = self.expr_untype(
+                value,
+                TypeFormContext::TupleElement(&type_form_context),
+                errors,
+            );
             match ty {
-                Type::Unpack(box Type::Tuple(Tuple::Concrete(elts))) => {
+                Type::Unpack(ty) if matches!(&*ty, Type::Tuple(Tuple::Concrete(_))) => {
                     has_unpack = true;
+                    // Repeated match because pattern guards cannot move out of bindings.
+                    let Type::Tuple(Tuple::Concrete(elts)) = *ty else {
+                        unreachable!("guarded by matches! above")
+                    };
                     if middle.is_none() {
                         prefix.extend(elts)
                     } else {
                         suffix.extend(elts)
                     }
                 }
-                Type::Unpack(box ty @ Type::Tuple(Tuple::Unbounded(_))) => {
+                Type::Unpack(ty) if matches!(&*ty, Type::Tuple(Tuple::Unbounded(_))) => {
                     has_unpack = true;
                     if middle.is_none() {
-                        middle = Some(ty)
+                        middle = Some(*ty)
                     } else {
                         self.extra_unpack_error(errors, value.range());
                         return None;
                     }
                 }
-                Type::Unpack(box Type::Tuple(Tuple::Unpacked(box (pre, mid, suff)))) => {
+                Type::Unpack(ty) if matches!(&*ty, Type::Tuple(Tuple::Unpacked(_))) => {
                     has_unpack = true;
+                    // Repeated match because pattern guards cannot move out of bindings.
+                    let Type::Tuple(Tuple::Unpacked(unpacked)) = *ty else {
+                        unreachable!("guarded by matches! above")
+                    };
+                    let (pre, mid, suff) = unpacked.into_parts();
                     if middle.is_none() {
                         prefix.extend(pre);
                         middle = Some(mid);
@@ -164,7 +176,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 // UntypedAlias (from a TypeAliasRef) is opaque at the raw layer;
                 // it will be expanded in wrap_type_alias. Treat it as a valid
                 // middle element like TypeVarTuple.
-                Type::Unpack(ty @ box Type::UntypedAlias(_)) => {
+                Type::Unpack(ty) if matches!(&*ty, Type::UntypedAlias(_)) => {
                     has_unpack = true;
                     if middle.is_none() {
                         middle = Some(*ty)
@@ -177,7 +189,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         value.range(),
-                        ErrorInfo::Kind(ErrorKind::BadUnpacking),
+                        ErrorKind::BadUnpacking,
                         format!("Expected a tuple or `TypeVarTuple`, got `{ty}`"),
                     );
                     return None;
@@ -186,7 +198,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         value.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidTypeVarTuple),
+                        ErrorKind::InvalidTypeVarTuple,
                         "`TypeVarTuple` must be unpacked".to_owned(),
                     );
                     return None;
@@ -238,7 +250,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 Some(lit) => literals.push(lit.to_explicit_type()),
                 None => literals.push(self.heap.mk_literal_string(LitStyle::Explicit)),
             },
-            Expr::BytesLiteral(x) => literals.push(Lit::from_bytes_literal(x).to_explicit_type()),
+            Expr::BytesLiteral(x) => match Lit::from_bytes_literal(x) {
+                Some(lit) => literals.push(lit.to_explicit_type()),
+                None => literals.push(self.heap.mk_class_type(self.stdlib.bytes().clone())),
+            },
             Expr::BooleanLiteral(x) => {
                 literals.push(Lit::from_boolean_literal(x).to_explicit_type())
             }
@@ -248,20 +263,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     match x {
                         Type::None | Type::Literal(_) | Type::Any(AnyStyle::Error) => true,
                         Type::Annotated(inner, _) => is_valid_literal(inner),
-                        Type::Union(box Union { members: xs, .. }) => {
-                            xs.iter().all(is_valid_literal)
-                        }
+                        Type::Union(f) => f.members.iter().all(is_valid_literal),
                         _ => false,
                     }
                 }
-                let t = self.expr_untype(x, TypeFormContext::TypeArgument, errors);
+                let t = self.expr_untype(x, TypeFormContext::type_argument(), errors);
                 if is_valid_literal(&t) {
                     literals.push(t)
                 } else {
                     self.error(
                         errors,
                         x.range(),
-                        ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+                        ErrorKind::InvalidLiteral,
                         format!("Invalid type inside literal, `{t}`"),
                     );
                     literals.push(self.heap.mk_any_error())
@@ -286,7 +299,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             *range,
-                            ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+                            ErrorKind::InvalidLiteral,
                             format!(
                                 "`{}.{}` is not a valid enum member",
                                 value.display_with(self.module()),
@@ -300,13 +313,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             Expr::Subscript(_) => {
                 let ty = self.expr_infer(x, errors);
                 self.map_over_union(&ty, |ty| match ty {
-                    Type::Type(box lit @ Type::Literal(_)) => literals.push(lit.clone()),
+                    Type::Type(lit) if matches!(&**lit, Type::Literal(_)) => {
+                        literals.push((**lit).clone())
+                    }
                     ty @ Type::Any(AnyStyle::Error) => literals.push(ty.clone()),
                     _ => {
                         self.error(
                             errors,
                             x.range(),
-                            ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+                            ErrorKind::InvalidLiteral,
                             "Invalid literal expression".to_owned(),
                         );
                         literals.push(self.heap.mk_any_error())
@@ -317,7 +332,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     x.range(),
-                    ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+                    ErrorKind::InvalidLiteral,
                     "Invalid literal expression".to_owned(),
                 );
                 literals.push(self.heap.mk_any_error())
@@ -330,8 +345,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         special_form: SpecialForm,
         arguments: &Expr,
         range: TextRange,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
+        let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
         let (arguments, parens) = match arguments {
             Expr::Tuple(x) => (x.elts.as_slice(), x.parenthesized),
             _ => (slice::from_ref(arguments), false),
@@ -341,25 +358,29 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 SpecialForm::Optional.to_string(),
                 arguments,
                 range,
-                TypeFormContext::TypeArgument,
+                type_argument_context,
                 errors,
                 |arg| self.heap.mk_optional(arg),
             ),
-            SpecialForm::Union => self.heap.mk_type_of(self.unions(
-                arguments.map(|arg| self.expr_untype(arg, TypeFormContext::TypeArgument, errors)),
-            )),
-            SpecialForm::Tuple => match self.check_args_and_construct_tuple(arguments, errors) {
-                Some((tuple, _)) => self.heap.mk_type_of(self.heap.mk_tuple(tuple)),
-                None => self
-                    .heap
-                    .mk_type_of(self.heap.mk_unbounded_tuple(self.heap.mk_any_error())),
-            },
+            SpecialForm::Union => {
+                self.heap.mk_type_of(self.unions(
+                    arguments.map(|arg| self.expr_untype(arg, type_argument_context, errors)),
+                ))
+            }
+            SpecialForm::Tuple => {
+                match self.check_args_and_construct_tuple(arguments, type_form_context, errors) {
+                    Some((tuple, _)) => self.heap.mk_type_of(self.heap.mk_tuple(tuple)),
+                    None => self
+                        .heap
+                        .mk_type_of(self.heap.mk_unbounded_tuple(self.heap.mk_any_error())),
+                }
+            }
             SpecialForm::Literal => {
                 if parens {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::InvalidLiteral),
+                        ErrorKind::InvalidLiteral,
                         "`Literal` arguments cannot be parenthesized".to_owned(),
                     );
                 }
@@ -374,7 +395,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.error(
                         errors,
                         range,
-                        ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                        ErrorKind::BadSpecialization,
                         format!(
                             "Expected at least 2 arguments for `Concatenate`, got {}",
                             arguments.len()
@@ -385,21 +406,22 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         .iter()
                         .map(|x| {
                             PrefixParam::new(
-                                self.expr_untype(x, TypeFormContext::TupleOrCallableParam, errors),
+                                self.expr_untype(
+                                    x,
+                                    TypeFormContext::TupleOrCallableParam(&type_form_context),
+                                    errors,
+                                ),
                                 Required::Required,
                             )
                         })
                         .collect();
-                    let pspec = self.expr_untype(
-                        arguments.last().unwrap(),
-                        TypeFormContext::TypeArgument,
-                        errors,
-                    );
+                    let pspec =
+                        self.expr_untype(arguments.last().unwrap(), type_argument_context, errors);
                     if !pspec.is_kind_param_spec() {
                         self.error(
                             errors,
                             range,
-                            ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                            ErrorKind::BadSpecialization,
                             format!(
                                 "Expected a `ParamSpec` for the second argument of `Concatenate`, got {pspec}",
                             ),
@@ -414,14 +436,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     self.heap
                         .mk_type_of(self.heap.mk_callable_ellipsis(self.heap.mk_any_error()))
                 };
-                let ret = self.expr_untype(
-                    &arguments[1],
-                    TypeFormContext::TypeArgumentCallableReturn,
-                    errors,
-                );
+                let ret = if let Expr::EllipsisLiteral(_) = &arguments[1] {
+                    self.error(
+                        errors,
+                        arguments[1].range(),
+                        ErrorKind::InvalidAnnotation,
+                        "`...` is not a valid return type".to_owned(),
+                    );
+                    self.heap.mk_any_error()
+                } else {
+                    self.expr_untype(
+                        &arguments[1],
+                        TypeFormContext::TypeArgumentCallableReturn(&type_form_context),
+                        errors,
+                    )
+                };
                 match &arguments[0] {
                     Expr::List(ExprList { elts, .. }) => {
-                        match self.check_args_and_construct_tuple(elts, errors) {
+                        match self.check_args_and_construct_tuple(
+                            elts,
+                            TypeFormContext::TypeExpression,
+                            errors,
+                        ) {
                             Some((tuple, true)) => {
                                 self.heap.mk_type_of(self.heap.mk_callable_from_vec(
                                     vec![Param::Varargs(
@@ -443,7 +479,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 self.error(
                                     errors,
                                     range,
-                                    ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                                    ErrorKind::BadSpecialization,
                                     "Unrecognized callable type form".to_owned(),
                                 );
                                 callable_error()
@@ -455,23 +491,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.heap.mk_type_of(self.heap.mk_callable_ellipsis(ret))
                     }
                     name @ Expr::Name(_) => {
-                        let ty = self.expr_untype(name, TypeFormContext::TypeArgument, errors);
+                        let ty = self.expr_untype(name, type_argument_context, errors);
                         if ty.is_kind_param_spec() {
                             self.heap
                                 .mk_type_of(self.heap.mk_callable_param_spec(ty, ret))
                         } else {
-                            self.error(errors, name.range(),ErrorInfo::Kind(ErrorKind::BadSpecialization), format!("Callable types can only have `ParamSpec` in this position, got `{}`", self.for_display(ty)));
+                            self.error(errors, name.range(),ErrorKind::BadSpecialization, format!("Callable types can only have `ParamSpec` in this position, got `{}`", self.for_display(ty)));
                             callable_error()
                         }
                     }
                     x @ Expr::Subscript(_) => {
-                        let ty = self.expr_untype(x, TypeFormContext::TypeArgument, errors);
+                        let ty = self.expr_untype(x, type_argument_context, errors);
                         match ty {
                             Type::Concatenate(args, pspec) => self
                                 .heap
                                 .mk_type_of(self.heap.mk_callable_concatenate(args, *pspec, ret)),
                             _ => {
-                                self.error(errors, x.range(),ErrorInfo::Kind(ErrorKind::BadSpecialization), format!("Callable types can only have `Concatenate` in this position, got `{}`", self.for_display(ty)));
+                                self.error(errors, x.range(),ErrorKind::BadSpecialization, format!("Callable types can only have `Concatenate` in this position, got `{}`", self.for_display(ty)));
                                 callable_error()
                             }
                         }
@@ -480,7 +516,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         self.error(
                             errors,
                             x.range(),
-                            ErrorInfo::Kind(ErrorKind::InvalidSyntax),
+                            ErrorKind::InvalidSyntax,
                             "Invalid `Callable` type".to_owned(),
                         );
                         callable_error()
@@ -491,7 +527,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 self.error(
                     errors,
                     range,
-                    ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                    ErrorKind::BadSpecialization,
                     format!(
                         "Expected 2 arguments for `Callable`, got {}",
                         arguments.len()
@@ -504,7 +540,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 SpecialForm::TypeGuard.to_string(),
                 arguments,
                 range,
-                TypeFormContext::TypeArgument,
+                TypeFormContext::TypePredicateArgument(&type_form_context),
                 errors,
                 |arg| self.heap.mk_type_guard(arg),
             ),
@@ -512,17 +548,17 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 SpecialForm::TypeIs.to_string(),
                 arguments,
                 range,
-                TypeFormContext::TypeArgument,
+                TypeFormContext::TypePredicateArgument(&type_form_context),
                 errors,
                 |arg| self.heap.mk_type_is(arg),
             ),
             SpecialForm::Unpack if arguments.len() == 1 => {
-                let arg = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
+                let arg = self.expr_untype(&arguments[0], type_argument_context, errors);
                 if matches!(arg, Type::Unpack(_)) {
                     return self.error(
                         errors,
                         arguments[0].range(),
-                        ErrorInfo::Kind(ErrorKind::BadUnpacking),
+                        ErrorKind::BadUnpacking,
                         "`Unpack` cannot be applied to an unpacked argument".to_owned(),
                     );
                 }
@@ -531,7 +567,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             SpecialForm::Unpack => self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                ErrorKind::BadSpecialization,
                 format!(
                     "Expected 1 type argument for `Unpack`, got {}",
                     arguments.len()
@@ -541,7 +577,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 SpecialForm::Type.to_string(),
                 arguments,
                 range,
-                TypeFormContext::TypeArgumentForType,
+                TypeFormContext::TypeArgumentForType(&type_form_context),
                 errors,
                 |arg| self.heap.mk_type_of(arg),
             ),
@@ -549,12 +585,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 SpecialForm::TypeForm.to_string(),
                 arguments,
                 range,
-                TypeFormContext::TypeArgument,
+                type_argument_context,
                 errors,
                 |arg| self.heap.mk_typeform(arg),
             ),
             SpecialForm::Annotated if arguments.len() > 1 => {
-                let inner = self.expr_untype(&arguments[0], TypeFormContext::TypeArgument, errors);
+                let inner = self.expr_untype(&arguments[0], type_argument_context, errors);
                 let metadata: Vec<Type> = arguments[1..]
                     .iter()
                     .map(|e| self.expr_infer(e, &self.error_swallower()))
@@ -564,7 +600,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             SpecialForm::Annotated => self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::BadSpecialization),
+                ErrorKind::BadSpecialization,
                 "`Annotated` needs at least one piece of metadata in addition to the type"
                     .to_owned(),
             ),
@@ -577,7 +613,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | SpecialForm::TypedDict => self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                ErrorKind::InvalidAnnotation,
                 format!("`{special_form}` may not be subscripted"),
             ),
             SpecialForm::ClassVar
@@ -589,7 +625,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | SpecialForm::Required => self.error(
                 errors,
                 range,
-                ErrorInfo::Kind(ErrorKind::InvalidAnnotation),
+                ErrorKind::InvalidAnnotation,
                 format!("`{special_form}` is not allowed in this context"),
             ),
         }

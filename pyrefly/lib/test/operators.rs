@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -17,6 +18,20 @@ def f(a: int, b: int) -> None:
     d = a + 1
     assert_type(d, int)
 "#,
+);
+
+testcase!(
+    test_dict_union_literal_keys,
+    r#"
+from typing import Literal
+
+Allowed = Literal["a", "b", "c"]
+d: dict[Allowed, int] = {"a": 0, "b": 0}
+e: dict[Allowed, int] = d | {"c": 0}
+d |= {"c": 0}
+bad_key: dict[Allowed, int] = d | {"not-allowed": 0}  # E: `dict[Literal['a', 'b', 'c'] | str, int]` is not assignable to `dict[Allowed, int]`
+bad_value: dict[Allowed, int] = d | {"a": "not-an-int"}  # E: `dict[Literal['a', 'b', 'c'] | str, int | str]` is not assignable to `dict[Allowed, int]`
+    "#,
 );
 
 testcase!(
@@ -121,6 +136,49 @@ class CandidateWeight(Generic[Weight]):
     def __add__(self, other: CandidateWeight[Weight]) -> Weight:
         return self.weight + other.weight
     "#,
+);
+
+testcase!(
+    test_incompatible_equality_comparison,
+    TestEnv::new().enable_incompatible_comparison_error(),
+    r#"
+from decimal import Decimal
+
+def compare(
+    x: int,
+    y: str,
+    z: int | str,
+    f: float,
+    b: bytes,
+    ba: bytearray,
+    s: set[int],
+    fs: frozenset[int],
+    d: Decimal,
+    bo: bool,
+    c: complex,
+    mv: memoryview,
+) -> None:
+    x == y  # E: Comparison `==` between incompatible types `int` and `str`
+    x != y  # E: Comparison `!=` between incompatible types `int` and `str`
+    z == y
+    x == f
+    x == d
+    b == ba
+    s == fs
+    x == bo
+    c == f
+    b == mv
+    bo == y  # E: Comparison `==` between incompatible types `bool` and `str`
+    mv == y  # E: Comparison `==` between incompatible types `memoryview` and `str`
+"#,
+);
+
+testcase!(
+    test_incompatible_equality_comparison_default_off,
+    r#"
+def compare(x: int, y: str) -> None:
+    x == y
+"#,
 );
 
 testcase!(
@@ -540,7 +598,8 @@ def test1(x: Any) -> None:
     assert_type(x != 1, Any)
     assert_type(x is None, Any)
     assert_type(x is not None, Any)
-    assert_type(x in [1, 2], Any)
+    assert_type(x in [1, 2], bool)
+    assert_type(x not in [1, 2], bool)
     assert_type(1 in x, Any)
 
 def test2(x: float, y: Any) -> None:
@@ -698,7 +757,7 @@ testcase!(
 from typing import Callable, cast, assert_type
 
 class Tensor:
-    __pow__ = cast(Callable[[Tensor, int], Tensor], lambda x, y: x)  # No redundant cast warning - types are not exactly equal
+    __pow__ = cast("Callable[[Tensor, int], Tensor]", lambda x, y: x)  # No redundant cast warning - types are not exactly equal
 
 def f(x: Tensor, i: int):
     assert_type(x ** i, Tensor)
@@ -863,6 +922,27 @@ True & ThisClassDoesNotWork(False)
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3876
+testcase!(
+    test_reflected_dunder_subclass_priority,
+    r#"
+from enum import IntFlag
+from typing import assert_type
+
+class Color(IntFlag):
+    RED = 1
+    GREEN = 2
+
+def f(x: int, c: Color) -> None:
+    # `int & Color` invokes `Color.__rand__` at runtime because `Color` is a
+    # proper subclass of `int` that overrides the reflected dunder, so the result
+    # keeps the flag type instead of widening to `int`.
+    assert_type(x & c, Color)
+    assert_type(x | c, Color)
+    assert_type(x ^ c, Color)
+"#,
+);
+
 testcase!(
     test_type_of_typevar_equality,
     r#"
@@ -901,6 +981,31 @@ def test(a: A, b: B, c: C) -> None:
     a < b < c  # Should be OK: (a < b) and (b < c)
     a < c      # E: `<` is not supported between `A` and `C`
     "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/4342
+testcase!(
+    test_date_datetime_comparison,
+    r#"
+from datetime import date, datetime
+
+d = date.today()
+dt = datetime.now()
+
+dt < d  # E: `<` is not supported between `datetime` and `date`
+dt <= d  # E: `<=` is not supported between `datetime` and `date`
+dt > d  # E: `>` is not supported between `datetime` and `date`
+dt >= d  # E: `>=` is not supported between `datetime` and `date`
+d < dt  # E: `<` is not supported between `date` and `datetime`
+d <= dt  # E: `<=` is not supported between `date` and `datetime`
+d > dt  # E: `>` is not supported between `date` and `datetime`
+d >= dt  # E: `>=` is not supported between `date` and `datetime`
+
+dt == d
+dt != d
+d < date.today()
+dt < datetime.now()
+"#,
 );
 
 testcase!(
@@ -1090,4 +1195,29 @@ from typing import assert_type
 _ = [{"col": None}] * 1000
 assert_type([1, 2, 3] * 5, list[int])
 "#,
+);
+
+testcase!(
+    test_add_after_narrow,
+    r#"
+def f[T: (bytes, str)](x: T) -> T:
+    if isinstance(x, bytes):
+        return x + b""
+    else:
+        return x + ""
+    "#,
+);
+
+testcase!(
+    test_containment_with_typevars,
+    r#"
+from typing import Iterable
+def f1[T: (str, bytes)](x: T, y: Iterable[T]):
+    return x in y
+def f2[T: (str, bytes)](x: T, y: Iterable[T]):
+    if isinstance(x, str):
+        return x in y
+def f3[T: (str, bytes)](x: T, y: T):
+    return x in y
+    "#,
 );

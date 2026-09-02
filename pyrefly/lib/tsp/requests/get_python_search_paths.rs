@@ -16,11 +16,12 @@ use lsp_types::Url;
 use tsp_types::protocol::GetPythonSearchPathsParams;
 
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::tsp::server::TspConnection;
+use crate::tsp::server::Reply;
+use crate::tsp::server::TspServer;
 use crate::tsp::validation::internal_error;
 use crate::tsp::validation::parse_uri;
 
-impl<T: TspInterface> TspConnection<T> {
+impl<T: TspInterface> TspServer<T> {
     /// Handle a `typeServer/getPythonSearchPaths` request.
     ///
     /// Validates the snapshot, parses the `from_uri`, and delegates to
@@ -33,10 +34,11 @@ impl<T: TspInterface> TspConnection<T> {
         &self,
         id: RequestId,
         params: GetPythonSearchPathsParams,
+        reply: Reply,
     ) {
         // --- 1. Validate snapshot ---
         if let Err(err) = self.validate_snapshot(params.snapshot) {
-            self.send_err(id, err);
+            reply.err(id, err);
             return;
         }
 
@@ -44,7 +46,7 @@ impl<T: TspInterface> TspConnection<T> {
         let url = match parse_uri(&params.from_uri) {
             Ok(url) => url,
             Err(err) => {
-                self.send_err(id, err);
+                reply.err(id, err);
                 return;
             }
         };
@@ -60,7 +62,7 @@ impl<T: TspInterface> TspConnection<T> {
                 Some(file_url) => file_url,
                 None => {
                     // Cannot resolve to a filesystem path — return empty list.
-                    self.send_ok::<Vec<String>>(id, vec![]);
+                    reply.ok::<Vec<String>>(id, vec![]);
                     return;
                 }
             }
@@ -69,8 +71,8 @@ impl<T: TspInterface> TspConnection<T> {
         };
 
         match self.inner().get_python_search_paths(&resolved_url) {
-            Ok(paths) => self.send_ok(id, paths),
-            Err(detail) => self.send_err(id, internal_error(&detail)),
+            Ok(paths) => reply.ok(id, paths),
+            Err(detail) => reply.err(id, internal_error(&detail)),
         }
     }
 }

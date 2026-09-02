@@ -20,28 +20,30 @@ for popular IDEs and editors such as
 See the [Pyrefly website](https://pyrefly.org) for full documentation and how to
 add Pyrefly to your editor of choice.
 
-Pyrefly is currently in [beta](https://github.com/facebook/pyrefly/releases/tag/0.42.0).
+Pyrefly's current development status is [stable](https://github.com/facebook/pyrefly/releases/tag/1.0.0).
 
 ### Key Features
 
 - **Fast.** Pyrefly checks over 1.85 million lines of code per second, type checking projects like PyTorch 15x faster than Mypy and Pyright. In the IDE, rechecks typically complete in under 10 milliseconds after saving a file.
 - **Production-proven at scale.** Pyrefly is the default type checker for Instagram's 20-million-line Python codebase at Meta, and has been adopted by large open source projects including PyTorch and JAX.
 - **Full-featured language server.** Code navigation, autocomplete, hover information, inlay hints, semantic highlighting, and more, with consistent results across the CLI and your editor of choice.
-- **Understands real-world Python.** Built-in support for frameworks like [Pydantic](https://pyrefly.org/en/docs/pydantic/) and [Django](https://pyrefly.org/en/docs/django/), with model validation, field types, and autocomplete that work out of the box.
+- **Understands real-world Python.** Built-in support for frameworks and tools like [Pydantic](https://pyrefly.org/en/docs/pydantic/), [Django](https://pyrefly.org/en/docs/django/), and [pytest](https://pyrefly.org/en/docs/pytest/), with model validation, field types, fixture navigation, and autocomplete that work out of the box.
 - **Adoption-ready.** Migrate from Mypy or Pyright with `pyrefly init`, silence existing errors with `pyrefly suppress`, and generate type annotations with `pyrefly infer`. Start with one file and expand at your own pace.
 
 ### Getting Started
 
 - Try out pyrefly in your browser: [Sandbox](https://pyrefly.org/sandbox/)
 - Get the command-line tool: `pip install pyrefly`
-- Get the IDE Extension: [IDE installation page](https://pyrefly.org/en/docs/IDE/)
+- Get the IDE extension: [IDE installation page](https://pyrefly.org/en/docs/IDE/)
 
 ### Version Policy
 
-Pyrefly releases new minor versions (`0.x.0`) weekly, with patch fixes (`0.x.y`) in between as needed.
-Pyrefly does *not* follow strict semantic versioning: any version may introduce new type errors and
-other breaking changes. The [`pyrefly suppress`](https://pyrefly.org/en/docs/error-suppressions/)
-command can be used to easily silence errors when upgrading to a new version.
+Pyrefly releases new minor versions (`1.x.0`) monthly and patch versions in between
+as-needed for critical fixes. Pyrefly does *not* follow strict semantic versioning:
+minor versions contain more significant changes than patch versions, but any
+version may introduce new type errors and other breaking changes. The
+[`pyrefly suppress`](https://pyrefly.org/en/docs/error-suppressions/) command can be used
+to easily silence errors when upgrading to a new version.
 
 ## Getting Involved
 

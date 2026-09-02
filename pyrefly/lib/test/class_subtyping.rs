@@ -60,6 +60,48 @@ b: type[B] = A  # E: `type[A]` is not assignable to `type[B]`
 );
 
 testcase!(
+    test_metaclass_instance_not_subtype_of_specific_type,
+    r#"
+from typing import Any
+class Meta(type): pass
+class A(metaclass=Meta): pass
+
+def f(x: Meta):
+    a: type[A] = x  # E: `Meta` is not assignable to `type[A]`
+    any_cls: type[Any] = x
+    o: type[object] = x
+    union_with_object: type[int | object] = x
+    union_without_object: type[int | str] = x  # E: `Meta` is not assignable to `type[int | str]`
+"#,
+);
+
+testcase!(
+    test_concrete_metaclass_class_object_subtyping,
+    r#"
+class Meta(type): pass
+class Base(metaclass=Meta):
+    def only_on_base(self) -> str:
+        return "base"
+class Child(Base): pass
+
+def needs_base_class(cls: type[Base]) -> str:
+    return cls().only_on_base()
+
+def make[T: Base](cls: type[T]) -> T:
+    return cls()
+
+cls = Child
+needs_base_class(Child)
+needs_base_class(cls)
+child: Child = make(Child)
+
+def f(x: Meta):
+    unsafe: type[Base] = x  # E: `Meta` is not assignable to `type[Base]`
+    make(x)  # E: Argument `Meta` is not assignable to parameter `cls`
+"#,
+);
+
+testcase!(
     test_generic_class_object_subtyping,
     r#"
 class A[T]: pass
@@ -172,7 +214,8 @@ testcase!(
     r#"
 class A(type): pass
 def test(a: A):
-    x: type[int] = a
+    x: type[int] = a  # E: `A` is not assignable to `type[int]`
+    y: type[object] = a
 "#,
 );
 

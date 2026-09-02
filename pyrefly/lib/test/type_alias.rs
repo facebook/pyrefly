@@ -578,10 +578,10 @@ from typing import *
 Ts = TypeVarTuple('Ts')
 P = ParamSpec('P')
 t1: TypeAlias = Unpack[TypedDict]  # E: `Unpack` is not allowed in this context # E: `TypedDict` is not allowed in this context
-t2: TypeAlias = P  # E: `ParamSpec` is not allowed in this context
+t2: TypeAlias = P  # E: `P` is not allowed in this context
 t3: TypeAlias = Unpack[Ts]  # E: `Unpack` is not allowed in this context
 t4: TypeAlias = Literal  # E: Expected a type argument for `Literal`
-t5: TypeAlias = Ts  # E: `TypeVarTuple` must be unpacked
+t5: TypeAlias = Ts  # E: `TypeVarTuple` is not allowed in this context
 t6: TypeAlias = Generic  # E: Expected a type argument for `Generic`
 t7: TypeAlias = Protocol  # E: Expected a type argument for `Protocol`
 t8: TypeAlias = Generic[int]  # E: `Generic` is not allowed in this context
@@ -691,8 +691,8 @@ testcase!(
 from typing import ParamSpec, TypeVarTuple, Unpack
 P = ParamSpec('P')
 Ts = TypeVarTuple('Ts')
-Error1 = type[P]  # E: `ParamSpec` is not allowed
-Error2 = type[Ts]  # E: `TypeVarTuple` must be unpacked
+Error1 = type[P]  # E: `P` is not allowed
+Error2 = type[Ts]  # E: `TypeVarTuple` is not allowed in this context
 Error3 = type[Unpack[Ts]]  # E: `Unpack` is not allowed
     "#,
 );
@@ -1088,7 +1088,6 @@ def type_alias_subscript() -> Iterator["TResult[Line]"]:
 );
 
 testcase!(
-    bug = "conformance: Should error when using non-type expressions as implicit type aliases",
     test_bad_implicit_type_alias_conformance,
     r#"
 BadTypeAlias1 = eval("".join(map(chr, [105, 110, 116])))
@@ -1098,12 +1097,37 @@ BadTypeAlias8 = int if 1 < 3 else str
 BadTypeAlias12 = list or set
 
 def bad_type_aliases(
-    p1: BadTypeAlias1,  # should error: eval result is not a valid type
-    p6: BadTypeAlias6,  # should error: lambda call is not a valid type
-    p7: BadTypeAlias7,  # should error: list subscript is not a valid type
-    p8: BadTypeAlias8,  # should error: conditional expr is not a valid type
-    p12: BadTypeAlias12,  # should error: 'or' expr is not a valid type
+    p1: BadTypeAlias1,  # E: `BadTypeAlias1` is not a valid type alias: Function call cannot be used in annotations
+    p6: BadTypeAlias6,  # E: `BadTypeAlias6` is not a valid type alias: Function call cannot be used in annotations
+    p7: BadTypeAlias7,  # E: `BadTypeAlias7` is not a valid type alias: Invalid subscript expression cannot be used in annotations
+    p8: BadTypeAlias8,  # E: `BadTypeAlias8` is not a valid type alias: If expression cannot be used in annotations
+    p12: BadTypeAlias12,  # E: `BadTypeAlias12` is not a valid type alias: Boolean operation cannot be used in annotations
 ):
+    pass
+"#,
+);
+
+testcase!(
+    test_implicit_alias_exempt_class_constructors,
+    r#"
+from typing import NamedTuple
+from typing_extensions import TypedDict
+
+Point = NamedTuple("Point", [("x", int), ("y", int)])
+Config = TypedDict("Config", {"x": int})
+DynClass = type("DynClass", (), {})
+
+def f(p: Point, c: Config, d: DynClass) -> tuple[Point, Config, DynClass]:
+    return p, c, d
+"#,
+);
+
+testcase!(
+    test_implicit_alias_base_class_not_checked,
+    r#"
+BadBase = eval("int")
+
+class Foo(BadBase):
     pass
 "#,
 );

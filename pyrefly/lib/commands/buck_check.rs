@@ -12,7 +12,7 @@ use std::str::FromStr;
 use anyhow::Context as _;
 use clap::Parser;
 use dupe::Dupe;
-use pyrefly_build::source_db::SourceDatabase;
+use pyrefly_build::source_db::ModuleEnumerator;
 use pyrefly_build::source_db::buck_check::BuckCheckSourceDatabase;
 use pyrefly_config::base::InferReturnTypes;
 use pyrefly_config::error::ErrorDisplayConfig;
@@ -25,6 +25,7 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::forgetter::Forgetter;
 use pyrefly_util::fs_anyhow;
 use pyrefly_util::thread_pool::ThreadCount;
+use regex::Regex;
 use ruff_text_size::Ranged;
 use serde::Deserialize;
 use tracing::info;
@@ -77,6 +78,12 @@ pub struct BuckCheckArgs {
     /// Also check dependency files, which are normally only used for import resolution.
     #[arg(long)]
     check_dependencies: bool,
+
+    /// When checking dependencies (`--check-dependencies`), skip type-checking
+    /// dependency modules whose module name matches any of these regexes.
+    /// May be passed multiple times. Has no effect without `--check-dependencies`.
+    #[arg(long = "skip-dependency-modules", value_name = "REGEX")]
+    skip_dependency_modules: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -97,7 +104,7 @@ fn read_input_file(path: &Path) -> anyhow::Result<InputFile> {
 
 fn compute_errors(
     sys_info: SysInfo,
-    sourcedb: impl SourceDatabase + 'static,
+    sourcedb: impl ModuleEnumerator + 'static,
     thread_count: ThreadCount,
     report_pysa: Option<&Path>,
     report_pysa_format: report::pysa::PysaFormat,
@@ -118,6 +125,11 @@ fn compute_errors(
     config.root.permissive_ignores = Some(true);
     config.root.check_unannotated_defs = Some(false);
     config.root.infer_return_types = Some(InferReturnTypes::Annotated);
+    config.root.ignore_errors_in_generated_code = Some(true);
+    if report_pysa.is_some() {
+        config.root.check_unannotated_defs = Some(true);
+        config.root.infer_return_types = Some(InferReturnTypes::Checked);
+    }
     let mut error_config = ErrorDisplayConfig::default();
     error_config.set_error_severity(ErrorKind::Deprecated, Severity::Ignore);
     error_config.set_error_severity(ErrorKind::UnusedIgnore, Severity::Info);
@@ -205,6 +217,16 @@ fn write_output(errors: &[Error], path: Option<&Path>) -> anyhow::Result<()> {
     }
 }
 
+/// Whether an error survives the `--min-severity` filter and is written to the
+/// output. Two kinds are kept regardless of severity:
+/// - Directives (e.g. `reveal_type`), whose payload the client renders specially.
+/// - `UnusedIgnore`, emitted at `Severity::Info` (see `set_error_severity` above)
+///   and consumed by `arc pyre check --remove-unused-ignores`. Dropping it here
+///   would silently leave that command with nothing to remove.
+fn keep_in_output(error_kind: ErrorKind, severity: Severity, min_severity: Severity) -> bool {
+    error_kind.is_directive() || error_kind == ErrorKind::UnusedIgnore || severity >= min_severity
+}
+
 impl BuckCheckArgs {
     fn progress_bar_style(&self) -> ProgressBarStyle {
         if let Some(style) = &self.progress_bar {
@@ -222,12 +244,21 @@ impl BuckCheckArgs {
         let python_version = PythonVersion::from_str(&input_file.py_version)?;
         let python_platform = PythonPlatform::new(&input_file.system_platform);
         let sys_info = SysInfo::new(python_version, python_platform);
+        let skip_dependency_regexes = self
+            .skip_dependency_modules
+            .iter()
+            .map(|pattern| {
+                Regex::new(pattern)
+                    .with_context(|| format!("invalid --skip-dependency-modules `{pattern}`"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         let sourcedb = BuckCheckSourceDatabase::from_manifest_files(
             input_file.sources.as_slice(),
             input_file.dependencies.as_slice(),
             input_file.typeshed.as_slice(),
             sys_info.dupe(),
             self.check_dependencies,
+            skip_dependency_regexes,
         )?;
         let type_errors = compute_errors(
             sys_info,
@@ -240,10 +271,59 @@ impl BuckCheckArgs {
         let min_severity = self.min_severity.unwrap_or(Severity::Error);
         let displayed_errors: Vec<Error> = type_errors
             .into_iter()
-            .filter(|e| e.error_kind().is_directive() || e.severity() >= min_severity)
+            .filter(|e| keep_in_output(e.error_kind(), e.severity(), min_severity))
             .collect();
         info!("Found {} type errors", displayed_errors.len());
         write_output(&displayed_errors, self.output_path.as_deref())?;
         Ok(CommandExitStatus::Success)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unused_ignore_survives_default_min_severity() {
+        // UnusedIgnore is emitted at Info, below the default Error threshold.
+        // It must still be written so `arc pyre check --remove-unused-ignores`
+        // has something to remove. This is the regression guard for that bug.
+        assert!(keep_in_output(
+            ErrorKind::UnusedIgnore,
+            Severity::Info,
+            Severity::Error,
+        ));
+    }
+
+    #[test]
+    fn ordinary_subthreshold_error_is_filtered() {
+        assert!(!keep_in_output(
+            ErrorKind::BadAssignment,
+            Severity::Info,
+            Severity::Error,
+        ));
+    }
+
+    #[test]
+    fn directive_survives_default_min_severity() {
+        assert!(keep_in_output(
+            ErrorKind::RevealType,
+            Severity::Info,
+            Severity::Error,
+        ));
+    }
+
+    #[test]
+    fn at_or_above_threshold_is_kept() {
+        assert!(keep_in_output(
+            ErrorKind::BadAssignment,
+            Severity::Error,
+            Severity::Error,
+        ));
+        assert!(keep_in_output(
+            ErrorKind::BadAssignment,
+            Severity::Info,
+            Severity::Info,
+        ));
     }
 }

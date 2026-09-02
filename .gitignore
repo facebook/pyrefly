@@ -1,3 +1,8 @@
 debug.json
 debug.js
 target/
+
+target/criterion/
+criterion/
+*.bench
+criterion-*/

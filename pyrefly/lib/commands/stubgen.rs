@@ -59,7 +59,7 @@ impl StubgenArgs {
         let (files_to_check, config_finder, _) =
             self.files.resolve(self.config_override, wrapper)?;
 
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files())?;
+        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
         let state = State::new(config_finder, thread_count);
         let holder = Forgetter::new(state, false);
         let handles = Handles::new(expanded_file_list);

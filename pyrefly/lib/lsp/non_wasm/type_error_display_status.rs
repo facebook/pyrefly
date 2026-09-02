@@ -115,6 +115,8 @@ pub struct TypeErrorDisplayStatusV2 {
     /// URL referenced from the tooltip — the IDE typically renders this
     /// as the trailing "Docs" link in the hover.
     pub docs_url: String,
+    /// The version of Pyrefly that's currently running.
+    pub pyrefly_version: Option<String>,
 }
 
 /// Internal sum type covering both wire shapes. `#[serde(untagged)]`
@@ -154,12 +156,13 @@ const STATUS_BAR_DOCS_URL: &str = "https://pyrefly.org/en/docs/IDE/";
 /// The onboarding nudge for genuine no-config states lives in the
 /// `Some(SynthesizedPresetReason::NoNearbyConfig)` branch of
 /// `derive_v2_response` (with `Basic` label + `pyrefly init` tooltip).
-pub fn default_v2_response() -> TypeErrorDisplayStatusV2 {
+pub fn default_v2_response(pyrefly_version: Option<String>) -> TypeErrorDisplayStatusV2 {
     TypeErrorDisplayStatusV2 {
         version: "v2".to_owned(),
         label: None,
         tooltip: String::new(),
         docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+        pyrefly_version,
     }
 }
 
@@ -178,6 +181,7 @@ pub fn derive_v2_response(
     disable_type_errors_in_ide: bool,
     workspace_disable_type_errors: bool,
     workspace_type_checking_mode: Option<TypeCheckingMode>,
+    pyrefly_version: Option<String>,
 ) -> TypeErrorDisplayStatusV2 {
     if workspace_disable_type_errors {
         return TypeErrorDisplayStatusV2 {
@@ -187,16 +191,15 @@ pub fn derive_v2_response(
                 "Pyrefly diagnostics are suppressed by [`python.pyrefly.disableTypeErrors`](command:workbench.action.openSettings?[\"python.pyrefly.disableTypeErrors\"]).\n\nUnset this setting to re-enable diagnostics."
                     .to_owned(),
             docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+            pyrefly_version,
         };
     }
     match reason {
-        Some(SynthesizedPresetReason::IdeOverride) => {
-            // The IdeOverride reason is set by the unconfigured resolver
-            // when the user explicitly chose a non-`Auto` value for the
-            // `python.pyrefly.typeCheckingMode` workspace setting AND no
-            // nearby `pyrefly.toml` was found, so we surface both facts.
-            // Fall back to `<unknown>` only if the workspace state and
-            // the reason somehow disagree — shouldn't happen in practice.
+        Some(SynthesizedPresetReason::UserOverride) => {
+            // In the LSP this is produced by the unconfigured resolver
+            // when the user chose a non-`Auto` `typeCheckingMode`. On the
+            // CLI it comes from `--preset`. Either way the user made a
+            // deliberate choice, so we just surface the current value.
             let value = workspace_type_checking_mode
                 .map(type_checking_mode_kebab)
                 .unwrap_or("<unknown>");
@@ -207,6 +210,7 @@ pub fn derive_v2_response(
                     "Pyrefly is using the [`python.pyrefly.typeCheckingMode`](command:workbench.action.openSettings?[\"python.pyrefly.typeCheckingMode\"]) setting (currently: `{value}`) because no `pyrefly.toml` was found.\n\nRun `pyrefly init` to continue setting up Pyrefly.",
                 ),
                 docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+                pyrefly_version,
             }
         }
         Some(SynthesizedPresetReason::Migrated(kind)) => {
@@ -235,6 +239,7 @@ pub fn derive_v2_response(
                     "Pyrefly is using settings imported from {location} (preset: {preset}).\n\nRun `pyrefly init` to continue setting up Pyrefly.",
                 ),
                 docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+                pyrefly_version,
             }
         }
         Some(SynthesizedPresetReason::NoNearbyConfig) => TypeErrorDisplayStatusV2 {
@@ -244,6 +249,7 @@ pub fn derive_v2_response(
                 "Pyrefly is running with the `basic` preset because no `pyrefly.toml` was found.\n\nRun `pyrefly init` to continue setting up Pyrefly."
                     .to_owned(),
             docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+            pyrefly_version,
         },
         None => match source {
             ConfigSource::File(path) if disable_type_errors_in_ide => {
@@ -267,6 +273,7 @@ pub fn derive_v2_response(
                         "Pyrefly diagnostics are suppressed by `disable-type-errors-in-ide` in {location}.\n\nRemove this config to re-enable diagnostics.",
                     ),
                     docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+                    pyrefly_version,
                 }
             }
             ConfigSource::File(_) => TypeErrorDisplayStatusV2 {
@@ -274,8 +281,9 @@ pub fn derive_v2_response(
                 label: None,
                 tooltip: String::new(),
                 docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+                pyrefly_version,
             },
-            _ => default_v2_response(),
+            _ => default_v2_response(pyrefly_version),
         },
     }
 }
@@ -292,6 +300,7 @@ fn type_checking_mode_kebab(mode: TypeCheckingMode) -> &'static str {
         TypeCheckingMode::Legacy => "legacy",
         TypeCheckingMode::Default => "default",
         TypeCheckingMode::Strict => "strict",
+        TypeCheckingMode::All => "all",
     }
 }
 
@@ -327,13 +336,14 @@ mod tests {
         use crate::state::lsp::TypeCheckingMode;
 
         #[test]
-        fn ide_override_yields_null_label() {
+        fn user_override_yields_null_label() {
             let r = derive_v2_response(
-                Some(SynthesizedPresetReason::IdeOverride),
-                &ConfigSource::Synthetic,
+                Some(SynthesizedPresetReason::UserOverride),
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 Some(TypeCheckingMode::Strict),
+                None,
             );
             assert_eq!(r.label, None);
             assert!(r.tooltip.contains("typeCheckingMode"));
@@ -352,9 +362,10 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(MigratedFromKind::Mypy(
                     MigratedConfigSource::DedicatedFile,
                 ))),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Legacy"));
@@ -368,9 +379,10 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(MigratedFromKind::Mypy(
                     MigratedConfigSource::PyprojectToml,
                 ))),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Legacy"));
@@ -384,9 +396,10 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(
                     MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile),
                 )),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Default"));
@@ -399,9 +412,10 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(
                     MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml),
                 )),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Default"));
@@ -416,9 +430,10 @@ mod tests {
         fn no_nearby_config_yields_basic_label() {
             let r = derive_v2_response(
                 Some(SynthesizedPresetReason::NoNearbyConfig),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Basic"));
@@ -437,6 +452,7 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
             );
             assert_eq!(r.label, None);
             assert!(r.tooltip.is_empty());
@@ -453,6 +469,7 @@ mod tests {
                 &ConfigSource::File(PathBuf::from("/proj/pyrefly.toml")),
                 true,
                 false,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
@@ -476,6 +493,7 @@ mod tests {
                 true,
                 false,
                 None,
+                None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
             assert!(r.tooltip.contains("disable-type-errors-in-ide"));
@@ -493,7 +511,14 @@ mod tests {
         /// know which knob to flip.
         #[test]
         fn workspace_kill_switch_yields_errors_off_label() {
-            let r = derive_v2_response(None, &ConfigSource::Synthetic, false, true, None);
+            let r = derive_v2_response(
+                None,
+                &ConfigSource::Synthetic(None),
+                false,
+                true,
+                None,
+                None,
+            );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
             assert!(r.tooltip.contains("python.pyrefly.disableTypeErrors"));
         }
@@ -506,9 +531,10 @@ mod tests {
         fn workspace_kill_switch_wins_over_preset_reason() {
             let r = derive_v2_response(
                 Some(SynthesizedPresetReason::NoNearbyConfig),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 true,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
@@ -522,6 +548,7 @@ mod tests {
                 &ConfigSource::File(PathBuf::from("/proj/pyrefly.toml")),
                 true,
                 true,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));

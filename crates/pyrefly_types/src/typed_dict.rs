@@ -121,6 +121,20 @@ impl TypedDict {
         heap.mk_typed_dict(self)
     }
 
+    pub fn is_anonymous(&self) -> bool {
+        matches!(self, Self::Anonymous(_))
+    }
+
+    /// Display label for error messages: `"dict"` for anonymous TypedDicts,
+    /// `"TypedDict \`X\`"` for declared ones.
+    pub fn label(&self) -> String {
+        if self.is_anonymous() {
+            "dict".to_owned()
+        } else {
+            format!("TypedDict `{}`", self.name())
+        }
+    }
+
     // This is just a placeholder to reduce refactoring for existing code
     // We should consider showing the anonymous typed dicts like `{k1: v1, k2: v2}`
     pub fn name(&self) -> &Name {

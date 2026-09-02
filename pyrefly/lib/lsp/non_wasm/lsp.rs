@@ -52,21 +52,17 @@ where
 pub fn as_request_response_pair<T>(
     request: &Request,
     response: &Response,
-) -> Option<(T::Params, T::Result)>
+) -> Option<(T::Params, Result<T::Result, serde_json::Error>)>
 where
     T: lsp_types::request::Request,
     T::Params: DeserializeOwned,
+    T::Result: DeserializeOwned,
 {
     if response.id != request.id {
         return None;
     }
     let params = as_request::<T>(request)?.ok()?;
-    let result = serde_json::from_value(response.result.clone()?).unwrap_or_else(|err| {
-        panic!(
-            "Invalid response\n  method: {}\n response:{:?}\n, response error:{:?}\n, error: {}\n",
-            request.method, response.result, response.error, err
-        )
-    });
+    let result = response.result.clone().map(serde_json::from_value)?;
     Some((params, result))
 }
 

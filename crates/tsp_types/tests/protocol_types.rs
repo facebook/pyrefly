@@ -17,11 +17,11 @@ use tsp_types::*;
 #[test]
 fn test_type_kind_serialization() {
     let kind = TypeKind::Builtin;
-    let json = serde_json::to_value(&kind).unwrap();
+    let json = serde_json::to_value(kind).unwrap();
     assert_eq!(json, serde_json::json!(0));
 
     let kind = TypeKind::Function;
-    let json = serde_json::to_value(&kind).unwrap();
+    let json = serde_json::to_value(kind).unwrap();
     assert_eq!(json, serde_json::json!(2));
 }
 
@@ -46,14 +46,14 @@ fn test_declaration_kind_round_trip() {
 #[test]
 fn test_declaration_category_serialization() {
     let cat = DeclarationCategory::Function;
-    let json = serde_json::to_value(&cat).unwrap();
+    let json = serde_json::to_value(cat).unwrap();
     assert_eq!(json, serde_json::json!(5));
 }
 
 #[test]
 fn test_type_flags_serialization() {
     let flag = TypeFlags::CALLABLE;
-    let json = serde_json::to_value(&flag).unwrap();
+    let json = serde_json::to_value(flag).unwrap();
     assert_eq!(json, serde_json::json!(4));
 }
 

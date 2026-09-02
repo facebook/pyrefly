@@ -49,12 +49,26 @@ jobs:
             echo "Will create release with auto-generated notes"
           fi
 
+      - name: Determine prerelease flag
+        id: prerelease
+        run: |
+          # Validate the version first, then check prerelease. is-prerelease
+          # returns exit 1 for stable (which is fine in an if-condition) but
+          # exit 2 for malformed input (which should fail the step).
+          python3 scripts/version_helpers.py to-marketplace "${{ inputs.tag_name }}" >/dev/null
+          if python3 scripts/version_helpers.py is-prerelease "${{ inputs.tag_name }}" >/dev/null; then
+            echo "prerelease_flag=--prerelease" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease_flag=" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create release with notes file
         if: steps.find-notes.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ inputs.tag_name }}" \
+            ${{ steps.prerelease.outputs.prerelease_flag }} \
             --title "Pyrefly v${{ inputs.tag_name }}" \
             --notes-file "${{ steps.find-notes.outputs.notes_file }}"
 
@@ -64,6 +78,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ inputs.tag_name }}" \
+            ${{ steps.prerelease.outputs.prerelease_flag }} \
             --title "Pyrefly v${{ inputs.tag_name }}" \
             --generate-notes
 

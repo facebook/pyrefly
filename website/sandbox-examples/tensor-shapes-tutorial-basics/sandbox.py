@@ -10,13 +10,13 @@ from typing import assert_type, TYPE_CHECKING
 import torch
 
 if TYPE_CHECKING:
+    from shape_extensions import Int
     from torch import Tensor
-    from torch_shapes import Dim
 
 
-# Step 1: Use Dim to capture dimensions at construction
+# Step 1: Use Int to capture dimensions at construction
 class Actor[S, A]:
-    def __init__(self, state_size: Dim[S], action_size: Dim[A]):
+    def __init__(self, state_size: Int[S], action_size: Int[A]):
         self.w1: Tensor[S, 128] = torch.randn(state_size, 128)
         self.w2: Tensor[128, A] = torch.randn(128, action_size)
 

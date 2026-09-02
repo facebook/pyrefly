@@ -1,7 +1,8 @@
 # @generated
 from typing import TypeAlias
 
-Vector: TypeAlias
+__all__ = ["public_func", "PublicClass", "PUBLIC_VAR", "Vector"]
+Vector: TypeAlias = list[float]
 
 
 def public_func(x: int) -> str: ...

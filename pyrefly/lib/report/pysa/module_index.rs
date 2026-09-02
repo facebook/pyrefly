@@ -9,9 +9,9 @@ use std::collections::HashMap;
 
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::FuncDefIndex;
-use pyrefly_types::callable::FunctionKind;
-use pyrefly_types::callable::PropertyRole;
+use pyrefly_types::function::FuncDefIndex;
+use pyrefly_types::function::FunctionKind;
+use pyrefly_types::function::PropertyRole;
 use pyrefly_types::types::Type;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -93,15 +93,15 @@ pub(crate) static GRAPHQL_DECORATORS: &[(&GraphQLDecoratorRef, &GraphQLDecorator
 /// the module and name from the function metadata.
 fn decorator_matches_graphql_ref(ty: &Type, graphql_ref: &GraphQLDecoratorRef) -> bool {
     let func_metadata = match ty {
-        Type::Function(box pyrefly_types::callable::Function { metadata, .. }) => Some(metadata),
-        Type::Overload(pyrefly_types::types::Overload { box metadata, .. }) => Some(metadata),
+        Type::Function(f) => Some(&f.metadata),
+        Type::Overload(o) => Some(&*o.metadata),
         _ => None,
     };
     match func_metadata {
-        Some(pyrefly_types::callable::FuncMetadata {
+        Some(pyrefly_types::function::FuncMetadata {
             kind: FunctionKind::Def(func_id),
             ..
-        }) => graphql_ref.matches_decorator_id(func_id.module.name(), &func_id.name),
+        }) => graphql_ref.matches_decorator_id(func_id.qname.module_name(), func_id.qname.id()),
         _ => false,
     }
 }
@@ -262,10 +262,9 @@ impl PysaModuleIndex {
                         .as_ref()
                         .is_some_and(|m| m.role == PropertyRole::Getter)
                     && let FunctionKind::Def(func_id) = &function.metadata.kind
-                    && func_id.name != field_name
-                    && func_id.module == context.module_info
-                    && let Some(def_index) = func_id.def_index
-                    && let Some(getter_ref) = func_def_to_function_ref.get(&def_index)
+                    && func_id.qname.id() != &field_name
+                    && func_id.qname.module() == &context.module_info
+                    && let Some(getter_ref) = func_def_to_function_ref.get(&func_id.def_index)
                     && let Some(declaration) =
                         get_class_field_declaration(&class, &field_name, context)
                 {

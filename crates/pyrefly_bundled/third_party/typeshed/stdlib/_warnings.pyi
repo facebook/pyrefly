@@ -63,7 +63,6 @@ if sys.version_info >= (3, 12):
           during stacklevel computations for stack frame attribution.
         """
         ...
-
 else:
     @overload
     def warn(message: str, category: type[Warning] | None = None, stacklevel: int = 1, source: Any | None = None) -> None: ...

@@ -26,7 +26,7 @@ Not seeing inlay hints in VS Code? Try setting `editor.inlayHints.enabled` to `t
 :::
 
 :::tip
-Want type error squiggles to show up in your editor by default? Try setting `python.pyrefly.displayTypeErrors` to `"force-on"` in your editor settings, create a `pyrefly.toml` file in your project root, or add a `[tool.pyrefly]` section to your `pyproject.toml` (can be empty).
+Want the broader set of type-check diagnostics to show up in your editor by default? Run `pyrefly init`. It adds a `[tool.pyrefly]` section to an existing `pyproject.toml`, or creates a new `pyrefly.toml` if no `pyproject.toml` is present. You can also set `python.pyrefly.typeCheckingMode` to `"default"` or `"strict"` in your editor settings.
 :::
 
 ## Customization
@@ -37,11 +37,44 @@ By default, Pyrefly should work in the IDE with no configuration necessary. But 
 
 The following configuration options are IDE-specific and exposed as VSCode settings:
 
-#### `python.pyrefly.displayTypeErrors`
+#### `python.pyrefly.typeCheckingMode`
+
+**Type:** enum (`auto`, `off`, `basic`, `legacy`, `default`, `strict`, `all`) &nbsp; **Default:** `"auto"`
+
+Controls how Pyrefly configures files not covered by a `pyrefly.toml` or `[tool.pyrefly]` section. Those configurations always take precedence over this setting. `auto` is a configuration-selection mode, not a preset.
+
+- `auto` (default): searches for a nearby `mypy.ini` / `pyrightconfig.json` (or `[tool.mypy]` / `[tool.pyright]` in `pyproject.toml`) and migrates its settings in memory. If no migratable configuration is found, or migration fails, Pyrefly uses the `basic` preset. Nothing is written to disk.
+- `off`: silences every error kind. Useful for editor users who only want IDE features (hover, go-to-def) without diagnostics.
+- `basic`: minimal checking. Only high-confidence errors fire; everything else is silenced.
+- `legacy`: looser preset for codebases migrating from mypy. Unlike `auto`, this is just the bare preset with no migration of any nearby mypy/pyright config.
+- `default`: Pyrefly's default behavior.
+- `strict`: additional error kinds on top of default for stricter checking.
+- `all`: enables every error kind at error severity.
+
+The non-`auto` values force a specific preset and skip configuration detection and migration.
+
+#### `python.pyrefly.disableTypeErrors`
+
+**Type:** boolean &nbsp; **Default:** `false`
+
+Workspace kill switch for Pyrefly type-error diagnostics. When `true`, all errors are suppressed for files in this workspace, regardless of `pyrefly.toml` settings or preset. The status bar shows `Pyrefly (Errors Off)` and the hover explains the source. When `false` (the default), Pyrefly defers to the project's `pyrefly.toml` and any in-config `disable-type-errors-in-ide` flag. The project's committed config is authoritative.
+
+There is no override that bypasses an in-config disable. If a project ships with `disable-type-errors-in-ide = true` and you want to see errors locally, remove the flag from your `pyrefly.toml`.
+
+#### `python.pyrefly.displayTypeErrors` (deprecated)
 
 **Type:** enum (`default`, `force-on`, `force-off`, `error-missing-imports`) &nbsp; **Default:** `"default"`
 
-Controls type-check diagnostics in the IDE. If `'default'`, Pyrefly will only provide type checking diagnostics if your file is covered by a [Pyrefly configuration](../configuration). If `'force-off'`, Pyrefly will never provide type check diagnostics. If `'force-on'`, Pyrefly will always provide type check diagnostics. If `'error-missing-imports'`, Pyrefly will only show errors for missing imports and missing sources (`missing-import`, `missing-source`, and `missing-source-for-stubs`). Syntax errors (`invalid-syntax` and `parse-error`) are shown by default in every mode besides `force-off`.
+:::warning
+Replaced by [`typeCheckingMode`](#pythonpyreflytypecheckingmode) and [`disableTypeErrors`](#pythonpyreflydisabletypeerrors). This setting still works for backwards compatibility but new configurations should use the replacements. When both legacy and new settings are present, the new settings take precedence.
+:::
+
+Legacy mapping onto the new model:
+
+- `force-on` -> `typeCheckingMode = "default"`. No effect on `disableTypeErrors`.
+- `force-off` -> `disableTypeErrors = true` (workspace kill switch). No effect on Pyrefly's behavior for files without a Pyrefly configuration.
+- `default` resets both new settings to their unset values (`typeCheckingMode = "auto"`, `disableTypeErrors = false`). Use it to clear a previous `force-on` / `force-off` setting.
+- `error-missing-imports` was removed in v0.64.0 and now behaves identically to `default`.
 
 #### `python.pyrefly.diagnosticMode`
 
@@ -53,7 +86,7 @@ Controls the scope of Pyrefly's diagnostic analysis. When set to `'openFilesOnly
 
 **Type:** boolean &nbsp; **Default:** `false`
 
-If true, Pyrefly will not provide IDE services like completions, hover, definition, etc. Type errors are controlled separately via [`displayTypeErrors`](#pythonpyreflydisplaytypeerrors). Set to `true` to keep type errors from Pyrefly unchanged but use VSCode's Python extension for everything else.
+If true, Pyrefly will not provide IDE services like completions, hover, definition, etc. Type errors are controlled separately via [`disableTypeErrors`](#pythonpyreflydisabletypeerrors) and [`typeCheckingMode`](#pythonpyreflytypecheckingmode). Set to `true` to keep type errors from Pyrefly unchanged but use VSCode's Python extension for everything else.
 
 #### `python.pyrefly.disabledLanguageServices`
 
@@ -62,6 +95,12 @@ If true, Pyrefly will not provide IDE services like completions, hover, definiti
 Granular toggle to disable individual language services. Set a service to `true` to disable it. For example, if you want go-to definition but not find-references.
 
 Available services: `hover`, `documentSymbol`, `workspaceSymbol`, `inlayHint`, `completion`, `codeAction`, `definition`, `declaration`, `typeDefinition`, `references`, `documentHighlight`, `rename`, `codeLens`, `semanticTokens`, `signatureHelp`, `implementation`, `callHierarchy`.
+
+Services not in this list can only be turned off wholesale via [`disableLanguageServices`](#pythonpyreflydisablelanguageservices).
+
+:::note
+`workspaceSymbol` and `callHierarchy` are accepted but not yet honored — setting them to `true` currently has no effect.
+:::
 
 #### `python.pyrefly.configPath`
 
@@ -99,6 +138,12 @@ Controls whether hover tooltips include "Go to definition" and "Go to type defin
 
 Automatically insert parentheses when completing a function or method.
 
+#### `python.analysis.autoImportCompletions`
+
+**Type:** boolean &nbsp; **Default:** `true`
+
+Controls whether completions include symbols that are not yet imported. When enabled, accepting such a completion also inserts the required import statement. Set to `false` to only complete symbols that are already in scope.
+
 #### `pyrefly.lspPath`
 
 **Type:** string &nbsp; **Default:** `""`
@@ -133,26 +178,42 @@ This is a setting from the [Python extension](https://marketplace.visualstudio.c
 
 When used with non-VSCode editors, the options above can also be configured by sending them via `initializationOptions` in the LSP [initialization](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#initialize) request.
 
-Below is an example of a value that can be passed for `initializationOptions`:
+The keys are the VSCode setting names with the leading `python.` stripped, so `python.pyrefly.typeCheckingMode` becomes `pyrefly.typeCheckingMode` and `python.analysis.importFormat` becomes `analysis.importFormat`. `analysis` is also accepted under `pyrefly` (`pyrefly.analysis.importFormat`) — the two are equivalent. Everything is optional; omitted keys keep their defaults.
+
+Two exceptions: `commentFoldingRanges` sits at the top level rather than under `pyrefly`, and `pyrefly.lspPath` / `pyrefly.lspArguments` / `pyrefly.trace.server` have no `initializationOptions` equivalent at all — they tell the VSCode extension how to launch the server, which your client already does itself.
+
+Below is an example showing every supported key at its default value:
 ```json
 {
   "pythonPath": "/usr/bin/python3",
-  "commentFoldingRanges": true,
+  "commentFoldingRanges": false,
+  "analysis": {
+    "diagnosticMode": "openFilesOnly",
+    "importFormat": "absolute",
+    "completeFunctionParens": false,
+    "autoImportCompletions": true,
+    "showHoverGoToLinks": true,
+    "inlayHintDebounceMs": 0,
+    "inlayHints": {
+      "callArgumentNames": "off",
+      "functionReturnTypes": true,
+      "pytestParameters": false,
+      "variableTypes": true
+    }
+  },
   "pyrefly": {
+    "typeCheckingMode": "auto",
+    "disableTypeErrors": false,
     "displayTypeErrors": "default",
+    "typeErrorDisplayStatusVersion": "v1",
     "disableLanguageServices": false,
-    "extraPaths": ["/path/to/extra/modules"],
-    "analysis": {
-      "diagnosticMode": "workspace",
-      "importFormat": "absolute",
-      "inlayHints": {
-        "callArgumentNames": "off",
-        "functionReturnTypes": true,
-        "pytestParameters": false,
-        "variableTypes": true
-      },
-      "showHoverGoToLinks": true
-    },
+    "diagnosticMode": "openFilesOnly",
+    "extraSearchPaths": [],
+    "extraProjectExcludes": [],
+    "configPath": "",
+    "streamDiagnostics": true,
+    "syncNotebooks": true,
+    "runnableCodeLens": false,
     "disabledLanguageServices": {
       "hover": false,
       "documentSymbol": false,
@@ -175,6 +236,131 @@ Below is an example of a value that can be passed for `initializationOptions`:
   }
 }
 ```
+
+#### Keys not covered above
+
+Every other key means exactly what the same-named [VSCode setting](#vscode-extension-settings) means. These ones aren't in that list — either because they have no VSCode counterpart, or because they're inherited from Pylance's settings rather than being Pyrefly's own.
+
+##### `pythonPath`
+
+**Type:** string
+
+Absolute path to the Python interpreter whose environment (version, platform, `site-packages`) Pyrefly should use. Equivalent to [`python-interpreter-path`](../configuration#python-interpreter-path) in a config file, and ignored for files whose resolved config specifies an interpreter of its own.
+
+##### `pyrefly.extraSearchPaths`
+
+**Type:** array of strings &nbsp; **Default:** `[]`
+
+Extra directories to resolve imports from, appended to the [`search-path`](../configuration#search-path) of whatever config Pyrefly resolves for a file. Named to match Pyrefly's own `search-path`, and prefixed `extra` because the entries are added to that path rather than replacing it.
+
+##### `pyrefly.extraPaths` (deprecated)
+
+**Type:** array of strings &nbsp; **Default:** `[]`
+
+:::warning
+Renamed to [`extraSearchPaths`](#pyreflyextrasearchpaths). Still accepted for backwards compatibility, and for clients already forwarding Pylance's similarly-named `python.analysis.extraPaths`.
+:::
+
+##### `pyrefly.extraProjectExcludes`
+
+**Type:** array of strings &nbsp; **Default:** `[]`
+
+Globs to exclude from the project, appended to the [`project-excludes`](../configuration#project-excludes) of whatever config Pyrefly resolves for a file. Files matching them are not type checked: no diagnostics are published for them, and they are skipped when [`diagnosticMode`](#pythonpyreflydiagnosticmode) is `workspace`.
+
+Use this to map an editor's own notion of excluded directories (for example PyCharm's "Excluded" content roots) onto Pyrefly without writing a `pyrefly.toml`. Relative globs are resolved against the workspace folder the setting is scoped to; patterns use `/` as the separator on every platform.
+
+Because the globs are appended, this can only ever remove files from a project — it cannot re-include a file the project's own `project-excludes` already excluded.
+
+:::note
+Excluded files are still available for import resolution: an excluded module that a checked file imports is read and analyzed, it just doesn't report its own errors. Language services (hover, go-to-definition, completions) also keep working inside excluded files. To stop resolving imports out of a directory entirely, leave it off the [`search-path`](../configuration#search-path).
+:::
+
+##### `pyrefly.typeErrorDisplayStatusVersion`
+
+**Type:** enum (`v1`, `v2`) &nbsp; **Default:** `"v1"`
+
+Wire shape the server should use when answering [`pyrefly/textDocument/typeErrorDisplayStatus`](#custom-request-pyreflytextdocumenttypeerrordisplaystatus). See that section for the two shapes and the version-negotiation rules.
+
+##### `analysis.diagnosticMode`
+
+**Type:** enum (`openFilesOnly`, `workspace`) &nbsp; **Default:** `"openFilesOnly"`
+
+Same meaning as [`pyrefly.diagnosticMode`](#pythonpyreflydiagnosticmode), and read only as a fallback when that is unset. Exists so that a client already forwarding Pylance's `python.analysis.diagnosticMode` gets the expected behavior for free.
+
+##### `analysis.importFormat`
+
+**Type:** enum (`absolute`, `relative`) &nbsp; **Default:** `"absolute"`
+
+Whether the import statements Pyrefly inserts — for auto-import completions and the move-symbol / convert-module code actions — are written as absolute or relative imports. Mirrors Pylance's `python.analysis.importFormat`.
+
+##### `analysis.inlayHintDebounceMs`
+
+**Type:** number &nbsp; **Default:** `0`
+
+Debounce window in milliseconds for inlay hint requests. When the document was edited within this window, the request is deferred until editing pauses, which stops hint widths from jittering on every keystroke. `0` disables debouncing.
+
+##### `analysis.inlayHints`
+
+**Type:** object
+
+Which inlay hints to produce:
+
+- `callArgumentNames` (enum `all`, `off`, `partial`, default `"off"`): show parameter names on positional arguments at call sites. `all` and `partial` currently behave identically; the enum matches Pylance's `python.analysis.inlayHints.callArgumentNames`.
+- `functionReturnTypes` (boolean, default `true`): show inferred return types on unannotated functions.
+- `pytestParameters` (boolean, default `false`): accepted for Pylance compatibility, currently has no effect.
+- `variableTypes` (boolean, default `true`): show inferred types on unannotated assignments.
+
+#### Scoping and `workspace/configuration`
+
+`initializationOptions` are applied twice: once to a catch-all default scope covering every file on the system, and once per workspace folder listed in the `initialize` request. Relative `extraProjectExcludes` globs are therefore rooted at each workspace folder, and files outside every folder fall back to the default scope, where only absolute globs can match.
+
+If the client advertises the `workspace.configuration` capability, Pyrefly additionally requests the `python` section for each workspace folder (plus a folder-less request for the default scope) and applies the responses on top of `initializationOptions`, both at startup and on every `workspace/didChangeConfiguration`. A client that advertises the capability should answer with the same settings it sent in `initializationOptions`; returning a `pyrefly` object that omits a key resets that key to its default.
+
+### Custom request: `pyrefly/textDocument/typeErrorDisplayStatus`
+
+Third-party integrators can ask the server about Pyrefly's current
+type-checking state for a given file via the custom request
+`pyrefly/textDocument/typeErrorDisplayStatus`. The wire shape is
+versioned via `initializationOptions.pyrefly.typeErrorDisplayStatusVersion`:
+
+- `"v1"` (legacy default): the server returns a bare JSON string from
+  the original `TypeErrorDisplayStatus` enum
+  (`enabled-in-config-file`, `disabled-in-ide-config`, `no-config-file`,
+  etc.). Every historical client can decode this shape. A missing or
+  unspecified version also resolves to `v1` so older clients keep
+  working unchanged.
+- `"v2"`: the server returns an object:
+  ```json
+  {
+    "version": "v2",
+    "label": "Basic" | "Legacy" | "Default" | "Errors Off" | null,
+    "tooltip": "markdown string",
+    "docsUrl": "https://pyrefly.org/..."
+  }
+  ```
+  `Basic` / `Legacy` / `Default` are emitted when Pyrefly synthesized
+  a config (no `pyrefly.toml` was found) and tell the user which
+  preset is active. `Errors Off` is emitted whenever diagnostics are
+  suppressed, either by the workspace `disableTypeErrors` kill switch
+  or by in-config `disable-type-errors-in-ide`. `null` is emitted for
+  everything else (project has a real `pyrefly.toml`, or the user
+  explicitly set `typeCheckingMode`). In that case the client should
+  render plain `Pyrefly` with no parenthetical. The Pyrefly VS Code
+  extension uses V2 to render the status-bar parenthetical (e.g.
+  `Pyrefly (Basic)` or `Pyrefly (Errors Off)`).
+
+Clients should dispatch on response shape (`typeof resp === 'string'`
+for V1, `resp.version` for V2+) so they can transparently support
+servers older than the version they declared.
+
+If a client opts into a version the server doesn't recognize (e.g. a
+future `v3` against a server that only knows up to `v2`), the server
+clamps to the latest version it can produce (`v2` in that example).
+The richer shape is the closest the server can offer to what the
+client asked for. A fallback to `v1` would silently strip features
+the client explicitly requested. Clients should still defensively
+dispatch on `resp.version` so they can recognize when the server has
+clamped them down.
 
 ## Issues?
 
@@ -332,14 +518,14 @@ require("mason-lspconfig").setup {
         :::
 
         :::info
-        Want type error squiggles to show up in your editor by default? You can create a `pyrefly.toml` in your project root, add a `[tool.pyrefly]` section in your `pyproject.toml`, or add the following to the config object passed into `vim.lsp.config`.
+        Want full type-check squiggles in your editor by default? Run `pyrefly init` to create a `pyrefly.toml` (or update `pyproject.toml`), or add the following to the config object passed into `vim.lsp.config` to override the default `auto`-detect behavior:
 
         ```
         {
             settings = {
                 python = {
                     pyrefly = {
-                        displayTypeErrors = 'force-on'
+                        typeCheckingMode = 'default'
                     }
                 }
             }
@@ -383,7 +569,8 @@ Ensure the pyrefly is on `$PATH`, add following snippet to your `coc-settings.js
 ```
 
 :::tip
-Type errors aren't shown unless a configuration exists. To always display type errors with coc.nvim, add the following `initializationOptions` to your configuration:
+For projects without a Pyrefly configuration, Pyrefly migrates a nearby mypy/pyright configuration in memory or falls back to the `basic` preset (a small set of high-confidence diagnostics). To switch to a stricter preset for files not covered by a `pyrefly.toml`, add the following `initializationOptions`:
+
 ```json
 "languageserver": {
   "pyrefly": {
@@ -393,13 +580,14 @@ Type errors aren't shown unless a configuration exists. To always display type e
     "rootPatterns": ["pyrefly.toml", "pyproject.toml", ".git"],
     "initializationOptions": {
       "pyrefly": {
-        "displayTypeErrors": "force-on"
+        "typeCheckingMode": "default"
       }
     }
   }
 }
 ```
-Use `"default"` to only show type errors when a configuration exists, `"force-off"` to never show them, or `"error-missing-imports"` to only show import-related errors - this can help you determine if your Python interpreter is set correctly and all packages are installed.
+
+Available values: `"auto"` (the default; migrates a nearby mypy/pyright config in memory or falls back to `basic`), `"off"`, `"basic"`, `"legacy"`, `"default"`, `"strict"`, `"all"`. To suppress all diagnostics in this workspace regardless of preset, use `"disableTypeErrors": true` instead.
 :::
 
 ### Vim + ALE

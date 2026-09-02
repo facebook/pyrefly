@@ -23,11 +23,10 @@
 #![deny(clippy::mem_replace_option_with_some)]
 #![deny(clippy::str_to_string)]
 #![deny(clippy::trivially_copy_pass_by_ref)]
-#![feature(box_patterns)]
-#![feature(closure_lifetime_binder)]
 
 pub mod alt;
-mod binding;
+mod annotation;
+pub mod binding;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub mod commands;
@@ -50,6 +49,7 @@ mod solver;
 pub mod state;
 #[cfg(not(target_arch = "wasm32"))]
 mod stubgen;
+#[cfg(test)]
 mod test;
 #[cfg(not(target_arch = "wasm32"))]
 mod tsp;
@@ -71,12 +71,14 @@ pub mod library {
                 pub use crate::commands::check::CheckArgs;
                 pub use crate::commands::check::CheckResult;
                 pub use crate::commands::check::FullCheckArgs;
+                pub use crate::commands::check::write_serializable_errors_to_console;
                 pub use crate::commands::config_finder::ConfigConfigurer;
                 pub use crate::commands::config_finder::ConfigConfigurerWrapper;
                 pub use crate::commands::config_finder::default_config_finder;
                 pub use crate::commands::config_finder::default_config_finder_with_overrides;
                 pub use crate::commands::files::UpsellDecision;
                 pub use crate::commands::util;
+                pub use crate::error::error::SerializableError;
                 pub use crate::error::legacy::LegacyError;
                 pub use crate::lsp::non_wasm::external_provider::ExternalProvider;
                 pub use crate::lsp::non_wasm::external_provider::NoExternalProvider;

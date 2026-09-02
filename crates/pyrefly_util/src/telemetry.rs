@@ -145,6 +145,8 @@ pub struct TelemetryServerState {
     pub server_start_time: Instant,
     pub agent_session_id: Option<String>,
     pub agent_invocation_id: Option<String>,
+    /// Names of active experiments for this server session.
+    pub active_experiments: Vec<String>,
 }
 
 #[derive(Default)]
