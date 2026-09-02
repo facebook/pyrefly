@@ -5,11 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_provide_type_unopened_file() {
@@ -280,7 +280,7 @@ fn test_generic_mixed_scopes() {
     do_test(
         69,
         14,
-        "def bar.A.f1.B.f2[F2](self: typing.Self@bar.A.f1.B, x: F1@bar.A.f1, y: F2, a: T@bar.A, b: T2@bar.A.f1.B) -> None",
+        "def bar.A.f1.B.f2[F2](self: typing.Self@bar.A.f1.B, x: F1@bar.A.f1, y: F2, a: Unknown, b: T2@bar.A.f1.B) -> None",
     );
 }
 

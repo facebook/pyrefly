@@ -46,172 +46,70 @@ $ echo "x: str = 0" > $TMPDIR/oops.py && echo "errors = { bad-assignment = false
 [0]
 ```
 
-## Error in implicit config (project mode)
+## Replaced imports resolve exported and missing names to Any
+
+`replace-imports-with-any` discards the module's type information even when its
+source exists. Both names the source exports and names it does not export are
+therefore `Any`.
 
 ```scrut {output_stream: stderr}
-$ mkdir $TMPDIR/bad_config && touch $TMPDIR/bad_config/empty.py && echo "oops oops" > $TMPDIR/bad_config/pyrefly.toml && cd $TMPDIR/bad_config && $PYREFLY check
- WARN Config at `*/pyrefly.toml` failed to parse, checking with default configuration (glob)
-ERROR */pyrefly.toml: TOML parse error* (glob)
-  |
-1 | oops oops
-  |      ^
-key with no value* (glob)
-
-Fatal configuration error
-[1]
+$ mkdir $TMPDIR/replace_with_any && \
+> printf 'replace-imports-with-any = ["module"]\n' > $TMPDIR/replace_with_any/pyrefly.toml && \
+> printf 'class Exported: ...\n' > $TMPDIR/replace_with_any/module.py && \
+> printf 'from typing import Any, assert_type\nfrom module import Exported, Missing\n\nassert_type(Exported, Any)\nassert_type(Missing, Any)\n' > $TMPDIR/replace_with_any/main.py && \
+> $PYREFLY check -c $TMPDIR/replace_with_any/pyrefly.toml --output-format=min-text $TMPDIR/replace_with_any/main.py
+ INFO 0 errors
+[0]
 ```
 
-## Error in implicit config (file mode)
-
-<!-- Reusing bad_config dir set up in "Error in implicit config (project mode)" -->
+## Replaced imports remain dynamic when used as TypeVar bounds
 
 ```scrut {output_stream: stderr}
-$ $PYREFLY check $TMPDIR/bad_config/empty.py
-ERROR */pyrefly.toml: TOML parse error* (glob)
-  |
-1 | oops oops
-  |      ^
-key with no value* (glob)
-
-Fatal configuration error
-[1]
+$ mkdir $TMPDIR/replace_bound && \
+> printf 'replace-imports-with-any = ["module.*"]\n' > $TMPDIR/replace_bound/pyrefly.toml && \
+> printf 'class Foo: ...\n' > $TMPDIR/replace_bound/module.py && \
+> printf 'from typing import TypeVar\nfrom module import Foo\n\nT = TypeVar("T", bound=Foo)\n\ndef f(arg: T) -> T:\n    arg.method()\n    return arg\n' > $TMPDIR/replace_bound/main.py && \
+> $PYREFLY check -c $TMPDIR/replace_bound/pyrefly.toml --output-format=min-text $TMPDIR/replace_bound/main.py
+ INFO 0 errors
+[0]
 ```
 
-## Error in explicit config (project mode)
-
-<!-- Reusing bad_config dir set up in "Error in implicit config (project mode)" -->
+## Untyped third-party imports are followed by default
 
 ```scrut {output_stream: stderr}
-$ $PYREFLY check -c $TMPDIR/bad_config/pyrefly.toml
- WARN Config at `*/pyrefly.toml` failed to parse, checking with default configuration (glob)
-ERROR */pyrefly.toml: TOML parse error* (glob)
-  |
-1 | oops oops
-  |      ^
-key with no value* (glob)
-
-Fatal configuration error
+$ mkdir -p $TMPDIR/untyped_import/site_packages/untyped_package && \
+> printf '' > $TMPDIR/untyped_import/site_packages/untyped_package/__init__.py && \
+> printf 'from untyped_package import missing\nmissing()\n' > $TMPDIR/untyped_import/main.py && \
+> printf 'project-includes = ["main.py"]\nsite-package-path = ["site_packages"]\nskip-interpreter-query = true\n' > $TMPDIR/untyped_import/pyrefly.toml && \
+> $PYREFLY check -c $TMPDIR/untyped_import/pyrefly.toml --output-format=min-text
+ INFO Checking project configured at `*/pyrefly.toml` (glob)
+ INFO 1 error
 [1]
 ```
 
-## Error in explicit config (file mode)
+## Replace untyped third-party imports with Any
 
-<!-- Reusing bad_config dir set up in "Error in implicit config (project mode)" -->
+Same project, with the option turned on: `untyped_package` becomes `typing.Any`,
+so importing a name it does not define is no longer an error.
 
 ```scrut {output_stream: stderr}
-$ $PYREFLY check -c $TMPDIR/bad_config/pyrefly.toml $TMPDIR/bad_config/empty.py
-ERROR */pyrefly.toml: TOML parse error* (glob)
-  |
-1 | oops oops
-  |      ^
-key with no value* (glob)
-
-Fatal configuration error
-[1]
-```
-
-## We'll use the first marker file we find as a project root
-
-```scrut {output_stream: stdout}
-$ mkdir -p $TMPDIR/config_finder/project && \
-> touch $TMPDIR/config_finder/pyproject.toml && \
-> touch $TMPDIR/config_finder/project/pyproject.toml && \
-> touch $TMPDIR/config_finder/project/main.py && \
-> $PYREFLY dump-config $TMPDIR/config_finder/project/main.py
-Default configuration for project root marked by `*/config_finder/project/pyproject.toml` (glob)
-* (glob+)
+$ $PYREFLY check -c $TMPDIR/untyped_import/pyrefly.toml --replace-untyped-imports-with-any untyped_package --output-format=min-text
+ INFO Checking project configured at `*/pyrefly.toml` (glob)
+ INFO 0 errors
 [0]
 ```
 
-## We'll prefer a Pyrefly config in a parent directory to a marker file
+## `--replace-untyped-imports-with-any` ignores bundled stubs
 
-<!-- Reusing configs set up in tests between here and "We'll use the first marker file we find as a project root" -->
+Pyrefly's bundled `pandas` stubs should not prevent `pandas` from being detected as untyped.
 
-```scrut {output_stream: stdout}
-$ touch $TMPDIR/config_finder/pyrefly.toml && \
-> $PYREFLY dump-config $TMPDIR/config_finder/project/main.py
-Configuration at `*/config_finder/pyrefly.toml` (glob)
-* (glob+)
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/untyped_import/site_packages/pandas && \
+> printf '' > $TMPDIR/untyped_import/site_packages/pandas/__init__.py && \
+> printf 'from pandas import missing\nmissing()\n' > $TMPDIR/untyped_import/main.py && \
+> printf 'project-includes = ["main.py"]\nsite-package-path = ["site_packages"]\nskip-interpreter-query = true\n' > $TMPDIR/untyped_import/pyrefly.toml && \
+> $PYREFLY check -c $TMPDIR/untyped_import/pyrefly.toml --output-format=min-text --replace-untyped-imports-with-any pandas
+ INFO Checking project configured at `*/pyrefly.toml` (glob)
+ INFO 0 errors
 [0]
-```
-
-## We'll prefer a Pyproject with Pyrefly config in a parent directory to a marker file
-
-<!-- Reusing configs set up in tests between here and "We'll use the first marker file we find as a project root" -->
-
-```scrut {output_stream: stdout}
-$ rm $TMPDIR/config_finder/pyrefly.toml && \
-> echo "[tool.pyrefly]" > $TMPDIR/config_finder/pyproject.toml && \
-> $PYREFLY dump-config $TMPDIR/config_finder/project/main.py
-Configuration at `*/config_finder/pyproject.toml` (glob)
-* (glob+)
-[0]
-```
-
-## We'll use the first Pyrefly config we find
-
-<!-- Reusing configs set up in tests between here and "We'll use the first marker file we find as a project root" -->
-
-```scrut {output_stream: stdout}
-$ echo "[tool.pyrefly]" > $TMPDIR/config_finder/project/pyproject.toml && \
-> $PYREFLY dump-config $TMPDIR/config_finder/project/main.py
-Configuration at `*/config_finder/project/pyproject.toml` (glob)
-* (glob+)
-[0]
-```
-
-## We'll prefer pyrefly.toml to pyproject.toml
-
-<!-- Reusing configs set up in tests between here and "We'll use the first marker file we find as a project root" -->
-
-```scrut {output_stream: stdout}
-$ touch $TMPDIR/config_finder/project/pyrefly.toml && \
-> $PYREFLY dump-config $TMPDIR/config_finder/project/main.py
-Configuration at `*/config_finder/project/pyrefly.toml` (glob)
-* (glob+)
-[0]
-```
-
-## Skip hidden directories
-
-```scrut {output_stream.stdout}
-$ mkdir $TMPDIR/contains_hidden && \
-> mkdir $TMPDIR/contains_hidden/.hidden && \
-> touch $TMPDIR/contains_hidden/ok.py && \
-> echo "1 + 'oops'" > $TMPDIR/contains_hidden/.hidden/secret_error.py && \
-> $PYREFLY check $TMPDIR/contains_hidden
-[0]
-```
-
-## We can still find hard-coded `project-excludes` when overridden
-
-```scrut {output_stream: stdout}
-$ mkdir -p $TMPDIR/disable_excludes_heuristics/.src && \
-> echo "x: str = 1" > $TMPDIR/disable_excludes_heuristics/.src/main.py && \
-> touch $TMPDIR/disable_excludes_heuristics/pyrefly.toml && \
-> $PYREFLY check -c $TMPDIR/disable_excludes_heuristics/pyrefly.toml --disable-project-excludes-heuristics --output-format=min-text
-ERROR *main.py* ?bad-assignment? (glob)
-[1]
-```
-
-## We can still find hard-coded `project-excludes` when overridden in configs
-
-<!-- Uss the same test setup from "We can still find hard-coded `project-excludes` when overridden -->
-
-```scrut {output_stream: stdout}
-$ echo "disable-project-excludes-heuristics = true" > $TMPDIR/disable_excludes_heuristics/pyrefly.toml && \
-> PYREFLY_CONFIG="$TMPDIR/disable_excludes_heuristics/pyrefly.toml" $PYREFLY check $TMPDIR/disable_excludes_heuristics/.src/main.py --output-format=min-text
-ERROR *main.py* ?bad-assignment? (glob)
-[1]
-```
-
-## Project inside hidden directory ancestor still reports errors
-
-```scrut {output_stream: stdout}
-$ mkdir -p $TMPDIR/.hidden_workspace/project && \
-> echo "x: str = 1" > $TMPDIR/.hidden_workspace/project/main.py && \
-> touch $TMPDIR/.hidden_workspace/project/pyrefly.toml && \
-> $PYREFLY check --output-format=min-text $TMPDIR/.hidden_workspace/project
-ERROR *main.py* ?bad-assignment? (glob)
-[1]
 ```

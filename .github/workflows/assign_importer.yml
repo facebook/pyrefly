@@ -1,0 +1,65 @@
+name: Assign imported PR to importer
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  assign-importer:
+    # issue_comment fires for both issues and PRs. Only act on PRs, and only on
+    # the import bot's comment that records who imported the PR to Phabricator.
+    # Gating on the bot author is also the security boundary: it stops an
+    # arbitrary commenter from spoofing an "imported" notice to assign someone.
+    if: >-
+      ${{ github.event.issue.pull_request != null
+          && github.event.comment.user.login == 'meta-codesync[bot]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Assign the importer named in the import comment
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // meta-codesync[bot] posts "@<handle> has **imported** this pull
+            // request. ..." when a Meta employee imports the PR to Phabricator.
+            // "imported" is bold in the raw markdown, so tolerate the "**". The
+            // named importer is always a Meta employee, so there is no allowlist
+            // to check — the bot-author gate above is the trust boundary, and
+            // the verify step below drops anyone lacking repo access.
+            const body = context.payload.comment.body || '';
+            const match = body.match(/@([A-Za-z0-9-]+) has \**imported\** this pull request/);
+            if (!match) {
+              console.log('Comment is not an import notice, skipping');
+              return;
+            }
+            const importer = match[1];
+
+            const issue_number = context.payload.issue.number;
+            const { owner, repo } = context.repo;
+            const assignees = (context.payload.issue.assignees || []).map(a => a.login);
+
+            if (assignees.includes(importer)) {
+              console.log(`${importer} is already assigned to #${issue_number}`);
+              return;
+            }
+            // Respect an existing manual assignment rather than clobbering it.
+            if (assignees.length > 0) {
+              console.log(`#${issue_number} already assigned to ${assignees.join(', ')}, leaving as-is`);
+              return;
+            }
+
+            await github.rest.issues.addAssignees({ owner, repo, issue_number, assignees: [importer] });
+
+            // GitHub silently ignores assignees who lack repo access, so verify
+            // the assignment actually took effect.
+            const { data: pr } = await github.rest.issues.get({ owner, repo, issue_number });
+            if (!(pr.assignees || []).some(a => a.login === importer)) {
+              console.log(`Could not assign ${importer} to #${issue_number} (no repo access?)`);
+              return;
+            }
+
+            console.log(`Assigned importer ${importer} to #${issue_number}`);

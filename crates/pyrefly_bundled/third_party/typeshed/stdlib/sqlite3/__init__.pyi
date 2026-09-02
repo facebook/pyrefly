@@ -62,11 +62,14 @@ from sqlite3.dbapi2 import (
     threadsafety as threadsafety,
 )
 from types import TracebackType
-from typing import Any, Literal, Protocol, SupportsIndex, TypeVar, final, overload, type_check_only
-from typing_extensions import Self, TypeAlias, disjoint_base
+from typing import Any, Literal, Protocol, SupportsIndex, TypeAlias, TypeVar, final, overload, type_check_only
+from typing_extensions import Self, disjoint_base
 
 if sys.version_info < (3, 14):
     from sqlite3.dbapi2 import version_info as version_info
+
+if sys.version_info >= (3, 15):
+    from sqlite3.dbapi2 import SQLITE_KEYWORDS as SQLITE_KEYWORDS
 
 if sys.version_info >= (3, 12):
     from sqlite3.dbapi2 import (
@@ -211,9 +214,6 @@ if sys.version_info >= (3, 11):
 if sys.version_info < (3, 12):
     from sqlite3.dbapi2 import enable_shared_cache as enable_shared_cache, version as version
 
-if sys.version_info < (3, 10):
-    from sqlite3.dbapi2 import OptimizedUnicode as OptimizedUnicode
-
 _CursorT = TypeVar("_CursorT", bound=Cursor)
 _SqliteData: TypeAlias = str | ReadableBuffer | int | float | None
 # Data that is passed through adapters can be of any type accepted by an adapter.
@@ -301,6 +301,7 @@ class Connection:
         def autocommit(self) -> int: ...
         @autocommit.setter
         def autocommit(self, val: int) -> None: ...
+
     row_factory: _RowFactoryOptions
     text_factory: Any
     if sys.version_info >= (3, 12):
@@ -361,9 +362,12 @@ class Connection:
         If there is no open transaction, this method is a no-op.
         """
         ...
-    def create_aggregate(self, name: str, n_arg: int, aggregate_class: Callable[[], _AggregateProtocol]) -> None:
-        """Creates a new aggregate."""
-        ...
+    if sys.version_info >= (3, 15):
+        def create_aggregate(self, name: str, n_arg: int, aggregate_class: Callable[[], _AggregateProtocol], /) -> None: ...
+    else:
+        def create_aggregate(self, name: str, n_arg: int, aggregate_class: Callable[[], _AggregateProtocol]) -> None:
+            """Creates a new aggregate."""
+            ...
     if sys.version_info >= (3, 11):
         # num_params determines how many params will be passed to the aggregate class. We provide an overload
         # for the case where num_params = 1, which is expected to be the common case.
@@ -423,11 +427,17 @@ class Connection:
     def create_collation(self, name: str, callback: Callable[[str, str], SupportsIndex] | None, /) -> None:
         """Creates a collation function."""
         ...
-    def create_function(
-        self, name: str, narg: int, func: Callable[..., _SqliteData] | None, *, deterministic: bool = False
-    ) -> None:
-        """Creates a new function."""
-        ...
+    if sys.version_info >= (3, 15):
+        def create_function(
+            self, name: str, narg: int, func: Callable[..., _SqliteData] | None, /, *, deterministic: bool = False
+        ) -> None: ...
+    else:
+        def create_function(
+            self, name: str, narg: int, func: Callable[..., _SqliteData] | None, *, deterministic: bool = False
+        ) -> None:
+            """Creates a new function."""
+            ...
+
     @overload
     def cursor(self, factory: None = None) -> Cursor:
         """Return a cursor for the connection."""
@@ -436,6 +446,7 @@ class Connection:
     def cursor(self, factory: Callable[[Connection], _CursorT]) -> _CursorT:
         """Return a cursor for the connection."""
         ...
+
     def execute(self, sql: str, parameters: _Parameters = ..., /) -> Cursor:
         """Executes an SQL statement."""
         ...
@@ -449,9 +460,9 @@ class Connection:
         """Abort any pending database operation."""
         ...
     if sys.version_info >= (3, 13):
-        def iterdump(self, *, filter: str | None = None) -> Generator[str, None, None]: ...
+        def iterdump(self, *, filter: str | None = None) -> Generator[str]: ...
     else:
-        def iterdump(self) -> Generator[str, None, None]:
+        def iterdump(self) -> Generator[str]:
             """Returns iterator to the dump of the database in an SQL text format."""
             ...
 
@@ -462,17 +473,24 @@ class Connection:
         If there is no open transaction, this method is a no-op.
         """
         ...
-    def set_authorizer(
-        self, authorizer_callback: Callable[[int, str | None, str | None, str | None, str | None], int] | None
-    ) -> None:
-        """Sets authorizer callback."""
-        ...
-    def set_progress_handler(self, progress_handler: Callable[[], int | None] | None, n: int) -> None:
-        """Sets progress handler callback."""
-        ...
-    def set_trace_callback(self, trace_callback: Callable[[str], object] | None) -> None:
-        """Sets a trace callback called for each SQL statement (passed as unicode)."""
-        ...
+    if sys.version_info >= (3, 15):
+        def set_authorizer(
+            self, authorizer_callback: Callable[[int, str | None, str | None, str | None, str | None], int] | None, /
+        ) -> None: ...
+        def set_progress_handler(self, progress_handler: Callable[[], int | None] | None, /, n: int) -> None: ...
+        def set_trace_callback(self, trace_callback: Callable[[str], object] | None, /) -> None: ...
+    else:
+        def set_authorizer(
+            self, authorizer_callback: Callable[[int, str | None, str | None, str | None, str | None], int] | None
+        ) -> None:
+            """Sets authorizer callback."""
+            ...
+        def set_progress_handler(self, progress_handler: Callable[[], int | None] | None, n: int) -> None:
+            """Sets progress handler callback."""
+            ...
+        def set_trace_callback(self, trace_callback: Callable[[str], object] | None) -> None:
+            """Sets a trace callback called for each SQL statement (passed as unicode)."""
+            ...
     # enable_load_extension and load_extension is not available on python distributions compiled
     # without sqlite3 loadable extension support. see footnotes https://docs.python.org/3/library/sqlite3.html#f1
     def enable_load_extension(self, enable: bool, /) -> None:
@@ -520,8 +538,36 @@ class Connection:
               The limit category to be queried.
             """
             ...
-        def serialize(self, *, name: str = "main") -> bytes: ...
-        def deserialize(self, data: ReadableBuffer, /, *, name: str = "main") -> None: ...
+        def serialize(self, *, name: str = "main") -> bytes:
+            """
+            Serialize a database into a byte string.
+
+              name
+                Which database to serialize.
+
+            For an ordinary on-disk database file, the serialization is just a copy of the
+            disk file. For an in-memory database or a "temp" database, the serialization is
+            the same sequence of bytes which would be written to disk if that database
+            were backed up to disk.
+            """
+            ...
+        def deserialize(self, data: ReadableBuffer, /, *, name: str = "main") -> None:
+            """
+            Load a serialized database.
+
+              data
+                The serialized database content.
+              name
+                Which database to reopen with the deserialization.
+
+            The deserialize interface causes the database connection to disconnect from the
+            target database, and then reopen it as an in-memory database based on the given
+            serialized data.
+
+            The deserialize interface will fail with SQLITE_BUSY if the database is
+            currently in a read transaction or is involved in a backup operation.
+            """
+            ...
     if sys.version_info >= (3, 12):
         def getconfig(self, op: int, /) -> bool:
             """
@@ -625,6 +671,7 @@ class Row(Sequence[Any]):
     def keys(self) -> list[str]:
         """Returns the keys of the row."""
         ...
+
     @overload  # Note: really needs int instead of SupportsIndex
     def __getitem__(self, key: int | str, /) -> Any:
         """Return self[key]."""
@@ -633,6 +680,7 @@ class Row(Sequence[Any]):
     def __getitem__(self, key: slice[SupportsIndex | None], /) -> tuple[Any, ...]:
         """Return self[key]."""
         ...
+
     def __hash__(self) -> int:
         """Return hash(self)."""
         ...

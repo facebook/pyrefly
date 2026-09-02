@@ -13,13 +13,22 @@ use anyhow::Context as _;
 use itertools::Itertools as _;
 use serde::Deserialize;
 
-use crate::environment::finder::walk_interpreter;
-
-const SEARCH_DEPTH: usize = 1;
 pub const ENV_VAR: &str = "CONDA_PREFIX";
 
+#[cfg(windows)]
+fn interpreter_candidates(root: &Path) -> [PathBuf; 2] {
+    [root.join("python.exe"), root.join("Scripts/python.exe")]
+}
+
+#[cfg(not(windows))]
+fn interpreter_candidates(root: &Path) -> [PathBuf; 2] {
+    [root.join("bin/python"), root.join("bin/python3")]
+}
+
 pub fn find(env_path: &Path) -> Option<PathBuf> {
-    walk_interpreter(env_path, SEARCH_DEPTH).next()
+    interpreter_candidates(env_path)
+        .into_iter()
+        .find(|path| path.is_file())
 }
 
 pub fn get_env_path(env_name: &str) -> anyhow::Result<PathBuf> {
@@ -62,8 +71,7 @@ pub fn get_env_path(env_name: &str) -> anyhow::Result<PathBuf> {
 }
 
 pub fn find_interpreter_from_env(env_name: &str) -> anyhow::Result<PathBuf> {
-    get_env_path(env_name).and_then(|mut p| {
-        p.push("bin");
+    get_env_path(env_name).and_then(|p| {
         find(&p).ok_or_else(|| {
             anyhow::anyhow!(
                 "Could not find interpreter for environment named `{env_name}` at `{}`",
@@ -71,4 +79,30 @@ pub fn find_interpreter_from_env(env_name: &str) -> anyhow::Result<PathBuf> {
             )
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use pyrefly_util::test_path::TestPath;
+
+    use super::*;
+
+    #[test]
+    fn test_find_interpreter() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let relative_interpreter = if cfg!(windows) {
+            "python.exe"
+        } else {
+            "bin/python"
+        };
+        let layout = if cfg!(windows) {
+            vec![TestPath::file("python.exe")]
+        } else {
+            vec![TestPath::dir("bin", vec![TestPath::file("python")])]
+        };
+        TestPath::setup_test_directory(root, layout);
+
+        assert_eq!(find(root), Some(root.join(relative_interpreter)));
+    }
 }

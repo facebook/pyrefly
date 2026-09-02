@@ -162,6 +162,24 @@ def foo():
     ),]),
 );
 
+// A variable bound by a `match` capture and then captured by an inner function is NOT resolved to
+// its defining function today: `definition_to_function_map` is built only from assignment and
+// parameter bindings, so the capture's binding chain never reaches a mapped definition. This is a
+// pre-existing gap (identical on the pre-D113824734 baseline), not a consequence of `PatternCapture`
+// being a definition boundary. Documented here per review request; update if captures become
+// resolvable.
+exported_captured_variables_testcase!(
+    test_capture_from_match_pattern_unresolved,
+    r#"
+def outer(funcs: list):
+    match funcs:
+        case [f]:
+            def inner():
+                return f
+"#,
+    HashMap::new(),
+);
+
 exported_captured_variables_testcase!(
     test_export_capture_parameter,
     r#"

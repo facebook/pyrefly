@@ -31,6 +31,10 @@ impl<T> Mutex<T> {
         self.0.try_lock().ok()
     }
 
+    pub fn get_mut(&mut self) -> &mut T {
+        self.0.get_mut().unwrap()
+    }
+
     pub fn into_inner(self) -> T {
         self.0.into_inner().unwrap()
     }

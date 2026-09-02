@@ -90,7 +90,7 @@ pub(crate) fn extract_field_code_actions(
             context.class_name
         ),
         edits: vec![insert_edit, replace_edit],
-        kind: CodeActionKind::REFACTOR_EXTRACT,
+        kind: CodeActionKind::RefactorExtract,
     }])
 }
 

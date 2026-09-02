@@ -11,18 +11,22 @@
  * Usage in MDX:
  *
  *     ```sandbox
- *     dir: tensor-shapes-overview
+ *     dir: overview
+ *     source: microtorch
+ *     shared: microtorch
  *     active: sandbox.py
  *     linkText: Open this example in the Pyrefly sandbox
  *     description: See tensor shape tracking in action.
  *     ```
  *
- * The plugin reads all `.py`, `.pyi`, and `.toml` files from the directory
- * `website/sandbox-examples/{dir}/`, compresses them into a sandbox URL,
- * and replaces the code block with a :::tip admonition containing the link.
+ * The plugin reads all `.py`, `.pyi`, and `.toml` files from the example and
+ * optional shared directory, compresses them into a sandbox URL, and replaces
+ * the code block with a :::tip admonition containing the link.
  *
  * Supported fields (parsed as `key: value` lines):
- *   - dir (required): subdirectory under sandbox-examples/
+ *   - dir (required): subdirectory under the selected source directory
+ *   - source: key from the plugin's sourceDirectories option
+ *   - shared: key from the plugin's sharedDirectories option
  *   - active: which file to show initially (default: sandbox.py)
  *   - linkText: the clickable link text
  *   - description: additional text after the link
@@ -30,12 +34,14 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as LZString from 'lz-string';
+import { generateSandboxUrl } from './generateSandboxUrl';
 
 const SANDBOX_EXTENSIONS = ['.py', '.pyi', '.toml'];
 
 export interface SandboxConfig {
     dir: string;
+    source: string;
+    shared: string;
     active: string;
     linkText: string;
     description: string;
@@ -61,9 +67,10 @@ export function parseSandboxConfig(body: string): SandboxConfig | null {
 
     return {
         dir: config.dir,
+        source: config.source ?? '',
+        shared: config.shared ?? '',
         active: config.active ?? 'sandbox.py',
-        linkText:
-            config.linkText ?? 'Open this example in the Pyrefly sandbox',
+        linkText: config.linkText ?? 'Open this example in the Pyrefly sandbox',
         description: config.description ?? '',
     };
 }
@@ -90,8 +97,13 @@ export function stripLicenseHeader(content: string): string {
     return lines.slice(i).join('\n');
 }
 
-export function readSandboxFiles(dirPath: string): Record<string, string> {
-    const files: Record<string, string> = {};
+export function readSandboxFiles(
+    dirPath: string,
+    sharedDirPath?: string
+): Record<string, string> {
+    const files: Record<string, string> = sharedDirPath
+        ? readSandboxFiles(sharedDirPath)
+        : {};
 
     if (!fs.existsSync(dirPath)) {
         throw new Error(`Sandbox examples directory not found: ${dirPath}`);
@@ -109,7 +121,7 @@ export function readSandboxFiles(dirPath: string): Record<string, string> {
 
     if (Object.keys(files).length === 0) {
         throw new Error(
-            `No sandbox files found in ${dirPath} (expected .py, .pyi, or .toml files)`,
+            `No sandbox files found in ${dirPath} (expected .py, .pyi, or .toml files)`
         );
     }
 
@@ -118,13 +130,9 @@ export function readSandboxFiles(dirPath: string): Record<string, string> {
 
 export function buildSandboxUrl(
     files: Record<string, string>,
-    activeFile: string,
+    activeFile: string
 ): string {
-    const project = { files, activeFile };
-    const compressed = LZString.compressToEncodedURIComponent(
-        JSON.stringify(project),
-    );
-    return `https://pyrefly.org/sandbox/?project=${compressed}`;
+    return generateSandboxUrl(files, activeFile);
 }
 
 // Walks an mdast tree, calling `visitor(node, index, parent)` for every node
@@ -132,7 +140,7 @@ export function buildSandboxUrl(
 function visit(
     tree: any,
     targetType: string,
-    visitor: (node: any, index: number, parent: any) => void,
+    visitor: (node: any, index: number, parent: any) => void
 ): void {
     function walk(node: any, index: number, parent: any): void {
         if (node.type === targetType) {
@@ -149,6 +157,8 @@ function visit(
 
 export interface RemarkSandboxPluginOptions {
     sandboxExamplesDir?: string;
+    sourceDirectories?: Record<string, string>;
+    sharedDirectories?: Record<string, string>;
 }
 
 function remarkSandboxPlugin(options?: RemarkSandboxPluginOptions) {
@@ -169,12 +179,28 @@ function remarkSandboxPlugin(options?: RemarkSandboxPluginOptions) {
             const config = parseSandboxConfig(node.value);
             if (!config) {
                 throw new Error(
-                    `Invalid sandbox code block: missing "dir" field. Content:\n${node.value}`,
+                    `Invalid sandbox code block: missing "dir" field. Content:\n${node.value}`
                 );
             }
 
-            const dirPath = path.join(sandboxExamplesDir, config.dir);
-            const files = readSandboxFiles(dirPath);
+            const sourceDirPath = config.source
+                ? options?.sourceDirectories?.[config.source]
+                : sandboxExamplesDir;
+            if (!sourceDirPath) {
+                throw new Error(
+                    `Unknown sandbox source directory: ${config.source}`
+                );
+            }
+            const dirPath = path.join(sourceDirPath, config.dir);
+            const sharedDirPath = config.shared
+                ? options?.sharedDirectories?.[config.shared]
+                : undefined;
+            if (config.shared && !sharedDirPath) {
+                throw new Error(
+                    `Unknown shared sandbox directory: ${config.shared}`
+                );
+            }
+            const files = readSandboxFiles(dirPath, sharedDirPath);
             const url = buildSandboxUrl(files, config.active);
 
             // Build a Docusaurus admonition AST node (:::tip)
@@ -198,9 +224,7 @@ function remarkSandboxPlugin(options?: RemarkSandboxPluginOptions) {
                 children: [
                     {
                         type: 'containerDirectiveLabel',
-                        children: [
-                            { type: 'text', value: 'Try it yourself' },
-                        ],
+                        children: [{ type: 'text', value: 'Try it yourself' }],
                     },
                     {
                         type: 'paragraph',

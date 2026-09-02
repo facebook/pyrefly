@@ -20,11 +20,9 @@ use pyrefly_python::module_path::ModulePathDetails;
 use pyrefly_util::fs_anyhow;
 use ruff_notebook::Notebook;
 use ruff_text_size::TextRange;
-use vec1::vec1;
 
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::error::context::ErrorInfo;
 use crate::error::style::ErrorStyle;
 use crate::module::bundled::BundledStub;
 use crate::module::third_party::get_bundled_third_party;
@@ -50,25 +48,31 @@ impl FileContents {
 /// It can be converted to `FileContents`
 #[derive(Clone, Dupe, Debug, Eq, PartialEq)]
 pub enum LspFile {
-    Source(Arc<String>),
+    Source {
+        contents: Arc<String>,
+        language_id: Arc<str>,
+    },
     Notebook(Arc<LspNotebook>),
 }
 
 impl LspFile {
     pub fn get_string(&self) -> &str {
         match self {
-            Self::Source(contents) => contents.as_str(),
+            Self::Source { contents, .. } => contents.as_str(),
             Self::Notebook(notebook) => notebook.ruff_notebook().source_code(),
         }
     }
 
-    pub fn from_source(source: String) -> Self {
-        Self::Source(Arc::new(source))
+    pub fn from_source(source: String, language_id: String) -> Self {
+        Self::Source {
+            contents: Arc::new(source),
+            language_id: language_id.into(),
+        }
     }
 
     pub fn to_file_contents(&self) -> FileContents {
         match self {
-            Self::Source(contents) => FileContents::Source(Arc::clone(contents)),
+            Self::Source { contents, .. } => FileContents::Source(Arc::clone(contents)),
             Self::Notebook(notebook) => {
                 FileContents::Notebook(Arc::clone(notebook.ruff_notebook()))
             }
@@ -169,14 +173,16 @@ impl Load {
         };
         let errors = ErrorCollector::new(module_info.dupe(), error_style);
         if let Some(err) = self_error {
-            errors.add(
-                TextRange::default(),
-                ErrorInfo::Kind(ErrorKind::MissingImport),
-                vec1![format!(
-                    "Failed to load `{name}` from `{}`, got {err:#}",
-                    module_info.path()
-                )],
-            );
+            errors
+                .error_builder(
+                    TextRange::default(),
+                    ErrorKind::MissingImport,
+                    format!(
+                        "Failed to load `{name}` from `{}`, got {err:#}",
+                        module_info.path()
+                    ),
+                )
+                .emit();
         }
         Self {
             errors,

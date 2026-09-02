@@ -61,7 +61,7 @@ pub(crate) fn extract_variable_code_actions(
     let action = LocalRefactorCodeAction {
         title: format!("Extract into variable `{variable_name}`"),
         edits: vec![insert_edit, replace_edit],
-        kind: CodeActionKind::REFACTOR_EXTRACT,
+        kind: CodeActionKind::RefactorExtract,
     };
     Some(vec![action])
 }

@@ -82,6 +82,181 @@ test(C())
  "#,
 );
 
+// A gradual type argument in the expected type must not suppress the bounds
+// check on the corresponding class type parameter (ref: #3525).
+testcase!(
+    test_bound_checked_under_gradual_expected_type,
+    r#"
+from typing import Any
+
+class A: ...
+class B(A): ...
+
+class Container[T: B]:
+    def __init__(self, x: T) -> None: ...
+
+def bare(x: A) -> Container:  # implicitly Container[Any]
+    return Container(x)  # E: `A` is not assignable to upper bound `B` of type variable `T`
+
+def explicit_any(x: A) -> Container[Any]:
+    return Container(x)  # E: `A` is not assignable to upper bound `B` of type variable `T`
+
+def unrelated(x: str) -> Container[Any]:
+    return Container(x)  # E: `str` is not assignable to upper bound `B` of type variable `T`
+ "#,
+);
+
+// A gradual type argument still supplies the solution for its own type
+// parameter, so a well-bounded argument is accepted and `Any` is preserved.
+testcase!(
+    test_gradual_expected_type_still_solves_targ,
+    r#"
+from typing import Any, assert_type
+
+class B: ...
+
+class Container[T: B]:
+    def __init__(self, x: T) -> None: ...
+
+def f(x: B) -> None:
+    assert_type(Container(x), Container[B])
+    y: Container[Any] = Container(x)
+    assert_type(y, Container[Any])
+ "#,
+);
+
+// An `Any` argument is a real solution for the type parameter, unlike an `Any`
+// coming from the expected type, so the parameter is still solved to `Any`.
+testcase!(
+    test_gradual_argument_solves_restricted_targ,
+    r#"
+from typing import Any, assert_type
+
+def unknown() -> Any: ...
+
+class Container[T: str | None]:
+    def __init__(self, x: T = None) -> None: ...
+
+def f() -> None:
+    assert_type(Container(unknown()), Container[Any])
+    assert_type(next(Container(unknown()) for _ in range(3)), Container[Any])
+
+def g() -> Container[str]:
+    return Container(unknown())
+ "#,
+);
+
+// Constraints are checked under a gradual expected type just as bounds are, and a valid
+// argument still selects its constraint.
+testcase!(
+    test_constraints_checked_under_gradual_expected_type,
+    r#"
+from typing import Any, assert_type
+
+class Container[T: (int, str)]:
+    def __init__(self, x: T) -> None: ...
+
+def returned(x: float) -> Container[Any]:
+    return Container(x)  # E: `float` is not assignable to any of constraints `int`, `str`
+
+def assigned(x: float) -> None:
+    y: Container[Any] = Container(x)  # E: `float` is not assignable to any of constraints `int`, `str`
+
+def valid(x: int) -> Container[Any]:
+    assert_type(Container(x), Container[int])
+    return Container(x)
+ "#,
+);
+
+// A bound of `Any` or `object` accepts everything, so keeping such a parameter free buys no
+// checking and only discards the solution the expected type supplies.
+testcase!(
+    test_vacuous_bound_solved_from_gradual_expected_type,
+    r#"
+from typing import Any, assert_type
+
+class BoxAny[T: Any]:
+    def __init__(self, x: T) -> None: ...
+
+class BoxObj[T: object]:
+    def __init__(self, x: T) -> None: ...
+
+def f(x: str) -> None:
+    y: BoxAny[Any] = BoxAny(x)
+    assert_type(y, BoxAny[Any])
+    z: BoxObj[Any] = BoxObj(x)
+    assert_type(z, BoxObj[Any])
+ "#,
+);
+
+// The restriction check for a gradual expected type only produces a diagnostic, so it must not
+// solve anything. `v`'s element variable is reachable only through the answer for the nested
+// `list(...)` call, and the overloaded `__init__` keeps the argument from being expanded first.
+testcase!(
+    test_gradual_expected_type_restriction_check_is_rolled_back,
+    r#"
+from typing import Any, assert_type, overload
+
+class Container[T: list[list[int]]]:
+    @overload
+    def __init__(self, x: T) -> None: ...
+    @overload
+    def __init__(self, x: T, y: int) -> None: ...
+    def __init__(self, x: T, y: int = 0) -> None: ...
+
+def f() -> None:
+    v = []
+    c: Container[Any] = Container(list([v]))
+    assert_type(v, list[Any])
+    v.append("s")
+ "#,
+);
+
+testcase!(
+    test_any_bound_attribute_access,
+    r#"
+from typing import Any, TypeVar, assert_type
+
+class Concrete: ...
+
+def pep695_bound[T: Any](arg: T) -> T:
+    assert_type(arg.method(), Any)
+    return arg
+
+LegacyT = TypeVar("LegacyT", bound=Any)
+def legacy_bound(arg: LegacyT) -> LegacyT:
+    assert_type(arg.method(), Any)
+    return arg
+
+assert_type(pep695_bound(Concrete()), Concrete)
+assert_type(legacy_bound(Concrete()), Concrete)
+
+class Base:
+    def method(self) -> int: ...
+    @classmethod
+    def class_method(cls) -> int: ...
+class Inherited(Base): ...
+
+def union_bound[T: Any | Inherited](arg: T) -> T:
+    assert_type(arg.method(), int | Any)
+    arg.missing()  # E: Object of class `Inherited` has no attribute `missing`
+    return arg
+
+def constrained[T: (Any, Inherited)](arg: T) -> T:
+    assert_type(arg.method(), int | Any)
+    return arg
+
+def class_bound[T: Any](arg: type[T]) -> type[T]:
+    assert_type(arg.__name__, str)
+    assert_type(arg.class_method(), Any)
+    return arg
+
+def class_constrained[T: (Any, Inherited)](arg: type[T]) -> type[T]:
+    arg.class_method()
+    return arg
+ "#,
+);
+
 testcase!(
     test_base_class_bound,
     r#"
@@ -112,7 +287,7 @@ def test[T: (B, C)](x: T) -> None:
     c: C = x  # E: `T` is not assignable to `C`
     d: B | C = x  # OK
 
-test(A())  # E: `A` is not assignable to upper bound `B | C` of type variable `T`
+test(A())  # E: `A` is not assignable to any of constraints `B`, `C` of type variable `T`
 test(B())
 test(C())
 test(D())
@@ -341,7 +516,7 @@ from typing import Self, TypeVar
 
 class B():
     def f(self) -> Self:
-        return self 
+        return self
 class C(B):
     pass
 class D(B):
@@ -592,7 +767,7 @@ class X: ...
 def f[T: (int, str)](x: T) -> T: ...
 
 # X is not assignable to int or str, so this should error.
-f(X())  # E: `X` is not assignable to upper bound `int | str` of type variable `T`
+f(X())  # E: `X` is not assignable to any of constraints `int`, `str` of type variable `T`
     "#,
 );
 
@@ -629,6 +804,39 @@ def add1[T: int](x: T, y: T) -> T:
     return x + y # E: Returned type `int` is not assignable to declared return type `T`
 def add2[T: int | float](x: T, y: T) -> T:
     return x + y # E: Returned type `float | int` is not assignable to declared return type `T`
+    "#,
+);
+
+testcase!(
+    test_multiple_binops_with_constrained_typevar,
+    r#"
+from typing import TypeVar
+
+T = TypeVar("T", str, int)
+
+def foo(a: T) -> T:
+    doubled = 2 * a
+    return a + doubled
+    "#,
+);
+
+testcase!(
+    test_constraints_with_custom_add,
+    r#"
+from typing import assert_type, TypeVar
+class A1:
+    pass
+class A2:
+    def __radd__(self, other: "MyNum") -> str: ...
+class MyNum:
+    def __add__(self, other: A1) -> int: ...
+T = TypeVar("T", bound=MyNum)
+U = TypeVar("U", A1, A2)
+
+def f(x: T, y: U):
+    # T + A1 -> MyNum.__add__(A1) -> int
+    # T + A2 -> A2.__radd__(MyNum) -> str
+    assert_type(x + y, int | str)
     "#,
 );
 
@@ -988,6 +1196,16 @@ class A:
 );
 
 testcase!(
+    test_nondefault_followed_by_default,
+    r#"
+from typing import assert_type
+class C[R, T = int, S = T]: ...
+def f(x: C[str]) -> None:
+    assert_type(x, C[str, int, int])
+    "#,
+);
+
+testcase!(
     test_nested_call_preserves_bound,
     r#"
 # Tests for preserving type variable bounds when unifying quantified variables.
@@ -1134,67 +1352,6 @@ reveal_type(f)  # E: revealed type: [T, U: int, V = str](x: T, y: U, z: V) -> tu
 );
 
 testcase!(
-    bug =
-        "conformance: Should error on unbound TypeVars in class bases, TypeAlias, and expressions",
-    test_typevar_scoping_restrictions,
-    r#"
-from typing import TypeVar, Generic, TypeAlias
-from collections.abc import Iterable
-
-T = TypeVar("T")
-S = TypeVar("S")
-
-# Unbound TypeVar S used in generic function body
-def fun_3(x: T) -> list[T]:
-    y: list[T] = []  # OK
-    z: list[S] = []  # E: Type variable `S` is not in scope
-    return y
-
-# Unbound TypeVar S in class body (not in method)
-class Bar(Generic[T]):
-    an_attr: list[S] = []  # E: Type variable `S` is not in scope
-
-# Nested class using outer class's TypeVar
-class Outer(Generic[T]):
-    class Bad(Iterable[T]):  # should error: T from outer not in scope
-        ...
-    class AlsoBad:
-        x: list[T]  # should error: T from outer not in scope
-
-    alias: TypeAlias = list[T]  # should error: T not allowed in TypeAlias here
-
-# Unbound TypeVars at global scope
-global_var1: T  # E: Type variable `T` is not in scope
-global_var2: list[T] = []  # E: Type variable `T` is not in scope
-list[T]()  # should error
-"#,
-);
-
-testcase!(
-    bug = "Follow-on errors on TypeVar usages inside nested class that shadows outer TypeVars",
-    test_nested_class_independent_typevar_adoption,
-    r#"
-from typing import Generic, Type, TypeVar
-
-_Deserialized = TypeVar("_Deserialized")
-_Serialized = TypeVar("_Serialized")
-
-class CustomCoercer(Generic[_Deserialized, _Serialized]):
-    # CoercerMapping uses the same TypeVars as CustomCoercer, which the spec forbids.
-    class CoercerMapping(
-        dict[
-            Type[_Deserialized],  # should error: _Deserialized already bound by CustomCoercer
-            Type["CustomCoercer[_Deserialized, _Serialized]"],  # should error: both TypeVars
-        ]
-    ):
-        def __getitem__(
-            self,
-            key: type[_Deserialized],
-        ) -> type["CustomCoercer[_Deserialized, _Serialized]"]: ...
-"#,
-);
-
-testcase!(
     test_constraint_promotion_anystr_passthrough,
     r#"
 from typing import AnyStr, assert_type
@@ -1335,4 +1492,282 @@ def f(x: T | None) -> T | int: ...
 def g(x: T | None) -> T | int:
     return f(x)
     "#,
+);
+
+testcase!(
+    test_unrestricted_typevar_param_with_default,
+    r#"
+from typing import assert_type
+
+def f1[T](x: T = 0) -> T: ...
+assert_type(f1(), int)
+assert_type(f1(""), str)
+
+def f2[T](x: T, y: T = 0) -> T: ...
+assert_type(f2(1), int)
+assert_type(f2(""), int | str)
+    "#,
+);
+
+testcase!(
+    test_constrained_typevar_param_with_default,
+    r#"
+from typing import assert_type, reveal_type
+
+def f1[T: (int, str)](x: T = 0) -> T: ...
+assert_type(f1(), int)
+assert_type(f1(""), str)
+
+def f2[T: (int, str)](x: T, y: T = 0) -> T: ...
+assert_type(f2(1), int)
+f2("")  # E: `Literal[0]` is not assignable to parameter `y` with type `str`
+
+def f_bad[T: (int, str)](x: T = b"") -> T: ...  # E: `Literal[b'']` is not assignable to parameter `x` with type `int | str`
+# T is left unsolved
+reveal_type(f_bad())  # E: revealed type: @_
+assert_type(f_bad(0), int)
+    "#,
+);
+
+testcase!(
+    test_bounded_typevar_param_with_default,
+    r#"
+from typing import assert_type, reveal_type
+
+def f1[T: int](x: T = 0) -> T: ...
+assert_type(f1(), int)
+
+def f2[T: int](x: T, y: T = 0) -> T: ...
+assert_type(f2(1), int)
+
+def f_bad[T: int](x: T = "") -> T: ...  # E: `Literal['']` is not assignable to parameter `x` with type `int`
+# T is left unsolved
+reveal_type(f_bad())  # E: revealed type: @_
+assert_type(f_bad(0), int)
+    "#,
+);
+
+testcase!(
+    test_param_with_nested_typevar_and_default,
+    r#"
+from typing import Sequence, assert_type
+def f[T](x: Sequence[T] = (0,)) -> T: ...
+assert_type(f(), int)
+assert_type(f([""]), str)
+    "#,
+);
+
+// Note: in Python, mutable function parameter defaults are wildly unsafe and heavily discouraged.
+// We still want to make sure Pyrefly behaves sensibly, even on this bad code pattern.
+testcase!(
+    test_typevar_param_with_mutable_default,
+    r#"
+from typing import assert_type, reveal_type
+
+def f1[T](x: list[T] = []) -> T: ...
+# T is left unsolved
+reveal_type(f1())  # E: revealed type: @_
+assert_type(f1([0]), int)
+
+def f2[T](x: T, y: list[T] = []) -> T: ...
+assert_type(f2(0), int)
+
+def f3[T](x: list[T] = [""]) -> T: ...
+assert_type(f3(), str)
+assert_type(f3([0]), int)
+
+def f_bad[T: int](x: list[T] = [""]) -> T: ...  # E: `list[str]` is not assignable to parameter `x` with type `list[int]`
+# T is left unsolved
+reveal_type(f_bad())  # E: revealed type: @_
+    "#,
+);
+
+testcase!(
+    test_typevar_posonly_and_kwonly_param_default,
+    r#"
+from typing import assert_type
+
+def f1[T: (int, str)](x: T = 0, /) -> T: ...
+assert_type(f1(), int)
+
+def f2[T: (int, str)](*, x: T = 0) -> T: ...
+assert_type(f2(), int)
+    "#,
+);
+
+testcase!(
+    test_typevar_param_default_custom_generic,
+    r#"
+from typing import reveal_type
+class A[T]: ...
+def f[T](x: A[T] = A()) -> T: ...
+# T is left unsolved
+reveal_type(f())  # E: revealed type: @_
+    "#,
+);
+
+testcase!(
+    test_union_of_constraints_does_not_match_constrained_typevar,
+    r#"
+def f[T: (int, str)](x: T) -> T:
+    return x
+def g(x: int | str):
+    f(x)  # E: `int | str` is not assignable to any of constraints `int`, `str` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_constrained_identity_function_preserves_typevar,
+    r#"
+from typing import reveal_type
+def f[T: (bool, int)](x: T) -> T:
+    return x
+def g[T: bool](x: T) -> T:
+    return f(x)
+def h[S: str](x: S) -> S:
+    return f(x)  # E: `S` is not assignable to any of constraints `bool`, `int` of type variable `T`
+    "#,
+);
+
+testcase!(
+    test_cannot_return_union_of_constraints_for_constrained_typevar,
+    r#"
+def f() -> int | str: ...
+def g[T: (int, str)](x: T) -> T:
+    return f()  # E: `int | str` is not assignable to declared return type `T`
+    "#,
+);
+
+testcase!(
+    bug = "Return type T is narrowed to int, so returning 0 should be allowed",
+    test_return_concrete_type_after_typevar_narrow,
+    r#"
+def f[T: (int, str)](x: T) -> T:
+    if isinstance(x, int):
+        return 0  # E: `Literal[0]` is not assignable to declared return type `T`
+    else:
+        return x
+    "#,
+);
+
+testcase!(
+    test_binop_on_two_typevars_after_narrow_one,
+    r#"
+from typing import reveal_type
+def f[T: (str, bytes)](x: T, y: T):
+    if isinstance(x, str):
+        return reveal_type(x + y)  # E: revealed type: str & T
+    "#,
+);
+
+testcase!(
+    test_binop_on_typevar_with_union_bound,
+    r#"
+def f[T: bytes | str](x: T):
+    if isinstance(x, str):
+        y: str = 2 * x
+    "#,
+);
+
+testcase!(
+    bug = "We sometimes solve to the wrong constraint when one constraint is a subtype of another",
+    test_constraint_subtyping,
+    r#"
+from typing import assert_type
+
+class Parent: ...
+class Child(Parent): ...
+class Unrelated: ...
+
+def f[T: (Child, Parent, Unrelated)](x: T, y: T) -> T:
+    return x
+
+assert_type(f(Parent(), Child()), Parent)
+# BUG: this `f` call and `assert_type` should succeed
+assert_type(f(Child(), Parent()), Parent)  # E: assert_type(Child, Parent)  # E: `Parent` is not assignable to parameter `y` with type `Child`
+
+# The below is a real error that we need to make sure to catch.
+# This shows why it would be incorrect for the solver to just ignore the `Child` bound when it does
+# not unambiguously solve the type parameter.
+f(Child(), Unrelated())  # E: `Unrelated` is not assignable to parameter `y` with type `Child`
+    "#,
+);
+
+testcase!(
+    test_constraint_do_not_pin_to_any,
+    r#"
+from typing import Any, assert_type
+
+def f1[T: (int, str)](x: T, y: T) -> T: ...
+def f2[T: (list[int], list[str])](x: T, y: T) -> T: ...
+def g(x: Any):
+    assert_type(f1(x, 0), int)
+    assert_type(f1(0, x), int)
+    assert_type(f2([x], [0]), list[int])
+    assert_type(f2([0], [x]), list[int])
+
+class A: ...
+class B(A): ...
+def f3[T: (A, B)](x: T, y: T) -> T: ...
+def h(x: Any):
+    # In cases that are ambiguous due to `Any`, we solve to the narrowest constraint. This is
+    # technically unsound (`x` could have type `A`) but is more useful than degrading to `Any`.
+    assert_type(f3(x, B()), B)
+    assert_type(f3(B(), x), B)
+    "#,
+);
+
+// A gradual type argument supplies the solution for its own type parameter, and keeping that
+// solution is the point of the expected type. Here `V` must stay `Any`: were it instead solved
+// from the first argument, it would become `bool` and reject the second one.
+testcase!(
+    test_gradual_expected_type_solution_is_kept,
+    r#"
+from typing import Any, MutableMapping
+
+class ChainMap[K, V: bool | dict]:
+    def __init__(self, *mappings: MutableMapping[K, V]): ...
+
+mapping: ChainMap[str, Any] = ChainMap(
+    {"flag": True},
+    {"nested": {"value": 1}},
+)
+ "#,
+);
+
+// The restriction is checked against each argument, so nesting the gradual type inside a container
+// does not suppress the check.
+testcase!(
+    test_nested_gradual_expected_type_checks_restriction,
+    r#"
+from typing import Any, assert_type
+
+class Nested[T: list[str]]:
+    def __init__(self, value: T) -> None: ...
+
+def bad(v: list[int]) -> None:
+    x: Nested[list[Any]] = Nested(v)  # E: `list[int]` is not assignable to upper bound `list[str]` of type variable `T`
+
+def good(v: list[str]) -> None:
+    y: Nested[list[Any]] = Nested(v)
+    assert_type(y, Nested[list[Any]])
+ "#,
+);
+
+// A container literal is contextually typed by the expected type before the restriction can be
+// checked: the element variable of `[1]` is pinned to `Any` by the `list[Any]` type argument, so
+// `list[int]` is never the argument type that argument matching sees. Passing an expression whose
+// type is already fixed, as in `test_nested_gradual_expected_type_checks_restriction`, is caught.
+testcase!(
+    bug = "the literal's element type is absorbed by the gradual type argument",
+    test_nested_gradual_expected_type_misses_literal,
+    r#"
+from typing import Any
+
+class Nested[T: list[str]]:
+    def __init__(self, value: T) -> None: ...
+
+def bad() -> None:
+    x: Nested[list[Any]] = Nested([1])  # Should be an error
+ "#,
 );
