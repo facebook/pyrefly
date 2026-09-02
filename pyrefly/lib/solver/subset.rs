@@ -2588,7 +2588,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let tuple_type = self.solver.heap.mk_class_type(
                     self.type_order
                         .stdlib()
-                        .tuple(unions(left_elts.clone(), &self.solver.heap)),
+                        .tuple(self.solver.unions(left_elts.clone(), self.type_order)),
                 );
                 self.is_subset_eq(&tuple_type, want)
             }
@@ -2612,7 +2612,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let tuple_type = self.solver.heap.mk_class_type(
                     self.type_order
                         .stdlib()
-                        .tuple(unions(elts, &self.solver.heap)),
+                        .tuple(self.solver.unions(elts, self.type_order)),
                 );
                 self.is_subset_eq(&tuple_type, want)
             }
@@ -2622,7 +2622,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let tuple_type = self.solver.heap.mk_class_type(
                     self.type_order
                         .stdlib()
-                        .tuple(unions(elts, &self.solver.heap)),
+                        .tuple(self.solver.unions(elts, self.type_order)),
                 );
                 self.is_subset_eq(&tuple_type, want)?;
                 self.is_subset_eq(middle, want)?;
