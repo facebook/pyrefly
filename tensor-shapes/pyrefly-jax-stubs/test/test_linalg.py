@@ -162,7 +162,7 @@ def test_matmul_rejects_mismatched_inner_dimension() -> None:
 
     assert_shape(jnp.linalg.matmul(a, jnp.ones((4, 5))), (3, 5))
     try:
-        # E: Cannot evaluate type-level shape DSL call: matmul inner dimensions must match
+        # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 4 and 7
         jnp.linalg.matmul(a, jnp.ones((7, 5)))
     except TypeError:
         pass

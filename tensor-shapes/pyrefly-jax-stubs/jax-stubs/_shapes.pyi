@@ -4,7 +4,12 @@
 # LICENSE file in the root directory of this source tree.
 
 import shape_extensions.dsl as dsl
-from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions import (
+    gufunc_broadcast,
+    Int,
+    IntTuple,
+    type_shape_dsl_function,
+)
 
 @type_shape_dsl_function
 def int_min(a: Int, b: Int) -> Int:
@@ -18,75 +23,17 @@ def int_min(a: Int, b: Int) -> Int:
 
 @type_shape_dsl_function
 def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
-    # 1. Reject operands with rank 0 (scalars)
     if len(left) == 0 or len(right) == 0:
-        return dsl.Invalid("matmul requires at least 1-D operands")
-
-    # (k)(*batch,k,m) -> (*batch,m)
-    if len(left) == 1:
-        k_left = left[0]
-        k_right = right[len(right) - 2]
-        if (
-            dsl.is_concrete_int(k_left)
-            and dsl.is_concrete_int(k_right)
-            and k_left != k_right
-        ):
-            return dsl.Invalid("matmul inner dimensions must match")
-        return dsl.IntTuple(
-            right[i] if i < len(right) - 2 else right[len(right) - 1]
-            for i in range(len(right) - 1)
-        )
-
-    # (*batch,k)(k) -> (*batch,)
+        return dsl.Invalid("matmul expects at least 1-D arrays")
+    operands = dsl.IntTuples((left, right))
     if len(right) == 1:
-        k_left = left[len(left) - 1]
-        k_right = right[0]
-        if (
-            dsl.is_concrete_int(k_left)
-            and dsl.is_concrete_int(k_right)
-            and k_left != k_right
-        ):
-            return dsl.Invalid("matmul inner dimensions must match")
-        return dsl.IntTuple(left[i] for i in range(len(left) - 1))
-
-    # (*batch_left,n,k)(*batch_right,k,m) -> (*broadcast(batch_left,batch_right),n,m)
-    k_left = left[len(left) - 1]
-    k_right = right[len(right) - 2]
-    if (
-        dsl.is_concrete_int(k_left)
-        and dsl.is_concrete_int(k_right)
-        and k_left != k_right
-    ):
-        return dsl.Invalid("matmul inner dimensions must match")
-    if len(left) >= len(right):
-        n_batch = len(left) - 2
-        diff = len(left) - len(right)
-        return dsl.IntTuple(
-            (
-                (
-                    (right[i - diff] if left[i] == 1 else left[i])
-                    if i >= diff
-                    else left[i]
-                )
-                if i < n_batch
-                else (left[len(left) - 2] if i == n_batch else right[len(right) - 1])
-            )
-            for i in range(len(left))
-        )
-    n_batch = len(right) - 2
-    diff = len(right) - len(left)
-    return dsl.IntTuple(
-        (
-            (
-                (right[i] if left[i - diff] == 1 else left[i - diff])
-                if i >= diff
-                else right[i]
-            )
-            if i < n_batch
-            else (left[len(left) - 2] if i == n_batch else right[len(right) - 1])
-        )
-        for i in range(len(right))
-    )
+        spec = "(n),(n)->()"
+        return gufunc_broadcast(spec, operands)
+    if len(left) == 1:
+        spec = "(n),(n,p)->(p)"
+        return gufunc_broadcast(spec, operands)
+    spec = "(m,n),(n,p)->(m,p)"
+    return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
 def reverse_shape(shape: IntTuple) -> IntTuple:
