@@ -472,7 +472,7 @@ impl FromStr for ErrorOutput {
 }
 
 impl OutputArgs {
-    fn has_custom_options(&self) -> bool {
+    fn has_daemon_incompatible_options(&self) -> bool {
         let Self {
             output,
             output_format,
@@ -500,11 +500,25 @@ impl OutputArgs {
             update_baseline,
             prune_baseline,
             error_stale_baseline,
-            min_severity,
+            min_severity: _,
         } = self;
 
+        let unsupported_output_format = match output_format {
+            None | Some(OutputFormat::MinText | OutputFormat::FullText | OutputFormat::Json) => {
+                false
+            }
+            Some(
+                OutputFormat::FullTextWithGithub
+                | OutputFormat::Github
+                | OutputFormat::JunitXml
+                | OutputFormat::CodeClimate
+                | OutputFormat::Sarif
+                | OutputFormat::OmitErrors,
+            ) => true,
+        };
+
         !output.is_empty()
-            || output_format.is_some()
+            || unsupported_output_format
             || debug_info.is_some()
             || report_binding_memory.is_some()
             || report_trace.is_some()
@@ -529,7 +543,6 @@ impl OutputArgs {
             || *update_baseline
             || *prune_baseline
             || *error_stale_baseline
-            || min_severity.is_some()
     }
 
     /// Validate invariants across all requested output destinations.
@@ -1525,9 +1538,9 @@ struct PreparedCliRun {
 }
 
 impl CheckArgs {
-    /// Whether the invocation customizes check behavior or output.
-    pub fn has_custom_options(&self) -> bool {
-        self.output.has_custom_options() || self.behavior.has_custom_options()
+    /// Whether the invocation uses an option unsupported by daemon checks.
+    pub fn has_daemon_incompatible_options(&self) -> bool {
+        self.output.has_daemon_incompatible_options() || self.behavior.has_custom_options()
     }
 
     /// Return the output format selected directly by the client, or the built-in default.
