@@ -454,6 +454,66 @@ def leaf(first: Int, second: Int) -> Int:
 }
 
 #[test]
+fn test_type_shape_dsl_broadcast_edit_invalidates_importer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class IntTuple: pass
+def shaped_array[T](*, shape: str): ...
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+
+@type_shape_dsl_function
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    return left
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from shape_extensions import IntTuple, broadcast, shaped_array
+
+@shaped_array(shape="Shape")
+class Tensor[Shape: IntTuple]: ...
+
+def chosen() -> Tensor[broadcast(IntTuple[2], IntTuple[3])]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import Tensor, chosen
+
+result: Tensor[[2]] = chosen()
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "shape_extensions",
+        r#"
+class IntTuple: pass
+def shaped_array[T](*, shape: str): ...
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+
+@type_shape_dsl_function
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    return right
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main", "shape_extensions"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].msg().contains("not assignable to `Tensor[[2]]`"));
+}
+
+#[test]
 fn test_type_shape_dsl_cross_module_helper_cycle_is_rejected() {
     let mut i = Incremental::with_files(vec![
         "left".to_owned(),

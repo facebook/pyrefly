@@ -279,12 +279,6 @@ def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
     return decorator
 
 
-def broadcast(*_args: typing.Any) -> IntTuple:
-    """Runtime placeholder for Pyrefly's native type-level broadcast intrinsic."""
-
-    return IntTuple()
-
-
 class MapIntTuples:
     """Map a unary type lambda over an ``IntTuples`` value.
 
@@ -321,6 +315,13 @@ def gufunc_broadcast(spec: str, shapes: IntTuples) -> IntTuple:
     """Compute the output shape described by a generalized ufunc signature."""
 
     return _dsl._gufunc_broadcast(spec, shapes)
+
+
+@type_shape_dsl_function
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    spec = "(),()->()"
+    shapes = _dsl.IntTuples((left, right))
+    return gufunc_broadcast(spec, shapes)
 
 
 class IntVar:
