@@ -2194,10 +2194,6 @@ impl<'a> Transaction<'a> {
                 );
                 defs
             }
-            // Workaround so functions decorated with `functools.lru_cache` go to definition on the source, not the decorator.
-            Type::ClassType(class) if class.has_qname("functools", "_lru_cache_wrapper") => {
-                vec![]
-            }
             Type::ClassType(_) => self
                 .find_attribute_definition_for_base_type(handle, preference, ty, &dunder::CALL)
                 .map(Vec1::into_vec)
@@ -2811,9 +2807,20 @@ impl<'a> Transaction<'a> {
                         }
                     }
                     ExprContext::Load | ExprContext::Del | ExprContext::Invalid => {
+                        let definition = self.find_definition_for_name_use(handle, &id, preference);
+                        // A decorator may give a function a class instance type. Preserve the
+                        // function definition instead of navigating to the instance's `__call__`.
+                        let is_function_or_method = match &definition {
+                            Ok(Some(item)) => matches!(
+                                item.metadata.symbol_kind(),
+                                Some(SymbolKind::Function | SymbolKind::Method)
+                            ),
+                            Ok(None) | Err(_) => false,
+                        };
                         // If this name is the callee of a call expression, jump
                         // to constructor or __call__ definitions when applicable.
                         if preference.resolve_call_dunders
+                            && !is_function_or_method
                             && let Some(AnyNodeRef::ExprCall(call)) = covering_nodes.get(1)
                             && call.func.range() == id.range
                             && let Some(bindings) = self.get_bindings(handle)
@@ -2830,7 +2837,7 @@ impl<'a> Transaction<'a> {
                             }
                         }
                         // This is a usage of the variable
-                        match self.find_definition_for_name_use(handle, &id, preference)? {
+                        match definition? {
                             Some(item) => Ok(vec1![item]),
                             None => Err(EmptyResponseReason::DefinitionNotFound {
                                 name: id.id.to_string(),

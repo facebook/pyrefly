@@ -3148,6 +3148,60 @@ Definition Result:
 }
 
 #[test]
+fn goto_def_decorated_function_call_goes_to_function() {
+    let task_code = r#"
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+class Task[**P, R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+def task(*, retries: int = 0) -> Callable[[Callable[P, R]], Task[P, R]]: ...
+"#;
+    let decorated_code = r#"
+from task import task
+
+@task(retries=2)
+def foo(value: int) -> int:
+    return value + 1
+"#;
+    let code = r#"
+from decorated import foo
+
+foo(value=1)
+# ^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("main", code),
+            ("decorated", decorated_code),
+            ("task", task_code),
+        ],
+        get_test_report,
+    );
+    assert_eq!(
+        r#"
+# main.py
+4 | foo(value=1)
+      ^
+Definition Result:
+5 | def foo(value: int) -> int:
+        ^^^
+
+
+# decorated.py
+
+# task.py
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn goto_def_class_name_without_call_goes_to_class() {
     let code = r#"
 class Baz:
