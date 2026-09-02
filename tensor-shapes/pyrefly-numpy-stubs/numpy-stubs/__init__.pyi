@@ -149,11 +149,9 @@ class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
     def __rpow__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
     ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
-    # TODO(stroxler): Share the DSL-backed `np.matmul` rule once operator methods can invoke it.
-    def __matmul__[N: IntVar, M: IntVar, P: IntVar](
-        self: ndarray[[N, M], DType],
-        other: ndarray[[M, P]],
-    ) -> ndarray[[N, P], DType]: ...
+    def __matmul__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[matmul_shape(Shape, OtherShape), DType]: ...
     # TODO(stroxler): Share the DSL-backed free-function reduction rules with bound methods.
     # These narrow method bridges currently cover the shapes used by the example corpus.
     @overload
@@ -307,10 +305,8 @@ def argmin[N: IntVar, M: IntVar](
     keepdims: Literal[False] = False,
 ) -> ndarray[[N], dtype[intp]]: ...
 
-# NumPy uses the typed DSL for this rule; Torch still uses the legacy shaped-array
-# mechanism. This MVP models only two-dimensional inputs. The result dtype stays
-# gradual because dtype promotion is not modeled, while `ndarray.__matmul__`
-# carries the left operand's dtype.
+# The result dtype stays gradual because dtype promotion is not modeled, while
+# `ndarray.__matmul__` carries the left operand's dtype.
 def matmul[LeftShape: _Shape, RightShape: _Shape](
     a: ndarray[LeftShape], b: ndarray[RightShape], /
 ) -> ndarray[matmul_shape(LeftShape, RightShape), Any]: ...

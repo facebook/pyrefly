@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import shape_extensions.dsl as dsl
-from shape_extensions import Int, IntTuple, type_shape_dsl_function
+from shape_extensions import gufunc_broadcast, Int, IntTuple, type_shape_dsl_function
 
 @type_shape_dsl_function
 def int_min(a: Int, b: Int) -> Int:
@@ -25,17 +25,17 @@ def diag_extent(n: Int, k: int) -> Int:
 
 @type_shape_dsl_function
 def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
-    if len(left) != 2 or len(right) != 2:
-        return dsl.Invalid("matmul expects 2-D arrays")
-    left_inner = left[1]
-    right_inner = right[0]
-    if (
-        dsl.is_concrete_int(left_inner)
-        and dsl.is_concrete_int(right_inner)
-        and left_inner != right_inner
-    ):
-        return dsl.Invalid("matmul inner dimensions must match")
-    return dsl.IntTuple((left[0], right[1]))
+    if len(left) == 0 or len(right) == 0:
+        return dsl.Invalid("matmul expects at least 1-D arrays")
+    operands = dsl.IntTuples((left, right))
+    if len(right) == 1:
+        spec = "(n),(n)->()"
+        return gufunc_broadcast(spec, operands)
+    if len(left) == 1:
+        spec = "(n),(n,p)->(p)"
+        return gufunc_broadcast(spec, operands)
+    spec = "(m,n),(n,p)->(m,p)"
+    return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
 def reduce_shape(
