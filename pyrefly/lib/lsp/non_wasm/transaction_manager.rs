@@ -61,9 +61,9 @@ impl<'a> TransactionManager<'a> {
         let previous_blocking = match self.saved_state.take() {
             Some(saved_state) => match saved_state.restore() {
                 Ok(mut tx) => {
-                    // The saved cancellation belonged to the previous consumer and has already
-                    // taken effect; clearing it upholds the invariant that a transaction
-                    // handed out here can perform work, instead of silently doing none.
+                    // The saved cancellation belonged to the previous consumer and has
+                    // taken effect; clearing upholds the invariant that a transaction
+                    // handed out here can perform work (instead of silently doing none).
                     tx.reset_cancellation();
                     return tx;
                 }
@@ -105,6 +105,8 @@ mod tests {
 
     /// A recheck cancels the in-flight reads that block its commit. That cancellation belongs
     /// to the request being aborted, so it should *not* survive into the saved transaction.
+    /// Clearing it must also keep the work the saved transaction already did, so the restored
+    /// transaction reuses the cached stdlib instead of recomputing it.
     #[test]
     fn test_restored_transaction_is_not_still_cancelled() {
         let mut test_env = TestEnv::new();
@@ -145,8 +147,16 @@ mod tests {
 
         let second = handle("second");
         let mut transaction = manager.non_committable_transaction(&state);
+        assert!(
+            !transaction.get_cancellation_handle().is_cancelled(),
+            "restored transaction should hold a fresh cancellation handle"
+        );
         transaction.set_memory(test_env.get_memory());
         transaction.run(&[second.dupe()], Require::Everything, None);
+        assert!(
+            transaction.compute_stdlib_cached(),
+            "restored transaction should reuse the stdlib computed before the save"
+        );
         assert_eq!(
             transaction
                 .get_errors([&second])
