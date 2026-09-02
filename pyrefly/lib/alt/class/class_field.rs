@@ -1864,6 +1864,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         range,
                         errors,
                     );
+                    // Promote each assigned value before unioning them, rather than promoting
+                    // the finished union. Promoting first means a literal can never be absorbed
+                    // by a wider member before promotion has had a chance to widen it, which
+                    // would leave an explicit type that promotion is not allowed to touch.
+                    //
+                    // A value whose annotation fixes its type keeps it: an explicit type is the
+                    // declaration, and a read-only value cannot be reassigned so its literal is
+                    // not over-precise.
+                    let annotation_fixes_type = annotation.as_ref().is_some_and(|ann| {
+                        ann.ty.is_some()
+                            || ann.is_final()
+                            || ann.has_qualifier(&Qualifier::ReadOnly)
+                    });
+                    let value_ty = if annotation_fixes_type
+                        || matches!(value_ty, Type::NNModule(_) | Type::DataFrame(_))
+                    {
+                        // Shape and column inference need NNModule and DataFrame literals kept.
+                        value_ty
+                    } else {
+                        value_ty.promote_implicit_literals(self.stdlib)
+                    };
                     union_types.push(value_ty);
                     if overall_annotation.is_none() {
                         overall_annotation = annotation;
