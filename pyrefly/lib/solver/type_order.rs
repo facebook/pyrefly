@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
+use std::borrow::Cow;
 
 use dupe::Clone_;
 use dupe::Copy_;
@@ -31,6 +31,7 @@ use crate::solver::solver::SubsetError;
 use crate::types::callable::Required;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::quantified::Quantified;
 use crate::types::stdlib::Stdlib;
 use crate::types::typed_dict::TypedDict;
 use crate::types::typed_dict::TypedDictField;
@@ -45,10 +46,10 @@ use crate::types::types::Type;
 /// the `Type` object itself does not contain enough information to determine
 /// subset relations.
 #[derive(Clone_, Copy_, Dupe_)]
-pub struct TypeOrder<'a, Ans: LookupAnswer>(&'a AnswersSolver<'a, Ans>);
+pub struct TypeOrder<'solver, Ans: LookupAnswer>(&'solver AnswersSolver<'solver, 'solver, Ans>);
 
-impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
-    pub fn new(solver: &'a AnswersSolver<'a, Ans>) -> Self {
+impl<'solver, Ans: LookupAnswer> TypeOrder<'solver, Ans> {
+    pub fn new(solver: &'solver AnswersSolver<'solver, 'solver, Ans>) -> Self {
         Self(solver)
     }
 
@@ -57,7 +58,11 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.is_debug()
     }
 
-    pub fn stdlib(self) -> &'a Stdlib {
+    pub fn has_active_scc(self) -> bool {
+        self.0.has_active_scc()
+    }
+
+    pub fn stdlib(self) -> &'solver Stdlib {
         self.0.stdlib
     }
 
@@ -73,6 +78,10 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.as_class_type_unchecked(class)
     }
 
+    pub fn shaped_array_shape_for_class_type(self, cls: &ClassType) -> Option<Quantified> {
+        self.0.shaped_array_shape_for_class_type(cls)
+    }
+
     pub fn has_metaclass(self, cls: &Class, metaclass: &ClassType) -> bool {
         let metadata = self.0.get_metadata_for_class(cls);
         self.0
@@ -82,11 +91,11 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
     }
 
     pub fn is_protocol(self, cls: &Class) -> bool {
-        self.0.get_metadata_for_class(cls).is_protocol()
+        cls.is_protocol()
     }
 
-    pub fn is_final(self, cls: &Class) -> bool {
-        self.0.get_metadata_for_class(cls).is_final()
+    pub fn is_subclassable(self, cls: &Class) -> bool {
+        self.0.is_subclassable(cls)
     }
 
     pub fn is_new_type(self, cls: &Class) -> bool {
@@ -119,6 +128,14 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
     ) -> Result<(), SubsetError> {
         self.0
             .is_protocol_subset_at_attr(got, protocol, name, is_subset)
+    }
+
+    pub fn coinductive_assumptions_used(self) -> bool {
+        self.0.coinductive_assumptions_used()
+    }
+
+    pub fn set_coinductive_assumptions_used(self, value: bool) {
+        self.0.set_coinductive_assumptions_used(value)
     }
 
     pub fn as_tuple_type(self, cls: &ClassType) -> Option<Type> {
@@ -157,14 +174,18 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
             .get_typed_dict_value_type_as_builtins_dict(typed_dict)
     }
 
-    pub fn get_variance_from_class(self, cls: &Class) -> Arc<VarianceMap> {
+    pub fn get_variance_from_class(self, cls: &Class) -> &'solver VarianceMap {
         self.0
             .get_from_class(cls, &KeyVariance(cls.index()))
-            .unwrap_or_default()
+            .unwrap_or(VarianceMap::empty())
     }
 
     pub fn constructor_to_callable(self, cls: &ClassType) -> Type {
         self.0.constructor_to_callable(cls)
+    }
+
+    pub fn constructor_to_callable_for_class_def(self, cls: &Class) -> Type {
+        self.0.constructor_to_callable_for_class_def(cls)
     }
 
     pub fn instantiate_fresh_forall(self, forall: Forall<Forallable>) -> (QuantifiedHandle, Type) {
@@ -179,7 +200,10 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
         self.0.bind_boundmethod(m, is_subset)
     }
 
-    pub fn get_type_alias(self, ta: &TypeAliasData) -> Arc<TypeAlias> {
+    pub fn get_type_alias<'b>(self, ta: &'b TypeAliasData) -> Cow<'b, TypeAlias>
+    where
+        'solver: 'b,
+    {
         self.0.get_type_alias(ta)
     }
 
@@ -189,9 +213,9 @@ impl<'a, Ans: LookupAnswer> TypeOrder<'a, Ans> {
 
     pub fn args_expander(
         self,
-        posargs: Vec<CallArg<'a>>,
-        keywords: Vec<CallKeyword<'a>>,
-    ) -> ArgsExpander<'a, Ans> {
+        posargs: Vec<CallArg<'solver>>,
+        keywords: Vec<CallKeyword<'solver>>,
+    ) -> ArgsExpander<'solver, Ans> {
         ArgsExpander::new(posargs, keywords, self.0)
     }
 

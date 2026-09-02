@@ -13,6 +13,18 @@ $ mkdir $TMPDIR/test && echo "" > $TMPDIR/test/empty.py && \
 [0]
 ```
 
+## Coverage commands also warn on a non-existent search-path/site-package-path
+
+```scrut {output_stream: stderr}
+$ mkdir $TMPDIR/covwarn && echo "def f(): pass" > $TMPDIR/covwarn/f.py && \
+> echo -e "project_includes = [\"$TMPDIR/covwarn/f.py\"]\nsite_package_path = [\"$TMPDIR/covwarn/abcd\"]\nsearch_path = [\"$TMPDIR/covwarn/efgh\"]" > $TMPDIR/covwarn/pyrefly.toml && \
+> $PYREFLY coverage report -c $TMPDIR/covwarn/pyrefly.toml > /dev/null
+ INFO Checking project configured at `*/pyrefly.toml` (glob)
+ WARN */pyrefly.toml: Invalid site-package-path: */abcd` does not exist (glob)
+ WARN */pyrefly.toml: Invalid search-path: */efgh` does not exist (glob)
+[0]
+```
+
 ## Dump config
 
 ```scrut
@@ -42,6 +54,18 @@ Default configuration
 
 ```scrut {output_stream: stderr}
 $ echo "x: str = 0" > $TMPDIR/oops.py && echo "errors = { bad-assignment = false }" > $TMPDIR/pyrefly.toml && $PYREFLY check -c $TMPDIR/pyrefly.toml $TMPDIR/oops.py && rm $TMPDIR/pyrefly.toml
+ INFO 0 errors
+[0]
+```
+
+## Replaced imports remain dynamic when used as TypeVar bounds
+
+```scrut {output_stream: stderr}
+$ mkdir $TMPDIR/replace_bound && \
+> printf 'replace-imports-with-any = ["module.*"]\n' > $TMPDIR/replace_bound/pyrefly.toml && \
+> printf 'class Foo: ...\n' > $TMPDIR/replace_bound/module.py && \
+> printf 'from typing import TypeVar\nfrom module import Foo\n\nT = TypeVar("T", bound=Foo)\n\ndef f(arg: T) -> T:\n    arg.method()\n    return arg\n' > $TMPDIR/replace_bound/main.py && \
+> $PYREFLY check -c $TMPDIR/replace_bound/pyrefly.toml --output-format=min-text $TMPDIR/replace_bound/main.py
  INFO 0 errors
 [0]
 ```

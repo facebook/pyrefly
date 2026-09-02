@@ -1,0 +1,86 @@
+name: Claim or unclaim issue via comment
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  claim-issue:
+    # issue_comment fires for both issues and PRs; only act on issues.
+    if: ${{ github.event.issue.pull_request == null }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Assign or unassign commenter on "#claim" / "#unclaim"
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Match "#claim" / "#unclaim" case-insensitively as whole words, so
+            // "#claims" / "#unclaiming" don't trigger. "#claim" does not match
+            // inside "#unclaim" (the char before "claim" there is "n", not "#").
+            const body = context.payload.comment.body || '';
+            const isUnclaim = /#unclaim\b/i.test(body);
+            const isClaim = /#claim\b/i.test(body);
+            if (!isClaim && !isUnclaim) {
+              console.log('No #claim/#unclaim command found, skipping');
+              return;
+            }
+
+            const user = context.payload.comment.user.login;
+            const issue_number = context.payload.issue.number;
+            const { owner, repo } = context.repo;
+            const assignees = (context.payload.issue.assignees || []).map(a => a.login);
+
+            const comment = (text) =>
+              github.rest.issues.createComment({ owner, repo, issue_number, body: text });
+
+            // #unclaim takes precedence: release the commenter's own assignment.
+            if (isUnclaim) {
+              if (!assignees.includes(user)) {
+                console.log(`${user} is not assigned to #${issue_number}, nothing to unclaim`);
+                await comment(`@${user} you're not currently assigned to this issue, so there's nothing to unclaim.`);
+                return;
+              }
+              await github.rest.issues.removeAssignees({ owner, repo, issue_number, assignees: [user] });
+              console.log(`Unassigned ${user} from #${issue_number}`);
+              await comment(`@${user} you've been unassigned from this issue. Thanks for letting us know! 👋`);
+              return;
+            }
+
+            // #claim: only assign when the issue is unclaimed.
+            if (assignees.includes(user)) {
+              console.log(`${user} already assigned to #${issue_number}`);
+              await comment(`@${user} this issue is already assigned to you. Have at it! 🚀`);
+              return;
+            }
+
+            if (assignees.length > 0) {
+              console.log(`#${issue_number} already claimed by ${assignees.join(', ')}`);
+              await comment(`@${user} this issue is already claimed by ${assignees.map(a => '@' + a).join(', ')}. Please coordinate with them before starting.`);
+              return;
+            }
+
+            await github.rest.issues.addAssignees({ owner, repo, issue_number, assignees: [user] });
+
+            // GitHub silently ignores assignees who lack repo access, so verify the
+            // assignment actually took effect before confirming.
+            const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number });
+            if (!(issue.assignees || []).some(a => a.login === user)) {
+              console.log(`Failed to assign ${user} to #${issue_number}`);
+              await comment(`@${user} I couldn't assign this issue to you automatically — GitHub only allows assigning users with repository access. A maintainer can assign you manually.`);
+              return;
+            }
+
+            console.log(`Assigned ${user} to #${issue_number}`);
+            await comment(`@${user} you've claimed this issue — it's now assigned to you. Thanks for picking it up! 🎉`);
+
+            // A claimed issue no longer needs triage.
+            try {
+              await github.rest.issues.removeLabel({ owner, repo, issue_number, name: 'needs-triage' });
+            } catch (error) {
+              // Label may not be present; nothing to remove.
+            }

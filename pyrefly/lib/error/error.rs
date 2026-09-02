@@ -23,8 +23,10 @@ use pyrefly_util::display::number_thousands;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lined_buffer::LinedBuffer;
+use ruff_annotate_snippets::Annotation;
+use ruff_annotate_snippets::AnnotationKind;
+use ruff_annotate_snippets::Group;
 use ruff_annotate_snippets::Level;
-use ruff_annotate_snippets::Message;
 use ruff_annotate_snippets::Renderer;
 use ruff_annotate_snippets::Snippet;
 use ruff_text_size::Ranged;
@@ -47,6 +49,40 @@ pub struct SecondaryAnnotation {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ErrorQuickFix {
     ReplaceWithEnumMember { replacement: String },
+    AssertNotNone,
+}
+
+/// Whether an error was compared with the configured baseline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BaselineStatus {
+    /// No baseline was configured for this check.
+    NotConfigured,
+    /// A baseline was configured but was not loaded for comparison.
+    NotCompared,
+    /// The error did not match the loaded baseline.
+    Unmatched,
+    /// The error matched the loaded baseline.
+    Matched,
+}
+
+impl BaselineStatus {
+    /// Value for the legacy JSON `baselined` field.
+    /// `None` omits the field (no baseline configured), `Some(true/false)` emits it.
+    pub fn legacy_baselined_flag(self) -> Option<bool> {
+        match self {
+            Self::NotConfigured => None,
+            Self::Matched => Some(true),
+            Self::NotCompared | Self::Unmatched => Some(false),
+        }
+    }
+
+    /// Suffix appended in text renderers, e.g. `" [baselined]"`.
+    pub fn display_suffix(self) -> &'static str {
+        match self {
+            Self::Matched => " [baselined]",
+            _ => "",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -56,6 +92,7 @@ pub struct Error {
     display_range: DisplayRange,
     error_kind: ErrorKind,
     severity: Severity,
+    baseline_status: BaselineStatus,
     /// First line of the error message
     msg_header: Box<str>,
     /// The rest of the error message after the first line.
@@ -73,71 +110,132 @@ impl Ranged for Error {
     }
 }
 
-impl Error {
-    pub fn write_line(
-        &self,
-        mut f: impl Write,
-        project_root: &Path,
-        verbose: bool,
-    ) -> io::Result<()> {
-        if verbose && self.severity.is_enabled() {
-            writeln!(
-                f,
-                "{} {} [{}]",
-                self.severity.label(),
-                self.msg_header,
-                self.error_kind.to_name(),
-            )?;
-            let origin = self.path_string_with_fragment(project_root);
-            let snippet = self.get_source_snippet(&origin);
-            let renderer = Renderer::plain();
-            writeln!(f, "{}", renderer.render(snippet))?;
-            if let Some(details) = &self.msg_details {
-                writeln!(f, "{details}")?;
+#[derive(Debug)]
+pub struct ErrorRenderer<W> {
+    writer: W,
+    mode: ErrorRenderMode,
+    snippets: Renderer,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ErrorRenderMode {
+    Plain,
+    Color,
+}
+
+impl<W: Write> ErrorRenderer<W> {
+    pub fn new(writer: W, color_choice: anstream::ColorChoice) -> Self {
+        match color_choice {
+            anstream::ColorChoice::Never => Self::plain(writer),
+            anstream::ColorChoice::Always
+            | anstream::ColorChoice::AlwaysAnsi
+            | anstream::ColorChoice::Auto => Self::styled(writer),
+        }
+    }
+
+    pub fn plain(writer: W) -> Self {
+        Self {
+            writer,
+            mode: ErrorRenderMode::Plain,
+            snippets: Renderer::plain(),
+        }
+    }
+
+    pub fn styled(writer: W) -> Self {
+        Self {
+            writer,
+            mode: ErrorRenderMode::Color,
+            snippets: Renderer::styled(),
+        }
+    }
+
+    pub fn write(&mut self, error: &Error, project_root: &Path, verbose: bool) -> io::Result<()> {
+        if !error.severity.is_enabled() {
+            return Ok(());
+        }
+        let origin = error.path_string_with_fragment(project_root);
+        if verbose {
+            self.write_header(error)?;
+            let snippet = error.get_source_snippet(&origin);
+            self.write_snippet(snippet)?;
+            if let Some(details) = &error.msg_details {
+                writeln!(self.writer, "{details}")?;
             }
-        } else if self.severity.is_enabled() {
-            writeln!(
-                f,
-                "{} {}:{}: {} [{}]",
-                self.severity.label(),
-                self.path_string_with_fragment(project_root),
-                self.display_range,
-                self.msg_header,
-                self.error_kind.to_name(),
-            )?;
+        } else {
+            self.write_concise(error, &origin)?;
         }
         Ok(())
     }
 
-    pub fn print_colors(&self, project_root: &Path, verbose: bool) {
-        if verbose && self.severity.is_enabled() {
-            anstream::println!(
-                "{} {} {}",
-                self.severity.painted(),
-                Paint::new(&*self.msg_header),
-                Paint::dim(format!("[{}]", self.error_kind().to_name()).as_str()),
-            );
-            let origin = self.path_string_with_fragment(project_root);
-            let snippet = self.get_source_snippet(&origin);
-            let renderer = Renderer::styled();
-            anstream::println!("{}", renderer.render(snippet));
-            if let Some(details) = &self.msg_details {
-                anstream::println!("{details}");
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+
+    fn write_header(&mut self, error: &Error) -> io::Result<()> {
+        match self.mode {
+            ErrorRenderMode::Plain => writeln!(
+                self.writer,
+                "{} {} [{}]{}",
+                error.severity.label(),
+                error.msg_header,
+                error.error_kind.to_name(),
+                error.baseline_status.display_suffix(),
+            ),
+            ErrorRenderMode::Color => {
+                write!(
+                    self.writer,
+                    "{} {} {}",
+                    error.severity.painted(),
+                    Paint::new(&*error.msg_header),
+                    Paint::dim(format!("[{}]", error.error_kind().to_name()).as_str()),
+                )?;
+                if error.baseline_status == BaselineStatus::Matched {
+                    write!(self.writer, " {}", Paint::dim("[baselined]"))?;
+                }
+                writeln!(self.writer)
             }
-        } else if self.severity.is_enabled() {
-            anstream::println!(
-                "{} {}:{}: {} {}",
-                self.severity.painted(),
-                Paint::blue(&self.path_string_with_fragment(project_root)),
-                Paint::dim(self.display_range()),
-                Paint::new(&*self.msg_header),
-                Paint::dim(format!("[{}]", self.error_kind().to_name()).as_str()),
-            );
         }
     }
 
+    fn write_concise(&mut self, error: &Error, origin: &str) -> io::Result<()> {
+        let header = error.msg_header.lines().map(str::trim).join(" ");
+        match self.mode {
+            ErrorRenderMode::Plain => writeln!(
+                self.writer,
+                "{} {}:{}: {} [{}]{}",
+                error.severity.label(),
+                origin,
+                error.display_range,
+                header,
+                error.error_kind.to_name(),
+                error.baseline_status.display_suffix(),
+            ),
+            ErrorRenderMode::Color => {
+                write!(
+                    self.writer,
+                    "{} {}:{}: {} {}",
+                    error.severity.painted(),
+                    Paint::blue(origin),
+                    Paint::dim(error.display_range()),
+                    Paint::new(&header),
+                    Paint::dim(format!("[{}]", error.error_kind().to_name()).as_str()),
+                )?;
+                if error.baseline_status == BaselineStatus::Matched {
+                    write!(self.writer, " {}", Paint::dim("[baselined]"))?;
+                }
+                writeln!(self.writer)
+            }
+        }
+    }
+
+    fn write_snippet<'a>(&mut self, snippet: Group<'a>) -> io::Result<()> {
+        writeln!(self.writer, "{}", self.snippets.render(&[snippet]))
+    }
+}
+
+impl Error {
     /// Return the path with a cell fragment if the error is in a notebook cell.
-    fn path_string_with_fragment(&self, project_root: &Path) -> String {
+    pub fn path_string_with_fragment(&self, project_root: &Path) -> String {
         let path = self.path().as_path();
         let path = path.strip_prefix(project_root).unwrap_or(path);
         if let Some(cell) = self.display_range.start.cell() {
@@ -147,7 +245,7 @@ impl Error {
         }
     }
 
-    fn get_source_snippet<'a>(&'a self, origin: &'a str) -> Message<'a> {
+    fn get_source_snippet<'a>(&'a self, origin: &'a str) -> Group<'a> {
         // Maximum number of lines to show in a single snippet. Annotations further apart
         // than this are shown as separate snippets rather than dumping all lines in between.
         // The primary span is also capped to this many lines for very large multi-line spans.
@@ -187,10 +285,10 @@ impl Error {
         }
 
         let level = match self.severity {
-            Severity::Error => Level::Error,
-            Severity::Warn => Level::Warning,
-            Severity::Info => Level::Info,
-            Severity::Ignore => Level::None,
+            Severity::Error => Level::ERROR,
+            Severity::Warn => Level::WARNING,
+            Severity::Info => Level::INFO,
+            Severity::Ignore => Level::NOTE.no_name(),
         };
 
         // Primary snippet with nearby annotations inline.
@@ -198,16 +296,16 @@ impl Error {
             origin,
             start_line,
             end_line,
-            Some((self.range, level)),
+            Some(self.range),
             &nearby_annotations,
         );
 
         // Distant annotations each get their own snippet covering their full span.
-        let mut message = Level::None.title("").snippet(primary_snippet);
+        let mut message = Group::with_level(level).element(primary_snippet);
         for (ann, ann_display) in &distant_annotations {
             let ann_start_line = ann_display.start.line_within_file();
             let ann_end_line = ann_display.end.line_within_file();
-            message = message.snippet(self.make_snippet(
+            message = message.element(self.make_snippet(
                 origin,
                 ann_start_line,
                 ann_end_line,
@@ -225,9 +323,9 @@ impl Error {
         origin: &'a str,
         from_line: LineNumber,
         to_line: LineNumber,
-        primary: Option<(TextRange, Level)>,
+        primary: Option<TextRange>,
         annotations: &[&'a SecondaryAnnotation],
-    ) -> Snippet<'a> {
+    ) -> Snippet<'a, Annotation<'a>> {
         // Warning: The SourceRange is char indexed, while the snippet is byte indexed.
         let source = self
             .module
@@ -240,11 +338,15 @@ impl Error {
             .start
             .line_within_cell()
             .get() as usize;
-        let mut snippet = Snippet::source(source).line_start(cell_line).origin(origin);
-        if let Some((range, lvl)) = primary {
+        let mut snippet = Snippet::source(source).line_start(cell_line).path(origin);
+        if let Some(range) = primary {
             let start = (range.start() - line_start).to_usize();
             let end = cmp::min(start + range.len().to_usize(), source.len());
-            snippet = snippet.annotation(lvl.span(start..end));
+            let primary_annotation_kind = match self.severity {
+                Severity::Error | Severity::Warn | Severity::Ignore => AnnotationKind::Primary,
+                Severity::Info => AnnotationKind::Context,
+            };
+            snippet = snippet.annotation(primary_annotation_kind.span(start..end));
         }
         for ann in annotations {
             let start = ann
@@ -254,7 +356,8 @@ impl Error {
                 .saturating_sub(line_start.to_usize());
             let end = cmp::min(start + ann.range.len().to_usize(), source.len());
             if start <= end && end <= source.len() {
-                snippet = snippet.annotation(Level::Warning.span(start..end).label(&ann.label));
+                snippet =
+                    snippet.annotation(AnnotationKind::Context.span(start..end).label(&*ann.label));
             }
         }
         snippet
@@ -268,6 +371,15 @@ impl Error {
 
     pub fn severity(&self) -> Severity {
         self.severity
+    }
+
+    pub fn with_baseline_status(mut self, baseline_status: BaselineStatus) -> Self {
+        self.baseline_status = baseline_status;
+        self
+    }
+
+    pub fn baseline_status(&self) -> BaselineStatus {
+        self.baseline_status
     }
 
     /// Create a diagnostic suitable for use in LSP.
@@ -288,7 +400,7 @@ impl Error {
                 Severity::Ignore => lsp_types::DiagnosticSeverity::INFORMATION,
             }),
             source: Some("Pyrefly".to_owned()),
-            message: self.msg().to_owned(),
+            message: self.msg().to_owned().into(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
             tags: if self.error_kind() == ErrorKind::Deprecated {
@@ -311,8 +423,19 @@ impl Error {
 
 #[cfg(test)]
 pub fn print_errors(project_root: &Path, errors: &[Error]) {
-    for err in errors {
-        err.print_colors(project_root, true);
+    let mut buf = Vec::new();
+    {
+        let mut renderer = ErrorRenderer::new(&mut buf, anstream::stdout().current_choice());
+        for err in errors {
+            renderer.write(err, project_root, true).unwrap();
+        }
+        renderer.flush().unwrap();
+    }
+    // Use print! so Rust's test runner captures the output and shows it
+    // on test failure. Direct writes to stdout (e.g. via ErrorRenderer +
+    // stdout.lock()) bypass test capture and are invisible in test output.
+    if !buf.is_empty() {
+        print!("{}", String::from_utf8_lossy(&buf));
     }
 }
 
@@ -366,6 +489,7 @@ impl Error {
             display_range,
             error_kind,
             severity: error_kind.default_severity(),
+            baseline_status: BaselineStatus::NotConfigured,
             msg_header,
             msg_details,
             secondary_annotations: Vec::new(),
@@ -386,6 +510,27 @@ impl Error {
     pub fn with_quick_fix(mut self, quick_fix: ErrorQuickFix) -> Self {
         self.quick_fixes.push(quick_fix);
         self
+    }
+
+    /// Merge editor fixes when both values describe the same user-facing diagnostic.
+    pub(crate) fn merge_if_same_diagnostic(&mut self, other: &Self) -> bool {
+        if self.module != other.module
+            || self.range != other.range
+            || self.display_range != other.display_range
+            || self.error_kind != other.error_kind
+            || self.severity != other.severity
+            || self.msg_header != other.msg_header
+            || self.msg_details != other.msg_details
+            || self.secondary_annotations != other.secondary_annotations
+        {
+            return false;
+        }
+        for fix in &other.quick_fixes {
+            if !self.quick_fixes.contains(fix) {
+                self.quick_fixes.push(fix.clone());
+            }
+        }
+        true
     }
 
     pub fn display_range(&self) -> &DisplayRange {
@@ -446,7 +591,7 @@ impl Error {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -455,6 +600,38 @@ mod tests {
 
     use super::*;
     use crate::test::util::TestEnv;
+
+    fn render_error(error: &Error, root: &Path, verbose: bool) -> String {
+        let mut output = Vec::new();
+        {
+            let mut renderer = ErrorRenderer::plain(&mut output);
+            renderer.write(error, root, verbose).unwrap();
+        }
+        str::from_utf8(&output).unwrap().to_owned()
+    }
+
+    #[test]
+    fn test_multiline_header_is_flattened_only_in_concise_output() {
+        let module_info = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("test.py")),
+            Arc::new("x".to_owned()),
+        );
+        let error = Error::new(
+            module_info,
+            TextRange::new(TextSize::new(0), TextSize::new(1)),
+            "revealed type: Overload[\n  (x: int) -> str\n]".to_owned(),
+            Vec::new(),
+            ErrorKind::RevealType,
+        );
+
+        let concise = render_error(&error, Path::new(""), false);
+        assert_eq!(concise.lines().count(), 1);
+        assert!(concise.contains("revealed type: Overload[ (x: int) -> str ]"));
+
+        let verbose = render_error(&error, Path::new(""), true);
+        assert!(verbose.contains("revealed type: Overload[\n  (x: int) -> str\n]"));
+    }
 
     #[test]
     fn test_error_render() {
@@ -471,28 +648,44 @@ mod tests {
             ErrorKind::BadReturn,
         );
         let root = PathBuf::new();
-        let mut normal = Vec::new();
-        error
-            .write_line(&mut Cursor::new(&mut normal), root.as_path(), false)
-            .unwrap();
-        let mut verbose = Vec::new();
-        error
-            .write_line(&mut Cursor::new(&mut verbose), root.as_path(), true)
-            .unwrap();
+        let normal = render_error(&error, root.as_path(), false);
+        let verbose = render_error(&error, root.as_path(), true);
 
+        assert_eq!(normal, "ERROR test.py:2:5-13: bad return [bad-return]\n");
         assert_eq!(
-            str::from_utf8(&normal).unwrap(),
-            "ERROR test.py:2:5-13: bad return [bad-return]\n"
-        );
-        assert_eq!(
-            str::from_utf8(&verbose).unwrap(),
+            verbose,
             r#"ERROR bad return [bad-return]
  --> test.py:2:5
   |
 2 |     return x
   |     ^^^^^^^^
-  |
 "#,
+        );
+    }
+
+    #[test]
+    fn test_baselined_error_render() {
+        let module_info = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(PathBuf::from("test.py")),
+            Arc::new("x: str = 1".to_owned()),
+        );
+        let error = Error::new(
+            module_info,
+            TextRange::new(TextSize::new(9), TextSize::new(10)),
+            "bad assignment".to_owned(),
+            Vec::new(),
+            ErrorKind::BadAssignment,
+        )
+        .with_baseline_status(BaselineStatus::Matched);
+
+        assert_eq!(
+            render_error(&error, Path::new(""), false),
+            "ERROR test.py:1:10-11: bad assignment [bad-assignment] [baselined]\n"
+        );
+        assert!(
+            render_error(&error, Path::new(""), true)
+                .starts_with("ERROR bad assignment [bad-assignment] [baselined]\n")
         );
     }
 
@@ -511,14 +704,11 @@ mod tests {
             Vec::new(),
             ErrorKind::BadReturn,
         );
-        let mut output = Vec::new();
         let root = PathBuf::new();
-        error
-            .write_line(&mut Cursor::new(&mut output), root.as_path(), true)
-            .unwrap();
+        let output = render_error(&error, root.as_path(), true);
 
         assert_eq!(
-            str::from_utf8(&output).unwrap(),
+            output,
             r#"ERROR oops [bad-return]
   --> test.py:1:1
    |
@@ -526,15 +716,10 @@ mod tests {
  2 | | X
  3 | | X
  4 | | X
- 5 | | X
- 6 | | X
- 7 | | X
- 8 | | X
- 9 | | X
+...  |
 10 | | X
 11 | | X
    | |__^
-   |
 "#,
         );
     }
@@ -565,13 +750,10 @@ mod tests {
             "has type `int`".to_owned(),
         );
         let root = PathBuf::new();
-        let mut output = Vec::new();
-        error
-            .write_line(&mut Cursor::new(&mut output), root.as_path(), true)
-            .unwrap();
+        let output = render_error(&error, root.as_path(), true);
 
         assert_eq!(
-            str::from_utf8(&output).unwrap(),
+            output,
             r#"ERROR `*` is not supported between `int | str` and `int` [unsupported-operation]
  --> test.py:1:1
   |
@@ -580,7 +762,6 @@ mod tests {
   | |     |
   | |     has type `int`
   | has type `int | str`
-  |
 "#,
         );
     }

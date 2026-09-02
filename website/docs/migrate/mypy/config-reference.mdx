@@ -1,0 +1,230 @@
+---
+title: Mypy Config to Pyrefly
+slug: /migrate/mypy/config
+description:
+    A complete migration reference for translating mypy.ini and [tool.mypy]
+    options into Pyrefly configuration.
+keywords:
+    - mypy config
+    - mypy pyproject toml
+    - mypy ini
+    - convert mypy config to pyrefly
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+This page separates what `pyrefly init` converts today from the settings that
+only have a manual or approximate Pyrefly equivalent.
+
+:::warning
+
+A conceptual equivalent is not necessarily implemented by the converter. Read
+the generated config before trusting a row.
+
+:::
+
+## Quick conversion
+
+```sh
+pyrefly init
+```
+
+A typical generated config starts like this:
+
+```toml
+# pyrefly.toml
+preset = "legacy"
+project-includes = ["src"]
+project-excludes = ["**/generated/**"]
+search-path = ["src"]
+python-version = "3.13"
+
+[errors]
+missing-import = "error"
+```
+
+## Mapping status
+
+- **Automatic:** `pyrefly init` reads the mypy option and writes one or more
+  Pyrefly settings.
+- **Automatic; review:** converted by `pyrefly init`, but the semantics differ
+  or the conversion is lossy so you should review.
+- **Manual:** a related Pyrefly setting exists, but it is not captured by
+  `pyrefly init` so you should manually add it to your Pyrefly config.
+- **Not mapped:** no current automatic or direct equivalent.
+
+## Complete option matrix
+
+| Mypy option                        | Closest Pyrefly setting or workflow                                                 | Status                             | Migration note                                                                                                                                                                                                                                                                                |
+| ---------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mypy_path`                        | `search-path`                                                                       | Automatic                          | Both add import roots; verify ordering and config-relative paths.                                                                                                                                                                                                                             |
+| `files`                            | `project-includes`                                                                  | Automatic                          | Entries are converted to Pyrefly filesystem globs.                                                                                                                                                                                                                                            |
+| `modules`                          | `project-includes`                                                                  | Automatic; review                  | Mypy does not recurse through `modules`; a path-oriented Pyrefly include may cover more files.                                                                                                                                                                                                |
+| `packages`                         | `project-includes`                                                                  | Automatic                          | Review namespace-package layouts.                                                                                                                                                                                                                                                             |
+| `exclude`                          | `project-excludes`                                                                  | Automatic; approximate             | Mypy regexes are converted to globs. Complex regex features cannot be preserved exactly.                                                                                                                                                                                                      |
+| `exclude_gitignore`                | `use-ignore-files`                                                                  | Manual; not exact                  | Pyrefly reads `.gitignore`, `.ignore`, and `.git/info/exclude` by default, which is not the same rule set.                                                                                                                                                                                    |
+| `namespace_packages`               | No direct setting                                                                   | Not mapped                         | Validate import resolution on namespace packages.                                                                                                                                                                                                                                             |
+| `explicit_package_bases`           | `search-path` and project layout                                                    | Manual                             | Represent package roots explicitly rather than translating the flag.                                                                                                                                                                                                                          |
+| `ignore_missing_imports`           | `ignore-missing-imports`                                                            | Automatic                          | Per-module mypy overrides become module globs. Imports are replaced with `Any` only when they cannot be found.                                                                                                                                                                                |
+| `follow_untyped_imports`           | No direct setting                                                                   | Not mapped                         | Pyrefly's source and stub discovery differ; test representative third-party imports.                                                                                                                                                                                                          |
+| `follow_imports`                   | `replace-imports-with-any` for `skip`; the converter emits `ignore-missing-imports` | Automatic but lossy for `skip`     | Mypy `skip` discards an import even when it resolves. The converter groups it with `ignore_missing_imports`, which is narrower, so change the generated entry by hand when exact `skip` behavior matters. `normal`, `silent`, and `error` have no equivalent.                                 |
+| `follow_imports_for_stubs`         | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `python_executable`                | `python-interpreter-path`                                                           | Automatic                          | Prefer environment autoconfiguration where possible.                                                                                                                                                                                                                                          |
+| `no_site_packages`                 | `skip-interpreter-query` plus explicit `site-package-path`                          | Manual; not exact                  | Skipping the interpreter query also affects the inferred Python version and platform.                                                                                                                                                                                                         |
+| `no_silence_site_packages`         | No direct setting                                                                   | Not mapped                         | Pyrefly treats site packages as dependencies rather than project files.                                                                                                                                                                                                                       |
+| `python_version`                   | `python-version`                                                                    | Automatic                          |                                                                                                                                                                                                                                                                                               |
+| `platform`                         | `python-platform`                                                                   | Manual                             | The settings are equivalent, but the mypy converter does not wire this one through. Set `python-platform` explicitly.                                                                                                                                                                         |
+| `always_true`                      | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `always_false`                     | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `disallow_any_unimported`          | `untyped-import`, `missing-import`, and the implicit-`Any` kinds                    | Manual; no exact 1:1               |                                                                                                                                                                                                                                                                                               |
+| `disallow_any_expr`                | No direct setting                                                                   | Not mapped                         | Pyrefly has targeted explicit and implicit `Any` diagnostics, not a general expression-level ban.                                                                                                                                                                                             |
+| `disallow_any_decorated`           | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `disallow_any_explicit`            | `[errors] explicit-any = "error"`                                                   | Automatic                          |                                                                                                                                                                                                                                                                                               |
+| `disallow_any_generics`            | `[errors] implicit-any = "error"`                                                   | Automatic; broader                 | For closer semantics, enable only `implicit-any-type-argument`.                                                                                                                                                                                                                               |
+| `disallow_subclassing_any`         | `unsupported-dynamic-base`                                                          | Manual; not exact                  |                                                                                                                                                                                                                                                                                               |
+| `disallow_untyped_calls`           | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `untyped_calls_exclude`            | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `disallow_untyped_defs`            | `implicit-any-parameter` + `unannotated-return`                                     | Automatic                          |                                                                                                                                                                                                                                                                                               |
+| `disallow_incomplete_defs`         | `implicit-any-parameter` + `unannotated-return`                                     | Automatic; broader                 | The Pyrefly pair does not distinguish partially annotated from fully unannotated definitions the way mypy does.                                                                                                                                                                               |
+| `check_untyped_defs`               | `check-unannotated-defs = true` and `infer-return-types = "never"`                  | Automatic; global only             | Both the INI and `[tool.mypy]` paths read this field, falling back to `strict`. Per-module sections are ignored, so a config that only enables it per module needs a manual review.                                                                                                            |
+| `disallow_untyped_decorators`      | `untyped-function-decorator`, `untyped-class-decorator`                             | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `implicit_optional`                | No direct setting                                                                   | Not mapped                         | Pyrefly follows modern explicit-`Optional` behavior.                                                                                                                                                                                                                                          |
+| `strict_optional`                  | No direct setting                                                                   | Not mapped                         | Pyrefly has no equivalent of mypy's legacy non-strict `Optional` mode.                                                                                                                                                                                                                        |
+| `warn_redundant_casts`             | `[errors] redundant-cast = "warn"`                                                  | Automatic                          |                                                                                                                                                                                                                                                                                               |
+| `warn_unused_ignores`              | `unused-type-ignore` and/or `unused-ignore`                                         | Manual                             | Choose based on which ignore syntax you are enforcing.                                                                                                                                                                                                                                        |
+| `warn_no_return`                   | `bad-return` behavior                                                               | No config translation needed       | Pyrefly does not expose this as a standalone toggle.                                                                                                                                                                                                                                          |
+| `warn_return_any`                  | `[errors] no-any-return = "error"`                                                  | Automatic                          |                                                                                                                                                                                                                                                                                               |
+| `warn_unreachable`                 | `[errors] unreachable = "warn"`                                                     | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `deprecated_calls_exclude`         | Sub-config or source suppression                                                    | Manual; no exact 1:1               |                                                                                                                                                                                                                                                                                               |
+| `ignore_errors`                    | Baseline, `pyrefly suppress`, or sub-configs                                        | Manual; no exact 1:1               | Prefer a baseline for incremental rollout rather than excluding code outright.                                                                                                                                                                                                                |
+| `allow_untyped_globals`            | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `allow_redefinition`               | `[errors] redefinition = "ignore"`                                                  | Manual                             | The converter reads the key `allow_redefinitions`, not mypy's documented `allow_redefinition`, so do not assume this is preserved automatically.                                                                                                                                              |
+| `allow_redefinition_new`           | `[errors] redefinition = "ignore"`                                                  | Manual; approximate                | Pyrefly has no equivalent of mypy's old/new redefinition split.                                                                                                                                                                                                                               |
+| `allow_redefinition_old`           | `[errors] redefinition = "ignore"`                                                  | Manual; approximate                | Pyrefly has no equivalent of mypy's old/new redefinition split.                                                                                                                                                                                                                               |
+| `local_partial_types`              | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `disable_error_code`               | `[errors]` or `[sub-config.errors]`                                                 | Automatic for mapped codes         | Unrecognized mypy codes are dropped by the converter; audit the generated config.                                                                                                                                                                                                             |
+| `enable_error_code`                | `[errors]` or `[sub-config.errors]`                                                 | Automatic for mapped codes         | Unrecognized mypy codes are dropped by the converter; audit the generated config.                                                                                                                                                                                                             |
+| `extra_checks`                     | Specific error kinds, or `preset = "strict"`                                        | Manual                             | There is no matching bundle.                                                                                                                                                                                                                                                                  |
+| `implicit_reexport`                | `[errors] implicit-reexport = ...`                                                  | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `strict_equality`                  | `incompatible-comparison`, `unnecessary-comparison`                                 | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `strict_equality_for_none`         | No separate setting                                                                 | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `strict_bytes`                     | No direct setting                                                                   | Not mapped                         | Validate `bytes` and `bytearray` behavior on representative code.                                                                                                                                                                                                                             |
+| `strict`                           | `preset = "legacy"` plus selected error overrides                                   | Automatic; incomplete              | The two strict bundles differ and evolve independently. The converter maps the error policies listed in [Mypy error codes](error-codes.mdx), but does not fully expand mypy strict. In particular, verify `check-unannotated-defs = true`, because mypy strict includes `check_untyped_defs`. |
+| `show_error_context`               | `output-format` and CLI output                                                      | No 1:1 mapping                     |                                                                                                                                                                                                                                                                                               |
+| `show_column_numbers`              | Pyrefly output always includes locations                                            | No 1:1 mapping                     |                                                                                                                                                                                                                                                                                               |
+| `show_error_code_links`            | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `hide_error_codes`                 | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `pretty`                           | `output-format = "full-text"`                                                       | Manual; approximate                |                                                                                                                                                                                                                                                                                               |
+| `color_output`                     | Terminal behavior                                                                   | No 1:1 mapping                     |                                                                                                                                                                                                                                                                                               |
+| `error_summary`                    | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `show_absolute_path`               | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `incremental`                      | No user-facing equivalent                                                           | Not mapped                         | Pyrefly manages its own incremental analysis.                                                                                                                                                                                                                                                 |
+| `cache_dir`                        | No user-facing equivalent                                                           | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `sqlite_cache`                     | No user-facing equivalent                                                           | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `cache_fine_grained`               | No user-facing equivalent                                                           | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `skip_version_check`               | No user-facing equivalent                                                           | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `skip_cache_mtime_checks`          | No user-facing equivalent                                                           | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `num_workers`                      | No direct setting                                                                   | Not mapped                         | Benchmark Pyrefly's default execution on the target repository.                                                                                                                                                                                                                               |
+| `plugins`                          | No plugin-loader setting                                                            | Not mapped                         | Pyrefly does not execute arbitrary mypy plugins, but built-in Pydantic v2+, Django, and attrs support replaces several common plugin use cases. Review custom plugins separately.                                                                                                             |
+| `pdb`                              | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `show_traceback`                   | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `raise_exceptions`                 | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `custom_typing_module`             | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `custom_typeshed_dir`              | `typeshed-path`                                                                     | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `warn_incomplete_stub`             | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `native_parser`                    | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `any_exprs_report`                 | `pyrefly coverage`                                                                  | Manual; not equivalent             | Coverage reports measure annotation and type coverage, not mypy's `Any`-expression report.                                                                                                                                                                                                    |
+| `cobertura_xml_report`             | External coverage tooling                                                           | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `html_report` / `xslt_html_report` | External coverage tooling                                                           | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `linecount_report`                 | `pyrefly coverage`                                                                  | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `linecoverage_report`              | `pyrefly coverage`                                                                  | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `lineprecision_report`             | `pyrefly coverage`                                                                  | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `txt_report` / `xslt_txt_report`   | External coverage tooling                                                           | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `xml_report`                       | External coverage tooling                                                           | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `junit_xml`                        | `output-format = "junit-xml"`                                                       | Manual                             |                                                                                                                                                                                                                                                                                               |
+| `junit_format`                     | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `scripts_are_modules`              | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
+| `warn_unused_configs`              | No direct setting                                                                   | Not mapped                         | Pyrefly rejects unknown options in its own config files.                                                                                                                                                                                                                                      |
+| `verbosity`                        | CLI logging flags                                                                   | No 1:1 mapping                     |                                                                                                                                                                                                                                                                                               |
+
+## Plugin configuration
+
+`pyrefly init` does not copy mypy's `plugins` option. That does **not** mean a
+plugin-backed project loses framework-aware checking:
+
+| Mypy integration               | Pyrefly equivalent                                                         |
+| ------------------------------ | -------------------------------------------------------------------------- |
+| `pydantic.mypy`                | Built-in [Pydantic v2+ support](../../pydantic.mdx), enabled automatically |
+| `mypy_django_plugin.main`      | Built-in [Django support](../../django.mdx) with `django-stubs` installed  |
+| Mypy's built-in attrs handling | Built-in [attrs support](../../attrs.mdx) for attrs 23.2+                  |
+| A custom plugin module         | No equivalent; replace manually or keep mypy                               |
+
+Keep the mypy `plugins` entry while mypy still runs in parallel CI. Pyrefly
+simply does not consume it. See [Mypy plugins](plugins.mdx) for the migration
+checklist and the framework-specific caveats.
+
+## Per-module overrides
+
+Mypy matches **module names**. Pyrefly
+[sub-configs](../../configuration.mdx#sub-configs) match **file paths** and
+support only:
+
+- `errors`;
+- `replace-imports-with-any`;
+- `check-unannotated-defs`;
+- `infer-return-types`;
+- `ignore-errors-in-generated-code`.
+
+Example:
+
+```toml
+[[sub-config]]
+matches = "src/legacy/**"
+check-unannotated-defs = false
+infer-return-types = "never"
+
+[sub-config.errors]
+implicit-any = "ignore"
+```
+
+Mypy per-module import suppression is migrated separately, into the
+`ignore-missing-imports` module-glob list rather than into a sub-config.
+
+## High-risk review items
+
+1. **Custom plugins:** Pyrefly does not execute arbitrary mypy plugin modules.
+   Pydantic, Django, and attrs are [native-support cases](plugins.mdx) to
+   validate, not wholesale gaps.
+2. **Regex excludes:** complex regexes cannot be preserved exactly as globs.
+3. **`modules`:** mypy and Pyrefly differ in recursion and project discovery.
+4. **Strict mode:** mypy strict is not Pyrefly strict.
+5. **Platform:** set `python-platform` explicitly and verify it.
+6. **Per-module `check_untyped_defs`:** review by hand; only the global setting
+   is migrated.
+7. **`allow_redefinition`:** review by hand; the converter reads a different key
+   spelling.
+8. **Error codes:** only recognized codes become Pyrefly error overrides.
+
+## Upstream references
+
+- [Mypy configuration file documentation](https://mypy.readthedocs.io/en/stable/config_file.html)
+- [Pyrefly configuration](../../configuration.mdx)
+
+## Next steps
+
+- [Migrate from mypy](index.mdx)
+- [Mypy error codes](error-codes.mdx)
+- [Mypy strict mode](strict-mode.mdx)
+- [Pyrefly configuration](../../configuration.mdx)
+
+:::note
+
+Last reviewed against upstream mypy documentation and Pyrefly's migration source
+on 2026-08-08.
+
+:::
