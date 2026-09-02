@@ -48,3 +48,4 @@
 - [Tutorial 1: Your First Port](/en/docs/tensor-shapes-tutorial-basics/): Learn the basics of tensor shape annotations by typing a simple multi-layer perceptron (MLP) model.
 - [Tutorial 2: Loops and Stacking](/en/docs/tensor-shapes-tutorial-loops/): Type shape-preserving loops and ModuleList iteration in Transformer-style architectures.
 - [Typing for Python Developers](/en/docs/typing-for-python-developers/): Get to know Python's Type System with working examples
+- [WebAssembly](/en/docs/wasm/): How Pyrefly's WebAssembly build is used, built, and what the current API covers

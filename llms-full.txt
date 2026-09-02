@@ -7633,6 +7633,15 @@ That repository contains:
 
 To get started, follow the setup steps in the repo’s [README](https://github.com/facebook/pyrefly-pre-commit#readme).
 
+----
+
+## Browser / WebAssembly
+
+The [sandbox](https://pyrefly.org/sandbox/) runs Pyrefly in the browser via
+WebAssembly. That path is for trying Pyrefly online and for website
+development, not a replacement for the CLI or IDE extension. See
+[WebAssembly](./wasm.mdx).
+
 
 ---
 
@@ -10393,6 +10402,13 @@ Great question. We have made a substantial investment in Pyrefly, use it interna
 
 See our [README.md](https://github.com/facebook/pyrefly/blob/main/README.md) for the high level design. We plan to add more detailed documentation along with announcements on [https://engineering.fb.com](https://engineering.fb.com/)
 
+## Can I run Pyrefly in the browser / WebAssembly?
+
+Yes, in the [sandbox](https://pyrefly.org/sandbox/). Pyrefly compiles to
+WebAssembly for that playground. The WASM crate is **not** a stable embeddable
+API yet. See [WebAssembly](./wasm.mdx) for how to build it and what `State`
+currently exposes.
+
 ## I don't like Python's Type System. Stop wasting your time.
 
 Tell us more - seriously! We want to hear your objections to typing. We hope that better tooling, improvements to the type system and well typed libraries will help provide make development easier. If all else fails our fast code navigation and inference algorithm might spark joy in your IDE, so give us a chance.
@@ -12993,3 +13009,130 @@ See the full list of features available in the Python type system [here](../pyth
 - **Defining Types:** You can define types inline using Python's built-in types, which aids in documentation and improves IDE support.
 - **Advanced Types:** The guide covers advanced concepts like composing types, using unions and optionals, generics, protocols, and structural types like dataclasses and TypedDict.
 - **Practical Examples:** The guide includes examples of functions, generic classes, structural typing with protocols, and more, demonstrating how to apply these concepts in real-world scenarios.
+
+
+---
+
+---
+title: WebAssembly
+slug: /wasm
+description: How Pyrefly's WebAssembly build is used, built, and what the current API covers
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# WebAssembly
+
+Pyrefly can compile to WebAssembly so a browser can run the type checker and a
+subset of language-server features without a native `pyrefly` binary. That is
+how the [Pyrefly sandbox](https://pyrefly.org/sandbox/) works.
+
+:::warning Not a stable embeddable API
+
+The WASM crate primarily powers the sandbox. Maintainers have not settled a
+complete, backwards-compatible API for embedding Pyrefly in other web apps.
+Method names and payloads can change. Test changes made for the sandbox in the
+sandbox itself; treat `pyrefly_wasm` as an internal interface if you build from
+source.
+
+:::
+
+## Build from source
+
+The crate lives in
+[`pyrefly_wasm/`](https://github.com/facebook/pyrefly/tree/main/pyrefly_wasm).
+The website wires it into the sandbox under `website/src/sandbox/`.
+
+### Prerequisites
+
+- Linux or macOS (website WASM workflows are not supported on native Windows;
+  use WSL).
+- [Rust](https://rustup.rs/) with `wasm32-unknown-unknown`.
+- [`wasm-pack`](https://rustwasm.github.io/wasm-pack/installer/) and
+  [`wasm-opt`](https://github.com/WebAssembly/binaryen) (`wasm-opt` must be on
+  `PATH`; `wasm-pack`’s bundled optimizer is disabled because it is outdated).
+- Clang / LLVM. On macOS: `brew install llvm`. On Fedora/CentOS:
+  `sudo dnf install clang`. If zstd fails to compile on a Mac, put Homebrew
+  LLVM first on `PATH` (`llvm-config --version` should resolve).
+- Node.js and Yarn, if you will run the website.
+
+### Build the crate
+
+From the repository root:
+
+```bash
+cd pyrefly_wasm
+./build.sh
+```
+
+That runs `wasm-pack` for the `web` target and then `wasm-opt -Os`. Pass
+`--BUILD_FOR_TEST` to target `nodejs` (used by website Jest tests).
+
+Output lands in `pyrefly_wasm/target/` (`pyrefly_wasm.js` and
+`pyrefly_wasm_bg.wasm`). Copy those into the sandbox (or test) paths the
+website README describes when you need a local rebuild.
+
+### Test changes in the sandbox
+
+See [`website/README.md`](https://github.com/facebook/pyrefly/blob/main/website/README.md).
+In short:
+
+```bash
+cd website
+yarn install-with-wasm-deps   # first time: build WASM + yarn install
+yarn start-with-wasm          # rebuild WASM and start Docusaurus
+```
+
+`yarn start` / `yarn install` only work on the static docs and do not rebuild
+WASM. The sandbox is the primary consumer of `pyrefly_wasm`, so exercise the
+affected sandbox behavior after changing its implementation or API.
+
+## Current API
+
+`pyrefly_wasm` exports a `State` class (`new State(version)`) wrapping the
+in-tree playground. The exports in
+[`pyrefly_wasm/lib.rs`](https://github.com/facebook/pyrefly/blob/main/pyrefly_wasm/lib.rs)
+are the authoritative API reference. The current JavaScript names are:
+
+| Method | Role |
+| --- | --- |
+| `updateSandboxFiles(files, forceUpdate)` | Replace the virtual project (`Record<string, string>` of path → source). Returns an optional error string. |
+| `updateSingleFile(filename, content)` | Update one file. |
+| `setActiveFile(filename)` | Choose which file later queries apply to. |
+| `getErrors()` | Type errors for the project. |
+| `hover(line, column)` | Hover payload at a 0-based position, or `null`. |
+| `gotoDefinition(line, column)` | Definition ranges, or `null`. |
+| `autoComplete(line, column)` | Completions. |
+| `inlayHint(callArgumentNames)` | Inlay hints. |
+| `semanticTokens(range)` | Semantic tokens for an optional range. |
+| `semanticTokensLegend()` | Token types/modifiers legend. |
+
+Positions match the playground (`line` / `column` as `i32`). Payloads are
+serde-serialized into JS; there is no TypeScript `.d.ts` from `wasm-pack`
+(`--no-typescript`). The sandbox keeps a local
+[`PyreflyState`](https://github.com/facebook/pyrefly/blob/main/website/src/sandbox/Sandbox.tsx)
+interface.
+
+Some native features are compiled out with
+`#[cfg(not(target_arch = "wasm32"))]`. If a WASM build fails with `could not
+find … in the crate root`, that crate is likely excluded from the WASM
+target. See [`pyrefly_wasm/README.md`](https://github.com/facebook/pyrefly/blob/main/pyrefly_wasm/README.md).
+
+## Configuration
+
+Sandbox files are an in-memory project, not your disk workspace. There is no
+separate “WASM config” documented beyond what the playground/`State` accepts
+when creating the instance (`version` is the Python version string passed to
+`State`). For CLI and IDE configuration, use the
+[configuration reference](./configuration.mdx).
+
+## Related source
+
+- [`pyrefly_wasm/README.md`](https://github.com/facebook/pyrefly/blob/main/pyrefly_wasm/README.md) — crate build notes
+- [`website/README.md`](https://github.com/facebook/pyrefly/blob/main/website/README.md) — sandbox and docs site
+- [Sandbox](/sandbox)
