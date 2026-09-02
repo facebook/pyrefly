@@ -796,19 +796,6 @@ impl ClassField {
         })
     }
 
-    /// Given a `__set__(self, instance, value)` function, gets the type of `value`.
-    fn get_descriptor_setter_value(heap: &TypeHeap, setter: &Type) -> Type {
-        let values = setter
-            .toplevel_callable_signatures()
-            .filter_map(|(callable, _)| callable.get_positional_param(2).cloned())
-            .collect::<Vec<_>>();
-        if values.is_empty() {
-            heap.mk_any_implicit()
-        } else {
-            unions(values, heap)
-        }
-    }
-
     fn as_raw_special_method_type(&self, heap: &TypeHeap, instance: &Instance) -> Option<Type> {
         match self.instantiate_for(heap, instance).0 {
             ClassFieldInner::Descriptor { ty, .. } => Some(ty),
@@ -3734,7 +3721,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else if let Some(x) = descriptor
             && let Some(setter) = self.resolve_descriptor_setter(name, x, errors)
         {
-            ClassField::get_descriptor_setter_value(self.heap, &setter)
+            self.get_descriptor_setter_value(&setter)
         } else {
             ty.clone()
         };
@@ -5933,6 +5920,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             )
         } else {
             None
+        }
+    }
+
+    /// Given a `__set__(self, instance, value)` function, gets the type of `value`.
+    fn get_descriptor_setter_value(&self, setter: &Type) -> Type {
+        let values = setter
+            .toplevel_callable_signatures()
+            .filter_map(|(callable, _)| callable.get_positional_param(2).cloned())
+            .collect::<Vec<_>>();
+        if values.is_empty() {
+            self.heap.mk_any_implicit()
+        } else {
+            unions(values, self.heap)
         }
     }
 
