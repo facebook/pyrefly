@@ -1579,14 +1579,14 @@ impl CheckArgs {
         self.output.has_daemon_incompatible_options() || self.behavior.has_custom_options()
     }
 
-    /// Return the output format selected directly by the client, or the built-in default.
-    pub fn output_format(&self) -> OutputFormat {
-        self.output.output_format.unwrap_or_default()
+    /// Return the output format selected by the client, configuration, or built-in default.
+    pub fn output_format(&self, config: Option<&ConfigFile>) -> OutputFormat {
+        self.output.resolve(config).output_format
     }
 
-    /// Return the minimum severity selected directly by the client, or the built-in default.
-    pub fn min_severity(&self) -> Severity {
-        self.output.min_severity.unwrap_or(Severity::Error)
+    /// Return the minimum severity selected by the client, configuration, or built-in default.
+    pub fn min_severity(&self, config: Option<&ConfigFile>) -> Severity {
+        self.output.resolve(config).min_severity
     }
 
     /// Run a one-shot type check. Returns the exit status, the CLI-visible errors,
