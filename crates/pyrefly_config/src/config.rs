@@ -1496,8 +1496,8 @@ impl ConfigFile {
                 }
                 (Some(_), None) => {}
             }
-            // For scalar fields: preset fills in None values. Any preset field
-            // not listed here is silently dropped, so new fields added to
+            // The preset fills in None values. Any preset field not listed here
+            // is silently dropped, so new fields added to
             // `Preset::apply()` must be added here as well — `test_preset_fields_propagate`
             // guards against accidental omissions.
             macro_rules! apply_preset_default {
@@ -1517,6 +1517,7 @@ impl ConfigFile {
             apply_preset_default!(legacy_overload_expansion);
             apply_preset_default!(ignore_errors_in_generated_code);
             apply_preset_default!(permissive_ignores);
+            apply_preset_default!(replace_untyped_imports_with_any);
             apply_preset_default!(treat_all_caps_as_final);
         }
 
@@ -2974,6 +2975,10 @@ output-format = "omit-errors"
         // Preset leaves `infer_with_first_use` unset, so the post-preset
         // default-fill in `configure()` provides the default value of `true`.
         assert_eq!(config.root.infer_with_first_use, Some(true));
+        assert_eq!(
+            config.root.replace_untyped_imports_with_any,
+            Some(vec![ModuleWildcard::new("*").unwrap()])
+        );
         let errors = config.root.errors.as_ref().unwrap();
         assert_eq!(
             errors.severity(ErrorKind::BadOverrideMutableAttribute),
@@ -2992,6 +2997,7 @@ output-format = "omit-errors"
             preset: Some(Preset::Legacy),
             root: ConfigBase {
                 check_unannotated_defs: Some(true),
+                replace_untyped_imports_with_any: Some(vec![ModuleWildcard::new("!*").unwrap()]),
                 errors: Some(ErrorDisplayConfig::new(HashMap::from([(
                     ErrorKind::BadOverrideMutableAttribute,
                     Severity::Error,
@@ -3004,6 +3010,10 @@ output-format = "omit-errors"
 
         // User setting overrides preset
         assert_eq!(config.root.check_unannotated_defs, Some(true));
+        assert_eq!(
+            config.root.replace_untyped_imports_with_any,
+            Some(vec![ModuleWildcard::new("!*").unwrap()])
+        );
         let errors = config.root.errors.as_ref().unwrap();
         // Explicit user error override wins
         assert_eq!(

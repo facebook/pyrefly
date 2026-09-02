@@ -87,9 +87,8 @@ pub enum Preset {
     /// or assignment validation are disabled.
     Basic,
     /// A looser, less-strict preset useful for codebases migrating from mypy.
-    /// Pyrefly does not aim to mimic mypy's behavior precisely — this preset
-    /// just disables a few checks that mypy does not have, so migrating users
-    /// aren't hit with new errors for classes of issues mypy never flagged.
+    /// Pyrefly does not aim to mimic mypy's behavior precisely, but this preset
+    /// preserves selected defaults that otherwise produce new migration errors.
     Legacy,
     /// The default Pyrefly configuration. Equivalent to having no preset at all.
     Default,
@@ -168,6 +167,10 @@ impl Preset {
                 ]);
                 ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(errors)),
+                    replace_untyped_imports_with_any: Some(vec![
+                        ModuleWildcard::new("*")
+                            .expect("the hardcoded module wildcard should be valid"),
+                    ]),
                     check_unannotated_defs: Some(false),
                     infer_return_types: Some(InferReturnTypes::Never),
                     legacy_overload_expansion: Some(true),
