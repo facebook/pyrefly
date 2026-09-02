@@ -1530,6 +1530,11 @@ impl CheckArgs {
         self.output.has_custom_options() || self.behavior.has_custom_options()
     }
 
+    /// Return the minimum severity selected directly by the client, or the built-in default.
+    pub fn min_severity(&self) -> Severity {
+        self.output.min_severity.unwrap_or(Severity::Error)
+    }
+
     /// Run a one-shot type check. Returns the exit status, the CLI-visible errors,
     /// and a `CheckResult` suitable for telemetry logging.
     pub fn run_once(
