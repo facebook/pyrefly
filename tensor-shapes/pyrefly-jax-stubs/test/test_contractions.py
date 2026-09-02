@@ -158,11 +158,36 @@ def test_diagonal_and_trace() -> None:
     mat = jnp.ones((3, 3))
     rect = jnp.ones((4, 5))
     batch_mat = jnp.ones((2, 3, 3))
+    t3d = jnp.ones((2, 3, 4))
 
+    # 2D diagonal
     assert_shape(jnp.diagonal(mat), (3,))
     assert_shape(jnp.diagonal(rect), (4,))
     assert_shape(mat.diagonal(), (3,))
 
+    # 2D diagonal with positive and negative offsets
+    assert_shape(jnp.diagonal(mat, offset=1), (2,))
+    assert_shape(jnp.diagonal(mat, offset=-1), (2,))
+    assert_shape(jnp.diagonal(mat, offset=2), (1,))
+    assert_shape(mat.diagonal(offset=1), (2,))
+
+    assert_shape(jnp.diagonal(rect, offset=1), (4,))
+    assert_shape(jnp.diagonal(rect, offset=2), (3,))
+    assert_shape(jnp.diagonal(rect, offset=-1), (3,))
+    assert_shape(jnp.diagonal(rect, offset=-2), (2,))
+
+    # 3D diagonal with axis1, axis2
+    assert_shape(jnp.diagonal(t3d), (4, 2))
+    assert_shape(jnp.diagonal(t3d, axis1=0, axis2=2), (3, 2))
+    assert_shape(jnp.diagonal(t3d, axis1=1, axis2=2), (2, 3))
+    assert_shape(jnp.diagonal(t3d, axis1=-2, axis2=-1), (2, 3))
+    assert_shape(jnp.diagonal(t3d, offset=2, axis1=1, axis2=2), (2, 2))
+    assert_shape(t3d.diagonal(axis1=1, axis2=2), (2, 3))
+
+    # Trace
     assert_shape(jnp.trace(mat), ())
     assert_shape(mat.trace(), ())
     assert_shape(jnp.trace(batch_mat), (3,))
+    assert_shape(jnp.trace(batch_mat, axis1=1, axis2=2), (2,))
+    assert_shape(jnp.trace(t3d, axis1=1, axis2=2), (2,))
+    assert_shape(t3d.trace(axis1=1, axis2=2), (2,))

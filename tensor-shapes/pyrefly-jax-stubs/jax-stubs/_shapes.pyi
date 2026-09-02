@@ -608,25 +608,100 @@ def tensordot_shape(left: IntTuple, right: IntTuple, dims: int) -> IntTuple:
 
 @type_shape_dsl_function
 def diagonal_shape(shape: IntTuple, offset: int, axis1: int, axis2: int) -> IntTuple:
-    if len(shape) < 2:
+    rank = len(shape)
+    if rank < 2:
         return dsl.Invalid("diagonal requires at least 2-D array")
-    d0 = shape[0]
-    d1 = shape[1]
-    if d0 == d1:
-        return dsl.concat(shape[2:], dsl.IntTuple((d0,)))
-    if dsl.is_concrete_int(d0) and dsl.is_concrete_int(d1):
-        if d0 < d1:
-            return dsl.concat(shape[2:], dsl.IntTuple((d0,)))
-        return dsl.concat(shape[2:], dsl.IntTuple((d1,)))
-    return dsl.concat(shape[2:], dsl.IntTuple((dsl.Int.gradual(),)))
+
+    if axis1 < 0:
+        norm_axis1 = axis1 + rank
+    else:
+        norm_axis1 = axis1 + 0
+    if norm_axis1 < 0 or norm_axis1 >= rank:
+        return dsl.Invalid("axis1 out of bounds")
+
+    if axis2 < 0:
+        norm_axis2 = axis2 + rank
+    else:
+        norm_axis2 = axis2 + 0
+    if norm_axis2 < 0 or norm_axis2 >= rank:
+        return dsl.Invalid("axis2 out of bounds")
+
+    if norm_axis1 == norm_axis2:
+        return dsl.Invalid("axis1 and axis2 cannot be the same")
+
+    d1 = shape[norm_axis1]
+    d2 = shape[norm_axis2]
+
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    offset_tuple = dsl.IntTuple((offset + 0,))
+    offset_dim = offset_tuple[0]
+
+    remaining = dsl.IntTuple(
+        (shape[i] for i in range(rank) if i != norm_axis1 and i != norm_axis2)
+    )
+
+    if offset == 0:
+        if d1 == d2:
+            return dsl.concat(remaining, dsl.IntTuple((d1,)))
+        if dsl.is_concrete_int(d1) and dsl.is_concrete_int(d2):
+            if d1 < d2:
+                return dsl.concat(remaining, dsl.IntTuple((d1,)))
+            return dsl.concat(remaining, dsl.IntTuple((d2,)))
+        return dsl.concat(remaining, dsl.IntTuple((dsl.Int.gradual(),)))
+
+    if offset > 0:
+        limit = d2 - offset_dim
+        if d1 == limit:
+            return dsl.concat(remaining, dsl.IntTuple((d1,)))
+        if dsl.is_concrete_int(d1) and dsl.is_concrete_int(limit):
+            if limit < zero:
+                return dsl.concat(remaining, dsl.IntTuple((zero,)))
+            if d1 < limit:
+                return dsl.concat(remaining, dsl.IntTuple((d1,)))
+            return dsl.concat(remaining, dsl.IntTuple((limit,)))
+        return dsl.concat(remaining, dsl.IntTuple((dsl.Int.gradual(),)))
+
+    limit = d1 + offset_dim
+    if limit == d2:
+        return dsl.concat(remaining, dsl.IntTuple((d2,)))
+    if dsl.is_concrete_int(limit) and dsl.is_concrete_int(d2):
+        if limit < zero:
+            return dsl.concat(remaining, dsl.IntTuple((zero,)))
+        if limit < d2:
+            return dsl.concat(remaining, dsl.IntTuple((limit,)))
+        return dsl.concat(remaining, dsl.IntTuple((d2,)))
+    return dsl.concat(remaining, dsl.IntTuple((dsl.Int.gradual(),)))
 
 @type_shape_dsl_function
 def trace_shape(shape: IntTuple, offset: int, axis1: int, axis2: int) -> IntTuple:
-    if len(shape) < 2:
+    rank = len(shape)
+    if rank < 2:
         return dsl.Invalid("trace requires at least 2-D array")
-    if len(shape) == 2:
+
+    if axis1 < 0:
+        norm_axis1 = axis1 + rank
+    else:
+        norm_axis1 = axis1 + 0
+    if norm_axis1 < 0 or norm_axis1 >= rank:
+        return dsl.Invalid("axis1 out of bounds")
+
+    if axis2 < 0:
+        norm_axis2 = axis2 + rank
+    else:
+        norm_axis2 = axis2 + 0
+    if norm_axis2 < 0 or norm_axis2 >= rank:
+        return dsl.Invalid("axis2 out of bounds")
+
+    if norm_axis1 == norm_axis2:
+        return dsl.Invalid("axis1 and axis2 cannot be the same")
+
+    if rank == 2:
         return dsl.IntTuple(())
-    return shape[2:]
+
+    return dsl.IntTuple(
+        (shape[i] for i in range(rank) if i != norm_axis1 and i != norm_axis2)
+    )
 
 @type_shape_dsl_function
 def cross_axes_shape(
