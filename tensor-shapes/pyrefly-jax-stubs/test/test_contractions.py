@@ -121,8 +121,28 @@ def test_vecdot() -> None:
 
 
 def test_cross() -> None:
+    # 3D vectors
     assert_shape(jnp.cross(jnp.ones(3), jnp.ones(3)), (3,))
     assert_shape(jnp.cross(jnp.ones((2, 3)), jnp.ones((2, 3))), (2, 3))
+
+    # 2D vectors
+    assert_shape(jnp.cross(jnp.ones(2), jnp.ones(2)), ())
+    assert_shape(jnp.cross(jnp.ones((4, 2)), jnp.ones((4, 2))), (4,))
+
+    # Mixed 2D and 3D
+    assert_shape(jnp.cross(jnp.ones((4, 2)), jnp.ones((4, 3))), (4, 3))
+    assert_shape(jnp.cross(jnp.ones((4, 3)), jnp.ones((4, 2))), (4, 3))
+
+    # axis parameter
+    assert_shape(jnp.cross(jnp.ones((3, 4)), jnp.ones((3, 4)), axis=0), (3, 4))
+    assert_shape(jnp.cross(jnp.ones((2, 4)), jnp.ones((2, 4)), axis=0), (4,))
+
+    # axisa, axisb, axisc
+    assert_shape(jnp.cross(jnp.ones((4, 3)), jnp.ones((4, 3)), axisc=0), (3, 4))
+    assert_shape(
+        jnp.cross(jnp.ones((3, 4)), jnp.ones((4, 3)), axisa=0, axisb=1, axisc=0),
+        (3, 4),
+    )
 
 
 def test_tensordot() -> None:

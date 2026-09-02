@@ -7,6 +7,7 @@ from typing import Any, Literal, overload, Sequence
 
 from jax._array import Array
 from jax._shapes import (
+    cross_axis_shape,
     int_min,
     matmul_shape,
     reduce_shape,
@@ -26,13 +27,26 @@ def cond[Batch: IntTuple, M: IntVar, N: IntVar](
     x: Array[[*Elements[Batch], M, N]],
     p: Any = None,
 ) -> Array[Batch]: ...
-def cross[Shape1: _Shape, Shape2: _Shape](
+@overload
+def cross[
+    Shape1: _Shape,
+    Shape2: _Shape,
+    Axis: Flag[int] = -1,
+](
     x1: Array[Shape1],
     x2: Array[Shape2],
     /,
     *,
+    axis: Axis = -1,
+) -> Array[cross_axis_shape(Shape1, Shape2, Axis)]: ...
+@overload
+def cross(
+    x1: Array[Any],
+    x2: Array[Any],
+    /,
+    *,
     axis: int = -1,
-) -> Array[broadcast(Shape1, Shape2)]: ...
+) -> Array[IntTuple]: ...
 def det[Batch: IntTuple, N: IntVar](
     a: Array[[*Elements[Batch], N, N]],
 ) -> Array[Batch]: ...

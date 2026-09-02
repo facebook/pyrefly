@@ -11,9 +11,9 @@ from typing import Any, overload, Sequence
 
 import shape_extensions
 from jax._shapes import (
-    matmul_shape,
     diagonal_shape,
     dot_shape,
+    matmul_shape,
     permute_shape,
     reduce_shape,
     reshape_shape,

@@ -8,6 +8,7 @@ from shape_extensions import (
     gufunc_broadcast,
     Int,
     IntTuple,
+    IntTuples,
     type_shape_dsl_function,
 )
 
@@ -626,3 +627,88 @@ def trace_shape(shape: IntTuple, offset: int, axis1: int, axis2: int) -> IntTupl
     if len(shape) == 2:
         return dsl.IntTuple(())
     return shape[2:]
+
+@type_shape_dsl_function
+def cross_axes_shape(
+    a_shape: IntTuple,
+    b_shape: IntTuple,
+    axisa: int,
+    axisb: int,
+    axisc: int,
+) -> IntTuple:
+    rank_a = len(a_shape)
+    rank_b = len(b_shape)
+    if rank_a == 0 or rank_b == 0:
+        return dsl.Invalid("cross requires at least 1-D arrays")
+
+    if axisa < 0:
+        norm_axisa = axisa + rank_a
+    else:
+        norm_axisa = axisa + 0
+    if norm_axisa < 0 or norm_axisa >= rank_a:
+        return dsl.Invalid("axisa out of bounds")
+
+    if axisb < 0:
+        norm_axisb = axisb + rank_b
+    else:
+        norm_axisb = axisb + 0
+    if norm_axisb < 0 or norm_axisb >= rank_b:
+        return dsl.Invalid("axisb out of bounds")
+
+    dim_a = a_shape[norm_axisa]
+    dim_b = b_shape[norm_axisb]
+    if dsl.is_concrete_int(dim_a) and dim_a != 2 and dim_a != 3:
+        return dsl.Invalid("Dimension must be either 2 or 3 for cross product")
+    if dsl.is_concrete_int(dim_b) and dim_b != 2 and dim_b != 3:
+        return dsl.Invalid("Dimension must be either 2 or 3 for cross product")
+
+    batch_a = dsl.concat(a_shape[:norm_axisa], a_shape[norm_axisa + 1 :])
+    batch_b = dsl.concat(b_shape[:norm_axisb], b_shape[norm_axisb + 1 :])
+    len_a = len(batch_a)
+    len_b = len(batch_b)
+    if len_a >= len_b:
+        diff_a = len_a - len_b
+        batch = dsl.IntTuple(
+            (
+                (batch_b[i - diff_a] if batch_a[i] == 1 else batch_a[i])
+                if i >= diff_a
+                else batch_a[i]
+            )
+            for i in range(len_a)
+        )
+    else:
+        diff_b = len_b - len_a
+        batch = dsl.IntTuple(
+            (
+                (batch_a[i - diff_b] if batch_b[i] == 1 else batch_b[i])
+                if i >= diff_b
+                else batch_b[i]
+            )
+            for i in range(len_b)
+        )
+
+    if dim_a == 2 and dim_b == 2:
+        return batch
+
+    if dim_a == 3 or dim_b == 3:
+        out_rank = len(batch) + 1
+        if axisc < 0:
+            norm_axisc = axisc + out_rank
+        else:
+            norm_axisc = axisc + 0
+        if norm_axisc < 0 or norm_axisc >= out_rank:
+            return dsl.Invalid("axisc out of bounds")
+        return dsl.concat(
+            dsl.concat(batch[:norm_axisc], dsl.IntTuple((3,))),
+            batch[norm_axisc:],
+        )
+
+    return dsl.IntTuple.gradual()
+
+@type_shape_dsl_function
+def cross_axis_shape(
+    a_shape: IntTuple,
+    b_shape: IntTuple,
+    axis: int,
+) -> IntTuple:
+    return cross_axes_shape(a_shape, b_shape, axis, axis, axis)

@@ -7,6 +7,8 @@ from typing import Any, Callable, Literal, overload, Sequence, Unpack
 
 from jax._array import Array as Array, Array as ndarray
 from jax._shapes import (
+    cross_axes_shape,
+    cross_axis_shape,
     diagonal_shape,
     dot_shape,
     einsum_shape,
@@ -904,17 +906,47 @@ def logaddexp2[Shape: _Shape](
 def logaddexp2[Shape1: _Shape, Shape2: _Shape](
     x1: Array[Shape1], x2: Array[Shape2], /
 ) -> Array[broadcast(Shape1, Shape2)]: ...
-
-# Shape semantics, including vector and batched operands, come from the gufunc-backed helper.
-def cross[Shape1: _Shape, Shape2: _Shape](
+@overload
+def cross[
+    Shape1: _Shape,
+    Shape2: _Shape,
+    Axis: Flag[int],
+](
     a: Array[Shape1],
     b: Array[Shape2],
     /,
     axisa: int = -1,
     axisb: int = -1,
     axisc: int = -1,
+    *,
+    axis: Axis,
+) -> Array[cross_axis_shape(Shape1, Shape2, Axis)]: ...
+@overload
+def cross[
+    Shape1: _Shape,
+    Shape2: _Shape,
+    AxisA: Flag[int] = -1,
+    AxisB: Flag[int] = -1,
+    AxisC: Flag[int] = -1,
+](
+    a: Array[Shape1],
+    b: Array[Shape2],
+    /,
+    axisa: AxisA = -1,
+    axisb: AxisB = -1,
+    axisc: AxisC = -1,
+    axis: None = None,
+) -> Array[cross_axes_shape(Shape1, Shape2, AxisA, AxisB, AxisC)]: ...
+@overload
+def cross(
+    a: Array[Any],
+    b: Array[Any],
+    /,
+    axisa: int = -1,
+    axisb: int = -1,
+    axisc: int = -1,
     axis: int | None = None,
-) -> Array[broadcast(Shape1, Shape2)]: ...
+) -> Array[IntTuple]: ...
 @overload
 def diagonal[
     Shape: _Shape,
