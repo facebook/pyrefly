@@ -5932,7 +5932,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if values.is_empty() {
             self.heap.mk_any_implicit()
         } else {
-            unions(values, self.heap)
+            self.unions(values)
         }
     }
 
