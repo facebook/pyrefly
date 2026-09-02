@@ -41,6 +41,7 @@ use ruff_python_ast::StmtFunctionDef;
 use ruff_python_ast::StmtIf;
 use ruff_python_ast::StmtReturn;
 use ruff_python_ast::UnaryOp;
+use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -5520,6 +5521,14 @@ fn expression_root_name(expr: &Expr) -> Option<&Name> {
     }
 }
 
+fn function_body_without_docstring(body: &[Stmt]) -> &[Stmt] {
+    if body.first().is_some_and(is_docstring_stmt) {
+        &body[1..]
+    } else {
+        body
+    }
+}
+
 impl ParsedTypeShapeDslFunction {
     pub fn try_new(
         definition: StmtFunctionDef,
@@ -5606,7 +5615,7 @@ impl ParsedTypeShapeDslFunction {
             helper_argument_domains,
         );
         if validator
-            .validate_suite(&self.definition.body, flow)?
+            .validate_suite(function_body_without_docstring(&self.definition.body), flow)?
             .is_some()
         {
             return Err(TypeShapeDslDefinitionError {
@@ -6031,7 +6040,7 @@ impl ResolvedTypeShapeDslProgram {
         };
         match self.evaluate_suite(
             node_id,
-            &node.definition.parsed.definition.body,
+            function_body_without_docstring(&node.definition.parsed.definition.body),
             &mut environment,
             budget,
         ) {

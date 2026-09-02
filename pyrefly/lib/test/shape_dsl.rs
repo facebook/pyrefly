@@ -547,6 +547,27 @@ def diag_extent(n: Int, k: int) -> Int:
     }
 }
 
+testcase!(
+    test_type_shape_dsl_function_docstring,
+    shaped_array_env(),
+    r#"
+from shape_extensions import IntTuple, shaped_array, type_shape_dsl_function
+from typing import assert_type
+
+@shaped_array(shape="Shape")
+class Array[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def documented_identity(shape: IntTuple) -> IntTuple:
+    """Return the input shape."""
+    return shape
+
+def apply[Shape: IntTuple](value: Array[Shape]) -> Array[documented_identity(Shape)]: ...
+
+def test(value: Array[[2, 3]]) -> None:
+    assert_type(apply(value), Array[[2, 3]])
+"#,
+);
 #[test]
 fn test_invalid_type_shape_dsl_function_recovers_as_def() {
     let mut env = shaped_array_env();
@@ -630,6 +651,23 @@ def duplicate(x: Int, x: Int) -> Int:  # E: @type_shape_dsl_function parameter n
 @type_shape_dsl_function
 def expression(x: Int) -> Int:
     return x + 1
+
+@type_shape_dsl_function
+def docstring_only(x: Int) -> Int:  # E: @type_shape_dsl_function every control-flow path must return  # E: Function declared to return `Int[int]` but is missing an explicit `return`
+    """A docstring is not a return statement."""
+
+@type_shape_dsl_function
+def second_string_is_not_a_docstring(x: Int) -> Int:
+    """The function docstring is allowed."""
+    "A later string expression is not allowed."  # E: @type_shape_dsl_function body supports only `if` and `return`, plus supported immutable local assignments
+    return x
+
+@type_shape_dsl_function
+def nested_string_is_not_a_docstring(x: Int) -> Int:
+    if x < 0:
+        "A nested string expression is not allowed."  # E: @type_shape_dsl_function body supports only `if` and `return`, plus supported immutable local assignments
+        return x
+    return x
 
 @type_shape_dsl_function
 def wrong_name(x: Int) -> Int:
@@ -13557,5 +13595,46 @@ def wrong_shapes_tuple_of_int(spec: str, shapes: tuple[int, ...]) -> IntTuple:
 @type_shape_dsl_function
 def parameter_shadow(gufunc_alias: Int, spec: str, shapes: IntTuples) -> IntTuple:
     return gufunc_alias(spec, shapes)  # E: DSL helper callee must be a validated  # E: Expected a callable
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_gufunc_public_wrapper,
+    shape_dsl_base_env(),
+    r#"
+import shape_extensions as shapes
+from shape_extensions import Flag, IntTuple, IntTuples, gufunc_broadcast
+from shape_extensions import gufunc_broadcast as imported_gufunc_broadcast
+from shape_extensions import type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+gufunc_alias = imported_gufunc_broadcast
+
+@type_shape_dsl_function
+def forwarded(spec: str, operands: IntTuples) -> IntTuple:
+    return gufunc_broadcast(spec, operands)
+
+def direct() -> ShapeBox[gufunc_broadcast("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, 3], IntTuple[3, 5]])]: ...
+def module_import() -> ShapeBox[shapes.gufunc_broadcast("(n)->(n)", tuple[IntTuple[4]])]: ...
+def imported_alias() -> ShapeBox[imported_gufunc_broadcast("(n)->(n)", tuple[IntTuple[5]])]: ...
+def assigned_alias() -> ShapeBox[gufunc_alias("(n)->(n)", tuple[IntTuple[6]])]: ...
+def composed() -> ShapeBox[forwarded("(),()->()", tuple[IntTuple[2, 1, 4], IntTuple[3, 4]])]: ...
+def unbounded() -> ShapeBox[gufunc_broadcast("(m,n),(n,p)->(m,p)", tuple[IntTuple[2, 3], ...])]: ...
+
+assert_type(direct(), ShapeBox[IntTuple[2, 5]])
+assert_type(module_import(), ShapeBox[IntTuple[4]])
+assert_type(imported_alias(), ShapeBox[IntTuple[5]])
+assert_type(assigned_alias(), ShapeBox[IntTuple[6]])
+assert_type(composed(), ShapeBox[IntTuple[2, 3, 4]])
+assert_type(unbounded(), ShapeBox[IntTuple])
+
+def forwarded_flag[Spec: Flag[str]](spec: Spec) -> ShapeBox[forwarded(Spec, tuple[IntTuple[7]])]: ...
+
+assert_type(forwarded_flag("(n)->(n)"), ShapeBox[IntTuple[7]])
+
+def check_unknown_flag[Spec: Flag[str]](spec: Spec) -> None:
+    assert_type(forwarded_flag(spec), ShapeBox[IntTuple])
 "#,
 );

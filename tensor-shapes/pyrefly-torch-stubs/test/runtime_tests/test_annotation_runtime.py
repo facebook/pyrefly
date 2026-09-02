@@ -29,6 +29,7 @@ from shape_extensions import (
     assert_shape,
     D,
     defines_assert_shape,
+    gufunc_broadcast,
     Int,
     IntTuple,
     IntVar,
@@ -113,6 +114,11 @@ class TestIntTupleRuntime(unittest.TestCase):
 
     def test_subscript_erases_to_runtime_helper(self):
         self.assertIs(IntTuple[1, 2], IntTuple)
+
+    def test_gufunc_broadcast_is_safe_in_eager_annotations(self):
+        def f() -> gufunc_broadcast("(),()->()", tuple[IntTuple[2], IntTuple[3]]): ...
+
+        self.assertEqual(f.__annotations__["return"], ())
 
 
 class TestMapIntTuplesRuntime(unittest.TestCase):

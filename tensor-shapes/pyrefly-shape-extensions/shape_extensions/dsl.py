@@ -11,6 +11,7 @@ Only used inside DSL definition files (e.g. torch/_shapes.pyi), not in
 normal stubs or user code.
 """
 
+# TODO(stroxler): Unquote `typing.TypeIs` when Python 3.13+ is the minimum version.
 import typing
 
 from . import (
@@ -61,7 +62,7 @@ class IntTuples(_IntTuplesSchema):
 def is_concrete_int(value: object) -> typing.TypeGuard[_IntSchema]: ...
 
 
-def is_int_value(value: object) -> typing.TypeIs[int]: ...
+def is_int_value(value: object) -> "typing.TypeIs[int]": ...
 
 
 def concat(
@@ -85,6 +86,4 @@ def einsum(spec: str, shapes: _IntTuplesSchema, /) -> _IntTupleSchema:
 
 def _gufunc_broadcast(spec: str, shapes: _IntTuplesSchema, /) -> _IntTupleSchema:
     """Compute a gufunc result shape inside a type-level shape DSL function."""
-    raise NotImplementedError(
-        "dsl._gufunc_broadcast is only available inside a type-level shape DSL function"
-    )
+    return _IntTupleSchema()
