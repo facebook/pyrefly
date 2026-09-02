@@ -1893,7 +1893,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         overall_is_inherited = IsInherited::Maybe;
                     }
                 }
-                let mut value_ty = unions(union_types, self.heap);
+                let mut value_ty = self.unions(union_types);
                 if matches!(receiver_kind, MethodSelfKind::Instance) {
                     value_ty = self
                         .check_and_sanitize_type_parameters(class, value_ty, name, range, errors);
