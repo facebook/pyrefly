@@ -1140,6 +1140,14 @@ impl Handles {
         self.path_data.len()
     }
 
+    fn with_additional_files(&self, files: &[PathBuf]) -> Self {
+        // `path_data` is a set, so explicitly requesting a configured file does not
+        // create a duplicate handle.
+        let mut path_data = self.path_data.clone();
+        path_data.extend(files.iter().cloned().map(ModulePath::filesystem));
+        Self { path_data }
+    }
+
     pub fn all(
         &self,
         config_finder: &ConfigFinder,
@@ -1403,8 +1411,17 @@ impl IncrementalChecker {
 
     /// Run a check after applying the filesystem events supplied by the caller.
     pub fn check(&mut self, events: &CategorizedEvents) -> IncrementalCheckResult {
-        self.prepare_check(events)
-            .run(|transaction, handles, mut sourcedb_errors| {
+        self.check_with_additional_files(events, &[])
+    }
+
+    /// Run a check with additional files without adding them to the configured file set.
+    pub fn check_with_additional_files(
+        &mut self,
+        events: &CategorizedEvents,
+        additional_files: &[PathBuf],
+    ) -> IncrementalCheckResult {
+        self.prepare_check(events, additional_files).run(
+            |transaction, handles, mut sourcedb_errors| {
                 let diagnostics = transaction
                     .get_errors(handles)
                     .collect_display_errors_with_unused_ignores();
@@ -1414,7 +1431,8 @@ impl IncrementalChecker {
                     diagnostics,
                     config_errors,
                 }
-            })
+            },
+        )
     }
 
     /// Return the number of configured files checked by this checker.
@@ -1422,7 +1440,20 @@ impl IncrementalChecker {
         self.handles.len()
     }
 
-    fn prepare_check(&mut self, events: &CategorizedEvents) -> IncrementalCheckTransaction<'_> {
+    /// Return whether every file is already in the configured handle set.
+    pub fn all_files_are_configured(&self, files: &[PathBuf]) -> bool {
+        files.iter().all(|file| {
+            self.handles
+                .path_data
+                .contains(&ModulePath::filesystem(file.clone()))
+        })
+    }
+
+    fn prepare_check(
+        &mut self,
+        events: &CategorizedEvents,
+        additional_files: &[PathBuf],
+    ) -> IncrementalCheckTransaction<'_> {
         let mut transaction = self
             .state
             .new_committable_transaction(self.require_levels.default, None);
@@ -1430,8 +1461,13 @@ impl IncrementalChecker {
         self.handles
             .apply_events(events, self.files_to_check.as_ref());
 
-        let (loaded_handles, reloaded_configs, sourcedb_errors) =
-            self.handles.all(self.state.config_finder());
+        let (loaded_handles, reloaded_configs, sourcedb_errors) = if additional_files.is_empty() {
+            self.handles.all(self.state.config_finder())
+        } else {
+            self.handles
+                .with_additional_files(additional_files)
+                .all(self.state.config_finder())
+        };
 
         transaction
             .as_mut()
@@ -1480,7 +1516,7 @@ impl IncrementalCheckCommand {
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
         let timings = Timings::new();
         let args = &self.args;
-        let mut check = self.checker.prepare_check(events);
+        let mut check = self.checker.prepare_check(events, &[]);
         let transaction = check.transaction.as_mut();
         let handles = &check.handles;
         let config = handles.first().map(|handle| {
@@ -2403,6 +2439,32 @@ def go(w: Widget) -> int:
         )
         .diagnostics;
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn incremental_checker_checks_additional_files_without_retaining_them() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let configured = root.join("configured.py");
+        let additional = root.join("excluded.py");
+        fs::write(&configured, "x: int = 1\n").unwrap();
+        fs::write(&additional, "x: int = 'bad'\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![configured]);
+
+        let result = checker.check_with_additional_files(
+            &CategorizedEvents::default(),
+            std::slice::from_ref(&additional),
+        );
+        assert!(result.config_errors.is_empty());
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(result.diagnostics[0].path().as_path(), additional);
+
+        assert!(
+            check(&mut checker, &CategorizedEvents::default())
+                .diagnostics
+                .is_empty()
+        );
     }
 
     #[test]
