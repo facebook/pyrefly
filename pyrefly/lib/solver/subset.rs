@@ -68,7 +68,6 @@ use crate::types::callable::params_are_gradual_variadic;
 use crate::types::class::ClassType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
-use crate::types::simplify::unions;
 use crate::types::tuple::Tuple;
 use crate::types::type_alias::TypeAliasData;
 use crate::types::type_var::Restriction;
@@ -226,7 +225,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         full: Type,
     ) -> Result<(), SubsetError> {
         optional_prefixes.push(full.clone());
-        let accepted = unions(optional_prefixes, &self.solver.heap);
+        let accepted = self.solver.unions(optional_prefixes, self.type_order);
         let unpack = canonical_vararg_unpack_inner(unpack, &accepted);
         self.is_subset_eq(unpack, &accepted)
     }
