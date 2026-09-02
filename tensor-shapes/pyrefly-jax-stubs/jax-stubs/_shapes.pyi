@@ -514,87 +514,17 @@ def kron_shape(a_shape: IntTuple, b_shape: IntTuple) -> IntTuple:
 def matvec_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     if len(left) < 2 or len(right) < 1:
         return dsl.Invalid("matvec requires at least 2-D matrix and 1-D vector")
-    m = left[len(left) - 2]
-    k_left = left[len(left) - 1]
-    k_right = right[len(right) - 1]
-    if (
-        dsl.is_concrete_int(k_left)
-        and dsl.is_concrete_int(k_right)
-        and k_left != k_right
-    ):
-        return dsl.Invalid("matvec inner dimensions must match")
-    b_left_len = len(left) - 2
-    b_right_len = len(right) - 1
-    if b_left_len >= b_right_len:
-        diff = b_left_len - b_right_len
-        return dsl.IntTuple(
-            (
-                (
-                    (right[i - diff] if left[i] == 1 else left[i])
-                    if i >= diff
-                    else left[i]
-                )
-                if i < b_left_len
-                else m
-            )
-            for i in range(b_left_len + 1)
-        )
-    diff = b_right_len - b_left_len
-    return dsl.IntTuple(
-        (
-            (
-                (right[i] if left[i - diff] == 1 else left[i - diff])
-                if i >= diff
-                else right[i]
-            )
-            if i < b_right_len
-            else m
-        )
-        for i in range(b_right_len + 1)
-    )
+    operands = dsl.IntTuples((left, right))
+    spec = "(m,n),(n)->(m)"
+    return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
 def vecmat_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     if len(left) < 1 or len(right) < 2:
         return dsl.Invalid("vecmat requires at least 1-D vector and 2-D matrix")
-    k_left = left[len(left) - 1]
-    k_right = right[len(right) - 2]
-    m = right[len(right) - 1]
-    if (
-        dsl.is_concrete_int(k_left)
-        and dsl.is_concrete_int(k_right)
-        and k_left != k_right
-    ):
-        return dsl.Invalid("vecmat inner dimensions must match")
-    b_left_len = len(left) - 1
-    b_right_len = len(right) - 2
-    if b_left_len >= b_right_len:
-        diff = b_left_len - b_right_len
-        return dsl.IntTuple(
-            (
-                (
-                    (right[i - diff] if left[i] == 1 else left[i])
-                    if i >= diff
-                    else left[i]
-                )
-                if i < b_left_len
-                else m
-            )
-            for i in range(b_left_len + 1)
-        )
-    diff = b_right_len - b_left_len
-    return dsl.IntTuple(
-        (
-            (
-                (right[i] if left[i - diff] == 1 else left[i - diff])
-                if i >= diff
-                else right[i]
-            )
-            if i < b_right_len
-            else m
-        )
-        for i in range(b_right_len + 1)
-    )
+    operands = dsl.IntTuples((left, right))
+    spec = "(n),(n,m)->(m)"
+    return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
 def tensordot_shape(left: IntTuple, right: IntTuple, dims: int) -> IntTuple:
