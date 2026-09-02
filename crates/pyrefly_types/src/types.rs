@@ -1400,6 +1400,10 @@ impl Type {
         matches!(self, Type::Any(_))
     }
 
+    pub fn is_object(&self) -> bool {
+        matches!(self, Type::ClassType(cls) if cls.is_builtin("object"))
+    }
+
     pub fn is_typed_dict(&self) -> bool {
         matches!(self, Type::TypedDict(_) | Type::PartialTypedDict(_))
     }

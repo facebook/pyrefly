@@ -3513,12 +3513,12 @@ pub struct Subset<'solver, 'subset, Ans: LookupAnswer> {
     witness_deferred_vars: SmallMap<ArgumentKey, SmallSet<Var>>,
 }
 
-/// Everything a speculative subset check must put back to leave no trace: the variables it may
-/// bind, plus the results it caches and accumulates on the way.
+/// Everything a speculative subset check in this module must put back to leave no trace: the
+/// variables it may bind, plus the results it caches and accumulates on the way. Taking and
+/// restoring these as one value is what keeps the set complete.
 ///
-/// Taking and restoring these as one value is what keeps the set complete. Rollback-sensitive state
-/// added to `Subset` belongs here, so that every probe picks it up rather than one of them silently
-/// leaking it.
+/// Probes outside this module, such as `is_subset_overload_with_active_witness`, only roll back
+/// variables, so new rollback-sensitive state on `Subset` has to be handled there separately.
 struct SubsetSnapshot {
     vars: VarSnapshot,
     subset_cache: SmallMap<(Type, Type, SubsetCacheContext), SubsetCacheEntry>,
@@ -3699,9 +3699,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             }
             Restriction::Unrestricted => {
                 // Check if the implicit bound `object` is assignable to any of the constraints
-                constraints.iter().any(|c| {
-                    c.is_any() || matches!(c, Type::ClassType(cls) if cls.is_builtin("object"))
-                })
+                constraints.iter().any(|c| c.is_any() || c.is_object())
             }
         }
     }

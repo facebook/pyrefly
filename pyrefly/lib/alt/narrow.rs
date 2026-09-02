@@ -2382,9 +2382,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
         let subject_ty = subject_info.ty().clone();
-        if subject_ty.is_any()
-            || matches!(&subject_ty, Type::ClassType(cls) if cls.is_builtin("object"))
-        {
+        if subject_ty.is_any() || subject_ty.is_object() {
             return;
         }
         let ignore_errors = self.error_swallower();

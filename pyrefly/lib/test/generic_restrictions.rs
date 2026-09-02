@@ -1282,7 +1282,9 @@ def f(x: str) -> None:
  "#,
 );
 
-// The restriction check for a gradual expected type should not itself solve.
+// The restriction check for a gradual expected type only produces a diagnostic, so it must not
+// solve anything. `v`'s element variable is reachable only through the answer for the nested
+// `list(...)` call, and the overloaded `__init__` keeps the argument from being expanded first.
 testcase!(
     test_gradual_expected_type_restriction_check_is_rolled_back,
     r#"
