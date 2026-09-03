@@ -7,6 +7,9 @@ from typing import Any, Callable, Literal, overload, Sequence, Unpack
 
 from jax._array import Array as Array, Array as ndarray
 from jax._shapes import (
+    atleast_1d_shape,
+    atleast_2d_shape,
+    atleast_3d_shape,
     broadcast_to_shape,
     column_stack_shape,
     concatenate_shape,
@@ -59,14 +62,71 @@ type _Axis = int | tuple[int, ...] | None
 # an `int | tuple[int, ...]` parameter cannot be iterated inside a DSL function
 # after narrowing with `is_int_value` alone. See `reshape_shape`, which rejects it.
 type _NewShape = int | tuple[int, ...] | None
+type _Scalar = bool | int | float | complex
 
-# Ranks 1 through 3 are exact; any other integer sequence, including a longer
-# tuple or a list, falls through to a gradual overload rather than being
-# rejected.
-# TODO(stroxler): Replace these finite tuple-shape constructor overloads with a
-# single `Shape: tuple[int, ...]` overload once carrier shapes flow through
-# downstream shaped-array operations without degrading to unknown. The NumPy
-# stubs carry the same limitation.
+@overload
+def array(
+    object: _Scalar,
+    dtype: Any = ...,
+    copy: bool | None = ...,
+    order: str | None = ...,
+    ndmin: Literal[0] = 0,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[]]: ...
+@overload
+def array[Shape: _Shape](
+    object: Array[Shape],
+    dtype: Any = ...,
+    copy: bool | None = ...,
+    order: str | None = ...,
+    ndmin: Literal[0] = 0,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def array(
+    object: Any,
+    dtype: Any = ...,
+    copy: bool | None = ...,
+    order: str | None = ...,
+    ndmin: int = 0,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[IntTuple]: ...
+@overload
+def asarray(
+    a: _Scalar,
+    dtype: Any = ...,
+    order: str | None = ...,
+    *,
+    copy: bool | None = ...,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[]]: ...
+@overload
+def asarray[Shape: _Shape](
+    a: Array[Shape],
+    dtype: Any = ...,
+    order: str | None = ...,
+    *,
+    copy: bool | None = ...,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def asarray(
+    a: Any,
+    dtype: Any = ...,
+    order: str | None = ...,
+    *,
+    copy: bool | None = ...,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[IntTuple]: ...
 @overload
 def zeros(shape: tuple[()], dtype: Any = ..., *, device: Any = ...) -> Array[[]]: ...
 @overload
@@ -1464,6 +1524,36 @@ def roll[Shape: _Shape](
     shift: Any,
     axis: Sequence[int] | None = None,
 ) -> Array[Shape]: ...
+@overload
+def atleast_1d(ary: _Scalar, /) -> Array[[1]]: ...
+@overload
+def atleast_1d[Shape: _Shape](
+    ary: Array[Shape], /
+) -> Array[atleast_1d_shape(Shape)]: ...
+@overload
+def atleast_1d(ary: Any, /) -> Array[IntTuple]: ...
+@overload
+def atleast_1d(*arys: Any) -> list[Array[IntTuple]]: ...
+@overload
+def atleast_2d(ary: _Scalar, /) -> Array[[1, 1]]: ...
+@overload
+def atleast_2d[Shape: _Shape](
+    ary: Array[Shape], /
+) -> Array[atleast_2d_shape(Shape)]: ...
+@overload
+def atleast_2d(ary: Any, /) -> Array[IntTuple]: ...
+@overload
+def atleast_2d(*arys: Any) -> list[Array[IntTuple]]: ...
+@overload
+def atleast_3d(ary: _Scalar, /) -> Array[[1, 1, 1]]: ...
+@overload
+def atleast_3d[Shape: _Shape](
+    ary: Array[Shape], /
+) -> Array[atleast_3d_shape(Shape)]: ...
+@overload
+def atleast_3d(ary: Any, /) -> Array[IntTuple]: ...
+@overload
+def atleast_3d(*arys: Any) -> list[Array[IntTuple]]: ...
 
 # JAX accepts any integer sequence for an axis, but only a tuple is a Flag
 # domain, so any other sequence yields a gradual shape. Rejecting it would flag

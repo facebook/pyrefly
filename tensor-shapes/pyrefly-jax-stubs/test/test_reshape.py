@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import reveal_type, TYPE_CHECKING
+from typing import assert_type, reveal_type, TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -181,3 +181,85 @@ def test_reshape_zero_size_placeholder() -> None:
         raise AssertionError(
             "expected JAX method to reject ambiguous zero-size inference"
         )
+
+
+def test_atleast_1d() -> None:
+    # Python scalars
+    assert_shape(jnp.atleast_1d(5), (1,))
+    assert_shape(jnp.atleast_1d(2.5), (1,))
+    assert_shape(jnp.atleast_1d(True), (1,))
+    assert_shape(jnp.atleast_1d(1 + 2j), (1,))
+
+    # Arrays
+    assert_shape(jnp.atleast_1d(jnp.ones(())), (1,))
+    assert_shape(jnp.atleast_1d(jnp.ones(4)), (4,))
+    assert_shape(jnp.atleast_1d(jnp.ones((2, 3))), (2, 3))
+    assert_shape(jnp.atleast_1d(jnp.ones((2, 3, 4))), (2, 3, 4))
+
+    # Zero arguments: returns list of arrays
+    res0 = jnp.atleast_1d()
+    assert_type(res0, list[jax.Array])
+    assert res0 == []
+
+    # Two arguments: returns list of arrays
+    res2 = jnp.atleast_1d(1, jnp.ones((2, 3)))
+    assert_type(res2, list[jax.Array])
+    assert isinstance(res2, list) and len(res2) == 2
+    assert all(isinstance(x, jax.Array) for x in res2)
+    assert res2[0].shape == (1,)
+    assert res2[1].shape == (2, 3)
+
+
+def test_atleast_2d() -> None:
+    # Python scalars
+    assert_shape(jnp.atleast_2d(5), (1, 1))
+    assert_shape(jnp.atleast_2d(2.5), (1, 1))
+    assert_shape(jnp.atleast_2d(True), (1, 1))
+    assert_shape(jnp.atleast_2d(1 + 2j), (1, 1))
+
+    # Arrays
+    assert_shape(jnp.atleast_2d(jnp.ones(())), (1, 1))
+    assert_shape(jnp.atleast_2d(jnp.ones(4)), (1, 4))
+    assert_shape(jnp.atleast_2d(jnp.ones((2, 3))), (2, 3))
+    assert_shape(jnp.atleast_2d(jnp.ones((2, 3, 4))), (2, 3, 4))
+
+    # Zero arguments: returns list of arrays
+    res0 = jnp.atleast_2d()
+    assert_type(res0, list[jax.Array])
+    assert res0 == []
+
+    # Two arguments: returns list of arrays
+    res2 = jnp.atleast_2d(jnp.ones(3), jnp.ones((2, 3)))
+    assert_type(res2, list[jax.Array])
+    assert isinstance(res2, list) and len(res2) == 2
+    assert all(isinstance(x, jax.Array) for x in res2)
+    assert res2[0].shape == (1, 3)
+    assert res2[1].shape == (2, 3)
+
+
+def test_atleast_3d() -> None:
+    # Python scalars
+    assert_shape(jnp.atleast_3d(5), (1, 1, 1))
+    assert_shape(jnp.atleast_3d(2.5), (1, 1, 1))
+    assert_shape(jnp.atleast_3d(True), (1, 1, 1))
+    assert_shape(jnp.atleast_3d(1 + 2j), (1, 1, 1))
+
+    # Arrays
+    assert_shape(jnp.atleast_3d(jnp.ones(())), (1, 1, 1))
+    assert_shape(jnp.atleast_3d(jnp.ones(4)), (1, 4, 1))
+    assert_shape(jnp.atleast_3d(jnp.ones((2, 3))), (2, 3, 1))
+    assert_shape(jnp.atleast_3d(jnp.ones((2, 3, 4))), (2, 3, 4))
+    assert_shape(jnp.atleast_3d(jnp.ones((2, 3, 4, 5))), (2, 3, 4, 5))
+
+    # Zero arguments: returns list of arrays
+    res0 = jnp.atleast_3d()
+    assert_type(res0, list[jax.Array])
+    assert res0 == []
+
+    # Two arguments: returns list of arrays
+    res2 = jnp.atleast_3d(jnp.ones(3), jnp.ones((2, 3)))
+    assert_type(res2, list[jax.Array])
+    assert isinstance(res2, list) and len(res2) == 2
+    assert all(isinstance(x, jax.Array) for x in res2)
+    assert res2[0].shape == (1, 3, 1)
+    assert res2[1].shape == (2, 3, 1)

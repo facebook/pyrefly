@@ -912,3 +912,27 @@ def roll_shape(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
     if any(item < 0 - rank or item >= rank for item in axes):
         return dsl.Invalid("axis out of bounds")
     return shape
+
+@type_shape_dsl_function
+def atleast_1d_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) == 0:
+        return dsl.IntTuple((1,))
+    return shape
+
+@type_shape_dsl_function
+def atleast_2d_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) == 0:
+        return dsl.IntTuple((1, 1))
+    if len(shape) == 1:
+        return dsl.concat(dsl.IntTuple((1,)), shape)
+    return shape
+
+@type_shape_dsl_function
+def atleast_3d_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) == 0:
+        return dsl.IntTuple((1, 1, 1))
+    if len(shape) == 1:
+        return dsl.concat(dsl.IntTuple((1,)), dsl.concat(shape, dsl.IntTuple((1,))))
+    if len(shape) == 2:
+        return dsl.concat(shape, dsl.IntTuple((1,)))
+    return shape
