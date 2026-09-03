@@ -23,6 +23,6 @@ def test_tuple_indexing():
     z = x[:, (0, 2), :]
     assert_type(z, Tensor[[2, 2, 4]])
 
-    # A list literal has a statically known length, like a tuple literal.
+    # A list's length is not retained by the Index restriction.
     w = x[:, [-1], :]
-    assert_type(w, Tensor[[2, 1, 4]])
+    assert_type(w, Tensor[[2, int, 4]])

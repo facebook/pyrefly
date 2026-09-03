@@ -449,6 +449,7 @@ class Transformer(nn.Module):
             raise AssertionError("Caches must be initialized first")
         mask = self.causal_mask[None, None, input_pos]
         assert_type(mask, Tensor)  # bare — indexing with None/input_pos
+        # An optional tensor index uses the gradual fallback overload.
         freqs_cis = self.freqs_cis[input_pos]
         assert_type(freqs_cis, Tensor)  # bare — indexing on bare freqs_cis
         # ModelArgs uses plain int — sub-module dims are Unknown

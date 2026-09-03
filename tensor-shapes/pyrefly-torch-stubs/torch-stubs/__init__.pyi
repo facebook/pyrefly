@@ -12,6 +12,7 @@ functions are defined in `torch/_shapes.pyi`.
 
 import builtins
 from collections.abc import Sequence
+from types import EllipsisType
 from typing import Any, overload, Self, TYPE_CHECKING, Unpack
 
 import shape_extensions
@@ -19,6 +20,8 @@ from shape_extensions import (
     broadcast,
     Elements,
     Flag,
+    Index,
+    index_shape,
     IntTuple,
     IntTuples,
     IntVar,
@@ -86,6 +89,7 @@ __all__ = ["Tensor"]
 
 type _Shape = IntTuple
 type _AnyShape = tuple[Any, ...]
+type _BasicIndex = builtins.int | slice | list[builtins.int] | None | EllipsisType
 
 # ============================================================================
 # Device Type
@@ -116,7 +120,7 @@ ops: Any
 # Tensor Class
 # ============================================================================
 
-@shape_extensions.shaped_array(shape="Shape")
+@shape_extensions.shaped_array(shape="Shape", builtin_indexing=False)
 class Tensor[Shape: _Shape = _AnyShape]:
     """
     PyTorch Tensor with shape type parameter.
@@ -139,24 +143,38 @@ class Tensor[Shape: _Shape = _AnyShape]:
     imag: Self  # Imaginary part of complex tensor (shape-preserving)
     # Note: Use .dim() method for rank (ndim removed in favor of dim())
     # ==== Indexing ====
+    @overload
+    def __getitem__[I: Index](
+        self: Tensor[Shape], index: I
+    ) -> Tensor[index_shape(Shape, I)]: ...
+    @overload
     def __getitem__(
         self: Tensor,
-        index: int
-        | slice
-        | tuple[int | slice | Tensor | list[int] | None, ...]
+        index: _BasicIndex
+        | Sequence[builtins.int]
+        | Sequence[Sequence[builtins.int]]
         | Tensor
-        | list[int],
-    ) -> Tensor:
-        """Index into tensor. Shape inference via meta-shape: torch.Tensor.__getitem__"""
-        ...
-
+        | tuple[
+            _BasicIndex
+            | Sequence[builtins.int]
+            | Sequence[Sequence[builtins.int]]
+            | Tensor,
+            ...,
+        ],
+    ) -> Tensor[IntTuple]: ...
     def __setitem__(
         self: Tensor,
-        index: int
-        | slice
-        | tuple[int | slice | Tensor | list[int] | None, ...]
+        index: _BasicIndex
+        | Sequence[builtins.int]
+        | Sequence[Sequence[builtins.int]]
         | Tensor
-        | list[int],
+        | tuple[
+            _BasicIndex
+            | Sequence[builtins.int]
+            | Sequence[Sequence[builtins.int]]
+            | Tensor,
+            ...,
+        ],
         value: Tensor | int | float,
     ) -> None:
         """Set values in tensor via indexing. Mutates tensor in-place."""
