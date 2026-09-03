@@ -34,6 +34,7 @@ use pyrefly_util::display::DisplayWith;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::uniques::UniqueFactory;
+use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -119,6 +120,43 @@ pub enum AttributeReferenceKind {
     /// constructor protocol, as in `Foo()` reaching `Foo.__init__`. Only class construction
     /// is recorded this way; calling an instance through its `__call__` is not.
     ConstructorCall,
+}
+
+/// Visiting a trace store reaches every type recorded in it.
+impl VisitMut<Type> for Traces {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        for map in [
+            &mut self.types,
+            &mut self.invoked_properties,
+            &mut self.expected_types,
+        ] {
+            for ty in map.values_mut() {
+                f(Arc::make_mut(ty));
+            }
+        }
+        for callee in self.overloaded_callees.values_mut() {
+            // Note: `tparams` does not need to be visited, as this comes from an answer
+            // which is already visited. `TArgs` skips tparams for the same reason.
+            match callee {
+                OverloadedCallee::Resolved { callable: trace } => {
+                    let OverloadTrace {
+                        callable,
+                        tparams: _,
+                    } = trace;
+                    callable.visit_mut(f);
+                }
+                OverloadedCallee::Candidates { all, closest, .. } => {
+                    for OverloadTrace {
+                        callable,
+                        tparams: _,
+                    } in all.iter_mut().chain(std::iter::once(closest))
+                    {
+                        callable.visit_mut(f);
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1495,6 +1533,13 @@ impl Answers {
             &answers_solver,
             compute_everything
         ));
+        // Every binding is solved, so every variable a trace mentions now has an answer. Force
+        // them here, once, rather than on every read. This must precede any trace consumer below.
+        if let Some(trace_store) = &self.trace {
+            trace_store
+                .lock()
+                .visit_mut(&mut |ty| self.solver.force_mut(ty));
+        }
         // `pre_solve` has published every exported slot. From this point on,
         // the preallocated solutions table represents a complete result set.
         if let Some(index) = &self.index {
