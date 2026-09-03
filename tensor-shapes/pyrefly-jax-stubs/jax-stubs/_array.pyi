@@ -7,7 +7,8 @@
 # `jax.numpy` can refer to it without importing its own parent package. Real
 # JAX splits it out for the same reason, as `jax._src.basearray`.
 
-from typing import Any, overload, Sequence
+from types import EllipsisType
+from typing import Any, overload, Protocol, Sequence, SupportsIndex
 
 import shape_extensions
 from jax._shapes import (
@@ -23,19 +24,42 @@ from jax._shapes import (
     swapaxes_shape,
     trace_shape,
 )
-from shape_extensions import broadcast, Flag, IntTuple, IntVar
+from shape_extensions import broadcast, Flag, Index, index_shape, IntTuple, IntVar
 
 type _Shape = IntTuple
 type _AnyShape = tuple[Any, ...]
 type _Axis = int | tuple[int, ...] | None
+
+class _ArrayIndex(Protocol):
+    @property
+    def shape(self) -> object: ...
+    @property
+    def dtype(self) -> object: ...
+
+type _IntegerSequence = (
+    # Lists are intentionally accepted through contextual typing of literals, not as a general
+    # sequence abstraction. This avoids requiring runtime code to replace existing list syntax.
+    list[SupportsIndex | _IntegerSequence]
+    | tuple[SupportsIndex | _IntegerSequence, ...]
+)
+type _BasicIndex = SupportsIndex | slice | _IntegerSequence | None | EllipsisType
 # The trailing `None` is not a legal argument to `reshape`. It is present because
 # an `int | tuple[int, ...]` parameter cannot be iterated inside a DSL function
 # after narrowing with `is_int_value` alone. See `reshape_shape`, which rejects it.
 type _NewShape = int | tuple[int, ...] | None
 
-@shape_extensions.shaped_array(shape="Shape")
+@shape_extensions.shaped_array(shape="Shape", builtin_indexing=False)
 class Array[Shape: _Shape = _AnyShape]:
     shape: Shape
+    @overload
+    def __getitem__[I: Index](self, index: I) -> Array[index_shape(Shape, I)]: ...
+    @overload
+    # JAX accepts array operands. The structural, tuple, and list-literal arms also provide
+    # gradual compatibility for values that JAX may reject at runtime.
+    def __getitem__(
+        self,
+        index: _BasicIndex | _ArrayIndex | tuple[_BasicIndex | _ArrayIndex, ...],
+    ) -> Array[IntTuple]: ...
     # JAX reverses every axis, at any rank, so this is not 2-D only.
     @property
     def T(self) -> Array[reverse_shape(Shape)]: ...
