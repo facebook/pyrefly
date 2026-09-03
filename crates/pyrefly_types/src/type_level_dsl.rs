@@ -63,6 +63,7 @@ use crate::gufunc::parse_gufunc_signature;
 use crate::literal::Lit;
 use crate::map_int_tuples::MapIntTuples;
 use crate::quantified::Quantified;
+use crate::shape_index::index_shape_from_type;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
 use crate::tuple::Tuple;
@@ -5695,6 +5696,7 @@ pub struct TypeLevelDslCall {
 /// The identity of a type-level DSL operation.
 #[derive(Debug, Clone, PartialEq, Eq, TypeEq, PartialOrd, Ord, Hash)]
 pub enum TypeLevelDslFunction {
+    IndexShape,
     UserDefined(Arc<ResolvedTypeShapeDslFunction>),
     /// A deferred `shape_extensions.MapIntTuples[<lambda>, <source>]` application.
     MapIntTuples(MapIntTuples),
@@ -5851,7 +5853,7 @@ enum DslControlFlow {
 impl Visit<Type> for TypeLevelDslFunction {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
         match self {
-            Self::UserDefined(_) => {}
+            Self::IndexShape | Self::UserDefined(_) => {}
             Self::MapIntTuples(map) => map.visit(f),
         }
     }
@@ -5860,13 +5862,21 @@ impl Visit<Type> for TypeLevelDslFunction {
 impl VisitMut<Type> for TypeLevelDslFunction {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
         match self {
-            Self::UserDefined(_) => {}
+            Self::IndexShape | Self::UserDefined(_) => {}
             Self::MapIntTuples(map) => map.visit_mut(f),
         }
     }
 }
 
 impl TypeLevelDslCall {
+    /// Constructs a native `index_shape(shape, index)` call.
+    pub fn index_shape(shape: Type, index: Type) -> Self {
+        Self {
+            function: TypeLevelDslFunction::IndexShape,
+            args: vec![shape, index],
+        }
+    }
+
     pub fn user_defined(function: Arc<ResolvedTypeShapeDslFunction>, args: Vec<Type>) -> Self {
         assert_eq!(
             args.len(),
@@ -5881,6 +5891,7 @@ impl TypeLevelDslCall {
 
     pub fn function_name(&self) -> &str {
         match &self.function {
+            TypeLevelDslFunction::IndexShape => "index_shape",
             TypeLevelDslFunction::UserDefined(function) => function.name().as_str(),
             TypeLevelDslFunction::MapIntTuples(_) => "MapIntTuples",
         }
@@ -5889,6 +5900,7 @@ impl TypeLevelDslCall {
     /// Returns the shape-DSL result domain, or `None` for a map of arbitrary result types.
     pub fn result_domain(&self) -> Option<TypeShapeDslDomain> {
         match &self.function {
+            TypeLevelDslFunction::IndexShape => Some(TypeShapeDslDomain::IntTuple),
             TypeLevelDslFunction::UserDefined(function) => Some(function.result_domain()),
             TypeLevelDslFunction::MapIntTuples(map) => map.result_domain(),
         }
@@ -5897,6 +5909,7 @@ impl TypeLevelDslCall {
     /// Returns the gradual result for a call whose precise value cannot be determined.
     pub fn fallback(&self) -> Type {
         match &self.function {
+            TypeLevelDslFunction::IndexShape => IntTuple::shapeless().to_shape_arg_type(),
             TypeLevelDslFunction::UserDefined(function) => match function.result_domain() {
                 TypeShapeDslDomain::Int => gradual_size(),
                 TypeShapeDslDomain::IntTuple => IntTuple::shapeless().to_shape_arg_type(),
@@ -5941,6 +5954,15 @@ impl TypeLevelDslCall {
             DslOutcome::Invalid(error) => Err(error),
         };
         match &self.function {
+            TypeLevelDslFunction::IndexShape => {
+                let [shape, index] = self.args.as_slice() else {
+                    unreachable!("native index_shape calls are constructed with two arguments");
+                };
+                let Some(shape) = IntTuple::from_shape_arg_or_tuple_carrier(shape) else {
+                    return Ok(self.fallback());
+                };
+                index_shape_from_type(&shape, index).map(|shape| shape.to_shape_arg_type())
+            }
             TypeLevelDslFunction::UserDefined(function) => project(function.evaluate(&self.args)),
             TypeLevelDslFunction::MapIntTuples(map) => map.evaluate(),
         }

@@ -1002,6 +1002,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         match callee.callee_kind() {
             Some(CalleeKind::Function(FunctionKind::TypeShapeDsl(_, function))) => self
                 .parse_user_defined_type_level_dsl_call(call, function, type_form_context, errors),
+            Some(CalleeKind::Function(FunctionKind::Def(id)))
+                if id.has_toplevel_qname("shape_extensions", "index_shape") =>
+            {
+                self.parse_index_shape_type_level_dsl_call(call, type_form_context, errors)
+            }
             _ => self.error(
                 errors,
                 call.func.range(),

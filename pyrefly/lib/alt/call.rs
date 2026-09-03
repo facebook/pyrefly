@@ -12,6 +12,7 @@ use itertools::Itertools;
 use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModuleStyle;
+use pyrefly_types::dimension::ShapeError;
 use pyrefly_types::function::BodyKind;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
@@ -973,6 +974,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) {
         for error in errors_to_add.into_iter().unique() {
             match error {
+                ReturnTypeResolutionError::TypeLevelDsl(ShapeError::BadIndex { message }) => {
+                    self.error_with_context(errors, range, ErrorKind::BadIndex, message, context)
+                }
                 ReturnTypeResolutionError::TypeLevelDsl(error) => self.error_with_context(
                     errors,
                     range,

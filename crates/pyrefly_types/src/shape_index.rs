@@ -545,6 +545,66 @@ pub fn lower_index_type(ty: &Type) -> IndexTypeLowering {
     lower_index_type_in_position(ty, IndexPosition::Root)
 }
 
+/// Apply an ordinary retained index type to a shape.
+///
+/// The `Index` restriction validates this same lowering before specialization. A gradual lowering
+/// produces a gradual shape, while algebra failures retain their indexing-specific diagnostic.
+pub fn index_shape_from_type(shape: &IntTuple, index: &Type) -> Result<IntTuple, ShapeError> {
+    let bad_index = |error: ShapeError| ShapeError::BadIndex {
+        message: error.to_string(),
+    };
+    let components = match lower_index_type(index) {
+        IndexTypeLowering::Precise(components) => components,
+        IndexTypeLowering::Gradual => return Ok(IntTuple::shapeless()),
+        IndexTypeLowering::Invalid => {
+            // Index-bound validation reports the user-facing diagnostic before evaluation.
+            // This branch only protects malformed internal calls, where solver display context
+            // is unavailable.
+            return Err(ShapeError::BadIndex {
+                message: format!("`{index}` is not a valid index value"),
+            });
+        }
+    };
+    if ellipsis_count(&components) > 1 {
+        return Err(ShapeError::BadIndex {
+            message: "an index may contain at most one ellipsis".to_owned(),
+        });
+    }
+    match components.as_slice() {
+        [IndexComponent::Operation(IndexOp::Int)] => {
+            return index_shape_int(shape).map_err(&bad_index);
+        }
+        [IndexComponent::Operation(IndexOp::Slice { start, stop, step })] => {
+            return index_shape_slice(shape, start.clone(), stop.clone(), step.clone())
+                .map_err(&bad_index);
+        }
+        [IndexComponent::Ellipsis] => return Ok(shape.clone()),
+        _ => {}
+    }
+    let ellipsis = components
+        .iter()
+        .position(|component| matches!(component, IndexComponent::Ellipsis));
+    let operations = |components: &[IndexComponent]| {
+        components
+            .iter()
+            .map(|component| match component {
+                IndexComponent::Operation(operation) => operation.clone(),
+                IndexComponent::Ellipsis => {
+                    unreachable!("the component slice does not include the ellipsis")
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let (pre, post) = match ellipsis {
+        Some(index) => (
+            operations(&components[..index]),
+            operations(&components[index + 1..]),
+        ),
+        None => (operations(&components), Vec::new()),
+    };
+    index_shape_multi(shape, &pre, &post, ellipsis.is_some()).map_err(&bad_index)
+}
+
 // ============================================================================
 // Shape Algebra
 // ============================================================================

@@ -32,6 +32,7 @@ __all__ = [
     "defines_assert_shape",
     "gufunc_broadcast",
     "shaped_array",
+    "index_shape",
     "type_shape_dsl_function",
 ]
 
@@ -289,6 +290,12 @@ def shaped_array(
         return cls
 
     return decorator
+
+
+def index_shape(_shape: IntTuple, _index: typing.Any) -> IntTuple:
+    """Runtime placeholder for Pyrefly's native shape-indexing intrinsic."""
+
+    return IntTuple()
 
 
 class MapIntTuples:

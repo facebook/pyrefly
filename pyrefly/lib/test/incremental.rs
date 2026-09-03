@@ -190,6 +190,65 @@ impl Incremental {
 }
 
 #[test]
+fn test_index_shape_argument_edit_invalidates_consumer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+from typing import Any
+class IntTuple: pass
+class Index: pass
+def index_shape(shape: IntTuple, index: Any) -> IntTuple: ...
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from typing import Literal
+from shape_extensions import IntTuple, index_shape
+
+class Array[Shape: IntTuple]: ...
+def selected() -> Array[index_shape(IntTuple[10, 20], slice[Literal[1], Literal[5], None])]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from typing import assert_type
+from shape_extensions import IntTuple
+from main import Array, selected
+
+assert_type(selected(), Array[IntTuple[4, 20]])
+"#,
+    );
+    i.check(&["consumer"], &["consumer", "main", "shape_extensions"]);
+
+    i.set(
+        "main",
+        r#"
+from typing import Literal
+from shape_extensions import IntTuple, index_shape
+
+class Array[Shape: IntTuple]: ...
+def selected() -> Array[index_shape(IntTuple[10, 20], slice[Literal[1], Literal[7], None])]: ...
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0]
+            .msg()
+            .contains("assert_type(Array[IntTuple[6, 20]], Array[IntTuple[4, 20]]) failed")
+    );
+}
+
+#[test]
 fn test_type_shape_dsl_body_edit_invalidates_importer() {
     let mut i = Incremental::with_files(vec![
         "foo".to_owned(),

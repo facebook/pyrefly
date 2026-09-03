@@ -1031,15 +1031,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Expr::Slice(x) => {
                 let none = self.heap.mk_none();
                 let elts = vec![
-                    x.lower
-                        .as_ref()
-                        .map_or_else(|| none.clone(), |e| self.expr_infer(e, errors)),
-                    x.upper
-                        .as_ref()
-                        .map_or_else(|| none.clone(), |e| self.expr_infer(e, errors)),
-                    x.step
-                        .as_ref()
-                        .map_or_else(|| none.clone(), |e| self.expr_infer(e, errors)),
+                    x.lower.as_ref().map_or_else(
+                        || none.clone(),
+                        |e| self.infer_shape_index_slice_bound(e, errors),
+                    ),
+                    x.upper.as_ref().map_or_else(
+                        || none.clone(),
+                        |e| self.infer_shape_index_slice_bound(e, errors),
+                    ),
+                    x.step.as_ref().map_or_else(
+                        || none.clone(),
+                        |e| self.infer_shape_index_slice_bound(e, errors),
+                    ),
                 ];
                 self.specialize(&self.stdlib.slice_class_object(), elts, x.range(), errors)
             }
@@ -4398,6 +4401,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         Ok(Type::Any(AnyStyle::Explicit))
                     }
                     Type::ClassDef(cls) if cls.is_builtin("int") => Ok(gradual_size()),
+                    _ if context.allows_explicit_int_wrapper()
+                        && let Some(dimension) = type_to_dim(&expr_type) =>
+                    {
+                        Ok(self.heap.mk_int(dimension))
+                    }
                     _ => {
                         match self.untype_opt_with_context(
                             expr_type.clone(),

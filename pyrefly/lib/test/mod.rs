@@ -43,6 +43,7 @@ mod generic_restrictions;
 mod generic_sub;
 mod imports;
 mod incremental;
+mod index_shape;
 mod inference;
 mod literal;
 mod lsp;
