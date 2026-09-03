@@ -575,7 +575,7 @@ def f(x: Any):
 testcase!(
     test_binop_on_any,
     r#"
-from typing import Any, assert_type
+from typing import Any, Self, assert_type
 
 def f(x: Any):
     assert_type(1 + x, Any)
@@ -584,6 +584,14 @@ def f(x: Any):
 def f2(x: int | Any):
     assert_type(1 + x, int | Any)
     assert_type(x < 10,  bool | Any )
+
+class C:
+    def __add__(self, other: object, /) -> Self: ...
+    def __radd__(self, other: object, /) -> Self: ...
+
+def f3(x: C, y: Any) -> None:
+    assert_type(x + y, Any)
+    assert_type(y + x, Any)
     "#,
 );
 

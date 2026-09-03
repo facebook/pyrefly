@@ -589,15 +589,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // Then e1 + e2 should have a return type of Any since e2's __radd__  signature could be
                 // inconsistent with the signature of e1 __add__.
                 //
-                // Exception: when one operand is a shaped Tensor, fall through
-                // to dunder dispatch. Tensor's arithmetic dunders accept any
-                // numeric type and return Self, so the shape is preserved
-                // regardless of the other operand's type. Without this, e.g.
-                // Tensor[B, 1] / (2**n - 1.0) loses shape because 2**n is Any.
-                if (lhs.is_any() || rhs.is_any())
-                    && !matches!(lhs, Type::ShapedArray(_))
-                    && !matches!(rhs, Type::ShapedArray(_))
-                {
+                if lhs.is_any() || rhs.is_any() {
                     if let Type::Any(style) = &rhs {
                         return style.propagate();
                     } else if let Type::Any(style) = &lhs {
