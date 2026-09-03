@@ -906,13 +906,10 @@ f(x=["a", "bad"])  # E: `list[str]` is not assignable to parameter `x`
     "#,
 );
 
-// Regression: a generic call's return TypeVar solved against a wide Literal hint (more
-// than MAX_CALL_HINT_WIDTH members) used to discard the hint entirely, falling back to
-// the argument's own widened type (e.g. `str` instead of the Literal) and reporting a
-// false bad-assignment/bad-argument-type/bad-return in every context that offers a hint.
-// Literal members are scalar and cheap to try individually, so — like
-// `test_list_hint_with_wide_literal_alias_union` above — they should not count against
-// the cap.
+// Regression: a generic call's return TypeVar solved against a wide Literal hint used to
+// discard the hint entirely, falling back to the argument's own widened type (e.g. `str`
+// instead of the Literal). Wide call hints are tried as a combined union rather than by
+// enumerating every member.
 testcase!(
     test_call_hint_with_wide_literal_union,
     r#"
@@ -923,16 +920,16 @@ T = TypeVar("T")
 def identity(x: T) -> T:
     return x
 
-L5 = Literal["a", "b", "c", "d", "e"]
-v: L5 = identity("a")
+BigLit = Literal["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m"]
+v: BigLit = identity("a")
 
-def takes_l5(x: L5) -> None: ...
-takes_l5(identity("a"))
+def takes_big_lit(x: BigLit) -> None: ...
+takes_big_lit(identity("a"))
 
-def returns_l5() -> L5:
+def returns_big_lit() -> BigLit:
     return identity("a")
 
-bad: L5 = identity("z")  # E: `str` is not assignable to `Literal['a', 'b', 'c', 'd', 'e']`
+bad: BigLit = identity("z")  # E: `str` is not assignable
     "#,
 );
 

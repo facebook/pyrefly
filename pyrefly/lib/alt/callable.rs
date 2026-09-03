@@ -2003,19 +2003,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // Optimization: no-hint and single-hint cases can return immediately.
             None => return inner(None, errors),
             Some(hint) if hint.types().len() == 1 => return inner(hint.types().first(), errors),
-            // Optimization: discard overly wide hints. Scalar members (literals, `None`) are
-            // cheap to try individually and don't decompose further, so they don't count
-            // against the cap — mirrors `infer_with_decomposed_hint`'s `decomposable_width`.
-            Some(hint)
-                if hint.types().iter().filter(|t| !t.is_scalar()).count() > MAX_CALL_HINT_WIDTH =>
-            {
-                return inner(None, errors);
-            }
             Some(hint) => hint,
         };
-        let mut hints = hint.types().map(Some);
-        // Push a marker so we know when no individual hint has matched. We'll try a combined union hint.
-        // Constructing the union is expensive, so we use the marker to avoid unnecessary construction.
+        let mut hints = if hint.types().len() <= MAX_CALL_HINT_WIDTH {
+            hint.types().map(Some)
+        } else {
+            Vec::new()
+        };
+        // Push a marker so we know when no individual hint has matched, or the hint was too wide
+        // to try individual hints. We'll try a combined union hint. Constructing the union is
+        // expensive, so we use the marker to avoid unnecessary construction.
         hints.push(None);
         let mut ret_with_error = None;
         for mut cur_hint in hints {

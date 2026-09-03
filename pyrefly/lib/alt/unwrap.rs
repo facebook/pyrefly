@@ -22,8 +22,8 @@ use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
-/// Maximum size for a union hint to a function call. Hints wider than this are ignored.
-/// Overly wide unions don't provide a useful hint and lead to prohibitively expensive calls.
+/// Maximum size for a union hint to a function call. Hints wider than this are not tried
+/// individually, as doing so would lead to prohibitively expensive calls.
 pub const MAX_CALL_HINT_WIDTH: usize = 4;
 
 /// Maximum size for a union hint to `infer_with_decomposed_hint`.
