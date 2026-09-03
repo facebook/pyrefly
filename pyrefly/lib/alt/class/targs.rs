@@ -213,6 +213,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// promote(list) == list[Any]
     /// instantiate(list) == list[T]
     pub fn promote(&self, cls: &Class, range: TextRange, errors: &ErrorCollector) -> Type {
+        self.promote_impl(cls, range, errors, None)
+    }
+
+    /// Promote a bare generic class while omitting the implicit-Any diagnostic for one parameter.
+    pub(crate) fn promote_ignoring_implicit_any_for(
+        &self,
+        cls: &Class,
+        range: TextRange,
+        errors: &ErrorCollector,
+        ignored: &Quantified,
+    ) -> Type {
+        self.promote_impl(cls, range, errors, Some(ignored))
+    }
+
+    fn promote_impl(
+        &self,
+        cls: &Class,
+        range: TextRange,
+        errors: &ErrorCollector,
+        ignored_implicit_any: Option<&Quantified>,
+    ) -> Type {
         let Some(tparams) = self.get_class_tparams(cls).map(Dupe::dupe) else {
             return self.type_of_instance(cls, TArgs::default());
         };
@@ -220,12 +241,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let targs = self.create_default_targs(
             tparams,
             Some(&|tparam: &Quantified| {
-                Self::add_implicit_any_error(
-                    errors,
-                    range,
-                    format_generic_entity("class", cls.name(), &tparams_for_error),
-                    Some(tparam.name().as_str()),
-                );
+                if ignored_implicit_any != Some(tparam) {
+                    Self::add_implicit_any_error(
+                        errors,
+                        range,
+                        format_generic_entity("class", cls.name(), &tparams_for_error),
+                        Some(tparam.name().as_str()),
+                    );
+                }
             }),
         );
         self.type_of_instance(cls, targs)

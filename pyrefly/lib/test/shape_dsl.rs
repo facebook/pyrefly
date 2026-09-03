@@ -7234,8 +7234,7 @@ def f(
 );
 
 testcase!(
-    bug = "jaxtyping shapes require @shaped_array",
-    test_jaxtyping_undecorated_inttuple_generic_ignores_shape,
+    test_jaxtyping_undecorated_inttuple_generic_applies_shape,
     {
         let mut env = shaped_array_env();
         add_jaxtyping(&mut env);
@@ -7249,7 +7248,271 @@ from typing import assert_type
 class Array[DType, Shape: IntTuple]: ...
 
 def f(x: Float[Array[int, IntTuple], "3 4"]) -> None:
-    assert_type(x, Array[int, IntTuple])
+    assert_type(x, Array[int, IntTuple[3, 4]])
+"#,
+);
+
+testcase!(
+    test_jaxtyping_ordinary_generic_preserves_other_arguments,
+    {
+        let mut env = shaped_array_env();
+        add_jaxtyping(&mut env);
+        env
+    },
+    r#"
+from jaxtyping import Float
+from shape_extensions import IntTuple
+from typing import Any, assert_type, reveal_type
+
+class Array[DType, Shape: IntTuple, Device = str]: ...
+
+def f(
+    concrete: Float[Array[float, IntTuple, bytes], "3 4"],
+    default_device: Float[Array[int, IntTuple], "6"],
+    scalar: Float[Array[str, tuple[int, ...]], ""],
+    dynamic: Float[Array[bool, Any], "5"],
+    named: Float[Array[int, IntTuple], "batch channels"],
+    variadic: Float[Array[int, IntTuple], "*batch channels"],
+    bad_shape: Float[Array[int, IntTuple], 123],  # E: Second argument to jaxtyping annotation must be a string literal
+) -> None:
+    assert_type(concrete, Array[float, IntTuple[3, 4], bytes])
+    assert_type(default_device, Array[int, IntTuple[6]])
+    assert_type(scalar, Array[str, IntTuple[()]])
+    assert_type(dynamic, Array[bool, IntTuple[5]])
+    reveal_type(named)  # E: revealed type: Array[int, IntTuple[batch, channels]]
+    reveal_type(variadic)  # E: revealed type: Array[int, IntTuple[*Elements[batch], channels]]
+"#,
+);
+
+testcase!(
+    test_jaxtyping_ordinary_generic_requires_one_gradual_inttuple_argument,
+    {
+        let mut env = shaped_array_env();
+        add_jaxtyping(&mut env);
+        env
+    },
+    r#"
+from jaxtyping import Float
+from shape_extensions import Flag, IntTuple
+from typing import Any, assert_type
+
+class Array[DType, Shape: IntTuple]: ...
+class NoShape[T]: ...
+class Ambiguous[Left: IntTuple, Right: IntTuple]: ...
+class Multiple[Fixed: IntTuple, Shape: IntTuple]: ...
+class Variadic[*Ts]: ...
+class Dependent[Shape: IntTuple, Copy = Shape]: ...
+class Constrained[Shape: (IntTuple, tuple[int, ...])]: ...
+class OrdinaryTuple[Shape: tuple[int, ...]]: ...
+class FlagArray[Shape: Flag[tuple[int, ...]]]:
+    def __init__(self, shape: Shape) -> None: ...
+
+def f(
+    concrete: Float[Array[int, IntTuple[5]], "3 4"],
+    concrete_bad_shape: Float[Array[int, IntTuple[5]], 123],
+    no_shape: Float[NoShape[int], 123],
+    ambiguous: Float[Ambiguous[IntTuple, IntTuple], "3 4"],
+    one_gradual: Float[Multiple[IntTuple[7], IntTuple], "3 4"],
+    variadic: Float[Variadic[int, str], "3 4"],
+    dependent: Float[Dependent[IntTuple], "3 4"],
+    constrained: Float[Constrained[IntTuple], "3 4"],
+    ordinary_tuple: Float[OrdinaryTuple[tuple[int, ...]], 123],
+    flag: Float[FlagArray[Any], "3 4"],
+) -> None:
+    assert_type(concrete, Array[int, IntTuple[5]])
+    assert_type(concrete_bad_shape, Array[int, IntTuple[5]])
+    assert_type(no_shape, NoShape[int])
+    assert_type(ambiguous, Ambiguous[IntTuple, IntTuple])
+    assert_type(one_gradual, Multiple[IntTuple[7], IntTuple[3, 4]])
+    assert_type(variadic, Variadic[int, str])
+    assert_type(dependent, Dependent[IntTuple])
+    assert_type(constrained, Constrained[IntTuple])
+    assert_type(ordinary_tuple, OrdinaryTuple[tuple[int, ...]])
+    assert_type(flag, FlagArray[Any])
+
+# Ordinary generic classes do not carry jaxtyping/native syntax provenance, so
+# equivalent spellings may coexist in one signature.
+def mixed(
+    native: Array[int, IntTuple[2]],
+    jaxtyping: Float[Array[int, IntTuple], "2"],
+) -> None:
+    assert_type(native, Array[int, IntTuple[2]])
+    assert_type(jaxtyping, Array[int, IntTuple[2]])
+"#,
+);
+
+testcase!(
+    test_jaxtyping_ordinary_generic_preserves_base_diagnostics,
+    {
+        let mut env = shaped_array_env();
+        add_jaxtyping(&mut env);
+        env
+    },
+    r#"
+from jaxtyping import Float
+from shape_extensions import IntTuple
+
+class Array[DType, Shape: IntTuple]: ...
+
+def f(
+    invalid_other: Float[Array[Missing, IntTuple], "2"],  # E: Could not find name `Missing`
+    excess: Float[Array[int, IntTuple, str], "2"],  # E: Expected 2 type arguments for `Array`, got 3
+) -> None: ...
+"#,
+);
+
+testcase!(
+    test_jaxtyping_ordinary_generic_implicit_shapes_solve_at_calls,
+    {
+        let mut env = shaped_array_env();
+        add_jaxtyping(&mut env);
+        env
+    },
+    r#"
+from jaxtyping import Float
+from shape_extensions import IntTuple
+from typing import assert_type
+
+class Array[DType, Shape: IntTuple]: ...
+
+def named_identity(
+    value: Float[Array[int, IntTuple], "size"],
+) -> Float[Array[int, IntTuple], "size"]:
+    return value
+
+def variadic_identity(
+    value: Float[Array[int, IntTuple], "*shape"],
+) -> Float[Array[int, IntTuple], "*shape"]:
+    return value
+
+def call(
+    vector: Array[int, IntTuple[7]],
+    matrix: Array[int, IntTuple[2, 3]],
+) -> None:
+    assert_type(named_identity(vector), Array[int, IntTuple[7]])
+    assert_type(variadic_identity(matrix), Array[int, IntTuple[2, 3]])
+"#,
+);
+
+testcase!(
+    test_jaxtyping_ordinary_generic_nested_implicit_shapes_solve_at_calls,
+    {
+        let mut env = shaped_array_env();
+        add_jaxtyping(&mut env);
+        env
+    },
+    r#"
+from collections.abc import Callable
+from jaxtyping import Float
+from shape_extensions import IntTuple
+from typing import assert_type
+
+class Array[DType, Shape: IntTuple]: ...
+
+def optional_identity(
+    value: Float[Array[int, IntTuple], "size"] | None,
+) -> Float[Array[int, IntTuple], "size"] | None:
+    return value
+
+def tuple_identity(
+    value: tuple[Float[Array[int, IntTuple], "size"]],
+) -> Float[Array[int, IntTuple], "size"]:
+    return value[0]
+
+def callable_identity(
+    callback: Callable[[], Float[Array[int, IntTuple], "*shape"]],
+) -> Float[Array[int, IntTuple], "*shape"]:
+    return callback()
+
+def shaped_identity(
+    value: Float[Array[int, IntTuple], "size"],
+) -> Float[Array[int, IntTuple], "size"]:
+    return value
+
+def returns_shaped_identity():
+    return shaped_identity
+
+def returns_matrix() -> Array[int, IntTuple[2, 3]]: ...
+
+def call(
+    vector: Array[int, IntTuple[7]],
+) -> None:
+    assert_type(optional_identity(vector), Array[int, IntTuple[7]] | None)
+    assert_type(tuple_identity((vector,)), Array[int, IntTuple[7]])
+    assert_type(callable_identity(returns_matrix), Array[int, IntTuple[2, 3]])
+    assert_type(returns_shaped_identity()(vector), Array[int, IntTuple[7]])
+"#,
+);
+
+testcase!(
+    test_jaxtyping_generic_type_aliases_do_not_activate,
+    {
+        let mut env = shaped_array_env();
+        add_jaxtyping(&mut env);
+        env.enable_implicit_any_error()
+    },
+    r#"
+from jaxtyping import Float
+from shape_extensions import IntTuple
+from typing import assert_type
+
+class Array[DType, Shape: IntTuple]: ...
+type Alias[Renamed: IntTuple] = Array[int, Renamed]
+
+def f(
+    explicit: Float[Alias[IntTuple], "2"],
+    bare: Float[Alias, "2"],  # E: Cannot determine the type parameter `Renamed`
+) -> None:
+    assert_type(explicit, Alias[IntTuple])
+"#,
+);
+
+testcase!(
+    test_jaxtyping_imported_ordinary_class_activates,
+    {
+        let mut env = shaped_array_env();
+        add_jaxtyping(&mut env);
+        env.add_with_path(
+            "arrays",
+            "arrays.pyi",
+            r#"
+from shape_extensions import IntTuple
+
+class Array[DType, Shape: IntTuple]: ...
+"#,
+        );
+        env
+    },
+    r#"
+from arrays import Array as ImportedArray
+from jaxtyping import Float
+from shape_extensions import IntTuple
+from typing import assert_type
+
+def f(value: Float[ImportedArray[int, IntTuple], "2 3"]) -> None:
+    assert_type(value, ImportedArray[int, IntTuple[2, 3]])
+"#,
+);
+
+testcase!(
+    test_jaxtyping_shape_argument_satisfies_implicit_any_diagnostic,
+    shaped_array_env_with_shaped_torch_and_jaxtyping().enable_implicit_any_error(),
+    r#"
+from jaxtyping import Float
+from shape_extensions import IntTuple
+from torch import Tensor
+from typing import Any, assert_type
+
+class Array[DType, Shape: IntTuple]: ...
+class ShapeFirstArray[Shape: IntTuple, DType]: ...
+
+def f(
+    legacy: Float[Tensor, "2"],
+    ordinary_bare: Float[Array, "2"],  # E: Cannot determine the type parameter `DType`
+    shape_first: Float[ShapeFirstArray, "2"],  # E: Cannot determine the type parameter `DType`
+) -> None:
+    assert_type(ordinary_bare, Array[Any, IntTuple[2]])
+    assert_type(shape_first, ShapeFirstArray[IntTuple[2], Any])
 "#,
 );
 
@@ -7294,7 +7557,7 @@ from jaxtyping import Integer, Key, Real
 import jaxtyping
 import jaxtyping as jt
 from torch import Tensor
-from typing import assert_type, reveal_type
+from typing import assert_type, Callable, reveal_type
 
 def f(
     x: Float[Tensor, "batch channels"],
@@ -7325,6 +7588,43 @@ def check_nontrivial_shape_syntax(
 
 def bad_shape(x: Float[Tensor, 123]) -> None:  # E: Second argument to jaxtyping annotation must be a string literal
     pass
+
+def mixed_syntax(  # E: Cannot mix native tensor syntax
+    native: Tensor[[2]],
+    jaxtyping: Float[Tensor, "2"],
+) -> None: ...
+
+def mixed_syntax_in_unions(  # E: Cannot mix native tensor syntax
+    native: Tensor[[2]] | None,
+    jaxtyping: Float[Tensor, "2"] | None,
+) -> None: ...
+
+def mixed_syntax_in_tuples(  # E: Cannot mix native tensor syntax
+    native: tuple[Tensor[[2]]],
+    jaxtyping: tuple[Float[Tensor, "2"]],
+) -> None: ...
+
+def mixed_syntax_in_callables(  # E: Cannot mix native tensor syntax
+    native: Callable[[Tensor[[2]]], None],
+    jaxtyping: Callable[[Float[Tensor, "2"]], None],
+) -> None: ...
+
+def named_identity(
+    value: Float[Tensor, "size"],
+) -> Float[Tensor, "size"]:
+    return value
+
+def variadic_identity(
+    value: Float[Tensor, "*shape"],
+) -> Float[Tensor, "*shape"]:
+    return value
+
+def call(
+    vector: Tensor[[7]],
+    matrix: Tensor[[2, 3]],
+) -> None:
+    assert_type(named_identity(vector), Tensor[[7]])
+    assert_type(variadic_identity(matrix), Tensor[[2, 3]])
 "#,
 );
 

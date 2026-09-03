@@ -152,6 +152,19 @@ impl ErrorCollector {
         }
     }
 
+    /// Add the errors from another collector that satisfy `keep`.
+    pub(crate) fn extend_filtered(
+        &self,
+        other: ErrorCollector,
+        mut keep: impl FnMut(&Error) -> bool,
+    ) {
+        if self.is_active() {
+            let mut other = other.errors.into_inner();
+            other.items.retain(|error| keep(error));
+            self.errors.lock().extend(other);
+        }
+    }
+
     /// Start building an error. Returns a no-op builder if style is Never.
     pub fn error_builder(
         &self,

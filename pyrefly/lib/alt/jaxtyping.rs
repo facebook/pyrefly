@@ -11,7 +11,14 @@
 //! annotations like `Float[Tensor, "batch channels"]`. Static jaxtyping stubs
 //! expose dtype wrappers (Float, Int, Shaped, etc.) as `Annotated` aliases.
 //! Pyrefly uses those wrappers only as markers for jaxtyping shape syntax; it
-//! does not model dtype refinements.
+//! does not model dtype refinements. The parsed shape is applied either to a
+//! legacy `@shaped_array` class or to the unique gradual `IntTuple`-bounded
+//! type argument of an ordinary generic class. Ordinary classes with defaults
+//! that depend on that shape parameter are not expanded yet, because replacing
+//! the shape without re-instantiating the dependent defaults would leave stale
+//! type arguments. Generic type aliases are also left to normal `Annotated`
+//! handling because alias parameters do not retain a stable one-to-one identity
+//! with the expanded class parameters.
 //!
 //! ## Shape string syntax
 //!
@@ -35,11 +42,12 @@
 //! and adds them to the function's `Forall` wrapper so they participate in
 //! type inference.
 //!
-//! ## Mixed syntax detection
+//! ## Legacy mixed syntax detection
 //!
-//! Native (`Tensor[N, M]`) and jaxtyping (`Float[Tensor, "N M"]`) syntax
-//! cannot be mixed in the same function. This module detects and reports
-//! such mixing.
+//! Native (`Tensor[N, M]`) and jaxtyping (`Float[Tensor, "N M"]`) syntax for
+//! legacy decorated shaped arrays cannot be mixed in the same function. This
+//! module detects and reports such mixing. Ordinary generic classes lower both
+//! spellings to the same `ClassType`, so they may be mixed.
 
 use std::sync::Arc;
 
@@ -49,10 +57,12 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::Int;
+use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::shaped_array::ShapedArraySyntax;
 use pyrefly_types::shaped_array::ShapedArrayType;
+use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TParams;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -71,6 +81,7 @@ use crate::binding::binding::Key;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::types::AnyStyle;
+use crate::types::types::Forallable;
 use crate::types::types::Type;
 
 const JAXTYPING_WRAPPERS: &[&str] = &[
@@ -100,6 +111,14 @@ const JAXTYPING_WRAPPERS: &[&str] = &[
     "Complex128",
     "Inexact",
 ];
+
+enum JaxtypingTarget {
+    LegacyShapedArray(ClassType),
+    Generic {
+        base_class: ClassType,
+        shape_arg_index: usize,
+    },
+}
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Check if an expression resolves to one of jaxtyping's public dtype wrappers.
@@ -196,17 +215,125 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if xs.is_empty() || !self.solver().tensor_shapes || !self.is_jaxtyping_wrapper_expr(value) {
             return None;
         }
-        let base_class = self.jaxtyping_shaped_array_base(&xs[0])?;
-        Some(self.parse_jaxtyping_annotation(xs, base_class, range, errors))
+        let base_head = match &xs[0] {
+            Expr::Subscript(subscript) => subscript.value.as_ref(),
+            base => base,
+        };
+        let (base_is_type_alias, bare_class) = match self
+            .expr_infer(base_head, &self.error_swallower())
+        {
+            Type::TypeAlias(_) => (true, None),
+            Type::Forall(forall) if matches!(forall.body, Forallable::TypeAlias(_)) => (true, None),
+            Type::ClassDef(cls) if !matches!(xs[0], Expr::Subscript(_)) => (false, Some(cls)),
+            _ => (false, None),
+        };
+        let base_errors = self.error_collector();
+        let target = self.jaxtyping_target(&xs[0], base_is_type_alias, &base_errors)?;
+        let shape_parameter = match &target {
+            JaxtypingTarget::LegacyShapedArray(base_class) => {
+                self.shaped_array_shape_for_class_type(base_class)
+            }
+            JaxtypingTarget::Generic {
+                base_class,
+                shape_arg_index,
+            } => base_class.tparams().iter().nth(*shape_arg_index).cloned(),
+        };
+        let base_range = xs[0].range();
+        if let (Some(shape_parameter), Some(bare_class)) = (shape_parameter, bare_class) {
+            errors.extend_filtered(base_errors, |error| {
+                error.error_kind() != ErrorKind::ImplicitAnyTypeArgument
+                    || error.range() != base_range
+            });
+            self.promote_ignoring_implicit_any_for(
+                &bare_class,
+                base_range,
+                errors,
+                &shape_parameter,
+            );
+        } else {
+            errors.extend(base_errors);
+        }
+        Some(self.parse_jaxtyping_annotation(xs, target, range, errors))
     }
 
-    fn jaxtyping_shaped_array_base(&self, base_expr: &Expr) -> Option<ClassType> {
-        let silent_errors = self.error_swallower();
-        match self.expr_untype(base_expr, TypeFormContext::type_argument(), &silent_errors) {
-            Type::ShapedArray(shaped_array_type) if shaped_array_type.is_shapeless() => {
-                Some(shaped_array_type.base_class.clone())
+    fn jaxtyping_target(
+        &self,
+        base_expr: &Expr,
+        base_is_type_alias: bool,
+        errors: &ErrorCollector,
+    ) -> Option<JaxtypingTarget> {
+        match self.expr_untype(base_expr, TypeFormContext::type_argument(), errors) {
+            Type::ShapedArray(shaped_array_type) if shaped_array_type.is_shapeless() => Some(
+                JaxtypingTarget::LegacyShapedArray(shaped_array_type.base_class.clone()),
+            ),
+            Type::ClassType(base_class) if !base_is_type_alias => {
+                self.jaxtyping_generic_target(base_class)
             }
             _ => None,
+        }
+    }
+
+    fn jaxtyping_generic_target(&self, base_class: ClassType) -> Option<JaxtypingTarget> {
+        let shape_arg_index = {
+            let mut candidates =
+                base_class
+                    .targs()
+                    .iter_paired()
+                    .enumerate()
+                    .filter(|(_, (param, arg))| {
+                        param.kind() == QuantifiedKind::TypeVar
+                            && matches!(param.restriction(), Restriction::Bound(Type::IntTuple(_)))
+                            && (matches!(arg, Type::Any(AnyStyle::Explicit | AnyStyle::Implicit))
+                                || IntTuple::from_shape_arg_or_tuple_carrier(arg)
+                                    .is_some_and(|shape| shape.is_shapeless()))
+                    });
+            let (shape_arg_index, (shape_param, _)) = candidates.next()?;
+            if candidates.next().is_some() {
+                return None;
+            }
+            let has_dependent_default = base_class
+                .tparams()
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != shape_arg_index)
+                .filter_map(|(_, param)| param.default())
+                .any(|default| {
+                    let mut depends_on_shape = false;
+                    default.for_each_quantified(&mut |q| depends_on_shape |= q == shape_param);
+                    depends_on_shape
+                });
+            if has_dependent_default {
+                return None;
+            }
+            shape_arg_index
+        };
+        Some(JaxtypingTarget::Generic {
+            base_class,
+            shape_arg_index,
+        })
+    }
+
+    fn jaxtyping_target_type(&self, target: JaxtypingTarget, shape: IntTuple) -> Type {
+        match target {
+            JaxtypingTarget::LegacyShapedArray(base_class) => {
+                self.jaxtyping_shaped_array_type(base_class, shape)
+            }
+            JaxtypingTarget::Generic {
+                mut base_class,
+                shape_arg_index,
+            } => {
+                base_class.targs_mut().as_mut()[shape_arg_index] = shape.to_shape_arg_type();
+                base_class.to_type()
+            }
+        }
+    }
+
+    fn jaxtyping_variadic_kind(&self, target: &JaxtypingTarget) -> Option<QuantifiedKind> {
+        match target {
+            JaxtypingTarget::LegacyShapedArray(base_class) => self
+                .shaped_array_shape_for_class_type(base_class)
+                .map(|shape_param| shape_param.kind()),
+            JaxtypingTarget::Generic { .. } => Some(QuantifiedKind::TypeVar),
         }
     }
 
@@ -258,7 +385,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn parse_jaxtyping_annotation(
         &self,
         xs: &[Expr],
-        base_class: ClassType,
+        target: JaxtypingTarget,
         range: TextRange,
         errors: &ErrorCollector,
     ) -> Type {
@@ -294,7 +421,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if tokens.is_empty() {
             // Empty shape string means scalar tensor (rank 0), like Tensor[()]
             let shaped_array_shape = IntTuple::from_types(vec![]);
-            return self.jaxtyping_shaped_array_type(base_class, shaped_array_shape);
+            return self.jaxtyping_target_type(target, shaped_array_shape);
         }
 
         // Find variadic token: "*name", "*#name", or "...".
@@ -328,13 +455,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // Strip leading '*', then strip optional broadcast '#' prefix.
                 let var_name = &tokens[var_idx][1..];
                 let var_name = var_name.strip_prefix('#').unwrap_or(var_name);
-                let q = match self.shaped_array_shape_for_class_type(&base_class) {
-                    Some(shape_param) => match shape_param.kind() {
-                        QuantifiedKind::TypeVar | QuantifiedKind::IntVar => self
-                            .get_or_create_jaxtyping_variadic_shape(
-                                Name::new(var_name),
-                                shape_param.kind(),
-                            ),
+                let q = match self.jaxtyping_variadic_kind(&target) {
+                    Some(kind) => match kind {
+                        QuantifiedKind::TypeVar | QuantifiedKind::IntVar => {
+                            self.get_or_create_jaxtyping_variadic_shape(Name::new(var_name), kind)
+                        }
                         QuantifiedKind::TypeVarTuple => unreachable!(
                             "shaped-array metadata validation rejects TypeVarTuple shape parameters"
                         ),
@@ -351,12 +476,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             };
 
             let shaped_array_shape = IntTuple::unpacked_from_types(prefix, middle, suffix);
-            self.jaxtyping_shaped_array_type(base_class, shaped_array_shape)
+            self.jaxtyping_target_type(target, shaped_array_shape)
         } else {
             // Concrete shape: all tokens are non-variadic dims
             let dims = self.parse_jaxtyping_dim_tokens(&tokens);
             let shaped_array_shape = IntTuple::from_types(dims);
-            self.jaxtyping_shaped_array_type(base_class, shaped_array_shape)
+            self.jaxtyping_target_type(target, shaped_array_shape)
         }
     }
 
@@ -454,7 +579,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     /// Collect implicit jaxtyping TypeVars from a callable's signature and
     /// extend `tparams` with them. Also detects and reports mixing of native
-    /// and jaxtyping tensor annotation syntax in the same function.
+    /// and jaxtyping syntax for legacy decorated shaped arrays in the same function.
     ///
     /// Returns the (potentially extended) `TParams` to use for the function's
     /// `Forall` wrapper.
@@ -469,27 +594,40 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return tparams.dupe();
         }
 
-        let mut jaxtyping_extras = Vec::new();
-        let mut has_native = false;
-        let mut has_jaxtyping = false;
-        // Visit all types in the callable (params + return) to find jaxtyping
-        // Quantified types and detect mixed tensor annotation syntax.
-        callable.visit(&mut |ty: &Type| {
-            if let Type::Quantified(q) = ty
-                && self.is_jaxtyping_quantified(q)
-                && !tparams.iter().any(|existing| existing == q.as_ref())
-                && !jaxtyping_extras.contains(q.as_ref())
-            {
-                jaxtyping_extras.push(q.as_ref().clone());
-            }
+        fn collect_shape_syntax(ty: &Type, has_native: &mut bool, has_jaxtyping: &mut bool) {
             if let Type::ShapedArray(shaped_array_type) = ty
                 && !shaped_array_type.is_shapeless()
             {
                 match shaped_array_type.syntax {
-                    ShapedArraySyntax::Native => has_native = true,
-                    ShapedArraySyntax::Jaxtyping => has_jaxtyping = true,
+                    ShapedArraySyntax::Native => *has_native = true,
+                    ShapedArraySyntax::Jaxtyping => *has_jaxtyping = true,
                 }
+                return;
             }
+            ty.recurse(&mut |nested| collect_shape_syntax(nested, has_native, has_jaxtyping));
+        }
+
+        let mut jaxtyping_extras = Vec::new();
+        let mut has_native = false;
+        let mut has_jaxtyping = false;
+        let mut collect_implicit = |q: &Quantified| {
+            if self.is_jaxtyping_quantified(q)
+                && !tparams.iter().any(|existing| existing == q)
+                && !jaxtyping_extras.contains(q)
+            {
+                jaxtyping_extras.push(q.clone());
+            }
+        };
+        // Visit all types in the callable (params + return) to find jaxtyping
+        // Quantified types and detect mixed tensor annotation syntax.
+        callable.visit(&mut |ty: &Type| {
+            // `Visit<Type>` exposes the callable's top-level types, while dimensions
+            // inside `IntTuple` are stored as `Int::Symbolic(Type)`. Use the semantic
+            // type-variable traversal so wrappers such as unions, tuples, and callables
+            // cannot hide an implicit jaxtyping variable. Quantifieds owned by a nested
+            // `Forall` belong to that generic value and must not be hoisted into this callable.
+            ty.for_each_free_quantified(&mut collect_implicit);
+            collect_shape_syntax(ty, &mut has_native, &mut has_jaxtyping);
         });
         if has_native && has_jaxtyping {
             self.error(
