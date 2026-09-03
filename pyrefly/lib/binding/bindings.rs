@@ -1026,6 +1026,17 @@ impl<'a> BindingsBuilder<'a> {
         self.table.get_mut::<K>().1.get_mut(idx)
     }
 
+    pub fn mark_reassigned_classmethod(&mut self, function_idx: Idx<KeyDecoratedFunction>) {
+        let undecorated_idx = self
+            .idx_to_binding(function_idx)
+            .expect("a function flow binding has a decorated function")
+            .undecorated_idx;
+        self.idx_to_binding_mut(undecorated_idx)
+            .expect("a decorated function has an undecorated function")
+            .def
+            .is_reassigned_classmethod = true;
+    }
+
     /// Declare a `Key` as a usage, which can be used for name lookups. Like `idx_for_promise`,
     /// this is a promise to later provide a `Binding` corresponding this key.
     pub fn declare_current_idx(&mut self, key: Key) -> CurrentIdx {
