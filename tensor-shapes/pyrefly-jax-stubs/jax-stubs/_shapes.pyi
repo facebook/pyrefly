@@ -5,6 +5,7 @@
 
 import shape_extensions.dsl as dsl
 from shape_extensions import (
+    broadcast,
     gufunc_broadcast,
     Int,
     IntTuple,
@@ -220,52 +221,19 @@ def rfftfreq_shape(n: int) -> IntTuple:
 
 @type_shape_dsl_function
 def lax_broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
-    if len(left) == 0:
-        return right
-    if len(right) == 0:
-        return left
-    if len(left) != len(right):
+    if len(left) != 0 and len(right) != 0 and len(left) != len(right):
         return dsl.Invalid("arrays must have the same number of dimensions")
-    if any(
-        left[i] != right[i] and left[i] != 1 and right[i] != 1 for i in range(len(left))
-    ):
-        return dsl.Invalid("incompatible shapes for broadcasting")
-    return dsl.IntTuple(
-        (right[i] if left[i] == 1 else left[i]) for i in range(len(left))
-    )
+    return broadcast(left, right)
 
 @type_shape_dsl_function
 def symmetric_product_shape(a_shape: IntTuple, c_shape: IntTuple) -> IntTuple:
     if len(a_shape) < 2 or len(c_shape) < 2:
         return dsl.Invalid("symmetric_product requires at least 2-D arrays")
-    m_a = a_shape[len(a_shape) - 2]
-    m_c1 = c_shape[len(c_shape) - 2]
-    m_c2 = c_shape[len(c_shape) - 1]
-    if m_c1 != m_c2:
-        return dsl.Invalid("c_matrix must be square")
-    if m_a != m_c1:
-        return dsl.Invalid(
-            "leading core dimensions of a_matrix and c_matrix must match"
-        )
-    batch_a = a_shape[: len(a_shape) - 2]
-    batch_c = c_shape[: len(c_shape) - 2]
-    if len(batch_a) == 0 and len(batch_c) == 0:
-        return dsl.IntTuple((m_a, m_a))
-    if len(batch_a) == 0:
-        return dsl.concat(batch_c, dsl.IntTuple((m_a, m_a)))
-    if len(batch_c) == 0:
-        return dsl.concat(batch_a, dsl.IntTuple((m_a, m_a)))
-    if len(batch_a) != len(batch_c):
+    if len(a_shape) != len(c_shape):
         return dsl.Invalid("arrays must have the same number of batch dimensions")
-    if any(
-        batch_a[i] != batch_c[i] and batch_a[i] != 1 and batch_c[i] != 1
-        for i in range(len(batch_a))
-    ):
-        return dsl.Invalid("incompatible batch shapes for broadcasting")
-    batch = dsl.IntTuple(
-        (batch_c[i] if batch_a[i] == 1 else batch_a[i]) for i in range(len(batch_a))
-    )
-    return dsl.concat(batch, dsl.IntTuple((m_a, m_a)))
+    operands = dsl.IntTuples((a_shape, c_shape))
+    spec = "(m,n),(m,m)->(m,m)"
+    return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
 def triangular_solve_shape(
@@ -273,37 +241,14 @@ def triangular_solve_shape(
 ) -> IntTuple:
     if len(a_shape) < 2 or len(b_shape) < 2:
         return dsl.Invalid("triangular_solve requires at least 2-D arrays")
-    m_a = a_shape[len(a_shape) - 2]
-    n_a = a_shape[len(a_shape) - 1]
-    if m_a != n_a:
-        return dsl.Invalid("a matrix must be square")
-    m_b = b_shape[len(b_shape) - 2]
-    n_b = b_shape[len(b_shape) - 1]
-    if left_side:
-        if m_a != m_b:
-            return dsl.Invalid("incompatible shapes for triangular_solve")
-    else:
-        if m_a != n_b:
-            return dsl.Invalid("incompatible shapes for triangular_solve")
-    batch_a = a_shape[: len(a_shape) - 2]
-    batch_b = b_shape[: len(b_shape) - 2]
-    if len(batch_a) == 0 and len(batch_b) == 0:
-        return dsl.IntTuple((m_b, n_b))
-    if len(batch_a) == 0:
-        return dsl.concat(batch_b, dsl.IntTuple((m_b, n_b)))
-    if len(batch_b) == 0:
-        return dsl.concat(batch_a, dsl.IntTuple((m_b, n_b)))
-    if len(batch_a) != len(batch_b):
+    if len(a_shape) != len(b_shape):
         return dsl.Invalid("arrays must have the same number of batch dimensions")
-    if any(
-        batch_a[i] != batch_b[i] and batch_a[i] != 1 and batch_b[i] != 1
-        for i in range(len(batch_a))
-    ):
-        return dsl.Invalid("incompatible batch shapes for broadcasting")
-    batch = dsl.IntTuple(
-        (batch_b[i] if batch_a[i] == 1 else batch_a[i]) for i in range(len(batch_a))
-    )
-    return dsl.concat(batch, dsl.IntTuple((m_b, n_b)))
+    operands = dsl.IntTuples((a_shape, b_shape))
+    if left_side:
+        spec = "(m,m),(m,n)->(m,n)"
+    else:
+        spec = "(n,n),(m,n)->(m,n)"
+    return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
 def cholesky_update_shape(r_shape: IntTuple, w_shape: IntTuple) -> IntTuple:
@@ -311,32 +256,11 @@ def cholesky_update_shape(r_shape: IntTuple, w_shape: IntTuple) -> IntTuple:
         return dsl.Invalid(
             "cholesky_update requires at least 2-D matrix and 1-D vector"
         )
-    n_r1 = r_shape[len(r_shape) - 2]
-    n_r2 = r_shape[len(r_shape) - 1]
-    if n_r1 != n_r2:
-        return dsl.Invalid("r_matrix must be square")
-    n_w = w_shape[len(w_shape) - 1]
-    if n_r1 != n_w:
-        return dsl.Invalid("r_matrix and w_vector dimensions must match")
-    batch_r = r_shape[: len(r_shape) - 2]
-    batch_w = w_shape[: len(w_shape) - 1]
-    if len(batch_r) == 0 and len(batch_w) == 0:
-        return dsl.IntTuple((n_r1, n_r1))
-    if len(batch_r) == 0:
-        return dsl.concat(batch_w, dsl.IntTuple((n_r1, n_r1)))
-    if len(batch_w) == 0:
-        return dsl.concat(batch_r, dsl.IntTuple((n_r1, n_r1)))
-    if len(batch_r) != len(batch_w):
+    if len(r_shape) - 2 != len(w_shape) - 1:
         return dsl.Invalid("arrays must have the same number of batch dimensions")
-    if any(
-        batch_r[i] != batch_w[i] and batch_r[i] != 1 and batch_w[i] != 1
-        for i in range(len(batch_r))
-    ):
-        return dsl.Invalid("incompatible batch shapes for broadcasting")
-    batch = dsl.IntTuple(
-        (batch_w[i] if batch_r[i] == 1 else batch_r[i]) for i in range(len(batch_r))
-    )
-    return dsl.concat(batch, dsl.IntTuple((n_r1, n_r1)))
+    operands = dsl.IntTuples((r_shape, w_shape))
+    spec = "(n,n),(n)->(n,n)"
+    return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
 def householder_product_shape(a_shape: IntTuple, taus_shape: IntTuple) -> IntTuple:
@@ -344,27 +268,11 @@ def householder_product_shape(a_shape: IntTuple, taus_shape: IntTuple) -> IntTup
         return dsl.Invalid(
             "householder_product requires at least 2-D matrix and 1-D taus"
         )
-    batch_a = a_shape[: len(a_shape) - 2]
-    batch_t = taus_shape[: len(taus_shape) - 1]
-    m = a_shape[len(a_shape) - 2]
-    n = a_shape[len(a_shape) - 1]
-    if len(batch_a) == 0 and len(batch_t) == 0:
-        return dsl.IntTuple((m, n))
-    if len(batch_a) == 0:
-        return dsl.concat(batch_t, dsl.IntTuple((m, n)))
-    if len(batch_t) == 0:
-        return dsl.concat(batch_a, dsl.IntTuple((m, n)))
-    if len(batch_a) != len(batch_t):
+    if len(a_shape) - 2 != len(taus_shape) - 1:
         return dsl.Invalid("arrays must have the same number of batch dimensions")
-    if any(
-        batch_a[i] != batch_t[i] and batch_a[i] != 1 and batch_t[i] != 1
-        for i in range(len(batch_a))
-    ):
-        return dsl.Invalid("incompatible batch shapes for broadcasting")
-    batch = dsl.IntTuple(
-        (batch_t[i] if batch_a[i] == 1 else batch_a[i]) for i in range(len(batch_a))
-    )
-    return dsl.concat(batch, dsl.IntTuple((m, n)))
+    operands = dsl.IntTuples((a_shape, taus_shape))
+    spec = "(m,n),(k)->(m,n)"
+    return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
 def ormqr_shape(a_shape: IntTuple, taus_shape: IntTuple, c_shape: IntTuple) -> IntTuple:
@@ -388,32 +296,16 @@ def tridiagonal_solve_shape(
         return dsl.Invalid(
             "tridiagonal_solve requires at least 1-D diagonals and 2-D b"
         )
-    n_dl = dl_shape[len(dl_shape) - 1]
-    n_d = d_shape[len(d_shape) - 1]
-    n_du = du_shape[len(du_shape) - 1]
-    n_b = b_shape[len(b_shape) - 2]
-    k_b = b_shape[len(b_shape) - 1]
-    if n_dl != n_d or n_du != n_d or n_b != n_d:
-        return dsl.Invalid("tridiagonal_solve dimension mismatch")
-    batch_dl = dl_shape[: len(dl_shape) - 1]
-    batch_b = b_shape[: len(b_shape) - 2]
-    if len(batch_dl) == 0 and len(batch_b) == 0:
-        return dsl.IntTuple((n_d, k_b))
-    if len(batch_dl) == 0:
-        return dsl.concat(batch_b, dsl.IntTuple((n_d, k_b)))
-    if len(batch_b) == 0:
-        return dsl.concat(batch_dl, dsl.IntTuple((n_d, k_b)))
-    if len(batch_dl) != len(batch_b):
-        return dsl.Invalid("arrays must have the same number of batch dimensions")
-    if any(
-        batch_dl[i] != batch_b[i] and batch_dl[i] != 1 and batch_b[i] != 1
-        for i in range(len(batch_dl))
+    b_rank = len(b_shape) - 2
+    if (
+        len(dl_shape) - 1 != b_rank
+        or len(d_shape) - 1 != b_rank
+        or len(du_shape) - 1 != b_rank
     ):
-        return dsl.Invalid("incompatible batch shapes for broadcasting")
-    batch = dsl.IntTuple(
-        (batch_b[i] if batch_dl[i] == 1 else batch_dl[i]) for i in range(len(batch_dl))
-    )
-    return dsl.concat(batch, dsl.IntTuple((n_d, k_b)))
+        return dsl.Invalid("arrays must have the same number of batch dimensions")
+    operands = dsl.IntTuples((dl_shape, d_shape, du_shape, b_shape))
+    spec = "(n),(n),(n),(n,k)->(n,k)"
+    return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
 def hessenberg_taus_shape(a_shape: IntTuple) -> IntTuple:
