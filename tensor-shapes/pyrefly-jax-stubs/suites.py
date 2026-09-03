@@ -36,6 +36,7 @@ def _suites() -> list[Suite]:
         Suite(
             name=path.stem.removeprefix("test_").replace("_", "-"),
             patterns=(f"test/{path.name}",),
+            extra_search_paths=(_PACKAGE_ROOT.parent / "pyrefly-numpy-stubs",),
             expectations=True,
         )
         for path in paths
