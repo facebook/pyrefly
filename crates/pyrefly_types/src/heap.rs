@@ -56,6 +56,7 @@ use crate::types::Overload;
 use crate::types::SuperObj;
 use crate::types::Type;
 use crate::types::Union;
+use crate::types::UnionDisplay;
 use crate::types::Var;
 
 /// Global factory for producing unique heap identifiers.
@@ -146,18 +147,20 @@ impl TypeHeap {
 
     /// Create a `Type::Union` from members.
     pub fn mk_union(&self, members: Vec<Type>) -> Type {
-        Type::Union(Box::new(Union {
-            members,
-            display_name: None,
-        }))
+        Type::Union(Box::new(Union::new(members)))
     }
 
     /// Create a `Type::Union` with a display name.
     pub fn mk_union_with_name(&self, members: Vec<Type>, display_name: (ModuleName, Name)) -> Type {
-        Type::Union(Box::new(Union {
+        Type::Union(Box::new(Union::with_display(
             members,
-            display_name: Some(display_name),
-        }))
+            UnionDisplay::new(display_name, Box::new([])),
+        )))
+    }
+
+    /// Create a `Type::Union` with structured presentation metadata.
+    pub fn mk_union_with_display(&self, members: Vec<Type>, display: UnionDisplay) -> Type {
+        Type::Union(Box::new(Union::with_display(members, display)))
     }
 
     /// Create a `Type::Callable` from params and return type.

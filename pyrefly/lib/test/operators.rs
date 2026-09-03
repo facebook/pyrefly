@@ -29,8 +29,8 @@ Allowed = Literal["a", "b", "c"]
 d: dict[Allowed, int] = {"a": 0, "b": 0}
 e: dict[Allowed, int] = d | {"c": 0}
 d |= {"c": 0}
-bad_key: dict[Allowed, int] = d | {"not-allowed": 0}  # E: `dict[Literal['a', 'b', 'c'] | str, int]` is not assignable to `dict[Allowed, int]`
-bad_value: dict[Allowed, int] = d | {"a": "not-an-int"}  # E: `dict[Literal['a', 'b', 'c'] | str, int | str]` is not assignable to `dict[Allowed, int]`
+bad_key: dict[Allowed, int] = d | {"not-allowed": 0}  # E: `dict[Allowed | str, int]` is not assignable to `dict[Allowed, int]`
+bad_value: dict[Allowed, int] = d | {"a": "not-an-int"}  # E: `dict[Allowed | str, int | str]` is not assignable to `dict[Allowed, int]`
     "#,
 );
 
