@@ -7233,6 +7233,26 @@ def f(
 "#,
 );
 
+testcase!(
+    bug = "jaxtyping shapes require @shaped_array",
+    test_jaxtyping_undecorated_inttuple_generic_ignores_shape,
+    {
+        let mut env = shaped_array_env();
+        add_jaxtyping(&mut env);
+        env
+    },
+    r#"
+from jaxtyping import Float
+from shape_extensions import IntTuple
+from typing import assert_type
+
+class Array[DType, Shape: IntTuple]: ...
+
+def f(x: Float[Array[int, IntTuple], "3 4"]) -> None:
+    assert_type(x, Array[int, IntTuple])
+"#,
+);
+
 #[test]
 fn test_tensor_shapes_semantically_inert_without_shape_extensions() -> anyhow::Result<()> {
     let contents = r#"
