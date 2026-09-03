@@ -883,8 +883,8 @@ class Box(Generic[N]): ...
 }
 
 #[test]
-fn test_jaxtyping_dim_cache_distinguishes_kinds() {
-    // The per-module jaxtyping dim cache must key on `QuantifiedKind`, not just the
+fn test_jaxtyping_quantified_cache_distinguishes_kinds() {
+    // The per-module jaxtyping quantified cache must key on `QuantifiedKind`, not just the
     // name. The same dimension name legitimately arrives as a scalar dim (`TypeVar`)
     // and as a variadic `*name` (`TypeVarTuple`); if the cache dropped the kind,
     // whichever kind was requested first would be cached and returned for both,
@@ -895,12 +895,12 @@ fn test_jaxtyping_dim_cache_distinguishes_kinds() {
     let main = handle("main");
     let (type_var, type_var_tuple) = state
         .transaction()
-        .ad_hoc_solve(&main, "test_jaxtyping_dim_cache", |solver| {
+        .ad_hoc_solve(&main, "test_jaxtyping_quantified_cache", |solver| {
             let name = Name::new("batch");
             let type_var =
-                solver.get_or_create_jaxtyping_dim(name.clone(), QuantifiedKind::TypeVar);
+                solver.get_or_create_jaxtyping_dimension(name.clone(), QuantifiedKind::TypeVar);
             let type_var_tuple =
-                solver.get_or_create_jaxtyping_dim(name, QuantifiedKind::TypeVarTuple);
+                solver.get_or_create_jaxtyping_dimension(name, QuantifiedKind::TypeVarTuple);
             (type_var, type_var_tuple)
         })
         .expect("ad_hoc_solve should succeed for the `main` module");
@@ -7370,7 +7370,7 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
 );
 
 testcase!(
-    test_jaxtyping_inttuple_carrier_shapes,
+    test_jaxtyping_inttuple_shape_parameters,
     {
         let mut env = shaped_array_env();
         add_jaxtyping(&mut env);
@@ -7392,9 +7392,9 @@ from jaxtyping import Float
 from tclib import Array
 from typing import Literal, reveal_type
 
-# Jaxtyping shape annotations work on a TypeVar (IntTuple) shape carrier, not just
-# on torch's TypeVarTuple `*Shape`. The concrete case exercises the tuple-carrier
-# sync path and the `*name` case exercises the synthesized shape-carrier TypeVar.
+# Jaxtyping shape annotations work on a TypeVar (`IntTuple`) shape parameter, not just
+# on torch's TypeVarTuple `*Shape`. The concrete case exercises shape-argument
+# synchronization and the `*name` case exercises the synthesized variadic-shape TypeVar.
 def concrete(x: Float[Array, "3 4"]) -> None:
     reveal_type(x)  # E: revealed type: Shaped[Array, "3 4"]
 

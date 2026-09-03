@@ -210,10 +210,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// Build a jaxtyping-syntax `ShapedArrayType` and synchronize the tuple carrier.
+    /// Build a jaxtyping-syntax `ShapedArrayType` and synchronize its shape argument.
     ///
     /// For shaped arrays whose shape parameter is a `TypeVar` or `IntVar`, the
-    /// carrier type argument on `base_class` is updated to reflect `shape` so that
+    /// shape type argument on `base_class` is updated to reflect `shape` so that
     /// shape-aware operations (e.g. `.shape` access, generic return reprojection)
     /// remain coherent with the jaxtyping annotation.
     fn jaxtyping_shaped_array_type(&self, mut base_class: ClassType, shape: IntTuple) -> Type {
@@ -331,7 +331,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let q = match self.shaped_array_shape_for_class_type(&base_class) {
                     Some(shape_param) => match shape_param.kind() {
                         QuantifiedKind::TypeVar | QuantifiedKind::IntVar => self
-                            .get_or_create_jaxtyping_shape_carrier(
+                            .get_or_create_jaxtyping_variadic_shape(
                                 Name::new(var_name),
                                 shape_param.kind(),
                             ),
@@ -342,7 +342,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             "shaped-array metadata validation rejects ParamSpec shape parameters"
                         ),
                     },
-                    None => self.get_or_create_jaxtyping_dim(
+                    None => self.get_or_create_jaxtyping_dimension(
                         Name::new(var_name),
                         QuantifiedKind::TypeVarTuple,
                     ),
@@ -400,7 +400,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
 
                 // Named dimension: "batch", "channels", etc.
-                let q = self.get_or_create_jaxtyping_dim(Name::new(token), QuantifiedKind::IntVar);
+                let q = self
+                    .get_or_create_jaxtyping_dimension(Name::new(token), QuantifiedKind::IntVar);
                 Type::Quantified(Box::new(q))
             })
             .collect()
@@ -433,7 +434,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if let Ok(n) = s.parse::<i64>() {
                 self.heap.mk_int(Int::literal(n))
             } else {
-                let q = self.get_or_create_jaxtyping_dim(Name::new(s), QuantifiedKind::IntVar);
+                let q =
+                    self.get_or_create_jaxtyping_dimension(Name::new(s), QuantifiedKind::IntVar);
                 Type::Quantified(Box::new(q))
             }
         };
@@ -474,7 +476,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Quantified types and detect mixed tensor annotation syntax.
         callable.visit(&mut |ty: &Type| {
             if let Type::Quantified(q) = ty
-                && self.is_jaxtyping_dim(q)
+                && self.is_jaxtyping_quantified(q)
                 && !tparams.iter().any(|existing| existing == q.as_ref())
                 && !jaxtyping_extras.contains(q.as_ref())
             {

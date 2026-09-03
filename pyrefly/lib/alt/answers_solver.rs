@@ -114,8 +114,8 @@ use crate::types::types::Var;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum JaxtypingQuantifiedKey {
-    Dim(Name, QuantifiedKind),
-    ShapeCarrier(Name, QuantifiedKind),
+    Dimension(Name, QuantifiedKind),
+    VariadicShape(Name, QuantifiedKind),
 }
 
 pub struct TypeCheckOptions<'a, 'subset> {
@@ -2071,10 +2071,10 @@ pub struct AnswersSolver<'ctx, 'answer, Ans: LookupAnswer> {
     pub stdlib: &'ctx Stdlib,
     pub heap: &'ctx TypeHeap,
     /// Cache for jaxtyping synthetic quantifieds.
-    /// Module-scoped: the same dimension key always maps to the same Quantified,
+    /// Module-scoped: the same key always maps to the same Quantified,
     /// which is correct because each function independently wraps its signature
     /// in a Forall (just like legacy TypeVars defined at module scope).
-    jaxtyping_dims: &'ctx RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
+    jaxtyping_quantifieds: &'ctx RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
 }
 
 /// Proof that this SCC owns the pending result slot for this calculation.
@@ -2155,7 +2155,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         thread_state: &'answer ThreadState,
         answer_scope: &'answer AnswerScope,
         heap: &'ctx TypeHeap,
-        jaxtyping_dims: &'ctx RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
+        jaxtyping_quantifieds: &'ctx RefCell<FxHashMap<JaxtypingQuantifiedKey, Quantified>>,
     ) -> AnswersSolver<'ctx, 'answer, Ans> {
         AnswersSolver {
             stdlib,
@@ -2169,7 +2169,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             thread_state,
             answer_scope,
             heap,
-            jaxtyping_dims,
+            jaxtyping_quantifieds,
         }
     }
 
@@ -2190,7 +2190,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             recurser: self.recurser,
             stdlib: self.stdlib,
             heap: self.heap,
-            jaxtyping_dims: self.jaxtyping_dims,
+            jaxtyping_quantifieds: self.jaxtyping_quantifieds,
         }
     }
 
@@ -2208,14 +2208,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Get or create a Quantified type for a jaxtyping dimension name.
     /// Cached per module on the `(name, kind)` pair: the same name reused with a
     /// different `QuantifiedKind` intentionally yields a distinct Quantified.
-    pub fn get_or_create_jaxtyping_dim(&self, name: Name, kind: QuantifiedKind) -> Quantified {
-        let mut dims = self.jaxtyping_dims.borrow_mut();
-        // Jaxtyping dims have no real source location. Use the current map size as a
+    pub fn get_or_create_jaxtyping_dimension(
+        &self,
+        name: Name,
+        kind: QuantifiedKind,
+    ) -> Quantified {
+        let mut quantifieds = self.jaxtyping_quantifieds.borrow_mut();
+        // Jaxtyping dimensions have no real source location. Use the current map size as a
         // collision-free ordinal to distinguish synthetic quantifieds at the same
-        // (default) anchor. Shared with `get_or_create_jaxtyping_shape_carrier`, which
+        // (default) anchor. Shared with `get_or_create_jaxtyping_variadic_shape`, which
         // uses the same map, so ordinals stay unique across both.
-        let ordinal = dims.len() as u32;
-        dims.entry(JaxtypingQuantifiedKey::Dim(name.clone(), kind))
+        let ordinal = quantifieds.len() as u32;
+        quantifieds
+            .entry(JaxtypingQuantifiedKey::Dimension(name.clone(), kind))
             .or_insert_with(|| {
                 let identity = QuantifiedIdentity::new(
                     self.module().name(),
@@ -2242,20 +2247,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .clone()
     }
 
-    /// Get or create a tuple-carrier TypeVar or IntVar for a jaxtyping variadic shape name.
+    /// Get or create a TypeVar or IntVar for a jaxtyping variadic shape name.
     ///
     /// A variadic jaxtyping shape (`*name`) whose enclosing shaped-array class uses a
-    /// `TypeVar`/`IntVar` (IntTuple) shape parameter needs a carrier bounded by
+    /// `TypeVar`/`IntVar` (`IntTuple`) shape parameter needs a quantified bounded by
     /// `tuple[int, ...]`, rather than the `TypeVarTuple` produced for `*Shape` classes.
-    pub fn get_or_create_jaxtyping_shape_carrier(
+    pub fn get_or_create_jaxtyping_variadic_shape(
         &self,
         name: Name,
         kind: QuantifiedKind,
     ) -> Quantified {
-        let mut dims = self.jaxtyping_dims.borrow_mut();
-        // See `get_or_create_jaxtyping_dim`: the shared map's size is a collision-free ordinal.
-        let ordinal = dims.len() as u32;
-        dims.entry(JaxtypingQuantifiedKey::ShapeCarrier(name.clone(), kind))
+        let mut quantifieds = self.jaxtyping_quantifieds.borrow_mut();
+        // See `get_or_create_jaxtyping_dimension`: the shared map's size is a collision-free
+        // ordinal.
+        let ordinal = quantifieds.len() as u32;
+        quantifieds
+            .entry(JaxtypingQuantifiedKey::VariadicShape(name.clone(), kind))
             .or_insert_with(|| {
                 let identity = QuantifiedIdentity::new(
                     self.module().name(),
@@ -2274,16 +2281,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         PreInferenceVariance::Invariant,
                     ),
                     QuantifiedKind::TypeVarTuple | QuantifiedKind::ParamSpec => {
-                        unreachable!("jaxtyping shape carriers must be TypeVar or IntVar")
+                        unreachable!("jaxtyping variadic shapes must be TypeVar or IntVar")
                     }
                 }
             })
             .clone()
     }
 
-    /// Check if a Quantified type was created by jaxtyping dimension parsing.
-    pub fn is_jaxtyping_dim(&self, q: &Quantified) -> bool {
-        self.jaxtyping_dims.borrow().values().any(|v| v == q)
+    /// Check if a quantified type was created while parsing a jaxtyping shape.
+    pub fn is_jaxtyping_quantified(&self, q: &Quantified) -> bool {
+        self.jaxtyping_quantifieds.borrow().values().any(|v| v == q)
     }
 
     pub fn current(&self) -> &'answer Answers {

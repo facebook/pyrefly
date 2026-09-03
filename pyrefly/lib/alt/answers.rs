@@ -1513,7 +1513,7 @@ impl Answers {
         let recurser = &VarRecurser::new();
         let thread_state = &ThreadState::new(recursion_limit_config);
         let answer_scope = &AnswerScope::new();
-        let jaxtyping_dims = RefCell::default();
+        let jaxtyping_quantifieds = RefCell::default();
         let answers_solver = AnswersSolver::new(
             answers,
             self,
@@ -1526,7 +1526,7 @@ impl Answers {
             thread_state,
             answer_scope,
             self.heap(),
-            &jaxtyping_dims,
+            &jaxtyping_quantifieds,
         );
         table_for_each!(&self.solutions.table, |items| pre_solve(
             items,
@@ -1627,7 +1627,7 @@ impl Answers {
         }
         // Slow path: need to compute the answer.
         let recurser = &VarRecurser::new();
-        let jaxtyping_dims = RefCell::default();
+        let jaxtyping_quantifieds = RefCell::default();
         let solver = AnswersSolver::new(
             answers,
             self,
@@ -1640,7 +1640,7 @@ impl Answers {
             thread_state,
             answer_scope,
             self.heap(),
-            &jaxtyping_dims,
+            &jaxtyping_quantifieds,
         );
         solver.get_hashed_opt(key)
     }
@@ -1677,7 +1677,7 @@ impl Answers {
         answer_scope: &AnswerScope,
     ) {
         let recurser = &VarRecurser::new();
-        let jaxtyping_dims = RefCell::default();
+        let jaxtyping_quantifieds = RefCell::default();
         let solver = AnswersSolver::new(
             answers,
             self,
@@ -1690,7 +1690,7 @@ impl Answers {
             thread_state,
             answer_scope,
             self.heap(),
-            &jaxtyping_dims,
+            &jaxtyping_quantifieds,
         );
         dispatch_anyidx!(any_idx, solver, solve_idx_erased_typed);
     }
