@@ -4128,7 +4128,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         Some(shape_arg)
     }
 
-    pub(crate) fn shaped_array_shape_arg_to_shape(&self, shape_arg: &Type) -> Option<IntTuple> {
+    pub(crate) fn shape_arg_to_int_tuple(&self, shape_arg: &Type) -> Option<IntTuple> {
         IntTuple::from_shape_arg_type(shape_arg)
             .or_else(|| tuple_carrier_to_shape(shape_arg))
             .or_else(|| {
@@ -4169,7 +4169,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         match shape_param.kind() {
             QuantifiedKind::TypeVar | QuantifiedKind::IntVar => {
                 let shape = self
-                    .shaped_array_shape_arg_to_shape(&shape_arg)
+                    .shape_arg_to_int_tuple(&shape_arg)
                     .unwrap_or_else(IntTuple::shapeless);
                 let mut base_class = cls.clone();
                 let shape_arg = base_class

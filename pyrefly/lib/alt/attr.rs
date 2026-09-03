@@ -2438,7 +2438,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // recomputes this projection; that duplicate lookup is bounded by the cheap
         // syntactic pre-filter above, so it only runs for plausible shaped arrays.
         let shape_arg = self.shaped_array_shape_arg(cls)?;
-        self.shaped_array_shape_arg_to_shape(&shape_arg)?;
+        self.shape_arg_to_int_tuple(&shape_arg)?;
         Some(self.shaped_array_classtype_to_shaped_array_type(cls))
     }
 
