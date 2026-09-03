@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -28,6 +29,7 @@ use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::fs_anyhow;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use pyrefly_util::trace::init_tracing;
@@ -38,6 +40,7 @@ use ruff_source_file::PositionEncoding;
 use ruff_source_file::SourceLocation;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use tempfile::TempDir;
 
 use crate::binding::binding::KeyExport;
 use crate::config::base::InferReturnTypes;
@@ -55,6 +58,36 @@ use crate::state::state::StateReader;
 use crate::state::subscriber::TestSubscriber;
 use crate::types::class::Class;
 use crate::types::types::Type;
+
+pub fn get_test_files_root() -> TempDir {
+    let mut source_files =
+        std::env::current_dir().expect("std:env::current_dir() unavailable for test");
+    let test_files_path = std::env::var("TEST_FILES_PATH")
+        .expect("TEST_FILES_PATH env var not set: cargo or buck should set this automatically");
+    source_files.push(test_files_path);
+
+    // Copy the fixtures so tests can mutate them and behave consistently under Cargo and Buck.
+    let temp_dir = TempDir::with_prefix("pyrefly_lsp_test").unwrap();
+    copy_dir_recursively(&source_files, temp_dir.path());
+    temp_dir
+}
+
+fn copy_dir_recursively(src: &Path, dst: &Path) {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst).unwrap();
+    }
+
+    for entry in fs_anyhow::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir_recursively(&src_path, &dst_path);
+        } else {
+            std::fs::copy(src_path, dst_path).unwrap();
+        }
+    }
+}
 
 pub fn shape_extensions_env() -> TestEnv {
     let path = std::env::var("SHAPE_EXTENSIONS_TEST_PATH")

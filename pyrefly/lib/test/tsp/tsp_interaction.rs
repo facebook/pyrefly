@@ -16,3 +16,4 @@ pub mod object_model;
 pub mod request_errors;
 pub mod resolve_import;
 pub mod snapshot_changed;
+pub mod unopened_files;

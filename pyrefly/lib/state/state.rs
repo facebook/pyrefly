@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::MutexGuard;
 use std::sync::RwLockReadGuard;
+use std::sync::RwLockWriteGuard;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
@@ -1074,6 +1075,16 @@ impl<'a> Transaction<'a> {
 
     pub fn get_config_errors(&self) -> Vec<ConfigError> {
         self.data.state.config_finder.errors()
+    }
+
+    /// The `Require` level this transaction retains `handle` at, or `None` if
+    /// it has no such module.
+    pub fn get_require(&self, handle: &Handle) -> Option<Require> {
+        if let Some(v) = self.data.updated_modules.get(handle) {
+            Some(v.state.require())
+        } else {
+            self.readable.modules.get(handle).map(|v| v.state.require)
+        }
     }
 
     pub fn get_module_info(&self, handle: &Handle) -> Option<Module> {
@@ -3312,6 +3323,15 @@ pub struct CommittingTransaction<'a> {
     committing_transaction_guard: MutexGuard<'a, ()>,
 }
 
+impl<'a> CommittingTransaction<'a> {
+    /// Give up the right to commit, keeping the transaction and its state read
+    /// lock. Unlike acquiring both locks, releasing one cannot deadlock, so
+    /// this imposes no ordering constraint on the caller.
+    pub fn downgrade(self) -> Transaction<'a> {
+        self.transaction
+    }
+}
+
 impl<'a> AsMut<Transaction<'a>> for CommittingTransaction<'a> {
     fn as_mut(&mut self) -> &mut Transaction<'a> {
         &mut self.transaction
@@ -3451,6 +3471,19 @@ impl State {
         let start = Timer::start();
         let readable = self.state.read();
         let state_lock_blocked = start.elapsed();
+        self.transaction_from_guard(readable, default_require, subscriber, state_lock_blocked)
+    }
+
+    /// Build a transaction over the state `readable` observes. Takes the guard
+    /// rather than acquiring one, so a caller already holding the read lock
+    /// reuses it instead of dropping it and racing for another.
+    fn transaction_from_guard<'a>(
+        &'a self,
+        readable: RwLockReadGuard<'a, StateData>,
+        default_require: Require,
+        subscriber: Option<Box<dyn Subscriber + 'a>>,
+        state_lock_blocked: Duration,
+    ) -> Transaction<'a> {
         let now = readable.now;
         let stdlib = readable.stdlib.clone();
         Transaction {
@@ -3521,11 +3554,42 @@ impl State {
         }
     }
 
-    pub fn commit_transaction(
-        &self,
-        transaction: CommittingTransaction,
+    pub fn commit_transaction<'a>(
+        &'a self,
+        transaction: CommittingTransaction<'a>,
         telemetry: Option<&mut TelemetryEvent>,
     ) {
+        // Callers that need to read what was committed use
+        // `commit_transaction_downgrade` instead.
+        drop(self.commit_transaction_inner(transaction, telemetry));
+    }
+
+    /// Commit, then downgrade the write guard and hand back a transaction over
+    /// the state just written. No other commit can land in between, so the
+    /// caller does not have to re-establish what it just committed.
+    pub fn commit_transaction_downgrade<'a>(
+        &'a self,
+        transaction: CommittingTransaction<'a>,
+        telemetry: Option<&mut TelemetryEvent>,
+        default_require: Require,
+    ) -> Transaction<'a> {
+        let state = self.commit_transaction_inner(transaction, telemetry);
+        // Already holding the lock, so there was nothing to wait for.
+        self.transaction_from_guard(
+            RwLockWriteGuard::downgrade(state),
+            default_require,
+            None,
+            Duration::ZERO,
+        )
+    }
+
+    /// Apply the transaction to shared state and hand back the write lock, so
+    /// the caller chooses whether to release or downgrade it.
+    fn commit_transaction_inner<'a>(
+        &'a self,
+        transaction: CommittingTransaction<'a>,
+        telemetry: Option<&mut TelemetryEvent>,
+    ) -> RwLockWriteGuard<'a, StateData> {
         debug!("Committing transaction");
         let CommittingTransaction {
             transaction:
@@ -3614,7 +3678,8 @@ impl State {
             }
         }
 
-        drop(committing_transaction_guard)
+        drop(committing_transaction_guard);
+        state
     }
 
     pub fn run(
