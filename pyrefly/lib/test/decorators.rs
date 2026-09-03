@@ -750,22 +750,21 @@ class C(ABC):
 // These assignments should behave like @classmethod: cls should be type[Self],
 // calls should preserve subclass types, and initialized attributes should exist on the class.
 testcase!(
-    bug = "Desugared classmethod assignments retain instance binding",
     test_desugared_classmethod_application,
     r#"
 from typing import Self, assert_type
 class A:
     def f(cls):
-        assert_type(cls, type[Self])  # E: assert_type(Self@A, type[Self@A]) failed
+        assert_type(cls, type[Self])
         return cls
     f = classmethod(f)
 
 class B(A):
     pass
 
-assert_type(A.f(), type[A])  # E: assert_type(A, type[A]) failed  # E: Argument `type[A]` is not assignable to parameter `cls` with type `A` in function `A.f`
-assert_type(A().f(), type[A])  # E: assert_type(A, type[A]) failed  # E: Argument `type[A]` is not assignable to parameter `cls` with type `A` in function `A.f`
-assert_type(B.f(), type[B])  # E: assert_type(B, type[B]) failed  # E: Argument `type[B]` is not assignable to parameter `cls` with type `B` in function `A.f`
+assert_type(A.f(), type[A])
+assert_type(A().f(), type[A])
+assert_type(B.f(), type[B])
 
 class Holder:
     def foo(cls, string: str) -> int:
@@ -773,7 +772,7 @@ class Holder:
 
     foo = classmethod(foo)
 
-assert_type(Holder.foo("hello"), int)  # E: Argument `type[Holder]` is not assignable to parameter `cls` with type `Holder` in function `Holder.foo`
+assert_type(Holder.foo("hello"), int)
 
 class InitializesOnClass:
     def initialize(cls) -> None:
@@ -781,8 +780,8 @@ class InitializesOnClass:
 
     initialize = classmethod(initialize)
 
-InitializesOnClass.initialize()  # E: Argument `type[InitializesOnClass]` is not assignable to parameter `cls` with type `InitializesOnClass` in function `InitializesOnClass.initialize`
-assert_type(InitializesOnClass.value, int)  # E: assert_type(Unknown, int) failed  # E: Instance-only attribute `value` of class `InitializesOnClass` is not visible on the class
+InitializesOnClass.initialize()
+assert_type(InitializesOnClass.value, int)
     "#,
 );
 
