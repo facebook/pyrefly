@@ -48,7 +48,7 @@ use crate::alt::shape_extension::shape_extension_vars;
 use crate::alt::shape_flag::extend_shape_flag_vars_from_targs;
 use crate::alt::solve::Iterable;
 use crate::alt::unwrap::HintRef;
-use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
+use crate::alt::unwrap::MAX_HINT_WIDTH;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
@@ -2005,7 +2005,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Some(hint) if hint.types().len() == 1 => return inner(hint.types().first(), errors),
             Some(hint) => hint,
         };
-        let mut hints = if hint.types().len() <= MAX_CALL_HINT_WIDTH {
+        let mut hints = if hint.types().len() <= MAX_HINT_WIDTH {
             hint.types().map(Some)
         } else {
             Vec::new()

@@ -891,8 +891,7 @@ f(list())
 
 // Regression: a list/set literal against `Alias | Collection[Alias]`, where the
 // `Literal[...]` alias is wide, must still pick up the `Collection` element hint.
-// Flattening the alias used to count its members against `MAX_DECOMPOSE_HINT_WIDTH`,
-// incorrectly triggering the cap so the literal fell back to `list[str]`.
+// Flattening the alias used to cause the literal to fall back to `list[str]`.
 testcase!(
     test_list_hint_with_wide_literal_alias_union,
     r#"

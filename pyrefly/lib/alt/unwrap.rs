@@ -22,12 +22,9 @@ use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 use crate::types::types::Var;
 
-/// Maximum size for a union hint to a function call. Hints wider than this are not tried
-/// individually, as doing so would lead to prohibitively expensive calls.
-pub const MAX_CALL_HINT_WIDTH: usize = 4;
-
-/// Maximum size for a union hint to `infer_with_decomposed_hint`.
-pub const MAX_DECOMPOSE_HINT_WIDTH: usize = 8;
+/// Maximum size for a union hint. Hints wider than this are not tried
+/// individually, as doing so would be prohibitively expensive.
+pub const MAX_HINT_WIDTH: usize = 32;
 
 /// A contextual element hint for list literals and comprehensions.
 pub(crate) enum ListElementHint {
@@ -544,7 +541,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let flattened_hints = self.flatten_alias_union_hints(raw_hints);
             let hints = flattened_hints.as_ref().map_or(raw_hints, |x| x);
             let decomposable_width = hints.iter().filter(|h| !h.is_scalar()).count();
-            if decomposable_width <= MAX_DECOMPOSE_HINT_WIDTH {
+            if decomposable_width <= MAX_HINT_WIDTH {
                 let mut ret_with_errors = None;
                 for (branch_hint, vs) in self.solver().partial_sort_by_vars(hints) {
                     if branch_hint.is_scalar() {
