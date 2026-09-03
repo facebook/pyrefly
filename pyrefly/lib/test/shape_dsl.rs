@@ -5619,6 +5619,28 @@ def index_preserves_dtype(concrete: Array[[2, 3], int]) -> Array[[3], int]:
 );
 
 testcase!(
+    bug = "Shaped-array indexing shadows a declared __getitem__",
+    test_shaped_array_builtin_indexing_shadows_declared_getitem,
+    shaped_array_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import IntTuple, shaped_array
+
+@shaped_array(shape="Shape")
+class LegacyArray[Shape: IntTuple]:
+    def __getitem__(self, index: int) -> str: ...
+
+class OrdinaryArray:
+    def __getitem__(self, index: int) -> str: ...
+
+def f(legacy: LegacyArray[[2, 3]], ordinary: OrdinaryArray) -> None:
+    # The legacy decorator incorrectly gives built-in indexing precedence over the method.
+    assert_type(legacy[0], LegacyArray[[3]])
+    assert_type(ordinary[0], str)
+"#,
+);
+
+testcase!(
     test_shaped_array_slice_bound_kind_recovery,
     shaped_array_env(),
     r#"
