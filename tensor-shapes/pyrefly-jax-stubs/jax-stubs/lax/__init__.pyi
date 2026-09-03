@@ -5,6 +5,7 @@
 
 from typing import Any, overload
 
+import numpy as np
 from jax._array import Array
 from jax._shapes import lax_broadcast
 from shape_extensions import IntTuple
@@ -12,7 +13,7 @@ from shape_extensions import IntTuple
 from . import linalg as linalg
 
 type _Shape = IntTuple
-type _Scalar = int | float | complex
+type _Scalar = bool | int | float | complex | np.generic
 
 # Unary elementwise operators
 def abs[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...

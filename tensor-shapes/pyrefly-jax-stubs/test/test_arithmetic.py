@@ -5,8 +5,18 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import jax.numpy as jnp
+import numpy as np
 from shape_extensions import assert_shape
+
+if TYPE_CHECKING:
+    numpy_int: np.int32
+    numpy_bool: np.bool_
+else:
+    numpy_int = np.int32(1)
+    numpy_bool = np.bool_(True)
 
 
 def test_elementwise_operators_preserve_shape() -> None:
@@ -32,6 +42,9 @@ def test_scalar_operands_preserve_shape() -> None:
     assert_shape(2.0 * a, (3, 4))
     assert_shape(a / 2.0, (3, 4))
     assert_shape(v**2, (5,))
+    assert_shape(jnp.maximum(a, numpy_int), (3, 4))
+    assert_shape(jnp.maximum(numpy_int, a), (3, 4))
+    assert_shape(jnp.where(numpy_bool, a, 0), (3, 4))
 
 
 def test_complex_scalars_preserve_shape() -> None:
@@ -88,6 +101,47 @@ def test_binary_functions_accept_scalars() -> None:
     assert_shape(jnp.divide(a, 2.0), (3, 4))
     assert_shape(jnp.maximum(a, 0), (3, 4))
     assert_shape(jnp.minimum(0, a), (3, 4))
+
+
+def test_maximum_accepts_arrays_and_scalars() -> None:
+    column = jnp.ones((3, 1))
+    row = jnp.ones((1, 4))
+
+    assert_shape(jnp.maximum(column, row), (3, 4))
+    assert_shape(jnp.maximum(column, 0), (3, 1))
+    assert_shape(jnp.maximum(0, row), (1, 4))
+    assert_shape(jnp.maximum(0, 1), ())
+    assert_shape(jnp.maximum(np.ones((3, 1)), row), (3, 4))
+
+
+def test_where_accepts_arrays_and_scalars() -> None:
+    condition = jnp.ones((3, 1), dtype=bool)
+    row = jnp.ones((1, 4))
+    full = jnp.ones((3, 4))
+
+    assert_shape(jnp.where(condition, row, full), (3, 4))
+    assert_shape(jnp.where(condition, row, 0), (3, 4))
+    assert_shape(jnp.where(condition, 0, row), (3, 4))
+    assert_shape(jnp.where(True, condition, row), (3, 4))
+    assert_shape(jnp.where(full, 1, 0), (3, 4))
+    assert_shape(jnp.where(True, full, 0), (3, 4))
+    assert_shape(jnp.where(True, 0, full), (3, 4))
+    assert_shape(jnp.where(True, 1, 0), ())
+
+
+def test_where_rejects_incompatible_broadcast() -> None:
+    condition = jnp.ones((3, 4), dtype=bool)
+    incompatible = jnp.ones(5)
+
+    assert_shape(jnp.where(condition, 1, 0), (3, 4))
+    try:
+        jnp.where(  # E: Cannot evaluate type-level shape DSL call
+            condition, incompatible, 0
+        )
+    except (TypeError, ValueError):
+        pass
+    else:
+        raise AssertionError("expected JAX to reject incompatible shapes")
 
 
 def test_elementwise_unary_functions_preserve_shape() -> None:
