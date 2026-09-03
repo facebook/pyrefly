@@ -800,6 +800,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // https://typing.python.org/en/latest/spec/overload.html#overload-call-evaluation.
             let spec_compliant = self.solver().spec_compliant_overloads;
             if matched_overloads.len() > 1 {
+                let dominated = matched_overloads
+                    .iter()
+                    .enumerate()
+                    .map(|(i, candidate)| {
+                        matched_overloads.iter().enumerate().any(|(j, other)| {
+                            i != j
+                                && self
+                                    .compare_scalar_as_shape_overloads(
+                                        &other.argmap,
+                                        &candidate.argmap,
+                                    )
+                                    .is_gt()
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                matched_overloads = matched_overloads
+                    .into_iter()
+                    .zip(dominated)
+                    .filter_map(|(overload, dominated)| (!dominated).then_some(overload))
+                    .collect();
                 // Step 4: if any arguments supply an unknown number of args and at least one
                 // overload has a corresponding variadic parameter, eliminate overloads without
                 // this parameter.
@@ -833,7 +853,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                 }
             }
-            if matched_overloads.len() > 1 {
+            if matched_overloads.len() > 1
+                && !matched_overloads.iter().any(|overload| {
+                    self.scalar_as_shape_preserves_expanded_gradual_ambiguity(&overload.argmap)
+                })
+            {
                 // Step 5, part 1: for each overload, check whether it's the case that all possible
                 // materializations of each argument are assignable to the corresponding parameter.
                 // If so, eliminate all subsequent overloads.

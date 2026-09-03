@@ -115,6 +115,18 @@ impl TypeCheckKind {
                     function_suffix(func_id.as_ref(), current_module),
                 )
             }
+            Self::ScalarAsShape(param, func_id) => {
+                let param_desc = match param {
+                    Some(name) => format!("parameter `{name}`"),
+                    None => "parameter".to_owned(),
+                };
+                format!(
+                    "Scalar argument is treated as having shape `()`, which is not assignable to {} with shape `{}`{}",
+                    param_desc,
+                    ctx.display(want),
+                    function_suffix(func_id.as_ref(), current_module),
+                )
+            }
             Self::CallVarArgs(arg_is_unpacked, param, func_id) => {
                 let arg_desc = if *arg_is_unpacked {
                     "Unpacked argument"

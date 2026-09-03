@@ -5,6 +5,7 @@
 
 from typing import Any, Callable, Literal, overload, Sequence, Unpack
 
+import numpy as np
 from jax._array import Array as Array, Array as ndarray
 from jax._shapes import (
     broadcast_to_shape,
@@ -49,11 +50,16 @@ from shape_extensions import (
     IntTuples,
     IntVar,
     MapIntTuples,
+    ScalarAsShape,
 )
 
 from . import fft as fft, linalg as linalg
 
 type _Shape = IntTuple
+type _Scalar = bool | int | float | complex | np.generic
+type _ArrayLike[Shape: _Shape] = (
+    Array[Shape] | np.ndarray[Shape, Any] | ScalarAsShape[_Scalar, Shape]
+)
 type _Axis = int | tuple[int, ...] | None
 # The trailing `None` is not a legal argument to `reshape`. It is present because
 # an `int | tuple[int, ...]` parameter cannot be iterated inside a DSL function
@@ -1124,7 +1130,7 @@ def maximum[Shape: _Shape](
 ) -> Array[Shape]: ...
 @overload
 def maximum[Shape1: _Shape, Shape2: _Shape](
-    x1: Array[Shape1], x2: Array[Shape2], /
+    x1: _ArrayLike[Shape1], x2: _ArrayLike[Shape2], /
 ) -> Array[broadcast(Shape1, Shape2)]: ...
 @overload
 def minimum[Shape: _Shape](
@@ -1246,6 +1252,16 @@ def true_divide[Shape: _Shape](
 def true_divide[Shape1: _Shape, Shape2: _Shape](
     x1: Array[Shape1], x2: Array[Shape2], /
 ) -> Array[broadcast(Shape1, Shape2)]: ...
+def where[
+    ConditionShape: _Shape,
+    XShape: _Shape,
+    YShape: _Shape,
+](
+    condition: _ArrayLike[ConditionShape],
+    x: _ArrayLike[XShape],
+    y: _ArrayLike[YShape],
+    /,
+) -> Array[broadcast(broadcast(ConditionShape, XShape), YShape)]: ...
 @overload
 def transpose[Shape: _Shape](
     a: Array[Shape], axes: None = None

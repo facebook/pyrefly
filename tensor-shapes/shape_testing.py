@@ -217,6 +217,9 @@ def check_suites(
         raise ValueError(f"no suites to check under {package_root}")
 
     failed = 0
+    stub_extra_search_paths = tuple(
+        dict.fromkeys(path for suite in suites for path in suite.extra_search_paths)
+    )
     for suite in [STUB_SUITE, *suites] if check_stubs else suites:
         files = suite.files(package_root)
         command = [
@@ -230,7 +233,11 @@ def check_suites(
         if suite.expectations:
             command.append("--expectations")
         for search_path in (
-            *suite.extra_search_paths,
+            *(
+                stub_extra_search_paths
+                if suite is STUB_SUITE
+                else suite.extra_search_paths
+            ),
             package_root,
             SHAPE_EXTENSIONS_ROOT,
         ):

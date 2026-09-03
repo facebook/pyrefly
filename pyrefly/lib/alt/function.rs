@@ -1193,6 +1193,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             FunctionParameter::Annotated(idx) => {
                 let param_ty = self.get_idx(*idx).annotation.get_type().clone();
                 let annot_range = self.annotation_range(*idx);
+                let invalid_scalar_as_shape_default = self.report_scalar_as_shape_default_error(
+                    &param_ty,
+                    default.map(Ranged::range),
+                    errors,
+                );
                 let make_context = || {
                     TypeCheckContext::of_kind(TypeCheckKind::FunctionParameterDefault(
                         name.id.clone(),
@@ -1211,7 +1216,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         }))
                 ) if i.as_i64().is_some() && matches!(inner.as_ref(), Type::Quantified(_))
                 ) || (default.is_some()
-                    && self.is_shape_flag_parameter_type(&param_ty));
+                    && self.is_shape_flag_parameter_type(&param_ty))
+                    || invalid_scalar_as_shape_default;
                 let check: Option<(&Type, &dyn Fn() -> TypeCheckContext)> = if skip_check {
                     None
                 } else {

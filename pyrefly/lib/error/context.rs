@@ -143,6 +143,30 @@ impl TypeCheckContext {
             None => self,
         }
     }
+
+    pub fn for_scalar_as_shape(self) -> Self {
+        let Self {
+            kind,
+            context,
+            annotations,
+        } = self;
+        let kind = match kind {
+            TypeCheckKind::CallArgument(param, function)
+            | TypeCheckKind::CallVarArgs(_, param, function)
+            | TypeCheckKind::CallKwArgs(_, param, function) => {
+                TypeCheckKind::ScalarAsShape(param, function)
+            }
+            TypeCheckKind::CallUnpackKwArg(param, function) => {
+                TypeCheckKind::ScalarAsShape(Some(param), function)
+            }
+            _ => unreachable!("ScalarAsShape conversion requires a call argument context"),
+        };
+        Self {
+            kind,
+            context,
+            annotations,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -167,6 +191,8 @@ pub enum TypeCheckKind {
     CallKwArgs(Option<Name>, Option<Name>, Option<FunctionKind>),
     /// Unpacked keyword argument against named parameter.
     CallUnpackKwArg(Name, Option<FunctionKind>),
+    /// Check that treating a scalar argument as shape `()` satisfies the parameter's shape.
+    ScalarAsShape(Option<Name>, Option<FunctionKind>),
     /// Check of a parameter's default value against its type annotation.
     FunctionParameterDefault(Name),
     /// Check against the key type of a dict.
@@ -242,6 +268,7 @@ impl TypeCheckKind {
             Self::CallVarArgs(..) => ErrorKind::BadArgumentType,
             Self::CallKwArgs(..) => ErrorKind::BadArgumentType,
             Self::CallUnpackKwArg(..) => ErrorKind::BadArgumentType,
+            Self::ScalarAsShape(..) => ErrorKind::BadArgumentType,
             Self::FunctionParameterDefault(..) => ErrorKind::BadFunctionDefinition,
             Self::DictKey | Self::DictValue | Self::TypedDictKey(_, _) => ErrorKind::BadAssignment,
             Self::TypedDictUnpacking => ErrorKind::BadUnpacking,

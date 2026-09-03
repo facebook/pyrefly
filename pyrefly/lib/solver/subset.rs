@@ -275,7 +275,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     Some(Param::PosOnly(_, l, l_req) | Param::Pos(_, l, l_req)),
                     Some(Param::PosOnly(_, u, u_req)),
                 ) if (*u_req == Required::Required || matches!(l_req, Required::Optional(_))) => {
-                    self.is_subset_eq(u, l)?;
+                    self.is_subset_callable_parameter(u, l)?;
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
@@ -285,7 +285,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     if l_name != u_name {
                         return Err(SubsetError::PosParamName(l_name.clone(), u_name.clone()));
                     }
-                    self.is_subset_eq(u, l)?;
+                    self.is_subset_callable_parameter(u, l)?;
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
@@ -414,13 +414,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     u_arg = u_args.next();
                 }
                 (Some(Param::Varargs(_, l)), Some(Param::PosOnly(_, u, _))) => {
-                    self.is_subset_eq(u, l)?;
+                    self.is_subset_callable_parameter(u, l)?;
                     u_arg = u_args.next();
                 }
                 (Some(Param::Varargs(_, l)), Some(Param::Pos(name, u, _))) => {
                     // Param::Pos can be passed positionally or by name, so if it matches *args
                     // we need to make sure it matches an optional kw-only argument or *kwargs
-                    self.is_subset_eq(u, l)?;
+                    self.is_subset_callable_parameter(u, l)?;
                     u_param_matched_with_l_varargs.push((name, u));
                     u_arg = u_args.next();
                 }
@@ -461,7 +461,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     u_arg = u_args.next();
                 }
                 (Some(Param::Varargs(_, l)), Some(Param::Varargs(_, u))) => {
-                    self.is_subset_eq(u, l)?;
+                    self.is_subset_callable_parameter(u, l)?;
                     l_arg = l_args.next();
                     u_arg = u_args.next();
                 }
@@ -570,7 +570,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 l_kwargs
             }
             (Some(l), Some(u)) => {
-                self.is_subset_eq(&u, &l)?;
+                self.is_subset_callable_parameter(&u, &l)?;
                 Some(l)
             }
             (None, Some(_)) => {
@@ -587,9 +587,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 if l_req {
                     return Err(SubsetError::Other);
                 }
-                self.is_subset_eq(u_ty, &l_ty)?;
+                self.is_subset_callable_parameter(u_ty, &l_ty)?;
             } else if let Some(l_ty) = &l_kwargs {
-                self.is_subset_eq(u_ty, l_ty)?;
+                self.is_subset_callable_parameter(u_ty, l_ty)?;
             } else {
                 return Err(SubsetError::Other);
             }
@@ -600,9 +600,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 if !*u_req && l_req {
                     return Err(SubsetError::Other);
                 }
-                self.is_subset_eq(u_ty, &l_ty)?;
+                self.is_subset_callable_parameter(u_ty, &l_ty)?;
             } else if let Some(l_ty) = &l_kwargs {
-                self.is_subset_eq(u_ty, l_ty)?;
+                self.is_subset_callable_parameter(u_ty, l_ty)?;
             } else {
                 return Err(SubsetError::Other);
             }

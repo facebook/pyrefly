@@ -44,6 +44,7 @@ use crate::alt::expr::ExprOptions;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::map_int_tuples::MapIntTuplesPatternArgument;
 use crate::alt::map_int_tuples::map_int_tuples_parameter_pattern;
+use crate::alt::scalar_as_shape::is_scalar_as_shape_parameter;
 use crate::alt::shape_flag::extend_shape_flag_vars_from_targs;
 use crate::alt::shape_flag::shape_flag_vars;
 use crate::alt::solve::Iterable;
@@ -502,6 +503,7 @@ impl CallArgPreEval<'_> {
         param_name: Option<&Name>,
         vararg: bool,
         is_self_arg: bool,
+        scalar_as_shape_conversions: &mut usize,
         range: TextRange,
         arg_errors: &ErrorCollector,
         call_errors: &ErrorCollector,
@@ -516,6 +518,29 @@ impl CallArgPreEval<'_> {
             })
             .with_context(context.map(|ctx| ctx()))
         };
+        if is_scalar_as_shape_parameter(hint) {
+            let ty = match self {
+                Self::Star {
+                    prefix,
+                    middle,
+                    suffix,
+                    consumed,
+                    ..
+                } => Self::star_element(solver, prefix, middle, suffix, *consumed, vararg),
+                _ => self.inferred_type(solver, arg_errors),
+            };
+            self.advance_after_match(vararg);
+            *scalar_as_shape_conversions += usize::from(solver.check_scalar_as_shape_argument(
+                &ty,
+                hint,
+                range,
+                call_errors,
+                tcc,
+                call_context,
+            ));
+            solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+            return Some(ty);
+        }
         // A shape-extension map at a parameter root carries an ordinary `Sequence` view, but its
         // source must be recovered from the argument before that view is checked.
         if let Some(pattern) = map_int_tuples_parameter_pattern(hint) {
@@ -699,21 +724,36 @@ impl MatchedParam {
 #[derive(Debug, Clone)]
 pub struct ArgMap {
     pub range_to_param: HashMap<TextRange, MatchedParam>,
+    /// Parameters in argument-matching order. Unlike `range_to_param`, this retains every
+    /// element contributed by a single starred argument.
+    pub matched_params: Vec<(TextRange, MatchedParam)>,
     /// Required parameters that were left unmatched
     pub unmatched_params: SmallSet<Option<Name>>,
+    /// Number of `matched_params` entries that used a scalar-to-empty-shape conversion.
+    pub scalar_as_shape_conversions: usize,
+    /// Whether overload matching involved a gradual argument whose runtime type is unknown.
+    pub has_gradual_argument: bool,
+    /// Whether graduality came from an expanded argument that ordinary materialization cannot
+    /// reconstruct from the original call expression.
+    pub has_unmaterialized_gradual_argument: bool,
 }
 
 impl ArgMap {
     pub fn new() -> Self {
         Self {
             range_to_param: HashMap::new(),
+            matched_params: Vec::new(),
             unmatched_params: SmallSet::new(),
+            scalar_as_shape_conversions: 0,
+            has_gradual_argument: false,
+            has_unmaterialized_gradual_argument: false,
         }
     }
 
     fn insert(&mut self, range: TextRange, ty: Type, name: Option<Name>) -> Option<MatchedParam> {
-        self.range_to_param
-            .insert(range, MatchedParam::new(ty, name))
+        let matched = MatchedParam::new(ty, name);
+        self.matched_params.push((range, matched.clone()));
+        self.range_to_param.insert(range, matched)
     }
 }
 
@@ -1118,6 +1158,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 name,
                                 false,
                                 is_self_arg,
+                                &mut argmap.scalar_as_shape_conversions,
                                 arg.range(),
                                 arg_errors,
                                 call_errors,
@@ -1125,6 +1166,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 call_context,
                             )
                         };
+                        argmap.has_gradual_argument |= arg_ty.as_ref().is_some_and(Type::is_any);
                         if let Some(name) = name
                             && let Some(ty) = unhinted_arg_ty.or(arg_ty)
                         {
@@ -1159,12 +1201,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             name,
                             true,
                             is_self_arg,
+                            &mut argmap.scalar_as_shape_conversions,
                             arg.range(),
                             arg_errors,
                             call_errors,
                             context,
                             call_context,
                         );
+                        argmap.has_gradual_argument |= arg_ty.as_ref().is_some_and(Type::is_any);
                         if bound_args.is_some() {
                             if let Some(name) = name {
                                 variadic_name = Some(name);
@@ -1552,19 +1596,35 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 unexpected_keyword_error(name, kw.range);
                             }
                             if let Some(want) = &hint {
-                                self.check_type_with_options(
-                                    &field.ty,
-                                    want,
-                                    kw.range,
-                                    TypeCheckOptions::new(call_errors, &|| {
-                                        TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
-                                            Some(name.clone()),
-                                            callable_name.cloned(),
-                                        ))
-                                        .with_context(context.map(|ctx| ctx()))
-                                    })
-                                    .with_call_context(call_context),
-                                );
+                                argmap.insert(kw.range, (*want).clone(), Some(name.clone()));
+                                argmap.has_gradual_argument |= field.ty.is_any();
+                                argmap.has_unmaterialized_gradual_argument |= field.ty.is_any();
+                                let check_context = || {
+                                    TypeCheckContext::of_kind(TypeCheckKind::CallArgument(
+                                        Some(name.clone()),
+                                        callable_name.cloned(),
+                                    ))
+                                    .with_context(context.map(|ctx| ctx()))
+                                };
+                                if is_scalar_as_shape_parameter(want) {
+                                    argmap.scalar_as_shape_conversions +=
+                                        usize::from(self.check_scalar_as_shape_argument(
+                                            &field.ty,
+                                            want,
+                                            kw.range,
+                                            call_errors,
+                                            &check_context,
+                                            call_context,
+                                        ));
+                                } else {
+                                    self.check_type_with_options(
+                                        &field.ty,
+                                        want,
+                                        kw.range,
+                                        TypeCheckOptions::new(call_errors, &check_context)
+                                            .with_call_context(call_context),
+                                    );
+                                }
                             }
                         }
                     } else {
@@ -1575,22 +1635,37 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                     &self.heap.mk_class_type(self.stdlib.str().clone()),
                                 ) {
                                     if let Some((name, Some(want))) = kwargs.as_ref() {
-                                        self.check_type_with_options(
-                                            &value,
-                                            want,
-                                            kw.range,
-                                            TypeCheckOptions::new(call_errors, &|| {
-                                                TypeCheckContext::of_kind(
-                                                    TypeCheckKind::CallKwArgs(
-                                                        None,
-                                                        name.cloned(),
-                                                        callable_name.cloned(),
-                                                    ),
-                                                )
-                                                .with_context(context.map(|ctx| ctx()))
-                                            })
-                                            .with_call_context(call_context),
-                                        );
+                                        argmap.insert(kw.range, (*want).clone(), name.cloned());
+                                        argmap.has_gradual_argument |= value.is_any();
+                                        argmap.has_unmaterialized_gradual_argument |=
+                                            value.is_any();
+                                        let check_context = || {
+                                            TypeCheckContext::of_kind(TypeCheckKind::CallKwArgs(
+                                                None,
+                                                name.cloned(),
+                                                callable_name.cloned(),
+                                            ))
+                                            .with_context(context.map(|ctx| ctx()))
+                                        };
+                                        if is_scalar_as_shape_parameter(want) {
+                                            argmap.scalar_as_shape_conversions +=
+                                                usize::from(self.check_scalar_as_shape_argument(
+                                                    &value,
+                                                    want,
+                                                    kw.range,
+                                                    call_errors,
+                                                    &check_context,
+                                                    call_context,
+                                                ));
+                                        } else {
+                                            self.check_type_with_options(
+                                                &value,
+                                                want,
+                                                kw.range,
+                                                TypeCheckOptions::new(call_errors, &check_context)
+                                                    .with_call_context(call_context),
+                                            );
+                                        }
                                     };
                                     splat_kwargs.push((value, kw.range));
                                 } else {
@@ -1672,7 +1747,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         })
                         .with_context(context.map(|ctx| ctx()))
                     };
-                    let arg_ty = if let Some(pattern) = hint
+                    let arg_ty = if let Some((_, hint)) = &hint
+                        && is_scalar_as_shape_parameter(hint)
+                    {
+                        let ty = match kw.value {
+                            TypeOrExpr::Expr(expr) => self.expr_infer(expr, arg_errors),
+                            TypeOrExpr::Type(ty, _) => (*ty).clone(),
+                        };
+                        argmap.scalar_as_shape_conversions +=
+                            usize::from(self.check_scalar_as_shape_argument(
+                                &ty,
+                                hint,
+                                kw.range,
+                                call_errors,
+                                tcc,
+                                call_context,
+                            ));
+                        ty
+                    } else if let Some(pattern) = hint
                         .as_ref()
                         .and_then(|(_, hint)| map_int_tuples_parameter_pattern(hint))
                     {
@@ -1725,6 +1817,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             }
                         }
                     };
+                    argmap.has_gradual_argument |= arg_ty.is_any();
                     self.maybe_error_unknown_argument_type(&arg_ty, kw.range, arg_errors);
                     record(bound_args, &id.id, unhinted_arg_ty.unwrap_or(arg_ty));
                 }
@@ -1793,19 +1886,35 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     Required::Optional(None) => {}
                 }
                 for (ty, range) in &splat_kwargs {
-                    self.check_type_with_options(
-                        ty,
-                        want,
-                        *range,
-                        TypeCheckOptions::new(call_errors, &|| {
-                            TypeCheckContext::of_kind(TypeCheckKind::CallUnpackKwArg(
-                                (*name).clone(),
-                                callable_name.cloned(),
-                            ))
-                            .with_context(context.map(|ctx| ctx()))
-                        })
-                        .with_call_context(call_context),
-                    );
+                    let check_context = || {
+                        TypeCheckContext::of_kind(TypeCheckKind::CallUnpackKwArg(
+                            (*name).clone(),
+                            callable_name.cloned(),
+                        ))
+                        .with_context(context.map(|ctx| ctx()))
+                    };
+                    argmap.insert(*range, (*want).clone(), Some((*name).clone()));
+                    argmap.has_gradual_argument |= ty.is_any();
+                    argmap.has_unmaterialized_gradual_argument |= ty.is_any();
+                    if is_scalar_as_shape_parameter(want) {
+                        argmap.scalar_as_shape_conversions +=
+                            usize::from(self.check_scalar_as_shape_argument(
+                                ty,
+                                want,
+                                *range,
+                                call_errors,
+                                &check_context,
+                                call_context,
+                            ));
+                    } else {
+                        self.check_type_with_options(
+                            ty,
+                            want,
+                            *range,
+                            TypeCheckOptions::new(call_errors, &check_context)
+                                .with_call_context(call_context),
+                        );
+                    }
                 }
             }
         }
@@ -1842,19 +1951,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .params
                     .visit_mut(&mut |ty| self.solver().expand_with_bounds(ty));
             }
-            arg.post_check(
+            let arg_ty = arg.post_check(
                 self,
                 callable_name,
                 &hint,
                 name,
                 false,
                 false,
+                &mut argmap.scalar_as_shape_conversions,
                 range,
                 arg_errors,
                 call_errors,
                 context,
                 call_context,
             );
+            argmap.has_gradual_argument |= arg_ty.as_ref().is_some_and(Type::is_any);
         }
         let num_extra_positional_args = extra_positional_args.len();
         if let Some(arg_range) = extra_arg_pos
