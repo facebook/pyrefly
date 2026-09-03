@@ -29,9 +29,12 @@ use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::meta_shape_dsl::validate_shape_dsl_functions;
+use pyrefly_types::quantified::AnchorIndex;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::quantified::QuantifiedIdentity;
 use pyrefly_types::quantified::QuantifiedOrigin;
 use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
+use pyrefly_types::type_var::PreInferenceVariance;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::AnyStyle;
 use pyrefly_types::types::BoundMethod;
@@ -600,7 +603,43 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Look for a @classmethod or @staticmethod decorator and change the "self" type
         // accordingly. This is not totally correct, since it doesn't account for chaining
         // decorators, or weird cases like both decorators existing at the same time.
-        if flags.is_classmethod || found_class_property || is_dunder_new {
+        let mut receiver_tparam = None;
+        if def.is_reassigned_classmethod
+            && def.is_used_before_classmethod
+            && def
+                .parameters
+                .iter()
+                .next()
+                .is_some_and(|p| !p.is_variadic() && p.annotation().is_none())
+        {
+            if let Some(cls) = &defining_cls {
+                // An earlier alias can bind an instance while classmethod binds a class.
+                // Quantify the receiver so each call retains its own return type.
+                let mut instance = self.heap.mk_class_type(self.as_class_type_unchecked(cls));
+                // The bound accepts every specialization of the defining class.
+                instance.subst_mut_fn(&mut |q| {
+                    Some(Quantified::as_gradual_type_helper(q.kind(), None))
+                });
+                let class = self.heap.mk_type_of(instance.clone());
+                let receiver = Quantified::type_var(
+                    Name::new_static("Receiver"),
+                    QuantifiedIdentity::new(
+                        self.module().name(),
+                        AnchorIndex::first(def.name.range),
+                        QuantifiedOrigin::Synthetic { is_self: true },
+                    ),
+                    None,
+                    Restriction::Bound(self.unions(vec![instance, class])),
+                    PreInferenceVariance::Undefined,
+                );
+                self_type = Some(self.heap.mk_quantified(receiver.clone()));
+                receiver_tparam = Some(receiver);
+            }
+        } else if flags.is_classmethod
+            || found_class_property
+            || is_dunder_new
+            || def.is_reassigned_classmethod
+        {
             self_type = self_type.map(|t| self.heap.mk_type_of(t));
         } else if flags.is_staticmethod {
             self_type = None;
@@ -698,6 +737,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .iter()
             .filter_map(|key| self.get_idx(*key).parameter().cloned());
         tparams.extend(legacy_tparams);
+        tparams.extend(receiver_tparam);
         // Validate written parameters before declaration-scoped dimensions are appended below.
         let tparams =
             Arc::new(self.validated_tparams(def.range, tparams, TParamsSource::Function, errors));
@@ -891,6 +931,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // For classmethods, the annotation is `type[TFoo]`, so we also unwrap `Type::Type(...)`.
         if has_implicit_self_or_cls_param
             && !def.metadata.flags.is_staticmethod
+            && stmt
+                .parameters
+                .iter()
+                .next()
+                .is_some_and(|p| p.annotation().is_some())
             && let Some(first_param) = def.params.first()
             && {
                 let ty = first_param.as_type();

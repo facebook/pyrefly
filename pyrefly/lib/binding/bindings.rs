@@ -1189,12 +1189,76 @@ impl<'a> BindingsBuilder<'a> {
         matches!(self.idx_to_binding(idx), Some(Binding::ClassDef(..)))
     }
 
-    fn idx_to_binding_mut<K>(&mut self, idx: Idx<K>) -> Option<&mut K::Value>
+    pub(super) fn idx_to_binding_mut<K>(&mut self, idx: Idx<K>) -> Option<&mut K::Value>
     where
         K: Keyed,
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
         self.table.get_mut::<K>().1.get_mut(idx)
+    }
+
+    /// Infer the receiver for a local classmethod assignment without changing method flags.
+    pub fn infer_classmethod_receiver(&mut self, name: &Name) {
+        let Some(mut idx) = self.scopes.current_flow_idx(name) else {
+            return;
+        };
+        let mut functions = Vec::new();
+        while let Some(Binding::Function {
+            decorated_idx,
+            pred_idx,
+            ..
+        }) = self.idx_to_binding(idx)
+        {
+            let pred_idx = *pred_idx;
+            let undecorated_idx = self
+                .idx_to_binding(*decorated_idx)
+                .expect("a function flow binding has a decorated function")
+                .undecorated_idx;
+            let binding = self
+                .idx_to_binding(undecorated_idx)
+                .expect("a decorated function has an undecorated function");
+            let specials = binding
+                .decorators
+                .iter()
+                .map(|idx| {
+                    let decorator = self
+                        .idx_to_binding(*idx)
+                        .expect("a decorator has a binding");
+                    self.as_special_export(&decorator.expr)
+                })
+                .collect::<Vec<_>>();
+            if !functions.is_empty() && !specials.contains(&Some(SpecialExport::Overload)) {
+                break;
+            }
+            // Custom decorators receive the original function and can change its receiver.
+            if specials
+                .iter()
+                .any(|special| *special != Some(SpecialExport::Overload))
+            {
+                return;
+            }
+            functions.push(undecorated_idx);
+            let Some(pred_idx) = pred_idx else { break };
+            idx = pred_idx;
+        }
+        if functions.is_empty() {
+            return;
+        }
+        let is_used = functions.iter().any(|idx| {
+            self.idx_to_binding(*idx)
+                .expect("a decorated function has an undecorated function")
+                .def
+                .is_used_before_classmethod
+        });
+        for idx in functions {
+            let function = &mut self
+                .idx_to_binding_mut(idx)
+                .expect("a decorated function has an undecorated function")
+                .def;
+            function.is_reassigned_classmethod = true;
+            function.is_used_before_classmethod = is_used;
+        }
+        self.scopes.mark_method_as_classmethod(name);
     }
 
     /// Declare a `Key` as a usage, which can be used for name lookups. Like `idx_for_promise`,

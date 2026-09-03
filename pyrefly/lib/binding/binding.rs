@@ -2081,6 +2081,10 @@ pub struct FunctionDefData {
     pub parameters: Box<Parameters>,
     pub type_params: Option<Box<TypeParams>>,
     pub is_async: bool,
+    /// Whether this method is converted with the class-body idiom `f = classmethod(f)`.
+    pub is_reassigned_classmethod: bool,
+    /// Whether another expression uses this function before its classmethod assignment.
+    pub is_used_before_classmethod: bool,
     pub range: TextRange,
 }
 
@@ -2091,6 +2095,8 @@ impl FunctionDefData {
             parameters: def.parameters,
             type_params: def.type_params,
             is_async: def.is_async,
+            is_reassigned_classmethod: false,
+            is_used_before_classmethod: false,
             range: def.range,
         }
     }
