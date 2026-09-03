@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::fs;
+
 use pyrefly_build::handle::Handle;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -1977,6 +1979,55 @@ fn test_pkgutil_namespace_absorbs_implicit_namespace() {
         "main",
         "main.py",
         "from ns.bar import Foo\nfrom ns.baz import helper\n",
+    );
+    let (state, handle_fn) = env.to_state();
+    state
+        .transaction()
+        .get_errors(&[handle_fn("main")])
+        .check_against_expectations()
+        .unwrap();
+}
+
+#[test]
+fn test_site_package_star_import_reexport() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let root = tempdir.path();
+    fs::create_dir_all(root.join("fakestarlib")).unwrap();
+    fs::write(
+        root.join("fakestarlib/__init__.py"),
+        r#"from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ._direct import Explicit
+    from ._impl import *
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("fakestarlib/_direct.py"),
+        "class Explicit:\n    value: int = 0\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("fakestarlib/_impl.py"),
+        r#"__all__ = ["Starred"]
+
+class Starred:
+    value: int = 0
+"#,
+    )
+    .unwrap();
+    fs::write(root.join("fakestarlib/py.typed"), "").unwrap();
+
+    let mut env = TestEnv::new().with_site_package_paths(vec![root.to_path_buf()]);
+    env.add_with_path(
+        "main",
+        "main.py",
+        r#"from fakestarlib import Explicit, Starred
+
+explicit: Explicit = Explicit()
+starred: Starred = Starred()
+"#,
     );
     let (state, handle_fn) = env.to_state();
     state
