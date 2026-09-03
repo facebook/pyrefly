@@ -91,6 +91,15 @@ impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
         errors: &ErrorCollector,
     ) -> Option<Type> {
         self.validate_shape_flag_type_parameter_default(name, default, range, restriction, errors)
+            .or_else(|| {
+                self.validate_shape_index_type_parameter_default(
+                    name,
+                    default,
+                    range,
+                    restriction,
+                    errors,
+                )
+            })
     }
 
     pub(crate) fn validate_shape_extension_function_parameters(
@@ -101,6 +110,7 @@ impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
         errors: &ErrorCollector,
     ) {
         self.validate_shape_flag_function_parameters(stmt, params, tparams, errors);
+        self.validate_shape_index_function_parameters(stmt, params, tparams, errors);
     }
 
     pub(crate) fn reject_legacy_shape_extension_bound(
@@ -109,18 +119,20 @@ impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
         range: TextRange,
         errors: &ErrorCollector,
     ) -> bool {
-        if matches!(bound, Type::ClassType(cls) if cls.has_qname("shape_extensions", "Flag")) {
-            self.error(
-                errors,
-                range,
-                ErrorKind::InvalidTypeVar,
-                "`shape_extensions.Flag` is supported only as a direct PEP 695 type parameter bound"
-                    .to_owned(),
-            );
-            true
-        } else {
-            false
-        }
+        let kind = match bound {
+            Type::ClassType(cls) if cls.has_qname("shape_extensions", "Flag") => "Flag",
+            Type::ClassType(cls) if cls.has_qname("shape_extensions", "Index") => "Index",
+            _ => return false,
+        };
+        self.error(
+            errors,
+            range,
+            ErrorKind::InvalidTypeVar,
+            format!(
+                "`shape_extensions.{kind}` is supported only as a direct PEP 695 type parameter bound"
+            ),
+        );
+        true
     }
 
     pub(crate) fn resolve_shape_type_parameter_bound(
@@ -166,18 +178,28 @@ impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
                 );
                 Restriction::Unrestricted
             }
+            TypeParameterBound::ShapeIndex => Restriction::index(),
             TypeParameterBound::Ordinary(bound) => {
                 let bound_ty = self.expr_untype(bound, TypeFormContext::TypeVarConstraint, errors);
-                if matches!(&bound_ty, Type::ClassType(cls) if cls.has_qname("shape_extensions", "Flag"))
-                {
+                let aliased_kind = match &bound_ty {
+                    Type::ClassType(cls) if cls.has_qname("shape_extensions", "Flag") => {
+                        Some("Flag")
+                    }
+                    Type::ClassType(cls) if cls.has_qname("shape_extensions", "Index") => {
+                        Some("Index")
+                    }
+                    _ => None,
+                };
+                if let Some(kind) = aliased_kind {
                     // TODO: Distinguish quoted canonical bounds from aliases so quoted syntax gets
                     // its intended behavior or a quoted-form diagnostic rather than an alias error.
                     self.error(
                         errors,
                         bound.range(),
                         ErrorKind::InvalidTypeVar,
-                        "`shape_extensions.Flag` must be used directly rather than through a type alias"
-                            .to_owned(),
+                        format!(
+                            "`shape_extensions.{kind}` must be used directly rather than through a type alias"
+                        ),
                     );
                     Restriction::Unrestricted
                 } else {
@@ -202,6 +224,21 @@ impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
                 range,
                 ErrorKind::InvalidTypeVar,
                 "`Flag` type parameters are not supported on type aliases".to_owned(),
+            );
+        }
+        let index_source = match source {
+            TParamsSource::Function => None,
+            TParamsSource::Class => Some("classes"),
+            TParamsSource::TypeAlias => Some("type aliases"),
+        };
+        if let Some(source_name) = index_source
+            && tparams.iter().any(|tparam| tparam.restriction().is_index())
+        {
+            self.error(
+                errors,
+                range,
+                ErrorKind::InvalidTypeVar,
+                format!("`Index` type parameters are not supported on {source_name}"),
             );
         }
     }

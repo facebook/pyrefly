@@ -6,20 +6,26 @@
  */
 
 //! Shape algebra for indexing shaped arrays.
+//!
+//! `lower_index_type` supports the annotation-driven stub path. The legacy shaped-array path
+//! continues to classify index expressions separately for compatibility with older stubs.
 
 use crate::dimension::Int;
 use crate::dimension::ShapeError;
+use crate::quantified::QuantifiedKind;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
 use crate::shaped_array::broadcast_shapes;
 use crate::shaped_array::gradual_shape_middle;
-
-// ============================================================================
-// Shaped Array Indexing / Slicing
-// ============================================================================
+use crate::tuple::Tuple;
+use crate::type_var::FlagDomain;
+use crate::type_var::FlagMember;
+use crate::type_var::Restriction;
+use crate::types::Type;
 
 /// A single index operation, pre-classified by the type checker.
 /// The type checker resolves Expr nodes into these before calling shape functions.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexOp {
     /// Integer index: removes the dimension
     Int,
@@ -40,6 +46,508 @@ pub enum IndexOp {
     /// Does not consume a shape dimension.
     NewAxis,
 }
+
+/// One component of a lowered indexing operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexComponent {
+    Operation(IndexOp),
+    Ellipsis,
+}
+
+/// The syntax-free result of interpreting an ordinary type as an index value.
+///
+/// `Index`-restricted type parameters retain their ordinary `Type`; this result is created only
+/// while validating a specialization or evaluating an indexing operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexTypeLowering {
+    Precise(Vec<IndexComponent>),
+    Gradual,
+    Invalid,
+}
+
+impl IndexTypeLowering {
+    pub fn is_valid(&self) -> bool {
+        !matches!(self, Self::Invalid)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum IndexPosition {
+    Root,
+    Component,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SliceComponent {
+    Precise(Option<Int>),
+    Gradual,
+    Invalid,
+}
+
+enum IntegerTypeLowering {
+    Precise(Int),
+    Gradual,
+    Invalid,
+}
+
+fn lower_integer_restriction(restriction: &Restriction) -> IntegerTypeLowering {
+    match restriction {
+        Restriction::Bound(bound) => lower_integer_type(bound),
+        Restriction::Constraints(constraints) => {
+            if constraints.is_empty() {
+                return IntegerTypeLowering::Invalid;
+            }
+            let mut gradual = false;
+            for constraint in constraints {
+                match lower_integer_type(constraint) {
+                    IntegerTypeLowering::Invalid => return IntegerTypeLowering::Invalid,
+                    IntegerTypeLowering::Gradual => gradual = true,
+                    IntegerTypeLowering::Precise(_) => {}
+                }
+            }
+            if gradual {
+                IntegerTypeLowering::Gradual
+            } else {
+                IntegerTypeLowering::Precise(Int::Int)
+            }
+        }
+        Restriction::ShapeExtension(_)
+            if restriction
+                .flag_domain()
+                .is_some_and(|domain| domain.is_subset_of(FlagDomain::of(FlagMember::Int))) =>
+        {
+            IntegerTypeLowering::Precise(Int::Int)
+        }
+        Restriction::ShapeExtension(_) | Restriction::Unrestricted => IntegerTypeLowering::Invalid,
+    }
+}
+
+fn lower_integer_type(ty: &Type) -> IntegerTypeLowering {
+    if ty.is_any() || matches!(ty, Type::Var(_)) {
+        return IntegerTypeLowering::Gradual;
+    }
+    if let Some(value) = Int::from_type(ty) {
+        return IntegerTypeLowering::Precise(value);
+    }
+    if matches!(ty, Type::ClassType(cls) if cls.is_builtin("int")) {
+        return IntegerTypeLowering::Precise(Int::Int);
+    }
+    if let Type::Union(union) = ty {
+        if union.members.is_empty() {
+            return IntegerTypeLowering::Invalid;
+        }
+        let mut gradual = false;
+        for member in &union.members {
+            match lower_integer_type(member) {
+                IntegerTypeLowering::Invalid => return IntegerTypeLowering::Invalid,
+                IntegerTypeLowering::Gradual => gradual = true,
+                IntegerTypeLowering::Precise(_) => {}
+            }
+        }
+        return if gradual {
+            IntegerTypeLowering::Gradual
+        } else {
+            IntegerTypeLowering::Precise(Int::Int)
+        };
+    }
+    let restriction = match ty {
+        Type::Quantified(q) => Some(q.restriction()),
+        Type::TypeVar(tv) => Some(tv.restriction()),
+        _ => None,
+    };
+    restriction.map_or(IntegerTypeLowering::Invalid, lower_integer_restriction)
+}
+
+fn lower_slice_component(ty: &Type) -> SliceComponent {
+    if ty.is_any() || matches!(ty, Type::Var(_)) {
+        return SliceComponent::Gradual;
+    }
+    if matches!(ty, Type::None) {
+        return SliceComponent::Precise(None);
+    }
+    if let Type::Union(union) = ty {
+        return lower_slice_members(&union.members);
+    }
+    let restriction = match ty {
+        Type::Quantified(q) => Some(q.restriction()),
+        Type::TypeVar(tv) => Some(tv.restriction()),
+        _ => None,
+    };
+    if let Some(restriction) = restriction {
+        return lower_slice_restriction(restriction);
+    }
+    match lower_integer_type(ty) {
+        IntegerTypeLowering::Precise(value) => SliceComponent::Precise(Some(value)),
+        IntegerTypeLowering::Gradual => SliceComponent::Gradual,
+        IntegerTypeLowering::Invalid => SliceComponent::Invalid,
+    }
+}
+
+fn lower_slice_members(members: &[Type]) -> SliceComponent {
+    if members.is_empty() {
+        return SliceComponent::Invalid;
+    }
+    let mut precise = None;
+    let mut gradual = false;
+    for member in members {
+        match lower_slice_component(member) {
+            SliceComponent::Invalid => return SliceComponent::Invalid,
+            SliceComponent::Gradual => gradual = true,
+            SliceComponent::Precise(value) => match &precise {
+                None => precise = Some(value),
+                Some(previous) if previous == &value => {}
+                Some(_) => gradual = true,
+            },
+        }
+    }
+    if gradual {
+        SliceComponent::Gradual
+    } else {
+        precise.map_or(SliceComponent::Invalid, SliceComponent::Precise)
+    }
+}
+
+fn lower_slice_restriction(restriction: &Restriction) -> SliceComponent {
+    match restriction {
+        Restriction::Bound(bound) => lower_slice_component(bound),
+        Restriction::Constraints(constraints) => lower_slice_members(constraints),
+        Restriction::ShapeExtension(_) => {
+            let Some(domain) = restriction.flag_domain() else {
+                return SliceComponent::Invalid;
+            };
+            if domain.contains(FlagMember::Bool)
+                || domain.contains(FlagMember::Str)
+                || domain.contains(FlagMember::IntTuple)
+            {
+                return SliceComponent::Invalid;
+            }
+            match (
+                domain.contains(FlagMember::Int),
+                domain.contains(FlagMember::NoneType),
+            ) {
+                (true, false) => SliceComponent::Precise(Some(Int::Int)),
+                (false, true) => SliceComponent::Precise(None),
+                (true, true) => SliceComponent::Gradual,
+                (false, false) => unreachable!("Flag domains are nonempty"),
+            }
+        }
+        Restriction::Unrestricted => SliceComponent::Invalid,
+    }
+}
+
+fn lower_slice(ty: &Type) -> IndexTypeLowering {
+    let Type::ClassType(cls) = ty else {
+        return IndexTypeLowering::Invalid;
+    };
+    if !cls.is_builtin("slice") {
+        return IndexTypeLowering::Invalid;
+    }
+    let Ok([start, stop, step]) = <&[Type; 3]>::try_from(cls.targs().as_slice()) else {
+        return IndexTypeLowering::Gradual;
+    };
+    let (start, stop, step) = match (
+        lower_slice_component(start),
+        lower_slice_component(stop),
+        lower_slice_component(step),
+    ) {
+        (SliceComponent::Invalid, _, _)
+        | (_, SliceComponent::Invalid, _)
+        | (_, _, SliceComponent::Invalid) => return IndexTypeLowering::Invalid,
+        (SliceComponent::Gradual, _, _)
+        | (_, SliceComponent::Gradual, _)
+        | (_, _, SliceComponent::Gradual) => return IndexTypeLowering::Gradual,
+        (
+            SliceComponent::Precise(start),
+            SliceComponent::Precise(stop),
+            SliceComponent::Precise(step),
+        ) => (start, stop, step),
+    };
+    IndexTypeLowering::Precise(vec![IndexComponent::Operation(IndexOp::Slice {
+        start,
+        stop,
+        step,
+    })])
+}
+
+fn is_unresolved_tuple_middle(ty: &Type) -> bool {
+    match ty {
+        Type::Var(_) | Type::TypeVarTuple(_) => true,
+        Type::Unpack(inner) => is_unresolved_tuple_middle(inner),
+        Type::Quantified(q) => q.kind() == QuantifiedKind::TypeVarTuple,
+        _ => false,
+    }
+}
+
+fn lower_integer_tuple(ty: &Type) -> IntegerTypeLowering {
+    match ty {
+        Type::Var(_) | Type::TypeVarTuple(_) => IntegerTypeLowering::Gradual,
+        Type::Unpack(inner) => lower_integer_tuple(inner),
+        Type::Quantified(q) if q.kind() == QuantifiedKind::TypeVarTuple => {
+            IntegerTypeLowering::Gradual
+        }
+        Type::Tuple(Tuple::Concrete(members)) => {
+            let mut gradual = false;
+            for member in members {
+                match lower_integer_type(member) {
+                    IntegerTypeLowering::Invalid => return IntegerTypeLowering::Invalid,
+                    IntegerTypeLowering::Gradual => gradual = true,
+                    IntegerTypeLowering::Precise(_) => {}
+                }
+            }
+            if gradual {
+                IntegerTypeLowering::Gradual
+            } else {
+                IntegerTypeLowering::Precise(Int::Literal(members.len() as i64))
+            }
+        }
+        Type::Tuple(Tuple::Unbounded(member)) => match lower_integer_type(member) {
+            IntegerTypeLowering::Precise(_) => IntegerTypeLowering::Precise(Int::Int),
+            other => other,
+        },
+        Type::Tuple(Tuple::Unpacked(parts)) => {
+            let (prefix, middle, suffix) = parts.parts();
+            let mut gradual = false;
+            for member in prefix.iter().chain(suffix) {
+                match lower_integer_type(member) {
+                    IntegerTypeLowering::Invalid => return IntegerTypeLowering::Invalid,
+                    IntegerTypeLowering::Gradual => gradual = true,
+                    IntegerTypeLowering::Precise(_) => {}
+                }
+            }
+            match lower_integer_tuple(middle) {
+                IntegerTypeLowering::Invalid => IntegerTypeLowering::Invalid,
+                IntegerTypeLowering::Gradual => IntegerTypeLowering::Gradual,
+                IntegerTypeLowering::Precise(_) if gradual => IntegerTypeLowering::Gradual,
+                IntegerTypeLowering::Precise(_) => IntegerTypeLowering::Precise(Int::Int),
+            }
+        }
+        _ => IntegerTypeLowering::Invalid,
+    }
+}
+
+fn ellipsis_count(components: &[IndexComponent]) -> usize {
+    components
+        .iter()
+        .filter(|component| matches!(component, IndexComponent::Ellipsis))
+        .count()
+}
+
+fn combine_index_alternatives<'a>(
+    alternatives: impl IntoIterator<Item = &'a Type>,
+    position: IndexPosition,
+) -> IndexTypeLowering {
+    let mut precise = None;
+    let mut gradual = false;
+    let mut saw_alternative = false;
+    for alternative in alternatives {
+        saw_alternative = true;
+        match lower_index_type_in_position(alternative, position) {
+            IndexTypeLowering::Invalid => return IndexTypeLowering::Invalid,
+            IndexTypeLowering::Gradual => gradual = true,
+            IndexTypeLowering::Precise(components) => match &precise {
+                None => precise = Some(components),
+                Some(previous) if previous == &components => {}
+                Some(_) => gradual = true,
+            },
+        }
+    }
+    if !saw_alternative {
+        IndexTypeLowering::Invalid
+    } else if gradual {
+        IndexTypeLowering::Gradual
+    } else {
+        precise.map_or(IndexTypeLowering::Invalid, IndexTypeLowering::Precise)
+    }
+}
+
+fn lower_flag_domain(domain: FlagDomain, position: IndexPosition) -> IndexTypeLowering {
+    if domain.contains(FlagMember::Bool) || domain.contains(FlagMember::Str) {
+        return IndexTypeLowering::Invalid;
+    }
+    let has_int = domain.contains(FlagMember::Int);
+    let has_tuple = domain.contains(FlagMember::IntTuple);
+    let has_none = domain.contains(FlagMember::NoneType);
+    match (has_int, has_tuple, has_none) {
+        (false, false, false) => unreachable!("Flag domains are nonempty"),
+        (true, false, false) => {
+            IndexTypeLowering::Precise(vec![IndexComponent::Operation(IndexOp::Int)])
+        }
+        (false, false, true) => {
+            IndexTypeLowering::Precise(vec![IndexComponent::Operation(IndexOp::NewAxis)])
+        }
+        (false, true, false) if matches!(position, IndexPosition::Component) => {
+            IndexTypeLowering::Precise(vec![IndexComponent::Operation(IndexOp::Fancy(Int::Int))])
+        }
+        _ => IndexTypeLowering::Gradual,
+    }
+}
+
+fn lower_index_restriction(
+    restriction: &Restriction,
+    position: IndexPosition,
+) -> IndexTypeLowering {
+    match restriction {
+        Restriction::Bound(bound) => lower_index_type_in_position(bound, position),
+        Restriction::Constraints(constraints) => combine_index_alternatives(constraints, position),
+        Restriction::ShapeExtension(_) if restriction.is_index() => IndexTypeLowering::Gradual,
+        Restriction::ShapeExtension(_) => restriction
+            .flag_domain()
+            .map_or(IndexTypeLowering::Invalid, |domain| {
+                lower_flag_domain(domain, position)
+            }),
+        Restriction::Unrestricted => IndexTypeLowering::Invalid,
+    }
+}
+
+fn lower_index_type_in_position(ty: &Type, position: IndexPosition) -> IndexTypeLowering {
+    if ty.is_any() || matches!(ty, Type::Var(_)) {
+        return IndexTypeLowering::Gradual;
+    }
+    let shape_extension_restriction = match ty {
+        Type::Quantified(q)
+            if q.restriction().is_index() || q.restriction().flag_domain().is_some() =>
+        {
+            Some(q.restriction())
+        }
+        Type::TypeVar(tv)
+            if tv.restriction().is_index() || tv.restriction().flag_domain().is_some() =>
+        {
+            Some(tv.restriction())
+        }
+        _ => None,
+    };
+    if let Some(restriction) = shape_extension_restriction {
+        return lower_index_restriction(restriction, position);
+    }
+    match lower_integer_type(ty) {
+        IntegerTypeLowering::Precise(_) => {
+            return IndexTypeLowering::Precise(vec![IndexComponent::Operation(IndexOp::Int)]);
+        }
+        IntegerTypeLowering::Gradual => return IndexTypeLowering::Gradual,
+        IntegerTypeLowering::Invalid => {}
+    }
+    match ty {
+        Type::Quantified(q) => return lower_index_restriction(q.restriction(), position),
+        Type::TypeVar(tv) => return lower_index_restriction(tv.restriction(), position),
+        _ => {}
+    }
+    if matches!(ty, Type::None) {
+        return IndexTypeLowering::Precise(vec![IndexComponent::Operation(IndexOp::NewAxis)]);
+    }
+    if ty.is_ellipsis_value() {
+        return IndexTypeLowering::Precise(vec![IndexComponent::Ellipsis]);
+    }
+    if matches!(ty, Type::ClassType(cls) if cls.is_builtin("slice")) {
+        return lower_slice(ty);
+    }
+    if let Type::Union(union) = ty {
+        return combine_index_alternatives(&union.members, position);
+    }
+    if let Type::Tuple(tuple) = ty {
+        if matches!(position, IndexPosition::Component) {
+            return match lower_integer_tuple(ty) {
+                IntegerTypeLowering::Precise(dimension) => {
+                    IndexTypeLowering::Precise(vec![IndexComponent::Operation(IndexOp::Fancy(
+                        dimension,
+                    ))])
+                }
+                IntegerTypeLowering::Gradual => IndexTypeLowering::Gradual,
+                IntegerTypeLowering::Invalid => IndexTypeLowering::Invalid,
+            };
+        }
+        return match tuple {
+            Tuple::Concrete(members) => {
+                let mut components = Vec::new();
+                let mut gradual = false;
+                for member in members {
+                    match lower_index_type_in_position(member, IndexPosition::Component) {
+                        IndexTypeLowering::Precise(mut member_components) => {
+                            components.append(&mut member_components)
+                        }
+                        IndexTypeLowering::Gradual => gradual = true,
+                        IndexTypeLowering::Invalid => return IndexTypeLowering::Invalid,
+                    }
+                }
+                if gradual {
+                    IndexTypeLowering::Gradual
+                } else {
+                    IndexTypeLowering::Precise(components)
+                }
+            }
+            Tuple::Unbounded(member) => {
+                match lower_index_type_in_position(member, IndexPosition::Component) {
+                    // An unbounded tuple whose repeated component is definitely an ellipsis can
+                    // contain more than one ellipsis, which is never a legal index.
+                    IndexTypeLowering::Precise(components) if ellipsis_count(&components) != 0 => {
+                        IndexTypeLowering::Invalid
+                    }
+                    IndexTypeLowering::Precise(_) | IndexTypeLowering::Gradual => {
+                        IndexTypeLowering::Gradual
+                    }
+                    IndexTypeLowering::Invalid => IndexTypeLowering::Invalid,
+                }
+            }
+            Tuple::Unpacked(parts) => {
+                let (prefix, middle, suffix) = parts.parts();
+                let mut ellipses = 0;
+                for member in prefix.iter().chain(suffix) {
+                    match lower_index_type_in_position(member, IndexPosition::Component) {
+                        IndexTypeLowering::Precise(components) => {
+                            ellipses += ellipsis_count(&components);
+                        }
+                        IndexTypeLowering::Gradual => {}
+                        IndexTypeLowering::Invalid => return IndexTypeLowering::Invalid,
+                    }
+                }
+                if ellipses > 1 {
+                    return IndexTypeLowering::Invalid;
+                }
+                if !is_unresolved_tuple_middle(middle) {
+                    match lower_index_type_in_position(middle, IndexPosition::Root) {
+                        IndexTypeLowering::Precise(components) => {
+                            ellipses += ellipsis_count(&components);
+                        }
+                        IndexTypeLowering::Gradual => {}
+                        IndexTypeLowering::Invalid => return IndexTypeLowering::Invalid,
+                    }
+                }
+                if ellipses > 1 {
+                    IndexTypeLowering::Invalid
+                } else {
+                    IndexTypeLowering::Gradual
+                }
+            }
+        };
+    }
+    if let Type::ClassType(cls) = ty
+        && cls.is_builtin("list")
+        && let [member] = cls.targs().as_slice()
+    {
+        return match lower_integer_type(member) {
+            IntegerTypeLowering::Precise(_) => {
+                IndexTypeLowering::Precise(vec![IndexComponent::Operation(IndexOp::Fancy(
+                    Int::Int,
+                ))])
+            }
+            IntegerTypeLowering::Gradual => IndexTypeLowering::Gradual,
+            IntegerTypeLowering::Invalid => IndexTypeLowering::Invalid,
+        };
+    }
+    IndexTypeLowering::Invalid
+}
+
+/// Interpret an ordinary runtime type as the supported shape-index grammar.
+///
+/// A tuple at the root denotes several axis operations, while a tuple nested inside that root is
+/// one integer-sequence operand. Unknown structure is accepted as gradual so typed fallback
+/// overloads do not need a parallel representation for imprecise-but-valid indices.
+pub fn lower_index_type(ty: &Type) -> IndexTypeLowering {
+    lower_index_type_in_position(ty, IndexPosition::Root)
+}
+
+// ============================================================================
+// Shape Algebra
+// ============================================================================
 
 /// Apply a single integer index — removes first dimension.
 /// E.g. `Tensor[10, 20][i]` -> `Tensor[20]`
@@ -515,12 +1023,18 @@ mod tests {
     use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
+    use pyrefly_python::nesting_context::NestingContext;
     use ruff_python_ast::Identifier;
     use ruff_python_ast::name::Name;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
 
     use super::*;
+    use crate::class::Class;
+    use crate::class::ClassDefIndex;
+    use crate::class::ClassType;
+    use crate::class::PrecomputedTParams;
+    use crate::lit_int::LitInt;
     use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedIdentity;
@@ -529,8 +1043,120 @@ mod tests {
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
     use crate::type_var::TypeVar;
+    use crate::types::TArgs;
+    use crate::types::TParams;
     use crate::types::Type;
+    use crate::types::Union;
     use crate::types::Var;
+
+    #[test]
+    fn lowers_root_and_nested_tuples_with_distinct_meanings() {
+        let index = Type::Tuple(Tuple::Concrete(vec![
+            LitInt::new(0).to_implicit_type(),
+            Type::Tuple(Tuple::Concrete(vec![
+                LitInt::new(1).to_implicit_type(),
+                LitInt::new(2).to_implicit_type(),
+            ])),
+            Type::None,
+        ]));
+        assert_eq!(
+            lower_index_type(&index),
+            IndexTypeLowering::Precise(vec![
+                IndexComponent::Operation(IndexOp::Int),
+                IndexComponent::Operation(IndexOp::Fancy(Int::Literal(2))),
+                IndexComponent::Operation(IndexOp::NewAxis),
+            ])
+        );
+    }
+
+    #[test]
+    fn invalid_tuple_member_wins_over_gradual_member() {
+        let index = Type::Tuple(Tuple::Concrete(vec![Type::any_implicit(), Type::Ellipsis]));
+        assert_eq!(lower_index_type(&index), IndexTypeLowering::Invalid);
+    }
+
+    #[test]
+    fn unresolved_tuple_structure_is_valid_but_gradual() {
+        let index = Type::Tuple(Tuple::Unbounded(Box::new(Type::Int(Int::Int))));
+        assert_eq!(lower_index_type(&index), IndexTypeLowering::Gradual);
+    }
+
+    #[test]
+    fn nested_tuple_members_must_be_integers() {
+        let nested = Type::Tuple(Tuple::Concrete(vec![Type::Tuple(Tuple::unpacked(
+            vec![Type::None],
+            Type::unbounded_tuple(Type::Int(Int::Int)),
+            Vec::new(),
+        ))]));
+        assert_eq!(lower_index_type(&nested), IndexTypeLowering::Invalid);
+    }
+
+    #[test]
+    fn known_unpacked_root_members_must_be_valid_indices() {
+        let index = Type::Tuple(Tuple::unpacked(
+            vec![Type::Int(Int::Int)],
+            Type::unbounded_tuple(bare_builtin("str")),
+            Vec::new(),
+        ));
+        assert_eq!(lower_index_type(&index), IndexTypeLowering::Invalid);
+    }
+
+    #[test]
+    fn unresolved_nested_tuple_members_are_gradual() {
+        let nested = Type::Tuple(Tuple::Concrete(vec![Type::Tuple(Tuple::Concrete(vec![
+            Type::Var(Var::ZERO),
+        ]))]));
+        assert_eq!(lower_index_type(&nested), IndexTypeLowering::Gradual);
+    }
+
+    #[test]
+    fn integer_unions_are_valid_nested_tuple_members() {
+        let nested = Type::Tuple(Tuple::Concrete(vec![Type::Tuple(Tuple::Concrete(vec![
+            Type::union(vec![
+                LitInt::new(1).to_implicit_type(),
+                LitInt::new(2).to_implicit_type(),
+            ]),
+        ]))]));
+        assert_eq!(
+            lower_index_type(&nested),
+            IndexTypeLowering::Precise(vec![IndexComponent::Operation(IndexOp::Fancy(
+                Int::Literal(1),
+            ))])
+        );
+    }
+
+    #[test]
+    fn empty_integer_union_is_invalid() {
+        let empty_union = Type::Union(Box::new(Union {
+            members: Vec::new(),
+            display_name: None,
+        }));
+        assert_eq!(lower_index_type(&empty_union), IndexTypeLowering::Invalid);
+    }
+
+    #[test]
+    fn flag_slice_components_accept_integer_and_none_domains() {
+        let integer = FlagDomain::of(FlagMember::Int);
+        let none = FlagDomain::of(FlagMember::NoneType);
+        assert_eq!(
+            lower_slice_restriction(&Restriction::flag(integer)),
+            SliceComponent::Precise(Some(Int::Int))
+        );
+        assert_eq!(
+            lower_slice_restriction(&Restriction::flag(none)),
+            SliceComponent::Precise(None)
+        );
+        assert_eq!(
+            lower_slice_restriction(&Restriction::flag(integer.join(none))),
+            SliceComponent::Gradual
+        );
+        assert_eq!(
+            lower_slice_restriction(&Restriction::flag(
+                integer.join(FlagDomain::of(FlagMember::Bool)),
+            )),
+            SliceComponent::Invalid
+        );
+    }
 
     fn size(value: i64) -> Type {
         Type::Int(Int::Literal(value))
@@ -546,6 +1172,28 @@ mod tests {
             ModulePath::filesystem(PathBuf::from(module)),
             Arc::new("fake module contents".to_owned()),
         )
+    }
+
+    fn bare_builtin(name: &str) -> Type {
+        Type::ClassType(ClassType::new(
+            Class::new(
+                ClassDefIndex(0),
+                Identifier::new(Name::new(name), TextRange::empty(TextSize::new(0))),
+                NestingContext::toplevel(),
+                fake_module("builtins"),
+                PrecomputedTParams::NotGeneric,
+                false,
+            ),
+            TArgs::default(),
+        ))
+    }
+
+    #[test]
+    fn bare_slice_is_valid_but_gradual() {
+        assert_eq!(
+            lower_index_type(&bare_builtin("slice")),
+            IndexTypeLowering::Gradual
+        );
     }
 
     fn fake_type_var(name: &str, kind: QuantifiedKind) -> TypeVar {
@@ -577,6 +1225,44 @@ mod tests {
             Restriction::Unrestricted,
             PreInferenceVariance::Invariant,
         )
+    }
+
+    fn generic_builtin(name: &str, argument: Type) -> Type {
+        Type::ClassType(ClassType::new(
+            Class::new(
+                ClassDefIndex(0),
+                Identifier::new(Name::new(name), TextRange::empty(TextSize::new(0))),
+                NestingContext::toplevel(),
+                fake_module("builtins"),
+                PrecomputedTParams::NotGeneric,
+                false,
+            ),
+            TArgs::new(
+                Arc::new(TParams::new(vec![fake_tparam(
+                    "T",
+                    QuantifiedKind::TypeVar,
+                )])),
+                vec![argument],
+            ),
+        ))
+    }
+
+    #[test]
+    fn nested_unbounded_integer_sequences_preserve_other_operations() {
+        for sequence in [
+            Type::unbounded_tuple(bare_builtin("int")),
+            generic_builtin("list", bare_builtin("int")),
+        ] {
+            let index = Type::Tuple(Tuple::Concrete(vec![Type::None, sequence, size(0)]));
+            assert_eq!(
+                lower_index_type(&index),
+                IndexTypeLowering::Precise(vec![
+                    IndexComponent::Operation(IndexOp::NewAxis),
+                    IndexComponent::Operation(IndexOp::Fancy(Int::Int)),
+                    IndexComponent::Operation(IndexOp::Int),
+                ])
+            );
+        }
     }
 
     #[test]

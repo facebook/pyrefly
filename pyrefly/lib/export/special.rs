@@ -21,6 +21,7 @@ pub enum SpecialExport {
     TypeVar,
     IntVar,
     Flag,
+    Index,
     ParamSpec,
     TypeVarTuple,
     Annotated,
@@ -99,6 +100,7 @@ impl SpecialExport {
             "TypeVar" => Some(Self::TypeVar),
             "IntVar" => Some(Self::IntVar),
             "Flag" => Some(Self::Flag),
+            "Index" => Some(Self::Index),
             "ParamSpec" => Some(Self::ParamSpec),
             "TypeVarTuple" => Some(Self::TypeVarTuple),
             "Annotated" => Some(Self::Annotated),
@@ -173,7 +175,7 @@ impl SpecialExport {
 
     pub fn defined_in(self, m: ModuleName) -> bool {
         match self {
-            Self::IntVar | Self::Flag | Self::MapIntTuples => {
+            Self::IntVar | Self::Flag | Self::Index | Self::MapIntTuples => {
                 matches!(m.as_str(), "shape_extensions")
             }
             Self::TypeVar => matches!(m.as_str(), "typing" | "typing_extensions"),

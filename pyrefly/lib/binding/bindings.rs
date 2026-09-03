@@ -2149,7 +2149,10 @@ impl<'a> BindingsBuilder<'a> {
                         }
                     }
                     if let Some(default_expr) = &mut tv.default {
-                        if matches!(bound, Some(TypeParameterBound::ShapeFlag { .. })) {
+                        if bound
+                            .as_ref()
+                            .is_some_and(TypeParameterBound::infer_default_as_value)
+                        {
                             self.ensure_expr(default_expr, &mut usage);
                         } else {
                             self.ensure_type_with_usage(default_expr, None, &mut usage);

@@ -34,6 +34,15 @@ pub enum TypeParameterBound {
         domain: Option<Expr>,
         range: TextRange,
     },
+    ShapeIndex,
+}
+
+impl TypeParameterBound {
+    /// Selects value-expression inference while syntax is being bound. The resolved restriction
+    /// exposes the same policy later, after the bound has become a semantic `Restriction`.
+    pub fn infer_default_as_value(&self) -> bool {
+        matches!(self, Self::ShapeFlag { .. } | Self::ShapeIndex)
+    }
 }
 
 pub(super) struct ShapeFunctionMetadata {
@@ -386,41 +395,51 @@ impl BindingsBuilder<'_> {
     }
 
     /// Record binding dependencies for a type parameter bound, including the
-    /// shape-specific handling required by `shape_extensions.Flag`.
+    /// shape-specific handling required by `shape_extensions.Flag` and
+    /// `shape_extensions.Index`.
     pub(super) fn record_type_parameter_bound(
         &mut self,
         bound_expr: &mut Expr,
         usage: &mut Usage,
     ) -> TypeParameterBound {
-        match bound_expr {
-            Expr::Subscript(subscript) if self.is_shape_flag(&subscript.value) => {
-                self.ensure_expr(&mut subscript.value, usage);
-                self.ensure_type_with_usage(&mut subscript.slice, None, usage);
-                TypeParameterBound::ShapeFlag {
-                    domain: Some((*subscript.slice).clone()),
-                    range: subscript.range,
-                }
-            }
-            marker if self.is_shape_flag(marker) => {
-                let range = marker.range();
-                self.ensure_expr(marker, usage);
+        if let Expr::Subscript(subscript) = bound_expr
+            && self.shape_extension_type_parameter_bound_marker(&subscript.value)
+                == Some(SpecialExport::Flag)
+        {
+            self.ensure_expr(&mut subscript.value, usage);
+            self.ensure_type_with_usage(&mut subscript.slice, None, usage);
+            return TypeParameterBound::ShapeFlag {
+                domain: Some((*subscript.slice).clone()),
+                range: subscript.range,
+            };
+        }
+
+        match self.shape_extension_type_parameter_bound_marker(bound_expr) {
+            Some(SpecialExport::Flag) => {
+                let range = bound_expr.range();
+                self.ensure_expr(bound_expr, usage);
                 TypeParameterBound::ShapeFlag {
                     domain: None,
                     range,
                 }
             }
-            bound => {
-                self.ensure_type_with_usage(bound, None, usage);
-                TypeParameterBound::Ordinary(bound.clone())
+            Some(SpecialExport::Index) => {
+                self.ensure_expr(bound_expr, usage);
+                TypeParameterBound::ShapeIndex
+            }
+            _ => {
+                self.ensure_type_with_usage(bound_expr, None, usage);
+                TypeParameterBound::Ordinary(bound_expr.clone())
             }
         }
     }
 
-    fn is_shape_flag(&self, expr: &Expr) -> bool {
-        self.is_shape_extensions_class_export_with_provenance(
-            expr,
-            SpecialExport::Flag,
-            self.as_special_export(expr),
-        )
+    fn shape_extension_type_parameter_bound_marker(&self, expr: &Expr) -> Option<SpecialExport> {
+        let provenance = self.as_special_export(expr);
+        [SpecialExport::Flag, SpecialExport::Index]
+            .into_iter()
+            .find(|special| {
+                self.is_shape_extensions_class_export_with_provenance(expr, *special, provenance)
+            })
     }
 }

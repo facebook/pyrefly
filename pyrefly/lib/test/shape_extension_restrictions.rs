@@ -14,6 +14,10 @@ fn shape_extension_env() -> TestEnv {
         "shape_extensions/__init__.pyi",
         r#"
 class Flag[T]: ...
+class Index: ...
+class Int[T]: ...
+from typing import _SpecialForm
+IntVar: _SpecialForm
 class ProxyMethod[T]: ...
 "#,
     )
@@ -25,6 +29,7 @@ fn shape_extension_reexport_env() -> TestEnv {
         "flag_reexport",
         r#"
 from shape_extensions import Flag as ReexportedFlag
+from shape_extensions import Index as ReexportedIndex
 "#,
     );
     env.add("flag_wildcard_reexport", "from flag_reexport import *\n");
@@ -38,6 +43,146 @@ from shape_extensions import Flag as ReexportedFlag
     );
     env
 }
+
+testcase!(
+    test_index_literal_preservation_and_imports,
+    shape_extension_reexport_env(),
+    r#"
+from types import EllipsisType
+from typing import Any, Literal, assert_type
+from shape_extensions import Index
+from flag_reexport import ReexportedIndex
+from flag_wildcard_reexport import ReexportedIndex as WildcardIndex
+
+def identity[I: Index](index: I) -> I: ...
+def reexported[I: ReexportedIndex](index: I) -> I: ...
+def wildcard[I: WildcardIndex](index: I) -> I: ...
+
+assert_type(identity(0), Literal[0])
+def typed(
+    part: slice[Literal[1], Literal[5], Literal[2]],
+    nested: tuple[slice[Literal[1], None, None], None, EllipsisType],
+    advanced: tuple[slice[None, None, None], tuple[Literal[0], Literal[2]]],
+) -> None:
+    assert_type(identity(part), slice[Literal[1], Literal[5], Literal[2]])
+    assert_type(
+        identity(nested),
+        tuple[slice[Literal[1], None, None], None, EllipsisType],
+    )
+    assert_type(
+        identity(advanced),
+        tuple[slice[None, None, None], tuple[Literal[0], Literal[2]]],
+    )
+assert_type(reexported(-1), Literal[-1])
+assert_type(wildcard(...), EllipsisType)
+
+IndexAlias = Index
+def aliased[I: IndexAlias](index: I) -> I: ...
+assert_type(aliased(3), Literal[3])
+
+broad_int: int = 0
+dynamic: Any = 0
+unbounded: tuple[int, ...] = (0, 1)
+items: list[int] = [0, 1]
+valid_union: int | None = 0
+assert_type(identity(broad_int), int)
+assert_type(identity(dynamic), Any)
+assert_type(identity(unbounded), tuple[int, ...])
+assert_type(identity(items), list[int])
+assert_type(identity([0, 1]), list[int])
+assert_type(identity(valid_union), int | None)
+
+identity(True)  # E: `Literal[True]` is not a valid `Index` value for type variable `I`
+identity("bad")  # E: `Literal['bad']` is not a valid `Index` value for type variable `I`
+identity((slice(None), "bad"))  # E: is not a valid `Index` value for type variable `I`
+assert_type(identity((..., ...)), tuple[EllipsisType, EllipsisType])
+bad_union: int | str = 0
+identity(bad_union)  # E: is not a valid `Index` value for type variable `I`
+bad_items: list[str] = []
+identity(bad_items)  # E: is not a valid `Index` value for type variable `I`
+class Array: ...
+class Tensor: ...
+identity(Array())  # E: is not a valid `Index` value for type variable `I`
+identity(Tensor())  # E: is not a valid `Index` value for type variable `I`
+"#,
+);
+
+testcase!(
+    test_index_symbolic_slices_and_unpacked_tuples,
+    shape_extension_env(),
+    r#"
+from typing import Literal, assert_type
+from shape_extensions import Flag, Index, Int, IntVar
+
+def identity[I: Index](index: I) -> I: ...
+
+def symbolic[N: IntVar](
+    n: Int[N],
+    first: slice[Int[N], None, Literal[-1]],
+    nested: tuple[slice[None, Int[N], None], Literal[0]],
+) -> None:
+    assert_type(identity(first), slice[Int[N], None, Literal[-1]])
+    assert_type(
+        identity(nested),
+        tuple[slice[None, Int[N], None], Literal[0]],
+    )
+
+def unpacked[*Ts](index: tuple[int, *Ts]) -> None:
+    assert_type(identity(index), tuple[int, *Ts])
+
+def invalid_nested_unpack[*Ts](index: tuple[tuple[str, *Ts]]) -> None:
+    identity(index)  # E: is not a valid `Index` value for type variable `I`
+
+def bounded[T: int](value: T) -> None:
+    assert_type(identity(value), T)
+
+def constrained[T: (Literal[1], Literal[2])](value: T) -> None:
+    assert_type(identity(value), T)
+
+def slice_bound[T: slice](value: T) -> None:
+    assert_type(identity(value), T)
+
+def optional_int_bound[T: int | None](value: T) -> None:
+    assert_type(identity(value), T)
+
+def integer_flag[K: Flag[int]](value: K) -> None:
+    assert_type(identity(value), K)
+
+def optional_slice_bound[T: int | None](value: slice[T, None, None]) -> None:
+    assert_type(identity(value), slice[T, None, None])
+
+def integer_tuple_flag[K: Flag[tuple[int, ...]]](value: K) -> None:
+    assert_type(identity(value), K)
+
+def integer_union(value: tuple[Literal[1] | Literal[2]]) -> None:
+    assert_type(identity(value), tuple[Literal[1] | Literal[2]])
+"#,
+);
+
+testcase!(
+    test_index_sources_and_defaults,
+    shape_extension_env(),
+    r#"
+from typing import Literal, assert_type
+from shape_extensions import Index
+
+def default_parameter[I: Index](index: I = 1) -> I: ...
+def bad_parameter_default[I: Index](index: I = "bad") -> I: ...  # E: Default for parameter binding `Index`
+def default_type_parameter[I: Index = 2](index: I = 2) -> I: ...
+def tuple_type_parameter[I: Index = tuple[Literal[0], Literal[1]]](index: I = (0, 1)) -> I: ...
+def bad_type_parameter_default[I: Index = str](index: I = ...) -> I: ...  # E: Default for `Index` type parameter `I` is not a valid index value
+
+assert_type(default_parameter(), Literal[1])
+assert_type(default_type_parameter(), Literal[2])
+assert_type(tuple_type_parameter(), tuple[Literal[0], Literal[1]])
+
+def no_source[I: Index](value: int) -> I: ...  # E: `Index` type parameter `I` must directly annotate exactly one function parameter, found 0
+def two_sources[I: Index](left: I, right: I) -> I: ...  # E: `Index` type parameter `I` must directly annotate exactly one function parameter, found 2
+def unpacked_source[I: Index](*indices: *I) -> I: ...  # E: `Index` type parameter `I` cannot bind an unpacked parameter
+class BadClass[I: Index]: ...  # E: `Index` type parameters are not supported on classes
+type BadAlias[I: Index] = I  # E: `Index` type parameters are not supported on type aliases
+"#,
+);
 
 fn shape_extension_stub_default_env() -> TestEnv {
     let mut env = shape_extension_env();
@@ -62,13 +207,20 @@ fn test_flag_same_module_marker_provenance() {
 from typing import Literal, assert_type
 
 class Flag[T]: ...
+class Index: ...
 
 def canonical[K: Flag[int]](k: K) -> K: ...
 assert_type(canonical(1), Literal[1])
+def canonical_index[I: Index](index: I) -> I: ...
+assert_type(canonical_index(1), Literal[1])
 
 def scope() -> None:
     class Flag[T]: ...
+    class Index: ...
     def shadowed[K: Flag[int]](k: K) -> K: ...
+    def shadowed_index[I: Index](index: I) -> I: ...
+    local_index = Index()
+    assert_type(shadowed_index(local_index), Index)
 
 class Namespace:
     class Flag[T]: ...
@@ -764,6 +916,7 @@ testcase!(
     r#"
 from typing import Literal, TypeVar, assert_type
 from shape_extensions import Flag as ShapeFlag
+from shape_extensions import Index as ShapeIndex
 
 class Flag[T]: ...
 def unrelated[K: Flag[int]](k: K) -> K: ...
@@ -777,6 +930,7 @@ def bare_alias[K: Marker](k: K) -> K: ...  # E: `shape_extensions.Flag` requires
 def bare_direct[K: ShapeFlag](k: K) -> K: ...  # E: `shape_extensions.Flag` requires one domain argument: `int`, `bool`, `str`, `tuple[int, ...]`, `None`, or a union of these
 
 Legacy = TypeVar("Legacy", bound=ShapeFlag[int])  # E: `shape_extensions.Flag` is supported only as a direct PEP 695 type parameter bound
+LegacyIndex = TypeVar("LegacyIndex", bound=ShapeIndex)  # E: `shape_extensions.Index` is supported only as a direct PEP 695 type parameter bound
 
 def union_domain[K: ShapeFlag[int | str]](k: K) -> K: ...
 def noncore_domain[K: ShapeFlag[bytes]](k: K) -> K: ...  # E: `Flag` domain must resolve to a nonempty union

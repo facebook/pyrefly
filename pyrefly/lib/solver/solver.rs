@@ -3956,15 +3956,16 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             }
                             Ok(())
                         }
-                        // An empty container contributes no evidence for a Flag. Keep its
-                        // validated direct source authoritative instead of preserving the partial.
+                        // An empty container contributes no evidence for a shape-extension
+                        // parameter. Keep its validated direct source authoritative instead of
+                        // preserving the partial.
                         (
                             Variable::PartialContained(_),
                             Variable::Quantified {
                                 quantified: q2,
                                 bounds: _,
                             },
-                        ) if q2.restriction().is_flag() => {
+                        ) if q2.restriction().uses_direct_value_source() => {
                             drop(variable1);
                             drop(variable2);
                             variables.unify(*v1, *v2);
@@ -3976,7 +3977,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                                 bounds: _,
                             },
                             Variable::PartialContained(_),
-                        ) if q1.restriction().is_flag() => {
+                        ) if q1.restriction().uses_direct_value_source() => {
                             drop(variable1);
                             drop(variable2);
                             variables.unify(*v2, *v1);

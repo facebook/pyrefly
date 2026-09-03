@@ -21,6 +21,7 @@ use pyrefly_derive::VisitMut;
 use super::FlagDomain;
 use super::Restriction;
 use crate::heap::TypeHeap;
+use crate::shape_index::lower_index_type;
 use crate::stdlib::Stdlib;
 use crate::types::Type;
 
@@ -33,6 +34,7 @@ pub struct ShapeExtensionRestriction(ShapeExtensionRestrictionKind);
 #[derive(Visit, VisitMut, TypeEq)]
 enum ShapeExtensionRestrictionKind {
     Flag(FlagDomain),
+    Index,
 }
 
 impl ShapeExtensionRestriction {
@@ -40,16 +42,26 @@ impl ShapeExtensionRestriction {
         Self(ShapeExtensionRestrictionKind::Flag(domain))
     }
 
+    pub(super) fn index() -> Self {
+        Self(ShapeExtensionRestrictionKind::Index)
+    }
+
     fn flag_domain(&self) -> Option<FlagDomain> {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(domain) => Some(domain),
+            ShapeExtensionRestrictionKind::Index => None,
         }
+    }
+
+    fn is_index(&self) -> bool {
+        matches!(self.0, ShapeExtensionRestrictionKind::Index)
     }
 
     /// Project this restriction to its ordinary type-system upper bound.
     pub fn upper_bound(&self, stdlib: &Stdlib, heap: &TypeHeap) -> Type {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(domain) => domain.as_type(stdlib, heap),
+            ShapeExtensionRestrictionKind::Index => stdlib.object().clone().to_type(),
         }
     }
 
@@ -61,6 +73,7 @@ impl ShapeExtensionRestriction {
     pub fn upper_bound_members(&self, stdlib: &Stdlib) -> Vec<Type> {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(domain) => domain.types(stdlib),
+            ShapeExtensionRestrictionKind::Index => vec![stdlib.object().clone().to_type()],
         }
     }
 
@@ -68,6 +81,7 @@ impl ShapeExtensionRestriction {
     pub fn upper_bound_class_names(&self) -> Vec<&'static str> {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(domain) => domain.class_names(),
+            ShapeExtensionRestrictionKind::Index => vec!["builtins.object"],
         }
     }
 
@@ -81,13 +95,17 @@ impl ShapeExtensionRestriction {
             ShapeExtensionRestrictionKind::Flag(domain) => {
                 domain.accepts_with_str_subclasses(ty, is_str_subclass)
             }
+            ShapeExtensionRestrictionKind::Index => lower_index_type(ty).is_valid(),
         }
     }
 
     /// Whether a default expression is a runtime value rather than a type expression.
+    ///
+    /// Binding consults `TypeParameterBound::infer_default_as_value` before a semantic restriction
+    /// exists; later consumers use this resolved counterpart without retaining syntax.
     pub fn infer_default_as_value(&self) -> bool {
         match self.0 {
-            ShapeExtensionRestrictionKind::Flag(_) => true,
+            ShapeExtensionRestrictionKind::Flag(_) | ShapeExtensionRestrictionKind::Index => true,
         }
     }
 
@@ -95,12 +113,13 @@ impl ShapeExtensionRestriction {
     pub fn kind_name(&self) -> &'static str {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(_) => "Flag",
+            ShapeExtensionRestrictionKind::Index => "Index",
         }
     }
 
     fn uses_direct_value_source(&self) -> bool {
         match self.0 {
-            ShapeExtensionRestrictionKind::Flag(_) => true,
+            ShapeExtensionRestrictionKind::Flag(_) | ShapeExtensionRestrictionKind::Index => true,
         }
     }
 }
@@ -109,6 +128,11 @@ impl Restriction {
     /// Construct the shape-extension restriction for a `Flag` domain.
     pub fn flag(domain: FlagDomain) -> Self {
         Self::ShapeExtension(ShapeExtensionRestriction::flag(domain))
+    }
+
+    /// Construct the shape-extension restriction for an index value.
+    pub fn index() -> Self {
+        Self::ShapeExtension(ShapeExtensionRestriction::index())
     }
 
     /// Return the `Flag` domain when this is a `Flag` restriction.
@@ -124,6 +148,11 @@ impl Restriction {
         self.flag_domain().is_some()
     }
 
+    /// Whether this is a shape-extension `Index` restriction.
+    pub fn is_index(&self) -> bool {
+        matches!(self, Self::ShapeExtension(extension) if extension.is_index())
+    }
+
     /// Whether this restriction needs one direct runtime parameter as its specialization source.
     pub fn uses_direct_value_source(&self) -> bool {
         matches!(self, Self::ShapeExtension(extension) if extension.uses_direct_value_source())
@@ -134,6 +163,7 @@ impl Display for ShapeExtensionRestriction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
             ShapeExtensionRestrictionKind::Flag(domain) => write!(f, "Flag[{domain}]"),
+            ShapeExtensionRestrictionKind::Index => write!(f, "Index"),
         }
     }
 }
@@ -197,5 +227,28 @@ mod tests {
         let members = extension.upper_bound_members(&stdlib);
         assert_eq!(members.len(), 1);
         assert!(matches!(&members[0], Type::ClassType(cls) if cls.is_builtin("int")));
+    }
+
+    #[test]
+    fn index_restriction_projects_to_object() {
+        let restriction = Restriction::index();
+        assert!(restriction.is_index());
+
+        let Restriction::ShapeExtension(extension) = restriction else {
+            unreachable!("an Index bound creates a shape-extension restriction")
+        };
+        assert_eq!(extension.to_string(), "Index");
+        assert_eq!(extension.kind_name(), "Index");
+        assert!(extension.infer_default_as_value());
+        assert_eq!(extension.upper_bound_class_names(), vec!["builtins.object"]);
+
+        let stdlib = Stdlib::new(
+            PythonVersion::default(),
+            &|module, name| Some((fake_class(module, name), None)),
+            &|_, _| None,
+        );
+        let members = extension.upper_bound_members(&stdlib);
+        assert_eq!(members.len(), 1);
+        assert!(matches!(&members[0], Type::ClassType(cls) if cls.is_builtin("object")));
     }
 }

@@ -25,6 +25,7 @@ pub mod polars_specials;
 pub mod regex;
 pub mod shape_extension;
 pub mod shape_flag;
+pub mod shape_index;
 pub mod singledispatch;
 pub mod solve;
 pub mod special_calls;

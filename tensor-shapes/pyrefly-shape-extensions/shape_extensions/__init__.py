@@ -22,6 +22,7 @@ __all__ = [
     "IntTuple",
     "IntTuples",
     "IntVar",
+    "Index",
     "MapIntTuples",
     "ProxyMethod",
     "SymbolicArithExpr",
@@ -148,6 +149,12 @@ class Int[T]:
 
 class Flag[T]:
     """Marker for a literal-preserving value that controls type-level evaluation."""
+
+    pass
+
+
+class Index:
+    """Marker for an index value retained for type-level shape evaluation."""
 
     pass
 
