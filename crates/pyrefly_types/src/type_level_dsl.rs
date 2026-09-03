@@ -5935,6 +5935,20 @@ impl TypeLevelDslCall {
         }
     }
 
+    /// Recurses through the call while respecting the binder introduced by a map's lambda.
+    pub fn visit_parts<'a>(
+        &'a self,
+        shadowed: &mut Vec<&'a Quantified>,
+        f: &mut dyn FnMut(&'a Type, &mut Vec<&'a Quantified>),
+    ) {
+        for arg in &self.args {
+            f(arg, shadowed);
+        }
+        if let TypeLevelDslFunction::MapIntTuples(map) = &self.function {
+            map.visit_parts(shadowed, f);
+        }
+    }
+
     /// Projects this call to the type used for generic-bound checking.
     ///
     /// For example, a call that constructs `IntTuples((IntTuple[2],))` checks against a bound as

@@ -191,6 +191,24 @@ impl MapIntTuples {
         shadowed.truncate(old_len);
         self.mapper.refresh_normalized_body();
     }
+
+    /// Recurses through the operation while respecting the mapper's bound parameter.
+    pub(crate) fn visit_parts<'a>(
+        &'a self,
+        shadowed: &mut Vec<&'a Quantified>,
+        f: &mut dyn FnMut(&'a Type, &mut Vec<&'a Quantified>),
+    ) {
+        f(&self.source, shadowed);
+        if let MapIntTuplesInterpretation::ParameterPattern { mapped_member } = &self.interpretation
+        {
+            f(mapped_member, shadowed);
+        }
+        self.mapper.parameter.recurse(&mut |ty| f(ty, shadowed));
+        let old_len = shadowed.len();
+        shadowed.push(&self.mapper.parameter);
+        f(&self.mapper.body, shadowed);
+        shadowed.truncate(old_len);
+    }
 }
 
 impl TypeLevelDslCall {

@@ -1493,6 +1493,72 @@ impl Type {
         })
     }
 
+    /// Visits quantified variables that are not bound by a containing callable or type-level map.
+    pub fn for_each_free_quantified<'a>(&'a self, f: &mut impl FnMut(&'a Quantified)) {
+        fn visit_forall<'a, T: Visit<Type>>(
+            forall: &'a Forall<T>,
+            f: &mut dyn FnMut(&'a Quantified),
+            shadowed: &mut Vec<&'a Quantified>,
+        ) {
+            let old_len = shadowed.len();
+            shadowed.extend(forall.tparams.iter());
+            forall.tparams.visit(&mut |ty| visit(ty, f, shadowed));
+            forall.body.visit(&mut |ty| visit(ty, f, shadowed));
+            shadowed.truncate(old_len);
+        }
+
+        fn visit_overload<'a>(
+            overload: &'a Overload,
+            f: &mut dyn FnMut(&'a Quantified),
+            shadowed: &mut Vec<&'a Quantified>,
+        ) {
+            for signature in &overload.signatures {
+                match signature {
+                    OverloadType::Function(function) => {
+                        function.visit(&mut |ty| visit(ty, f, shadowed));
+                    }
+                    OverloadType::Forall(forall) => visit_forall(forall, f, shadowed),
+                }
+            }
+            overload.metadata.visit(&mut |ty| visit(ty, f, shadowed));
+        }
+
+        fn visit<'a>(
+            ty: &'a Type,
+            f: &mut dyn FnMut(&'a Quantified),
+            shadowed: &mut Vec<&'a Quantified>,
+        ) {
+            if let Type::Quantified(q) = ty {
+                if !shadowed.contains(&q.as_ref()) {
+                    f(q);
+                }
+                return;
+            }
+            match ty {
+                Type::Forall(forall) => visit_forall(forall, f, shadowed),
+                Type::Overload(overload) => visit_overload(overload, f, shadowed),
+                Type::BoundMethod(method) => {
+                    visit(&method.obj, f, shadowed);
+                    match &method.func {
+                        BoundMethodType::Function(function) => {
+                            function.visit(&mut |ty| visit(ty, f, shadowed));
+                        }
+                        BoundMethodType::Forall(forall) => visit_forall(forall, f, shadowed),
+                        BoundMethodType::Overload(overload) => {
+                            visit_overload(overload, f, shadowed)
+                        }
+                    }
+                }
+                Type::TypeLevelDslCall(call) => {
+                    call.visit_parts(shadowed, &mut |ty, shadowed| visit(ty, f, shadowed));
+                }
+                _ => ty.recurse_type_variable_positions(&mut |inside| visit(inside, f, shadowed)),
+            }
+        }
+
+        visit(self, f, &mut Vec::new());
+    }
+
     pub fn collect_quantifieds<'a>(&'a self, acc: &mut SmallSet<&'a Quantified>) {
         self.for_each_quantified(&mut |q| {
             acc.insert(q);
@@ -2302,22 +2368,68 @@ mod tests {
     use pyrefly_util::visit::Visit;
     use ruff_python_ast::name::Name;
     use ruff_text_size::TextRange;
+    use vec1::vec1;
 
+    use crate::callable::Callable;
+    use crate::callable::ParamList;
     use crate::equality::TypeEq;
     use crate::equality::TypeEqCtx;
+    use crate::function::FuncFlags;
+    use crate::function::FuncMetadata;
+    use crate::function::Function;
+    use crate::function::FunctionKind;
     use crate::literal::Lit;
     use crate::literal::LitStyle;
+    use crate::map_int_tuples::TypeLambda;
     use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
     use crate::quantified::QuantifiedIdentity;
     use crate::quantified::QuantifiedKind;
     use crate::quantified::QuantifiedOrigin;
+    use crate::type_level_dsl::TypeLevelDslCall;
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
+    use crate::types::BoundMethod;
+    use crate::types::BoundMethodType;
+    use crate::types::Forall;
+    use crate::types::Forallable;
+    use crate::types::Overload;
+    use crate::types::OverloadType;
     use crate::types::TArgs;
     use crate::types::TParams;
     use crate::types::Type;
     use crate::types::Union;
+
+    fn test_quantified(module: &'static str, name: &'static str) -> Quantified {
+        Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str(module),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
+            Name::new_static(name),
+            QuantifiedKind::TypeVar,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Undefined,
+        )
+    }
+
+    fn test_function(ret: Type) -> Function {
+        Function {
+            signature: Callable::list(ParamList::new(Vec::new()), ret),
+            metadata: FuncMetadata {
+                kind: FunctionKind::Overload,
+                flags: FuncFlags::default(),
+            },
+        }
+    }
+
+    fn free_quantifieds(ty: &Type) -> Vec<Quantified> {
+        let mut result = Vec::new();
+        ty.for_each_free_quantified(&mut |q| result.push(q.clone()));
+        result
+    }
 
     #[test]
     fn test_targs_visit_only_visits_applied_arguments() {
@@ -2339,6 +2451,48 @@ mod tests {
         targs.visit(&mut |ty| visited.push(ty.clone()));
 
         assert_eq!(visited, vec![Type::Ellipsis]);
+    }
+
+    #[test]
+    fn test_for_each_free_quantified_respects_scoped_binders() {
+        let q = test_quantified("test.forall", "T");
+        let nested = Forallable::Callable(Callable::list(
+            ParamList::new(Vec::new()),
+            Type::Quantified(Box::new(q.clone())),
+        ))
+        .forall(Arc::new(TParams::new(vec![q.clone()])));
+        let mixed = Type::concrete_tuple(vec![Type::Quantified(Box::new(q.clone())), nested]);
+        assert_eq!(free_quantifieds(&mixed), vec![q.clone()]);
+
+        let overload = Type::Overload(Overload {
+            signatures: vec1![
+                OverloadType::Forall(Forall {
+                    tparams: Arc::new(TParams::new(vec![q.clone()])),
+                    body: test_function(Type::Quantified(Box::new(q.clone()))),
+                }),
+                OverloadType::Function(test_function(Type::Quantified(Box::new(q.clone())))),
+            ],
+            metadata: Box::new(FuncMetadata {
+                kind: FunctionKind::Overload,
+                flags: FuncFlags::default(),
+            }),
+        });
+        assert_eq!(free_quantifieds(&overload), vec![q.clone()]);
+
+        let bound_method = Type::BoundMethod(Box::new(BoundMethod {
+            obj: Type::Quantified(Box::new(q.clone())),
+            func: BoundMethodType::Forall(Forall {
+                tparams: Arc::new(TParams::new(vec![q.clone()])),
+                body: test_function(Type::Quantified(Box::new(q.clone()))),
+            }),
+        }));
+        assert_eq!(free_quantifieds(&bound_method), vec![q.clone()]);
+
+        let map = Type::TypeLevelDslCall(Box::new(TypeLevelDslCall::map_int_tuples(
+            TypeLambda::new(q.clone(), Type::Quantified(Box::new(q.clone()))),
+            Type::Quantified(Box::new(q.clone())),
+        )));
+        assert_eq!(free_quantifieds(&map), vec![q]);
     }
 
     /// `display_name` is presentation-only, so two unions with identical members
