@@ -449,7 +449,7 @@ impl<'a> Transaction<'a> {
                     let Some(class_field) = answers.get_idx::<KeyClassField>(field_idx) else {
                         continue;
                     };
-                    let mut ty = answers.solver().for_display(class_field.ty());
+                    let mut ty = class_field.ty().deterministic_printing();
                     let mut insertable = true;
                     if let Some(constructor) = self.new_type_constructor_signature(handle, &ty) {
                         ty = constructor;

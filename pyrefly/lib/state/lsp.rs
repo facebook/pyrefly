@@ -902,7 +902,7 @@ impl<'a> Transaction<'a> {
         let arg_index = Self::active_parameter_index(&params, &active_argument)?;
         let ty = params.get(arg_index)?.as_type().clone();
         if for_display {
-            Some(self.get_answers(handle)?.solver().for_display(ty))
+            Some(ty.deterministic_printing())
         } else {
             Some(ty)
         }
