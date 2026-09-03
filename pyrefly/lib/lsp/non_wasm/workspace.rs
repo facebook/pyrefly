@@ -42,23 +42,13 @@ use crate::state::lsp::ImportFormat;
 use crate::state::lsp::InlayHintConfig;
 use crate::state::lsp::TypeCheckingMode;
 
-/// A Python interpreter path provided by the client (e.g. via `pythonPath`).
-#[derive(Debug, Clone)]
-pub struct PythonInfo {
-    /// The path to the Python interpreter.
-    interpreter: PathBuf,
-}
-
-impl PythonInfo {
-    pub fn new(interpreter: PathBuf) -> Self {
-        Self { interpreter }
-    }
-}
-
 /// LSP workspace settings: this is all that is necessary to run an LSP at a given root.
 #[derive(Debug, Clone, Default)]
 pub struct Workspace {
-    python_info: Option<PythonInfo>,
+    /// A Python interpreter path provided by the client (e.g. via `pythonPath`).
+    /// Only applied to configs that don't pick their own interpreter and haven't
+    /// opted out of interpreter queries (`skip-interpreter-query`).
+    client_interpreter: Option<PathBuf>,
     search_path: Option<Vec<PathBuf>>,
     /// Extra `project_excludes` globs contributed by the client, already
     /// rewritten relative to this workspace's root. Appended to (never
@@ -166,7 +156,7 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
                 // config doesn't already specify an interpreter and hasn't opted out of
                 // interpreter queries entirely (`skip-interpreter-query`). The query is
                 // deferred until here so an opt-out config never pays for it.
-                if let Some(PythonInfo { interpreter }) = w.python_info.clone()
+                if let Some(interpreter) = w.client_interpreter.clone()
                     && config.interpreters.is_empty()
                     && !config.interpreters.skip_interpreter_query
                 {
@@ -822,19 +812,18 @@ impl Workspaces {
     fn update_pythonpath(&self, modified: &mut bool, scope_uri: &Option<Url>, python_path: &str) {
         let mut workspaces = self.workspaces.write();
         let interpreter = PathBuf::from(python_path);
-        let python_info = Some(PythonInfo::new(interpreter));
         match scope_uri {
             Some(scope_uri) => {
                 if let Ok(workspace_path) = scope_uri.to_file_path()
                     && let Some(workspace) = workspaces.get_mut(&workspace_path)
                 {
                     *modified = true;
-                    workspace.python_info = python_info;
+                    workspace.client_interpreter = Some(interpreter);
                 }
             }
             None => {
                 *modified = true;
-                self.default.write().python_info = python_info;
+                self.default.write().client_interpreter = Some(interpreter);
             }
         }
     }
@@ -1535,10 +1524,7 @@ mod tests {
     #[test]
     fn test_skip_interpreter_query_blocks_client_pythonpath() {
         let workspaces = Workspaces::new(Workspace::new(), &[]);
-        workspaces
-            .default
-            .write()
-            .python_info = Some(PythonInfo::new(PathBuf::from("/fake/python")));
+        workspaces.default.write().client_interpreter = Some(PathBuf::from("/fake/python"));
         let configurer = WorkspaceConfigConfigurer(Arc::new(workspaces));
 
         // A config with `skip-interpreter-query = true`: the client interpreter is
