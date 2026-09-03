@@ -5,10 +5,17 @@
 
 from __future__ import annotations
 
-from typing import assert_type
+from collections.abc import Sequence
+from typing import assert_type, TYPE_CHECKING
 
 import numpy as np
-from shape_extensions import assert_shape
+from shape_extensions import assert_shape, IntTuple
+
+GRADUAL_SHAPE_RUNTIME_TESTS = {
+    "test_list_indexing_has_gradual_length",
+    "test_array_indexing_falls_back_gradually",
+    "test_other_valid_indices_fall_back_gradually",
+}
 
 
 def test_arange_from_array_length() -> None:
@@ -50,8 +57,9 @@ def test_paired_row_column_indexing_uses_index_shape() -> None:
     logits = np.ones((5, 3))
     rows = np.arange(2)
     columns = np.zeros(2, dtype=np.int64)
-    selected: np.ndarray[[2], np.dtype[np.float64]] = logits[rows, columns]
+    selected = logits[rows, columns]
 
+    assert_type(selected, np.ndarray[[2], np.dtype[np.float64]])
     assert_shape(selected, (2,))
 
 
@@ -65,6 +73,52 @@ def test_none_indexing_for_nbody_broadcasting() -> None:
     assert_shape(positions[None, :, :], (1, 5, 3))
     assert_shape(pairwise_deltas, (5, 5, 3))
     assert_shape(source_masses, (1, 5, 1))
+
+
+def test_list_indexing_has_gradual_length() -> None:
+    values = np.ones((5, 3))
+
+    # TODO(stroxler): Preserve a list literal's length without storing syntax in Index.
+    assert_type(values[[0, 2]], np.ndarray[[int, 3], np.dtype[np.float64]])
+
+
+def test_array_indexing_falls_back_gradually() -> None:
+    values = np.ones((5, 3))
+    rows = np.arange(2)
+
+    assert_type(values[rows], np.ndarray[IntTuple, np.dtype[np.float64]])
+    assert_type(values[rows, :], np.ndarray[IntTuple, np.dtype[np.float64]])
+    assert_type(values[True], np.ndarray[IntTuple, np.dtype[np.float64]])
+    assert_type(values[rows, (0, 1)], np.ndarray[IntTuple, np.dtype[np.float64]])
+
+
+def test_other_valid_indices_fall_back_gradually() -> None:
+    values = np.ones((5, 3))
+    scalar = np.int64()
+    boolean = np.bool_()
+    sequence: Sequence[int] = range(2)
+    nested: Sequence[Sequence[int]] = [[0, 1]]
+
+    assert_type(values[scalar], np.ndarray[IntTuple, np.dtype[np.float64]])
+    assert_type(values[boolean], np.ndarray[IntTuple, np.dtype[np.float64]])
+    assert_type(values[sequence], np.ndarray[IntTuple, np.dtype[np.float64]])
+    assert_type(values[nested], np.ndarray[IntTuple, np.dtype[np.float64]])
+
+
+def test_unsupported_string_index() -> None:
+    values = np.ones((5, 3))
+    assert_shape(values, (5, 3))
+    if TYPE_CHECKING:
+        values[0, 0, 0]  # E: Too many indices
+
+    try:
+        values[  # E: Cannot index into
+            "bad"
+        ]
+    except IndexError:
+        pass
+    else:
+        raise AssertionError("expected NumPy to reject a string index")
 
 
 def test_projecting_3d_slice_for_fill_diagonal() -> None:
@@ -89,10 +143,8 @@ def test_fill_diagonal_rejects_vector() -> None:
         raise AssertionError("expected NumPy to reject a one-dimensional diagonal")
 
 
-# Pyrefly does not reject either of the next two cases statically, so unlike the
-# rest of this file they carry no inline error expectation and the runtime check
-# is the only coverage. They are the paired-index cases the stub's `__getitem__`
-# overload is meant to constrain, and are worth keeping as a record of the gap.
+# The gradual ndarray-index fallback preserves valid advanced indexing forms,
+# but it also admits these invalid cases. The runtime checks record that gap.
 def test_paired_indexing_rejects_float_indices() -> None:
     logits = np.ones((5, 3))
     float_indices = np.ones(5)

@@ -3,17 +3,20 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from collections.abc import Sequence
+from types import EllipsisType
 from typing import Any, Literal, overload
 
 import shape_extensions
 from numpy._shapes import diag_extent, matmul_shape, reduce_shape
-from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar
+from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple, IntVar
 
 from . import linalg as linalg, random as random
 
 type _Shape = IntTuple
 type _AnyShape = tuple[Any, ...]
 type _Axis = int | tuple[int, ...] | None
+type _BasicIndex = int | slice | list[int] | None | EllipsisType
 
 class generic: ...
 class bool_(generic): ...
@@ -22,6 +25,9 @@ class float64(generic): ...
 class int32(generic): ...
 class int64(generic): ...
 class intp(generic): ...
+
+type _IndexScalar = int | bool_ | int32 | int64 | intp
+type _IndexSequence = Sequence[_IndexScalar] | Sequence[Sequence[_IndexScalar]]
 
 class dtype[Scalar = Any]:
     @overload
@@ -34,7 +40,7 @@ class dtype[Scalar = Any]:
 # its body. Annotations inside the class reach the class through this alias.
 _dtype = dtype
 
-@shape_extensions.shaped_array(shape="Shape")
+@shape_extensions.shaped_array(shape="Shape", builtin_indexing=False)
 class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
     shape: Shape
     dtype: DType
@@ -42,9 +48,7 @@ class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
     def __len__[N: IntVar](self: ndarray[[N]]) -> Int[N]: ...
     @overload
     def __len__[N: IntVar, M: IntVar](self: ndarray[[N, M]]) -> Int[N]: ...
-    # TODO(stroxler): This overload does not bind: paired integer-array indexing
-    # infers a gradual shape rather than `[I]`, and float indices are not
-    # rejected. `test_indexing.py` covers both cases at runtime only.
+    @overload
     def __getitem__[
         N: IntVar,
         M: IntVar,
@@ -58,6 +62,21 @@ class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
             ndarray[[I], _dtype[ColumnIndexScalar]],
         ],
     ) -> ndarray[[I], DType]: ...
+    @overload
+    def __getitem__[I: Index](
+        self: ndarray[Shape, DType], key: I
+    ) -> ndarray[index_shape(Shape, I), DType]: ...
+    # TODO(stroxler): Model general array-valued indices precisely enough to
+    # reject non-integer dtypes and incompatible advanced-index shapes.
+    @overload
+    def __getitem__(
+        self: ndarray[Shape, DType],
+        key: _BasicIndex
+        | _IndexScalar
+        | _IndexSequence
+        | ndarray
+        | tuple[_BasicIndex | _IndexScalar | _IndexSequence | ndarray, ...],
+    ) -> ndarray[IntTuple, DType]: ...
     # Only 2-D transpose is modeled for the NumPy shape-stub MVP.
     @property
     def T[N: IntVar, P: IntVar](
