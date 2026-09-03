@@ -901,18 +901,6 @@ def flip_shape(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
     return shape
 
 @type_shape_dsl_function
-def fliplr_shape(shape: IntTuple) -> IntTuple:
-    if len(shape) < 2:
-        return dsl.Invalid("fliplr requires at least 2-D array")
-    return shape
-
-@type_shape_dsl_function
-def flipud_shape(shape: IntTuple) -> IntTuple:
-    if len(shape) < 1:
-        return dsl.Invalid("flipud requires at least 1-D array")
-    return shape
-
-@type_shape_dsl_function
 def roll_shape(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
     if axis is None:
         return shape

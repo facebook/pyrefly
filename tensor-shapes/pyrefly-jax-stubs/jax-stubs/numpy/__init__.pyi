@@ -18,8 +18,6 @@ from jax._shapes import (
     einsum_shape,
     expand_dims_shape,
     flip_shape,
-    fliplr_shape,
-    flipud_shape,
     hstack_shape,
     inner_shape,
     int_min,
@@ -1448,12 +1446,12 @@ def flip[Shape: _Shape](
     m: Array[Shape],
     axis: Sequence[int] | None = None,
 ) -> Array[Shape]: ...
-def fliplr[Shape: _Shape](
-    m: Array[Shape],
-) -> Array[fliplr_shape(Shape)]: ...
-def flipud[Shape: _Shape](
-    m: Array[Shape],
-) -> Array[flipud_shape(Shape)]: ...
+def fliplr[Batch: IntTuple, M: IntVar, N: IntVar](
+    m: Array[[*Elements[Batch], M, N]],
+) -> Array[[*Elements[Batch], M, N]]: ...
+def flipud[Batch: IntTuple, M: IntVar](
+    m: Array[[*Elements[Batch], M]],
+) -> Array[[*Elements[Batch], M]]: ...
 @overload
 def roll[Shape: _Shape, Axis: Flag[_Axis] = None](
     a: Array[Shape],
