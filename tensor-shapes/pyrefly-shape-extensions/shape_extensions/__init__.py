@@ -24,6 +24,7 @@ __all__ = [
     "IntVar",
     "MapIntTuples",
     "ProxyMethod",
+    "ScalarAsShape",
     "SymbolicArithExpr",
     "TypeVarTuple",
     "assert_shape",
@@ -154,6 +155,12 @@ class Flag[T]:
 
 class ProxyMethod[T]:
     """Type-checker marker for method forwarding annotations."""
+
+    pass
+
+
+class ScalarAsShape[Source, Shape]:
+    """Treat a scalar parameter as having the specified array shape."""
 
     pass
 

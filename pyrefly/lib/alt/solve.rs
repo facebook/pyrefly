@@ -4777,7 +4777,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 finalize(target, ty)
             }
         };
-        self.map_int_tuples_parameter_body_type(ty)
+        self.scalar_as_shape_parameter_body_type(self.map_int_tuples_parameter_body_type(ty))
     }
 
     /// Handle `Binding::TypeVarTuple` - process TypeVarTuple definition.
@@ -6683,6 +6683,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ty @ Type::DataFrame(_) => Some(ty),
             // Handle bare class definitions (e.g., Dim, Module) by canonicalizing them to type forms
             Type::ClassDef(cls) => {
+                if self.is_scalar_as_shape_class(&cls) {
+                    return Some(self.error(
+                        errors,
+                        range,
+                        ErrorKind::BadSpecialization,
+                        "`ScalarAsShape` requires two type arguments".to_owned(),
+                    ));
+                }
                 let canonicalized =
                     self.canonicalize_all_class_types(Type::ClassDef(cls), range, errors);
                 self.untype_opt_with_context(canonicalized, range, errors, context)
@@ -7090,6 +7098,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
         let result = self.validate_type_form(result, x.range(), type_form_context, errors);
+        let result =
+            self.validate_scalar_as_shape_annotation(result, x.range(), type_form_context, errors);
         let result = self.interpret_map_int_tuples_at_annotation_root(result, type_form_context);
         if type_form_context.can_report_explicit_any() {
             self.check_explicit_any(&result, x.range(), errors);

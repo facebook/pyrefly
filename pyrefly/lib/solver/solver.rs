@@ -3385,7 +3385,7 @@ impl<'subset> CallContext<'subset> {
 }
 
 /// A helper to implement subset ergonomically.
-/// Should only be used within `crate::subset`, which implements part of it.
+/// Core subset logic lives in `solver::subset`; extension modules may add narrowly scoped methods.
 pub struct Subset<'solver, 'subset, Ans: LookupAnswer> {
     pub(crate) solver: &'solver Solver,
     pub type_order: TypeOrder<'solver, Ans>,
@@ -3437,6 +3437,39 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         deferred_vars: SmallMap<ArgumentKey, SmallSet<Var>>,
     ) {
         self.witness_deferred_vars = deferred_vars;
+    }
+
+    /// Run a speculative subset branch, retaining its state only when it succeeds without
+    /// introducing an inconsistent variable solution.
+    pub(crate) fn with_speculative_subset_branch(
+        &mut self,
+        types: &[&Type],
+        check: impl FnOnce(&mut Self) -> Result<(), SubsetError>,
+    ) -> SubsetWithSnapshotResult {
+        let vars = self.solver.snapshot_for_speculative_inference(types);
+        let subset_cache = self.subset_cache.clone();
+        let class_protocol_assumptions = self.class_protocol_assumptions.clone();
+        let witness_deferred_vars = self.snapshot_witness_deferred_vars();
+        let coinductive_assumptions_used = self.coinductive_assumptions_used;
+        let type_order_coinductive = self.type_order.coinductive_assumptions_used();
+        let result = match (check(self), self.solver.has_new_instantiation_errors(&vars)) {
+            (Ok(()), false) => SubsetWithSnapshotResult::Ok,
+            (Ok(()), true) => SubsetWithSnapshotResult::Err(SubsetError::Other),
+            (Err(error), _) => SubsetWithSnapshotResult::Err(error),
+        };
+        match result {
+            SubsetWithSnapshotResult::Ok => SubsetWithSnapshotResult::Ok,
+            SubsetWithSnapshotResult::Err(error) => {
+                self.solver.restore_vars(vars);
+                self.subset_cache = subset_cache;
+                self.class_protocol_assumptions = class_protocol_assumptions;
+                self.restore_witness_deferred_vars(witness_deferred_vars);
+                self.coinductive_assumptions_used = coinductive_assumptions_used;
+                self.type_order
+                    .set_coinductive_assumptions_used(type_order_coinductive);
+                SubsetWithSnapshotResult::Err(error)
+            }
+        }
     }
 
     /// Check one overload branch's constraints as a transaction during quantified finishing.
