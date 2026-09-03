@@ -3406,6 +3406,7 @@ impl DisplayWith<Bindings> for BindingClassChecks {
 pub struct ShapedArrayMetadata {
     pub shape_name: Name,
     pub range: TextRange,
+    pub builtin_indexing: bool,
 }
 
 /// Binding for the class's metadata (anything obtained directly from base classes,

@@ -976,6 +976,9 @@ class DuplicateShapeKeyword[Shape]: ...
 @shaped_array(shape=123)  # E: `@shaped_array` `shape` argument must be a string literal  # E: Argument `Literal[123]` is not assignable to parameter `shape` with type `str` in function `shape_extensions.shaped_array`
 class NonStringShape[Shape]: ...
 
+@shaped_array(shape="Shape", builtin_indexing=0)  # E: `@shaped_array` `builtin_indexing` argument must be a boolean literal  # E: Argument `Literal[0]` is not assignable to parameter `builtin_indexing` with type `bool` in function `shape_extensions.shaped_array`
+class NonBooleanBuiltinIndexing[Shape]: ...
+
 @shaped_array(shape="Shape")  # E: Shape parameter `Shape` must be a scoped (PEP-695-style) type parameter of class `NoTypeParams`
 class NoTypeParams: ...
 
@@ -5625,6 +5628,7 @@ testcase!(
     r#"
 from typing import assert_type
 from shape_extensions import IntTuple, shaped_array
+from shape_extensions import shaped_array as shaped_array_alias
 
 @shaped_array(shape="Shape")
 class LegacyArray[Shape: IntTuple]:
@@ -5633,9 +5637,18 @@ class LegacyArray[Shape: IntTuple]:
 class OrdinaryArray:
     def __getitem__(self, index: int) -> str: ...
 
-def f(legacy: LegacyArray[[2, 3]], ordinary: OrdinaryArray) -> None:
+@shaped_array_alias(shape="Shape", builtin_indexing=False)
+class AnnotatedArray[Shape: IntTuple]:
+    def __getitem__(self, index: int) -> str: ...
+
+def f(
+    legacy: LegacyArray[[2, 3]],
+    annotated: AnnotatedArray[[2, 3]],
+    ordinary: OrdinaryArray,
+) -> None:
     # The legacy decorator incorrectly gives built-in indexing precedence over the method.
     assert_type(legacy[0], LegacyArray[[3]])
+    assert_type(annotated[0], str)
     assert_type(ordinary[0], str)
 "#,
 );

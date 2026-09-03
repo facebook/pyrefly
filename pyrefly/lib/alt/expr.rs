@@ -3610,12 +3610,28 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     )
                 }
                 // Tensor indexing: tensor[0] reduces dimensionality
-                Type::ShapedArray(ref shaped_array_type) => {
+                Type::ShapedArray(ref shaped_array_type)
+                    if self.uses_builtin_shaped_array_indexing(
+                        shaped_array_type.base_class.class_object(),
+                    ) =>
+                {
                     self.infer_shaped_array_index(shaped_array_type, slice, range, errors)
                 }
+                // Shaped arrays that opt out of built-in indexing use their declared method.
+                Type::ShapedArray(_) => self.call_method_or_error(
+                    &base,
+                    &dunder::GETITEM,
+                    range,
+                    &[CallArg::expr(slice)],
+                    &[],
+                    errors,
+                    Some(&|| ErrorContext::Index(self.for_display(base.clone()))),
+                ),
                 // Shaped arrays that have not gone through annotation
                 // canonicalization still use tensor indexing logic.
-                Type::ClassType(ref cls) if self.is_shaped_array_class(cls.class_object()) => {
+                Type::ClassType(ref cls)
+                    if self.uses_builtin_shaped_array_indexing(cls.class_object()) =>
+                {
                     let shaped_array_type = self.shaped_array_classtype_to_shaped_array_type(cls);
                     self.infer_shaped_array_index(&shaped_array_type, slice, range, errors)
                 }

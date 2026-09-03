@@ -57,6 +57,7 @@ use crate::alt::types::class_metadata::InitDefaults;
 use crate::alt::types::class_metadata::Metaclass;
 use crate::alt::types::class_metadata::NamedTupleMetadata;
 use crate::alt::types::class_metadata::ProtocolMetadata;
+use crate::alt::types::class_metadata::ShapedArrayMetadata as SolvedShapedArrayMetadata;
 use crate::alt::types::class_metadata::SlotsInfo;
 use crate::alt::types::class_metadata::TotalOrderingMetadata;
 use crate::alt::types::class_metadata::TypedDictMetadata;
@@ -73,7 +74,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyDecorator;
-use crate::binding::binding::ShapedArrayMetadata;
+use crate::binding::binding::ShapedArrayMetadata as ShapedArrayDecoratorMetadata;
 use crate::binding::django::DjangoFieldInfo;
 use crate::binding::pydantic::EXTRA;
 use crate::binding::pydantic::PydanticConfigDict;
@@ -189,7 +190,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         pydantic_before_validator_fields: &[Name],
         django_field_info: &DjangoFieldInfo,
         capture_init: Option<&[Name]>,
-        shaped_array_metadata: Option<&ShapedArrayMetadata>,
+        shaped_array_metadata: Option<&ShapedArrayDecoratorMetadata>,
         errors: &ErrorCollector,
     ) -> ClassMetadata {
         // Get class decorators.
@@ -609,7 +610,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .as_ref()
             .map(|m| m.pydantic_model_kind.clone());
 
-        let shaped_array_shape = self.shaped_array_shape(cls, shaped_array_metadata, errors);
+        let shaped_array = self.shaped_array_metadata(cls, shaped_array_metadata, errors);
 
         ClassMetadata::new(
             bases,
@@ -639,20 +640,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             is_metaclass,
             explicit_slots,
             capture_init.map(|names| names.to_vec()),
-            shaped_array_shape,
+            shaped_array,
         )
     }
 
-    fn shaped_array_shape(
+    fn shaped_array_metadata(
         &self,
         cls: &Class,
-        metadata: Option<&ShapedArrayMetadata>,
+        metadata: Option<&ShapedArrayDecoratorMetadata>,
         errors: &ErrorCollector,
-    ) -> Option<Quantified> {
-        let ShapedArrayMetadata { shape_name, range } = metadata?;
+    ) -> Option<SolvedShapedArrayMetadata> {
+        let ShapedArrayDecoratorMetadata {
+            shape_name,
+            range,
+            builtin_indexing,
+        } = metadata?;
         let tparams = self.get_class_tparams(cls);
         match tparams.and_then(|tparams| tparams.iter().find(|param| param.name() == shape_name)) {
-            Some(param) if param.is_type_var() => Some(param.clone()),
+            Some(param) if param.is_type_var() => Some(SolvedShapedArrayMetadata::new(
+                param.clone(),
+                *builtin_indexing,
+            )),
             Some(param) => {
                 self.error(
                     errors,

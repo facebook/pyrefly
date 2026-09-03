@@ -270,8 +270,13 @@ def assert_shape(x, shape):
     return x
 
 
-def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
-    """Decorator that marks a class as carrying a shape TypeVarTuple."""
+def shaped_array(
+    *, shape: str, builtin_indexing: bool = True
+) -> typing.Callable[[type], type]:
+    """Mark a class as carrying a shape parameter.
+
+    ``builtin_indexing=False`` lets its annotated ``__getitem__`` determine the result.
+    """
 
     def decorator(cls: type) -> type:
         return cls

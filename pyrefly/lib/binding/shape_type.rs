@@ -277,6 +277,7 @@ impl BindingsBuilder<'_> {
             }
 
             let mut shape_keyword = None;
+            let mut builtin_indexing = true;
             for keyword in &call.arguments.keywords {
                 let Some(arg) = &keyword.arg else {
                     self.error(
@@ -291,12 +292,24 @@ impl BindingsBuilder<'_> {
                     if shape_keyword.is_none() {
                         shape_keyword = Some(keyword);
                     }
+                } else if arg.as_str() == "builtin_indexing" {
+                    let Expr::BooleanLiteral(value) = &keyword.value else {
+                        self.error(
+                            keyword.value.range(),
+                            ErrorKind::InvalidArgument,
+                            "`@shaped_array` `builtin_indexing` argument must be a boolean literal"
+                                .to_owned(),
+                        );
+                        invalid = true;
+                        continue;
+                    };
+                    builtin_indexing = value.value;
                 } else {
                     self.error(
                         keyword.range(),
                         ErrorKind::InvalidArgument,
                         format!(
-                            "Unexpected keyword argument `{}` for `@shaped_array`; expected `shape`",
+                            "Unexpected keyword argument `{}` for `@shaped_array`; expected `shape` or `builtin_indexing`",
                             arg.id
                         ),
                     );
@@ -326,6 +339,7 @@ impl BindingsBuilder<'_> {
                 metadata = Some(Box::new(ShapedArrayMetadata {
                     shape_name: Name::new(shape.value.to_str()),
                     range: shape_keyword.value.range(),
+                    builtin_indexing,
                 }));
             }
         }

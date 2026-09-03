@@ -128,6 +128,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.shaped_array_shape_for_class(cls.class_object())
     }
 
+    pub fn uses_builtin_shaped_array_indexing(&self, cls: &Class) -> bool {
+        self.get_metadata_for_class(cls)
+            .uses_builtin_shaped_array_indexing()
+    }
+
     pub fn get_abstract_members_for_class(&self, cls: &Class) -> &AbstractClassMembers {
         self.get_from_class(cls, &KeyAbstractClassCheck(cls.index()))
             .unwrap_or(AbstractClassMembers::recursive())
