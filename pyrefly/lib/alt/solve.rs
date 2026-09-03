@@ -151,6 +151,7 @@ use crate::types::annotation::Qualifier;
 use crate::types::callable::Callable;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
+use crate::types::callable::Params;
 use crate::types::callable::Required;
 use crate::types::class::AttrsFieldSpecifierKind;
 use crate::types::class::Class;
@@ -545,9 +546,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> AnnotationWithTarget {
         match binding {
-            BindingAnnotation::AnnotateExpr(target, x, class_key) => {
+            BindingAnnotation::AnnotateExpr(target, x, class_key, override_method) => {
                 let type_form_context = target.type_form_context();
-                let mut ann = self.expr_annotation(x, type_form_context, errors);
+                // An `@override` method repeating the base signature's `Any` is exempt
+                // from `explicit-any`; solve into a local collector only then, so the
+                // dictated error can be filtered out.
+                let may_exempt = override_method.is_some()
+                    && matches!(
+                        type_form_context,
+                        TypeFormContext::ParameterAnnotation
+                            | TypeFormContext::ParameterArgsAnnotation
+                            | TypeFormContext::ParameterKwargsAnnotation
+                            | TypeFormContext::ReturnAnnotation
+                    );
+                let ann_errors = may_exempt.then(|| self.error_collector());
+                let mut ann = self.expr_annotation(
+                    x,
+                    type_form_context,
+                    ann_errors.as_ref().unwrap_or(errors),
+                );
                 if let Some(class_key) = class_key
                     && let Some(ty) = &mut ann.ty
                 {
@@ -579,6 +596,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 .to_owned(),
                         );
                     }
+                }
+                if let Some(ann_errors) = ann_errors {
+                    // An `@override` method cannot narrow or drop an `Any` the base
+                    // signature declares: repeating it is required, so the
+                    // `explicit-any` reported where it is written is dropped.
+                    let dictated = matches!(&ann.ty, Some(Type::Any(AnyStyle::Explicit)))
+                        && override_method.as_ref().is_some_and(|method| {
+                            self.override_base_dictates_any(*class_key, method, target)
+                        });
+                    errors.extend_filtered(ann_errors, |error| {
+                        !(dictated && error.error_kind() == ErrorKind::ExplicitAny)
+                    });
                 }
                 AnnotationWithTarget {
                     target: target.clone(),
@@ -3764,7 +3793,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Returns `None` for special forms which don't have a source expression.
     pub(crate) fn annotation_range(&self, key: Idx<KeyAnnotation>) -> Option<TextRange> {
         match self.bindings().get(key) {
-            BindingAnnotation::AnnotateExpr(_, expr, _) => Some(expr.range()),
+            BindingAnnotation::AnnotateExpr(_, expr, _, _) => Some(expr.range()),
             BindingAnnotation::SpecialForm(..) => None,
         }
     }
@@ -7080,6 +7109,66 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
         }
         ty
+    }
+
+    /// For a parameter or return annotation of an `@override` method: does the
+    /// base-class signature dictate `Any` at this position? The override cannot
+    /// narrow or drop such an `Any` without breaking the override, so it is
+    /// exempt from `explicit-any`. Only an explicitly-`Any`-annotated base
+    /// position exempts — an unannotated one does not.
+    fn override_base_dictates_any(
+        &self,
+        class_key: Option<Idx<KeyClass>>,
+        method_name: &Name,
+        target: &AnnotationTarget,
+    ) -> bool {
+        let Some(class_key) = class_key else {
+            return false;
+        };
+        let class = &*self.get_idx(class_key);
+        let Some(cls) = &class.0 else {
+            return false;
+        };
+        let Some(base) =
+            self.inherited_member_where(cls, method_name, |ty| ty.is_toplevel_callable())
+        else {
+            return false;
+        };
+        let is_explicit_any = |ty: &Type| matches!(ty, Type::Any(AnyStyle::Explicit));
+        // An async base stores its declared return as `Coroutine[Any, Any, T]`.
+        let return_dictates = |ret: &Type| {
+            is_explicit_any(ret)
+                || self
+                    .unwrap_coroutine(ret)
+                    .is_some_and(|(_, _, ret)| is_explicit_any(&ret))
+        };
+        base.toplevel_callable_signatures().any(|(sig, _)| {
+            let items: &[Param] = match &sig.params {
+                Params::List(params) | Params::Partial(params) => params.items(),
+                _ => &[],
+            };
+            match target {
+                AnnotationTarget::Return(_) => return_dictates(&sig.ret),
+                AnnotationTarget::Param(name) => items.iter().any(|p| match p {
+                    Param::Pos(param_name, ty, _) | Param::KwOnly(param_name, ty, _) => {
+                        param_name.as_str() == name.as_str()
+                            && matches!(ty, Type::Any(AnyStyle::Explicit))
+                    }
+                    Param::PosOnly(Some(param_name), ty, _) => {
+                        param_name.as_str() == name.as_str()
+                            && matches!(ty, Type::Any(AnyStyle::Explicit))
+                    }
+                    _ => false,
+                }),
+                AnnotationTarget::ArgsParam(_) => items.iter().any(|p| {
+                    matches!(p, Param::Varargs(_, ty) if matches!(ty, Type::Any(AnyStyle::Explicit)))
+                }),
+                AnnotationTarget::KwargsParam(_) => items.iter().any(|p| {
+                    matches!(p, Param::Kwargs(_, ty) if matches!(ty, Type::Any(AnyStyle::Explicit)))
+                }),
+                _ => false,
+            }
+        })
     }
 
     /// Type check a delete expression, including ensuring that the target of the
