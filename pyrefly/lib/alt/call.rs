@@ -1087,18 +1087,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             None => (args, keywords),
         };
 
-        self.construct_with_hint(arguments_range, errors, context, hint, |hint| {
-            self.construct_class_inner(
-                cls.clone(),
-                constructor_kind.clone(),
-                args,
-                keywords,
-                arguments_range,
-                callee_range,
-                context,
-                hint,
-            )
-        })
+        self.construct_with_hint(
+            arguments_range,
+            errors,
+            context,
+            HintRef::filter_for_constructor(hint, cls.targs()),
+            |hint| {
+                self.construct_class_inner(
+                    cls.clone(),
+                    constructor_kind.clone(),
+                    args,
+                    keywords,
+                    arguments_range,
+                    callee_range,
+                    context,
+                    hint,
+                )
+            },
+        )
     }
 
     fn construct_class_inner(
@@ -1425,16 +1431,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         context: Option<&dyn Fn() -> ErrorContext>,
         hint: Option<HintRef>,
     ) -> Type {
-        self.construct_with_hint(arguments_range, errors, context, hint, |hint| {
-            self.construct_typed_dict_inner(
-                typed_dict.clone(),
-                args,
-                keywords,
-                arguments_range,
-                context,
-                hint,
-            )
-        })
+        self.construct_with_hint(
+            arguments_range,
+            errors,
+            context,
+            HintRef::filter_for_constructor(hint, typed_dict.targs()),
+            |hint| {
+                self.construct_typed_dict_inner(
+                    typed_dict.clone(),
+                    args,
+                    keywords,
+                    arguments_range,
+                    context,
+                    hint,
+                )
+            },
+        )
     }
 
     fn construct_typed_dict_inner(

@@ -318,6 +318,33 @@ result: Base[object] = {expression}
     )
 }
 
+/// Models nested trees whose return annotation is a wide union.
+/// Each layer should be checked only once.
+fn nested_nongeneric_constructor_union_hint(depth: usize) -> String {
+    let mut expression = "Z()".to_owned();
+    for _ in 0..depth {
+        expression = format!("Z({expression})");
+    }
+    format!(
+        r#"
+class A: ...
+class B: ...
+class C: ...
+class D: ...
+class E: ...
+class F: ...
+
+class Z:
+    def __init__(self, child: "Renderable | None" = None) -> None: ...
+
+type Renderable = A | B | C | D | E | F | Z | None
+
+def render() -> Renderable:
+    return {expression}
+"#
+    )
+}
+
 /// `count` reassignments through a user method returning its own class. Every call walks the Polars
 /// dispatch chain but falls through on a `ClassType` receiver, the primary gate that schema tracking
 /// costs ordinary method calls nothing.
@@ -451,6 +478,15 @@ fn nested_generic_constructor(c: &mut Criterion) {
         "nested_generic_constructor_soft_error_12",
         nested_generic_constructor_soft_error(12),
         1,
+    );
+}
+
+fn nested_nongeneric_constructor(c: &mut Criterion) {
+    measure(
+        c,
+        "nested_nongeneric_constructor_union_hint_5",
+        nested_nongeneric_constructor_union_hint(5),
+        0,
     );
 }
 
@@ -874,6 +910,7 @@ criterion_group!(
     anon_typed_dict,
     overloads,
     nested_generic_constructor,
+    nested_nongeneric_constructor,
     user_method_dispatch,
     builtin_method_dispatch,
     method_name_collision,

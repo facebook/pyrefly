@@ -7,6 +7,7 @@
 
 use std::slice;
 
+use pyrefly_types::types::TArgs;
 use pyrefly_types::types::TParams;
 use ruff_python_ast::name::Name;
 
@@ -91,6 +92,20 @@ impl<'a, 'b> HintRef<'a, 'b> {
         // Note that by invariant, constructor calls get hint=None, so we only have to care about the
         // function's own type parameters and not type parameters from any enclosing class.
         hint.filter(|_| tparams.is_some())
+    }
+
+    pub fn filter_for_constructor(hint: Option<Self>, targs: &TArgs) -> Option<Self> {
+        // A constructor hint is useful only when matching it can constrain the constructor or its caller.
+        hint.filter(|hint| {
+            targs
+                .iter_paired()
+                .any(|(param, ty)| matches!(ty, Type::Quantified(q) if q.as_ref() == param))
+                || targs
+                    .as_slice()
+                    .iter()
+                    .any(Type::may_contain_placeholder_var)
+                || hint.types().iter().any(Type::may_contain_placeholder_var)
+        })
     }
 }
 
