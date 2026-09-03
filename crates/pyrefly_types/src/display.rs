@@ -1646,10 +1646,14 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Ellipsis => output.write_str("..."),
             Type::Any(style) => match style {
                 AnyStyle::Explicit => self.maybe_fmt_with_module("typing", "Any", output),
-                AnyStyle::Implicit | AnyStyle::Error if self.render_unknown_as_any => {
+                AnyStyle::Propagated | AnyStyle::Implicit | AnyStyle::Error
+                    if self.render_unknown_as_any =>
+                {
                     self.maybe_fmt_with_module("typing", "Any", output)
                 }
-                AnyStyle::Implicit | AnyStyle::Error => output.write_str("Unknown"),
+                AnyStyle::Propagated | AnyStyle::Implicit | AnyStyle::Error => {
+                    output.write_str("Unknown")
+                }
             },
             Type::TypeAlias(ta) => match &**ta {
                 TypeAliasData::Value(ta) if is_toplevel => {

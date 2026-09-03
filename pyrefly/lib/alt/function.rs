@@ -539,7 +539,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     if matches!(
                         &decorator.ty,
-                        Type::Any(AnyStyle::Implicit | AnyStyle::Explicit)
+                        Type::Any(AnyStyle::Implicit | AnyStyle::Propagated | AnyStyle::Explicit)
                     ) {
                         self.error(
                             errors,
@@ -1824,7 +1824,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if u.members.iter().all(|m| match m {
                     Type::Function(f) => f.signature.is_fully_unknown(),
                     Type::Callable(c) => c.is_fully_unknown(),
-                    Type::Any(AnyStyle::Implicit) => true,
+                    Type::Any(AnyStyle::Propagated | AnyStyle::Implicit) => true,
                     _ => false,
                 }) =>
             {

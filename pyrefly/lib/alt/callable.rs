@@ -782,7 +782,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         range: TextRange,
         arg_errors: &ErrorCollector,
     ) {
-        if matches!(ty, Type::Any(AnyStyle::Implicit)) {
+        if matches!(ty, Type::Any(AnyStyle::Propagated | AnyStyle::Implicit)) {
             self.error(
                 arg_errors,
                 range,

@@ -167,7 +167,7 @@ fn remove_maximum<T: Ord>(xs: &mut Vec<T>) {
         return;
     }
 
-    // There are only three elements at most, so sort is pretty cheap
+    // There are only a few elements at most, so sort is pretty cheap.
     xs.sort();
     xs.pop();
 }

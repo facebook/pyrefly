@@ -919,8 +919,10 @@ fn join_types_impl(
     union_types: &impl Fn(Vec<Type>) -> Type,
     is_subset_eq: &impl Fn(&Type, &Type) -> bool,
 ) -> Type {
-    if matches!(base_ty, Type::Any(AnyStyle::Explicit | AnyStyle::Implicit))
-        && types.iter().any(|t| t.is_any())
+    if matches!(
+        base_ty,
+        Type::Any(AnyStyle::Explicit | AnyStyle::Propagated | AnyStyle::Implicit)
+    ) && types.iter().any(|t| t.is_any())
     {
         base_ty
     } else if is_narrow {
