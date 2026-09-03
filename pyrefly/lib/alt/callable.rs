@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::mem;
 
 use itertools::Itertools;
 use pyrefly_python::dunder;
@@ -41,6 +42,8 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::answers_solver::TypeCheckOptions;
 use crate::alt::expr::ExprOptions;
 use crate::alt::expr::TypeOrExpr;
+use crate::alt::map_int_tuples::MapIntTuplesPatternArgument;
+use crate::alt::map_int_tuples::map_int_tuples_parameter_pattern;
 use crate::alt::shape_flag::extend_shape_flag_vars_from_targs;
 use crate::alt::shape_flag::shape_flag_vars;
 use crate::alt::solve::Iterable;
@@ -52,6 +55,7 @@ use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::display::function_suffix;
+use crate::solver::solver::ArgumentKey;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallBoundary;
 use crate::solver::solver::CallContext;
@@ -468,6 +472,27 @@ impl CallArgPreEval<'_> {
         }
     }
 
+    /// Advance past one matched parameter without changing how its argument is interpreted.
+    fn advance_after_match(&mut self, vararg: bool) {
+        match self {
+            Self::Type(_, done) | Self::Expr(_, done) => *done = true,
+            Self::Star {
+                prefix,
+                consumed,
+                done,
+                ..
+            } => {
+                if !vararg && *consumed < prefix.len() {
+                    // A prefix element is consumed once matched; the variadic tail remains on
+                    // offer to every later parameter.
+                    *consumed += 1;
+                }
+                *done = vararg;
+            }
+            Self::Fixed(_, index) => *index += 1,
+        }
+    }
+
     /// Check the argument against a parameter hint and return the inferred argument type.
     fn post_check<Ans: LookupAnswer>(
         &mut self,
@@ -491,12 +516,45 @@ impl CallArgPreEval<'_> {
             })
             .with_context(context.map(|ctx| ctx()))
         };
+        // A shape-extension map at a parameter root carries an ordinary `Sequence` view, but its
+        // source must be recovered from the argument before that view is checked.
+        if let Some(pattern) = map_int_tuples_parameter_pattern(hint) {
+            let argument = match self {
+                Self::Type(ty, _) => MapIntTuplesPatternArgument::Type((*ty).clone()),
+                Self::Expr(expr, _) => MapIntTuplesPatternArgument::Expr(expr),
+                Self::Star {
+                    prefix,
+                    middle,
+                    suffix,
+                    consumed,
+                    ..
+                } => {
+                    let ty = Self::star_element(solver, prefix, middle, suffix, *consumed, vararg);
+                    MapIntTuplesPatternArgument::Type(ty)
+                }
+                Self::Fixed(tys, index) => MapIntTuplesPatternArgument::Type(tys[*index].clone()),
+            };
+            self.advance_after_match(vararg);
+            let arg_ty = solver.check_map_int_tuples_parameter_pattern(
+                pattern,
+                argument,
+                range,
+                arg_errors,
+                call_errors,
+                tcc,
+                call_context,
+                context,
+            );
+            solver.maybe_error_unknown_argument_type(&arg_ty, range, arg_errors);
+            return Some(arg_ty);
+        }
         match self {
-            Self::Type(ty, done) => {
-                *done = true;
+            Self::Type(ty, _) => {
+                let ty = (*ty).clone();
+                self.advance_after_match(vararg);
                 let fresh_call_errors = solver.error_collector();
                 let res = solver.check_type_with_options(
-                    ty,
+                    &ty,
                     hint,
                     range,
                     TypeCheckOptions::new(&fresh_call_errors, tcc).with_call_context(call_context),
@@ -508,11 +566,12 @@ impl CallArgPreEval<'_> {
                 {
                     call_errors.extend(fresh_call_errors);
                 }
-                solver.maybe_error_unknown_argument_type(ty, range, arg_errors);
-                Some((*ty).clone())
+                solver.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                Some(ty)
             }
-            Self::Expr(x, done) => {
-                *done = true;
+            Self::Expr(x, _) => {
+                let x = *x;
+                self.advance_after_match(vararg);
                 // PEP 747: when the parameter type is TypeForm, evaluate
                 // string literal arguments as forward-reference type forms.
                 if matches!(hint, Type::TypeForm(_))
@@ -558,15 +617,10 @@ impl CallArgPreEval<'_> {
                 middle,
                 suffix,
                 consumed,
-                done,
+                ..
             } => {
                 let ty = Self::star_element(solver, prefix, middle, suffix, *consumed, vararg);
-                if !vararg && *consumed < prefix.len() {
-                    // A prefix element is consumed once matched; the variadic tail
-                    // is not, since it stays on offer to every later parameter.
-                    *consumed += 1;
-                }
-                *done = vararg;
+                self.advance_after_match(vararg);
                 solver.check_type_with_options(
                     &ty,
                     hint,
@@ -575,15 +629,15 @@ impl CallArgPreEval<'_> {
                 );
                 Some(ty)
             }
-            Self::Fixed(tys, i) => {
-                let arg_ty = tys[*i].clone();
+            Self::Fixed(tys, index) => {
+                let arg_ty = tys[*index].clone();
+                self.advance_after_match(vararg);
                 solver.check_type_with_options(
                     &arg_ty,
                     hint,
                     range,
                     TypeCheckOptions::new(call_errors, tcc).with_call_context(call_context),
                 );
-                *i += 1;
                 solver.maybe_error_unknown_argument_type(&arg_ty, range, arg_errors);
                 Some(arg_ty)
             }
@@ -975,11 +1029,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             };
             Ok(param_list_owner.push(ps).items().iter().rev().collect())
         };
-        for (arg, is_self_arg) in self_arg
+        for (argument_index, (arg, is_self_arg)) in self_arg
             .iter()
             .map(|arg| (arg, true))
             .chain(args.iter().map(|arg| (arg, false)))
+            .enumerate()
         {
+            let argument = ArgumentKey::new(argument_index);
+            let call_context = &call_context.clone().with_argument(argument);
             let mut arg_pre = arg.pre_eval(self, arg_errors);
             while arg_pre.step() {
                 let param = if let Some(p) = rparams.last() {
@@ -1044,7 +1101,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         let arg_ty = if matches!(arg_pre, CallArgPreEval::Expr(Expr::Lambda(_), _))
                             && bound_args.is_none()
                         {
-                            deferred_lambdas.push((arg_pre.clone(), ty, name, arg.range()));
+                            deferred_lambdas.push((
+                                arg_pre.clone(),
+                                ty,
+                                name,
+                                arg.range(),
+                                argument,
+                            ));
                             arg_pre.mark_done();
                             None
                         } else {
@@ -1077,7 +1140,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         // Matched args are typechecked separately later
                         argmap.insert(arg.range(), ty.clone(), name.cloned());
                         unpacked_vararg = Some((name, ty));
-                        unpacked_vararg_matched_args.push(arg_pre.clone());
+                        unpacked_vararg_matched_args.push((arg_pre.clone(), arg.range()));
                         arg_pre.post_skip();
                     }
                     Some(PosParam {
@@ -1150,32 +1213,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         let has_matched_unpacked_vararg = unpacked_vararg.is_some();
         if let Some((unpacked_name, unpacked_param_ty)) = unpacked_vararg {
+            let map_pattern = map_int_tuples_parameter_pattern(unpacked_param_ty);
             let mut prefix = Vec::new();
             let mut middle = Vec::new();
             let mut suffix = Vec::new();
-            for arg in unpacked_vararg_matched_args {
-                match arg {
-                    CallArgPreEval::Type(ty, _) => {
-                        if middle.is_empty() {
-                            prefix.push(ty.clone())
-                        } else {
-                            suffix.push(ty.clone())
-                        }
-                    }
+            for (arg, range) in unpacked_vararg_matched_args {
+                let ty = match arg {
+                    CallArgPreEval::Type(ty, _) => ty.clone(),
                     CallArgPreEval::Expr(e, _) => {
-                        if middle.is_empty() {
-                            prefix.push(self.expr_infer(e, arg_errors))
+                        let before = arg_errors.len_hard();
+                        let ty = self.expr_infer(e, arg_errors);
+                        if map_pattern.is_some() && arg_errors.len_hard() > before {
+                            self.heap.mk_any_error()
                         } else {
-                            suffix.push(self.expr_infer(e, arg_errors))
+                            ty
                         }
                     }
-                    CallArgPreEval::Fixed(tys, idx) => {
-                        if middle.is_empty() {
-                            prefix.push(tys[idx].clone());
-                        } else {
-                            suffix.push(tys[idx].clone());
-                        }
-                    }
+                    CallArgPreEval::Fixed(tys, idx) => tys[idx].clone(),
                     CallArgPreEval::Star {
                         prefix: star_prefix,
                         middle: star_middle,
@@ -1183,19 +1237,36 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         consumed,
                         ..
                     } => {
+                        let report_unknown = |ty: &Type| {
+                            if map_pattern.is_some() {
+                                self.maybe_error_unknown_argument_type(ty, range, arg_errors);
+                            }
+                        };
                         // Only elements landing between two variadic portions lose
                         // their position; the rest stay in the prefix or suffix.
-                        let unmatched_prefix = star_prefix.into_iter().skip(consumed);
+                        let unmatched_prefix = star_prefix
+                            .into_iter()
+                            .skip(consumed)
+                            .inspect(|ty| report_unknown(ty));
                         if middle.is_empty() {
                             prefix.extend(unmatched_prefix);
                         } else {
-                            middle.extend(suffix);
-                            suffix = Vec::new();
+                            middle.extend(mem::take(&mut suffix));
                             middle.extend(unmatched_prefix);
                         }
+                        report_unknown(&star_middle);
                         middle.push(star_middle);
-                        suffix.extend(star_suffix);
+                        suffix.extend(star_suffix.into_iter().inspect(|ty| report_unknown(ty)));
+                        continue;
                     }
+                };
+                if map_pattern.is_some() {
+                    self.maybe_error_unknown_argument_type(&ty, range, arg_errors);
+                }
+                if middle.is_empty() {
+                    prefix.push(ty)
+                } else {
+                    suffix.push(ty)
                 }
             }
             let unpacked_args_ty = match middle.len() {
@@ -1225,14 +1296,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     )
                 }
             };
-            // The args side (unpacked_args_ty) is always a tuple built from call
-            // arguments, e.g., tuple[*Cs] or tuple[int, str]. The param side
-            // (unpacked_param_ty) is the raw Ts from stripping * off the type
-            // annotation *Ts. Wrap it in a tuple so both sides have the same
-            // structure: tuple[*Cs] ⊆ tuple[*Ts] or tuple[int, str] ⊆ tuple[*Ts].
-            let unpacked_param_tuple =
-                self.heap
-                    .mk_unpacked_tuple(Vec::new(), unpacked_param_ty.clone(), Vec::new());
             let check_context = || {
                 TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
                     true,
@@ -1241,24 +1304,42 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 ))
                 .with_context(context.map(|ctx| ctx()))
             };
-            if let Some(flag_source_context) =
-                call_context.for_shape_flag_binding_source(unpacked_param_ty)
-            {
-                self.check_type_with_options(
-                    &unpacked_args_ty,
-                    &unpacked_param_tuple,
+            if let Some(pattern) = map_pattern {
+                self.check_map_int_tuples_parameter_pattern(
+                    pattern,
+                    MapIntTuplesPatternArgument::Type(unpacked_args_ty),
                     arguments_range,
-                    TypeCheckOptions::new(call_errors, &check_context)
-                        .with_call_context(&flag_source_context),
-                );
-            } else {
-                self.check_type_as_call_argument(
-                    &unpacked_args_ty,
-                    &unpacked_param_tuple,
-                    arguments_range,
+                    arg_errors,
                     call_errors,
                     &check_context,
+                    call_context,
+                    context,
                 );
+            } else {
+                // The args side is a tuple built from call arguments, while the parameter side is
+                // the raw type under `Unpack`. Wrap it so both sides have the same structure.
+                let unpacked_param_tuple =
+                    self.heap
+                        .mk_unpacked_tuple(Vec::new(), unpacked_param_ty.clone(), Vec::new());
+                if let Some(flag_source_context) =
+                    call_context.for_shape_flag_binding_source(unpacked_param_ty)
+                {
+                    self.check_type_with_options(
+                        &unpacked_args_ty,
+                        &unpacked_param_tuple,
+                        arguments_range,
+                        TypeCheckOptions::new(call_errors, &check_context)
+                            .with_call_context(&flag_source_context),
+                    );
+                } else {
+                    self.check_type_as_call_argument(
+                        &unpacked_args_ty,
+                        &unpacked_param_tuple,
+                        arguments_range,
+                        call_errors,
+                        &check_context,
+                    );
+                }
             }
         }
         // Missing positional-only arguments, split by whether the corresponding parameters
@@ -1317,32 +1398,51 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     Required::Optional(None) => {}
                 },
                 Param::Varargs(name, Type::Unpack(unpacked)) => {
-                    // An unmatched Flag vararg still has an authoritative empty-tuple source;
-                    // matched varargs and ordinary TypeVarTuples retain their existing path.
-                    if !has_matched_unpacked_vararg
-                        && let Some(flag_source_context) =
+                    if !has_matched_unpacked_vararg {
+                        if let Some(pattern) = map_int_tuples_parameter_pattern(unpacked) {
+                            self.check_map_int_tuples_parameter_pattern(
+                                pattern,
+                                MapIntTuplesPatternArgument::Type(
+                                    self.heap.mk_concrete_tuple(Vec::new()),
+                                ),
+                                arguments_range,
+                                arg_errors,
+                                call_errors,
+                                &|| {
+                                    TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
+                                        true,
+                                        name.clone(),
+                                        callable_name.cloned(),
+                                    ))
+                                    .with_context(context.map(|ctx| ctx()))
+                                },
+                                call_context,
+                                context,
+                            );
+                        } else if let Some(flag_source_context) =
                             call_context.for_shape_flag_binding_source(unpacked)
-                    {
-                        self.check_type_with_options(
-                            &self.heap.mk_concrete_tuple(Vec::new()),
-                            &self.heap.mk_unpacked_tuple(
-                                Vec::new(),
-                                unpacked.as_ref().clone(),
-                                Vec::new(),
-                            ),
-                            arguments_range,
-                            TypeCheckOptions::new(call_errors, &|| {
-                                TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
-                                    true,
-                                    name.clone(),
-                                    callable_name.cloned(),
-                                ))
-                                .with_context(context.map(|ctx| ctx()))
-                            })
-                            .with_call_context(&flag_source_context),
-                        );
-                    } else {
-                        self.is_subset_eq(unpacked, &self.heap.mk_concrete_tuple(Vec::new()));
+                        {
+                            self.check_type_with_options(
+                                &self.heap.mk_concrete_tuple(Vec::new()),
+                                &self.heap.mk_unpacked_tuple(
+                                    Vec::new(),
+                                    unpacked.as_ref().clone(),
+                                    Vec::new(),
+                                ),
+                                arguments_range,
+                                TypeCheckOptions::new(call_errors, &|| {
+                                    TypeCheckContext::of_kind(TypeCheckKind::CallVarArgs(
+                                        true,
+                                        name.clone(),
+                                        callable_name.cloned(),
+                                    ))
+                                    .with_context(context.map(|ctx| ctx()))
+                                })
+                                .with_call_context(&flag_source_context),
+                            );
+                        } else {
+                            self.is_subset_eq(unpacked, &self.heap.mk_concrete_tuple(Vec::new()));
+                        }
                     }
                 }
                 Param::Varargs(..) => {}
@@ -1395,7 +1495,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
         let mut splat_kwargs = Vec::new();
-        for kw in keywords {
+        let keyword_argument_offset = usize::from(self_arg.is_some()) + args.len();
+        for (keyword_index, kw) in keywords.iter().enumerate() {
+            let call_context = &call_context
+                .clone()
+                .with_argument(ArgumentKey::new(keyword_argument_offset + keyword_index));
             match kw.arg {
                 None => {
                     let ty = kw.value.infer(self, arg_errors);
@@ -1568,35 +1672,57 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         })
                         .with_context(context.map(|ctx| ctx()))
                     };
-                    let arg_ty = match kw.value {
-                        TypeOrExpr::Expr(x) => self
-                            .expr_with_options(
-                                x,
-                                match hint {
-                                    Some((_, ty)) => ExprOptions::check(
-                                        ty,
-                                        arg_errors,
-                                        call_errors,
-                                        tcc,
-                                        Some(call_context),
-                                    ),
-                                    None => ExprOptions::infer(arg_errors, None),
-                                },
-                            )
-                            .into_ty(),
-                        TypeOrExpr::Type(x, range) => {
-                            if let Some((_, hint)) = &hint
-                                && !hint.is_any()
-                            {
-                                self.check_type_with_options(
-                                    x,
-                                    hint,
-                                    range,
-                                    TypeCheckOptions::new(call_errors, tcc)
-                                        .with_call_context(call_context),
-                                );
+                    let arg_ty = if let Some(pattern) = hint
+                        .as_ref()
+                        .and_then(|(_, hint)| map_int_tuples_parameter_pattern(hint))
+                    {
+                        let argument = match kw.value {
+                            TypeOrExpr::Expr(expr) => MapIntTuplesPatternArgument::Expr(expr),
+                            TypeOrExpr::Type(ty, _) => {
+                                MapIntTuplesPatternArgument::Type((*ty).clone())
                             }
-                            (*x).clone()
+                        };
+                        self.check_map_int_tuples_parameter_pattern(
+                            pattern,
+                            argument,
+                            kw.range,
+                            arg_errors,
+                            call_errors,
+                            tcc,
+                            call_context,
+                            context,
+                        )
+                    } else {
+                        match kw.value {
+                            TypeOrExpr::Expr(x) => self
+                                .expr_with_options(
+                                    x,
+                                    match hint {
+                                        Some((_, ty)) => ExprOptions::check(
+                                            ty,
+                                            arg_errors,
+                                            call_errors,
+                                            tcc,
+                                            Some(call_context),
+                                        ),
+                                        None => ExprOptions::infer(arg_errors, None),
+                                    },
+                                )
+                                .into_ty(),
+                            TypeOrExpr::Type(x, range) => {
+                                if let Some((_, hint)) = &hint
+                                    && !hint.is_any()
+                                {
+                                    self.check_type_with_options(
+                                        x,
+                                        hint,
+                                        range,
+                                        TypeCheckOptions::new(call_errors, tcc)
+                                            .with_call_context(call_context),
+                                    );
+                                }
+                                (*x).clone()
+                            }
                         }
                     };
                     self.maybe_error_unknown_argument_type(&arg_ty, kw.range, arg_errors);
@@ -1706,7 +1832,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .with_call_context(call_context),
             );
         }
-        for (mut arg, hint, name, range) in deferred_lambdas {
+        for (mut arg, hint, name, range, argument) in deferred_lambdas {
+            let call_context = &call_context.clone().with_argument(argument);
             let mut hint = hint.clone();
             // Read parameter bounds collected from the other arguments while leaving the return
             // type open for the lambda body to constrain.

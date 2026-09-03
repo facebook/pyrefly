@@ -118,10 +118,12 @@ pub struct Exports {
     wildcard: Calculation<Arc<SmallSet<Name>>>,
     /// Names that are available via `from <this_module> import <name>` along with their locations
     exports: Calculation<Arc<SmallMap<Name, ExportLocation>>>,
-    /// If this module has a docstring, the range is stored here. Docstrings for exports themselves are stored in exports.
-    /// While putting the module docstring range on exports is a bit weird (it doesn't actually have much to do with exports),
-    /// we can't put it on the Module as that doesn't have the AST, and we can't get it from the AST as we often throw that away,
-    /// so here makes sense.
+    // The fields below are derived from the AST but are not exports. They live
+    // here because `Exports` is the only per-module artifact that is always
+    // available: `Module` does not carry the AST, and the AST itself is evicted
+    // once answers are computed unless the module is required at `Everything`.
+    /// The range of this module's docstring, if it has one. Docstrings for the
+    /// exports themselves are stored in `exports`.
     docstring_range: Option<TextRange>,
 }
 

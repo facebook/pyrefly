@@ -3423,6 +3423,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 {
                     self.proxy_method_subscript_infer(cls, xs, range, errors)
                 }
+                Type::ClassDef(ref cls) if self.is_map_int_tuples_class(cls) =>
+                {
+                    // Normal class subscripts are generic specializations. This experimental
+                    // shape extension instead reduces its type lambda eagerly, leaving an
+                    // ordinary tuple type for the rest of the checker.
+                    self.heap.mk_type_of(self.parse_map_int_tuples(
+                        xs,
+                        range,
+                        type_form_context,
+                        errors,
+                    ))
+                }
                 Type::ClassDef(ref cls)
                     if let Expr::StringLiteral(ExprStringLiteral { value: key, .. }) = slice
                         && self.get_enum_from_class(cls).is_some() =>
@@ -3470,7 +3482,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let Type::Quantified(quantified) = *f else { unreachable!("guarded by matches! above") };
                     let quantified = *quantified;
                     let base_display_ty =
-                        self.heap.mk_type(self.heap.mk_quantified(quantified.clone()));
+                        self.heap.mk_type_of(self.heap.mk_quantified(quantified.clone()));
                     if self.is_restricted_to_enum_class_def_type(&quantified) {
                         if self.is_subset_eq(
                             &self.expr_check(slice, None, errors),
@@ -4551,7 +4563,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let ty =
                         self.parse_type_level_dsl_call(call, &callee, type_form_context, errors);
                     if let Type::TypeLevelDslCall(call) = &ty
-                        && call.result_domain() != TypeShapeDslDomain::Int
+                        && call.result_domain() != Some(TypeShapeDslDomain::Int)
                     {
                         self.error(
                             errors,
@@ -5039,7 +5051,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 ty
                             }
                             Type::TypeLevelDslCall(call) if i == shape_idx => {
-                                if call.result_domain() == TypeShapeDslDomain::IntTuple {
+                                if call.result_domain() == Some(TypeShapeDslDomain::IntTuple) {
                                     let ty = Type::TypeLevelDslCall(call);
                                     shape_arg_carrier = Some(ty);
                                     shape_validation_arg(
@@ -5116,17 +5128,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         {
             *shape_arg = carrier;
         }
-        if matches!(
-            base_class.targs().as_slice().get(shape_idx),
-            Some(Type::TypeLevelDslCall(_))
-        ) {
+        if let Some(Type::TypeLevelDslCall(call)) = base_class.targs().as_slice().get(shape_idx)
+            && call.result_domain() == Some(TypeShapeDslDomain::IntTuple)
+        {
             return Type::ClassType(base_class);
         }
         self.shaped_array_classtype_to_shaped_array_type(&base_class)
             .to_type()
     }
 
-    fn parse_int_tuple_type(
+    pub(crate) fn parse_int_tuple_type(
         &self,
         args: &[Expr],
         type_form_context: TypeFormContext<'_>,

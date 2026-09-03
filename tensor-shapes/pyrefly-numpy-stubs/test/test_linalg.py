@@ -65,7 +65,7 @@ def generic_matmul[
     assert_type(np.matmul(left, same_inner), np.ndarray[[N, P]])
     assert_type(left @ same_inner, np.ndarray[[N, P], DType])
     assert_type(np.matmul(left, unrelated_inner), np.ndarray[[N, P]])
-    left @ unrelated_inner  # E: `@` is not supported
+    assert_type(left @ unrelated_inner, np.ndarray[[N, P], DType])
     assert_type(np.matmul(left, gradual_inner), np.ndarray[[N, P]])
     assert_type(left @ gradual_inner, np.ndarray[[N, P], DType])
 
@@ -77,9 +77,9 @@ def concrete_inner_matmul[N: IntVar, P: IntVar, DType](
 ) -> None:
     assert_type(np.matmul(left, same_inner), np.ndarray[[N, P]])
     assert_type(left @ same_inner, np.ndarray[[N, P], DType])
-    # E: Cannot evaluate type-level shape DSL call: matmul inner dimensions must match
+    # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 4 and 5
     np.matmul(left, different_inner)
-    left @ different_inner  # E: Shape dimension mismatch
+    left @ different_inner  # E: `@` is not supported
 
 
 def symbolic_concrete_inner_matmul[N: IntVar, M: IntVar, P: IntVar](
@@ -96,7 +96,7 @@ def gradual_matmul[DType](
     left: np.ndarray[IntTuple, DType], right: np.ndarray[IntTuple]
 ) -> None:
     assert_type(np.matmul(left, right), np.ndarray[IntTuple])
-    assert_type(left @ right, np.ndarray[[int, int], DType])
+    assert_type(left @ right, np.ndarray[IntTuple, DType])
 
 
 def bare_matmul(left: np.ndarray, right: np.ndarray) -> None:
@@ -118,30 +118,52 @@ def mixed_dtype_matmul(
     assert_type(np.matmul(left, right), np.ndarray[[3, 5]])
 
 
-def known_limitation_matmul_rejects_valid_non_2d_inputs(
-    batched: np.ndarray[[2, 3, 4]],
+def gufunc_matmul_shapes[
+    M: IntVar,
+    N: IntVar,
+    P: IntVar,
+    B: IntVar,
+    DType,
+](
+    left_vector: np.ndarray[[M], DType],
+    right_vector: np.ndarray[[P]],
+    matrix: np.ndarray[[M, P]],
+    batched: np.ndarray[[B, N, M], DType],
+    broadcasted: np.ndarray[[1, M, P]],
 ) -> None:
-    # NumPy supports vector and batched matmul, but the shape-stub MVP models
-    # only the 2-D contract.
-    vector = np.ones(4)
-    matrix = np.ones((4, 5))
-    vector @ matrix  # E: `@` is not supported
-    matrix @ vector  # E: `@` is not supported
-    # E: Cannot evaluate type-level shape DSL call: matmul expects 2-D arrays
-    np.matmul(vector, matrix)
-    # E: Cannot evaluate type-level shape DSL call: matmul expects 2-D arrays
-    np.matmul(matrix, vector)
-    # E: Cannot evaluate type-level shape DSL call: matmul expects 2-D arrays
-    np.matmul(batched, matrix)
+    assert_type(np.matmul(left_vector, matrix), np.ndarray[[P]])
+    assert_type(left_vector @ matrix, np.ndarray[[P], DType])
+    assert_type(np.matmul(left_vector, broadcasted), np.ndarray[[1, P]])
+    assert_type(left_vector @ broadcasted, np.ndarray[[1, P], DType])
+    assert_type(np.matmul(matrix, right_vector), np.ndarray[[M]])
+    assert_type(matrix @ right_vector, np.ndarray[[M]])
+    assert_type(np.matmul(batched, left_vector), np.ndarray[[B, N]])
+    assert_type(batched @ left_vector, np.ndarray[[B, N], DType])
+    assert_type(np.matmul(left_vector, left_vector), np.ndarray[[]])
+    assert_type(left_vector @ left_vector, np.ndarray[[], DType])
+    assert_type(np.matmul(batched, broadcasted), np.ndarray[[B, N, P]])
+    assert_type(batched @ broadcasted, np.ndarray[[B, N, P], DType])
 
 
-def reject_invalid_rank_with_gradual_other(
-    gradual: np.ndarray[IntTuple], batched: np.ndarray[[2, 3, 4]]
+def reject_invalid_gufunc_matmul_shapes[DType](
+    left: np.ndarray[[2, 3, 4], DType],
+    bad_core: np.ndarray[[2, 5, 6]],
+    bad_batch: np.ndarray[[3, 4, 6]],
 ) -> None:
-    # E: Cannot evaluate type-level shape DSL call: matmul expects 2-D arrays
-    np.matmul(gradual, batched)
-    # E: Cannot evaluate type-level shape DSL call: matmul expects 2-D arrays
-    np.matmul(batched, gradual)
+    # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 4 and 5
+    np.matmul(left, bad_core)
+    left @ bad_core  # E: `@` is not supported
+    # E: Cannot evaluate type-level shape DSL call: Cannot broadcast dimension Int[2] with dimension Int[3] at position 0
+    np.matmul(left, bad_batch)
+    left @ bad_batch  # E: `@` is not supported
+
+
+def reject_scalar_matmul[M: IntVar, DType](
+    scalar: np.ndarray[[], DType], vector: np.ndarray[[M]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: matmul expects at least 1-D arrays
+    np.matmul(scalar, vector)
+    scalar @ vector  # E: `@` is not supported
 
 
 def test_matmul_function_2d() -> None:
@@ -156,6 +178,30 @@ def test_matmul_operator_2d() -> None:
     b = np.ones((4, 5))
 
     assert_shape(a @ b, (3, 5))
+
+
+def test_matmul_vector_operands() -> None:
+    vec4 = np.ones(4)
+    mat34 = np.ones((3, 4))
+    mat45 = np.ones((4, 5))
+
+    assert_shape(np.matmul(vec4, vec4), ())
+    assert_shape(vec4 @ vec4, ())
+    assert_shape(np.matmul(vec4, mat45), (5,))
+    assert_shape(vec4 @ mat45, (5,))
+    assert_shape(np.matmul(mat34, vec4), (3,))
+    assert_shape(mat34 @ vec4, (3,))
+
+
+def test_matmul_batched_vector_operands() -> None:
+    vec4 = np.ones(4)
+    batch_234 = np.ones((2, 4))[:, None, :] + np.ones((3, 4))[None, :, :]
+    batch_245 = np.ones((2, 5))[:, None, :] + np.ones((4, 5))[None, :, :]
+
+    assert_shape(np.matmul(vec4, batch_245), (2, 5))
+    assert_shape(vec4 @ batch_245, (2, 5))
+    assert_shape(np.matmul(batch_234, vec4), (2, 3))
+    assert_shape(batch_234 @ vec4, (2, 3))
 
 
 def test_transpose_property_2d() -> None:
@@ -325,7 +371,7 @@ def test_matmul_rejects_mismatched_inner_dimension() -> None:
     # shape" invariant.
     assert_shape(np.matmul(np.ones((3, 4)), np.ones((4, 5))), (3, 5))
     try:
-        # E: Cannot evaluate type-level shape DSL call: matmul inner dimensions must match
+        # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 4 and 6
         np.matmul(a, b)
     except ValueError:
         pass

@@ -672,7 +672,7 @@ class MyTypedDict(TypedDict):
                 .prepend_modifier(TypeModifier::Type),
         ),
         PysaType::from_type(
-            &context.answers_context.answers.heap().mk_type(
+            &context.answers_context.answers.heap().mk_type_of(
                 context
                     .answers_context
                     .answers
@@ -701,7 +701,7 @@ class MyTypedDict(TypedDict):
         PysaType::from_type(
             &unions(
                 vec![
-                    context.answers_context.answers.heap().mk_type(
+                    context.answers_context.answers.heap().mk_type_of(
                         context
                             .answers_context
                             .answers
@@ -711,7 +711,7 @@ class MyTypedDict(TypedDict):
                                 Default::default(),
                             )),
                     ),
-                    context.answers_context.answers.heap().mk_type(
+                    context.answers_context.answers.heap().mk_type_of(
                         context
                             .answers_context
                             .answers

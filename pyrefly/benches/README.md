@@ -1,9 +1,12 @@
 # PyTorch benchmarks
 
-Three real-world walltime benchmarks over a large, pinned PyTorch checkout (15k+
-Python files) across all cores. Two drive the actual Pyrefly LSP server and
-measure interactive latency (`cold_start`, `error_propagation`); one runs a cold
-batch `check` and measures whole-project throughput (`full_check`).
+Four real-world benchmarks over a large, pinned PyTorch checkout (15k+ Python
+files) across all cores. Two drive the actual Pyrefly LSP server and measure
+interactive latency (`cold_start`, `error_propagation`); one runs a cold batch
+`check` and measures whole-project throughput (`full_check`); one times a cold
+whole-project index (`indexed_memory`). A fifth target, `pytorch_memory`,
+reports the memory that index holds — a separate binary rather than a fifth
+benchmark, for the reason in its section below.
 
 For the full command reference (all flags, micro benchmarks, cargo/buck forms),
 see `.claude/skills/benchmark-pyrefly/SKILL.md`.
@@ -16,15 +19,16 @@ The PyTorch source is pinned by a single 40-hex commit in `pytorch_pin.bzl` (rev
 one place. Two providers feed the checkout:
 
 - **Internal (buck):** `pyrefly/BUCK` fetches the pinned tarball from Manifold
-  via `http_archive` and passes its path to the benches in
-  `PYREFLY_PYTORCH_BENCH_PATH`. No github egress; Buck CAS caches it.
+  via `http_archive` and declares it as a resource of each benchmark target, so
+  buck materializes it next to the binary and `buck_resources` reports its path
+  on whichever host runs it. No github egress; Buck CAS caches it.
 - **OSS (cargo):** shallow-clones the pinned rev from github into a per-rev temp
   cache on first run (needs `git` + `github.com` egress), reused afterward.
 
 Set `PYREFLY_PYTORCH_BENCH_PATH` to an existing checkout to bypass both. If the
 checkout can't be obtained the bench prints a skip notice and exits cleanly.
 
-## The three benches
+## The four benches
 
 They ship in **one target** — buck `pytorch_bench`, cargo bench `pytorch` — and
 you select an individual one at runtime with a Criterion name filter rather than
@@ -43,12 +47,38 @@ per bench:
   resulting type error to surface in the distant dependent `_backward.py`.
   Proxy for incremental edit-propagation latency. Criterion id
   `pytorch/error_propagation`.
+- `pytorch/indexed_memory.rs` — the indexed-build benchmark. Drives every project
+  file to `Require::Indexing`, the level the language server uses for the files it
+  indexes in the background and the only one that retains the find-references
+  index and the per-module symbol tables. Times the cold index only; the memory
+  that index holds is reported by the `pytorch_memory` target below. Criterion id
+  `pytorch/indexed_memory`.
 - `pytorch/full_check.rs` — the full-check benchmark. Fresh `State` per iteration;
   runs exactly what `pyrefly check` (project mode, no file args) does from inside
   the checkout — discovers the project and checks every project file across all
   cores. Dependencies default to `Exports` and checked files to `Errors`, matching
   the CLI's require levels. Proxy for whole-project batch throughput (not
   interactive latency). Criterion id `pytorch/full_check`.
+
+## The memory report
+
+`benches/pytorch_memory/main.rs` — buck `pytorch_memory_bench`, cargo bench
+`pytorch_memory`. Indexes the checkout once and prints the resident memory the
+indexed project holds.
+
+**Why it is a separate target and not a fifth benchmark.** RSS is a property of
+the process, not of the routine: `VmRSS` counts everything the process still
+holds, and `VmHWM` is the high-water mark over its whole life. Run inside
+`pytorch_bench`, it would report whatever the cold-start, error-propagation and
+full-check benchmarks had already allocated — the memory of the largest of them,
+not of this index. A process that indexes once and does nothing else is what
+makes the figure mean what it says.
+
+Memory is reported, not asserted: RSS depends on the allocator and the host, so
+the number's use is comparative, by running at two commits and diffing. The
+measurement is corpus-independent and lives in the `pyrefly_bench_harness`
+crate, so reports over other corpora (see `facebook/benches/ig_indexed_memory.rs`)
+share it — each corpus supplies only its own root.
 
 ## Running
 
@@ -73,9 +103,15 @@ cargo bench --bench pytorch
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench cold_start
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench error_propagation
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench full_check
+buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench indexed_memory
 cargo bench --bench pytorch -- cold_start
 cargo bench --bench pytorch -- error_propagation
 cargo bench --bench pytorch -- full_check
+cargo bench --bench pytorch -- indexed_memory
+
+# The memory report — its own target, so that it gets a clean process
+buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_memory_bench
+cargo bench --bench pytorch_memory
 ```
 
 Useful flags — append after `--` for buck, pass directly for cargo:

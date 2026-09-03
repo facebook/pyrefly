@@ -21,6 +21,7 @@ inherits = "dev"
 
 [workspace]
 members = [
+  "crates/pyrefly_bench_harness",
   "crates/pyrefly_build",
   "crates/pyrefly_bundled",
   "crates/pyrefly_config",

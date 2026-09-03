@@ -176,8 +176,10 @@ impl TypeHeap {
     }
 
     /// Create a `Type::Type` wrapping an inner type.
-    pub fn mk_type(&self, inner: Type) -> Type {
-        Type::Type(Box::new(inner))
+    ///
+    /// This matches the `Type::type_of` helper.
+    pub fn mk_type_of(&self, inner: Type) -> Type {
+        Type::type_of(inner)
     }
 
     /// Create a `Type::TypeForm` wrapping an inner type (PEP 747).
@@ -337,13 +339,6 @@ impl TypeHeap {
         ret: Type,
     ) -> Type {
         Type::callable_concatenate(params, param_spec, ret)
-    }
-
-    /// Create a `Type::Type` wrapping an inner type.
-    ///
-    /// This is an alias for `mk_type` matching the `Type::type_of` helper.
-    pub fn mk_type_of(&self, inner: Type) -> Type {
-        Type::type_of(inner)
     }
 
     /// Create a `Type::Literal` from a Literal.

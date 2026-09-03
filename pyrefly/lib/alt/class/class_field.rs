@@ -796,19 +796,6 @@ impl ClassField {
         })
     }
 
-    /// Given a `__set__(self, instance, value)` function, gets the type of `value`.
-    fn get_descriptor_setter_value(heap: &TypeHeap, setter: &Type) -> Type {
-        let values = setter
-            .toplevel_callable_signatures()
-            .filter_map(|(callable, _)| callable.get_positional_param(2).cloned())
-            .collect::<Vec<_>>();
-        if values.is_empty() {
-            heap.mk_any_implicit()
-        } else {
-            unions(values, heap)
-        }
-    }
-
     fn as_raw_special_method_type(&self, heap: &TypeHeap, instance: &Instance) -> Option<Type> {
         match self.instantiate_for(heap, instance).0 {
             ClassFieldInner::Descriptor { ty, .. } => Some(ty),
@@ -937,7 +924,6 @@ impl ClassField {
                     Some(Annotation {
                         ty: Some(ty),
                         qualifiers,
-                        ..
                     }),
                 ..
             } => Some(TypedDictField {
@@ -960,7 +946,6 @@ impl ClassField {
                     Some(Annotation {
                         ty: Some(ty),
                         qualifiers,
-                        ..
                     }),
                 ..
             } => Some(TypedDictField {
@@ -1700,7 +1685,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             direct_annotation = Some(Annotation {
                                 qualifiers: Vec::new(),
                                 ty: Some(ty),
-                                display_ty: None,
                             });
                         }
                     }
@@ -1867,6 +1851,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         range,
                         errors,
                     );
+                    // Promote each assigned value before unioning them, rather than promoting
+                    // the finished union. Promoting first means a literal can never be absorbed
+                    // by a wider member before promotion has had a chance to widen it, which
+                    // would leave an explicit type that promotion is not allowed to touch.
+                    //
+                    // A value whose annotation fixes its type keeps it: an explicit type is the
+                    // declaration, and a read-only value cannot be reassigned so its literal is
+                    // not over-precise.
+                    let annotation_fixes_type = annotation.as_ref().is_some_and(|ann| {
+                        ann.ty.is_some()
+                            || ann.is_final()
+                            || ann.has_qualifier(&Qualifier::ReadOnly)
+                    });
+                    let value_ty = if annotation_fixes_type
+                        || matches!(value_ty, Type::NNModule(_) | Type::DataFrame(_))
+                    {
+                        // Shape and column inference need NNModule and DataFrame literals kept.
+                        value_ty
+                    } else {
+                        value_ty.promote_implicit_literals(self.stdlib)
+                    };
                     union_types.push(value_ty);
                     if overall_annotation.is_none() {
                         overall_annotation = annotation;
@@ -1875,7 +1880,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         overall_is_inherited = IsInherited::Maybe;
                     }
                 }
-                let mut value_ty = unions(union_types, self.heap);
+                let mut value_ty = self.unions(union_types);
                 if matches!(receiver_kind, MethodSelfKind::Instance) {
                     value_ty = self
                         .check_and_sanitize_type_parameters(class, value_ty, name, range, errors);
@@ -1993,7 +1998,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             (value_ty, None)
         } else {
             let mut has_implicit_literal = value_ty.is_implicit_literal();
-            if !has_implicit_literal && matches!(initialization, ClassFieldInitialization::Method) {
+            if !has_implicit_literal
+                && matches!(
+                    initialization,
+                    ClassFieldInitialization::Method | ClassFieldInitialization::ClassMethod
+                )
+            {
                 value_ty.universe(&mut |current_type_node| {
                     has_implicit_literal |= current_type_node.is_implicit_literal();
                 });
@@ -3066,16 +3076,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         direct_qualifiers: Option<&Vec<Qualifier>>,
     ) -> Option<Annotation> {
         match (inherited, direct_qualifiers) {
-            (inherited, Some(qualifiers)) => {
-                let (ty, display_ty) = inherited
-                    .map(|annotation| (annotation.ty, annotation.display_ty))
-                    .unwrap_or_default();
-                Some(Annotation {
-                    ty,
-                    qualifiers: qualifiers.clone(),
-                    display_ty,
-                })
-            }
+            (inherited, Some(qualifiers)) => Some(Annotation {
+                ty: inherited.and_then(|ann| ann.ty),
+                qualifiers: qualifiers.clone(),
+            }),
             (ann, None) => ann,
         }
     }
@@ -3717,7 +3721,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else if let Some(x) = descriptor
             && let Some(setter) = self.resolve_descriptor_setter(name, x, errors)
         {
-            ClassField::get_descriptor_setter_value(self.heap, &setter)
+            self.get_descriptor_setter_value(&setter)
         } else {
             ty.clone()
         };
@@ -5916,6 +5920,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             )
         } else {
             None
+        }
+    }
+
+    /// Given a `__set__(self, instance, value)` function, gets the type of `value`.
+    fn get_descriptor_setter_value(&self, setter: &Type) -> Type {
+        let values = setter
+            .toplevel_callable_signatures()
+            .filter_map(|(callable, _)| callable.get_positional_param(2).cloned())
+            .collect::<Vec<_>>();
+        if values.is_empty() {
+            self.heap.mk_any_implicit()
+        } else {
+            self.unions(values)
         }
     }
 

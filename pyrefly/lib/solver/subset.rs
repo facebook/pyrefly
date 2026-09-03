@@ -49,6 +49,7 @@ use starlark_map::small_map::SmallMap;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
+use crate::solver::shape::type_as_intvar_solution;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::OpenTypedDictSubsetError;
 use crate::solver::solver::QuantifiedHandle;
@@ -58,7 +59,6 @@ use crate::solver::solver::SubsetCacheEntry;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::SubsetWithSnapshotResult;
 use crate::solver::solver::TypedDictSubsetError;
-use crate::solver::solver::type_as_intvar_solution;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Params;
@@ -68,7 +68,6 @@ use crate::types::callable::params_are_gradual_variadic;
 use crate::types::class::ClassType;
 use crate::types::quantified::Quantified;
 use crate::types::quantified::QuantifiedKind;
-use crate::types::simplify::unions;
 use crate::types::tuple::Tuple;
 use crate::types::type_alias::TypeAliasData;
 use crate::types::type_var::Restriction;
@@ -197,7 +196,7 @@ fn any<T>(
 struct FreshForall {
     handle: QuantifiedHandle,
     ty: Type,
-    witness: ResidualWitnessContext,
+    witness: Option<ResidualWitnessContext>,
 }
 
 impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
@@ -226,7 +225,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         full: Type,
     ) -> Result<(), SubsetError> {
         optional_prefixes.push(full.clone());
-        let accepted = unions(optional_prefixes, &self.solver.heap);
+        let accepted = self.solver.unions(optional_prefixes, self.type_order);
         let unpack = canonical_vararg_unpack_inner(unpack, &accepted);
         self.is_subset_eq(unpack, &accepted)
     }
@@ -468,6 +467,15 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 }
                 (Some(_), Some(Param::KwOnly(_, _, _) | Param::Kwargs(_, _))) => {
                     break;
+                }
+                (None, Some(Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _))) => {
+                    let missing = std::iter::once(ty.clone())
+                        .chain(u_args.filter_map(|param| match param {
+                            Param::PosOnly(_, ty, _) | Param::Pos(_, ty, _) => Some(ty.clone()),
+                            _ => None,
+                        }))
+                        .collect();
+                    return Err(SubsetError::CallableMissingPositionalParameters(missing));
                 }
                 _ => return Err(SubsetError::Other),
             }
@@ -1067,12 +1075,21 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         want_ts: &[PrefixParam],
         want_pspec: &Type,
     ) -> Result<(), SubsetError> {
-        if got.len() < want_ts.len() {
-            return Err(SubsetError::Other);
-        }
         // Preserve Pos vs PosOnly so that the subset checker can reject name mismatches
         // (e.g. Pos("a", int) vs Pos("self", K) fails, but PosOnly matches any name).
         let args: Vec<Param> = want_ts.iter().map(|p| p.to_param_preserve_name()).collect();
+        if got.len() < args.len() {
+            // Run the regular parameter matcher first so it can distinguish a type mismatch
+            // from parameters that are genuinely absent. A variadic parameter may consume the
+            // whole prefix, but inferring the remaining ParamSpec from it is not supported.
+            self.is_subset_param_list(
+                got.items(),
+                &args,
+                params_are_gradual_variadic(got.items()),
+                params_are_gradual_variadic(&args),
+            )?;
+            return Err(SubsetError::Other);
+        }
         let (pre, post) = got.items().split_at(args.len());
         self.is_subset_param_list(
             pre,
@@ -1514,10 +1531,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             if successful_branch_captures.is_empty() {
                 unreachable!("successful overload probe must produce a branch capture");
             }
-            self.active_call_context.persist_overload_witness_captures(
-                witness.witness_hash(),
-                successful_branch_captures,
-            );
+            self.active_call_context
+                .persist_overload_witness_captures(witness.argument(), successful_branch_captures);
             true
         } else {
             false
@@ -1533,6 +1548,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             let argument_side = self.active_call_context.argument_side();
             let can_synthesize_witness = !matches!(argument_side, ArgumentSide::NotAnalyzingACall);
             if can_synthesize_witness
+                && let Some(argument) = self.active_call_context.argument()
                 && let eligible_vars = want
                     .collect_maybe_placeholder_vars()
                     .into_iter()
@@ -1540,12 +1556,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     .collect::<Vec<_>>()
                 && !eligible_vars.is_empty()
             {
-                let overload_type = Type::Overload(overload.clone());
-                let synthesized = ResidualWitnessContext::for_overload(
-                    &overload_type,
-                    &eligible_vars,
-                    argument_side,
-                );
+                let synthesized =
+                    ResidualWitnessContext::for_overload(argument, &eligible_vars, argument_side);
                 self.with_active_call_context(
                     self.active_call_context
                         .clone()
@@ -1651,12 +1663,14 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
     fn instantiate_fresh_forall(&self, forall: Forall<Forallable>, want: &Type) -> FreshForall {
         let (vs, got) = self.type_order.instantiate_fresh_forall(forall.clone());
-        let witness = ResidualWitnessContext::for_forall(
-            &Type::Forall(Box::new(forall)),
-            &vs,
-            want,
-            self.active_call_context.argument_side(),
-        );
+        let witness = self.active_call_context.argument().map(|argument| {
+            ResidualWitnessContext::for_forall(
+                argument,
+                &vs,
+                want,
+                self.active_call_context.argument_side(),
+            )
+        });
         FreshForall {
             handle: vs,
             ty: got,
@@ -1670,17 +1684,21 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             ty,
             witness,
         } = got;
-        let (result, mut maybe_witness) = self.with_active_call_context(
-            self.active_call_context
-                .clone()
-                .with_residual_witness(witness),
-            |me| {
-                (
-                    me.is_subset_eq(&ty, want),
-                    me.active_call_context.take_residual_witness(),
-                )
-            },
-        );
+        let (result, mut maybe_witness) = if let Some(witness) = witness {
+            self.with_active_call_context(
+                self.active_call_context
+                    .clone()
+                    .with_residual_witness(witness),
+                |me| {
+                    (
+                        me.is_subset_eq(&ty, want),
+                        me.active_call_context.take_residual_witness(),
+                    )
+                },
+            )
+        } else {
+            (self.is_subset_eq(&ty, want), None)
+        };
         let in_call_analysis = !matches!(
             self.active_call_context.argument_side(),
             ArgumentSide::NotAnalyzingACall
@@ -1689,7 +1707,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             && in_call_analysis
             && let Some(witness) = maybe_witness.as_mut()
         {
-            if let Some(deferred_vars) = self.take_witness_deferred_vars(witness.witness_hash()) {
+            if let Some(deferred_vars) = self.take_witness_deferred_vars(witness.argument()) {
                 witness.extend_deferred_vars(deferred_vars);
             }
             self.active_call_context.record_generic_residuals(witness);
@@ -2569,7 +2587,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let tuple_type = self.solver.heap.mk_class_type(
                     self.type_order
                         .stdlib()
-                        .tuple(unions(left_elts.clone(), &self.solver.heap)),
+                        .tuple(self.solver.unions(left_elts.clone(), self.type_order)),
                 );
                 self.is_subset_eq(&tuple_type, want)
             }
@@ -2593,7 +2611,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let tuple_type = self.solver.heap.mk_class_type(
                     self.type_order
                         .stdlib()
-                        .tuple(unions(elts, &self.solver.heap)),
+                        .tuple(self.solver.unions(elts, self.type_order)),
                 );
                 self.is_subset_eq(&tuple_type, want)
             }
@@ -2603,7 +2621,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let tuple_type = self.solver.heap.mk_class_type(
                     self.type_order
                         .stdlib()
-                        .tuple(unions(elts, &self.solver.heap)),
+                        .tuple(self.solver.unions(elts, self.type_order)),
                 );
                 self.is_subset_eq(&tuple_type, want)?;
                 self.is_subset_eq(middle, want)?;

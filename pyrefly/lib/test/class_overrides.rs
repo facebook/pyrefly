@@ -179,6 +179,33 @@ class B(A):
  "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1493
+testcase!(
+    test_override_with_differently_named_parent_overloads,
+    r#"
+from typing import overload
+
+class A:
+    @overload
+    def f(self, x: int) -> None: ...
+    @overload
+    def f(self, y: int, z: str) -> None: ...
+    def f(self, *args, **kwargs) -> None: ...
+
+class B(A):
+    # E: Class member `B.f` overrides parent class `A` in an inconsistent manner
+    # !E: Got parameter name
+    def f(self, x: int) -> None:
+        pass
+
+class C(A):
+    # E: Class member `C.f` overrides parent class `A` in an inconsistent manner
+    # !E: Got parameter name
+    def f(self, y: int) -> None:
+        pass
+"#,
+);
+
 testcase!(
     test_override_generic_simple,
     r#"

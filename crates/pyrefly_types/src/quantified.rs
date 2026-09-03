@@ -44,6 +44,10 @@ pub enum QuantifiedOrigin {
         /// Is this a Self quantified synthesized for `__new__` on a class?
         is_self: bool,
     },
+    /// Synthetic binder for the parameter of an `IntTuples` mapper.
+    MapIntTuplesParameter,
+    /// De Bruijn sentinel used only while comparing `MapIntTuples` lambdas.
+    NormalizedMapIntTuplesParameter,
 }
 
 impl QuantifiedOrigin {
@@ -419,6 +423,11 @@ impl Quantified {
 
     pub fn identity(&self) -> &QuantifiedIdentity {
         &self.identity
+    }
+
+    pub(crate) fn normalized_map_int_tuples_parameter_depth(&self) -> Option<u32> {
+        (self.identity.origin == QuantifiedOrigin::NormalizedMapIntTuplesParameter)
+            .then_some(self.identity.anchor.index)
     }
 
     pub fn as_gradual_type_helper(kind: QuantifiedKind, default: Option<&Type>) -> Type {

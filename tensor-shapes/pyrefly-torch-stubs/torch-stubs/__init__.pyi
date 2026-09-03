@@ -6,18 +6,24 @@
 """
 Comprehensive type stubs for PyTorch with shape inference.
 
-New shape inference rules use `@type_shape_dsl_function` definitions from
-`torch/_shapes.pyi`, called directly from public return annotations. Some existing rules still use
-the older `@uses_shape_dsl(...)` decorator while the stub library is migrated; new rules should not
-extend that legacy path.
+Shape inference is expressed through type-level functions in annotations. Library-specific
+functions are defined in `torch/_shapes.pyi`.
 """
 
 import builtins
 from collections.abc import Sequence
-from typing import Any, overload, Self, TYPE_CHECKING
+from typing import Any, overload, Self, TYPE_CHECKING, Unpack
 
 import shape_extensions
-from shape_extensions import broadcast, Elements, Flag, IntTuple, IntVar, uses_shape_dsl
+from shape_extensions import (
+    broadcast,
+    Elements,
+    Flag,
+    IntTuple,
+    IntTuples,
+    IntVar,
+    MapIntTuples,
+)
 
 # `Generator` is not defined anywhere in this package, and resolving it relies
 # on how a partial stub package is looked up. The `py.typed` file here contains
@@ -34,16 +40,15 @@ from torch._C import Generator
 from torch._shapes import (
     arange_extent,
     arange_step_extent,
-    cat_ir,
-    chunk_ir,
+    cat_shape,
+    chunk_shapes,
     diag_embed_shape,
     dim_shape,
     eig_shape,
-    einsum_ir,
+    einsum_shape,
     expand_shape,
     flatten_shape,
     index_select_shape,
-    item_ir,
     matmul_shape,
     movedim_scalar_shape,
     movedim_tuple_shape,
@@ -61,9 +66,10 @@ from torch._shapes import (
     select_shape,
     size_dim_shape,
     slogdet_shape,
-    split_ir,
+    split_sections_shapes,
+    split_size_shapes,
     squeeze_shape,
-    stack_ir,
+    stack_shape,
     tensordot_shape,
     tile_shape,
     topk_shape,
@@ -569,9 +575,8 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Enable/disable gradient tracking in-place. Shape-preserving."""
         ...
 
-    @uses_shape_dsl(item_ir)
-    def item(self: Tensor) -> float | int:
-        """Returns Python scalar from 0-dimensional tensor. Shape inference via meta-shape: torch.Tensor.item"""
+    def item(self: Tensor[[]]) -> builtins.float | builtins.int:
+        """Return a Python scalar from a rank-zero tensor."""
         ...
 
     def tolist(self: Tensor) -> Any:
@@ -600,24 +605,47 @@ class Tensor[Shape: _Shape = _AnyShape]:
         """Narrow tensor along dimension. Shape inference via meta-shape: torch.Tensor.narrow"""
         ...
 
-    @uses_shape_dsl(split_ir)
     @overload
-    def split(
-        self: Tensor, split_size_or_sections: int, dim: int = 0
-    ) -> tuple[Tensor, ...]:
-        """Split tensor into chunks. Shape inference via meta-shape: torch.Tensor.split"""
+    def split[
+        Shape: IntTuple,
+        SplitSize: _Int,
+        Dim: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], split_size_or_sections: SplitSize, dim: Dim = 0
+    ) -> MapIntTuples[lambda S: Tensor[S], split_size_shapes(Shape, SplitSize, Dim)]:
+        """Split tensor into chunks. Shape inference via the type-level DSL."""
         ...
 
+    @overload
+    def split[
+        Shape: IntTuple,
+        Sections: IntTuple,
+        Dim: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], split_size_or_sections: Sections, dim: Dim = 0
+    ) -> MapIntTuples[lambda S: Tensor[S], split_sections_shapes(Shape, Sections, Dim)]:
+        """Split tensor into variable-sized chunks. Shape inference via the type-level DSL."""
+        ...
+
+    # A list is mutable, so V2 cannot preserve its element values; this trailing
+    # overload keeps the documented list spelling checking without shape inference.
+    # TODO(stroxler): Route lists through `split_sections_shapes` once list values
+    # survive to the type level.
     @overload
     def split(
         self: Tensor, split_size_or_sections: list[int], dim: int = 0
     ) -> tuple[Tensor, ...]:
-        """Split tensor into variable-sized chunks. Shape inference via meta-shape: torch.Tensor.split"""
+        """Split tensor into variable-sized chunks. Shape inference unavailable for lists."""
         ...
 
-    @uses_shape_dsl(chunk_ir)
-    def chunk(self: Tensor, chunks: int, dim: int = 0) -> tuple[Tensor, ...]:
-        """Split tensor into chunks. Shape inference via meta-shape: torch.Tensor.chunk"""
+    def chunk[
+        Shape: IntTuple,
+        Chunks: _Int,
+        Dim: Flag[builtins.int],
+    ](
+        self: Tensor[Shape], chunks: Chunks, dim: Dim = 0
+    ) -> MapIntTuples[lambda S: Tensor[S], chunk_shapes(Shape, Chunks, Dim)]:
+        """Split tensor into chunks. Shape inference via the type-level DSL."""
         ...
 
     def index_select[
@@ -1510,18 +1538,21 @@ def matmul[Left: IntTuple, Right: IntTuple](
     """Matrix multiplication function. Shape inference via meta-shape: torch.matmul"""
     ...
 
-@uses_shape_dsl(cat_ir)
-def cat(tensors: list[Tensor] | tuple[Tensor, ...], dim: int = 0) -> Tensor:
+def cat[Shapes: IntTuples, Dim: Flag[builtins.int]](
+    tensors: MapIntTuples[lambda S: Tensor[S], Shapes], dim: Dim = 0
+) -> Tensor[cat_shape(Shapes, Dim)]:
     """Concatenate tensors. Shape inference via meta-shape: torch.cat"""
     ...
 
-@uses_shape_dsl(cat_ir)
-def concat(tensors: list[Tensor] | tuple[Tensor, ...], dim: int = 0) -> Tensor:
+def concat[Shapes: IntTuples, Dim: Flag[builtins.int]](
+    tensors: MapIntTuples[lambda S: Tensor[S], Shapes], dim: Dim = 0
+) -> Tensor[cat_shape(Shapes, Dim)]:
     """Alias for concatenate/cat. Shape inference via meta-shape: torch.cat"""
     ...
 
-@uses_shape_dsl(stack_ir)
-def stack(tensors: list[Tensor] | tuple[Tensor, ...], dim: int = 0) -> Tensor:
+def stack[Shapes: IntTuples, Dim: Flag[builtins.int]](
+    tensors: MapIntTuples[lambda S: Tensor[S], Shapes], dim: Dim = 0
+) -> Tensor[stack_shape(Shapes, Dim)]:
     """Stack tensors (adds new dimension)."""
     ...
 
@@ -1900,16 +1931,47 @@ def narrow[Shape: IntTuple, Dim: Flag[builtins.int], Length: _Int](
     """Narrow tensor along dimension. Shape inference via meta-shape: torch.narrow"""
     ...
 
-@uses_shape_dsl(split_ir)
-def split(
-    self: Tensor, split_size_or_sections: int, dim: int = 0
-) -> tuple[Tensor, ...]:
-    """Split tensor into chunks. Shape inference via meta-shape: torch.split"""
+@overload
+def split[
+    Shape: IntTuple,
+    SplitSize: _Int,
+    Dim: Flag[builtins.int],
+](
+    self: Tensor[Shape], split_size_or_sections: SplitSize, dim: Dim = 0
+) -> MapIntTuples[lambda S: Tensor[S], split_size_shapes(Shape, SplitSize, Dim)]:
+    """Split tensor into chunks. Shape inference via the type-level DSL."""
     ...
 
-@uses_shape_dsl(chunk_ir)
-def chunk(self: Tensor, chunks: int, dim: int = 0) -> tuple[Tensor, ...]:
-    """Split tensor into chunks. Shape inference via meta-shape: torch.chunk"""
+@overload
+def split[
+    Shape: IntTuple,
+    Sections: IntTuple,
+    Dim: Flag[builtins.int],
+](
+    self: Tensor[Shape], split_size_or_sections: Sections, dim: Dim = 0
+) -> MapIntTuples[lambda S: Tensor[S], split_sections_shapes(Shape, Sections, Dim)]:
+    """Split tensor into variable-sized chunks. Shape inference via the type-level DSL."""
+    ...
+
+# A list is mutable, so V2 cannot preserve its element values; this trailing
+# overload keeps the documented list spelling checking without shape inference.
+# TODO(stroxler): Route lists through `split_sections_shapes` once list values
+# survive to the type level.
+@overload
+def split(
+    self: Tensor, split_size_or_sections: list[int], dim: int = 0
+) -> tuple[Tensor, ...]:
+    """Split tensor into variable-sized chunks. Shape inference unavailable for lists."""
+    ...
+
+def chunk[
+    Shape: IntTuple,
+    Chunks: _Int,
+    Dim: Flag[builtins.int],
+](
+    self: Tensor[Shape], chunks: Chunks, dim: Dim = 0
+) -> MapIntTuples[lambda S: Tensor[S], chunk_shapes(Shape, Chunks, Dim)]:
+    """Split tensor into chunks. Shape inference via the type-level DSL."""
     ...
 
 def index_select[
@@ -2585,9 +2647,10 @@ def tensordot(self: Tensor, other: Tensor, dims: tuple[list[int], list[int]]) ->
     """
     ...
 
-@uses_shape_dsl(einsum_ir)
-def einsum(spec: str, *operands: Tensor) -> Tensor:
-    """Einstein summation convention. Shape inference via meta-shape: torch.einsum"""
+def einsum[Spec: Flag[str], Shapes: IntTuples](
+    spec: Spec, *operands: Unpack[MapIntTuples[lambda S: Tensor[S], Shapes]]
+) -> Tensor[einsum_shape(Spec, Shapes)]:
+    """Einstein summation convention. Shape inference via type-level DSL."""
     ...
 
 # Eigenvalue decomposition

@@ -12,7 +12,6 @@ from typing import Any, assert_type, Literal, TYPE_CHECKING
 
 from shape_extensions import IntVar
 
-
 if TYPE_CHECKING:
     from shape_extensions import Int
 

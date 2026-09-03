@@ -572,7 +572,7 @@ fn get_owner_class_of_pep695_type_parameter_at(
             _ => None,
         });
     let key = Key::Definition(ShortIdentifier::new(&owner?));
-    match transaction.get_type_for_display(handle, &key)? {
+    match transaction.get_type(handle, &key)? {
         Type::ClassDef(class) => Some(class),
         _ => None,
     }
@@ -796,7 +796,7 @@ fn in_keyword_hover(
     position: TextSize,
 ) -> Option<HoverResult> {
     let iterable_range = in_keyword_in_iteration_at(ast, position)?;
-    let iterable_type = transaction.get_type_at_for_display(handle, iterable_range.start())?;
+    let iterable_type = transaction.get_type_at(handle, iterable_range.start())?;
     Some(HoverResult {
         hover: Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -821,7 +821,7 @@ fn resolve_hovered_type(
 ) -> Option<Type> {
     let mut type_ = transaction
         .subscript_operator_type_at(handle, position)
-        .or_else(|| transaction.get_type_at_for_display(handle, position))
+        .or_else(|| transaction.get_type_at(handle, position))
         .or_else(|| transaction.operator_type_at(handle, position))?;
 
     // Find the innermost call whose callee (func) encloses the cursor, returning the
@@ -1131,7 +1131,7 @@ mod tests {
     #[test]
     fn fallback_recurses_through_type_wrapper() {
         let heap = TypeHeap::new();
-        let ty = heap.mk_type(make_function_type(&heap, "pkg.subpkg", "run"));
+        let ty = heap.mk_type_of(make_function_type(&heap, "pkg.subpkg", "run"));
         let fallback = fallback_hover_name_from_type(&ty);
         assert_eq!(fallback.as_deref(), Some("run"));
     }

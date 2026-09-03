@@ -19,13 +19,13 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable
-
 
 TENSOR_SHAPES_ROOT: Path = Path(__file__).resolve().parent
 REPO_ROOT: Path = TENSOR_SHAPES_ROOT.parent
@@ -127,11 +127,18 @@ def pyrefly_command(
     buck: bool = False,
     release: bool = False,
 ) -> list[str]:
-    """Resolve how to invoke Pyrefly, as an argv prefix.
+    """Resolve how to invoke Pyrefly, as an argv prefix, building it first.
 
     Order: an explicit `--pyrefly`, then `--buck`, then $PYREFLY, then a Cargo
     build. Buck and Cargo are both supported because the internal checkout
     often has only one of them on PATH.
+
+    Both build tools build before checking -- `buck2 run` builds its target, and
+    the Cargo path shells out to `cargo build` here. Reusing whatever binary
+    happens to sit in `target/` is how a developer ends up debugging a Pyrefly
+    they last built hours ago, and the symptom is indistinguishable from a real
+    difference between two builds. Passing a binary explicitly is the one mode
+    that skips the build, because a bare path says nothing about how to rebuild.
     """
 
     # Explicit flags beat the environment, so that `--buck` cannot be silently
@@ -144,17 +151,28 @@ def pyrefly_command(
     if "PYREFLY" in os.environ:
         return [str(_resolve_executable(Path(os.environ["PYREFLY"])))]
 
+    if shutil.which("cargo") is None:
+        raise SystemExit(
+            "cargo is not on PATH.\n\n"
+            "Pass `--buck` to build and run Pyrefly out of Buck, or point "
+            "`--pyrefly`/$PYREFLY at an existing binary."
+        )
+    build = ["cargo", "build", "-p", "pyrefly", *(["--release"] if release else [])]
+    print("+ " + " ".join(build), flush=True)
+    if subprocess.run(build, cwd=REPO_ROOT).returncode != 0:
+        raise SystemExit("cargo build failed")
+
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", REPO_ROOT / "target"))
     profile = "release" if release else "debug"
-    built = target_dir / profile / "pyrefly"
-    if not _resolve_executable(built).exists():
+    built = _resolve_executable(target_dir / profile / "pyrefly")
+    if not built.exists():
         raise SystemExit(
-            f"No Pyrefly binary at {built}.\n\n"
-            f"Build one with `cargo build{' --release' if release else ''}`, or "
-            "pass `--buck` to run it out of Buck, or point `--pyrefly`/$PYREFLY "
-            "at an existing binary."
+            f"cargo build succeeded, but there is no binary at {built}.\n\n"
+            "A build that redirects its output through `build.target-dir` in a "
+            "Cargo config file rather than $CARGO_TARGET_DIR is not discoverable "
+            "from here; pass that path as `--pyrefly`."
         )
-    return [str(_resolve_executable(built))]
+    return [str(built)]
 
 
 def _resolve_executable(path: Path) -> Path:

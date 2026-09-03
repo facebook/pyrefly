@@ -37,7 +37,6 @@ use crate::binding::binding::BindingDjangoRelations;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::error::collector::ErrorCollector;
-use crate::types::simplify::unions;
 
 /// Django stubs use this attribute to specify the Python type that a field should infer to
 const DJANGO_PRIVATE_GET_TYPE: Name = Name::new_static("_pyi_private_get_type");
@@ -149,7 +148,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .collect();
 
                 if transformed != f.members.to_vec() {
-                    Some(unions(transformed, self.heap))
+                    Some(self.unions(transformed))
                 } else {
                     None
                 }

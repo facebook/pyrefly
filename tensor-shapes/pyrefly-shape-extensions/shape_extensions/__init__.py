@@ -20,16 +20,18 @@ __all__ = [
     "Elements",
     "Int",
     "IntTuple",
+    "IntTuples",
     "IntVar",
+    "MapIntTuples",
     "ProxyMethod",
     "SymbolicArithExpr",
     "TypeVarTuple",
     "assert_shape",
     "broadcast",
     "defines_assert_shape",
+    "gufunc_broadcast",
     "shaped_array",
     "type_shape_dsl_function",
-    "uses_shape_dsl",
 ]
 
 
@@ -98,6 +100,13 @@ class IntTuple:
 
     def __class_getitem__(cls, params):
         return cls
+
+
+class IntTuples:
+    """A tuple whose elements are `IntTuple` values."""
+
+    def __new__(cls, iterable=()):
+        return tuple(iterable)
 
 
 class Elements:
@@ -270,16 +279,49 @@ def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
     return decorator
 
 
-def broadcast(*_args: typing.Any) -> IntTuple:
-    """Runtime placeholder for Pyrefly's native type-level broadcast intrinsic."""
+class MapIntTuples:
+    """Map a unary type lambda over an ``IntTuples`` value.
 
-    return IntTuple()
+    A forward map preserves each source shape::
+
+        MapIntTuples[lambda S: Tensor[S], tuple[IntTuple[2], IntTuple[3, 4]]]
+
+    A map used directly as a parameter annotation reverses that relationship, so
+    passing ``(Tensor[IntTuple[2]], Tensor[IntTuple[3, 4]])`` infers the source
+    as ``tuple[IntTuple[2], IntTuple[3, 4]]``. Each symbolic source may occur in
+    only one parameter pattern, keeping inference unambiguous.
+
+    At runtime this is a placeholder that does not inspect its arguments,
+    because valid static sources such as ``Any`` and ``Never`` cannot be mapped
+    as Python values.
+    """
+
+    def __class_getitem__(cls, params):
+        return tuple
 
 
 def type_shape_dsl_function[F: typing.Callable](fn: F) -> F:
     """Runtime no-op for a user-defined type-level shape DSL function."""
 
     return fn
+
+
+# `dsl` imports the public schema classes above, so defer this import until they exist.
+from . import dsl as _dsl
+
+
+@type_shape_dsl_function
+def gufunc_broadcast(spec: str, shapes: IntTuples) -> IntTuple:
+    """Compute the output shape described by a generalized ufunc signature."""
+
+    return _dsl._gufunc_broadcast(spec, shapes)
+
+
+@type_shape_dsl_function
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    spec = "(),()->()"
+    shapes = _dsl.IntTuples((left, right))
+    return gufunc_broadcast(spec, shapes)
 
 
 class IntVar:
@@ -370,22 +412,3 @@ class TypeVarTuple:
     @property
     def __typing_is_unpacked_typevartuple__(self):
         return True
-
-
-def uses_shape_dsl(
-    ir_fn: typing.Callable,
-    *,
-    capture_init: list[str] | None = None,
-) -> typing.Callable[[typing.Callable], typing.Callable]:
-    """Decorator that associates a shape DSL function with an API function.
-
-    At runtime this is a no-op: the decorator arguments are ignored and the
-    decorated function is returned unchanged. Pyrefly uses this decorator
-    at type-checking time to route bound arguments through the shape DSL
-    for return-type refinement.
-    """
-
-    def decorator(fn: typing.Callable) -> typing.Callable:
-        return fn
-
-    return decorator

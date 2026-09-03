@@ -131,6 +131,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .mk_type_of(self.heap.mk_special_form(SpecialForm::Tuple));
         }
         let type_form_context = TypeFormContext::BaseClassList;
+        // This restricted parser does not recurse through `expr_untype`, so recognize the
+        // shape-extension-specific `IntTuple[...]` form before ordinary class specialization
+        // erases its dimensions. For example, `Box[IntTuple[2, 3]]` must retain `[2, 3]` in the
+        // generic base so superclass projection can later recover that specialization.
+        if matches!(&base, Type::ClassDef(cls) if self.is_int_tuple_class(cls)) {
+            return (
+                self.parse_int_tuple_type(Ast::unpack_slice(slice), type_form_context, errors),
+                false,
+            );
+        }
         let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
         let mut has_strict = false;
         let arguments_untype = |slice: &Expr, has_strict: &mut bool| {

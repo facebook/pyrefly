@@ -87,9 +87,8 @@ pub enum Preset {
     /// or assignment validation are disabled.
     Basic,
     /// A looser, less-strict preset useful for codebases migrating from mypy.
-    /// Pyrefly does not aim to mimic mypy's behavior precisely — this preset
-    /// just disables a few checks that mypy does not have, so migrating users
-    /// aren't hit with new errors for classes of issues mypy never flagged.
+    /// Pyrefly does not aim to mimic mypy's behavior precisely, but this preset
+    /// preserves selected defaults that otherwise produce new migration errors.
     Legacy,
     /// The default Pyrefly configuration. Equivalent to having no preset at all.
     Default,
@@ -168,6 +167,10 @@ impl Preset {
                 ]);
                 ConfigBase {
                     errors: Some(ErrorDisplayConfig::new(errors)),
+                    replace_untyped_imports_with_any: Some(vec![
+                        ModuleWildcard::new("*")
+                            .expect("the hardcoded module wildcard should be valid"),
+                    ]),
                     check_unannotated_defs: Some(false),
                     infer_return_types: Some(InferReturnTypes::Never),
                     legacy_overload_expansion: Some(true),
@@ -239,6 +242,11 @@ pub struct ConfigBase {
     /// ignored. The module is only replaced with `typing.Any` if it can't be found.
     #[serde(skip_serializing_if = "crate::util::none_or_empty")]
     pub(crate) ignore_missing_imports: Option<Vec<ModuleWildcard>>,
+
+    /// Modules to replace with `typing.Any` when the installed package provides
+    /// neither stubs nor a `py.typed` marker.
+    #[serde(skip_serializing_if = "crate::util::none_or_empty")]
+    pub(crate) replace_untyped_imports_with_any: Option<Vec<ModuleWildcard>>,
 
     /// Deprecated: use `check-unannotated-defs` and `infer-return-types` instead.
     /// How should we handle analyzing and inferring the function signature if it's untyped?
@@ -379,6 +387,10 @@ impl ConfigBase {
 
     pub(crate) fn get_ignore_missing_imports(base: &Self) -> Option<&[ModuleWildcard]> {
         base.ignore_missing_imports.as_deref()
+    }
+
+    pub(crate) fn get_replace_untyped_imports_with_any(base: &Self) -> Option<&[ModuleWildcard]> {
+        base.replace_untyped_imports_with_any.as_deref()
     }
 
     pub fn get_check_unannotated_defs(base: &Self) -> Option<bool> {

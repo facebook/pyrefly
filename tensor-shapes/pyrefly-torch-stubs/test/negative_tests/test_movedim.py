@@ -7,7 +7,6 @@ import torch
 from shape_extensions import Int, IntVar
 from torch import Tensor
 
-
 x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
 
 torch.moveaxis(x, 3, 0)  # E: source dimension out of range

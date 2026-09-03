@@ -2705,17 +2705,16 @@ def f(fi: Any, buffering1: int, buffering2: Any):
     with open(fi, "rb", buffering1) as f:
         assert_type(f, BinaryIO)
     with open(fi, "rb", buffering2) as f:
-        assert_type(f, IO[Any])
+        assert_type(f, Any)
     "#,
 );
 
 testcase!(
     test_index_into_sequence_of_str,
     r#"
-from typing import assert_type, Sequence
+from typing import Any, Sequence, assert_type
 def f(x: Sequence[str], idx):
-    # idx may be a slice
-    assert_type(x[idx], Sequence[str])
+    assert_type(x[idx], Any)
     "#,
 );
 

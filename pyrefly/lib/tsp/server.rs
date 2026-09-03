@@ -219,6 +219,7 @@ impl<T: TspInterface> TspServer<T> {
     fn dispatch_tsp_request<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         reply: Reply,
         request: &Request,
         msg: TSPRequests,
@@ -236,6 +237,7 @@ impl<T: TspInterface> TspServer<T> {
                     request.id.clone(),
                     params,
                     ide_transaction_manager,
+                    telemetry_event,
                     reply,
                 );
             }
@@ -244,17 +246,17 @@ impl<T: TspInterface> TspServer<T> {
             }
             TSPRequests::GetDeclaredTypeRequest { params, .. } => {
                 self.dispatch_get_type_request(request.id.clone(), params, reply, |p| {
-                    self.handle_get_declared_type(p)
+                    self.handle_get_declared_type(ide_transaction_manager, telemetry_event, p)
                 });
             }
             TSPRequests::GetComputedTypeRequest { params, .. } => {
                 self.dispatch_get_type_request(request.id.clone(), params, reply, |p| {
-                    self.handle_get_computed_type(p)
+                    self.handle_get_computed_type(ide_transaction_manager, telemetry_event, p)
                 });
             }
             TSPRequests::GetExpectedTypeRequest { params, .. } => {
                 self.dispatch_get_type_request(request.id.clone(), params, reply, |p| {
-                    self.handle_get_expected_type(p)
+                    self.handle_get_expected_type(ide_transaction_manager, telemetry_event, p)
                 });
             }
             TSPRequests::ConnectionRequest { .. } => {
@@ -335,7 +337,13 @@ impl<T: TspInterface> TspServer<T> {
                     self.handle_connection_request(request.id.clone(), params, reply);
                 }
                 Some(msg) => {
-                    self.dispatch_tsp_request(ide_transaction_manager, reply, request, msg);
+                    self.dispatch_tsp_request(
+                        ide_transaction_manager,
+                        telemetry_event,
+                        reply,
+                        request,
+                        msg,
+                    );
                 }
                 None => {
                     reply.send(Response::new_err(

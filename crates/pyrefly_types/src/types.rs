@@ -683,26 +683,13 @@ pub struct Forall<T> {
 
 impl Forall<Forallable> {
     pub fn apply_targs(self, targs: TArgs) -> Type {
-        match self.body {
-            Forallable::TypeAlias(TypeAliasData::Value(mut alias)) => {
-                alias.set_display_args(targs.as_slice().to_vec().into_boxed_slice());
-                targs
-                    .substitution()
-                    .substitute_into_mut(alias.as_type_mut());
-                Type::TypeAlias(Box::new(TypeAliasData::Value(alias)))
-            }
-            body => targs.substitute_into(body.as_type()),
-        }
+        targs.substitute_into(self.body.as_type())
     }
 }
 
 /// These are things that can have Forall around them, so often you see `Forall<Forallable>`
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "shape Flag constructor metadata adds one pointer; boxing every generic function would add indirection to the common path"
-)]
 pub enum Forallable {
     TypeAlias(TypeAliasData),
     Function(Function),
@@ -945,8 +932,9 @@ pub enum Type {
     /// of the argument, so that we can resonstruct the same generic/overload structure if it
     /// appears in a callable type later. Otherwise, we should *flatten* to a fallback type.
     CallableResidual(Box<CallableResidual>),
-    /// A type-level shape DSL application that is valid inside callable return annotations.
-    /// Call return-boundary processing forces this to a result-schema projection.
+    /// A deferred type-level shape DSL application. Calls are normally forced at callable return
+    /// boundaries; experimental `MapIntTuples` parameter patterns instead expose the ordinary
+    /// collection view appropriate to regular or unpacked variadic parameters.
     TypeLevelDslCall(Box<TypeLevelDslCall>),
     /// A function declared using the `def` keyword.
     /// Note that the FunctionKind metadata doesn't participate in subtyping, and thus two types with distinct metadata are still subtypes.
@@ -1636,6 +1624,7 @@ impl Type {
         }
     }
 
+    /// Substitutes free quantified values while respecting `Forall` and `MapIntTuples` binders.
     pub fn subst_mut_fn(&mut self, mp: &mut dyn FnMut(&Quantified) -> Option<Type>) {
         // We are looking up Quantified in a map, and Quantified may contain a Quantified within it.
         // Therefore, to make sure we still get matches, work top-down (not using `transform`).
@@ -1655,6 +1644,8 @@ impl Type {
                 shadowed.extend(forall.tparams.iter().cloned());
                 ty.recurse_mut(&mut |x| f(x, mp, shadowed));
                 shadowed.truncate(old_len);
+            } else if let Type::TypeLevelDslCall(call) = ty {
+                call.subst_parts_mut(shadowed, &mut |x, shadowed| f(x, mp, shadowed));
             } else {
                 ty.recurse_mut(&mut |x| f(x, mp, shadowed));
             }
@@ -1701,19 +1692,30 @@ impl Type {
                     }
                 }
             };
-            for arg in &mut call.args {
-                if let Err(error) = force_nested(arg) {
-                    *ty = call.fallback();
-                    return Err(error);
+            fn force_call(call: &mut TypeLevelDslCall) -> Result<Type, dimension::ShapeError> {
+                for arg in &mut call.args {
+                    force_nested(arg)?;
                 }
+                if let Some(source) = call.map_int_tuples_source_mut() {
+                    force_nested(source)?;
+                }
+                // Mapping can instantiate DSL calls from its lambda body, so the produced type
+                // must cross the same boundary as the source arguments.
+                let mut result = call.evaluate()?;
+                force_nested(&mut result)?;
+                Ok(result)
             }
-            match call.evaluate() {
+            match force_call(call) {
                 Ok(result) => {
                     *ty = result;
                     Ok(())
                 }
                 Err(error) => {
-                    *ty = call.fallback();
+                    // Report only the original error if reducing a structured fallback also
+                    // encounters a failing nested call.
+                    let mut fallback = call.fallback();
+                    let _ = force_nested(&mut fallback);
+                    *ty = fallback;
                     Err(error)
                 }
             }

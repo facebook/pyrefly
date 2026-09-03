@@ -417,8 +417,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 } else {
                     left.clone()
                 }
-            } else if !left.is_any() && self.is_subset_eq(left, right) {
-                // is_any check because `Any <: int` is always true, but `Any - int` shouldn't produce Never.
+            } else if !left.is_any() && !right.is_any() && self.is_subset_eq(left, right) {
+                // The is_any checks are because `Any <: int` and `int <: Any` are both true, but
+                // neither `Any - int` nor `int - Any` should produce Never.
                 self.heap.mk_never()
             } else {
                 left.clone()
@@ -700,12 +701,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.distribute_over_union(left, |l| {
             self.with_fresh_class_info_target(l, right, |right| {
                 if right.is_any() {
-                    // NOTE(grievejia): The most precise refinement would be `left`:
-                    // `isinstance(x, Any)` provides no concrete evidence about the type
-                    // of `x`, so keeping the original type is sound. In practice, that is
-                    // currently too strict for some primer projects. Refining to `Any` is
-                    // a gradual-typing compromise; we can revisit `left` in strict mode.
-                    right.clone()
+                    // A class object whose identity is unknown gives no evidence about the
+                    // subject, so keep the subject's type rather than degrading it to `Any`.
+                    // The cost is losing the permissiveness of `Any` inside the branch.
+                    l.clone()
                 } else {
                     // TODO: falling back to Never when the lhs is a union is a hack to get
                     // reasonable behavior in cases like this:
@@ -956,7 +955,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
 
         for right in self.as_class_info(right.clone()) {
-            if self.unwrap_class_object_silently(&right).is_some() {
+            // A class object whose identity is unknown gives no evidence about the subject, so
+            // only narrow against targets that resolve to a specific class.
+            let target_is_known_class = self
+                .unwrap_class_object_silently(&right)
+                .is_some_and(|(_, target)| !target.is_any());
+            if target_is_known_class {
                 // Handle type vars specially: we need to enforce restrictions and avoid
                 // simplifying them away.
                 let mut quantifieds = Vec::new();

@@ -57,8 +57,8 @@ checkout you can pass the combined filegroup
 
 The `shape_extensions` package exports `Int` — the bridge between runtime
 integer values and type-level symbols. The package also includes utilities to
-support runtime evaluation of types with shapes and decorators such as
-`@uses_shape_dsl(...)` and `@shaped_array(...)`.
+support runtime evaluation of types with shapes, and the stub-authoring
+primitives (`@type_shape_dsl_function`, `MapIntTuples`, `@shaped_array(...)`).
 
 ### Concrete shape annotations
 
@@ -180,7 +180,8 @@ The type system tracks shapes through nearly all standard PyTorch operations:
   `torch.sigmoid`, `torch.tanh`
 - **Parameterized transforms** (stubs capture constructor args): `nn.Linear`,
   `nn.Conv2d`, `nn.Embedding`, `nn.LSTM`
-- **Computed shapes** (DSL functions): `reshape`/`view` (with `-1` inference),
+- **Computed shapes** (stubs whose return annotation calls a shape function):
+  `reshape`/`view` (with `-1` inference),
   `flatten`, `permute`, `transpose`, `cat`, `stack`, `expand`, `repeat`,
   `matmul`, `torch.arange`, `torch.zeros`, `torch.outer`, `F.interpolate`
 - **Special handlers**: `nn.Sequential` chaining, `.shape` attribute,
@@ -188,9 +189,9 @@ The type system tracks shapes through nearly all standard PyTorch operations:
 
 **If an op appears to lose shapes, it is almost certainly a bug or a missing
 stub — not a fundamental limitation.** Check the shape-aware stubs in
-`tensor-shapes/pyrefly-torch-stubs/torch-stubs/`, any `@uses_shape_dsl(...)` decorator and IR
-function in `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`, and special handlers
-before concluding anything is untracked.
+`tensor-shapes/pyrefly-torch-stubs/torch-stubs/`, the shape functions their return
+annotations call in `tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`, and special
+handlers before concluding anything is untracked.
 
 ### When shapes are lost, trace upstream
 

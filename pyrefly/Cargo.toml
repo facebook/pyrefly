@@ -28,6 +28,10 @@ harness = false
 name = "pytorch"
 harness = false
 
+[[bench]]
+name = "pytorch_memory"
+harness = false
+
 [dependencies]
 anstream = "0.6.11"
 anyhow = "1.0.104"
@@ -62,12 +66,12 @@ pyrefly_types = { path = "../crates/pyrefly_types" }
 pyrefly_util = { path = "../crates/pyrefly_util" }
 rayon = "1.11.0"
 regex = "1.13.1"
-ruff_annotate_snippets = { package = "ruff_annotate_snippets", version = "0.0.10" }
-ruff_notebook = "0.0.10"
-ruff_python_ast = { version = "0.0.10", features = ["serde"] }
-ruff_python_parser = "0.0.10"
-ruff_source_file = "0.0.10"
-ruff_text_size = "0.0.10"
+ruff_annotate_snippets = { package = "ruff_annotate_snippets", version = "0.0.11" }
+ruff_notebook = "0.0.11"
+ruff_python_ast = { version = "0.0.11", features = ["serde"] }
+ruff_python_parser = "0.0.11"
+ruff_source_file = "0.0.11"
+ruff_text_size = "0.0.11"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = { version = "1.0.151", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 serde_repr = "0.1.21"
@@ -88,6 +92,7 @@ yansi = { version = "1.0.0-rc.1", features = ["hyperlink"] }
 [dev-dependencies]
 criterion = { package = "codspeed-criterion-compat", version = "5.0.1", features = ["html_reports"] }
 pretty_assertions = { version = "1.4.1", features = ["alloc"], default-features = false }
+pyrefly_bench_harness = { path = "../crates/pyrefly_bench_harness" }
 pyrefly_lsp_test = { path = "../crates/pyrefly_lsp_test" }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]

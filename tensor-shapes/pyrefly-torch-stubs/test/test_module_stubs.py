@@ -633,6 +633,120 @@ def test_lstm_bidirectional():
     assert_type(c_n, Tensor[[2, 4, 512]])
 
 
+def test_lstm_multi_layer():
+    """An explicit `num_layers` stacks the state, and the instance keeps every
+    constructor argument across repeated forward calls."""
+    lstm = nn.LSTM(256, 512, 3, batch_first=True)
+    x: Tensor[[4, 10, 256]] = torch.randn(4, 10, 256)
+    output, h_n, c_n = lstm(x)
+    assert_type(output, Tensor[[4, 10, 512]])
+    assert_type(h_n, Tensor[[3, 4, 512]])
+    assert_type(c_n, Tensor[[3, 4, 512]])
+    again, _, _ = lstm(x)
+    assert_type(again, Tensor[[4, 10, 512]])
+
+
+def test_lstm_cell():
+    cell = nn.LSTMCell(256, 512)
+    x: Tensor[[4, 256]] = torch.randn(4, 256)
+    h, c = cell(x)
+    assert_type(h, Tensor[[4, 512]])
+    assert_type(c, Tensor[[4, 512]])
+    h_again, _ = cell(x)
+    assert_type(h_again, Tensor[[4, 512]])
+
+
+def test_recurrent_symbolic_constructor_flow[
+    B: IntVar,
+    T: IntVar,
+    I: IntVar,
+    H: IntVar,
+    L: IntVar,
+](
+    sequence: Tensor[[B, T, I]],
+    cell_input: Tensor[[B, I]],
+    input_size: Int[I],
+    hidden_size: Int[H],
+    num_layers: Int[L],
+) -> None:
+    lstm_output, lstm_h, lstm_c = nn.LSTM(
+        input_size,
+        hidden_size,
+        num_layers,
+        batch_first=True,
+        bidirectional=True,
+    )(sequence)
+    assert_type(lstm_output, Tensor[[B, T, H * 2]])
+    assert_type(lstm_h, Tensor[[L * 2, B, H]])
+    assert_type(lstm_c, Tensor[[L * 2, B, H]])
+
+    gru_output, gru_h = nn.GRU(input_size, hidden_size, num_layers, batch_first=True)(
+        sequence
+    )
+    assert_type(gru_output, Tensor[[B, T, H]])
+    assert_type(gru_h, Tensor[[L, B, H]])
+
+    cell_h, cell_c = nn.LSTMCell(input_size, hidden_size)(cell_input)
+    assert_type(cell_h, Tensor[[B, H]])
+    assert_type(cell_c, Tensor[[B, H]])
+
+
+def test_recurrent_gradual_constructor_arguments(
+    input_size: int,
+    hidden_size: int,
+    num_layers: int,
+    bidirectional: bool,
+) -> None:
+    sequence: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    lstm_output, lstm_h, lstm_c = nn.LSTM(
+        input_size,
+        hidden_size,
+        num_layers,
+        bidirectional=bidirectional,
+    )(sequence)
+    assert_type(lstm_output, Tensor)
+    assert_type(lstm_h, Tensor)
+    assert_type(lstm_c, Tensor)
+
+    gru_output, gru_h = nn.GRU(
+        input_size,
+        hidden_size,
+        num_layers,
+        bidirectional=bidirectional,
+    )(sequence)
+    assert_type(gru_output, Tensor)
+    assert_type(gru_h, Tensor)
+
+    cell_input: Tensor[[2, 4]] = torch.randn(2, 4)
+    cell_h, cell_c = nn.LSTMCell(input_size, hidden_size)(cell_input)
+    assert_type(cell_h, Tensor[[2, int]])
+    assert_type(cell_c, Tensor[[2, int]])
+
+    gradual: Tensor[IntTuple] = torch.randn(2, 3, 4)
+    gradual_output, gradual_h, gradual_c = nn.LSTM(4, 8)(gradual)
+    assert_type(gradual_output, Tensor[[int, int, 8]])
+    assert_type(gradual_h, Tensor[[1, int, 8]])
+    assert_type(gradual_c, Tensor[[1, int, 8]])
+
+
+def test_recurrent_mixed_gradual_constructor_arguments(
+    hidden_size: int,
+    bidirectional: bool,
+) -> None:
+    sequence: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+
+    output, h, c = nn.LSTM(4, 8, 2, bidirectional=bidirectional)(sequence)
+    assert_type(output, Tensor)
+    assert_type(h, Tensor)
+    assert_type(c, Tensor)
+
+    output, h = nn.GRU(4, hidden_size, 2, batch_first=True, bidirectional=False)(
+        sequence
+    )
+    assert_type(output, Tensor[[2, 3, int]])
+    assert_type(h, Tensor[[2, 2, int]])
+
+
 # ============================================================================
 # Loss Modules
 # ============================================================================

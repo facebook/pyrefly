@@ -9,7 +9,6 @@ from typing import assert_type, TYPE_CHECKING
 
 from shape_extensions import IntVar
 
-
 if TYPE_CHECKING:
     import torch
     import torch.nn.functional as F

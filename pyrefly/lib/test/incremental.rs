@@ -229,6 +229,83 @@ def identity(x: Int) -> Int:
     i.check(&["main"], &["foo", "main"]);
 }
 
+/// A list literal is inverted from its elements rather than its joined `list` type, so edits
+/// to the elements must invalidate and recompute the call result.
+#[test]
+fn test_map_int_tuples_pattern_list_literal_edits_invalidate_consumer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class IntTuple: pass
+class IntTuples: pass
+class MapIntTuples: pass
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+
+class Box[Shape: IntTuple]: ...
+
+def shapes[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def box2() -> Box[IntTuple[2]]: ...
+def box34() -> Box[IntTuple[3, 4]]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import box2, shapes
+from shape_extensions import IntTuple
+from typing import assert_type
+
+assert_type(shapes([box2()]), tuple[IntTuple[2]])
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "consumer",
+        r#"
+from main import box34, shapes
+from shape_extensions import IntTuple
+from typing import assert_type
+
+assert_type(shapes([box34()]), tuple[IntTuple[2]])
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].msg().contains("assert_type("));
+
+    i.set(
+        "consumer",
+        r#"
+from main import box2, shapes
+from shape_extensions import IntTuple
+from typing import assert_type
+
+assert_type(shapes([box2(), box2()]), tuple[IntTuple[2], IntTuple[2]])
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer"]);
+    let errors = changed.errors.collect_display_errors();
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
 #[test]
 fn test_shape_flag_constructor_source_edit_invalidates_consumers() {
     let mut i = Incremental::with_files(vec!["consumer".to_owned(), "main".to_owned()]);
@@ -371,6 +448,66 @@ def leaf(first: Int, second: Int) -> Int:
     );
     let changed = i.unchecked(&["consumer"]);
     changed.check_recompute(&["consumer", "helpers", "main"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].msg().contains("not assignable to `Tensor[[2]]`"));
+}
+
+#[test]
+fn test_type_shape_dsl_broadcast_edit_invalidates_importer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class IntTuple: pass
+def shaped_array[T](*, shape: str): ...
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+
+@type_shape_dsl_function
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    return left
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from shape_extensions import IntTuple, broadcast, shaped_array
+
+@shaped_array(shape="Shape")
+class Tensor[Shape: IntTuple]: ...
+
+def chosen() -> Tensor[broadcast(IntTuple[2], IntTuple[3])]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import Tensor, chosen
+
+result: Tensor[[2]] = chosen()
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "shape_extensions",
+        r#"
+class IntTuple: pass
+def shaped_array[T](*, shape: str): ...
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+
+@type_shape_dsl_function
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    return right
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main", "shape_extensions"]);
     let errors = changed.errors.collect_display_errors();
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(errors[0].msg().contains("not assignable to `Tensor[[2]]`"));
@@ -2619,4 +2756,70 @@ fn test_dunder_all_module_entry_change_invalidates() {
     );
     // main should be recomputed because the wildcard set changed
     i.check_ignoring_expectations(&["foo"], &["foo", "main"]);
+}
+
+#[test]
+fn test_type_shape_dsl_parameter_domain_edit_revalidates_indexed_locals() {
+    let mut i = Incremental::with_files(vec![
+        "consumer".to_owned(),
+        "helpers".to_owned(),
+        "main".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+class IntTuple: pass
+class IntTuples: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+
+@type_shape_dsl_function
+def first(shapes: IntTuples) -> IntTuple:
+    selected = shapes[0]
+    return selected
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from helpers import first
+from shape_extensions import IntTuple
+
+class ShapeBox[Shape: IntTuple]: ...
+def result() -> ShapeBox[first(tuple[IntTuple[2, 3], IntTuple[4]])]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import ShapeBox, result
+from shape_extensions import IntTuple
+
+expected: ShapeBox[IntTuple[2, 3]] = result()
+"#,
+    );
+    let initial = i.unchecked(&["consumer", "helpers"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def first(shapes: IntTuple) -> IntTuple:
+    selected = shapes[0]
+    return selected  # E: local return domain must match  # E: Returned type `Int[int]` is not assignable
+"#,
+    );
+    let changed = i.unchecked(&["consumer", "helpers"]);
+    changed.check_recompute(&["consumer", "helpers", "main"]);
+    changed.check_errors();
 }

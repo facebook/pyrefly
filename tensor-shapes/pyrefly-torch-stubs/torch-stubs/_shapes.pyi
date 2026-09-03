@@ -4,17 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 import shape_extensions.dsl as dsl
-from shape_extensions import Int, IntTuple, type_shape_dsl_function
-from shape_extensions.dsl import (
-    Error,
-    parse_einsum_equation,
-    prod,
-    shape_dsl_function,
-    ShapedArray,
-    sum,
-    symint,
-    Unknown,
-)
+from shape_extensions import Int, IntTuple, IntTuples, type_shape_dsl_function
 
 # TODO(stroxler): Use `IntTuple` slicing here once it preserves the symbolic-rank cases covered by
 # these generators, then share the common rank validation among the three helpers.
@@ -41,37 +31,6 @@ def slogdet_shape(shape: IntTuple) -> IntTuple:
             return dsl.Invalid("slogdet requires at least 2D input, got 0D tensor")
         return dsl.Invalid("slogdet requires at least 2D input, got 1D tensor")
     return dsl.IntTuple((shape[i] for i in range(len(shape) - 2)))
-
-@shape_dsl_function
-def normalize_dim(rank: int, dim: int) -> int:
-    if dim < 0:
-        return dim + rank
-    return dim
-
-@shape_dsl_function
-def int_max(a: int, b: int) -> int:
-    if a > b:
-        return a
-    return b
-
-@shape_dsl_function
-def replace_dim(
-    dims: list[int | symint], i: int, value: int | symint
-) -> list[int | symint]:
-    return dims[:i] + [value] + dims[i + 1 :]
-
-@shape_dsl_function
-def insert_dim(
-    dims: list[int | symint], i: int, value: int | symint
-) -> list[int | symint]:
-    return dims[:i] + [value] + dims[i:]
-
-@shape_dsl_function
-def broadcast(a: list[int | symint], b: list[int | symint]) -> list[int | symint]:
-    max_len = int_max(len(a), len(b))
-    padded_a = [1 for _ in range(max_len - len(a))] + a
-    padded_b = [1 for _ in range(max_len - len(b))] + b
-    return [bd if ad == 1 else ad for ad, bd in zip(padded_a, padded_b)]
 
 @type_shape_dsl_function
 def reduce_shape(
@@ -537,22 +496,92 @@ def unfold_shape(shape: IntTuple, dimension: int, size: int, step: int) -> IntTu
     dimension_size = shape[normalized]
     return unfold_checked_shape(shape, dimension_size, normalized, window_size, step)
 
-@shape_dsl_function
-def cat_ir(tensors: list[ShapedArray], dim: int = 0) -> ShapedArray:
-    first = tensors[0]
-    d = normalize_dim(len(first.shape), dim)
-    return ShapedArray(
-        shape=[
-            sum([t.shape[i] for t in tensors]) if i == d else dim_val
-            for i, dim_val in enumerate(first.shape)
-        ]
+# The two shape rules below share one discipline: every member of `shapes` is
+# checked against `shapes[0]` before any result dimension is produced. A member
+# that provably disagrees yields an `Invalid`; a member the checker cannot decide
+# (a symbolic dimension, a gradual member shape, or a sequence of unknown length)
+# makes the deciding `any` undecidable, which returns the whole call gradually
+# rather than reporting `shapes[0]` as if it had been confirmed.
+# TODO(stroxler): Preserve known output axes when another size comparison is unknown. This needs a
+# DSL operation that returns the shared size for equal dimensions, reports proven mismatches, and
+# returns a gradual `Int` when equality cannot be determined.
+
+@type_shape_dsl_function
+def cat_shape(shapes: IntTuples, dim: int) -> IntTuple:
+    if len(shapes) == 0:
+        return dsl.Invalid("cat expects a non-empty sequence of tensors")
+    first = shapes[0]
+    # Unary minus is not supported by the type-level DSL.
+    if dim < 0 - len(first) or dim >= len(first):
+        return dsl.Invalid("cat dimension out of range")
+    if dim < 0:
+        axis = dim + len(first)
+    else:
+        axis = dim + 0
+    ranks = dsl.IntTuple((0 if len(shape) == len(first) else 1 for shape in shapes))
+    if any(rank == 1 for rank in ranks):
+        return dsl.Invalid("cat expects all tensors to have the same rank")
+    # Equal ranks are established above, so indexing every member by an index of
+    # `first` is in bounds.
+    mismatches = dsl.IntTuple(
+        (
+            1
+            if any(
+                shape[index] != first[index]
+                for index in range(len(first))
+                if index != axis
+            )
+            else 0
+            for shape in shapes
+        )
+    )
+    if any(mismatch == 1 for mismatch in mismatches):
+        return dsl.Invalid(
+            "cat expects all tensor sizes to match outside the concatenated dimension"
+        )
+    return dsl.IntTuple(
+        (
+            dsl.sum(dsl.IntTuple((shape[axis] for shape in shapes)))
+            if index == axis
+            else first[index]
+            for index in range(len(first))
+        )
     )
 
-@shape_dsl_function
-def stack_ir(tensors: list[ShapedArray], dim: int = 0) -> ShapedArray:
-    first = tensors[0]
-    d = normalize_dim(len(first.shape) + 1, dim)
-    return ShapedArray(shape=insert_dim(first.shape, d, len(tensors)))
+@type_shape_dsl_function
+def stack_shape(shapes: IntTuples, dim: int) -> IntTuple:
+    if len(shapes) == 0:
+        return dsl.Invalid("stack expects a non-empty sequence of tensors")
+    first = shapes[0]
+    output_rank = len(first) + 1
+    # Unary minus is not supported by the type-level DSL.
+    if dim < 0 - output_rank or dim >= output_rank:
+        return dsl.Invalid("stack dimension out of range")
+    if dim < 0:
+        axis = dim + output_rank
+    else:
+        axis = dim + 0
+    ranks = dsl.IntTuple((0 if len(shape) == len(first) else 1 for shape in shapes))
+    if any(rank == 1 for rank in ranks):
+        return dsl.Invalid("stack expects all tensors to have the same rank")
+    # Equal ranks are established above, so indexing every member by an index of
+    # `first` is in bounds.
+    mismatches = dsl.IntTuple(
+        (
+            1 if any(shape[index] != first[index] for index in range(len(first))) else 0
+            for shape in shapes
+        )
+    )
+    if any(mismatch == 1 for mismatch in mismatches):
+        return dsl.Invalid("stack expects all tensors to have the same shape")
+    return dsl.IntTuple(
+        (
+            len(shapes)
+            if index == axis
+            else first[index if index < axis else index - 1]
+            for index in range(output_rank)
+        )
+    )
 
 @type_shape_dsl_function
 def tile_shape(shape: IntTuple, repeats: IntTuple) -> IntTuple:
@@ -629,73 +658,196 @@ def multinomial_shape(shape: IntTuple, num_samples: Int) -> IntTuple:
         return dsl.IntTuple((shape[0], num_samples))
     return dsl.Invalid("multinomial expects 1D or 2D input")
 
-@shape_dsl_function
-def split_ir(
-    self: ShapedArray,
-    split_size_or_sections: int | symint | list[int | symint] | None = None,
-    dim: int = 0,
-) -> list[ShapedArray]:
-    d = normalize_dim(len(self.shape), dim)
-    if isinstance(split_size_or_sections, list):
-        return [
-            ShapedArray(shape=replace_dim(self.shape, d, section))
-            for section in split_size_or_sections
-        ]
-    if isinstance(split_size_or_sections, int):
-        dim_val = self.shape[d]
-        if isinstance(dim_val, int):
-            count = (dim_val + split_size_or_sections - 1) // split_size_or_sections
-            return [
-                ShapedArray(
-                    shape=replace_dim(
-                        self.shape,
-                        d,
-                        split_size_or_sections
-                        if i < count - 1
-                        else dim_val - (count - 1) * split_size_or_sections,
-                    )
-                )
-                for i in range(count)
-            ]
-        return [
-            ShapedArray(shape=replace_dim(self.shape, d, split_size_or_sections)),
-            ...,
-        ]
-    if split_size_or_sections != None:
-        quotient = self.shape[d] // split_size_or_sections
-        if isinstance(quotient, int):
-            return [
-                ShapedArray(shape=replace_dim(self.shape, d, split_size_or_sections))
-                for _ in range(quotient)
-            ]
-        return [
-            ShapedArray(shape=replace_dim(self.shape, d, split_size_or_sections)),
-            ...,
-        ]
-    return Unknown
-
-@shape_dsl_function
-def chunk_ir(self: ShapedArray, chunks: int, dim: int = 0) -> list[ShapedArray]:
-    d = normalize_dim(len(self.shape), dim)
-    dim_val = self.shape[d]
-    if isinstance(dim_val, int):
-        chunk_size = (dim_val + chunks - 1) // chunks
-        return [
-            ShapedArray(
-                shape=replace_dim(
-                    self.shape,
-                    d,
-                    chunk_size
-                    if i < chunks - 1
-                    else dim_val - (chunks - 1) * chunk_size,
+@type_shape_dsl_function
+def split_sections_shapes(shape: IntTuple, sections: IntTuple, dim: int) -> IntTuples:
+    if not dsl.is_int_value(dim):
+        return dsl.IntTuples.gradual()
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("split dimension out of range")
+    if any(dsl.is_concrete_int(section) and section < 0 for section in sections):
+        return dsl.Invalid("split sections must be non-negative")
+    # The dimension range is settled above, so the axis is normalized once here and
+    # every later use - the extent and each output member - reads that name.
+    if dim < 0:
+        axis = dim + len(shape)
+    else:
+        axis = dim
+    extent = shape[axis]
+    total = dsl.sum(sections)
+    if dsl.is_concrete_int(extent) and dsl.is_concrete_int(total) and extent != total:
+        return dsl.Invalid("split sections must sum to the selected dimension")
+    return dsl.IntTuples(
+        (
+            dsl.IntTuple(
+                (
+                    section if index == axis else shape[index]
+                    for index in range(len(shape))
                 )
             )
-            for i in range(chunks)
-        ]
-    return [
-        ShapedArray(shape=replace_dim(self.shape, d, dim_val // chunks))
-        for i in range(chunks)
-    ]
+            for section in sections
+        )
+    )
+
+@type_shape_dsl_function
+def split_size_shapes(shape: IntTuple, split_size: Int, dim: int) -> IntTuples:
+    if not dsl.is_int_value(dim):
+        return dsl.IntTuples.gradual()
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("split dimension out of range")
+    # As in `split_sections_shapes`, the axis is normalized once and every extent read
+    # and output member below refers to that name.
+    if dim < 0:
+        axis = dim + len(shape)
+    else:
+        axis = dim
+    extent = shape[axis]
+    # An empty split axis yields exactly one empty chunk, and two different guards
+    # below reach that same result.
+    empty = dsl.IntTuple(
+        (0 if index == axis else shape[index] for index in range(len(shape)))
+    )
+    # Generator filters carry `is_concrete_int` narrowing into the comparison.
+    sizes = dsl.IntTuple((split_size,))
+    if any(dsl.is_concrete_int(size) and size < 0 for size in sizes):
+        return dsl.Invalid("split size must be non-negative")
+    if any(dsl.is_concrete_int(size) and size == 0 for size in sizes):
+        if dsl.is_concrete_int(extent) and extent != 0:
+            return dsl.Invalid(
+                "split size can only be zero when the selected dimension is zero"
+            )
+        return dsl.IntTuples((empty,))
+    if dsl.is_concrete_int(extent) and extent == 0:
+        return dsl.IntTuples((empty,))
+    if dsl.is_concrete_int(extent) and dsl.is_concrete_int(split_size):
+        count = (extent + split_size - 1) // split_size
+        return dsl.IntTuples(
+            (
+                dsl.IntTuple(
+                    (
+                        (
+                            split_size
+                            if chunk_index != count - 1
+                            else extent - (count - 1) * split_size
+                        )
+                        if index == axis
+                        else shape[index]
+                        for index in range(len(shape))
+                    )
+                )
+                for chunk_index in range(count)
+            )
+        )
+    quotient = extent // split_size
+    # A generator binding lets `is_concrete_int` narrow the computed remainder.
+    remainders = dsl.IntTuple((extent - quotient * split_size,))
+    if any(
+        dsl.is_concrete_int(remainder) and remainder == 0 for remainder in remainders
+    ):
+        return dsl.IntTuples(
+            (
+                dsl.IntTuple(
+                    (
+                        split_size if index == axis else shape[index]
+                        for index in range(len(shape))
+                    )
+                )
+                for _ in range(quotient)
+            )
+        )
+    count = (extent + split_size - 1) // split_size
+    # Without a divisibility proof, the split-axis dimension must be gradual
+    # because the final chunk may be smaller than split_size.
+    # TODO(stroxler): Recover precision through divisibility constraints or overloads.
+    return dsl.IntTuples(
+        (
+            dsl.IntTuple(
+                (
+                    dsl.Int.gradual() if index == axis else shape[index]
+                    for index in range(len(shape))
+                )
+            )
+            for _chunk_index in range(count)
+        )
+    )
+
+@type_shape_dsl_function
+def chunk_shapes(shape: IntTuple, chunks: Int, dim: int) -> IntTuples:
+    if not dsl.is_int_value(dim):
+        return dsl.IntTuples.gradual()
+    if dim < 0 - len(shape) or dim >= len(shape):
+        return dsl.Invalid("chunk dimension out of range")
+    chunk_counts = dsl.IntTuple((chunks,))
+    if any(dsl.is_concrete_int(count) and count <= 0 for count in chunk_counts):
+        return dsl.Invalid("chunk count must be greater than zero")
+    if dim < 0:
+        axis = dim + len(shape)
+    else:
+        axis = dim + 0
+    extent = shape[axis]
+    if dsl.is_concrete_int(extent) and extent == 0:
+        return dsl.IntTuples(
+            (
+                dsl.IntTuple(
+                    (
+                        0 if index == axis else shape[index]
+                        for index in range(len(shape))
+                    )
+                )
+                for _ in range(chunks)
+            )
+        )
+    if dsl.is_concrete_int(extent) and dsl.is_concrete_int(chunks):
+        chunk_size = (extent + chunks - 1) // chunks
+        count = (extent + chunk_size - 1) // chunk_size
+        return dsl.IntTuples(
+            (
+                dsl.IntTuple(
+                    (
+                        (
+                            chunk_size
+                            if chunk_index != count - 1
+                            else extent - (count - 1) * chunk_size
+                        )
+                        if index == axis
+                        else shape[index]
+                        for index in range(len(shape))
+                    )
+                )
+                for chunk_index in range(count)
+            )
+        )
+    quotient = extent // chunks
+    remainders = dsl.IntTuple((extent - quotient * chunks,))
+    if any(
+        dsl.is_concrete_int(remainder) and remainder == 0 for remainder in remainders
+    ):
+        return dsl.IntTuples(
+            (
+                dsl.IntTuple(
+                    (
+                        quotient if index == axis else shape[index]
+                        for index in range(len(shape))
+                    )
+                )
+                for _ in range(chunks)
+            )
+        )
+    chunk_size = (extent + chunks - 1) // chunks
+    count = (extent + chunk_size - 1) // chunk_size
+    # The output count and shorter final chunk depend on inequalities that the
+    # symbolic evaluator cannot currently prove.
+    # TODO(stroxler): Recover precision when the DSL supports such constraints.
+    return dsl.IntTuples(
+        (
+            dsl.IntTuple(
+                (
+                    dsl.Int.gradual() if index == axis else shape[index]
+                    for index in range(len(shape))
+                )
+            )
+            for _chunk_index in range(count)
+        )
+    )
 
 @type_shape_dsl_function
 def index_select_shape(shape: IntTuple, dim: int, index_shape: IntTuple) -> IntTuple:
@@ -960,27 +1112,11 @@ def tensordot_shape(left: IntTuple, right: IntTuple, dims: int) -> IntTuple:
     # ranks.
     return dsl.concat(left[: len(left) - dims], right[dims:])
 
-@shape_dsl_function
-def apply_einsum(
-    output_map: list[list[int]], check_pairs: list[list[int]], inputs: list[ShapedArray]
-) -> ShapedArray:
-    bad_dims = [
-        1
-        for i0, d0, i1, d1 in check_pairs
-        if isinstance(inputs[i0].shape[d0], int)
-        and isinstance(inputs[i1].shape[d1], int)
-        and inputs[i0].shape[d0] != inputs[i1].shape[d1]
-    ]
-    if len(bad_dims) > 0:
-        raise Error("einsum: inconsistent dimensions for repeated index")
-    return ShapedArray(shape=[inputs[inp].shape[dim] for inp, dim in output_map])
-
-@shape_dsl_function
-def einsum_ir(spec: str, operands: list[ShapedArray] | None = None) -> ShapedArray:
-    if operands != None:
-        output_map, check_pairs = parse_einsum_equation(spec)
-        return apply_einsum(output_map, check_pairs, operands)
-    return Unknown
+# Equation evaluation lives in the intrinsic; the only thing this stub adds is a name an
+# annotation can call, since only a declared DSL function may appear in one.
+@type_shape_dsl_function
+def einsum_shape(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl.einsum(spec, shapes)
 
 @type_shape_dsl_function
 def conv_shape(
@@ -1408,14 +1544,19 @@ def symmetric_pad2d_shape(input: IntTuple, padding: int) -> IntTuple:
     )
 
 @type_shape_dsl_function
-def pixel_shuffle_shape(input: IntTuple, upscale_factor: int) -> IntTuple:
+def pixel_shuffle_shape(input: IntTuple, upscale_factor: Int) -> IntTuple:
     if len(input) < 3:
         return dsl.Invalid("PixelShuffle requires at least 3D input")
-    if upscale_factor <= 0:
+    if any(
+        dsl.is_concrete_int(factor) and factor <= 0
+        for factor in dsl.IntTuple((upscale_factor,))
+    ):
         return dsl.Invalid("PixelShuffle upscale_factor must be positive")
     channels = input[-3]
-    factor_squared = upscale_factor * upscale_factor
-    if dsl.is_concrete_int(channels) and channels % factor_squared != 0:
+    if (
+        dsl.is_concrete_int(channels)
+        and channels % (upscale_factor * upscale_factor) != 0
+    ):
         return dsl.Invalid(
             "PixelShuffle input channels must be divisible by upscale_factor squared"
         )
@@ -1423,7 +1564,7 @@ def pixel_shuffle_shape(input: IntTuple, upscale_factor: int) -> IntTuple:
         input[:-3],
         dsl.IntTuple(
             (
-                channels // factor_squared,
+                channels // (upscale_factor * upscale_factor),
                 input[-2] * upscale_factor,
                 input[-1] * upscale_factor,
             )
@@ -1439,6 +1580,28 @@ def glu_shape(input: IntTuple, dim: int) -> IntTuple:
         return dsl.Invalid("GLU input dimension must be even")
     halved = extent // 2
     return replace_axis_extent(input, dim, halved)
+
+@type_shape_dsl_function
+def recurrent_output_shape(
+    input: IntTuple, hidden_size: Int, bidirectional: bool
+) -> IntTuple:
+    if bidirectional:
+        return dsl.IntTuple((input[0], input[1], hidden_size * 2))
+    else:
+        return dsl.IntTuple((input[0], input[1], hidden_size))
+
+@type_shape_dsl_function
+def recurrent_state_shape(
+    input: IntTuple, hidden_size: Int, num_layers: Int, bidirectional: bool
+) -> IntTuple:
+    if bidirectional:
+        return dsl.IntTuple((num_layers * 2, input[0], hidden_size))
+    else:
+        return dsl.IntTuple((num_layers, input[0], hidden_size))
+
+@type_shape_dsl_function
+def lstm_cell_state_shape(input: IntTuple, hidden_size: Int) -> IntTuple:
+    return dsl.IntTuple((input[0], hidden_size))
 
 # `n` defaults to the existing extent of the transformed axis, so `None` and an
 # explicit length differ only in which value feeds the halved output extent.
@@ -1497,48 +1660,3 @@ def numel_shape(shape: IntTuple) -> Int:
 @type_shape_dsl_function
 def dim_shape(shape: IntTuple) -> Int:
     return len(shape)
-
-@shape_dsl_function
-def item_ir(self: ShapedArray) -> ShapedArray:
-    if len(self.shape) != 0:
-        raise Error(
-            "item() only works on 0-dimensional tensors, got "
-            + str(len(self.shape))
-            + "D tensor"
-        )
-    return Unknown
-
-@shape_dsl_function
-def nn_lstm_forward_ir(
-    input: ShapedArray,
-    input_size: symint,
-    hidden_size: symint,
-    num_layers: symint = 1,
-    bidirectional: bool = False,
-) -> [ShapedArray, ShapedArray, ShapedArray]:
-    nd = 2 if bidirectional else 1
-    output = ShapedArray(shape=[input.shape[0], input.shape[1], hidden_size * nd])
-    h_n = ShapedArray(shape=[num_layers * nd, input.shape[0], hidden_size])
-    c_n = ShapedArray(shape=[num_layers * nd, input.shape[0], hidden_size])
-    return [output, h_n, c_n]
-
-@shape_dsl_function
-def nn_gru_forward_ir(
-    input: ShapedArray,
-    input_size: symint,
-    hidden_size: symint,
-    num_layers: symint = 1,
-    bidirectional: bool = False,
-) -> [ShapedArray, ShapedArray]:
-    nd = 2 if bidirectional else 1
-    output = ShapedArray(shape=[input.shape[0], input.shape[1], hidden_size * nd])
-    h_n = ShapedArray(shape=[num_layers * nd, input.shape[0], hidden_size])
-    return [output, h_n]
-
-@shape_dsl_function
-def nn_lstmcell_forward_ir(
-    input: ShapedArray, input_size: symint, hidden_size: symint
-) -> [ShapedArray, ShapedArray]:
-    h = ShapedArray(shape=[input.shape[0], hidden_size])
-    c = ShapedArray(shape=[input.shape[0], hidden_size])
-    return [h, c]

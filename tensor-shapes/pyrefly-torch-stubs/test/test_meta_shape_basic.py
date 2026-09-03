@@ -4,6 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Test meta-shape function integration
+from collections.abc import Sequence
 from typing import Any, assert_type, Literal, TYPE_CHECKING
 
 import torch
@@ -19,16 +20,81 @@ if TYPE_CHECKING:
 def test_cat_basic():
     x: Tensor[[2, 3]] = torch.randn(2, 3)
     y: Tensor[[2, 3]] = torch.randn(2, 3)
-    # Should infer: Tensor[[4, 3]] (concat along dim 0 adds 2+2=4)
-    result = torch.cat((x, y), dim=0)
-    assert_type(result, Tensor[[4, 3]])
+
+    assert_type(torch.cat((x, y)), Tensor[[4, 3]])
+    assert_type(torch.cat(tensors=[x, y], dim=0), Tensor[[4, 3]])
+    assert_type(torch.cat((x, y), dim=-1), Tensor[[2, 6]])
 
 
 def test_concat_alias():
     x: Tensor[[2, 3]] = torch.randn(2, 3)
     y: Tensor[[4, 3]] = torch.randn(4, 3)
-    result = torch.concat((x, y), dim=0)
-    assert_type(result, Tensor[[6, 3]])
+
+    assert_type(torch.concat((x, y)), Tensor[[6, 3]])
+    assert_type(torch.concat(tensors=[y, x], dim=0), Tensor[[6, 3]])
+
+
+def check_cat_stack_containers(
+    pair: tuple[Tensor[[2, 3]], Tensor[[4, 3]]],
+    homogeneous_tuple: tuple[Tensor[[2, 3]], ...],
+    homogeneous_list: list[Tensor[[2, 3]]],
+    homogeneous_sequence: Sequence[Tensor[[2, 3]]],
+    bare_sequence: Sequence[Tensor],
+) -> None:
+    x: Tensor[[2, 3]] = torch.randn(2, 3)
+    y: Tensor[[4, 3]] = torch.randn(4, 3)
+
+    # A fixed-length container names every member, so every check is decidable.
+    assert_type(torch.cat(pair), Tensor[[6, 3]])
+    assert_type(torch.cat([x, y]), Tensor[[6, 3]])
+    assert_type(torch.stack([x, x], dim=1), Tensor[[2, 2, 3]])
+
+    # A container of unknown length cannot be checked member by member, so no
+    # member-derived dimension is confirmed and the whole result stays gradual.
+    assert_type(torch.cat(homogeneous_tuple), Tensor[IntTuple])
+    assert_type(torch.cat(homogeneous_list), Tensor[IntTuple])
+    assert_type(torch.concat(homogeneous_sequence), Tensor[IntTuple])
+    assert_type(torch.stack(homogeneous_sequence), Tensor[IntTuple])
+    assert_type(torch.cat(bare_sequence), Tensor[IntTuple])
+
+
+def check_cat_symbolic_axis[N: IntVar](
+    symbolic: Tensor[[N, 3]],
+    known: Tensor[[2, 3]],
+) -> None:
+    # Only the axes outside the concatenated one have to be decidably equal, so a
+    # symbolic extent on the concatenated axis is summed rather than refused.
+    assert_type(torch.cat((symbolic, known)), Tensor[[N + 2, 3]])
+    assert_type(torch.concat((known, symbolic, known)), Tensor[[N + 4, 3]])
+    assert_type(torch.cat((symbolic, symbolic)), Tensor[[2 * N, 3]])
+
+    # A one-member sequence has nothing to compare against and sums one extent.
+    assert_type(torch.cat((symbolic,)), Tensor[[N, 3]])
+    assert_type(torch.stack((symbolic,), dim=1), Tensor[[N, 1, 3]])
+
+
+def check_cat_stack_undecidable_dimensions[N: IntVar](
+    known: Tensor[[2, 3]],
+    symbolic: Tensor[[2, N]],
+    gradual: Tensor[[2, Any]],
+    shapeless: Tensor,
+    dim: int,
+) -> None:
+    # Two spellings of one symbol agree, so the non-concatenated axes are confirmed.
+    assert_type(torch.cat((symbolic, symbolic)), Tensor[[4, N]])
+    assert_type(torch.stack((symbolic, symbolic)), Tensor[[2, 2, N]])
+
+    # A dimension the checker can neither match nor refute leaves the result
+    # gradual rather than adopting the first member's shape.
+    assert_type(torch.cat((known, symbolic)), Tensor[IntTuple])
+    assert_type(torch.cat((known, gradual)), Tensor[IntTuple])
+    assert_type(torch.stack((known, symbolic)), Tensor[IntTuple])
+    assert_type(torch.concat((known, shapeless)), Tensor[IntTuple])
+
+    # An unidentified axis leaves every dimension unattributable.
+    assert_type(torch.cat((known, known), dim=dim), Tensor[IntTuple])
+    assert_type(torch.concat((known, known), dim=dim), Tensor[IntTuple])
+    assert_type(torch.stack((known, known), dim=dim), Tensor[IntTuple])
 
 
 def test_shape_preserving_stub_surface():
@@ -421,9 +487,10 @@ def test_stack():
     x: Tensor[[2, 3]] = torch.randn(2, 3)
     y: Tensor[[2, 3]] = torch.randn(2, 3)
     z: Tensor[[2, 3]] = torch.randn(2, 3)
-    # Should infer: Tensor[[3, 2, 3]] (stack 3 tensors along dim 0)
-    result = torch.stack((x, y, z), dim=0)
-    assert_type(result, Tensor[[3, 2, 3]])
+
+    assert_type(torch.stack((x, y, z)), Tensor[[3, 2, 3]])
+    assert_type(torch.stack(tensors=[x, y, z], dim=1), Tensor[[2, 3, 3]])
+    assert_type(torch.stack((x, y, z), dim=-3), Tensor[[3, 2, 3]])
 
 
 # Test 15: torch.std - standard deviation reduction

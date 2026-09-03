@@ -11,8 +11,9 @@ of the shape coverage lands in one job rather than one job per library. The
 per-package `run_pyrefly.py` and `run_runtime_tests.py` remain the things to
 reach for while iterating on a single library.
 
-Requires a Pyrefly binary, and the shared virtualenv from bootstrap_venv.py for
-the runtime half. `--static-only` drops the virtualenv requirement entirely,
+Builds Pyrefly before checking, and needs the shared virtualenv from
+bootstrap_venv.py for the runtime half. `--static-only` drops the virtualenv
+requirement entirely,
 which is the usual mode when changing Pyrefly rather than the stubs. Nothing
 here downloads anything.
 """
@@ -26,7 +27,6 @@ from pathlib import Path
 
 from shape_testing import pyrefly_command, TENSOR_SHAPES_ROOT, venv_python
 
-
 PACKAGES: tuple[str, ...] = (
     "pyrefly-torch-stubs",
     "pyrefly-numpy-stubs",
@@ -36,16 +36,21 @@ PACKAGES: tuple[str, ...] = (
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--pyrefly", type=Path, default=None)
+    parser.add_argument(
+        "--pyrefly",
+        type=Path,
+        default=None,
+        help="use this binary as is; the only mode that does not build Pyrefly first",
+    )
     parser.add_argument(
         "--buck",
         action="store_true",
-        help="run Pyrefly out of Buck instead of a locally built binary",
+        help="build and run Pyrefly with Buck instead of Cargo",
     )
     parser.add_argument(
         "--release",
         action="store_true",
-        help="use the Cargo release build instead of debug",
+        help="build with the Cargo release profile instead of debug",
     )
     parser.add_argument(
         "--python",
@@ -99,10 +104,11 @@ def main() -> int:
             print(f"\n=== {step} ===", flush=True)
             command = [sys.executable, str(package_root / "run_pyrefly.py")]
             # Forward the already-resolved binary rather than re-passing the
-            # flags. `--pyrefly`, $PYREFLY and $CARGO_TARGET_DIR may all be
-            # relative to this process's directory, and the child runs from a
-            # different one. A single-element command is a binary path; anything
-            # longer is the `buck2 run` invocation, which needs no resolving.
+            # flags, so that the three packages share one build. `--pyrefly`,
+            # $PYREFLY and $CARGO_TARGET_DIR may all be relative to this
+            # process's directory, and the child runs from a different one. A
+            # single-element command is a binary path; anything longer is the
+            # `buck2 run` invocation, which needs no resolving.
             if len(pyrefly) == 1:
                 command.extend(["--pyrefly", pyrefly[0]])
             else:

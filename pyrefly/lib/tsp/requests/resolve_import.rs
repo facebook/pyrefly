@@ -17,6 +17,7 @@ use lsp_server::ResponseError;
 use lsp_types::Url;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_util::telemetry::TelemetryEvent;
 use ruff_python_ast::name::Name;
 use tsp_types::protocol::ResolveImportParams;
 
@@ -40,6 +41,7 @@ impl<T: TspInterface> TspServer<T> {
         id: RequestId,
         params: ResolveImportParams,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         reply: Reply,
     ) {
         // --- 1. Validate snapshot ---
@@ -99,6 +101,12 @@ impl<T: TspInterface> TspServer<T> {
                     .map(|u| u.to_string())
             })
         });
+
+        // Hand the transaction back. `non_committable_transaction` took it out
+        // of the manager, and it may carry a solve that a type query saved
+        // while a recheck held the committing lock; dropping it here would make
+        // the next query redo that work.
+        ide_transaction_manager.save(transaction, telemetry_event);
 
         reply.ok(id, uri_string);
     }

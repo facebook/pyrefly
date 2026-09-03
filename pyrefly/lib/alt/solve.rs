@@ -219,6 +219,8 @@ pub enum TypeFormContext<'a> {
     TypeArgumentForType(&'a TypeFormContext<'a>),
     /// Type argument for the return position of a `Callable` type.
     TypeArgumentCallableReturn(&'a TypeFormContext<'a>),
+    /// Body of an experimental shape-extension type-level lambda.
+    TypeLevelLambdaReturn(&'a TypeFormContext<'a>),
     /// Type argument for `TypeGuard` or `TypeIs`.
     TypePredicateArgument(&'a TypeFormContext<'a>),
     /// An element of a tuple type.
@@ -292,6 +294,7 @@ impl TypeFormContext<'_> {
                 | TypeFormContext::TupleElement(_)
                 | TypeFormContext::TypeArgument(_)
                 | TypeFormContext::TypeArgumentCallableReturn(_)
+                | TypeFormContext::TypeLevelLambdaReturn(_)
                 | TypeFormContext::TypeArgumentForType(_)
                 | TypeFormContext::TypePredicateArgument(_)
                 | TypeFormContext::UnionMember(_)
@@ -665,7 +668,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Annotation {
                     qualifiers: vec![qualifier],
                     ty: Some(self.expr_infer(&x.slice, errors)),
-                    display_ty: None,
                 }
             }
             _ => Annotation::new_type(self.expr_infer(x, errors)),
@@ -825,7 +827,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Annotation {
                     qualifiers: vec![qualifier],
                     ty: None,
-                    display_ty: None,
                 }
             }
             Expr::Subscript(x)
@@ -904,13 +905,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 ann
             }
-            _ => {
-                let (ty, display_ty) = self.expr_untype_with_display(x, type_form_context, errors);
-                match display_ty {
-                    Some(display_ty) => Annotation::new_type_with_display(ty, display_ty),
-                    None => Annotation::new_type(ty),
-                }
-            }
+            _ => Annotation::new_type(self.expr_untype(x, type_form_context, errors)),
         }
     }
 
@@ -2830,7 +2825,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     if let Some(k) = annotation
                         && let AnnotationWithTarget {
                             target,
-                            annotation: Annotation { ty: Some(want), .. },
+                            annotation:
+                                Annotation {
+                                    ty: Some(want),
+                                    qualifiers: _,
+                                },
                         } = self.get_idx(*k)
                     {
                         ty = self.check_and_return_type(ty, want, expr.range(), errors, &|| {
@@ -4749,7 +4748,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ),
             _ => ty,
         };
-        match param {
+        let ty = match param {
             FunctionParameter::Annotated(key) => {
                 let annotation = self.get_idx(*key);
                 annotation
@@ -4777,7 +4776,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     });
                 finalize(target, ty)
             }
-        }
+        };
+        self.map_int_tuples_parameter_body_type(ty)
     }
 
     /// Handle `Binding::TypeVarTuple` - process TypeVarTuple definition.
@@ -4796,7 +4796,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if let Some(k) = ann
             && let AnnotationWithTarget {
                 target,
-                annotation: Annotation { ty: Some(want), .. },
+                annotation:
+                    Annotation {
+                        ty: Some(want),
+                        qualifiers: _,
+                    },
             } = self.get_idx(k)
         {
             // Validate the annotation but always preserve the special TypeVarTuple type,
@@ -5880,7 +5884,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    pub(crate) fn return_type_from_annotation(
+    fn return_type_from_annotation(
         &self,
         annotated_ty: Type,
         is_async: bool,
@@ -6009,7 +6013,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if let Some(k) = ann
                     && let AnnotationWithTarget {
                         target,
-                        annotation: Annotation { ty: Some(want), .. },
+                        annotation:
+                            Annotation {
+                                ty: Some(want),
+                                qualifiers: _,
+                            },
                     } = self.get_idx(*k)
                 {
                     // Validate the annotation but always preserve the special TypeVar type,
@@ -6028,7 +6036,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if let Some(k) = ann
                     && let AnnotationWithTarget {
                         target,
-                        annotation: Annotation { ty: Some(want), .. },
+                        annotation:
+                            Annotation {
+                                ty: Some(want),
+                                qualifiers: _,
+                            },
                     } = self.get_idx(*k)
                 {
                     // Validate the annotation but always preserve the special ParamSpec type,
@@ -6117,7 +6129,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 .any(|(c, _)| matches!(&c.ret, Type::Type(inner) if matches!(&**inner, Type::Any(AnyStyle::Explicit))))
                     });
                     if erases_class {
-                        self.heap.mk_type(self.heap.mk_any_explicit())
+                        self.heap.mk_type_of(self.heap.mk_any_explicit())
                     } else {
                         self.heap.mk_class_def(cls.dupe())
                     }
@@ -6184,6 +6196,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Forallable::TypeAlias(TypeAliasData::Ref(r)).forall(tparams)
             }
             Binding::LambdaParameter(id, owner) => self.resolve_lambda_param_type(*id, *owner),
+            Binding::TypeLevelLambdaParameter(parameter) => {
+                self.resolve_map_int_tuples_mapper_parameter(&parameter.identifier)
+            }
             Binding::FunctionParameter(param) => self.binding_to_type_function_parameter(param),
             Binding::SuperInstance(x) => self.solve_super_binding(&x.0, x.1, errors),
             // For first-usage-based type inference, we occasionally just want a way to force
@@ -6211,7 +6226,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if let Some(k) = ann
                     && let AnnotationWithTarget {
                         target,
-                        annotation: Annotation { ty: Some(want), .. },
+                        annotation:
+                            Annotation {
+                                ty: Some(want),
+                                qualifiers: _,
+                            },
                     } = self.get_idx(*k)
                 {
                     // Validate the annotation already on assigned name
@@ -6467,9 +6486,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         cls.has_toplevel_qname("shape_extensions", "IntTuple")
     }
 
+    pub(crate) fn is_int_tuples_class(&self, cls: &Class) -> bool {
+        cls.has_toplevel_qname("shape_extensions", "IntTuples")
+    }
+
     pub(crate) fn bare_int_tuple_carrier(&self) -> Type {
         self.heap.mk_tuple(Tuple::Unbounded(Box::new(
             self.heap.mk_class_type(self.stdlib.int().clone()),
+        )))
+    }
+
+    pub(crate) fn bare_int_tuples(&self) -> Type {
+        self.heap.mk_tuple(Tuple::Unbounded(Box::new(
+            self.heap.mk_int_tuple(IntTuple::shapeless()),
         )))
     }
 
@@ -6530,21 +6559,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     pub(crate) fn untype_opt_with_context(
         &self,
-        ty: Type,
-        range: TextRange,
-        errors: &ErrorCollector,
-        context: UntypeContext,
-    ) -> Option<Type> {
-        self.untype_opt_with_context_impl(ty, range, errors, context, false)
-    }
-
-    fn untype_opt_with_context_impl(
-        &self,
         mut ty: Type,
         range: TextRange,
         errors: &ErrorCollector,
         context: UntypeContext,
-        preserve_aliases: bool,
     ) -> Option<Type> {
         if let Type::Forall(forall) = ty {
             ty = self.promote_forall(*forall, range, errors);
@@ -6553,25 +6571,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::Union(f) if !f.members.is_empty() => {
                 let mut ts = Vec::new();
                 for x in f.members {
-                    let t = self.untype_opt_with_context_impl(
-                        x,
-                        range,
-                        errors,
-                        context,
-                        preserve_aliases,
-                    )?;
+                    let t = self.untype_opt_with_context(x, range, errors, context)?;
                     ts.push(t);
                 }
                 Some(self.unions(ts))
             }
-            Type::Var(v) if let Some(_guard) = self.recurse(v) => self
-                .untype_opt_with_context_impl(
-                    self.solver().force_var(v),
-                    range,
-                    errors,
-                    context,
-                    preserve_aliases,
-                ),
+            Type::Var(v) if let Some(_guard) = self.recurse(v) => {
+                self.untype_opt_with_context(self.solver().force_var(v), range, errors, context)
+            }
             // These are all legal type forms, so we accept them (return `Some`).
             // Only the quantified kinds get a kind check from the validator;
             // `Args`/`Kwargs` pass through unchanged but must be listed
@@ -6588,6 +6595,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     Type::ClassType(cls) => {
                         if self.is_int_tuple_class(cls.class_object()) {
                             Some(self.heap.mk_int_tuple(IntTuple::shapeless()))
+                        } else if self.is_int_tuples_class(cls.class_object()) {
+                            Some(self.bare_int_tuples())
                         } else if cls.has_qname("shape_extensions", "Int") {
                             Some(gradual_size())
                         } else if self.shaped_array_shape_for_class_type(cls).is_some() {
@@ -6623,22 +6632,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let TypeAliasData::Value(ta) = *ta else {
                     unreachable!("guarded by matches! above")
                 };
-                let mut aliased_type = self.untype_opt_with_context_impl(
-                    ta.as_type(),
-                    range,
-                    errors,
-                    context,
-                    preserve_aliases,
-                )?;
+                let mut aliased_type =
+                    self.untype_opt_with_context(ta.as_type(), range, errors, context)?;
                 if let Type::Union(f) = &mut aliased_type {
                     f.display_name = Some((self.module().name(), (*ta.name).clone()));
                 }
-                if preserve_aliases {
-                    let alias = ta.with_type(self.heap.mk_type(aliased_type));
-                    Some(Type::UntypedAlias(Box::new(TypeAliasData::Value(alias))))
-                } else {
-                    Some(aliased_type)
-                }
+                Some(aliased_type)
             }
             // `as_type_alias` untypes a type alias in order to validate that it is a legal type.
             // If we hit a recursive reference to the alias while untyping it, delay the untyping
@@ -6658,12 +6657,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if let Type::Var(v) = &**inner
                     && let Some(_guard) = self.recurse(*v) =>
             {
-                self.untype_opt_with_context_impl(
+                self.untype_opt_with_context(
                     self.heap.mk_unpack(self.solver().force_var(*v)),
                     range,
                     errors,
                     context,
-                    preserve_aliases,
                 )
             }
             // A quantified *value* (e.g. an `IntVar` used in value position) is
@@ -6687,13 +6685,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::ClassDef(cls) => {
                 let canonicalized =
                     self.canonicalize_all_class_types(Type::ClassDef(cls), range, errors);
-                self.untype_opt_with_context_impl(
-                    canonicalized,
-                    range,
-                    errors,
-                    context,
-                    preserve_aliases,
-                )
+                self.untype_opt_with_context(canonicalized, range, errors, context)
             }
             // Annotated[T, meta] in annotation/type-alias context unwraps to T
             Type::Annotated(t, _) => {
@@ -6757,13 +6749,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.untype(ty, TextRange::default(), &self.error_swallower())
     }
 
-    // Approximate the result of calling `type()` on something of type T
-    // In many cases the result is just type[T] with generics erased, but sometimes
-    // we'll fall back to builtins.type. We can add more cases here as-needed.
+    // Approximate the result of calling `type()` on something of type T.
     pub fn type_of(&self, ty: Type) -> Type {
         match ty {
-            Type::ClassType(cls) => self.heap.mk_class_def(cls.class_object().clone()),
-            Type::SelfType(_) => self.heap.mk_type(ty),
+            Type::ClassType(_) | Type::SelfType(_) => self.heap.mk_type_of(ty),
             Type::Literal(lit) => self.heap.mk_class_def(
                 lit.value
                     .general_class_type(self.stdlib)
@@ -6937,6 +6926,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 );
             }
         }
+        // A normal class is a valid annotation without subscripting. `MapIntTuples` is an
+        // experimental shape operation represented by a runtime shim class, but it denotes a
+        // type only when its mapper and source arguments are present.
+        if self.is_bare_map_int_tuples(&ty) {
+            return self.error(
+                errors,
+                range,
+                ErrorKind::InvalidAnnotation,
+                "Expected 2 type arguments for `MapIntTuples`, got 0".to_owned(),
+            );
+        }
         if type_form_context == TypeFormContext::TypeVarConstraint && ty.contains_type_variable() {
             return self.error(
                 errors,
@@ -7059,25 +7059,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
-        self.expr_untype_with_display(x, type_form_context, errors)
-            .0
-    }
-
-    fn expr_untype_with_display(
-        &self,
-        x: &Expr,
-        type_form_context: TypeFormContext<'_>,
-        errors: &ErrorCollector,
-    ) -> (Type, Option<Type>) {
-        let (result, display_ty) = match x {
+        let result = match x {
             // A `IntVar`'s default (e.g. `N = 3`) is a dimension expression, not
             // an ordinary type, so route it through the dimension parser.
-            _ if type_form_context == TypeFormContext::IntVarDefault => (
-                self.parse_dimension_list(slice::from_ref(x), type_form_context, errors)
-                    .and_then(|dims| dims.into_iter().next())
-                    .unwrap_or_else(Type::any_error),
-                None,
-            ),
+            _ if type_form_context == TypeFormContext::IntVarDefault => self
+                .parse_dimension_list(slice::from_ref(x), type_form_context, errors)
+                .and_then(|dims| dims.into_iter().next())
+                .unwrap_or_else(Type::any_error),
             Expr::List(x)
                 if matches!(
                     type_form_context,
@@ -7092,38 +7080,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         Param::PosOnly(None, ty, Required::Required)
                     })
                     .collect();
-                (Type::ParamSpecValue(ParamList::new(elts)), None)
+                Type::ParamSpecValue(ParamList::new(elts))
             }
             _ => {
                 let inferred_ty = self
                     .expr_infer_impl(x, None, errors, Some(type_form_context))
                     .into_ty();
-                let result = self.untype_runtime_type(
-                    inferred_ty.clone(),
-                    x.range(),
-                    type_form_context,
-                    errors,
-                );
-                let display_ty = if inferred_ty.any(|ty| matches!(ty, Type::TypeAlias(_))) {
-                    self.untype_opt_with_context_impl(
-                        inferred_ty,
-                        x.range(),
-                        &self.error_swallower(),
-                        type_form_context.untype_context(),
-                        true,
-                    )
-                } else {
-                    None
-                };
-                (result, display_ty)
+                self.untype_runtime_type(inferred_ty, x.range(), type_form_context, errors)
             }
         };
         let result = self.validate_type_form(result, x.range(), type_form_context, errors);
+        let result = self.interpret_map_int_tuples_at_annotation_root(result, type_form_context);
         if type_form_context.can_report_explicit_any() {
             self.check_explicit_any(&result, x.range(), errors);
         }
-        let display_ty = display_ty.filter(|display_ty| display_ty != &result);
-        (result, display_ty)
+        result
     }
 
     fn untype_runtime_type(
@@ -7133,6 +7104,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Type {
+        if self.should_preserve_unpacked_map_int_tuples_call(&inferred_ty, type_form_context) {
+            return inferred_ty;
+        }
         // Check if this is a scoped type alias in base class context
         // We do this check here instead of `validate_type_form` because it
         // substitutes type aliases with the aliased type

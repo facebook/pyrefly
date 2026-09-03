@@ -479,6 +479,31 @@ impl IntTuple {
         }
     }
 
+    /// Add all dimensions, returning a gradual dimension when the shape has symbolic rank.
+    pub(crate) fn sum(&self) -> Int {
+        let IntTupleView::Concrete(dimensions) = self.view() else {
+            return Int::Int;
+        };
+        let terms = dimensions
+            .iter()
+            .map(|dimension| canonicalize_int_dim(dimension.clone()))
+            .filter(|dimension| !matches!(dimension, Int::Literal(0)))
+            .collect::<Vec<_>>();
+        match terms.as_slice() {
+            [] => Int::Literal(0),
+            [term] => term.clone(),
+            terms => {
+                let sum = terms.iter().cloned().fold(Int::Literal(0), |left, right| {
+                    Int::add(Type::Int(left), Type::Int(right))
+                });
+                match canonicalize(Type::Int(sum)) {
+                    Type::Int(sum) => sum,
+                    _ => unreachable!("canonicalized IntTuple sum must remain an Int"),
+                }
+            }
+        }
+    }
+
     /// Project this shape to the ordinary tuple type it denotes.
     pub fn to_tuple_type(&self) -> Type {
         match &self.0 {
@@ -1035,7 +1060,7 @@ fn is_valid_internal_dim(dim: &Type) -> bool {
         Type::Quantified(q) => q.kind == QuantifiedKind::IntVar,
         Type::TypeVar(tv) => tv.kind() == QuantifiedKind::IntVar,
         Type::Var(_) | Type::Any(_) => true,
-        Type::TypeLevelDslCall(call) => call.result_domain() == TypeShapeDslDomain::Int,
+        Type::TypeLevelDslCall(call) => call.result_domain() == Some(TypeShapeDslDomain::Int),
         _ => false,
     }
 }
@@ -1225,6 +1250,27 @@ pub fn tuple_carrier_to_shape(carrier: &Type) -> Option<IntTuple> {
     }
 }
 
+/// Whether `ty` is a structural `IntTuples` value.
+///
+/// Fixed and unbounded tuples contain `IntTuple` values directly. An unpacked tuple is valid when
+/// its fixed members are `IntTuple` values and its middle is itself an `IntTuples` value; unions
+/// are valid when every alternative has that structure.
+pub fn is_int_tuples_type(ty: &Type) -> bool {
+    let is_member = |member: &Type| IntTuple::from_shape_arg_or_tuple_carrier(member).is_some();
+    match ty {
+        Type::Tuple(Tuple::Concrete(elements)) => elements.iter().all(is_member),
+        Type::Tuple(Tuple::Unbounded(element)) => is_member(element),
+        Type::Tuple(Tuple::Unpacked(parts)) => {
+            let (prefix, middle, suffix) = parts.parts();
+            prefix.iter().chain(suffix).all(is_member) && is_int_tuples_type(middle)
+        }
+        Type::Union(union) => {
+            !union.members.is_empty() && union.members.iter().all(is_int_tuples_type)
+        }
+        _ => false,
+    }
+}
+
 fn recover_unbounded_tuple_carrier_middle(middle: Type) -> Type {
     match middle {
         Type::Tuple(Tuple::Unpacked(unpacked)) => {
@@ -1271,7 +1317,7 @@ fn gradual_shape_middle() -> Type {
     IntTuple::shapeless().to_shape_arg_type()
 }
 
-fn is_gradual_shape_middle(middle: &Type) -> bool {
+pub(crate) fn is_gradual_shape_middle(middle: &Type) -> bool {
     match middle {
         Type::IntTuple(shape) => shape.is_shapeless(),
         Type::Tuple(Tuple::Unbounded(elt)) => elt.is_any() || is_gradual_size(elt),
@@ -1521,7 +1567,7 @@ fn broadcast_concrete(a_dims: &[Int], b_dims: &[Int]) -> Result<IntTuple, ShapeE
 
 /// Broadcast a single pair of dimensions.
 /// Canonicalizes both sides so symbolic expressions that reduce to literals are caught.
-fn broadcast_dim(a_ty: &Int, b_ty: &Int, position: usize) -> Result<Int, ShapeError> {
+pub(crate) fn broadcast_dim(a_ty: &Int, b_ty: &Int, position: usize) -> Result<Int, ShapeError> {
     let a_ty = canonicalize_int_dim(a_ty.clone());
     let b_ty = canonicalize_int_dim(b_ty.clone());
     match (&a_ty, &b_ty) {

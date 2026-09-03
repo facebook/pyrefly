@@ -6,55 +6,19 @@
  */
 
 use std::fs;
-use std::path::Path;
 use std::path::PathBuf;
 
 use lsp_types::GotoDefinitionResponse;
 use lsp_types::Location;
-use pyrefly_util::fs_anyhow;
-use tempfile::TempDir;
 
 use crate::module::bundled::BundledStub;
 use crate::module::typeshed::typeshed;
-
-pub fn get_test_files_root() -> TempDir {
-    let mut source_files =
-        std::env::current_dir().expect("std:env::current_dir() unavailable for test");
-    let test_files_path = std::env::var("TEST_FILES_PATH")
-        .expect("TEST_FILES_PATH env var not set: cargo or buck should set this automatically");
-    source_files.push(test_files_path);
-
-    // We copy all files over to a separate temp directory so we are consistent between Cargo and Buck.
-    // In particular, given the current directory, Cargo is likely to find a pyproject.toml, but Buck won't.
-    let t = TempDir::with_prefix("pyrefly_lsp_test").unwrap();
-    copy_dir_recursively(&source_files, t.path());
-
-    t
-}
+pub use crate::test::util::get_test_files_root;
 
 pub fn bundled_typeshed_path() -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(typeshed().unwrap().get_path_name());
     path
-}
-
-fn copy_dir_recursively(src: &Path, dst: &Path) {
-    if !dst.exists() {
-        std::fs::create_dir_all(dst).unwrap();
-    }
-
-    for entry in fs_anyhow::read_dir(src).unwrap() {
-        let entry = entry.unwrap();
-        let file_type = entry.file_type().unwrap();
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-
-        if file_type.is_dir() {
-            copy_dir_recursively(&src_path, &dst_path);
-        } else {
-            std::fs::copy(&src_path, &dst_path).unwrap();
-        }
-    }
 }
 
 /// Validates that a goto definition response points to the expected symbol.

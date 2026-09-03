@@ -3,10 +3,11 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, overload, Sequence
+from typing import Any, Callable, Literal, overload, Sequence
 
 from jax._array import Array as Array, Array as ndarray
 from jax._shapes import (
+    int_min,
     matmul_shape,
     permute_shape,
     reduce_shape,
@@ -15,7 +16,7 @@ from jax._shapes import (
 )
 from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar
 
-from . import fft as fft
+from . import fft as fft, linalg as linalg
 
 type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
@@ -32,103 +33,231 @@ type _NewShape = int | tuple[int, ...] | None
 # downstream shaped-array operations without degrading to unknown. The NumPy
 # stubs carry the same limitation.
 @overload
+def zeros(shape: tuple[()], dtype: Any = ..., *, device: Any = ...) -> Array[[]]: ...
+@overload
 def zeros[N: IntVar](
     shape: Int[N], dtype: Any = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
 @overload
-def zeros[N: IntVar](
-    shape: IntTuple[N], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N]]: ...
-@overload
-def zeros[N: IntVar, M: IntVar](
-    shape: IntTuple[N, M], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N, M]]: ...
-@overload
-def zeros[N: IntVar, M: IntVar, K: IntVar](
-    shape: IntTuple[N, M, K], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N, M, K]]: ...
+def zeros[Shape: _Shape](
+    shape: Shape, dtype: Any = ..., *, device: Any = ...
+) -> Array[Shape]: ...
 @overload
 def zeros(
-    shape: Sequence[int], dtype: Any = ..., *, device: Any = ...
+    shape: Sequence[int] | int, dtype: Any = ..., *, device: Any = ...
 ) -> Array[IntTuple]: ...
+@overload
+def ones(shape: tuple[()], dtype: Any = ..., *, device: Any = ...) -> Array[[]]: ...
 @overload
 def ones[N: IntVar](
     shape: Int[N], dtype: Any = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
 @overload
-def ones[N: IntVar](
-    shape: IntTuple[N], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N]]: ...
-@overload
-def ones[N: IntVar, M: IntVar](
-    shape: IntTuple[N, M], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N, M]]: ...
-@overload
-def ones[N: IntVar, M: IntVar, K: IntVar](
-    shape: IntTuple[N, M, K], dtype: Any = ..., *, device: Any = ...
-) -> Array[[N, M, K]]: ...
+def ones[Shape: _Shape](
+    shape: Shape, dtype: Any = ..., *, device: Any = ...
+) -> Array[Shape]: ...
 @overload
 def ones(
-    shape: Sequence[int], dtype: Any = ..., *, device: Any = ...
+    shape: Sequence[int] | int, dtype: Any = ..., *, device: Any = ...
 ) -> Array[IntTuple]: ...
+@overload
+def empty[N: IntVar](
+    shape: Int[N],
+    dtype: Any = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def empty[Shape: _Shape](
+    shape: Shape,
+    dtype: Any = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def empty(
+    shape: Sequence[int] | int,
+    dtype: Any = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[IntTuple]: ...
+@overload
+def full(
+    shape: tuple[()], fill_value: Any, dtype: Any = ..., *, device: Any = ...
+) -> Array[[]]: ...
 @overload
 def full[N: IntVar](
     shape: Int[N], fill_value: Any, dtype: Any = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
 @overload
-def full[N: IntVar](
-    shape: IntTuple[N], fill_value: Any, dtype: Any = ..., *, device: Any = ...
-) -> Array[[N]]: ...
-@overload
-def full[N: IntVar, M: IntVar](
-    shape: IntTuple[N, M], fill_value: Any, dtype: Any = ..., *, device: Any = ...
-) -> Array[[N, M]]: ...
-@overload
-def full[N: IntVar, M: IntVar, K: IntVar](
-    shape: IntTuple[N, M, K], fill_value: Any, dtype: Any = ..., *, device: Any = ...
-) -> Array[[N, M, K]]: ...
+def full[Shape: _Shape](
+    shape: Shape, fill_value: Any, dtype: Any = ..., *, device: Any = ...
+) -> Array[Shape]: ...
 @overload
 def full(
-    shape: Sequence[int], fill_value: Any, dtype: Any = ..., *, device: Any = ...
+    shape: Sequence[int] | int,
+    fill_value: Any,
+    dtype: Any = ...,
+    *,
+    device: Any = ...,
 ) -> Array[IntTuple]: ...
 
-# `fill_value` stays `Any` because the rule JAX enforces is that it broadcasts
-# *to* the requested shape, which is a constraint on the result rather than a
-# computation of it. `broadcast(...)` computes a shape and cannot require that it
-# equal the target, so `jnp.full((2, 3), jnp.ones(2))` is not rejected here. Using
-# `broadcast(...)` anyway would trade this missed error for a wrong shape on
-# `jnp.full((2, 3), jnp.ones((4, 2, 3)))`, which JAX also rejects.
+# `_like` constructors
+@overload
+def empty_like[Shape: _Shape](
+    prototype: Array[Shape],
+    dtype: Any = ...,
+    shape: None = None,
+    *,
+    device: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def empty_like[N: IntVar](
+    prototype: Any,
+    dtype: Any = ...,
+    shape: Int[N] = ...,
+    *,
+    device: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def empty_like[Shape: _Shape](
+    prototype: Any,
+    dtype: Any = ...,
+    shape: Shape = ...,
+    *,
+    device: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def empty_like(
+    prototype: Any,
+    dtype: Any = ...,
+    shape: Sequence[int] | int | None = None,
+    *,
+    device: Any = ...,
+) -> Array[IntTuple]: ...
+@overload
+def zeros_like[Shape: _Shape](
+    a: Array[Shape],
+    dtype: Any = ...,
+    shape: None = None,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def zeros_like[N: IntVar](
+    a: Any,
+    dtype: Any = ...,
+    shape: Int[N] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def zeros_like[Shape: _Shape](
+    a: Any,
+    dtype: Any = ...,
+    shape: Shape = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def zeros_like(
+    a: Any,
+    dtype: Any = ...,
+    shape: Sequence[int] | int | None = None,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[IntTuple]: ...
+@overload
+def ones_like[Shape: _Shape](
+    a: Array[Shape],
+    dtype: Any = ...,
+    shape: None = None,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def ones_like[N: IntVar](
+    a: Any,
+    dtype: Any = ...,
+    shape: Int[N] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def ones_like[Shape: _Shape](
+    a: Any,
+    dtype: Any = ...,
+    shape: Shape = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def ones_like(
+    a: Any,
+    dtype: Any = ...,
+    shape: Sequence[int] | int | None = None,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[IntTuple]: ...
+@overload
+def full_like[Shape: _Shape](
+    a: Array[Shape],
+    fill_value: Any,
+    dtype: Any = ...,
+    shape: None = None,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def full_like[N: IntVar](
+    a: Any,
+    fill_value: Any,
+    dtype: Any = ...,
+    shape: Int[N] = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[N]]: ...
+@overload
+def full_like[Shape: _Shape](
+    a: Any,
+    fill_value: Any,
+    dtype: Any = ...,
+    shape: Shape = ...,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[Shape]: ...
+@overload
+def full_like(
+    a: Any,
+    fill_value: Any,
+    dtype: Any = ...,
+    shape: Sequence[int] | int | None = None,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[IntTuple]: ...
 
-# The single-argument form is the common one, so it carries its length exactly.
-# The cost is that a negative literal infers a negative dimension where JAX
-# returns an empty array: `jnp.arange(-3)` is `[-3]` here and `(0,)` at runtime.
-# Clamping instead would cost the exact length on every ordinary call.
-# TODO(stroxler): Represent an empty dimension, then clamp here. Pyrefly's shape
-# domain currently excludes both negative and zero dimensions in a written
-# annotation, so the correct answer for this call, `[0]`, is as unrepresentable
-# as the wrong one. Note the ordering this implies: extending that check to
-# inferred shapes before the clamp exists would turn today's wrong shape into a
-# rejection of valid code. The NumPy stubs model `arange` the same way.
+# `arange`, `linspace`, `logspace`, `geomspace`
 @overload
 def arange[N: IntVar](
     start: Int[N], *, dtype: Any = ..., device: Any = ...
 ) -> Array[[N]]: ...
-
-# A float `arange` is valid and its length is not an integer expression at all,
-# so it is rank-1 with a gradual length.
 @overload
 def arange(start: float, *, dtype: Any = ..., device: Any = ...) -> Array[[int]]: ...
-
-# The multi-argument forms mean `range(start, stop, step)`, whose length the DSL
-# cannot compute. It needs a floor division and a clamp at zero: an
-# `Int`-returning DSL function is restricted to an exact `Int +/- Flag[int]`, and
-# an `Int` cannot be compared against a literal at all. Inferring `stop - start`
-# without the clamp would claim a negative dimension for an empty range such as
-# `jnp.arange(7, 2)`, which is worse than not knowing, so the result is rank-1
-# with a gradual length.
-# TODO(stroxler): Compute the length once the type-level DSL admits division and
-# comparison in an `Int` return. The Torch migration is extending dimension
-# arithmetic, so this should become expressible.
 @overload
 def arange(
     start: int | float,
@@ -136,6 +265,106 @@ def arange(
     step: int | float = ...,
     dtype: Any = ...,
 ) -> Array[[int]]: ...
+@overload
+def linspace[N: IntVar](
+    start: Any,
+    stop: Any,
+    num: Int[N],
+    endpoint: bool = True,
+    retstep: Literal[False] = False,
+    dtype: Any = None,
+    axis: int = 0,
+    *,
+    device: Any = None,
+) -> Array[[N]]: ...
+@overload
+def linspace[N: IntVar](
+    start: Any,
+    stop: Any,
+    num: Int[N],
+    endpoint: bool,
+    retstep: Literal[True],
+    dtype: Any = None,
+    axis: int = 0,
+    *,
+    device: Any = None,
+) -> tuple[Array[[N]], Array[[]]]: ...
+@overload
+def linspace(
+    start: Any,
+    stop: Any,
+    num: int = 50,
+    endpoint: bool = True,
+    retstep: Literal[False] = False,
+    dtype: Any = None,
+    axis: int = 0,
+    *,
+    device: Any = None,
+) -> Array[[int]]: ...
+@overload
+def linspace(
+    start: Any,
+    stop: Any,
+    num: int,
+    endpoint: bool,
+    retstep: Literal[True],
+    dtype: Any = None,
+    axis: int = 0,
+    *,
+    device: Any = None,
+) -> tuple[Array[[int]], Array[[]]]: ...
+@overload
+def linspace(
+    start: Any,
+    stop: Any,
+    num: int = 50,
+    endpoint: bool = True,
+    retstep: bool = False,
+    dtype: Any = None,
+    axis: int = 0,
+    *,
+    device: Any = None,
+) -> Array[IntTuple] | tuple[Array[IntTuple], Array[[]]]: ...
+@overload
+def logspace[N: IntVar](
+    start: Any,
+    stop: Any,
+    num: Int[N],
+    endpoint: bool = True,
+    base: Any = 10.0,
+    dtype: Any = None,
+    axis: int = 0,
+) -> Array[[N]]: ...
+@overload
+def logspace(
+    start: Any,
+    stop: Any,
+    num: int = 50,
+    endpoint: bool = True,
+    base: Any = 10.0,
+    dtype: Any = None,
+    axis: int = 0,
+) -> Array[[int]]: ...
+@overload
+def geomspace[N: IntVar](
+    start: Any,
+    stop: Any,
+    num: Int[N],
+    endpoint: bool = True,
+    dtype: Any = None,
+    axis: int = 0,
+) -> Array[[N]]: ...
+@overload
+def geomspace(
+    start: Any,
+    stop: Any,
+    num: int = 50,
+    endpoint: bool = True,
+    dtype: Any = None,
+    axis: int = 0,
+) -> Array[[int]]: ...
+
+# `eye`, `identity`, `diag`, `diagflat`, `tri`, `tril`, `triu`, `vander`
 @overload
 def eye[N: IntVar](
     N: Int[N], M: None = ..., k: int = ..., dtype: Any = ..., *, device: Any = ...
@@ -147,6 +376,181 @@ def eye[N: IntVar, M: IntVar](
 def identity[N: IntVar](
     n: Int[N], dtype: Any = ..., *, device: Any = ...
 ) -> Array[[N, N]]: ...
+@overload
+def diag[N: IntVar](v: Array[[N]], k: int = 0) -> Array[[N, N]]: ...
+@overload
+def diag[N: IntVar, M: IntVar](
+    v: Array[[N, M]], k: int = 0
+) -> Array[[int_min(Int[N], Int[M])]]: ...
+@overload
+def diag(v: Any, k: int = 0) -> Array[IntTuple]: ...
+@overload
+def diagflat[N: IntVar](v: Array[[N]], k: int = 0) -> Array[[N, N]]: ...
+@overload
+def diagflat(v: Any, k: int = 0) -> Array[IntTuple]: ...
+@overload
+def tri[N: IntVar](
+    N: Int[N], M: None = None, k: int = 0, dtype: Any = None
+) -> Array[[N, N]]: ...
+@overload
+def tri[N: IntVar, M: IntVar](
+    N: Int[N], M: Int[M], k: int = 0, dtype: Any = None
+) -> Array[[N, M]]: ...
+@overload
+def tri(
+    N: int, M: int | None = None, k: int = 0, dtype: Any = None
+) -> Array[IntTuple]: ...
+def tril[Shape: _Shape](m: Array[Shape], k: int = 0) -> Array[Shape]: ...
+def triu[Shape: _Shape](m: Array[Shape], k: int = 0) -> Array[Shape]: ...
+@overload
+def vander[M: IntVar](
+    x: Array[[M]], N: None = None, increasing: bool = False
+) -> Array[[M, M]]: ...
+@overload
+def vander[M: IntVar, N: IntVar](
+    x: Array[[M]], N: Int[N], increasing: bool = False
+) -> Array[[M, N]]: ...
+@overload
+def vander(
+    x: Any, N: int | None = None, increasing: bool = False
+) -> Array[IntTuple]: ...
+
+# `indices`, `meshgrid`
+@overload
+def indices[N: IntVar](
+    dimensions: IntTuple[N],
+    dtype: Any = None,
+    sparse: Literal[False] = False,
+) -> Array[[1, N]]: ...
+@overload
+def indices[N: IntVar, M: IntVar](
+    dimensions: IntTuple[N, M],
+    dtype: Any = None,
+    sparse: Literal[False] = False,
+) -> Array[[2, N, M]]: ...
+@overload
+def indices[N: IntVar, M: IntVar, K: IntVar](
+    dimensions: IntTuple[N, M, K],
+    dtype: Any = None,
+    sparse: Literal[False] = False,
+) -> Array[[3, N, M, K]]: ...
+@overload
+def indices(
+    dimensions: Sequence[int], dtype: Any = None, sparse: bool = False
+) -> Array[IntTuple] | tuple[Array[IntTuple], ...]: ...
+@overload
+def meshgrid[N: IntVar, M: IntVar](
+    x1: Array[[N]],
+    x2: Array[[M]],
+    /,
+    *,
+    copy: bool = True,
+    sparse: Literal[False] = False,
+    indexing: Literal["xy"] = "xy",
+) -> tuple[Array[[M, N]], Array[[M, N]]]: ...
+@overload
+def meshgrid[N: IntVar, M: IntVar](
+    x1: Array[[N]],
+    x2: Array[[M]],
+    /,
+    *,
+    copy: bool = True,
+    sparse: Literal[False] = False,
+    indexing: Literal["ij"],
+) -> tuple[Array[[N, M]], Array[[N, M]]]: ...
+@overload
+def meshgrid[N: IntVar, M: IntVar, K: IntVar](
+    x1: Array[[N]],
+    x2: Array[[M]],
+    x3: Array[[K]],
+    /,
+    *,
+    copy: bool = True,
+    sparse: Literal[False] = False,
+    indexing: Literal["xy"] = "xy",
+) -> tuple[Array[[M, N, K]], Array[[M, N, K]], Array[[M, N, K]]]: ...
+@overload
+def meshgrid[N: IntVar, M: IntVar, K: IntVar](
+    x1: Array[[N]],
+    x2: Array[[M]],
+    x3: Array[[K]],
+    /,
+    *,
+    copy: bool = True,
+    sparse: Literal[False] = False,
+    indexing: Literal["ij"],
+) -> tuple[Array[[N, M, K]], Array[[N, M, K]], Array[[N, M, K]]]: ...
+@overload
+def meshgrid(
+    *xi: Any, copy: bool = True, sparse: bool = False, indexing: str = "xy"
+) -> tuple[Array[IntTuple], ...]: ...
+
+# `from_*` constructors
+def from_dlpack(
+    x: Any, /, *, device: Any = None, copy: bool | None = None
+) -> Array[IntTuple]: ...
+def frombuffer(
+    buffer: Any, dtype: Any = float, count: int = -1, offset: int = 0
+) -> Array[IntTuple]: ...
+def fromfile(*args: Any, **kwargs: Any) -> Array[IntTuple]: ...
+@overload
+def fromfunction[N: IntVar](
+    function: Callable[..., Any],
+    shape: IntTuple[N],
+    *,
+    dtype: Any = float,
+    **kwargs: Any,
+) -> Array[[N]]: ...
+@overload
+def fromfunction[N: IntVar, M: IntVar](
+    function: Callable[..., Any],
+    shape: IntTuple[N, M],
+    *,
+    dtype: Any = float,
+    **kwargs: Any,
+) -> Array[[N, M]]: ...
+@overload
+def fromfunction[N: IntVar, M: IntVar, K: IntVar](
+    function: Callable[..., Any],
+    shape: IntTuple[N, M, K],
+    *,
+    dtype: Any = float,
+    **kwargs: Any,
+) -> Array[[N, M, K]]: ...
+@overload
+def fromfunction(
+    function: Callable[..., Any],
+    shape: Sequence[int],
+    *,
+    dtype: Any = float,
+    **kwargs: Any,
+) -> Array[IntTuple]: ...
+def fromiter(*args: Any, **kwargs: Any) -> Array[IntTuple]: ...
+def fromstring(
+    string: str, dtype: Any = float, count: int = -1, *, sep: str
+) -> Array[IntTuple]: ...
+
+# Window functions
+@overload
+def bartlett[N: IntVar](M: Int[N]) -> Array[[N]]: ...
+@overload
+def bartlett(M: int) -> Array[IntTuple]: ...
+@overload
+def blackman[N: IntVar](M: Int[N]) -> Array[[N]]: ...
+@overload
+def blackman(M: int) -> Array[IntTuple]: ...
+@overload
+def hamming[N: IntVar](M: Int[N]) -> Array[[N]]: ...
+@overload
+def hamming(M: int) -> Array[IntTuple]: ...
+@overload
+def hanning[N: IntVar](M: Int[N]) -> Array[[N]]: ...
+@overload
+def hanning(M: int) -> Array[IntTuple]: ...
+@overload
+def kaiser[N: IntVar](M: Int[N], beta: Any) -> Array[[N]]: ...
+@overload
+def kaiser(M: int, beta: Any) -> Array[IntTuple]: ...
 
 # Shape-preserving elementwise unary functions.
 def abs[Shape: _Shape](x: Array[Shape], /) -> Array[Shape]: ...
@@ -482,6 +886,11 @@ def logaddexp2[Shape: _Shape](
 def logaddexp2[Shape1: _Shape, Shape2: _Shape](
     x1: Array[Shape1], x2: Array[Shape2], /
 ) -> Array[broadcast(Shape1, Shape2)]: ...
+
+# Shape semantics, including vector and batched operands, come from the gufunc-backed helper.
+def matmul[LeftShape: _Shape, RightShape: _Shape](
+    a: Array[LeftShape], b: Array[RightShape]
+) -> Array[matmul_shape(LeftShape, RightShape)]: ...
 @overload
 def maximum[Shape: _Shape](
     x1: Array[Shape], x2: int | float | complex, /
@@ -614,11 +1023,6 @@ def true_divide[Shape: _Shape](
 def true_divide[Shape1: _Shape, Shape2: _Shape](
     x1: Array[Shape1], x2: Array[Shape2], /
 ) -> Array[broadcast(Shape1, Shape2)]: ...
-
-# This MVP models only two-dimensional operands, matching the NumPy stubs.
-def matmul[LeftShape: _Shape, RightShape: _Shape](
-    a: Array[LeftShape], b: Array[RightShape]
-) -> Array[matmul_shape(LeftShape, RightShape)]: ...
 @overload
 def transpose[Shape: _Shape](
     a: Array[Shape], axes: None = None
@@ -776,6 +1180,679 @@ def min[Shape: _Shape](
     initial: Any = ...,
     where: Any = ...,
     promote_integers: bool = ...,
+) -> Array[IntTuple]: ...
+
+# Boolean reductions
+@overload
+def all[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+    *,
+    where: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def all[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    out: Any = None,
+    keepdims: bool = False,
+    *,
+    where: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def any[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+    *,
+    where: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def any[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    out: Any = None,
+    keepdims: bool = False,
+    *,
+    where: Any = None,
+) -> Array[IntTuple]: ...
+
+# Count nonzero
+@overload
+def count_nonzero[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    keepdims: KeepDims = False,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def count_nonzero[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    keepdims: bool = False,
+) -> Array[IntTuple]: ...
+
+# amax / amin aliases
+@overload
+def amax[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+    initial: Any = None,
+    where: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def amax[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    out: Any = None,
+    keepdims: bool = False,
+    initial: Any = None,
+    where: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def amin[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+    initial: Any = None,
+    where: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def amin[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    out: Any = None,
+    keepdims: bool = False,
+    initial: Any = None,
+    where: Any = None,
+) -> Array[IntTuple]: ...
+
+# Standard deviation & variance
+@overload
+def std[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    dtype: Any = None,
+    out: Any = None,
+    ddof: int = 0,
+    keepdims: KeepDims = False,
+    *,
+    where: Any = None,
+    mean: Any = None,
+    correction: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def std[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    dtype: Any = None,
+    out: Any = None,
+    ddof: int = 0,
+    keepdims: bool = False,
+    *,
+    where: Any = None,
+    mean: Any = None,
+    correction: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def var[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    dtype: Any = None,
+    out: Any = None,
+    ddof: int = 0,
+    keepdims: KeepDims = False,
+    *,
+    where: Any = None,
+    mean: Any = None,
+    correction: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def var[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    dtype: Any = None,
+    out: Any = None,
+    ddof: int = 0,
+    keepdims: bool = False,
+    *,
+    where: Any = None,
+    mean: Any = None,
+    correction: Any = None,
+) -> Array[IntTuple]: ...
+
+# Peak-to-peak (ptp)
+@overload
+def ptp[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def ptp[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    out: Any = None,
+    keepdims: bool = False,
+) -> Array[IntTuple]: ...
+
+# Median
+@overload
+def median[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    overwrite_input: bool = False,
+    keepdims: KeepDims = False,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def median[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    out: Any = None,
+    overwrite_input: bool = False,
+    keepdims: bool = False,
+) -> Array[IntTuple]: ...
+
+# NaN-safe reductions
+@overload
+def nanmax[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+    initial: Any = None,
+    where: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def nanmax[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    out: Any = None,
+    keepdims: bool = False,
+    initial: Any = None,
+    where: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def nanmin[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+    initial: Any = None,
+    where: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def nanmin[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    out: Any = None,
+    keepdims: bool = False,
+    initial: Any = None,
+    where: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def nansum[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    dtype: Any = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+    initial: Any = None,
+    where: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def nansum[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    dtype: Any = None,
+    out: Any = None,
+    keepdims: bool = False,
+    initial: Any = None,
+    where: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def nanprod[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    dtype: Any = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+    initial: Any = None,
+    where: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def nanprod[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    dtype: Any = None,
+    out: Any = None,
+    keepdims: bool = False,
+    initial: Any = None,
+    where: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def nanmean[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    dtype: Any = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+    where: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def nanmean[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    dtype: Any = None,
+    out: Any = None,
+    keepdims: bool = False,
+    where: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def nanstd[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    dtype: Any = None,
+    out: Any = None,
+    ddof: int = 0,
+    keepdims: KeepDims = False,
+    where: Any = None,
+    mean: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def nanstd[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    dtype: Any = None,
+    out: Any = None,
+    ddof: int = 0,
+    keepdims: bool = False,
+    where: Any = None,
+    mean: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def nanvar[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    dtype: Any = None,
+    out: Any = None,
+    ddof: int = 0,
+    keepdims: KeepDims = False,
+    where: Any = None,
+    mean: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def nanvar[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    dtype: Any = None,
+    out: Any = None,
+    ddof: int = 0,
+    keepdims: bool = False,
+    where: Any = None,
+    mean: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def nanmedian[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    overwrite_input: bool = False,
+    keepdims: KeepDims = False,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def nanmedian[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    out: Any = None,
+    overwrite_input: bool = False,
+    keepdims: bool = False,
+) -> Array[IntTuple]: ...
+
+# Average
+@overload
+def average[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    weights: Any = None,
+    returned: Literal[False] = False,
+    keepdims: KeepDims = False,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def average[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    weights: Any = None,
+    returned: Literal[True] = ...,
+    keepdims: KeepDims = False,
+) -> tuple[
+    Array[reduce_shape(Shape, Axis, KeepDims)],
+    Array[reduce_shape(Shape, Axis, KeepDims)],
+]: ...
+@overload
+def average[Shape: _Shape](
+    a: Array[Shape],
+    axis: Sequence[int],
+    weights: Any = None,
+    returned: bool = False,
+    keepdims: bool = False,
+) -> Array[IntTuple] | tuple[Array[IntTuple], Array[IntTuple]]: ...
+
+# Arg reductions
+@overload
+def argmax[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def argmax(
+    a: Array[Any],
+    axis: int | None = None,
+    out: Any = None,
+    keepdims: bool | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def argmin[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def argmin(
+    a: Array[Any],
+    axis: int | None = None,
+    out: Any = None,
+    keepdims: bool | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def nanargmax[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def nanargmax(
+    a: Array[Any],
+    axis: int | None = None,
+    out: Any = None,
+    keepdims: bool | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def nanargmin[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    axis: Axis = None,
+    out: Any = None,
+    keepdims: KeepDims = False,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def nanargmin(
+    a: Array[Any],
+    axis: int | None = None,
+    out: Any = None,
+    keepdims: bool | None = None,
+) -> Array[IntTuple]: ...
+
+# Cumulative operations
+@overload
+def cumsum[Shape: _Shape](
+    a: Array[Shape],
+    axis: int,
+    dtype: Any = None,
+    out: Any = None,
+) -> Array[Shape]: ...
+@overload
+def cumsum(
+    a: Array[Any],
+    axis: None = None,
+    dtype: Any = None,
+    out: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def cumprod[Shape: _Shape](
+    a: Array[Shape],
+    axis: int,
+    dtype: Any = None,
+    out: Any = None,
+) -> Array[Shape]: ...
+@overload
+def cumprod(
+    a: Array[Any],
+    axis: None = None,
+    dtype: Any = None,
+    out: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def cumulative_sum[Shape: _Shape](
+    x: Array[Shape],
+    /,
+    *,
+    axis: int,
+    dtype: Any = None,
+    include_initial: Literal[False] = False,
+) -> Array[Shape]: ...
+@overload
+def cumulative_sum(
+    x: Array[Any],
+    /,
+    *,
+    axis: int | None = None,
+    dtype: Any = None,
+    include_initial: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def cumulative_prod[Shape: _Shape](
+    x: Array[Shape],
+    /,
+    *,
+    axis: int,
+    dtype: Any = None,
+    include_initial: Literal[False] = False,
+) -> Array[Shape]: ...
+@overload
+def cumulative_prod(
+    x: Array[Any],
+    /,
+    *,
+    axis: int | None = None,
+    dtype: Any = None,
+    include_initial: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def nancumsum[Shape: _Shape](
+    a: Array[Shape],
+    axis: int,
+    dtype: Any = None,
+    out: Any = None,
+) -> Array[Shape]: ...
+@overload
+def nancumsum(
+    a: Array[Any],
+    axis: None = None,
+    dtype: Any = None,
+    out: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def nancumprod[Shape: _Shape](
+    a: Array[Shape],
+    axis: int,
+    dtype: Any = None,
+    out: Any = None,
+) -> Array[Shape]: ...
+@overload
+def nancumprod(
+    a: Array[Any],
+    axis: None = None,
+    dtype: Any = None,
+    out: Any = None,
+) -> Array[IntTuple]: ...
+
+# Quantile & Percentile
+@overload
+def quantile[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    q: int | float,
+    axis: Axis = None,
+    out: Any = None,
+    overwrite_input: bool = False,
+    method: str = "linear",
+    keepdims: KeepDims = False,
+    *,
+    weights: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def quantile(
+    a: Array[Any],
+    q: Any,
+    axis: Any = None,
+    out: Any = None,
+    overwrite_input: bool = False,
+    method: str = "linear",
+    keepdims: bool = False,
+    *,
+    weights: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def percentile[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    q: int | float,
+    axis: Axis = None,
+    out: Any = None,
+    overwrite_input: bool = False,
+    method: str = "linear",
+    keepdims: KeepDims = False,
+    *,
+    weights: Any = None,
+    out_sharding: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def percentile(
+    a: Array[Any],
+    q: Any,
+    axis: Any = None,
+    out: Any = None,
+    overwrite_input: bool = False,
+    method: str = "linear",
+    keepdims: bool = False,
+    *,
+    weights: Any = None,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def nanquantile[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    q: int | float,
+    axis: Axis = None,
+    out: Any = None,
+    overwrite_input: bool = False,
+    method: str = "linear",
+    keepdims: KeepDims = False,
+    *,
+    weights: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def nanquantile(
+    a: Array[Any],
+    q: Any,
+    axis: Any = None,
+    out: Any = None,
+    overwrite_input: bool = False,
+    method: str = "linear",
+    keepdims: bool = False,
+    *,
+    weights: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def nanpercentile[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    a: Array[Shape],
+    q: int | float,
+    axis: Axis = None,
+    out: Any = None,
+    overwrite_input: bool = False,
+    method: str = "linear",
+    keepdims: KeepDims = False,
+    *,
+    weights: Any = None,
+) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def nanpercentile(
+    a: Array[Any],
+    q: Any,
+    axis: Any = None,
+    out: Any = None,
+    overwrite_input: bool = False,
+    method: str = "linear",
+    keepdims: bool = False,
+    *,
+    weights: Any = None,
+) -> Array[IntTuple]: ...
+
+# Differences & Calculus
+def diff(
+    a: Array[Any],
+    n: int = 1,
+    axis: int = -1,
+    prepend: Any = None,
+    append: Any = None,
+) -> Array[IntTuple]: ...
+def ediff1d(
+    ary: Array[Any],
+    to_end: Any = None,
+    to_begin: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def gradient(
+    f: Array[Any],
+    *varargs: Any,
+    axis: int,
+    edge_order: int | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def gradient(
+    f: Array[Any],
+    *varargs: Any,
+    axis: Sequence[int] | None = None,
+    edge_order: int | None = None,
+) -> list[Array[IntTuple]]: ...
+@overload
+def trapezoid[Shape: _Shape, Axis: Flag[_Axis]](
+    y: Array[Shape],
+    x: Any = None,
+    dx: Any = 1.0,
+    axis: Axis = -1,
+) -> Array[reduce_shape(Shape, Axis, False)]: ...
+@overload
+def trapezoid(
+    y: Array[Any],
+    x: Any = None,
+    dx: Any = 1.0,
+    axis: int = -1,
+) -> Array[IntTuple]: ...
+def corrcoef(
+    x: Array[Any],
+    y: Any = None,
+    rowvar: bool = True,
+    dtype: Any = None,
+) -> Array[IntTuple]: ...
+def cov(
+    m: Array[Any],
+    y: Any = None,
+    rowvar: bool = True,
+    bias: bool = False,
+    ddof: int | None = None,
+    fweights: Any = None,
+    aweights: Any = None,
+    dtype: Any = None,
 ) -> Array[IntTuple]: ...
 
 float32: Any

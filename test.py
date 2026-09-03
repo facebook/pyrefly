@@ -1,4 +1,4 @@
-#!/usr/bin/env fbpython
+#!/usr/bin/env python3
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # This source code is licensed under the MIT license found in the
@@ -192,9 +192,9 @@ class CargoExecutor(Executor):
         )
 
     def tensor_shapes(self) -> None:
-        run(["cargo", "build"])
-        # Static only, so that `test.py` needs no virtualenv. The runner
-        # resolves the debug pyrefly itself, so we don't pass `--pyrefly`.
+        # Static only, so that `test.py` needs no virtualenv. The runner builds
+        # the debug pyrefly itself, so we neither build here nor pass
+        # `--pyrefly`.
         run([sys.executable, "tensor-shapes/run_tests.py", "--static-only"])
 
     def conformance(self) -> None:

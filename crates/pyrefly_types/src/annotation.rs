@@ -25,8 +25,6 @@ use crate::types::Type;
 pub struct Annotation {
     pub qualifiers: Vec<Qualifier>,
     pub ty: Option<Type>,
-    /// A semantically equivalent type that retains alias names for presentation.
-    pub display_ty: Option<Type>,
 }
 
 impl Display for Annotation {
@@ -51,15 +49,6 @@ impl Annotation {
         Self {
             qualifiers: Vec::new(),
             ty: Some(ty),
-            display_ty: None,
-        }
-    }
-
-    pub fn new_type_with_display(ty: Type, display_ty: Type) -> Self {
-        Self {
-            qualifiers: Vec::new(),
-            ty: Some(ty),
-            display_ty: Some(display_ty),
         }
     }
 
@@ -87,7 +76,6 @@ impl Annotation {
         Self {
             qualifiers: self.qualifiers,
             ty: self.ty.map(|ty| substitution.substitute_into(ty)),
-            display_ty: self.display_ty.map(|ty| substitution.substitute_into(ty)),
         }
     }
 }
@@ -114,8 +102,7 @@ mod tests {
         assert_eq!(
             Annotation {
                 qualifiers: Vec::new(),
-                ty: Some(Type::None),
-                display_ty: None,
+                ty: Some(Type::None)
             }
             .to_string(),
             "None"
@@ -123,8 +110,7 @@ mod tests {
         assert_eq!(
             Annotation {
                 qualifiers: vec![Qualifier::Required, Qualifier::ReadOnly],
-                ty: None,
-                display_ty: None,
+                ty: None
             }
             .to_string(),
             "Required[ReadOnly]"
@@ -133,7 +119,6 @@ mod tests {
             Annotation {
                 qualifiers: vec![Qualifier::Required, Qualifier::ReadOnly],
                 ty: Some(Type::LiteralString(LitStyle::Implicit)),
-                display_ty: None,
             }
             .to_string(),
             "Required[ReadOnly[LiteralString]]"

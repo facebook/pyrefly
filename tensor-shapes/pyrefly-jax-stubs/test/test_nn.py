@@ -10,7 +10,6 @@ import jax.nn as jnn
 import jax.numpy as jnp
 from shape_extensions import assert_shape, IntVar
 
-
 N = IntVar("N")
 M = IntVar("M")
 

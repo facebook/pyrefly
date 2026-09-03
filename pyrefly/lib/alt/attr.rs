@@ -15,6 +15,7 @@ use pyrefly_types::literal::LitEnum;
 use pyrefly_types::shaped_array::ShapedArrayType;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier;
 use pyrefly_types::shaped_array::shape_to_tuple_carrier_arg;
+use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::typed_dict::TypedDictInner;
 use pyrefly_types::types::Forallable;
@@ -497,6 +498,9 @@ enum AttributeBase1 {
     TypedDict(TypedDictInner),
     /// Attribute lookup on a base as part of a subset check against a protocol.
     ProtocolSubset(Box<AttributeBase1>),
+    /// A parameterized class object, which exposes attributes from both `GenericAlias` and its
+    /// origin class using runtime lookup precedence.
+    GenericAlias(ClassBase),
     Intersect(Vec<AttributeBase1>, Vec<AttributeBase1>),
     /// Bound methods prefer exposing builtin `types.MethodType` attributes but fall back to the
     /// underlying function's attributes when the builtin ones are missing.
@@ -565,7 +569,7 @@ impl ClassBase {
     pub fn to_type(self, heap: &TypeHeap) -> Type {
         match self {
             ClassBase::ClassDef(c) => heap.mk_class_def(c.into_class_object()),
-            ClassBase::ClassType(c) => heap.mk_type(heap.mk_class_type(c)),
+            ClassBase::ClassType(c) => heap.mk_type_of(heap.mk_class_type(c)),
             ClassBase::Quantified(q, _) => heap.mk_type_of(q.to_type(heap)),
             ClassBase::SelfType(c) => heap.mk_type_of(heap.mk_self_type(c)),
             ClassBase::Protocol(_, self_type) => heap.mk_type_of(self_type),
@@ -724,6 +728,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             AttributeBase1::ProtocolSubset(inner) => {
                 self.collect_attribute_candidates_from_base(inner, candidates);
+            }
+            AttributeBase1::GenericAlias(origin) => {
+                self.add_class_fields(self.stdlib.generic_alias().class_object(), candidates);
+                self.add_class_fields(origin.class_object(), candidates);
             }
             AttributeBase1::Intersect(options, fallback) => {
                 for b in options {
@@ -1622,6 +1630,54 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .unwrap_or_else(fallback)
     }
 
+    /// Fold one attribute per base into a single attribute, or `None` when they cannot be combined.
+    fn fold_attribute_candidates(
+        &self,
+        candidates: &[Vec<(Attribute, AttributeBase1)>],
+    ) -> Option<(Attribute, AttributeBase1)> {
+        let [(_, found_on)] = candidates.first()?.as_slice() else {
+            return None;
+        };
+        let found_on = found_on.clone();
+
+        let mut types = Vec::with_capacity(candidates.len());
+        let mut read_only_reason = None;
+        let mut is_class_attribute = false;
+        for base_results in candidates {
+            let [(attribute, _)] = base_results.as_slice() else {
+                return None;
+            };
+            let ty = match attribute {
+                Attribute::Simple(ty) => ty,
+                Attribute::ClassAttribute(ClassAttribute::ReadWrite(ty)) => {
+                    is_class_attribute = true;
+                    ty
+                }
+                Attribute::ClassAttribute(ClassAttribute::ReadOnly(ty, reason)) => {
+                    is_class_attribute = true;
+                    // A write has to be valid for every base, so the result is read-only if any of
+                    // them are.
+                    read_only_reason.get_or_insert_with(|| reason.clone());
+                    ty
+                }
+                _ => return None,
+            };
+            types.push(ty.clone());
+        }
+        let combined = intersect(types, Type::any_implicit(), self.heap);
+        let attribute = if is_class_attribute {
+            match read_only_reason {
+                Some(reason) => {
+                    Attribute::class_attribute(ClassAttribute::read_only(combined, reason))
+                }
+                None => Attribute::class_attribute(ClassAttribute::read_write(combined)),
+            }
+        } else {
+            Attribute::simple(combined)
+        };
+        Some((attribute, found_on))
+    }
+
     /// Look up an attribute on a single `AttributeBase1` using only class field declarations.
     /// Does not fall back to `__getattr__`/`__getattribute__`.
     fn lookup_attr_static1(&self, base: AttributeBase1, attr_name: &Name, acc: &mut LookupResult) {
@@ -1988,27 +2044,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                 }
             },
-            AttributeBase1::Intersect(bases, fallback) => {
-                // Try each base and collect successful lookups, filtering out
-                // GenericAlias lookups when the found attribute is inherited from
-                // `object`. Parametrized classes like `Foo[int]` are an intersection of
-                // a GenericAlias instance + the Foo class object. GenericAlias inherits
-                // dunders from `object` (e.g. `__init__`) that would shadow the class's
-                // own definitions, so we exclude those to let the class's version win.
+            AttributeBase1::GenericAlias(origin) => {
+                let generic_alias =
+                    AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
+                let origin = AttributeBase1::ClassObject(origin.clone());
                 let mut candidates = Vec::new();
-                for b in bases.iter() {
-                    let exclude = match b {
-                        AttributeBase1::ClassInstance(cls)
-                            if cls.has_qname("types", "GenericAlias") =>
-                        {
-                            self.field_is_inherited_from(
-                                cls.class_object(),
-                                attr_name,
-                                ("builtins", "object"),
-                            )
-                        }
-                        _ => false,
-                    };
+                let inherited_from_object = self.field_is_inherited_from(
+                    self.stdlib.generic_alias().class_object(),
+                    attr_name,
+                    ("builtins", "object"),
+                );
+                for (b, exclude) in [(&generic_alias, inherited_from_object), (&origin, false)] {
                     if exclude {
                         continue;
                     }
@@ -2022,7 +2068,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if candidates.len() == 1 {
                     acc.found.extend(candidates.into_iter().next().unwrap());
                 } else {
-                    // TODO: Intersect the candidates instead of using the fallback.
+                    self.lookup_attr_static1(generic_alias, attr_name, acc);
+                }
+            }
+            AttributeBase1::Intersect(bases, fallback) => {
+                let mut candidates = Vec::new();
+                for b in bases {
+                    let mut acc_candidate = LookupResult::empty();
+                    self.lookup_attr_static1(b.clone(), attr_name, &mut acc_candidate);
+                    if acc_candidate.not_found.is_empty() && acc_candidate.internal_error.is_empty()
+                    {
+                        candidates.push(acc_candidate.found);
+                    }
+                }
+                if candidates.len() == 1 {
+                    acc.found.extend(candidates.into_iter().next().unwrap());
+                } else if let Some(folded) = self.fold_attribute_candidates(candidates.as_slice()) {
+                    acc.found.push(folded);
+                } else {
+                    // Properties and descriptors require access-specific resolution, so use the
+                    // intersection's fallback instead of combining their declarations.
                     for b in fallback {
                         self.lookup_attr_static1(b.clone(), attr_name, acc);
                     }
@@ -2677,13 +2742,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     // Therefore, if we ever have a value of `type[C[int]]`
                     // (e.g. via inheritance), we should not treat it as a
                     // `GenericAlias`. However, such cases are rare in practice.
-                    let generic_alias_base =
-                        AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
-                    // Since GenericAlias also exposes all class attributes, we need to intersect the two bases
-                    acc.push(AttributeBase1::Intersect(
-                        vec![generic_alias_base.clone(), class_base],
-                        vec![generic_alias_base],
-                    ));
+                    acc.push(AttributeBase1::GenericAlias(ClassBase::ClassType(
+                        class.clone(),
+                    )));
                 } else {
                     acc.push(class_base)
                 }
@@ -3240,6 +3301,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             AttributeBase1::Property(_) => {
                 // TODO(samzhou19815): Support autocomplete for properties
                 {}
+            }
+            AttributeBase1::GenericAlias(origin) => {
+                self.completions_class_type(
+                    self.stdlib.generic_alias(),
+                    expected_attribute_name,
+                    res,
+                );
+                self.completions_class(origin.class_object(), expected_attribute_name, res);
             }
             AttributeBase1::Intersect(bases, _) => {
                 for b in bases {

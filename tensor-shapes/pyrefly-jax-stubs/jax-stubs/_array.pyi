@@ -10,7 +10,13 @@
 from typing import Any, overload, Sequence
 
 import shape_extensions
-from jax._shapes import permute_shape, reduce_shape, reshape_shape, reverse_shape
+from jax._shapes import (
+    matmul_shape,
+    permute_shape,
+    reduce_shape,
+    reshape_shape,
+    reverse_shape,
+)
 from shape_extensions import broadcast, Flag, IntTuple, IntVar
 
 type _Shape = IntTuple
@@ -143,25 +149,9 @@ class Array[Shape: _Shape = _AnyShape]:
     def __neg__(self) -> Array[Shape]: ...
     def __pos__(self) -> Array[Shape]: ...
     def __abs__(self) -> Array[Shape]: ...
-    # Declared for 2-D operands only, which makes the operator stricter than
-    # `jnp.matmul`: a batched `@` is reported as unsupported where the function
-    # form is gradual. A gradual fallback overload here would also absorb the
-    # mismatched-inner-dimension error, which is the most valuable check in
-    # these stubs, so the narrower declaration is deliberate.
-    @overload
-    def __matmul__[N: IntVar, M: IntVar, P: IntVar](
-        self: Array[[N, M]], other: Array[[M, P]]
-    ) -> Array[[N, P]]: ...
-    @overload
-    def __matmul__[N: IntVar, M: IntVar](
-        self: Array[[N, M]], other: Array[[M]]
-    ) -> Array[[N]]: ...
-    @overload
-    def __matmul__[M: IntVar, P: IntVar](
-        self: Array[[M]], other: Array[[M, P]]
-    ) -> Array[[P]]: ...
-    @overload
-    def __matmul__[M: IntVar](self: Array[[M]], other: Array[[M]]) -> Array[[]]: ...
+    def __matmul__[OtherShape: _Shape](
+        self, other: Array[OtherShape]
+    ) -> Array[matmul_shape(Shape, OtherShape)]: ...
     @overload
     def transpose(self) -> Array[reverse_shape(Shape)]: ...
     @overload
@@ -316,4 +306,162 @@ class Array[Shape: _Shape = _AnyShape]:
         initial: Any = ...,
         where: Any = ...,
         promote_integers: bool = ...,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def all[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+        *,
+        where: Any = None,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def all(
+        self,
+        axis: Sequence[int],
+        out: Any = None,
+        keepdims: bool = False,
+        *,
+        where: Any = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def any[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+        *,
+        where: Any = None,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def any(
+        self,
+        axis: Sequence[int],
+        out: Any = None,
+        keepdims: bool = False,
+        *,
+        where: Any = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def std[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        dtype: Any = None,
+        out: Any = None,
+        ddof: int = 0,
+        keepdims: KeepDims = False,
+        *,
+        where: Any = None,
+        mean: Any = None,
+        correction: Any = None,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def std(
+        self,
+        axis: Sequence[int],
+        dtype: Any = None,
+        out: Any = None,
+        ddof: int = 0,
+        keepdims: bool = False,
+        *,
+        where: Any = None,
+        mean: Any = None,
+        correction: Any = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def var[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        dtype: Any = None,
+        out: Any = None,
+        ddof: int = 0,
+        keepdims: KeepDims = False,
+        *,
+        where: Any = None,
+        mean: Any = None,
+        correction: Any = None,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def var(
+        self,
+        axis: Sequence[int],
+        dtype: Any = None,
+        out: Any = None,
+        ddof: int = 0,
+        keepdims: bool = False,
+        *,
+        where: Any = None,
+        mean: Any = None,
+        correction: Any = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def ptp[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def ptp(
+        self,
+        axis: Sequence[int],
+        out: Any = None,
+        keepdims: bool = False,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def argmax[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def argmax(
+        self,
+        axis: int | None = None,
+        out: Any = None,
+        keepdims: bool | None = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def argmin[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+    ) -> Array[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def argmin(
+        self,
+        axis: int | None = None,
+        out: Any = None,
+        keepdims: bool | None = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def cumsum(
+        self,
+        axis: int,
+        dtype: Any = None,
+        out: Any = None,
+    ) -> Array[Shape]: ...
+    @overload
+    def cumsum(
+        self,
+        axis: None = None,
+        dtype: Any = None,
+        out: Any = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def cumprod(
+        self,
+        axis: int,
+        dtype: Any = None,
+        out: Any = None,
+    ) -> Array[Shape]: ...
+    @overload
+    def cumprod(
+        self,
+        axis: None = None,
+        dtype: Any = None,
+        out: Any = None,
     ) -> Array[IntTuple]: ...

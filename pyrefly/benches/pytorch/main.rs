@@ -16,11 +16,13 @@ mod cold_start;
 mod common;
 mod error_propagation;
 mod full_check;
+mod indexed_memory;
 
 use criterion::criterion_main;
 
 criterion_main!(
     cold_start::benches,
     error_propagation::benches,
+    indexed_memory::benches,
     full_check::benches
 );

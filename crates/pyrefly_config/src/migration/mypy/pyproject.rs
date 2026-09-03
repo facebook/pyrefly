@@ -40,6 +40,8 @@ struct ModuleSection {
     ignore_missing_imports: bool,
     #[serde(default)]
     follow_imports: Option<String>,
+    #[serde(default)]
+    follow_untyped_imports: Option<bool>,
     #[serde_as(as = "Option<OneOrMany<_>>")]
     #[serde(default)]
     disable_error_code: Option<Vec<String>>,
@@ -81,6 +83,8 @@ struct MypySection {
     ignore_missing_imports: Option<bool>,
     #[serde(default)]
     follow_imports: Option<String>,
+    #[serde(default)]
+    follow_untyped_imports: Option<bool>,
     #[serde(default)]
     overrides: Vec<ModuleSection>,
     #[serde(default)]
@@ -181,6 +185,13 @@ fn pyproject_to_ini(raw_file: &str) -> anyhow::Result<Ini> {
     if let Some(follow_imports) = mypy.follow_imports {
         ini.set("mypy", "follow_imports", Some(follow_imports));
     }
+    if let Some(follow_untyped_imports) = mypy.follow_untyped_imports {
+        ini.set(
+            "mypy",
+            "follow_untyped_imports",
+            Some(follow_untyped_imports.to_string()),
+        );
+    }
     if let Some(warn_return_any) = mypy.warn_return_any {
         ini.set("mypy", "warn_return_any", Some(warn_return_any.to_string()));
     }
@@ -261,6 +272,13 @@ fn pyproject_to_ini(raw_file: &str) -> anyhow::Result<Ini> {
                     &section_name,
                     "follow_imports",
                     Some(follow_imports.clone()),
+                );
+            }
+            if let Some(follow_untyped_imports) = module_section.follow_untyped_imports {
+                ini.set(
+                    &section_name,
+                    "follow_untyped_imports",
+                    Some(follow_untyped_imports.to_string()),
                 );
             }
             if let Some(disable_error_code) = &module_section.disable_error_code {
@@ -471,6 +489,7 @@ allow_redefinition = true
     fn test_ignore_imports() -> anyhow::Result<()> {
         let src = r#"[tool.mypy]
 files = ["src/a.py"]
+follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
 module = [
@@ -487,6 +506,7 @@ follow_imports = "skip"
 module = [
     "do.not.replace",
 ]
+follow_untyped_imports = false
 
 "#;
         let cfg = parse_pyproject_config(src)?;
@@ -500,6 +520,10 @@ module = [
         assert_eq!(
             cfg.root.replace_imports_with_any,
             Some(vec![ModuleWildcard::new("uses.follow").unwrap()])
+        );
+        assert_eq!(
+            cfg.root.replace_untyped_imports_with_any,
+            Some(vec![ModuleWildcard::new("do.not.replace").unwrap()])
         );
 
         Ok(())

@@ -22,16 +22,18 @@ and the solutions (shape_extensions patches, shape_extensions.IntVar, Generic in
 
 import importlib
 import unittest
-from typing import Generic, TypedDict
+from typing import Any, Generic, Never, TypedDict
 
 import torch
 from shape_extensions import (
     assert_shape,
     D,
     defines_assert_shape,
+    gufunc_broadcast,
     Int,
     IntTuple,
     IntVar,
+    MapIntTuples,
     TypeVarTuple,
 )
 
@@ -112,6 +114,18 @@ class TestIntTupleRuntime(unittest.TestCase):
 
     def test_subscript_erases_to_runtime_helper(self):
         self.assertIs(IntTuple[1, 2], IntTuple)
+
+    def test_gufunc_broadcast_is_safe_in_eager_annotations(self):
+        def f() -> gufunc_broadcast("(),()->()", tuple[IntTuple[2], IntTuple[3]]): ...
+
+        self.assertEqual(f.__annotations__["return"], ())
+
+
+class TestMapIntTuplesRuntime(unittest.TestCase):
+    def test_sources_are_not_evaluated(self):
+        self.assertIs(MapIntTuples[lambda s: int, Any], tuple)
+        self.assertIs(MapIntTuples[lambda s: int, Never], tuple)
+        self.assertIs(MapIntTuples[lambda s: int, tuple[int, int]], tuple)
 
 
 class TestTypeVarArithmetic(unittest.TestCase):

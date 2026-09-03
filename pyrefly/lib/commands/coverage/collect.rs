@@ -434,6 +434,28 @@ fn is_schema_class(bindings: &Bindings, answers: &Answers, cls_binding: &ClassBi
         })
 }
 
+/// Builtin classes whose constructor names the type it yields. Iterator adapters are left out.
+const IMPLICIT_BUILTIN_CONSTRUCTORS: &[&str] = &[
+    "bool",
+    "bytearray",
+    "bytes",
+    "complex",
+    "dict",
+    "float",
+    "frozendict",
+    "frozenset",
+    "int",
+    "list",
+    "memoryview",
+    "object",
+    "range",
+    "sentinel",
+    "set",
+    "slice",
+    "str",
+    "tuple",
+];
+
 fn parse_variables(
     module: &Module,
     bindings: &Bindings,
@@ -443,11 +465,21 @@ fn parse_variables(
     functions: &[Function],
     classes: &[ReportClass],
 ) -> Vec<Variable> {
-    fn untyped_if_call(expr: &Expr) -> SlotCounts {
-        if let Expr::Call(_) = expr {
-            SlotCounts::untyped()
-        } else {
+    /// Only a call hides its type at the assignment site, unless it is a builtin constructor.
+    fn untyped_if_call(answers: &Answers, idx: Idx<Key>, expr: &Expr) -> SlotCounts {
+        let Expr::Call(call) = expr else {
+            return SlotCounts::default();
+        };
+
+        if let Expr::Name(n) = call.func.as_ref()
+            && IMPLICIT_BUILTIN_CONSTRUCTORS.contains(&n.id.as_str())
+            && answers
+                .get_idx(idx)
+                .is_some_and(|t| matches!(t.ty(), Type::ClassType(cls) if cls.is_builtin(&n.id)))
+        {
             SlotCounts::default()
+        } else {
+            SlotCounts::untyped()
         }
     }
 
@@ -527,12 +559,10 @@ fn parse_variables(
                     // Functions and classes are handled by parse_functions/parse_classes;
                     // skip them here even when excluded (e.g. @type_check_only).
                     Binding::Function { .. } | Binding::ClassDef(..) => continue,
-                    // IMPLICIT: non-call assignments have 0 slots;
-                    // call assignments are untyped (1 slot)
-                    Binding::NameAssign(na) => untyped_if_call(na.expr.as_ref()),
+                    Binding::NameAssign(na) => untyped_if_call(answers, *idx, na.expr.as_ref()),
                     Binding::MultiTargetAssign(_, rhs_idx, _, _) => match bindings.get(*rhs_idx) {
                         Binding::Function { .. } | Binding::ClassDef(..) => continue,
-                        Binding::Expr(_, expr) => untyped_if_call(expr.as_ref()),
+                        Binding::Expr(_, expr) => untyped_if_call(answers, *idx, expr.as_ref()),
                         _ => {
                             unreachable!(
                                 "MultiTargetAssign RHS should be Expr, Function, or ClassDef"

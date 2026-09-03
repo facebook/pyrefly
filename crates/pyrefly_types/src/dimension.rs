@@ -147,7 +147,9 @@ impl Int {
                 Some(Int::Symbolic(Box::new(ty.clone())))
             }
             Type::Var(_) => Some(Int::Symbolic(Box::new(ty.clone()))),
-            Type::TypeLevelDslCall(call) if call.result_domain() == TypeShapeDslDomain::Int => {
+            Type::TypeLevelDslCall(call)
+                if call.result_domain() == Some(TypeShapeDslDomain::Int) =>
+            {
                 Some(Int::Symbolic(Box::new(ty.clone())))
             }
             _ => None,

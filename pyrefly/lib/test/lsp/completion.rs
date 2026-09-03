@@ -3921,10 +3921,11 @@ This has documentation.
     );
 }
 
-// Regression test for https://github.com/facebook/pyrefly/issues/1257
-// Because the base type for completion is passed to Type::for_display,
-// which converts all unsolved Var to Var::ZERO, we were running into an
-// unexpected Var::ZERO in attribute lookup, leading to a panic.
+// Regression test for https://github.com/facebook/pyrefly/issues/1257.
+// Completion takes its base type from the type trace, and hover rendering of a bound method
+// shows the `self` parameter that ordinary display strips. Both the detail string and the
+// property's type therefore expose whatever the trace holds, so this pins that no solver
+// variable reaches either.
 #[test]
 fn dot_complete_var_crash_regression() {
     let code = r#"
@@ -3946,8 +3947,8 @@ f().
 9 | f().
         ^
 Completion Results:
-- (Method) m: def m(self: C[@12]) -> None: ...
-- (Field) p: @12
+- (Method) m: def m(self: C[Unknown]) -> None: ...
+- (Field) p: Unknown
 "#
         .trim(),
         report.trim(),
