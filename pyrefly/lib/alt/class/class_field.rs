@@ -2471,7 +2471,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if ty.is_some_and(Self::is_proxy_method_type) {
             return true;
         }
-        let BindingAnnotation::AnnotateExpr(_, expr, _) = self.bindings().get(annotation) else {
+        let BindingAnnotation::AnnotateExpr(_, expr, _, _) = self.bindings().get(annotation) else {
             return false;
         };
         Self::proxy_method_annotation_syntax_mentions_name(expr)
@@ -2483,7 +2483,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         annotation: Idx<KeyAnnotation>,
     ) -> ProxyMethodAnnotationForm {
-        let BindingAnnotation::AnnotateExpr(_, expr, _) = self.bindings().get(annotation) else {
+        let BindingAnnotation::AnnotateExpr(_, expr, _, _) = self.bindings().get(annotation) else {
             return ProxyMethodAnnotationForm::Other;
         };
         self.proxy_method_annotation_expr_form(expr)
@@ -4566,12 +4566,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             })
     }
 
-    /// Return the first inherited method signature (parameters and flags) for `name`.
-    pub(crate) fn inherited_method_signature(
+    /// Return the instantiated type of the first inherited member for `name`
+    /// whose type is accepted by `accept`, walking the MRO.
+    pub(crate) fn inherited_member_where(
         &self,
         cls: &Class,
         name: &Name,
-    ) -> Option<(ParamList, FuncFlags)> {
+        accept: impl Fn(&Type) -> bool,
+    ) -> Option<Type> {
         let derived_instance = self.instantiate(cls);
         for ancestor in self.get_mro_for_class(cls).ancestors(self.stdlib) {
             let parent_cls = ancestor.class_object();
@@ -4580,11 +4582,23 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             };
             let instance = Instance::of_protocol(ancestor, derived_instance.clone());
             let instantiated = member.instantiate_for(self.heap, &instance);
-            if let Some(sig) = Self::callable_params_and_flags(instantiated.ty()) {
-                return Some(sig);
+            let ty = instantiated.ty();
+            if accept(&ty) {
+                return Some(ty);
             }
         }
         None
+    }
+
+    /// Return the first inherited method signature (parameters and flags) for `name`.
+    pub(crate) fn inherited_method_signature(
+        &self,
+        cls: &Class,
+        name: &Name,
+    ) -> Option<(ParamList, FuncFlags)> {
+        Self::callable_params_and_flags(self.inherited_member_where(cls, name, |ty| {
+            Self::callable_params_and_flags(ty.clone()).is_some()
+        })?)
     }
 
     pub fn get_metaclass_attribute(

@@ -247,6 +247,209 @@ x: C[int]
 );
 
 testcase!(
+    test_explicit_any_exempt_for_override_dictated_by_base,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, override
+
+class Base:
+    def method(self, value: Any) -> Any: ...  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+
+class Child(Base):
+    @override
+    def method(self, value: Any) -> Any:
+        return value
+"#,
+);
+
+testcase!(
+    test_explicit_any_still_reported_for_undictated_override_positions,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, override
+
+class Base:
+    def method(self, value: int) -> int: ...
+
+class Child(Base):
+    @override
+    def method(self, value: Any) -> Any:  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+        return 1
+"#,
+);
+
+testcase!(
+    test_explicit_any_still_reported_without_override_decorator,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any
+
+class Base:
+    def method(self, value: Any) -> Any: ...  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+
+class Child(Base):
+    def method(self, value: Any) -> Any:  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+        return value
+"#,
+);
+
+testcase!(
+    test_explicit_any_per_position_granularity,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, override
+
+class Base:
+    def method(self, value: Any) -> Any: ...  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+
+class Child(Base):
+    @override
+    def method(self, value: Any, extra: Any = 1) -> Any:  # E: Explicit `Any` is not allowed
+        return value
+"#,
+);
+
+testcase!(
+    test_explicit_any_still_reported_for_override_without_base_member,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, override
+
+class Base:
+    ...
+
+class Child(Base):
+    @override
+    def missing(  # E: Class member `Child.missing` is marked as an override, but no parent class has a matching attribute
+        self, value: Any  # E: Explicit `Any` is not allowed
+    ) -> Any:  # E: Explicit `Any` is not allowed
+        return value
+"#,
+);
+
+testcase!(
+    test_explicit_any_still_reported_when_base_param_unannotated,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, override
+
+class Base:
+    def method(self, value) -> int: ...
+
+class Child(Base):
+    @override
+    def method(self, value: Any) -> int:  # E: Explicit `Any` is not allowed
+        return 1
+"#,
+);
+
+testcase!(
+    test_explicit_any_exempt_for_override_dictated_args_kwargs,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, override
+
+class Base:
+    def method(self, *args: Any, **kwargs: Any) -> None: ...  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+
+class Child(Base):
+    @override
+    def method(self, *args: Any, **kwargs: Any) -> None:
+        pass
+"#,
+);
+
+testcase!(
+    test_explicit_any_still_reported_for_args_kwargs_without_base_counterpart,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, override
+
+class Base:
+    def method(self, value: int) -> None: ...
+
+class Child(Base):
+    @override
+    def method(
+        self, value: int, *args: Any, **kwargs: Any  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+    ) -> None:
+        pass
+"#,
+);
+
+testcase!(
+    test_explicit_any_still_reported_for_nested_any_in_override,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, override
+
+class Base:
+    def method(self, value: list[int]) -> dict[str, int]: ...
+
+class Child(Base):
+    @override
+    def method(
+        self, value: list[Any]  # E: Explicit `Any` is not allowed
+    ) -> dict[str, Any]:  # E: Explicit `Any` is not allowed
+        return {}
+"#,
+);
+
+testcase!(
+    test_explicit_any_exempt_for_override_dictated_by_one_overload,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, override, overload
+
+class Base:
+    @overload
+    def method(self, value: int) -> int: ...
+    @overload
+    def method(self, value: Any) -> Any: ...  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+    def method(self, value):
+        return value
+
+class Child(Base):
+    @override
+    def method(self, value: Any) -> Any:
+        return value
+"#,
+);
+
+testcase!(
+    test_explicit_any_exempt_for_override_from_typing_extensions,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any
+from typing_extensions import override
+
+class Base:
+    def method(self, value: Any) -> Any: ...  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+
+class Child(Base):
+    @override
+    def method(self, value: Any) -> Any:
+        return value
+"#,
+);
+
+testcase!(
+    test_explicit_any_exempt_for_override_dictated_async_return,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, override
+
+class Base:
+    async def method(self) -> Any: ...  # E: Explicit `Any` is not allowed
+
+class Child(Base):
+    @override
+    async def method(self) -> Any:
+        return 1
+"#,
+);
+
+testcase!(
     test_warn_on_implicit_any_in_attribute,
     TestEnv::new().enable_implicit_any_attribute_error(),
     r#"

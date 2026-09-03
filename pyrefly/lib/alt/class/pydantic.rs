@@ -627,7 +627,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !metadata.is_pydantic_model() {
             return None;
         }
-        if let BindingAnnotation::AnnotateExpr(_, annotation_expr, _) = self.bindings().get(annot) {
+        if let BindingAnnotation::AnnotateExpr(_, annotation_expr, _, _) =
+            self.bindings().get(annot)
+        {
             let metadata_items = self.get_annotated_metadata(
                 annotation_expr,
                 TypeFormContext::ClassVarAnnotation,

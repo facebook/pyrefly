@@ -122,7 +122,7 @@ assert_words!(KeyUndecoratedFunction, 1);
 assert_words!(Binding, 6);
 assert_words!(BindingExpect, 14);
 assert_words!(BindingTypeAlias, 6);
-assert_words!(BindingAnnotation, 13);
+assert_words!(BindingAnnotation, 15);
 assert_words!(BindingClass, 10);
 assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
@@ -2985,7 +2985,10 @@ impl AnnotationTarget {
 pub enum BindingAnnotation {
     /// The type is annotated to be this key, will have the outer type removed.
     /// Optionally occurring within a class, in which case Self refers to this class.
-    AnnotateExpr(AnnotationTarget, Expr, Option<Idx<KeyClass>>),
+    /// For a parameter/return annotation of an `@override` method, the final field
+    /// is the method's name, used to exempt annotations dictated by the base
+    /// signature (e.g. from `explicit-any`); `None` otherwise.
+    AnnotateExpr(AnnotationTarget, Expr, Option<Idx<KeyClass>>, Option<Name>),
     /// A special form declaration like `Literal: _SpecialForm`.
     SpecialForm(AnnotationTarget, SpecialForm),
 }
@@ -2993,14 +2996,17 @@ pub enum BindingAnnotation {
 impl DisplayWith<Bindings> for BindingAnnotation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
         match self {
-            Self::AnnotateExpr(target, x, class_key) => write!(
+            Self::AnnotateExpr(target, x, class_key, override_method) => write!(
                 f,
-                "AnnotateExpr({target}, {}, {})",
+                "AnnotateExpr({target}, {}, {}, {})",
                 ctx.module().display(x),
                 match class_key {
                     None => "None".to_owned(),
                     Some(t) => ctx.display(*t).to_string(),
-                }
+                },
+                override_method
+                    .as_ref()
+                    .map_or_else(|| "None".to_owned(), ToString::to_string),
             ),
             Self::SpecialForm(target, sf) => write!(f, "SpecialForm({target}, {sf})"),
         }
