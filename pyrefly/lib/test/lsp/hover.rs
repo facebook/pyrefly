@@ -1775,6 +1775,62 @@ Widget docstring"#
 }
 
 #[test]
+fn hover_prefers_nonempty_pyi_docstring_and_falls_back_to_py() {
+    let mut test_env = TestEnv::new();
+    test_env.add_with_path(
+        "lib",
+        "lib.py",
+        r#"
+def from_stub() -> int:
+    """Documentation from the implementation."""
+    return 1
+
+def from_source() -> int:
+    """Fallback documentation from the implementation."""
+    return 1
+"#,
+    );
+    test_env.add_with_path(
+        "lib",
+        "lib.pyi",
+        r#"
+def from_stub() -> int:
+    """Documentation from the stub."""
+    ...
+
+def from_source() -> int:
+    """"""
+    ...
+"#,
+    );
+    let main_code = r#"
+from lib import from_source, from_stub
+
+from_stub()
+#   ^
+from_source()
+#   ^
+"#;
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+    let positions = extract_cursors_for_test(main_code);
+
+    let stub_report = get_test_report(&state, &main_handle, positions[0]);
+    assert!(
+        stub_report.contains("Documentation from the stub."),
+        "Expected the stub docstring in hover, got: {stub_report}"
+    );
+    assert!(!stub_report.contains("Documentation from the implementation."));
+
+    let source_report = get_test_report(&state, &main_handle, positions[1]);
+    assert!(
+        source_report.contains("Fallback documentation from the implementation."),
+        "Expected the implementation docstring in hover, got: {source_report}"
+    );
+}
+
+#[test]
 fn hover_on_dict_constructor_is_multiline() {
     let code = r#"
 x: dict[str, int]

@@ -971,33 +971,41 @@ pub fn get_hover_with_verbosity(
 
     let fallback_name_from_type = fallback_hover_name_from_type(&type_);
     let keyword_argument_identifier = keyword_argument_identifier(transaction, handle, position);
-    let definition = transaction
-        .find_definition(
-            handle,
-            position,
-            FindPreference {
-                prefer_pyi: false,
-                ..Default::default()
-            },
-        )
-        .map(Vec1::into_vec)
-        .unwrap_or_default()
-        .into_iter()
-        .next()
-        .filter(|item| {
-            keyword_argument_identifier
-                .as_ref()
-                .is_none_or(|identifier| {
-                    item.module.code_at(item.definition_range) == identifier.id.as_str()
-                })
-        });
-    let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
+    let find_definition = |prefer_pyi| {
+        transaction
+            .find_definition(
+                handle,
+                position,
+                FindPreference {
+                    prefer_pyi,
+                    ..Default::default()
+                },
+            )
+            .map(Vec1::into_vec)
+            .unwrap_or_default()
+            .into_iter()
+            .next()
+            .filter(|item| {
+                keyword_argument_identifier
+                    .as_ref()
+                    .is_none_or(|identifier| {
+                        item.module.code_at(item.definition_range) == identifier.id.as_str()
+                    })
+            })
+    };
+    let preferred_docstring = find_definition(true)
+        .and_then(|item| {
+            item.docstring_range
+                .map(|range| Docstring(range, item.module))
+        })
+        .filter(|docstring| !docstring.resolve().trim().is_empty());
+    let (kind, name, fallback_docstring) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
         definition_range: definition_location,
         module,
         docstring_range,
         display_name,
-    }) = definition
+    }) = find_definition(false)
     {
         let kind = metadata.symbol_kind();
         let name = hover_name_from_definition_snippet(
@@ -1005,9 +1013,10 @@ pub fn get_hover_with_verbosity(
             display_name.as_deref(),
             fallback_name_from_type,
         );
-        (kind, name, docstring_range, Some(module))
+        let docstring = docstring_range.map(|range| Docstring(range, module));
+        (kind, name, docstring)
     } else {
-        (None, fallback_name_from_type, None, None)
+        (None, fallback_name_from_type, None)
     };
 
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
@@ -1066,11 +1075,7 @@ pub fn get_hover_with_verbosity(
             None => (None, false),
         };
 
-    let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {
-        Some(Docstring(docstring, module))
-    } else {
-        None
-    };
+    let docstring = preferred_docstring.or(fallback_docstring);
 
     let parameter_doc = resolve_hover_parameter_doc(transaction, handle, position);
 
