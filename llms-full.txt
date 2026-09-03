@@ -2587,9 +2587,9 @@ A minimal-checking preset used when automatic configuration selection finds no m
 
 #### Preset: `legacy`
 
-A looser, less-strict preset intended for codebases migrating from mypy. This is the preset `pyrefly init` writes when it detects an existing mypy configuration. Pyrefly does not aim to mimic mypy precisely — type-checking behavior will still differ between the two tools — this preset just disables a few checks that mypy does not have, so migrating users aren't hit with new errors for classes of issues mypy never flagged.
+A looser, less-strict preset intended for codebases migrating from mypy. This is the preset `pyrefly init` writes when it detects an existing mypy configuration. Pyrefly does not aim to mimic mypy precisely, but the preset preserves selected defaults that would otherwise produce new migration errors.
 
-- Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`legacy-overload-expansion`](#legacy-overload-expansion) `= true`
+- Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`legacy-overload-expansion`](#legacy-overload-expansion) `= true`, [`replace-untyped-imports-with-any`](#replace-untyped-imports-with-any) `= ["*"]`
 - Disables: [`bad-override-mutable-attribute`](./error-kinds.mdx#bad-override-mutable-attribute), [`bad-override-param-name`](./error-kinds.mdx#bad-override-param-name), [`unbound-name`](./error-kinds.mdx#unbound-name)
 
 #### Preset: `default`
@@ -2705,6 +2705,19 @@ will always, unconditionally replace the import with `typing.Any`.
       _all_ import errors instead of import errors from specific modules.
     - When a `.pyc` file is encountered and no source/stub files are available, Pyrefly automatically treats module as `typing.Any`.
       This behavior ensures that compiled Python files without available source code do not cause import errors and are handled permissively.
+
+### `replace-untyped-imports-with-any`
+
+Instruct Pyrefly to replace the given [`ModuleGlob`](#module-globbing)s from
+installed third-party packages with `typing.Any` if the package provides neither
+stubs nor a `py.typed` marker. Stubs and `py.typed` packages are analyzed
+normally, and first-party modules are not affected.
+
+- Type: list of regex
+- Default: `[]`
+- Flag equivalent: `--replace-untyped-imports-with-any`
+- Equivalent config: `follow_untyped_imports = false` in mypy; use `["*"]` to
+  apply it to every module. `pyrefly init` converts global and per-module values.
 
 ### `ignore-errors-in-generated-code`
 
@@ -3303,6 +3316,7 @@ We currently allow the following config options to be overridden in a SubConfig:
 
 - `errors`
 - `replace-imports-with-any`
+- `replace-untyped-imports-with-any`
 - `check-unannotated-defs`
 - `infer-return-types`
 - `check-all-matches`
@@ -3479,6 +3493,8 @@ skip-interpreter-query = false
 replace-imports-with-any = []
 # wildcards for which Pyrefly will replace the import with `typing.Any` if it can't be found
 ignore-missing-imports = []
+# wildcards for which Pyrefly will replace untyped third-party imports with `typing.Any`
+replace-untyped-imports-with-any = []
 # should Pyrefly skip type checking if we find a generated file?
 ignore-errors-in-generated-code = false
 # should Pyrefly check the bodies of unannotated function definitions?
@@ -7819,7 +7835,7 @@ missing-import = "error"
 | `namespace_packages`               | No direct setting                                                                   | Not mapped                         | Validate import resolution on namespace packages.                                                                                                                                                                                                                                             |
 | `explicit_package_bases`           | `search-path` and project layout                                                    | Manual                             | Represent package roots explicitly rather than translating the flag.                                                                                                                                                                                                                          |
 | `ignore_missing_imports`           | `ignore-missing-imports`                                                            | Automatic                          | Per-module mypy overrides become module globs. Imports are replaced with `Any` only when they cannot be found.                                                                                                                                                                                |
-| `follow_untyped_imports`           | No direct setting                                                                   | Not mapped                         | Pyrefly's source and stub discovery differ; test representative third-party imports.                                                                                                                                                                                                          |
+| `follow_untyped_imports`           | `replace-untyped-imports-with-any`                                                   | Automatic                          | Mypy's default of `false` becomes `"*"`. Per-module overrides become positive or negative module globs.                                                                                                                                                                                       |
 | `follow_imports`                   | `replace-imports-with-any` for `skip`; the converter emits `ignore-missing-imports` | Automatic but lossy for `skip`     | Mypy `skip` discards an import even when it resolves. The converter groups it with `ignore_missing_imports`, which is narrower, so change the generated entry by hand when exact `skip` behavior matters. `normal`, `silent`, and `error` have no equivalent.                                 |
 | `follow_imports_for_stubs`         | No direct setting                                                                   | Not mapped                         |                                                                                                                                                                                                                                                                                               |
 | `python_executable`                | `python-interpreter-path`                                                           | Automatic                          | Prefer environment autoconfiguration where possible.                                                                                                                                                                                                                                          |
@@ -8215,11 +8231,18 @@ this list. A global `ignore_missing_imports = true` becomes the module glob
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
 | `ignore-missing-imports`             | Substitutes `Any` only when the matched module cannot be found. If it is found, its real type information is used. |
 | `replace-imports-with-any`           | Always substitutes `Any` for the matched module, even when source or stubs are available.                          |
+| `replace-untyped-imports-with-any`   | Substitutes `Any` when a matched installed package has neither stubs nor a `py.typed` marker.                       |
 | `[errors] missing-import = "ignore"` | Suppresses missing-import diagnostics everywhere, rather than for selected modules.                                |
 
 Prefer `ignore-missing-imports` for optional dependencies.
 `replace-imports-with-any` is the closer match for mypy's
 `follow_imports = "skip"`, and it is a much stronger escape hatch.
+
+Mypy's `follow_untyped_imports` has the opposite polarity from
+`replace-untyped-imports-with-any`. `pyrefly init` converts mypy's default of
+`false` to `["*"]`. It converts per-module overrides to module globs, using
+negated globs when a module enables `follow_untyped_imports` against that
+global default.
 
 :::warning
 

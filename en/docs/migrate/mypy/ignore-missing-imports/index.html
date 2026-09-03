@@ -38,9 +38,9 @@
 <script src="https://buttons.github.io/buttons.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
-<script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.eb8d0bd5.css">
-<script src="/assets/js/runtime~main.33536fe9.js" defer="defer"></script>
-<script src="/assets/js/main.d4aa8fc0.js" defer="defer"></script>
+<script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.caa578e5.css">
+<script src="/assets/js/runtime~main.208acbdd.js" defer="defer"></script>
+<script src="/assets/js/main.c3beffc4.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -57,10 +57,15 @@ same way.</p>
 this list. A global <code>ignore_missing_imports = true</code> becomes the module glob
 <code>&quot;*&quot;</code>.</p>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="do-not-confuse-the-two-pyrefly-settings">Do not confuse the two Pyrefly settings<a href="#do-not-confuse-the-two-pyrefly-settings" class="hash-link" aria-label="Direct link to Do not confuse the two Pyrefly settings" title="Direct link to Do not confuse the two Pyrefly settings">​</a></h2>
-<table><thead><tr><th>Setting</th><th>Behavior</th></tr></thead><tbody><tr><td><code>ignore-missing-imports</code></td><td>Substitutes <code>Any</code> only when the matched module cannot be found. If it is found, its real type information is used.</td></tr><tr><td><code>replace-imports-with-any</code></td><td>Always substitutes <code>Any</code> for the matched module, even when source or stubs are available.</td></tr><tr><td><code>[errors] missing-import = &quot;ignore&quot;</code></td><td>Suppresses missing-import diagnostics everywhere, rather than for selected modules.</td></tr></tbody></table>
+<table><thead><tr><th>Setting</th><th>Behavior</th></tr></thead><tbody><tr><td><code>ignore-missing-imports</code></td><td>Substitutes <code>Any</code> only when the matched module cannot be found. If it is found, its real type information is used.</td></tr><tr><td><code>replace-imports-with-any</code></td><td>Always substitutes <code>Any</code> for the matched module, even when source or stubs are available.</td></tr><tr><td><code>replace-untyped-imports-with-any</code></td><td>Substitutes <code>Any</code> when a matched installed package has neither stubs nor a <code>py.typed</code> marker.</td></tr><tr><td><code>[errors] missing-import = &quot;ignore&quot;</code></td><td>Suppresses missing-import diagnostics everywhere, rather than for selected modules.</td></tr></tbody></table>
 <p>Prefer <code>ignore-missing-imports</code> for optional dependencies.
 <code>replace-imports-with-any</code> is the closer match for mypy&#x27;s
 <code>follow_imports = &quot;skip&quot;</code>, and it is a much stronger escape hatch.</p>
+<p>Mypy&#x27;s <code>follow_untyped_imports</code> has the opposite polarity from
+<code>replace-untyped-imports-with-any</code>. <code>pyrefly init</code> converts mypy&#x27;s default of
+<code>false</code> to <code>[&quot;*&quot;]</code>. It converts per-module overrides to module globs, using
+negated globs when a module enables <code>follow_untyped_imports</code> against that
+global default.</p>
 <div class="theme-admonition theme-admonition-warning admonition_xJq3 alert alert--warning"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8.893 1.5c-.183-.31-.52-.5-.887-.5s-.703.19-.886.5L.138 13.499a.98.98 0 0 0 0 1.001c.193.31.53.501.886.501h13.964c.367 0 .704-.19.877-.5a1.03 1.03 0 0 0 .01-1.002L8.893 1.5zm.133 11.497H6.987v-2.003h2.039v2.003zm0-3.004H6.987V5.987h2.039v4.006z"></path></svg></span>warning</div><div class="admonitionContent_BuS1"><p><code>pyrefly init</code> currently groups <code>follow_imports = &quot;skip&quot;</code> with
 <code>ignore_missing_imports</code>, so a migrated <code>skip</code> rule lands in
 <code>ignore-missing-imports</code> and keeps type information for modules that do resolve.

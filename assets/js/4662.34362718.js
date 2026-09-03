@@ -1,0 +1,1 @@
+"use strict";(globalThis.webpackChunknew_website=globalThis.webpackChunknew_website||[]).push([[4662],{4662(e,l,n){n.r(l),n.d(l,{default:()=>t});var u=n(96540);function t({url:e}){return(0,u.useEffect)((()=>{window.location.replace(e)}),[e]),null}}}]);
