@@ -7,6 +7,7 @@
 
 use std::slice;
 
+use pyrefly_types::types::TParams;
 use ruff_python_ast::name::Name;
 
 use crate::alt::answers::LookupAnswer;
@@ -83,6 +84,13 @@ impl<'a, 'b> HintRef<'a, 'b> {
 
     pub fn errors(&self) -> Option<&ErrorCollector> {
         self.1
+    }
+
+    pub fn filter_for_call(hint: Option<Self>, tparams: Option<&TParams>) -> Option<Self> {
+        // Function return hints only affect calls whose type parameters can be contextually instantiated.
+        // Note that by invariant, constructor calls get hint=None, so we only have to care about the
+        // function's own type parameters and not type parameters from any enclosing class.
+        hint.filter(|_| tparams.is_some())
     }
 }
 

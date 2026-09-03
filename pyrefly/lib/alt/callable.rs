@@ -2081,6 +2081,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         Vec<ReturnTypeResolutionError>,
         ArgMap,
     ) {
+        let hint = HintRef::filter_for_call(hint, tparams);
         self.callable_infer_with_hint(
             hint,
             call_errors,
