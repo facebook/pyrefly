@@ -2820,7 +2820,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 format!("{construct} cannot have both constraints and bound"),
                             );
                             restriction = Some(Restriction::Unrestricted);
-                        } else if self.reject_legacy_shape_flag_bound(
+                        } else if self.reject_legacy_shape_extension_bound(
                             &bound,
                             kw.value.range(),
                             errors,
@@ -3201,8 +3201,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .iter()
                         .all(|constraint| self.is_enum_class_type(constraint))
             }
-            Restriction::Flag(domain) => domain
-                .types(self.stdlib)
+            Restriction::ShapeExtension(extension) => extension
+                .upper_bound_members(self.stdlib)
                 .iter()
                 .all(|ty| self.is_enum_class_type(ty)),
         }
@@ -3766,9 +3766,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 )
                             }))
                         }
-                        Restriction::Flag(domain) => self
+                        Restriction::ShapeExtension(extension) => self
                             .subscript_infer_for_type_with_key_present_inner(
-                                &domain.as_type(self.stdlib, self.heap),
+                                &extension.upper_bound(self.stdlib, self.heap),
                                 slice,
                                 range,
                                 errors,

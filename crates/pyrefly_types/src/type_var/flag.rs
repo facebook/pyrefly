@@ -33,7 +33,6 @@ use crate::literal::Lit;
 use crate::simplify::unions;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
-use crate::type_var::Restriction;
 use crate::types::Type;
 
 /// A member of the builtin universe a `Flag` type parameter can range over. The variant
@@ -63,12 +62,14 @@ fn int_tuple_length(tuple: &Tuple) -> Option<IntTupleLength> {
             Type::ClassType(cls) => cls.is_builtin("int"),
             Type::Literal(lit) => matches!(lit.value, Lit::Int(_)),
             Type::Union(union) => union.members.iter().all(is_int),
-            Type::Quantified(q) => {
-                matches!(q.restriction(), Restriction::Flag(d) if d.is_subset_of(FlagDomain::of(FlagMember::Int)))
-            }
-            Type::TypeVar(tv) => {
-                matches!(tv.restriction(), Restriction::Flag(d) if d.is_subset_of(FlagDomain::of(FlagMember::Int)))
-            }
+            Type::Quantified(q) => q
+                .restriction()
+                .flag_domain()
+                .is_some_and(|domain| domain.is_subset_of(FlagDomain::of(FlagMember::Int))),
+            Type::TypeVar(tv) => tv
+                .restriction()
+                .flag_domain()
+                .is_some_and(|domain| domain.is_subset_of(FlagDomain::of(FlagMember::Int))),
             _ => false,
         }
     }
@@ -321,12 +322,14 @@ impl FlagDomain {
             return true;
         }
         match ty {
-            Type::Quantified(q) => {
-                matches!(q.restriction(), Restriction::Flag(x) if x.is_subset_of(self))
-            }
-            Type::TypeVar(tv) => {
-                matches!(tv.restriction(), Restriction::Flag(x) if x.is_subset_of(self))
-            }
+            Type::Quantified(q) => q
+                .restriction()
+                .flag_domain()
+                .is_some_and(|domain| domain.is_subset_of(self)),
+            Type::TypeVar(tv) => tv
+                .restriction()
+                .flag_domain()
+                .is_some_and(|domain| domain.is_subset_of(self)),
             Type::Union(union) => union.members.iter().all(|member| self.accepts(member)),
             _ => self.members().any(|member| match member {
                 FlagMember::IntTuple => self.tuple.accepts(ty),
@@ -537,7 +540,7 @@ mod tests {
             assert_eq!(domain.to_string(), display);
             assert_eq!(domain.class_names(), vec![class_name]);
             assert!(domain.contains(member));
-            assert!(Restriction::Flag(domain).is_restricted());
+            assert!(Restriction::flag(domain).is_restricted());
         }
     }
 

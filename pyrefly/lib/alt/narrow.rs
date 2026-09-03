@@ -166,8 +166,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Type::Quantified(q) if q.is_type_var() => match q.restriction() {
                 Restriction::Bound(bound) => self.disjoint_base(bound),
-                Restriction::Flag(domain) => {
-                    self.disjoint_base(&domain.as_type(self.stdlib, self.heap))
+                Restriction::ShapeExtension(extension) => {
+                    self.disjoint_base(&extension.upper_bound(self.stdlib, self.heap))
                 }
                 Restriction::Constraints(_) | Restriction::Unrestricted => {
                     self.stdlib.object().class_object().dupe()

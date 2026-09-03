@@ -1627,8 +1627,8 @@ impl<'a> CallGraphVisitor<'a> {
                     // Use the bound of the type var as the base class.
                     self.receiver_class_from_type(bound, is_class_method)
                 }
-                Restriction::Flag(domain) => self.receiver_class_from_type(
-                    &domain.as_type(
+                Restriction::ShapeExtension(extension) => self.receiver_class_from_type(
+                    &extension.upper_bound(
                         &self.module_answers_context.stdlib,
                         self.module_answers_context.answers.heap(),
                     ),

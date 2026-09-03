@@ -407,7 +407,7 @@ impl<'a> TypeDisplayContext<'a> {
                     commas_iter(|| tys.iter().map(|ty| self.display_internal(ty)))
                 )?;
             }
-            Restriction::Flag(domain) => write!(f, ": Flag[{domain}]")?,
+            Restriction::ShapeExtension(extension) => write!(f, ": {extension}")?,
             _ => {}
         }
         if let Some(default) = param.default() {

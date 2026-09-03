@@ -451,16 +451,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             Some(*quantified),
                         )
                     }
-                    Restriction::Flag(domain) => {
-                        let targets = domain
-                            .types(self.stdlib)
+                    Restriction::ShapeExtension(extension) => {
+                        let targets = extension
+                            .upper_bound_members(self.stdlib)
                             .into_iter()
                             .map(|ty| {
                                 let cls = match ty {
                                     Type::ClassType(cls) => cls,
                                     Type::Tuple(tuple) => self.erase_tuple_type(tuple),
                                     ty => unreachable!(
-                                        "Flag domain members materialize to builtin types, got `{ty}`"
+                                        "shape-extension upper-bound members materialize to builtin types, got `{ty}`"
                                     ),
                                 };
                                 CallTarget::Class(
@@ -702,8 +702,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     CallTargetLookup::Ok(Box::new(CallTarget::Union(targets)))
                 }
-                Restriction::Flag(domain) => self
-                    .as_call_target_impl(domain.as_type(self.stdlib, self.heap), Some((*q).clone()))
+                Restriction::ShapeExtension(extension) => self
+                    .as_call_target_impl(
+                        extension.upper_bound(self.stdlib, self.heap),
+                        Some((*q).clone()),
+                    )
                     .with_error_type(|_| Type::Quantified(q)),
             },
             Type::KwCall(call) => {

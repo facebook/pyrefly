@@ -193,7 +193,9 @@ fn type_var_restriction(ty: &Type) -> Option<&Restriction> {
 fn type_var_bound(ty: &Type) -> Option<&Type> {
     match type_var_restriction(ty)? {
         Restriction::Bound(bound) => Some(bound),
-        Restriction::Constraints(_) | Restriction::Flag(_) | Restriction::Unrestricted => None,
+        Restriction::Constraints(_)
+        | Restriction::ShapeExtension(_)
+        | Restriction::Unrestricted => None,
     }
 }
 

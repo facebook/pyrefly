@@ -458,19 +458,19 @@ fn collapse_quantifieds(types: &mut Vec<Type>, stdlib: Option<&Stdlib>, heap: &T
     let mut indices_to_remove = SmallSet::new();
     let mut quantifieds_to_collapse = Vec::new();
     for (q, ts) in quantified_intersects {
-        let flag_types;
+        let extension_types;
         let restrictions = match q.restriction() {
             Restriction::Constraints(cs) => cs.iter().collect(),
             Restriction::Bound(Type::Union(u)) => u.members.iter().collect(),
             Restriction::Bound(b) => vec![b],
-            Restriction::Flag(domain) => {
+            Restriction::ShapeExtension(extension) => {
                 let Some(stdlib) = stdlib else {
                     // Raw union construction cannot materialize the builtin domain, so preserve
                     // the unsimplified intersection until a Stdlib-aware normalization boundary.
                     continue;
                 };
-                flag_types = domain.types(stdlib);
-                flag_types.iter().collect()
+                extension_types = extension.upper_bound_members(stdlib);
+                extension_types.iter().collect()
             }
             Restriction::Unrestricted => continue,
         };

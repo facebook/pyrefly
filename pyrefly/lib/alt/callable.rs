@@ -44,8 +44,8 @@ use crate::alt::expr::ExprOptions;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::map_int_tuples::MapIntTuplesPatternArgument;
 use crate::alt::map_int_tuples::map_int_tuples_parameter_pattern;
+use crate::alt::shape_extension::shape_extension_vars;
 use crate::alt::shape_flag::extend_shape_flag_vars_from_targs;
-use crate::alt::shape_flag::shape_flag_vars;
 use crate::alt::solve::Iterable;
 use crate::alt::unwrap::HintRef;
 use crate::alt::unwrap::MAX_CALL_HINT_WIDTH;
@@ -1321,15 +1321,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let unpacked_param_tuple =
                     self.heap
                         .mk_unpacked_tuple(Vec::new(), unpacked_param_ty.clone(), Vec::new());
-                if let Some(flag_source_context) =
-                    call_context.for_shape_flag_binding_source(unpacked_param_ty)
+                if let Some(extension_source_context) =
+                    call_context.for_shape_extension_binding_source(unpacked_param_ty)
                 {
                     self.check_type_with_options(
                         &unpacked_args_ty,
                         &unpacked_param_tuple,
                         arguments_range,
                         TypeCheckOptions::new(call_errors, &check_context)
-                            .with_call_context(&flag_source_context),
+                            .with_call_context(&extension_source_context),
                     );
                 } else {
                     self.check_type_as_call_argument(
@@ -1419,8 +1419,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 call_context,
                                 context,
                             );
-                        } else if let Some(flag_source_context) =
-                            call_context.for_shape_flag_binding_source(unpacked)
+                        } else if let Some(extension_source_context) =
+                            call_context.for_shape_extension_binding_source(unpacked)
                         {
                             self.check_type_with_options(
                                 &self.heap.mk_concrete_tuple(Vec::new()),
@@ -1438,7 +1438,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                     ))
                                     .with_context(context.map(|ctx| ctx()))
                                 })
-                                .with_call_context(&flag_source_context),
+                                .with_call_context(&extension_source_context),
                             );
                         } else {
                             self.is_subset_eq(unpacked, &self.heap.mk_concrete_tuple(Vec::new()));
@@ -1813,8 +1813,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // `ty` may contain type variables, so we record quantified bounds from the default and
             // check for inconsistent solutions. We mark any literals in the default as implicit so
             // that ordinary type variables get solved to promoted types (`int` rather than
-            // `Literal[N]`). A Flag's single binding source preserves the literal instead.
-            let default_ty = if call_context.is_shape_flag_var_type(ty) {
+            // `Literal[N]`). A shape-extension restriction's single binding source preserves the
+            // literal instead.
+            let default_ty = if call_context.is_shape_extension_var_type(ty) {
                 default.ty.clone()
             } else {
                 default.ty.clone().with_literal_style(LitStyle::Implicit)
@@ -2134,21 +2135,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let meta_shape_func: Option<&dyn MetaShapeFunction> = shape_transform_func.as_deref();
         let mut bound_args: Option<HashMap<String, Type>> = meta_shape_func.map(|_| HashMap::new());
 
-        let (callable_qs, mut callable, mut shape_flag_vars) = if let Some(tparams) = tparams {
+        let (callable_qs, mut callable, mut shape_extension_vars) = if let Some(tparams) = tparams {
             let instantiate = |callable| {
                 let (qs, callable) = self.instantiate_fresh_callable(tparams, callable);
-                let flag_vars = shape_flag_vars(tparams, qs.vars());
-                (qs, callable, flag_vars)
+                let extension_vars = shape_extension_vars(tparams, qs.vars());
+                (qs, callable, extension_vars)
             };
             // If we have a hint, we want to try to instantiate against it first, so we can contextually type
             // arguments. If we don't match the hint, we need to throw away any instantiations we might have made.
             // By invariant, hint will be None if we are calling a constructor.
             if let Some(hint) = hint {
-                let (qs, callable_, flag_vars) = instantiate(callable.clone());
-                let matches_hint = if let Some(flag_vars) = &flag_vars {
+                let (qs, callable_, extension_vars) = instantiate(callable.clone());
+                let matches_hint = if let Some(extension_vars) = &extension_vars {
                     let mut ret_for_hint = callable_.ret.clone();
                     ret_for_hint.transform_mut(&mut |ty| {
-                        if matches!(ty, Type::Var(var) if flag_vars.contains(var)) {
+                        if matches!(ty, Type::Var(var) if extension_vars.contains(var)) {
                             *ty = self.heap.mk_any_implicit();
                         }
                     });
@@ -2157,7 +2158,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     self.is_subset_eq(&callable_.ret, hint)
                 };
                 if matches_hint && !self.solver().has_instantiation_errors(&qs) {
-                    (qs, callable_, flag_vars)
+                    (qs, callable_, extension_vars)
                 } else {
                     // Even though these quantifieds aren't used, let's make sure to not leave
                     // unfinished quantifieds around.
@@ -2186,7 +2187,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         call_boundary.defer_quantified(remaining_callable_qs);
         if let Some(targs) = ctor_targs.as_mut() {
             let qs = self.solver().freshen_class_targs(targs, self.uniques);
-            extend_shape_flag_vars_from_targs(&mut shape_flag_vars, targs);
+            extend_shape_flag_vars_from_targs(&mut shape_extension_vars, targs);
             let mp = targs.substitution_map();
             callable.params.visit_mut(&mut |t| t.subst_mut(&mp));
             if let Some(obj) = self_obj.as_mut() {
@@ -2202,7 +2203,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             call_boundary.defer_quantified(qs);
         }
-        let call_context = call_context.with_shape_flag_vars(shape_flag_vars);
+        let call_context = call_context.with_shape_extension_vars(shape_extension_vars);
         self.constrain_forwarded_overload_return(ForwardedOverloadCall {
             params: &callable.params,
             has_self: self_obj.is_some(),

@@ -906,7 +906,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let tparams =
             self.collect_jaxtyping_tparams(&callable, &def.tparams, stmt.name.range, errors);
 
-        self.validate_shape_flag_function_parameters(stmt, &def.params, &tparams, errors);
+        self.validate_shape_extension_function_parameters(stmt, &def.params, &tparams, errors);
 
         let mut metadata = def.metadata.clone();
         self.record_shape_flag_constructor_sources(

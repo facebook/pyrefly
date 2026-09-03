@@ -1602,8 +1602,8 @@ impl<'a> Transaction<'a> {
             Type::Quantified(quantified) => match quantified.restriction {
                 Restriction::Bound(bound) => Self::callable_from_type(solver, bound),
                 Restriction::Constraints(options) => Self::callable_from_types(solver, options),
-                Restriction::Flag(domain) => {
-                    Self::callable_from_types(solver, domain.types(solver.stdlib))
+                Restriction::ShapeExtension(extension) => {
+                    Self::callable_from_types(solver, extension.upper_bound_members(solver.stdlib))
                 }
                 Restriction::Unrestricted => None,
             },

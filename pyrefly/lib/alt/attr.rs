@@ -2649,20 +2649,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ));
                     }
                 }
-                Restriction::Flag(domain) => {
-                    // Every materialized Flag domain member has an attribute base. Neither the
-                    // generic `object` fallback nor an empty result would be correct here.
-                    for ty in domain.types(self.stdlib) {
+                Restriction::ShapeExtension(extension) => {
+                    // Every materialized shape-extension bound member has an attribute base.
+                    // Neither the generic `object` fallback nor an empty result is correct here.
+                    for ty in extension.upper_bound_members(self.stdlib) {
                         let base = self
                             .as_attribute_base(ty)
-                            .expect("Flag domain members have attribute bases");
+                            .expect("shape-extension bound members have attribute bases");
                         for base1 in base.0 {
                             acc.push(
                                 self.attribute_base_for_bounded_quantified(
                                     (*quantified).clone(),
                                     base1,
                                 )
-                                .expect("Flag domain members have class-instance bases"),
+                                .expect(
+                                    "shape-extension upper-bound members have class-instance bases",
+                                ),
                             );
                         }
                     }
@@ -2806,17 +2808,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         )));
                     }
                 }
-                Restriction::Flag(domain) => {
-                    // Every materialized Flag domain member has a class-instance base. Neither
-                    // the generic `object` fallback nor an empty result would be correct here.
-                    for ty in domain.types(self.stdlib) {
+                Restriction::ShapeExtension(extension) => {
+                    // Every materialized shape-extension bound member has a class-instance base.
+                    // Neither the generic `object` fallback nor an empty result is correct here.
+                    for ty in extension.upper_bound_members(self.stdlib) {
                         let base = self
                             .as_attribute_base(ty)
-                            .expect("Flag domain members have attribute bases");
+                            .expect("shape-extension bound members have attribute bases");
                         for base1 in base.0 {
-                            let cls = self
-                                .quantified_bound_class(base1)
-                                .expect("Flag domain members have class-instance bases");
+                            let cls = self.quantified_bound_class(base1).expect(
+                                "shape-extension upper-bound members have class-instance bases",
+                            );
                             acc.push(AttributeBase1::ClassObject(ClassBase::Quantified(
                                 (*quantified).clone(),
                                 cls,

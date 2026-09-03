@@ -395,7 +395,7 @@ impl Quantified {
                     }
                     write!(f, ")")?;
                 }
-                Restriction::Flag(domain) => write!(f, ": Flag[{domain}]")?,
+                Restriction::ShapeExtension(extension) => write!(f, ": {extension}")?,
                 Restriction::Unrestricted => {}
             }
             if let Some(default) = self.default() {

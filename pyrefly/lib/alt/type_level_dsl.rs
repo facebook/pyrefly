@@ -1240,7 +1240,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .iter()
                         .all(|constraint| matches!(constraint, Type::IntTuple(_)))
             }
-            Restriction::Flag(_) => false,
+            Restriction::ShapeExtension(_) => false,
             Restriction::Unrestricted => false,
         }
     }
@@ -1261,7 +1261,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Restriction::Constraints(constraints) => {
                 !constraints.is_empty() && constraints.iter().all(is_int_tuples_type)
             }
-            Restriction::Flag(_) | Restriction::Unrestricted => false,
+            Restriction::ShapeExtension(_) | Restriction::Unrestricted => false,
         }
     }
 

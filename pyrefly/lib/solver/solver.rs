@@ -33,8 +33,8 @@ use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tuple::Tuple;
-use pyrefly_types::type_var::FlagDomain;
 use pyrefly_types::type_var::Restriction;
+use pyrefly_types::type_var::ShapeExtensionRestriction;
 use pyrefly_types::types::TArgs;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
@@ -2676,15 +2676,16 @@ impl Solver {
 
 #[derive(Debug, Clone)]
 pub enum TypeVarSpecializationError {
-    BadFlagSpecialization {
+    BadShapeExtensionSpecialization {
         name: Name,
         got: Type,
-        domain: FlagDomain,
+        restriction: ShapeExtensionRestriction,
     },
-    ConflictingFlagSpecialization {
+    ConflictingShapeExtensionSpecialization {
         name: Name,
         selected: Type,
         constraint: Type,
+        restriction: ShapeExtensionRestriction,
     },
     BadBoundSpecialization {
         name: Name,
@@ -2704,8 +2705,8 @@ pub enum TypeVarSpecializationError {
 impl TypeVarSpecializationError {
     pub fn error_kind(&self) -> ErrorKind {
         match self {
-            Self::BadFlagSpecialization { .. }
-            | Self::ConflictingFlagSpecialization { .. }
+            Self::BadShapeExtensionSpecialization { .. }
+            | Self::ConflictingShapeExtensionSpecialization { .. }
             | Self::BadBoundSpecialization { .. }
             | Self::BadConstraintSpecialization { .. } => ErrorKind::BadSpecialization,
             Self::IncompatibleOverloadResidual { .. } => ErrorKind::IncompatibleOverloadResidual,
@@ -2714,17 +2715,23 @@ impl TypeVarSpecializationError {
 
     pub fn to_error_msg<Ans: LookupAnswer>(self, ans: &AnswersSolver<Ans>) -> String {
         match self {
-            Self::BadFlagSpecialization { name, got, domain } => format!(
-                "`{}` is not a valid `Flag[{domain}]` value for type variable `{name}`",
+            Self::BadShapeExtensionSpecialization {
+                name,
+                got,
+                restriction,
+            } => format!(
+                "`{}` is not a valid `{restriction}` value for type variable `{name}`",
                 ans.for_display(got),
             ),
-            Self::ConflictingFlagSpecialization {
+            Self::ConflictingShapeExtensionSpecialization {
                 name,
                 selected,
                 constraint,
+                restriction,
             } => format!(
-                "`{}` is incompatible with selected `Flag` value `{}` for type variable `{name}`",
+                "`{}` is incompatible with selected `{}` value `{}` for type variable `{name}`",
                 ans.for_display(constraint),
+                restriction.kind_name(),
                 ans.for_display(selected),
             ),
             Self::BadBoundSpecialization { name, got, want } => {
@@ -3128,8 +3135,8 @@ impl CallBoundary {
             argument_side: ArgumentSide::default(),
             argument: None,
             boundary: Some(self),
-            shape_flag_vars: None,
-            shape_flag_binding_source: None,
+            shape_extension_vars: None,
+            shape_extension_binding_source: None,
         }
     }
 
@@ -3217,8 +3224,8 @@ pub struct CallContext<'subset> {
     /// Which argument of the call is being checked, when one is.
     argument: Option<ArgumentKey>,
     boundary: Option<&'subset CallBoundary>,
-    shape_flag_vars: Option<Arc<SmallSet<Var>>>,
-    shape_flag_binding_source: Option<Var>,
+    shape_extension_vars: Option<Arc<SmallSet<Var>>>,
+    shape_extension_binding_source: Option<Var>,
 }
 
 impl<'subset> CallContext<'subset> {
@@ -3257,35 +3264,35 @@ impl<'subset> CallContext<'subset> {
         self
     }
 
-    pub(crate) fn with_shape_flag_vars(mut self, vars: Option<Arc<SmallSet<Var>>>) -> Self {
-        self.shape_flag_vars = vars;
+    pub(crate) fn with_shape_extension_vars(mut self, vars: Option<Arc<SmallSet<Var>>>) -> Self {
+        self.shape_extension_vars = vars;
         self
     }
 
-    pub(crate) fn is_shape_flag_var_type(&self, ty: &Type) -> bool {
+    pub(crate) fn is_shape_extension_var_type(&self, ty: &Type) -> bool {
         matches!(
             ty,
             Type::Var(var)
-                if self.shape_flag_vars.as_ref().is_some_and(|vars| vars.contains(var))
+                if self.shape_extension_vars.as_ref().is_some_and(|vars| vars.contains(var))
         )
     }
 
-    pub(crate) fn for_shape_flag_binding_source(&self, ty: &Type) -> Option<Self> {
+    pub(crate) fn for_shape_extension_binding_source(&self, ty: &Type) -> Option<Self> {
         let Type::Var(var) = ty else {
             return None;
         };
-        self.shape_flag_vars
+        self.shape_extension_vars
             .as_ref()
             .is_some_and(|vars| vars.contains(var))
             .then(|| {
                 let mut context = self.clone();
-                context.shape_flag_binding_source = Some(*var);
+                context.shape_extension_binding_source = Some(*var);
                 context
             })
     }
 
-    fn is_shape_flag_binding_source(&self, var: Var) -> bool {
-        self.shape_flag_binding_source == Some(var)
+    fn is_shape_extension_binding_source(&self, var: Var) -> bool {
+        self.shape_extension_binding_source == Some(var)
     }
 
     pub fn with_outside_context(mut self) -> Self {
@@ -3293,8 +3300,8 @@ impl<'subset> CallContext<'subset> {
         // capture while retaining the boundary's previously collected captures.
         self.witness = Default::default();
         self.argument_side = Default::default();
-        self.shape_flag_vars = Default::default();
-        self.shape_flag_binding_source = None;
+        self.shape_extension_vars = Default::default();
+        self.shape_extension_binding_source = None;
         self
     }
 
@@ -3589,13 +3596,14 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     .iter()
                     .any(|c2| self.is_subset_eq(c1, c2).is_ok())
             }),
-            Restriction::Flag(domain) => {
-                domain.types(self.type_order.stdlib()).iter().all(|atom| {
+            Restriction::ShapeExtension(extension) => extension
+                .upper_bound_members(self.type_order.stdlib())
+                .iter()
+                .all(|atom| {
                     constraints
                         .iter()
                         .any(|constraint| self.is_subset_eq(atom, constraint).is_ok())
-                })
-            }
+                }),
             Restriction::Unrestricted => {
                 // Check if the implicit bound `object` is assignable to any of the constraints
                 constraints.iter().any(|c| {
@@ -3643,7 +3651,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         q: &Quantified,
         lower_bound: Option<&Type>,
         upper_bound: Option<&Type>,
-        is_shape_flag_binding_source: bool,
+        is_shape_extension_binding_source: bool,
     ) -> (Type, Option<TypeVarSpecializationError>) {
         let bound = q.upper_bound(self.type_order.stdlib(), &self.solver.heap);
         let t1_p = if let Some(normalized) =
@@ -3709,8 +3717,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     (t1_p.clone(), specialization_error)
                 }
             }
-            Restriction::Flag(domain) if is_shape_flag_binding_source => {
-                let accepted = domain.accepts_with_str_subclasses(t1, |member| match member {
+            Restriction::ShapeExtension(extension) if is_shape_extension_binding_source => {
+                let accepted = extension.accepts_specialization(t1, |member| match member {
                     Type::ClassType(cls) | Type::SelfType(cls) => self.type_order.has_superclass(
                         cls.class_object(),
                         self.type_order.stdlib().str().class_object(),
@@ -3718,33 +3726,42 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     _ => false,
                 });
                 let specialization_error = if !accepted {
-                    Some(TypeVarSpecializationError::BadFlagSpecialization {
-                        name: q.name().clone(),
-                        got: t1.clone(),
-                        domain: *domain,
-                    })
+                    Some(
+                        TypeVarSpecializationError::BadShapeExtensionSpecialization {
+                            name: q.name().clone(),
+                            got: t1.clone(),
+                            restriction: extension.clone(),
+                        },
+                    )
                 } else if let Some(lower_bound) = lower_bound
                     && self.is_subset_eq(lower_bound, t1).is_err()
                 {
-                    Some(TypeVarSpecializationError::ConflictingFlagSpecialization {
-                        name: q.name().clone(),
-                        selected: t1.clone(),
-                        constraint: lower_bound.clone(),
-                    })
+                    Some(
+                        TypeVarSpecializationError::ConflictingShapeExtensionSpecialization {
+                            name: q.name().clone(),
+                            selected: t1.clone(),
+                            constraint: lower_bound.clone(),
+                            restriction: extension.clone(),
+                        },
+                    )
                 } else if let Some(upper_bound) = upper_bound
                     && self.is_subset_eq(t1, upper_bound).is_err()
                 {
-                    Some(TypeVarSpecializationError::ConflictingFlagSpecialization {
-                        name: q.name().clone(),
-                        selected: t1.clone(),
-                        constraint: upper_bound.clone(),
-                    })
+                    Some(
+                        TypeVarSpecializationError::ConflictingShapeExtensionSpecialization {
+                            name: q.name().clone(),
+                            selected: t1.clone(),
+                            constraint: upper_bound.clone(),
+                            restriction: extension.clone(),
+                        },
+                    )
                 } else {
                     None
                 };
-                // A successfully specialized `Flag` value's literal identity is part of its type,
-                // including literals nested in an accepted composite value, so pin them recursively
-                // against later widening. Rejected specializations keep their recovery type.
+                // A successfully specialized shape-extension value's literal identity is part of
+                // its type, including literals nested in an accepted composite value, so pin them
+                // recursively against later widening. Rejected specializations keep their recovery
+                // type.
                 let answer = if specialization_error.is_none() {
                     t1.clone().with_literal_style(LitStyle::Explicit)
                 } else {
@@ -3752,7 +3769,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 };
                 (answer, specialization_error)
             }
-            Restriction::Flag(_) | Restriction::Bound(_) | Restriction::Unrestricted => {
+            Restriction::ShapeExtension(_) | Restriction::Bound(_) | Restriction::Unrestricted => {
                 if self.is_subset_eq(&t1_p, &bound).is_err() {
                     // If the promoted type fails, try again with the original type, in case the bound itself is literal.
                     // This could be more optimized, but errors are rare, so this code path should not be hot.
@@ -3775,9 +3792,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         }
     }
 
-    fn is_shape_flag_binding_source(&self, q: &Quantified, v: Var) -> bool {
-        matches!(q.restriction(), Restriction::Flag(_))
-            && self.active_call_context.is_shape_flag_binding_source(v)
+    fn is_shape_extension_binding_source(&self, q: &Quantified, v: Var) -> bool {
+        q.restriction().uses_direct_value_source()
+            && self
+                .active_call_context
+                .is_shape_extension_binding_source(v)
     }
 
     /// Implementation of Var subset cases, calling onward to solve non-Var cases.
@@ -3945,7 +3964,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                                 quantified: q2,
                                 bounds: _,
                             },
-                        ) if matches!(q2.restriction(), Restriction::Flag(_)) => {
+                        ) if q2.restriction().is_flag() => {
                             drop(variable1);
                             drop(variable2);
                             variables.unify(*v1, *v2);
@@ -3957,7 +3976,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                                 bounds: _,
                             },
                             Variable::PartialContained(_),
-                        ) if matches!(q1.restriction(), Restriction::Flag(_)) => {
+                        ) if q1.restriction().is_flag() => {
                             drop(variable1);
                             drop(variable2);
                             variables.unify(*v2, *v1);
@@ -4168,12 +4187,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         bounds,
                     } => {
                         let q = q.clone();
-                        let is_shape_flag_binding_source =
-                            self.is_shape_flag_binding_source(&q, *v2);
-                        // Optimization: compute the lower bound only when it is needed for shape
-                        // flag checks. Computing it unconditionally makes pytorch incremental
-                        // edits 4-5x slower on our LSP benchmarks.
-                        let lower_bound = is_shape_flag_binding_source
+                        let is_shape_extension_binding_source =
+                            self.is_shape_extension_binding_source(&q, *v2);
+                        // Optimization: compute the lower bound only when it is needed for
+                        // shape-extension value checks. Computing it unconditionally makes pytorch
+                        // incremental edits 4-5x slower on our LSP benchmarks.
+                        let lower_bound = is_shape_extension_binding_source
                             .then(|| self.solver.get_current_bound(bounds.lower.clone()))
                             .flatten();
                         let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
@@ -4184,7 +4203,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             &q,
                             lower_bound.as_ref(),
                             upper_bound.as_ref(),
-                            is_shape_flag_binding_source,
+                            is_shape_extension_binding_source,
                         );
                         if let Some(specialization_error) = specialization_error {
                             self.solver
@@ -4196,7 +4215,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             // For constraints, `Any` usually does not provide any information, so
                             // we drop it and pin to the first non-`Any` answer.
                             || (matches!(q.restriction(), Restriction::Constraints(_)) && !answer.is_any())
-                            || is_shape_flag_binding_source
+                            || is_shape_extension_binding_source
                         {
                             // If the TypeVar has constraints, we write the answer immediately to
                             // enforce that we always match the same constraint.
@@ -4224,7 +4243,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             &q,
                             None,
                             None,
-                            self.is_shape_flag_binding_source(&q, *v2),
+                            self.is_shape_extension_binding_source(&q, *v2),
                         );
                         let answer = normalize_answer_for_kind(q.kind(), Cow::Owned(answer));
                         if let Some(specialization_error) = specialization_error {

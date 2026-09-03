@@ -19,8 +19,8 @@ use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_alias::TypeAliasData;
-use pyrefly_types::type_var::FlagDomain;
 use pyrefly_types::type_var::Restriction;
+use pyrefly_types::type_var::ShapeExtensionRestriction;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::NeverStyle;
 use pyrefly_types::types::SuperObj;
@@ -677,7 +677,7 @@ fn quantified_restriction_indexed_bounds(
 ) -> Vec<usize> {
     match restriction {
         Restriction::Bound(bound) => vec![type_to_indexed_shape(context, bound, table)],
-        Restriction::Flag(domain) => flag_domain_indexed_bounds(*domain, table),
+        Restriction::ShapeExtension(extension) => shape_extension_indexed_bounds(extension, table),
         Restriction::Constraints(_) | Restriction::Unrestricted => Vec::new(),
     }
 }
@@ -693,14 +693,17 @@ fn restriction_indexed_bounds(
             .iter()
             .map(|ty| type_to_indexed_shape(context, ty, table))
             .collect(),
-        Restriction::Flag(domain) => flag_domain_indexed_bounds(*domain, table),
+        Restriction::ShapeExtension(extension) => shape_extension_indexed_bounds(extension, table),
         Restriction::Unrestricted => Vec::new(),
     }
 }
 
-fn flag_domain_indexed_bounds(domain: FlagDomain, table: &mut TypeTableBuilder) -> Vec<usize> {
-    domain
-        .class_names()
+fn shape_extension_indexed_bounds(
+    extension: &ShapeExtensionRestriction,
+    table: &mut TypeTableBuilder,
+) -> Vec<usize> {
+    extension
+        .upper_bound_class_names()
         .into_iter()
         .map(|name| indexed_named_leaf(table, name))
         .collect()
@@ -785,13 +788,17 @@ pub(super) fn located_type_table_refs(
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_types::type_var::FlagDomain;
     use pyrefly_types::type_var::FlagMember;
 
     use super::*;
 
     fn indexed_flag_bound_names(domain: FlagDomain) -> Vec<String> {
         let mut table = TypeTableBuilder::new();
-        let bounds = flag_domain_indexed_bounds(domain, &mut table);
+        let Restriction::ShapeExtension(extension) = Restriction::flag(domain) else {
+            unreachable!("a Flag domain creates a shape-extension restriction")
+        };
+        let bounds = shape_extension_indexed_bounds(&extension, &mut table);
         let entries = table.into_type_table();
         bounds
             .into_iter()

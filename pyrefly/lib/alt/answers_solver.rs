@@ -3673,13 +3673,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             TypeCheckCallContext::NoCall => None,
         };
-        let flag_source_context =
-            call_context.and_then(|context| context.for_shape_flag_binding_source(want));
+        let extension_source_context =
+            call_context.and_then(|context| context.for_shape_extension_binding_source(want));
         let subset_result = self.solver().is_subset_eq(
             got,
             want,
             self.type_order(),
-            flag_source_context.as_ref().or(call_context),
+            extension_source_context.as_ref().or(call_context),
         );
         match subset_result {
             Ok(()) => {

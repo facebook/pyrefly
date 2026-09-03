@@ -94,8 +94,8 @@ fn quantified_to_structured(
             .iter()
             .map(|c| type_to_structured(c, table, pending_class_traits))
             .collect(),
-        Restriction::Flag(domain) => domain
-            .class_names()
+        Restriction::ShapeExtension(extension) => extension
+            .upper_bound_class_names()
             .into_iter()
             .map(|name| insert_simple_class(name, table))
             .collect(),
@@ -390,8 +390,8 @@ pub(crate) fn type_to_structured(
                     .iter()
                     .map(|c| type_to_structured(c, table, pending_class_traits))
                     .collect(),
-                Restriction::Flag(domain) => domain
-                    .class_names()
+                Restriction::ShapeExtension(extension) => extension
+                    .upper_bound_class_names()
                     .into_iter()
                     .map(|name| insert_simple_class(name, table))
                     .collect(),

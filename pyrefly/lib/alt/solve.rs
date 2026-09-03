@@ -2117,7 +2117,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 matches!(ty, Type::Int(_))
                     || matches!(ty, Type::ClassType(cls) if cls.has_qname("shape_extensions", "Int"))
             };
-            let default = if matches!(restriction, Restriction::Flag(_)) {
+            let default = if matches!(
+                &restriction,
+                Restriction::ShapeExtension(extension) if extension.infer_default_as_value()
+            ) {
                 self.expr_infer(default_expr, errors)
             } else if self.solver().tensor_shapes
                 && matches!(&restriction, Restriction::Bound(bound) if is_size_bound(bound))
@@ -2199,7 +2202,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         source: TParamsSource,
         errors: &ErrorCollector,
     ) -> TParams {
-        self.validate_shape_flag_type_parameter_scope(&tparams, &source, range, errors);
+        self.validate_shape_extension_type_parameter_scope(&tparams, &source, range, errors);
         let mut last_tparam: Option<&Quantified> = None;
         let mut seen: SmallMap<&Name, &Quantified> = SmallMap::new();
         let mut typevartuple = None;
@@ -3434,7 +3437,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if default.is_error() {
             return default.clone();
         }
-        if let Some(default) = self.validate_shape_flag_type_parameter_default(
+        if let Some(default) = self.validate_shape_extension_type_parameter_default(
             name,
             default,
             range,
@@ -3443,71 +3446,75 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         ) {
             return default;
         }
-        match restriction {
+        // A shape extension may apply specialized validation above. Extensions without one use
+        // the same safe fallback as an ordinary bound.
+        let upper_bound = match restriction {
+            Restriction::Bound(bound) => Some(bound.clone()),
+            Restriction::ShapeExtension(extension) => {
+                Some(extension.upper_bound(self.stdlib, self.heap))
+            }
+            Restriction::Constraints(_) | Restriction::Unrestricted => None,
+        };
+        if let Some(bound_ty) = upper_bound {
             // Default must be a subtype of the upper bound.
             // Per PEP 696: when default is a TypeVar, "T1's bound must be a subtype of T2's bound"
-            Restriction::Bound(bound_ty) => {
-                let default_for_check = match default {
-                    Type::TypeVar(tv) => tv.upper_bound(self.stdlib, self.heap),
-                    Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
-                    _ => default.clone(),
-                };
-                if !self.is_subset_eq(&default_for_check, bound_ty) {
-                    self.error(
-                        errors,
-                        range,
-                        quantified_error(kind),
-                        format!(
-                            "Expected default `{default}` of `{name}` to be assignable to the upper bound of `{bound_ty}`",
-                        ),
-                    );
-                    return self.heap.mk_any_error();
-                }
+            let default_for_check = match default {
+                Type::TypeVar(tv) => tv.upper_bound(self.stdlib, self.heap),
+                Type::Quantified(q) if q.is_type_var() => q.upper_bound(self.stdlib, self.heap),
+                _ => default.clone(),
+            };
+            if !self.is_subset_eq(&default_for_check, &bound_ty) {
+                self.error(
+                    errors,
+                    range,
+                    quantified_error(kind),
+                    format!(
+                        "Expected default `{default}` of `{name}` to be assignable to the upper bound of `{bound_ty}`",
+                    ),
+                );
+                return self.heap.mk_any_error();
             }
-            Restriction::Constraints(constraints) => {
-                // Per PEP 696: when default is a TypeVar, "the constraints of T2 must be a
-                // superset of the constraints of T1". A bounded or unrestricted TypeVar cannot
-                // be a valid default for a constrained TypeVar since it can't guarantee an
-                // exact constraint match.
-                let valid = match default {
-                    Type::TypeVar(tv) => match tv.restriction() {
-                        Restriction::Constraints(default_constraints) => default_constraints
-                            .iter()
-                            .all(|dc| constraints.iter().any(|c| self.is_consistent(c, dc))),
-                        Restriction::Bound(_)
-                        | Restriction::Flag(_)
-                        | Restriction::Unrestricted => false,
-                    },
-                    Type::Quantified(q) if q.is_type_var() => match q.restriction() {
-                        Restriction::Constraints(default_constraints) => default_constraints
-                            .iter()
-                            .all(|dc| constraints.iter().any(|c| self.is_consistent(c, dc))),
-                        Restriction::Bound(_)
-                        | Restriction::Flag(_)
-                        | Restriction::Unrestricted => false,
-                    },
-                    _ => constraints.iter().any(|c| self.is_consistent(c, default)),
-                };
-                if !valid {
-                    let formatted_constraints = constraints
+        } else if let Restriction::Constraints(constraints) = restriction {
+            // Per PEP 696: when default is a TypeVar, "the constraints of T2 must be a
+            // superset of the constraints of T1". A bounded or unrestricted TypeVar cannot
+            // be a valid default for a constrained TypeVar since it can't guarantee an
+            // exact constraint match.
+            let valid = match default {
+                Type::TypeVar(tv) => match tv.restriction() {
+                    Restriction::Constraints(default_constraints) => default_constraints
                         .iter()
-                        .map(|x| format!("`{x}`"))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    self.error(
-                        errors,
-                        range,
-                        quantified_error(kind),
-                        format!(
-                            "Expected default `{default}` of `{name}` to be one of the following constraints: {formatted_constraints}"
-                        ),
-                    );
-                    return self.heap.mk_any_error();
-                }
+                        .all(|dc| constraints.iter().any(|c| self.is_consistent(c, dc))),
+                    Restriction::Bound(_)
+                    | Restriction::ShapeExtension(_)
+                    | Restriction::Unrestricted => false,
+                },
+                Type::Quantified(q) if q.is_type_var() => match q.restriction() {
+                    Restriction::Constraints(default_constraints) => default_constraints
+                        .iter()
+                        .all(|dc| constraints.iter().any(|c| self.is_consistent(c, dc))),
+                    Restriction::Bound(_)
+                    | Restriction::ShapeExtension(_)
+                    | Restriction::Unrestricted => false,
+                },
+                _ => constraints.iter().any(|c| self.is_consistent(c, default)),
+            };
+            if !valid {
+                let formatted_constraints = constraints
+                    .iter()
+                    .map(|x| format!("`{x}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.error(
+                    errors,
+                    range,
+                    quantified_error(kind),
+                    format!(
+                        "Expected default `{default}` of `{name}` to be one of the following constraints: {formatted_constraints}"
+                    ),
+                );
+                return self.heap.mk_any_error();
             }
-            Restriction::Flag(_) => unreachable!("Flag defaults are validated by the shape layer"),
-            Restriction::Unrestricted => {}
-        };
+        }
         match kind {
             QuantifiedKind::ParamSpec => {
                 if default.is_kind_param_spec() {
