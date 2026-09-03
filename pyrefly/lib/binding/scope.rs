@@ -265,6 +265,9 @@ enum StaticStyle {
 struct MutableCapture {
     kind: MutableCaptureKind,
     original: Result<Box<StaticInfo>, MutableCaptureError>,
+    /// Does the declaring scope itself give the name a value (e.g. `global x; x = 1`)?
+    /// Such a capture creates the outer-scope name instead of requiring one to exist.
+    has_value_definition: bool,
 }
 
 impl MutableCapture {
@@ -333,6 +336,7 @@ impl StaticStyle {
                     Self::MutableCapture(MutableCapture {
                         kind: *kind,
                         original,
+                        has_value_definition: definition.has_value_definition,
                     })
                 }
                 DefinitionStyle::Annotated(.., ann) => {
@@ -2059,6 +2063,26 @@ impl Scopes {
             return Some(static_info.range);
         }
         None
+    }
+
+    /// Does a `global` declaration of `name` in the current function/method scope
+    /// come with a value definition in that same scope (e.g. `global x; x = 1`)?
+    /// Such a declaration legally creates the module-level name at runtime, so it
+    /// must not be reported as referencing a missing outer definition.
+    pub fn global_capture_self_defined(&self, name: Hashed<&Name>) -> bool {
+        let current = self.current();
+        matches!(current.kind, ScopeKind::Function(_) | ScopeKind::Method(_))
+            && matches!(
+                current.stat.0.get_hashed(name),
+                Some(StaticInfo {
+                    style: StaticStyle::MutableCapture(MutableCapture {
+                        kind: MutableCaptureKind::Global,
+                        has_value_definition: true,
+                        ..
+                    }),
+                    ..
+                })
+            )
     }
 
     /// Check if a name has a nonlocal binding in an enclosing scope.

@@ -114,6 +114,25 @@ pub struct Definition {
     /// True while every definition site is inside an `if __name__ == "__main__":` body.
     /// Such names resolve in-module but are not importable, so the export surface excludes them.
     pub main_guard_only: bool,
+    /// True if any definition site assigns or imports a value, as opposed to merely
+    /// declaring the name (`global`/`nonlocal`) or deleting it. Only meaningful when
+    /// `style` is `MutableCapture`: a capture whose own scope defines a value
+    /// (`global x; x = 1`) legally creates the outer-scope name, so it needs no
+    /// pre-existing outer definition.
+    pub has_value_definition: bool,
+}
+
+/// Does this definition style give the name a value in the current scope?
+/// `global`/`nonlocal` declarations and `del` do not; implicit globals are
+/// injected module-level, not defined here.
+fn is_value_definition(style: &DefinitionStyle) -> bool {
+    !matches!(
+        style,
+        DefinitionStyle::MutableCapture(..)
+            | DefinitionStyle::Delete
+            | DefinitionStyle::ImplicitGlobal
+            | DefinitionStyle::ImportInvalidRelative
+    )
 }
 
 impl Definition {
@@ -126,6 +145,7 @@ impl Definition {
 
     fn merge(&mut self, other: DefinitionStyle, range: TextRange, in_main_guard: bool) {
         self.main_guard_only &= in_main_guard;
+        self.has_value_definition |= is_value_definition(&other);
         // To ensure binding code cannot produce invalid lookups, we ensure that
         // `self.style` and `self.range` always match.
         if other < self.style {
@@ -351,6 +371,7 @@ impl Definitions {
                     docstring_range: None,
                     last_range: TextRange::default(),
                     main_guard_only: false,
+                    has_value_definition: false,
                 },
             );
         }
@@ -439,6 +460,7 @@ impl DefinitionsBuilder {
             return;
         }
         let in_main_guard = self.in_main_guard;
+        let has_value_definition = is_value_definition(&style);
         match self.inner.definitions.entry(x.clone()) {
             Entry::Occupied(mut e) => {
                 e.get_mut().merge(style, range, in_main_guard);
@@ -451,6 +473,7 @@ impl DefinitionsBuilder {
                     docstring_range: body.and_then(Docstring::range_from_stmts),
                     last_range: range,
                     main_guard_only: in_main_guard,
+                    has_value_definition,
                 });
             }
         }
