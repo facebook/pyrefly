@@ -142,6 +142,20 @@ fn is_int_class_type(cls: &ClassType) -> bool {
     cls.has_qname("shape_extensions", "Int")
 }
 
+fn is_scalar_type(ty: &Type) -> bool {
+    match ty {
+        Type::ClassType(cls) => {
+            cls.is_builtin("int")
+                || cls.is_builtin("float")
+                || cls.is_builtin("complex")
+                || cls.is_builtin("bool")
+        }
+        Type::Literal(lit) => matches!(lit.value, Lit::Int(_) | Lit::Bool(_)),
+        Type::Int(_) => true,
+        _ => false,
+    }
+}
+
 fn params_have_any_args_and_kwargs(params: &Params) -> bool {
     match params {
         Params::List(args) | Params::Partial(args) => params_are_gradual_variadic(args.items()),
@@ -2281,6 +2295,24 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             // Tensor type checking
             (Type::ShapedArray(got_shaped_array), Type::ShapedArray(want_shaped_array)) => {
                 self.is_subset_shaped_array(got_shaped_array, want_shaped_array)
+            }
+            (got, Type::ShapedArray(want_shaped_array))
+                if is_scalar_type(got)
+                    && want_shaped_array
+                        .base_class
+                        .has_qname("shape_extensions", "Scalar") =>
+            {
+                let scalar_shape = IntTuple::new(Vec::new());
+                let scalar_shape_arg = scalar_shape.to_shape_arg_type();
+                let (_, want_arg) = self.shape_param_and_arg(want_shaped_array)?;
+                if IntTuple::from_shape_arg_type(want_arg)
+                    .or_else(|| tuple_carrier_to_shape(want_arg))
+                    .is_none()
+                {
+                    self.is_subset_eq(&scalar_shape_arg, want_arg)
+                } else {
+                    self.bind_tensor_dimensions(&scalar_shape, &want_shaped_array.shape())
+                }
             }
             // Tensor is subtype of its base class
             (Type::ShapedArray(tensor), Type::ClassType(cls)) => {

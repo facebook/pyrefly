@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import jax.numpy as jnp
-from shape_extensions import assert_shape
+from shape_extensions import assert_shape, Scalar
 
 
 def test_elementwise_operators_preserve_shape() -> None:
@@ -236,3 +236,48 @@ def test_binary_functions_reject_incompatible_broadcast() -> None:
         pass
     else:
         raise AssertionError("expected JAX to reject incompatible shapes")
+
+
+def test_add_arraylike_annotations() -> None:
+    # Scalar / scalar operations produce 0-D arrays.
+    assert_shape(jnp.add(1, 2), ())
+    assert_shape(jnp.add(1.5, 2.5), ())
+    assert_shape(jnp.add(1, 2.0), ())
+    assert_shape(jnp.add(True, 1), ())
+    assert_shape(jnp.add(True, False), ())
+    assert_shape(jnp.add(1j, 2.0), ())
+    assert_shape(jnp.add(1j, 2j), ())
+
+    # Scalar / array operations preserve or broadcast shape.
+    scalar_0d = jnp.ones(())
+    assert_shape(jnp.add(1, scalar_0d), ())
+    assert_shape(jnp.add(scalar_0d, 1), ())
+    assert_shape(jnp.add(scalar_0d, scalar_0d), ())
+
+    vector = jnp.ones(4)
+    assert_shape(jnp.add(vector, 1), (4,))
+    assert_shape(jnp.add(1, vector), (4,))
+    assert_shape(jnp.add(vector, 2.5), (4,))
+    assert_shape(jnp.add(2.5, vector), (4,))
+
+    matrix = jnp.ones((3, 4))
+    assert_shape(jnp.add(matrix, 1), (3, 4))
+    assert_shape(jnp.add(1, matrix), (3, 4))
+    assert_shape(jnp.add(matrix, 2.5), (3, 4))
+    assert_shape(jnp.add(2.5, matrix), (3, 4))
+    assert_shape(jnp.add(matrix, 1j), (3, 4))
+    assert_shape(jnp.add(1j, matrix), (3, 4))
+    assert_shape(jnp.add(matrix, True), (3, 4))
+    assert_shape(jnp.add(True, matrix), (3, 4))
+
+    tensor = jnp.ones((2, 3, 4))
+    assert_shape(jnp.add(tensor, 1), (2, 3, 4))
+    assert_shape(jnp.add(1, tensor), (2, 3, 4))
+    assert_shape(jnp.add(tensor, 1.0), (2, 3, 4))
+    assert_shape(jnp.add(1.0, tensor), (2, 3, 4))
+
+    # Scalar type only allows empty shapes:
+    _: Scalar[()] = 1
+    _bare: Scalar = 1
+    # E: `shape_extensions.Scalar` only accepts an empty shape `[]`
+    _bad: Scalar[[3, 4]]

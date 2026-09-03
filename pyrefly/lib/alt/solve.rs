@@ -6603,7 +6603,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             // Canonicalize bare shaped-array types to Type::ShapedArray(shapeless)
                             // for consistency. Subscripted arrays are already converted to
                             // Type::ShapedArray during annotation parsing, so only the bare case reaches here.
-                            Some(ShapedArrayType::shapeless(cls.clone()).to_type())
+                            if cls.has_qname("shape_extensions", "Scalar") {
+                                Some(
+                                    ShapedArrayType::new(cls.clone(), IntTuple::new(Vec::new()))
+                                        .to_type(),
+                                )
+                            } else {
+                                Some(ShapedArrayType::shapeless(cls.clone()).to_type())
+                            }
                         } else if cls.has_qname("types", "NoneType") {
                             // Normalize type[NoneType] as None
                             Some(self.heap.mk_none())
