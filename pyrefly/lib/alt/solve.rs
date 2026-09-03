@@ -157,6 +157,7 @@ use crate::types::class::AttrsFieldSpecifierKind;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
 use crate::types::display::TypeDisplayContext;
+use crate::types::function::FunctionKind;
 use crate::types::literal::Lit;
 use crate::types::literal::LitStyle;
 use crate::types::module::ModuleType;
@@ -6139,29 +6140,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 if matches!(
                                     &decorator.ty,
                                     Type::Any(AnyStyle::Implicit | AnyStyle::Explicit)
-                                ) || decorator.ty.dataclass_transform_metadata().is_some()
-                                    || matches!(
-                                        &decorator.ty,
-                                        Type::KwCall(call)
-                                            if call.has_function_kind(
-                                                FunctionKind::DataclassTransform,
-                                            ) || call
-                                                .func_metadata
-                                                .flags
-                                                .dataclass_transform_metadata
-                                                .is_some()
-                                    )
-                                {
+                                ) || decorator.ty.toplevel_func_metadata().is_some_and(|meta| {
+                                    meta.flags.dataclass_transform_metadata.is_some()
+                                }) || matches!(
+                                    &decorator.ty,
+                                    Type::KwCall(call)
+                                        if call.has_function_kind(
+                                            FunctionKind::DataclassTransform,
+                                        ) || call
+                                            .func_metadata
+                                            .flags
+                                            .dataclass_transform_metadata
+                                            .is_some()
+                                ) {
                                     continue;
                                 }
                                 // Generic identity and callable-returning decorators are common
                                 // and do not provide a concrete replacement value to model.
-                                if !decorator
-                                    .ty
-                                    .callable_signatures()
-                                    .iter()
-                                    .any(|callable| matches!(&callable.ret, Type::ClassType(_)))
-                                {
+                                if !decorator.ty.toplevel_callable_signatures().any(
+                                    |(callable, _)| matches!(&callable.ret, Type::ClassType(_)),
+                                ) {
                                     continue;
                                 }
                                 let range = self.bindings().idx_to_key(*decorator_key).range();
@@ -7145,50 +7143,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     })
                     .collect();
                 Type::ParamSpecValue(ParamList::new(elts))
-            }
-            Expr::Name(name) if !Ast::is_synthesized_empty_name(name) => {
-                let key = Key::BoundName(ShortIdentifier::expr_name(name));
-                let inferred_ty = if let Some(idx) =
-                    self.bindings().key_to_idx_hashed_opt(Hashed::new(&key))
-                {
-                    let mut binding = self.bindings().get(idx);
-                    while let Binding::Forward(next) | Binding::ForwardToFirstUse(next) = binding {
-                        binding = self.bindings().get(*next);
-                    }
-                    if let Binding::ClassDef(class_idx, _) = binding
-                        && let Some(cls) = &self.get_idx(*class_idx).0
-                    {
-                        self.heap.mk_class_def(cls.dupe())
-                    } else if let Binding::PossibleLegacyTParam(key, _) = binding
-                        && let LegacyTypeParameterLookup::NotParameter(ty) = &*self.get_idx(*key)
-                        && matches!(ty, Type::KwCall(_))
-                    {
-                        ty.clone()
-                    } else {
-                        self.expr_infer(x, errors)
-                    }
-                } else {
-                    self.expr_infer(x, errors)
-                };
-                if type_form_context == TypeFormContext::BaseClassList
-                    && let Type::TypeAlias(ta) = &inferred_ty
-                    && let ta = self.get_type_alias(ta)
-                    && ta.style == TypeAliasStyle::Scoped
-                {
-                    return self.error(
-                        errors,
-                        x.range(),
-                        ErrorKind::InvalidInheritance,
-                        format!(
-                            "Cannot use scoped type alias `{}` as a base class. Use a legacy type alias instead: `{}: TypeAlias = {}`",
-                            ta.name,
-                            ta.name,
-                            self.for_display(ta.as_type())
-                        ),
-                    );
-                } else {
-                    self.untype(inferred_ty, x.range(), errors)
-                }
             }
             _ => {
                 let inferred_ty = self
