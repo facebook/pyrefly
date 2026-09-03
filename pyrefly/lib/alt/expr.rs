@@ -5133,8 +5133,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         {
             return Type::ClassType(base_class);
         }
-        self.shaped_array_classtype_to_shaped_array_type(&base_class)
-            .to_type()
+        let shaped_array = self.shaped_array_classtype_to_shaped_array_type(&base_class);
+        if cls.has_toplevel_qname("shape_extensions", "Scalar") {
+            let is_valid = match shaped_array.shape().view() {
+                IntTupleView::Concrete(dims) => dims.is_empty(),
+                IntTupleView::Unpacked { .. } => true,
+                IntTupleView::Gradual => false,
+            };
+            if !is_valid {
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::InvalidAnnotation,
+                    "`shape_extensions.Scalar` only accepts an empty shape `[]`".to_owned(),
+                );
+                return Type::any_error();
+            }
+        }
+        shaped_array.to_type()
     }
 
     pub(crate) fn parse_int_tuple_type(

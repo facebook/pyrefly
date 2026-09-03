@@ -24,6 +24,7 @@ __all__ = [
     "IntVar",
     "MapIntTuples",
     "ProxyMethod",
+    "Scalar",
     "SymbolicArithExpr",
     "TypeVarTuple",
     "assert_shape",
@@ -277,6 +278,13 @@ def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
         return cls
 
     return decorator
+
+
+@shaped_array(shape="Shape")
+class Scalar[Shape: IntTuple = tuple[()]]:
+    """Marker type for scalar types that coerce to an empty shape `[]`."""
+
+    pass
 
 
 class MapIntTuples:

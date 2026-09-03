@@ -49,16 +49,20 @@ from shape_extensions import (
     IntTuples,
     IntVar,
     MapIntTuples,
+    Scalar,
 )
 
 from . import fft as fft, linalg as linalg
 
 type _Shape = IntTuple
+type _AnyShape = tuple[Any, ...]
 type _Axis = int | tuple[int, ...] | None
 # The trailing `None` is not a legal argument to `reshape`. It is present because
 # an `int | tuple[int, ...]` parameter cannot be iterated inside a DSL function
 # after narrowing with `is_int_value` alone. See `reshape_shape`, which rejects it.
 type _NewShape = int | tuple[int, ...] | None
+
+type ArrayLike[Shape: _Shape = _AnyShape] = Array[Shape] | Scalar[Shape]
 
 # Ranks 1 through 3 are exact; any other integer sequence, including a longer
 # tuple or a list, falls through to a gradual overload rather than being
@@ -657,17 +661,8 @@ def unwrap[Shape: _Shape](
 
 # Broadcasting elementwise binary functions. Each takes a scalar in either
 # position as well as an array: rejecting `jnp.add(a, 1)` would flag valid code.
-@overload
-def add[Shape: _Shape](
-    x1: Array[Shape], x2: int | float | complex, /
-) -> Array[Shape]: ...
-@overload
-def add[Shape: _Shape](
-    x1: int | float | complex, x2: Array[Shape], /
-) -> Array[Shape]: ...
-@overload
 def add[Shape1: _Shape, Shape2: _Shape](
-    x1: Array[Shape1], x2: Array[Shape2], /
+    x1: ArrayLike[Shape1], x2: ArrayLike[Shape2], /
 ) -> Array[broadcast(Shape1, Shape2)]: ...
 @overload
 def arctan2[Shape: _Shape](
