@@ -889,7 +889,6 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         position: TextSize,
-        for_display: bool,
     ) -> Option<Type> {
         let CallInfo {
             callables,
@@ -901,11 +900,7 @@ impl<'a> Transaction<'a> {
         let params = Self::normalize_singleton_function_type_into_params(callable)?;
         let arg_index = Self::active_parameter_index(&params, &active_argument)?;
         let ty = params.get(arg_index)?.as_type().clone();
-        if for_display {
-            Some(ty.deterministic_printing())
-        } else {
-            Some(ty)
-        }
+        Some(ty)
     }
 
     fn import_handle_with_preference(
@@ -1451,7 +1446,7 @@ impl<'a> Transaction<'a> {
         match kind {
             ResolutionKind::Type(ty) => Some(ty),
             ResolutionKind::ActiveCallArgument(position) => {
-                self.get_active_call_argument_type_for_surface(handle, position, for_display)
+                self.get_active_call_argument_type_for_surface(handle, position)
             }
             ResolutionKind::KeyInModule(handle, key) => {
                 let bindings = self.get_bindings(&handle)?;
@@ -1622,7 +1617,7 @@ impl<'a> Transaction<'a> {
     pub fn get_expected_type_at(&self, handle: &Handle, position: TextSize) -> Option<Type> {
         // Call-argument position: predict the active parameter's type from the
         // call signature. Works for not-yet-typed arguments and selects an overload.
-        if let Some(ty) = self.get_active_call_argument_type_for_surface(handle, position, false) {
+        if let Some(ty) = self.get_active_call_argument_type_for_surface(handle, position) {
             return Some(ty);
         }
 

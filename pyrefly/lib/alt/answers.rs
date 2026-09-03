@@ -1781,7 +1781,7 @@ impl Answers {
     }
 
     pub fn get_type_at_for_display(&self, idx: Idx<Key>) -> Option<Type> {
-        Some(self.get_idx(idx)?.ty().clone().deterministic_printing())
+        Some(self.get_idx(idx)?.ty().clone())
     }
 
     pub fn get_type_trace(&self, range: TextRange) -> Option<Type> {
@@ -1796,24 +1796,12 @@ impl Answers {
 
     pub fn get_type_trace_for_display(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
-        Some(
-            lock.types
-                .get(&range)?
-                .as_ref()
-                .clone()
-                .deterministic_printing(),
-        )
+        Some(lock.types.get(&range)?.as_ref().clone())
     }
 
     pub fn get_expected_type_trace_for_display(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
-        Some(
-            lock.expected_types
-                .get(&range)?
-                .as_ref()
-                .clone()
-                .deterministic_printing(),
-        )
+        Some(lock.expected_types.get(&range)?.as_ref().clone())
     }
 
     pub fn try_get_getter_for_range(&self, range: TextRange) -> Option<Type> {
@@ -1837,14 +1825,12 @@ impl Answers {
     pub fn get_chosen_overload_trace_for_display(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
         match lock.overloaded_callees.get(&range)? {
-            OverloadedCallee::Resolved { callable } => {
-                Some(callable.as_type().deterministic_printing())
-            }
+            OverloadedCallee::Resolved { callable } => Some(callable.as_type()),
             OverloadedCallee::Candidates {
                 closest,
                 is_closest_chosen,
                 ..
-            } if *is_closest_chosen => Some(closest.as_type().deterministic_printing()),
+            } if *is_closest_chosen => Some(closest.as_type()),
             _ => None,
         }
     }
