@@ -3,18 +3,38 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Callable, Literal, overload, Sequence
+from typing import Any, Callable, Literal, overload, Sequence, Unpack
 
 from jax._array import Array as Array, Array as ndarray
 from jax._shapes import (
+    cross_axes_shape,
+    cross_axis_shape,
+    diagonal_shape,
+    dot_shape,
+    einsum_shape,
+    inner_shape,
     int_min,
+    kron_shape,
     matmul_shape,
+    matvec_shape,
     permute_shape,
     reduce_shape,
     reshape_shape,
     reverse_shape,
+    tensordot_shape,
+    trace_shape,
+    vecmat_shape,
 )
-from shape_extensions import broadcast, Flag, Int, IntTuple, IntVar
+from shape_extensions import (
+    broadcast,
+    Elements,
+    Flag,
+    Int,
+    IntTuple,
+    IntTuples,
+    IntVar,
+    MapIntTuples,
+)
 
 from . import fft as fft, linalg as linalg
 
@@ -886,11 +906,199 @@ def logaddexp2[Shape: _Shape](
 def logaddexp2[Shape1: _Shape, Shape2: _Shape](
     x1: Array[Shape1], x2: Array[Shape2], /
 ) -> Array[broadcast(Shape1, Shape2)]: ...
-
-# Shape semantics, including vector and batched operands, come from the gufunc-backed helper.
+@overload
+def cross[
+    Shape1: _Shape,
+    Shape2: _Shape,
+    Axis: Flag[int],
+](
+    a: Array[Shape1],
+    b: Array[Shape2],
+    /,
+    axisa: int = -1,
+    axisb: int = -1,
+    axisc: int = -1,
+    *,
+    axis: Axis,
+) -> Array[cross_axis_shape(Shape1, Shape2, Axis)]: ...
+@overload
+def cross[
+    Shape1: _Shape,
+    Shape2: _Shape,
+    AxisA: Flag[int] = -1,
+    AxisB: Flag[int] = -1,
+    AxisC: Flag[int] = -1,
+](
+    a: Array[Shape1],
+    b: Array[Shape2],
+    /,
+    axisa: AxisA = -1,
+    axisb: AxisB = -1,
+    axisc: AxisC = -1,
+    axis: None = None,
+) -> Array[cross_axes_shape(Shape1, Shape2, AxisA, AxisB, AxisC)]: ...
+@overload
+def cross(
+    a: Array[Any],
+    b: Array[Any],
+    /,
+    axisa: int = -1,
+    axisb: int = -1,
+    axisc: int = -1,
+    axis: int | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def diagonal[
+    Shape: _Shape,
+    Offset: Flag[int] = 0,
+    Axis1: Flag[int] = 0,
+    Axis2: Flag[int] = 1,
+](
+    a: Array[Shape],
+    offset: Offset = 0,
+    axis1: Axis1 = 0,
+    axis2: Axis2 = 1,
+) -> Array[diagonal_shape(Shape, Offset, Axis1, Axis2)]: ...
+@overload
+def diagonal(
+    a: Array[Any],
+    offset: int = 0,
+    axis1: int = 0,
+    axis2: int = 1,
+) -> Array[IntTuple]: ...
+def dot[LeftShape: _Shape, RightShape: _Shape](
+    a: Array[LeftShape],
+    b: Array[RightShape],
+    *,
+    precision: Any = None,
+    preferred_element_type: Any = None,
+    out_sharding: Any = None,
+) -> Array[dot_shape(LeftShape, RightShape)]: ...
+@overload
+def einsum[Spec: Flag[str], Shapes: IntTuples](
+    subscripts: Spec,
+    /,
+    *operands: Unpack[MapIntTuples[lambda S: Array[S], Shapes]],
+    out: None = None,
+    optimize: str | bool | Sequence[tuple[int, ...]] = "auto",
+    precision: Any = None,
+    preferred_element_type: Any = None,
+    _dot_general: Any = ...,
+    out_sharding: Any = None,
+) -> Array[einsum_shape(Spec, Shapes)]: ...
+@overload
+def einsum(
+    subscripts: str,
+    /,
+    *operands: Array[Any] | Sequence[Any],
+    out: None = None,
+    optimize: str | bool | Sequence[tuple[int, ...]] = "auto",
+    precision: Any = None,
+    preferred_element_type: Any = None,
+    _dot_general: Any = ...,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+def einsum_path(
+    subscripts: str,
+    /,
+    *operands: Array[Any] | Sequence[Any],
+    optimize: bool | str | Sequence[tuple[int, ...]] = "auto",
+) -> tuple[list[tuple[int, ...]], Any]: ...
+def inner[LeftShape: _Shape, RightShape: _Shape](
+    a: Array[LeftShape],
+    b: Array[RightShape],
+    *,
+    precision: Any = None,
+    preferred_element_type: Any = None,
+) -> Array[inner_shape(LeftShape, RightShape)]: ...
+def kron[AShape: _Shape, BShape: _Shape](
+    a: Array[AShape],
+    b: Array[BShape],
+) -> Array[kron_shape(AShape, BShape)]: ...
 def matmul[LeftShape: _Shape, RightShape: _Shape](
     a: Array[LeftShape], b: Array[RightShape]
 ) -> Array[matmul_shape(LeftShape, RightShape)]: ...
+def matvec[LeftShape: _Shape, RightShape: _Shape](
+    x1: Array[LeftShape],
+    x2: Array[RightShape],
+    /,
+) -> Array[matvec_shape(LeftShape, RightShape)]: ...
+@overload
+def outer[M: IntVar, N: IntVar](
+    a: Array[[M]],
+    b: Array[[N]],
+    out: None = None,
+) -> Array[[M, N]]: ...
+@overload
+def outer(
+    a: Array[Any] | Sequence[Any],
+    b: Array[Any] | Sequence[Any],
+    out: None = None,
+) -> Array[IntTuple]: ...
+@overload
+def tensordot[Left: _Shape, Right: _Shape, Dims: Flag[int] = 2](
+    a: Array[Left],
+    b: Array[Right],
+    axes: Dims = 2,
+    *,
+    precision: Any = None,
+    preferred_element_type: Any = None,
+    out_sharding: Any = None,
+) -> Array[tensordot_shape(Left, Right, Dims)]: ...
+@overload
+def tensordot(
+    a: Array[Any],
+    b: Array[Any],
+    axes: int | Sequence[int] | Sequence[Sequence[int]] = 2,
+    *,
+    precision: Any = None,
+    preferred_element_type: Any = None,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def trace[
+    Shape: _Shape,
+    Offset: Flag[int] = 0,
+    Axis1: Flag[int] = 0,
+    Axis2: Flag[int] = 1,
+](
+    a: Array[Shape],
+    offset: Offset = 0,
+    axis1: Axis1 = 0,
+    axis2: Axis2 = 1,
+    dtype: Any = None,
+    out: None = None,
+) -> Array[trace_shape(Shape, Offset, Axis1, Axis2)]: ...
+@overload
+def trace(
+    a: Array[Any],
+    offset: int = 0,
+    axis1: int = 0,
+    axis2: int = 1,
+    dtype: Any = None,
+    out: None = None,
+) -> Array[IntTuple]: ...
+def vdot[Shape1: _Shape, Shape2: _Shape](
+    a: Array[Shape1],
+    b: Array[Shape2],
+    *,
+    precision: Any = None,
+    preferred_element_type: Any = None,
+) -> Array[[]]: ...
+def vecdot[Shape1: _Shape, Shape2: _Shape, Axis: Flag[_Axis] = -1](
+    x1: Array[Shape1],
+    x2: Array[Shape2],
+    /,
+    *,
+    axis: Axis = -1,
+    precision: Any = None,
+    preferred_element_type: Any = None,
+) -> Array[reduce_shape(broadcast(Shape1, Shape2), Axis, False)]: ...
+def vecmat[LeftShape: _Shape, RightShape: _Shape](
+    x1: Array[LeftShape],
+    x2: Array[RightShape],
+    /,
+) -> Array[vecmat_shape(LeftShape, RightShape)]: ...
 @overload
 def maximum[Shape: _Shape](
     x1: Array[Shape], x2: int | float | complex, /
