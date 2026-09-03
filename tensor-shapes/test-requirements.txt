@@ -18,9 +18,9 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 numpy==2.5.0
-jax==0.10.2
+jax==0.11.1
 # Pinned alongside `jax`: it is a separate distribution that would otherwise
 # resolve freely under a pinned `jax`.
-jaxlib==0.10.2
+jaxlib==0.11.1
 torch==2.12.1+cpu ; sys_platform != "darwin"
 torch==2.12.1 ; sys_platform == "darwin"

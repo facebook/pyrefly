@@ -7,23 +7,40 @@ from typing import Any, Callable, Literal, overload, Sequence, Unpack
 
 from jax._array import Array as Array, Array as ndarray
 from jax._shapes import (
+    broadcast_to_shape,
+    column_stack_shape,
+    concatenate_shape,
     cross_axes_shape,
     cross_axis_shape,
     diagonal_shape,
     dot_shape,
+    dstack_shape,
     einsum_shape,
+    expand_dims_shape,
+    flip_shape,
+    fliplr_shape,
+    flipud_shape,
+    hstack_shape,
     inner_shape,
     int_min,
     kron_shape,
     matmul_shape,
     matvec_shape,
+    moveaxis_shape,
     permute_shape,
+    ravel_shape,
     reduce_shape,
     reshape_shape,
     reverse_shape,
+    roll_shape,
+    rollaxis_shape,
+    squeeze_shape,
+    stack_shape,
+    swapaxes_shape,
     tensordot_shape,
     trace_shape,
     vecmat_shape,
+    vstack_shape,
 )
 from shape_extensions import (
     broadcast,
@@ -1243,6 +1260,18 @@ def transpose[Shape: _Shape, Axes: Flag[_Axis]](
 def transpose[Shape: _Shape](
     a: Array[Shape], axes: Sequence[int]
 ) -> Array[IntTuple]: ...
+@overload
+def permute_dims[Shape: _Shape, Axes: Flag[_Axis]](
+    a: Array[Shape], /, axes: Axes
+) -> Array[permute_shape(Shape, Axes)]: ...
+@overload
+def permute_dims[Shape: _Shape](
+    a: Array[Shape], /, axes: Sequence[int]
+) -> Array[IntTuple]: ...
+def matrix_transpose[Batch: IntTuple, M: IntVar, N: IntVar](
+    x: Array[[*Elements[Batch], M, N]],
+    /,
+) -> Array[[*Elements[Batch], N, M]]: ...
 
 # A single int or tuple, matching JAX: the free function is not variadic, so
 # `jnp.reshape(a, 2, 3)` is an error there. `Array.reshape` is the variadic one.
@@ -1264,6 +1293,179 @@ def reshape(
     copy: bool | None = ...,
     out_sharding: Any = ...,
 ) -> Array[IntTuple]: ...
+def ravel[Shape: _Shape](
+    a: Array[Shape],
+    order: str = "C",
+) -> Array[ravel_shape(Shape)]: ...
+@overload
+def squeeze[Shape: _Shape, Axis: Flag[_Axis] = None](
+    a: Array[Shape],
+    axis: Axis = None,
+) -> Array[squeeze_shape(Shape, Axis)]: ...
+@overload
+def squeeze(
+    a: Array[Any],
+    axis: Sequence[int] | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def expand_dims[Shape: _Shape, Axis: Flag[int]](
+    a: Array[Shape],
+    axis: Axis,
+) -> Array[expand_dims_shape(Shape, Axis)]: ...
+@overload
+def expand_dims(
+    a: Array[Any],
+    axis: int | Sequence[int],
+) -> Array[IntTuple]: ...
+@overload
+def broadcast_to[Shape: _Shape, TargetShape: Flag[_NewShape]](
+    array: Array[Shape],
+    shape: TargetShape,
+) -> Array[broadcast_to_shape(Shape, TargetShape)]: ...
+@overload
+def broadcast_to(
+    array: Array[Any],
+    shape: Sequence[int] | int,
+) -> Array[IntTuple]: ...
+@overload
+def concatenate[Shapes: IntTuples, Axis: Flag[int] = 0](
+    arrays: MapIntTuples[lambda S: Array[S], Shapes],
+    axis: Axis = 0,
+    dtype: Any = None,
+) -> Array[concatenate_shape(Shapes, Axis)]: ...
+@overload
+def concatenate(
+    arrays: Any,
+    axis: int | None = 0,
+    dtype: Any = None,
+) -> Array[IntTuple]: ...
+
+concat = concatenate
+
+@overload
+def stack[Shapes: IntTuples, Axis: Flag[int] = 0](
+    arrays: MapIntTuples[lambda S: Array[S], Shapes],
+    axis: Axis = 0,
+    dtype: Any = None,
+    *,
+    out: Any = None,
+) -> Array[stack_shape(Shapes, Axis)]: ...
+@overload
+def stack(
+    arrays: Any,
+    axis: int = 0,
+    dtype: Any = None,
+    *,
+    out: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def vstack[Shapes: IntTuples](
+    tup: MapIntTuples[lambda S: Array[S], Shapes],
+    *,
+    dtype: Any = None,
+) -> Array[vstack_shape(Shapes)]: ...
+@overload
+def vstack(
+    tup: Any,
+    *,
+    dtype: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def hstack[Shapes: IntTuples](
+    tup: MapIntTuples[lambda S: Array[S], Shapes],
+    *,
+    dtype: Any = None,
+) -> Array[hstack_shape(Shapes)]: ...
+@overload
+def hstack(
+    tup: Any,
+    *,
+    dtype: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def column_stack[Shapes: IntTuples](
+    tup: MapIntTuples[lambda S: Array[S], Shapes],
+) -> Array[column_stack_shape(Shapes)]: ...
+@overload
+def column_stack(
+    tup: Any,
+) -> Array[IntTuple]: ...
+@overload
+def dstack[Shapes: IntTuples](
+    tup: MapIntTuples[lambda S: Array[S], Shapes],
+    *,
+    dtype: Any = None,
+) -> Array[dstack_shape(Shapes)]: ...
+@overload
+def dstack(
+    tup: Any,
+    *,
+    dtype: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def swapaxes[Shape: _Shape, Axis1: Flag[int], Axis2: Flag[int]](
+    a: Array[Shape],
+    axis1: Axis1,
+    axis2: Axis2,
+) -> Array[swapaxes_shape(Shape, Axis1, Axis2)]: ...
+@overload
+def swapaxes(
+    a: Array[Any],
+    axis1: int,
+    axis2: int,
+) -> Array[IntTuple]: ...
+@overload
+def moveaxis[Shape: _Shape, Source: Flag[int], Destination: Flag[int]](
+    a: Array[Shape],
+    source: Source,
+    destination: Destination,
+) -> Array[moveaxis_shape(Shape, Source, Destination)]: ...
+@overload
+def moveaxis(
+    a: Array[Any],
+    source: int | Sequence[int],
+    destination: int | Sequence[int],
+) -> Array[IntTuple]: ...
+@overload
+def rollaxis[Shape: _Shape, Axis: Flag[int], Start: Flag[int] = 0](
+    a: Array[Shape],
+    axis: Axis,
+    start: Start = 0,
+) -> Array[rollaxis_shape(Shape, Axis, Start)]: ...
+@overload
+def rollaxis(
+    a: Array[Any],
+    axis: int,
+    start: int = 0,
+) -> Array[IntTuple]: ...
+@overload
+def flip[Shape: _Shape, Axis: Flag[_Axis] = None](
+    m: Array[Shape],
+    axis: Axis = None,
+) -> Array[flip_shape(Shape, Axis)]: ...
+@overload
+def flip[Shape: _Shape](
+    m: Array[Shape],
+    axis: Sequence[int] | None = None,
+) -> Array[Shape]: ...
+def fliplr[Shape: _Shape](
+    m: Array[Shape],
+) -> Array[fliplr_shape(Shape)]: ...
+def flipud[Shape: _Shape](
+    m: Array[Shape],
+) -> Array[flipud_shape(Shape)]: ...
+@overload
+def roll[Shape: _Shape, Axis: Flag[_Axis] = None](
+    a: Array[Shape],
+    shift: Any,
+    axis: Axis = None,
+) -> Array[roll_shape(Shape, Axis)]: ...
+@overload
+def roll[Shape: _Shape](
+    a: Array[Shape],
+    shift: Any,
+    axis: Sequence[int] | None = None,
+) -> Array[Shape]: ...
 
 # JAX accepts any integer sequence for an axis, but only a tuple is a Flag
 # domain, so any other sequence yields a gradual shape. Rejecting it would flag
