@@ -1759,12 +1759,6 @@ impl Answers {
         unsafe { self.rollback_reserved_if_pending(idx) }
     }
 
-    fn force_for_export_boundary(&self, t: Type) -> Type {
-        // Answers are normalized as they are written, so a committed answer needs no
-        // further normalization on the way out.
-        t
-    }
-
     pub fn solver(&self) -> &Solver {
         &self.solver
     }
@@ -1783,7 +1777,7 @@ impl Answers {
     }
 
     pub fn get_type_at(&self, idx: Idx<Key>) -> Option<Type> {
-        Some(self.force_for_export_boundary(self.get_idx(idx)?.ty().clone()))
+        Some(self.get_idx(idx)?.ty().clone())
     }
 
     pub fn get_type_at_for_display(&self, idx: Idx<Key>) -> Option<Type> {
@@ -1792,12 +1786,12 @@ impl Answers {
 
     pub fn get_type_trace(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
-        Some(self.force_for_export_boundary(lock.types.get(&range)?.as_ref().clone()))
+        Some(lock.types.get(&range)?.as_ref().clone())
     }
 
     pub fn get_expected_type_trace(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
-        Some(self.force_for_export_boundary(lock.expected_types.get(&range)?.as_ref().clone()))
+        Some(lock.expected_types.get(&range)?.as_ref().clone())
     }
 
     pub fn get_type_trace_for_display(&self, range: TextRange) -> Option<Type> {
@@ -1824,20 +1818,18 @@ impl Answers {
 
     pub fn try_get_getter_for_range(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
-        Some(self.force_for_export_boundary(lock.invoked_properties.get(&range)?.as_ref().clone()))
+        Some(lock.invoked_properties.get(&range)?.as_ref().clone())
     }
 
     pub fn get_chosen_overload_trace(&self, range: TextRange) -> Option<Type> {
         let lock = self.trace.as_ref()?.lock();
         match lock.overloaded_callees.get(&range)? {
-            OverloadedCallee::Resolved { callable } => {
-                Some(self.force_for_export_boundary(callable.as_type()))
-            }
+            OverloadedCallee::Resolved { callable } => Some(callable.as_type()),
             OverloadedCallee::Candidates {
                 closest,
                 is_closest_chosen,
                 ..
-            } if *is_closest_chosen => Some(self.force_for_export_boundary(closest.as_type())),
+            } if *is_closest_chosen => Some(closest.as_type()),
             _ => None,
         }
     }
