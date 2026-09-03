@@ -609,3 +609,306 @@ def cross_axis_shape(
     axis: int,
 ) -> IntTuple:
     return cross_axes_shape(a_shape, b_shape, axis, axis, axis)
+
+@type_shape_dsl_function
+def expand_dims_shape(shape: IntTuple, axis: int) -> IntTuple:
+    out_rank = len(shape) + 1
+    if axis < 0 - out_rank or axis >= out_rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + out_rank
+    else:
+        norm_axis = axis + 0
+    return dsl.concat(
+        dsl.concat(shape[:norm_axis], dsl.IntTuple((1,))),
+        shape[norm_axis:],
+    )
+
+@type_shape_dsl_function
+def squeeze_shape(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
+    if axis is None:
+        return dsl.IntTuple(
+            (shape[index] for index in range(len(shape)) if shape[index] != 1)
+        )
+    if dsl.is_int_value(axis):
+        if len(shape) == 0:
+            if axis == 0 or axis == -1:
+                return shape
+            return dsl.Invalid("squeeze axis out of range")
+        if axis < 0 - len(shape) or axis >= len(shape):
+            return dsl.Invalid("squeeze axis out of range")
+        if axis < 0:
+            norm_axis = axis + len(shape)
+        else:
+            norm_axis = axis + 0
+        dim_val = shape[norm_axis]
+        if dsl.is_concrete_int(dim_val) and dim_val != 1:
+            return dsl.Invalid(
+                "cannot select an axis to squeeze out which has size not equal to one"
+            )
+        return dsl.concat(shape[:norm_axis], shape[norm_axis + 1 :])
+    return dsl.IntTuple.gradual()
+
+@type_shape_dsl_function
+def concatenate_shape(shapes: IntTuples, axis: int) -> IntTuple:
+    if len(shapes) == 0:
+        return dsl.Invalid("need at least one array to concatenate")
+    first = shapes[0]
+    rank = len(first)
+    if rank == 0:
+        return dsl.Invalid("zero-dimensional arrays cannot be concatenated")
+    if axis < 0 - rank or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + rank
+    else:
+        norm_axis = axis + 0
+    ranks = dsl.IntTuple((0 if len(shape) == rank else 1 for shape in shapes))
+    if any(r == 1 for r in ranks):
+        return dsl.Invalid("all input arrays must have the same number of dimensions")
+    mismatches = dsl.IntTuple(
+        (
+            1
+            if any(
+                shape[index] != first[index]
+                for index in range(rank)
+                if index != norm_axis
+            )
+            else 0
+            for shape in shapes
+        )
+    )
+    if any(m == 1 for m in mismatches):
+        return dsl.Invalid(
+            "all input array dimensions for the concatenation axis must match exactly"
+        )
+    return dsl.IntTuple(
+        (
+            dsl.sum(dsl.IntTuple((shape[norm_axis] for shape in shapes)))
+            if index == norm_axis
+            else first[index]
+            for index in range(rank)
+        )
+    )
+
+@type_shape_dsl_function
+def stack_shape(shapes: IntTuples, axis: int) -> IntTuple:
+    if len(shapes) == 0:
+        return dsl.Invalid("need at least one array to stack")
+    first = shapes[0]
+    out_rank = len(first) + 1
+    if axis < 0 - out_rank or axis >= out_rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + out_rank
+    else:
+        norm_axis = axis + 0
+    ranks = dsl.IntTuple((0 if len(shape) == len(first) else 1 for shape in shapes))
+    if any(r == 1 for r in ranks):
+        return dsl.Invalid("all input arrays must have the same number of dimensions")
+    mismatches = dsl.IntTuple(
+        (
+            1 if any(shape[index] != first[index] for index in range(len(first))) else 0
+            for shape in shapes
+        )
+    )
+    if any(m == 1 for m in mismatches):
+        return dsl.Invalid("all input arrays must have the same shape")
+    return dsl.IntTuple(
+        (
+            len(shapes)
+            if index == norm_axis
+            else first[index if index < norm_axis else index - 1]
+            for index in range(out_rank)
+        )
+    )
+
+@type_shape_dsl_function
+def vstack_shape(shapes: IntTuples) -> IntTuple:
+    if len(shapes) == 0:
+        return dsl.Invalid("need at least one array to vstack")
+    first = shapes[0]
+    if len(first) == 0:
+        return dsl.Invalid("zero-dimensional arrays cannot be concatenated")
+    zero = 0
+    if len(first) == 1:
+        return stack_shape(shapes, zero)
+    return concatenate_shape(shapes, zero)
+
+@type_shape_dsl_function
+def hstack_shape(shapes: IntTuples) -> IntTuple:
+    if len(shapes) == 0:
+        return dsl.Invalid("need at least one array to hstack")
+    first = shapes[0]
+    if len(first) == 0:
+        return dsl.Invalid("zero-dimensional arrays cannot be concatenated")
+    zero = 0
+    if len(first) == 1:
+        return concatenate_shape(shapes, zero)
+    one = 1
+    return concatenate_shape(shapes, one)
+
+@type_shape_dsl_function
+def broadcast_to_shape(
+    shape: IntTuple, to_shape: int | tuple[int, ...] | None
+) -> IntTuple:
+    if to_shape is None:
+        return dsl.Invalid("broadcast_to requires a shape")
+    if dsl.is_int_value(to_shape):
+        target = (to_shape,)
+    else:
+        target = to_shape
+    if any(dim < 0 for dim in target):
+        return dsl.Invalid("all elements of target shape must be non-negative")
+    if len(shape) > len(target):
+        return dsl.Invalid("incompatible shapes for broadcasting")
+    target_tuple = dsl.IntTuple(dim for dim in target)
+    operands = dsl.IntTuples((shape, target_tuple))
+    spec = "(),()->()"
+    return gufunc_broadcast(spec, operands)
+
+@type_shape_dsl_function
+def ravel_shape(shape: IntTuple) -> IntTuple:
+    return dsl.IntTuple((dsl.prod(shape),))
+
+@type_shape_dsl_function
+def swapaxes_shape(shape: IntTuple, axis1: int, axis2: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        if (axis1 == 0 or axis1 == -1) and (axis2 == 0 or axis2 == -1):
+            return shape
+        return dsl.Invalid("axis out of bounds")
+    if axis1 < 0 - rank or axis1 >= rank or axis2 < 0 - rank or axis2 >= rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis1 < 0:
+        norm_axis1 = axis1 + rank
+    else:
+        norm_axis1 = axis1 + 0
+    if axis2 < 0:
+        norm_axis2 = axis2 + rank
+    else:
+        norm_axis2 = axis2 + 0
+    if norm_axis1 == norm_axis2:
+        return shape
+    return dsl.IntTuple(
+        (
+            shape[norm_axis2]
+            if index == norm_axis1
+            else (shape[norm_axis1] if index == norm_axis2 else shape[index])
+            for index in range(rank)
+        )
+    )
+
+@type_shape_dsl_function
+def moveaxis_shape(shape: IntTuple, source: int, destination: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return shape
+    if source < 0 - rank or source >= rank:
+        return dsl.Invalid("source axis out of bounds")
+    if source < 0:
+        norm_source = source + rank
+    else:
+        norm_source = source + 0
+    if destination < 0 - rank or destination >= rank:
+        return dsl.Invalid("destination axis out of bounds")
+    if destination < 0:
+        norm_dest = destination + rank
+    else:
+        norm_dest = destination + 0
+    dim = shape[norm_source]
+    remaining = dsl.concat(shape[:norm_source], shape[norm_source + 1 :])
+    return dsl.concat(
+        dsl.concat(remaining[:norm_dest], dsl.IntTuple((dim,))),
+        remaining[norm_dest:],
+    )
+
+@type_shape_dsl_function
+def rollaxis_shape(shape: IntTuple, axis: int, start: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return shape
+    if axis < 0 - rank or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + rank
+    else:
+        norm_axis = axis + 0
+    if start < 0 - rank or start > rank:
+        return dsl.Invalid("start out of bounds")
+    if start < 0:
+        norm_start = start + rank
+    else:
+        norm_start = start + 0
+    if norm_axis < norm_start:
+        target_pos = norm_start - 1
+    else:
+        target_pos = norm_start + 0
+    dim = shape[norm_axis]
+    remaining = dsl.concat(shape[:norm_axis], shape[norm_axis + 1 :])
+    return dsl.concat(
+        dsl.concat(remaining[:target_pos], dsl.IntTuple((dim,))),
+        remaining[target_pos:],
+    )
+
+@type_shape_dsl_function
+def column_stack_shape(shapes: IntTuples) -> IntTuple:
+    if len(shapes) == 0:
+        return dsl.Invalid("need at least one array to column_stack")
+    first = shapes[0]
+    if len(first) == 0:
+        return dsl.Invalid("zero-dimensional arrays cannot be concatenated")
+    one = 1
+    if len(first) == 1:
+        return stack_shape(shapes, one)
+    return concatenate_shape(shapes, one)
+
+@type_shape_dsl_function
+def dstack_shape(shapes: IntTuples) -> IntTuple:
+    if len(shapes) == 0:
+        return dsl.Invalid("need at least one array to dstack")
+    first = shapes[0]
+    if len(first) == 0:
+        return dsl.Invalid("zero-dimensional arrays cannot be concatenated")
+    if len(first) == 1:
+        ranks = dsl.IntTuple((0 if len(shape) == 1 else 1 for shape in shapes))
+        if any(r == 1 for r in ranks):
+            return dsl.Invalid(
+                "all input arrays must have the same number of dimensions"
+            )
+        mismatches = dsl.IntTuple(
+            (1 if shape[0] != first[0] else 0 for shape in shapes)
+        )
+        if any(m == 1 for m in mismatches):
+            return dsl.Invalid("all input array dimensions must match exactly")
+        return dsl.IntTuple((1, first[0], len(shapes)))
+    two = 2
+    if len(first) == 2:
+        return stack_shape(shapes, two)
+    return concatenate_shape(shapes, two)
+
+@type_shape_dsl_function
+def flip_shape(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
+    if axis is None:
+        return shape
+    if dsl.is_int_value(axis):
+        axes = (axis,)
+    else:
+        axes = axis
+    rank = len(shape)
+    if any(item < 0 - rank or item >= rank for item in axes):
+        return dsl.Invalid("axis out of bounds")
+    return shape
+
+@type_shape_dsl_function
+def roll_shape(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
+    if axis is None:
+        return shape
+    if dsl.is_int_value(axis):
+        axes = (axis,)
+    else:
+        axes = axis
+    rank = len(shape)
+    if any(item < 0 - rank or item >= rank for item in axes):
+        return dsl.Invalid("axis out of bounds")
+    return shape

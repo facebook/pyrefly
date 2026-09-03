@@ -15,9 +15,12 @@ from jax._shapes import (
     dot_shape,
     matmul_shape,
     permute_shape,
+    ravel_shape,
     reduce_shape,
     reshape_shape,
     reverse_shape,
+    squeeze_shape,
+    swapaxes_shape,
     trace_shape,
 )
 from shape_extensions import broadcast, Flag, IntTuple, IntVar
@@ -189,6 +192,19 @@ class Array[Shape: _Shape = _AnyShape]:
     def reshape(
         self, *shape: int, order: str = ..., out_sharding: Any = ...
     ) -> Array[IntTuple]: ...
+    def ravel(self, order: str = "C") -> Array[ravel_shape(Shape)]: ...
+    @overload
+    def squeeze[Axis: Flag[_Axis] = None](
+        self, axis: Axis = None
+    ) -> Array[squeeze_shape(Shape, Axis)]: ...
+    @overload
+    def squeeze(self, axis: Sequence[int] | None = None) -> Array[IntTuple]: ...
+    @overload
+    def swapaxes[Axis1: Flag[int], Axis2: Flag[int]](
+        self, axis1: Axis1, axis2: Axis2
+    ) -> Array[swapaxes_shape(Shape, Axis1, Axis2)]: ...
+    @overload
+    def swapaxes(self, axis1: int, axis2: int) -> Array[IntTuple]: ...
     @overload
     # Any non-tuple sequence axis is gradual; see `jax/numpy/__init__.pyi`.
     def sum[Axis: Flag[_Axis], KeepDims: Flag[bool]](
