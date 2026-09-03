@@ -3,16 +3,34 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, overload
+from typing import Any, overload, Sequence
 
 from jax._array import Array
-from jax._shapes import lax_broadcast
-from shape_extensions import IntTuple
+from jax._shapes import (
+    broadcast_to_rank_shape,
+    collapse_shape,
+    collapse_to_end_shape,
+    concatenate_shape,
+    lax_broadcast,
+    lax_squeeze_shape,
+    permute_shape,
+    stack_shape,
+)
+from shape_extensions import (
+    Elements,
+    Flag,
+    Int,
+    IntTuple,
+    IntTuples,
+    IntVar,
+    MapIntTuples,
+)
 
 from . import linalg as linalg
 
 type _Shape = IntTuple
 type _Scalar = int | float | complex
+type _Axis = int | tuple[int, ...] | None
 
 # Unary elementwise operators
 def abs[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
@@ -321,3 +339,327 @@ def zeta[Shape: _Shape](x: _Scalar, q: Array[Shape], /) -> Array[Shape]: ...
 def zeta[Shape1: _Shape, Shape2: _Shape](
     x: Array[Shape1], q: Array[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
+
+# -----------------------------------------------------------------------------
+# Array Creation & Constants
+# -----------------------------------------------------------------------------
+
+@overload
+def broadcasted_iota[Shape: _Shape](
+    dtype: Any,
+    shape: Shape,
+    dimension: int,
+    *,
+    out_sharding: Any = None,
+) -> Array[Shape]: ...
+@overload
+def broadcasted_iota(
+    dtype: Any,
+    shape: Sequence[int] | int,
+    dimension: int,
+    *,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def empty(shape: tuple[()], dtype: Any, *, out_sharding: Any = None) -> Array[[]]: ...
+@overload
+def empty[N: IntVar](
+    shape: Int[N], dtype: Any, *, out_sharding: Any = None
+) -> Array[[N]]: ...
+@overload
+def empty[Shape: _Shape](
+    shape: Shape, dtype: Any, *, out_sharding: Any = None
+) -> Array[Shape]: ...
+@overload
+def empty(
+    shape: Sequence[int] | int, dtype: Any, *, out_sharding: Any = None
+) -> Array[IntTuple]: ...
+@overload
+def full(
+    shape: tuple[()],
+    fill_value: Any,
+    dtype: Any = None,
+    *,
+    sharding: Any = None,
+) -> Array[[]]: ...
+@overload
+def full[N: IntVar](
+    shape: Int[N],
+    fill_value: Any,
+    dtype: Any = None,
+    *,
+    sharding: Any = None,
+) -> Array[[N]]: ...
+@overload
+def full[Shape: _Shape](
+    shape: Shape,
+    fill_value: Any,
+    dtype: Any = None,
+    *,
+    sharding: Any = None,
+) -> Array[Shape]: ...
+@overload
+def full(
+    shape: Sequence[int] | int,
+    fill_value: Any,
+    dtype: Any = None,
+    *,
+    sharding: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def full_like[Shape: _Shape](
+    x: Array[Shape],
+    fill_value: Any,
+    dtype: Any = None,
+    shape: None = None,
+    *,
+    sharding: Any = None,
+) -> Array[Shape]: ...
+@overload
+def full_like[N: IntVar](
+    x: Any,
+    fill_value: Any,
+    dtype: Any = None,
+    shape: Int[N] = ...,
+    *,
+    sharding: Any = None,
+) -> Array[[N]]: ...
+@overload
+def full_like[Shape: _Shape](
+    x: Any,
+    fill_value: Any,
+    dtype: Any = None,
+    shape: Shape = ...,
+    *,
+    sharding: Any = None,
+) -> Array[Shape]: ...
+@overload
+def full_like(
+    x: Any,
+    fill_value: Any,
+    dtype: Any = None,
+    shape: Sequence[int] | int | None = None,
+    *,
+    sharding: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def iota[N: IntVar](dtype: Any, size: Int[N]) -> Array[[N]]: ...
+@overload
+def iota(dtype: Any, size: int) -> Array[IntTuple]: ...
+
+# -----------------------------------------------------------------------------
+# Shape Manipulation, Slicing & Reshaping
+# -----------------------------------------------------------------------------
+
+@overload
+def broadcast[Shape: _Shape](
+    operand: Array[Shape],
+    sizes: tuple[()],
+    *,
+    out_sharding: Any = None,
+) -> Array[Shape]: ...
+@overload
+def broadcast[Shape: _Shape, D0: IntVar](
+    operand: Array[Shape],
+    sizes: tuple[Int[D0]],
+    *,
+    out_sharding: Any = None,
+) -> Array[[D0, *Elements[Shape]]]: ...
+@overload
+def broadcast[Shape: _Shape, D0: IntVar, D1: IntVar](
+    operand: Array[Shape],
+    sizes: tuple[Int[D0], Int[D1]],
+    *,
+    out_sharding: Any = None,
+) -> Array[[D0, D1, *Elements[Shape]]]: ...
+@overload
+def broadcast[Shape: _Shape, D0: IntVar, D1: IntVar, D2: IntVar](
+    operand: Array[Shape],
+    sizes: tuple[Int[D0], Int[D1], Int[D2]],
+    *,
+    out_sharding: Any = None,
+) -> Array[[D0, D1, D2, *Elements[Shape]]]: ...
+@overload
+def broadcast(
+    operand: Any,
+    sizes: Sequence[int],
+    *,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def broadcast_in_dim[Shape: _Shape](
+    operand: Any,
+    shape: Shape,
+    broadcast_dimensions: Sequence[int],
+    *,
+    out_sharding: Any = None,
+) -> Array[Shape]: ...
+@overload
+def broadcast_in_dim(
+    operand: Any,
+    shape: Sequence[int] | int,
+    broadcast_dimensions: Sequence[int],
+    *,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def broadcast_like[Shape: _Shape](
+    arr: Any,
+    like_arr: Array[Shape],
+) -> Array[Shape]: ...
+@overload
+def broadcast_like(
+    arr: Any,
+    like_arr: Any,
+) -> Array[IntTuple]: ...
+def broadcast_shapes(*shapes: Sequence[int]) -> tuple[int, ...]: ...
+@overload
+def broadcast_to_rank[Shape: _Shape, Rank: Flag[int]](
+    x: Array[Shape],
+    rank: Rank,
+) -> Array[broadcast_to_rank_shape(Shape, Rank)]: ...
+@overload
+def broadcast_to_rank(
+    x: Any,
+    rank: int,
+) -> Array[IntTuple]: ...
+@overload
+def collapse[Shape: _Shape, Start: Flag[int]](
+    operand: Array[Shape],
+    start_dimension: Start,
+    stop_dimension: None = None,
+) -> Array[collapse_to_end_shape(Shape, Start)]: ...
+@overload
+def collapse[Shape: _Shape, Start: Flag[int], Stop: Flag[int]](
+    operand: Array[Shape],
+    start_dimension: Start,
+    stop_dimension: Stop,
+) -> Array[collapse_shape(Shape, Start, Stop)]: ...
+@overload
+def collapse(
+    operand: Any,
+    start_dimension: int,
+    stop_dimension: int | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def concatenate[Shapes: IntTuples, Dimension: Flag[int] = 0](
+    operands: MapIntTuples[lambda S: Array[S], Shapes],
+    dimension: Dimension = 0,
+) -> Array[concatenate_shape(Shapes, Dimension)]: ...
+@overload
+def concatenate(
+    operands: Any,
+    dimension: int = 0,
+) -> Array[IntTuple]: ...
+def expand_dims(
+    array: Any,
+    dimensions: Sequence[int],
+) -> Array[IntTuple]: ...
+def pad(
+    operand: Any,
+    padding_value: Any,
+    padding_config: Sequence[tuple[int, int, int]],
+) -> Array[IntTuple]: ...
+def padtype_to_pads(
+    in_shape: Sequence[int],
+    window_shape: Sequence[int],
+    window_strides: Sequence[int],
+    padding: str,
+) -> list[tuple[int, int]]: ...
+@overload
+def reshape[NewShape: _Shape](
+    operand: Any,
+    new_sizes: NewShape,
+    dimensions: Sequence[int] | None = None,
+    *,
+    out_sharding: Any = None,
+) -> Array[NewShape]: ...
+@overload
+def reshape(
+    operand: Any,
+    new_sizes: Sequence[int] | int,
+    dimensions: Sequence[int] | None = None,
+    *,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+def rev[Shape: _Shape](
+    operand: Array[Shape],
+    dimensions: Sequence[int],
+) -> Array[Shape]: ...
+def slice(
+    operand: Any,
+    start_indices: Sequence[int],
+    limit_indices: Sequence[int],
+    strides: Sequence[int] | None = None,
+) -> Array[IntTuple]: ...
+def slice_in_dim(
+    operand: Any,
+    start_index: int | None,
+    limit_index: int | None,
+    stride: int = 1,
+    axis: int = 0,
+) -> Array[IntTuple]: ...
+def split(
+    operand: Any,
+    sizes: Sequence[int],
+    axis: int = 0,
+) -> list[Array[IntTuple]]: ...
+@overload
+def squeeze[Shape: _Shape, Dims: Flag[tuple[int, ...]]](
+    array: Array[Shape],
+    dimensions: Dims,
+) -> Array[lax_squeeze_shape(Shape, Dims)]: ...
+@overload
+def squeeze(
+    array: Any,
+    dimensions: Sequence[int],
+) -> Array[IntTuple]: ...
+@overload
+def stack[Shapes: IntTuples, Axis: Flag[int] = 0](
+    operands: MapIntTuples[lambda S: Array[S], Shapes],
+    axis: Axis = 0,
+) -> Array[stack_shape(Shapes, Axis)]: ...
+@overload
+def stack(
+    operands: Any,
+    axis: int = 0,
+) -> Array[IntTuple]: ...
+def tile(
+    operand: Any,
+    reps: Sequence[int],
+) -> Array[IntTuple]: ...
+@overload
+def transpose[Shape: _Shape, Permutation: Flag[_Axis]](
+    operand: Array[Shape],
+    permutation: Permutation,
+) -> Array[permute_shape(Shape, Permutation)]: ...
+@overload
+def transpose(
+    operand: Any,
+    permutation: Sequence[int],
+) -> Array[IntTuple]: ...
+def unstack(
+    x: Any,
+    axis: int = 0,
+) -> tuple[Array[IntTuple], ...]: ...
+
+# Data types & bitcasting
+def bitcast_convert_type(
+    operand: Any,
+    new_dtype: Any,
+) -> Array[IntTuple]: ...
+@overload
+def convert_element_type[Shape: _Shape](
+    operand: Array[Shape],
+    new_dtype: Any,
+) -> Array[Shape]: ...
+@overload
+def convert_element_type(
+    operand: _Scalar | bool,
+    new_dtype: Any,
+) -> Array[[]]: ...
+@overload
+def convert_element_type(
+    operand: Any,
+    new_dtype: Any,
+) -> Array[IntTuple]: ...

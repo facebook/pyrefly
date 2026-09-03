@@ -936,3 +936,59 @@ def atleast_3d_shape(shape: IntTuple) -> IntTuple:
     if len(shape) == 2:
         return dsl.concat(shape, dsl.IntTuple((1,)))
     return shape
+
+@type_shape_dsl_function
+def broadcast_to_rank_shape(shape: IntTuple, rank: int) -> IntTuple:
+    if rank < len(shape):
+        return dsl.Invalid("rank must be greater than or equal to array rank")
+    diff = rank - len(shape)
+    ones = dsl.IntTuple(1 for i in range(diff))
+    return dsl.concat(ones, shape)
+
+@type_shape_dsl_function
+def collapse_to_end_shape(shape: IntTuple, start: int) -> IntTuple:
+    rank = len(shape)
+    if start < 0:
+        norm_start = start + rank
+    else:
+        norm_start = start + 0
+    if norm_start < 0 or norm_start > rank:
+        return dsl.Invalid("start_dimension out of bounds")
+    collapsed_dim = dsl.prod(shape[norm_start:])
+    return dsl.concat(shape[:norm_start], dsl.IntTuple((collapsed_dim,)))
+
+@type_shape_dsl_function
+def collapse_shape(shape: IntTuple, start: int, stop: int) -> IntTuple:
+    rank = len(shape)
+    if start < 0:
+        norm_start = start + rank
+    else:
+        norm_start = start + 0
+    if stop < 0:
+        norm_stop = stop + rank
+    else:
+        norm_stop = stop + 0
+    if norm_start < 0 or norm_start > rank:
+        return dsl.Invalid("start_dimension out of bounds")
+    if norm_stop < 0 or norm_stop > rank:
+        return dsl.Invalid("stop_dimension out of bounds")
+    if norm_stop < norm_start:
+        return dsl.Invalid("stop_dimension must be >= start_dimension")
+    collapsed_dim = dsl.prod(shape[norm_start:norm_stop])
+    return dsl.concat(
+        dsl.concat(shape[:norm_start], dsl.IntTuple((collapsed_dim,))),
+        shape[norm_stop:],
+    )
+
+@type_shape_dsl_function
+def lax_squeeze_shape(shape: IntTuple, dimensions: tuple[int, ...]) -> IntTuple:
+    rank = len(shape)
+    if any(d < 0 or d >= rank for d in dimensions):
+        return dsl.Invalid("squeeze axis out of bounds")
+    if any(dimensions.count(d) > 1 for d in dimensions):
+        return dsl.Invalid("repeated axis in lax.squeeze")
+    if any(shape[d] != 1 for d in dimensions):
+        return dsl.Invalid(
+            "cannot select an axis to squeeze out which has size not equal to one"
+        )
+    return dsl.IntTuple((shape[i] for i in range(rank) if i not in dimensions))
