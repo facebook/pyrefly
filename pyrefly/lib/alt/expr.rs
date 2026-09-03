@@ -548,7 +548,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     Some(false) => self.expr_infer_impl(&x.orelse, hint, errors).into_ty(),
                     None => {
                         let body_type = self.expr_infer_impl(&x.body, hint, errors).into_ty();
-                        let orelse_type = self.expr_infer_impl(&x.orelse, hint, errors).into_ty();
+                        // Like `optional_list or []`, use the preceding branch as a soft hint
+                        // for the next one so an empty container pins its element type.
+                        let orelse_hint = hint.or_else(|| Some(HintRef::soft(&body_type)));
+                        let orelse_type = self
+                            .expr_infer_impl(&x.orelse, orelse_hint, errors)
+                            .into_ty();
                         match self.as_bool(&condition_type, x.test.range(), errors) {
                             Some(true) => body_type,
                             Some(false) => orelse_type,
