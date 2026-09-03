@@ -91,6 +91,7 @@ use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::polars_specials::is_polars_series;
 use crate::alt::regex::RegexValidationError;
 use crate::alt::regex::validate_pattern;
+use crate::alt::shape_extension::is_int_tuple_bound;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::solve::UntypeContext;
 use crate::alt::unwrap::HintRef;
@@ -4137,7 +4138,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     _ => return None,
                 };
                 let int_type = self.stdlib.int().clone().to_type();
-                Self::is_int_tuple_bound(&upper_bound, &int_type)
+                is_int_tuple_bound(&upper_bound, &int_type)
                     .then(|| IntTuple::unpacked(Vec::new(), shape_arg.clone(), Vec::new()))
             })
     }
@@ -4805,10 +4806,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     if param.kind() == QuantifiedKind::TypeVar
                         && let Expr::List(ExprList { elts, .. }) = arg
-                        && Self::is_int_tuple_bound(
-                            &param.upper_bound(self.stdlib, self.heap),
-                            &int_type,
-                        )
+                        && is_int_tuple_bound(&param.upper_bound(self.stdlib, self.heap), &int_type)
                     {
                         return self
                             .parse_int_tuple_shape_args(elts, type_argument_context, errors)
@@ -4819,18 +4817,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 self.expr_untype(arg, type_argument_context, errors)
             })
             .collect()
-    }
-
-    /// Returns whether `ty` is the normalized upper bound for an `IntTuple`-bounded `TypeVar`.
-    ///
-    /// Other tuple bounds are ordinary type bounds and must not enable compact
-    /// shape-list parsing.
-    fn is_int_tuple_bound(ty: &Type, int_type: &Type) -> bool {
-        match ty {
-            Type::IntTuple(_) => true,
-            Type::Tuple(Tuple::Unbounded(inner)) => inner.as_ref() == int_type,
-            _ => false,
-        }
     }
 
     /// Returns whether `ty` can legally be the argument inside `Elements[...]`.
@@ -4845,7 +4831,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             _ => return false,
         };
         let int_type = self.stdlib.int().clone().to_type();
-        Self::is_int_tuple_bound(&upper_bound, &int_type)
+        is_int_tuple_bound(&upper_bound, &int_type)
     }
 
     fn is_shape_elements_class(&self, cls: &Class) -> bool {

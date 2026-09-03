@@ -5,12 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Shared solving utilities for experimental shape-extension restrictions.
+//! Shared helpers for experimental shape-extension types and restrictions.
 
 use std::sync::Arc;
 
 use pyrefly_types::callable::Param;
 use pyrefly_types::quantified::Quantified;
+use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_var::FlagDomain;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TParams;
@@ -30,6 +31,17 @@ use crate::binding::binding::FunctionDefData;
 use crate::binding::shape_type::TypeParameterBound;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
+
+/// Returns whether `ty` is the normalized upper bound for an `IntTuple`-bounded `TypeVar`.
+///
+/// Other tuple bounds are ordinary type bounds and must not enable shape-specific parsing.
+pub(crate) fn is_int_tuple_bound(ty: &Type, int_type: &Type) -> bool {
+    match ty {
+        Type::IntTuple(_) => true,
+        Type::Tuple(Tuple::Unbounded(inner)) => inner.as_ref() == int_type,
+        _ => false,
+    }
+}
 
 pub(crate) fn shape_extension_vars(tparams: &TParams, vars: &[Var]) -> Option<Arc<SmallSet<Var>>> {
     assert_eq!(
