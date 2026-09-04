@@ -847,6 +847,11 @@ impl ConfigFile {
         Self::PYREFLY_HIDDEN_FILE_NAME,
         Self::PYPROJECT_FILE_NAME,
     ];
+
+    /// Additional files to watch for changes that should trigger an inspection.
+    pub const UV_LOCK: &str = "uv.lock";
+    pub const ADDITIONAL_WATCHED_FILES: &[&str] = &[Self::UV_LOCK];
+
     /// Files that don't contain pyrefly-specific config information but indicate that we're at the
     /// root of a Python project, which should be added to the search path.
     pub const ADDITIONAL_ROOT_FILE_NAMES: &[&str] = &["mypy.ini", "pyrightconfig.json"];
@@ -1236,6 +1241,11 @@ impl ConfigFile {
                 ConfigFile::CONFIG_FILE_NAMES.iter().for_each(|config| {
                     result.insert(WatchPattern::root(config_root, format!("**/{config}")));
                 });
+                ConfigFile::ADDITIONAL_WATCHED_FILES
+                    .iter()
+                    .for_each(|file| {
+                        result.insert(WatchPattern::root(config_root, format!("**/{file}")));
+                    });
             }
             config
                 .search_path()
@@ -2015,6 +2025,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use pyrefly_util::includes::Includes;
     use pyrefly_util::test_path::TestPath;
+    use starlark_map::smallset;
     use tempfile::TempDir;
     use toml::Table;
     use toml::Value;
@@ -4420,5 +4431,28 @@ output-format = "omit-errors"
             Severity::Ignore,
             "without pytorch-efficiency-lints flag, lints should default to Ignore"
         );
+    }
+
+    #[test]
+    fn test_additonal_watch_files() {
+        let mut config: ConfigFile = ConfigFile::default();
+        config.configure();
+        let root = TempDir::new().unwrap();
+
+        config.source = ConfigSource::File(PathBuf::from(
+            root.path().join(ConfigFile::PYPROJECT_FILE_NAME),
+        ));
+        let configs = smallset! {ArcId::new(config)};
+
+        ConfigFile::ADDITIONAL_WATCHED_FILES
+            .iter()
+            .for_each(|file| {
+                assert!(
+                    ConfigFile::get_paths_to_watch(&configs).contains(&WatchPattern::root(
+                        InternedPath::from_path(root.path()),
+                        String::from(format!("**/{file}"))
+                    ))
+                );
+            });
     }
 }
