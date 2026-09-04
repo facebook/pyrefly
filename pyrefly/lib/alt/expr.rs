@@ -4235,7 +4235,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     tensor.tuple_carrier_shape_arg_index().is_none(),
                     "a tuple-carrier shaped array reached the unregistered-class branch"
                 );
-                ShapedArrayType::new(tensor.base_class.clone(), shape).with_syntax(tensor.syntax)
+                ShapedArrayType::new(tensor.base_class.clone(), shape).with_syntax(*tensor.syntax)
             }
         }
     }

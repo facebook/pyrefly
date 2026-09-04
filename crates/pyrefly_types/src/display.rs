@@ -436,7 +436,7 @@ impl<'a> TypeDisplayContext<'a> {
         shaped_array: &ShapedArrayType,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
-        match shaped_array.syntax {
+        match *shaped_array.syntax {
             ShapedArraySyntax::Native => {
                 let shape_idx = match shaped_array.tuple_carrier_shape_arg_index() {
                     Some(index) => index,
