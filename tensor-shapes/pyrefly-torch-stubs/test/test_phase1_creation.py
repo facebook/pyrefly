@@ -1,0 +1,206 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+# Phase 1.3: Tensor creation operations tests
+from typing import assert_type
+
+import torch
+from shape_extensions import IntTuple
+from torch import Tensor
+
+# ==== *_like Operations (preserve shape) ====
+
+
+# Test: torch.zeros_like
+def test_zeros_like():
+    x: Tensor[[3, 4]] = torch.randn(3, 4)
+    result = torch.zeros_like(x)
+    assert_type(result, Tensor[[3, 4]])
+
+
+def test_zeros_like_3d():
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    result = torch.zeros_like(x)
+    assert_type(result, Tensor[[2, 3, 4]])
+
+
+# Test: torch.ones_like
+def test_ones_like():
+    x: Tensor[[3, 4]] = torch.randn(3, 4)
+    result = torch.ones_like(x)
+    assert_type(result, Tensor[[3, 4]])
+
+
+def test_ones_like_1d():
+    x: Tensor[[5]] = torch.randn(5)
+    result = torch.ones_like(x)
+    assert_type(result, Tensor[[5]])
+
+
+# Test: torch.full_like
+def test_full_like():
+    x: Tensor[[3, 4]] = torch.randn(3, 4)
+    result = torch.full_like(x, 2.5)
+    assert_type(result, Tensor[[3, 4]])
+
+
+# Test: torch.empty_like
+def test_empty_like():
+    x: Tensor[[3, 4]] = torch.randn(3, 4)
+    result = torch.empty_like(x)
+    assert_type(result, Tensor[[3, 4]])
+
+
+# Test: torch.rand_like
+def test_rand_like():
+    x: Tensor[[2, 3]] = torch.randn(2, 3)
+    result = torch.rand_like(x)
+    assert_type(result, Tensor[[2, 3]])
+
+
+# Test: torch.randn_like
+def test_randn_like():
+    x: Tensor[[2, 3, 4]] = torch.randn(2, 3, 4)
+    result = torch.randn_like(x)
+    assert_type(result, Tensor[[2, 3, 4]])
+
+
+# ==== Diagonal Operations ====
+
+
+# Test: torch.diag_embed
+def test_diag_embed_1d():
+    x: Tensor[[3]] = torch.randn(3)
+    # Embeds into 3x3 diagonal matrix
+    result = torch.diag_embed(x)
+    assert_type(result, Tensor[[3, 3]])
+
+
+def test_diag_embed_2d():
+    x: Tensor[[2, 3]] = torch.randn(2, 3)
+    # Embeds last dim (3) into 3x3, output: [2, 3, 3]
+    result = torch.diag_embed(x)
+    assert_type(result, Tensor[[2, 3, 3]])
+
+
+def test_diag_embed_method():
+    x: Tensor[[4]] = torch.randn(4)
+    result = x.diag_embed()
+    assert_type(result, Tensor[[4, 4]])
+
+
+def test_diag_embed_offsets_and_dims():
+    x: Tensor[[2, 3]] = torch.randn(2, 3)
+    assert_type(torch.diag_embed(x, offset=2), Tensor[[2, 5, 5]])
+    assert_type(x.diag_embed(offset=-2), Tensor[[2, 5, 5]])
+    assert_type(torch.diag_embed(x, dim1=0, dim2=1), Tensor[[3, 3, 2]])
+    assert_type(torch.diag_embed(x, dim1=2, dim2=0), Tensor[[3, 2, 3]])
+    assert_type(x.diag_embed(dim1=-1, dim2=-3), Tensor[[3, 2, 3]])
+
+
+def test_diag_embed_shapeless(x: Tensor):
+    assert_type(torch.diag_embed(x, offset=1), Tensor)
+
+
+def test_diag_embed_gradual_dims(x: Tensor[[2, 3]], dim1: int, dim2: int):
+    assert_type(torch.diag_embed(x, dim1=dim1, dim2=dim2), Tensor)
+
+
+# ==== Triangular Operations (preserve shape) ====
+
+
+# Test: torch.tril
+def test_tril():
+    x: Tensor[[3, 3]] = torch.randn(3, 3)
+    # Lower triangular preserves shape
+    result = torch.tril(x)
+    assert_type(result, Tensor[[3, 3]])
+
+
+def test_tril_rectangular():
+    x: Tensor[[4, 5]] = torch.randn(4, 5)
+    result = torch.tril(x)
+    assert_type(result, Tensor[[4, 5]])
+
+
+def test_tril_with_diagonal():
+    x: Tensor[[3, 3]] = torch.randn(3, 3)
+    # With diagonal offset
+    result = torch.tril(x, diagonal=1)
+    assert_type(result, Tensor[[3, 3]])
+
+
+def test_tril_method():
+    x: Tensor[[4, 4]] = torch.randn(4, 4)
+    result = x.tril()
+    assert_type(result, Tensor[[4, 4]])
+
+
+# Test: torch.triu
+def test_triu():
+    x: Tensor[[3, 3]] = torch.randn(3, 3)
+    # Upper triangular preserves shape
+    result = torch.triu(x)
+    assert_type(result, Tensor[[3, 3]])
+
+
+def test_triu_rectangular():
+    x: Tensor[[5, 4]] = torch.randn(5, 4)
+    result = torch.triu(x)
+    assert_type(result, Tensor[[5, 4]])
+
+
+def test_triu_with_diagonal():
+    x: Tensor[[3, 3]] = torch.randn(3, 3)
+    result = torch.triu(x, diagonal=-1)
+    assert_type(result, Tensor[[3, 3]])
+
+
+def test_triu_method():
+    x: Tensor[[4, 4]] = torch.randn(4, 4)
+    result = x.triu()
+    assert_type(result, Tensor[[4, 4]])
+
+
+# ==== Triangular Indices ====
+
+
+# Test: torch.tril_indices
+def test_tril_indices():
+    result = torch.tril_indices(3, 3)
+    assert_type(result.shape, IntTuple[2, int])
+
+
+def test_tril_indices_rectangular():
+    result = torch.tril_indices(4, 5)
+    assert_type(result.shape, IntTuple[2, int])
+
+
+def test_tril_indices_with_offset():
+    result = torch.tril_indices(3, 3, offset=1)
+    assert_type(result.shape, IntTuple[2, int])
+
+
+# Test: torch.triu_indices
+def test_triu_indices():
+    result = torch.triu_indices(3, 3)
+    assert_type(result.shape, IntTuple[2, int])
+
+
+def test_triu_indices_rectangular():
+    result = torch.triu_indices(5, 4)
+    assert_type(result.shape, IntTuple[2, int])
+
+
+def test_triu_indices_with_offset():
+    result = torch.triu_indices(3, 3, offset=-1)
+    assert_type(result.shape, IntTuple[2, int])
+
+
+def check_tri_indices_runtime_parameters(row: int, col: int, offset: int) -> None:
+    lower = torch.tril_indices(row=row, col=col, offset=offset)
+    upper = torch.triu_indices(row, col, offset)
+    assert_type(lower.shape, IntTuple[2, int])
+    assert_type(upper.shape, IntTuple[2, int])

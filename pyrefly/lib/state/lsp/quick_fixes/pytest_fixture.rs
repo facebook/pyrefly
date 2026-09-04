@@ -186,7 +186,8 @@ fn fixture_return_type(
     Some(
         ty.promote_implicit_literals(&stdlib)
             .explicit_any()
-            .clean_var(),
+            .clean_var()
+            .strip_library_schemas(),
     )
 }
 
@@ -281,7 +282,7 @@ fn import_edits_for_type(
         else {
             return;
         };
-        let (position, insert_text, _) = insert_import_edit(
+        let import_edit = insert_import_edit(
             ast,
             transaction.config_finder(),
             handle.dupe(),
@@ -289,7 +290,15 @@ fn import_edits_for_type(
             qname.id().as_str(),
             import_format,
         );
-        if module_contents.contains(&insert_text) {
+        let position = import_edit.range.start();
+        let insert_text = import_edit.insert_text;
+        // Only dedup against full import lines: merge edits have `new_text` like
+        // `, X`, and a substring check for that would spuriously match unrelated
+        // code (function args, type annotations). Merge edits are already
+        // deduplicated inside `merge_range_for_import`.
+        if (insert_text.starts_with("from ") || insert_text.starts_with("import "))
+            && module_contents.contains(&insert_text)
+        {
             return;
         }
         if seen_imports.insert(insert_text.clone()) {

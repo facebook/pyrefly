@@ -2,8 +2,7 @@ import argparse
 from _typeshed import ConvertibleToInt
 from collections.abc import Callable, Container
 from ssl import SSLContext, _SSLMethod
-from typing import Annotated, Any, ClassVar, Final, overload
-from typing_extensions import TypeAlias
+from typing import Annotated, Any, ClassVar, Final, TypeAlias, overload
 
 from gunicorn.arbiter import Arbiter
 from gunicorn.glogging import Logger as GLogger
@@ -76,6 +75,7 @@ _ASGILoopValidatorType: TypeAlias = Callable[[str | None], str]
 _ASGILifespanValidatorType: TypeAlias = Callable[[str | None], str]
 _HTTP2FrameSizeValidatorType: TypeAlias = Callable[[ConvertibleToInt], int]
 _HTTPProtocolsValidatorType: TypeAlias = Callable[[str | None], list[str]]
+_HttpParserValidatorType: TypeAlias = Callable[[str | None], str]
 
 _ValidatorType: TypeAlias = (  # noqa: Y047
     _BoolValidatorType
@@ -92,6 +92,7 @@ _ValidatorType: TypeAlias = (  # noqa: Y047
     | _ASGILifespanValidatorType
     | _HTTP2FrameSizeValidatorType
     | _HTTPProtocolsValidatorType
+    | _HttpParserValidatorType
 )
 
 KNOWN_SETTINGS: list[Setting]
@@ -174,42 +175,52 @@ def validate_bool(val: bool) -> bool: ...
 def validate_bool(val: None) -> None: ...
 @overload
 def validate_bool(val: Annotated[str, "Case-insensitive boolean string ('true'/'false' in any case)"]) -> bool: ...
+
 def validate_dict(val: dict[str, Any]) -> dict[str, Any]: ...
 def validate_pos_int(val: ConvertibleToInt) -> int: ...
 def validate_http2_frame_size(val: ConvertibleToInt) -> int: ...
 def validate_ssl_version(val: _SSLMethod) -> _SSLMethod: ...
+
 @overload
 def validate_string(val: str) -> str: ...
 @overload
 def validate_string(val: None) -> None: ...
+
 @overload
 def validate_file_exists(val: str) -> str: ...
 @overload
 def validate_file_exists(val: None) -> None: ...
+
 def validate_list_string(val: str | list[str] | None) -> list[str]: ...
 def validate_list_of_existing_files(val: str | list[str] | None) -> list[str]: ...
 def validate_string_to_addr_list(val: str | None) -> list[str]: ...
 def validate_string_to_list(val: str | None) -> list[str]: ...
+
 @overload
 def validate_class(val: str) -> str: ...
 @overload
 def validate_class(val: None) -> None: ...
 @overload
 def validate_class(val: object) -> object: ...
+
 def validate_callable(arity: int) -> _CallableValidatorType: ...
 def validate_user(val: int | str | None) -> int: ...
 def validate_group(val: int | str | None) -> int: ...
 def validate_post_request(val: str | _HookType) -> _PostRequestHookType: ...
 def validate_chdir(val: str) -> str: ...
+
 @overload
 def validate_statsd_address(val: str) -> _AddressType: ...
 @overload
 def validate_statsd_address(val: None) -> None: ...
+
 def validate_reload_engine(val: str) -> str: ...
+
 @overload
 def validate_header_map_behaviour(val: str) -> str: ...
 @overload
 def validate_header_map_behaviour(val: None) -> None: ...
+
 def get_default_config_file() -> str | None: ...
 
 class ConfigFile(Setting):
@@ -1156,6 +1167,7 @@ class HeaderMap(Setting):
 
 def validate_asgi_loop(val: str | None) -> str: ...
 def validate_asgi_lifespan(val: str | None) -> str: ...
+def validate_http_parser(val: str | None) -> str: ...
 
 class ASGILoop(Setting):
     name: ClassVar[str]
@@ -1183,6 +1195,15 @@ class ASGIDisconnectGracePeriod(Setting):
     validator: ClassVar[_IntValidatorType]
     type: ClassVar[type[int]]
     default: ClassVar[int]
+    desc: ClassVar[str]
+
+class HttpParser(Setting):
+    name: ClassVar[str]
+    section: ClassVar[str]
+    cli: ClassVar[list[str]]
+    meta: ClassVar[str]
+    validator: ClassVar[_HttpParserValidatorType]
+    default: ClassVar[str]
     desc: ClassVar[str]
 
 class RootPath(Setting):
@@ -1291,6 +1312,7 @@ class ControlSocket(Setting):
     meta: ClassVar[str]
     validator: ClassVar[_StringValidatorType]
     default: ClassVar[str]
+    default_doc: ClassVar[str]
     desc: ClassVar[str]
 
 class ControlSocketMode(Setting):

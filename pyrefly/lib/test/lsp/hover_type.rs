@@ -567,8 +567,33 @@ Hover Result: `int`
     );
 }
 
-// todo(kylei): When the callee's implementation uses *args/**kwargs, we can't refine the
-// keyword argument to a specific parameter. Ideally we'd resolve through the matched overload.
+#[test]
+fn kwarg_dataclass_constructor() {
+    let code = r#"
+from dataclasses import dataclass
+
+@dataclass
+class Test:
+    foo: int
+
+Test(foo=1)
+#    ^
+"#;
+    let report = get_batched_lsp_operations_report_allow_error(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+8 | Test(foo=1)
+         ^
+Hover Result: `int`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+// When the callee's implementation uses *args/**kwargs, keyword argument hovers fall back
+// to the matched overload when there is one.
 #[test]
 fn kwarg_with_overload() {
     let code = r#"
@@ -592,7 +617,7 @@ foo(y="hello")
 # main.py
 11 | foo(x=42)
          ^
-Hover Result: None
+Hover Result: `int`
 
 13 | foo(y="hello")
          ^
@@ -658,6 +683,33 @@ except ValueError as e:
 4 | except ValueError as e:
                          ^
 Hover Result: `ValueError`
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+// A placeholder from an empty container is pinned by its first use, which happens after the
+// expression itself was inferred and its type trace recorded. The trace is normalized when it is
+// published rather than when it is read, so the pinned type is what a hover sees.
+#[test]
+fn hover_on_container_pinned_by_first_use() {
+    let code = r#"
+xs = []
+# ^   ^
+xs.append(1)
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | xs = []
+      ^
+Hover Result: `list[int]`
+
+2 | xs = []
+          ^
+Hover Result: `list[int]`
 "#
         .trim(),
         report.trim(),

@@ -90,7 +90,7 @@ jobs:
 
             // Select non-draft pull requests that:
             // 1. Were created before the cutoff date
-            // 2. Do not have the 'fb-exported' label
+            // 2. Do not have the 'meta-exported' label
             // 3. Do not have a requested reviewer or assignee
             // 4. Do not have a review
             var oldPRs = [];
@@ -98,7 +98,7 @@ jobs:
               const createdAt = new Date(pr.created_at);
               if (pr.draft ||
                   createdAt >= twoDaysAgo ||
-                  pr.labels.some((label) => label.name == 'fb-exported') ||
+                  pr.labels.some((label) => label.name == 'meta-exported') ||
                   (Array.isArray(pr.requested_reviewers) && pr.requested_reviewers.length) ||
                   (Array.isArray(pr.assignees) && pr.assignees.length)) {
                 continue;

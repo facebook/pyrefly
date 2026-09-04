@@ -357,6 +357,7 @@ struct PysaProjectModule {
   isInterface        @8  :Bool;
   isInit             @9  :Bool;
   isInternal         @10 :Bool;
+  failedToLoad       @11 :Bool;
 }
 
 struct ProjectFile {

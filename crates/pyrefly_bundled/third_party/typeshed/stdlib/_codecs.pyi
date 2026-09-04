@@ -2,8 +2,7 @@ import codecs
 import sys
 from _typeshed import ReadableBuffer
 from collections.abc import Callable
-from typing import Literal, final, overload, type_check_only
-from typing_extensions import TypeAlias
+from typing import Literal, TypeAlias, final, overload, type_check_only
 
 # This type is not exposed; it is defined in unicodeobject.c
 # At runtime it calls itself builtins.EncodingMap
@@ -25,16 +24,13 @@ def register(search_function: _SearchFunction, /) -> None:
     (encoder, decoder, stream_reader, stream_writer) (or a CodecInfo object).
     """
     ...
+def unregister(search_function: _SearchFunction, /) -> None:
+    """
+    Unregister a codec search function and clear the registry's cache.
 
-if sys.version_info >= (3, 10):
-    def unregister(search_function: _SearchFunction, /) -> None:
-        """
-        Unregister a codec search function and clear the registry's cache.
-
-        If the search function is not registered, do nothing.
-        """
-        ...
-
+    If the search function is not registered, do nothing.
+    """
+    ...
 def register_error(errors: str, handler: _Handler, /) -> None:
     """
     Register the specified error handler under the name errors.
@@ -112,6 +108,7 @@ def encode(obj: str, encoding: str = "utf-8", errors: str = "strict") -> bytes:
     codecs.register_error that can handle ValueErrors.
     """
     ...
+
 @overload
 def decode(obj: ReadableBuffer, encoding: _BytesToBytesEncoding, errors: str = "strict") -> bytes:
     """
@@ -180,6 +177,7 @@ def decode(obj: ReadableBuffer, encoding: str = "utf-8", errors: str = "strict")
     codecs.register_error that can handle ValueErrors.
     """
     ...
+
 def lookup(encoding: str, /) -> codecs.CodecInfo:
     """Looks up a codec tuple in the Python codec registry and returns a CodecInfo object."""
     ...
@@ -188,7 +186,9 @@ def ascii_decode(data: ReadableBuffer, errors: str | None = None, /) -> tuple[st
 def ascii_encode(str: str, errors: str | None = None, /) -> tuple[bytes, int]: ...
 def charmap_decode(data: ReadableBuffer, errors: str | None = None, mapping: _CharMap | None = None, /) -> tuple[str, int]: ...
 def charmap_encode(str: str, errors: str | None = None, mapping: _CharMap | None = None, /) -> tuple[bytes, int]: ...
-def escape_decode(data: str | ReadableBuffer, errors: str | None = None, /) -> tuple[str, int]: ...
+
+# Docs say this accepts a bytes-like object, but in practice it also accepts str.
+def escape_decode(data: str | ReadableBuffer, errors: str | None = None, /) -> tuple[bytes, int]: ...
 def escape_encode(data: bytes, errors: str | None = None, /) -> tuple[bytes, int]: ...
 def latin_1_decode(data: ReadableBuffer, errors: str | None = None, /) -> tuple[str, int]: ...
 def latin_1_encode(str: str, errors: str | None = None, /) -> tuple[bytes, int]: ...

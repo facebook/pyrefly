@@ -17,12 +17,12 @@ use std::path::PathBuf;
 use lsp_types::Url;
 use lsp_types::notification::DidChangeWorkspaceFolders;
 use lsp_types::request::WorkspaceConfiguration;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use pyrefly_util::fs_anyhow::write;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_did_change_configuration() {
@@ -45,6 +45,35 @@ fn test_did_change_configuration() {
         .expect_configuration_request(Some(vec![&scope_uri]))
         .expect("Failed to receive configuration request")
         .send_configuration_response(json!([{}]));
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
+#[test]
+fn test_invalid_workspace_configuration_response_does_not_crash() {
+    let root = get_test_files_root();
+    let scope_uri = Url::from_file_path(root.path()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    let settings = InitializeSettings {
+        workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+        configuration: Some(None),
+        ..Default::default()
+    };
+
+    interaction
+        .client
+        .send_initialize(interaction.client.get_initialize_params(&settings));
+    interaction
+        .client
+        .expect_any_message()
+        .expect("Failed to initialize");
+    interaction.client.send_initialized();
+    interaction
+        .client
+        .expect_configuration_request(Some(vec![&scope_uri]))
+        .expect("Failed to receive configuration request")
+        .send_unchecked_response(json!("not-a-list"));
 
     interaction.shutdown().expect("Failed to shutdown");
 }
@@ -77,6 +106,56 @@ fi
     fs::set_permissions(&interpreter_path, perms).unwrap();
 
     interpreter_path
+}
+
+#[cfg(unix)]
+#[test]
+fn test_workspace_discovers_project_venv() {
+    let test_files_root = get_test_files_root();
+    let project_root = test_files_root.path().join("custom_interpreter");
+    let venv_root = project_root.join(".venv");
+    let site_packages = venv_root.join("bin/site-packages");
+    fs::create_dir_all(&site_packages).unwrap();
+    write(&venv_root.join("pyvenv.cfg"), "").unwrap();
+    write(
+        &site_packages.join("custom_module.py"),
+        fs::read_to_string(project_root.join("bin/site-packages/custom_module.py")).unwrap(),
+    )
+    .unwrap();
+    setup_dummy_interpreter(&venv_root);
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            initialization_options: Some(json!({
+                "pyrefly": {"streamDiagnostics": false},
+            })),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("custom_interpreter/src/foo.py");
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(project_root.join("src/foo.py"), 0)
+        .expect("Failed to receive publish diagnostics");
+    interaction
+        .client
+        .definition("custom_interpreter/src/foo.py", 5, 31)
+        .expect_definition_response_from_root(
+            "custom_interpreter/.venv/bin/site-packages/custom_module.py",
+            6,
+            6,
+            6,
+            17,
+        )
+        .unwrap();
+
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 // Only run this test on unix since windows has no way to mock a .exe without compiling something
@@ -1088,6 +1167,63 @@ fn test_diagnostics_file_in_excludes() {
     interaction
         .client
         .diagnostic("diagnostics_file_in_excludes/type_errors_exclude.py")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
+/// `pyrefly.extraProjectExcludes` lets a client push its own notion of excluded
+/// directories down to the server without writing a `pyrefly.toml`. It is
+/// additive: the config file's `project-excludes` still applies.
+#[test]
+fn test_client_project_excludes() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("client_project_excludes");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "test".to_owned(),
+                Url::from_file_path(&root_path).unwrap(),
+            )]),
+            // The glob is relative to the workspace folder, mirroring how an
+            // editor reports its excluded content roots.
+            initialization_options: Some(json!({
+                "pyrefly": {
+                    "displayTypeErrors": "force-on",
+                    "extraProjectExcludes": ["generated"]
+                }
+            })),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("included.py");
+    interaction.client.did_open("excluded_by_config.py");
+    interaction
+        .client
+        .did_open("generated/excluded_by_client.py");
+
+    interaction
+        .client
+        .diagnostic("included.py")
+        .expect_response(get_diagnostics_result())
+        .expect("Failed to receive expected response");
+
+    interaction
+        .client
+        .diagnostic("generated/excluded_by_client.py")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
+
+    // The client's excludes are appended to the config's, not substituted for
+    // them, so a file the project itself excluded stays excluded.
+    interaction
+        .client
+        .diagnostic("excluded_by_config.py")
         .expect_response(json!({"items": [], "kind": "full"}))
         .expect("Failed to receive expected response");
 

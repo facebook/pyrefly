@@ -51,4 +51,4 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         EXTRA_ARGS: ${{ inputs.args }}
-      run: pyrefly check --output-format=github $EXTRA_ARGS
+      run: pyrefly check --output-format=full-text-with-github $EXTRA_ARGS

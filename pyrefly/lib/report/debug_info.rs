@@ -20,6 +20,8 @@ use starlark_map::small_map::SmallMap;
 use crate::alt::answers::AnswerEntry;
 use crate::alt::answers::AnswerTable;
 use crate::alt::answers::Answers;
+use crate::alt::answers::SolutionsEntry;
+use crate::alt::answers::SolutionsTable;
 use crate::binding::binding::Keyed;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
@@ -104,7 +106,7 @@ impl DebugInfo {
         )],
     ) -> Self {
         fn f<K: Keyed>(
-            t: &AnswerEntry<K>,
+            _t: &AnswerEntry<K>,
             module_info: &ModuleInfo,
             bindings: &Bindings,
             answers: &Answers,
@@ -112,8 +114,9 @@ impl DebugInfo {
         ) where
             BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
             AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+            SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
         {
-            for (idx, val) in t.iter() {
+            for idx in bindings.keys::<K>() {
                 let key = bindings.idx_to_key(idx);
                 res.push(Binding {
                     key: module_info.display(key).to_string(),
@@ -121,12 +124,12 @@ impl DebugInfo {
                         .display_range(K::range_with(idx, bindings))
                         .to_string(),
                     binding: bindings.get(idx).display_with(bindings).to_string(),
-                    result: match val.get() {
+                    result: match answers.get_idx(idx) {
                         None => "None".to_owned(),
                         Some(v) => {
                             let mut r = (*v).clone();
                             r.visit_mut(&mut |t| {
-                                answers.solver().expand_vars_mut(t);
+                                answers.solver().expand_mut(t);
                             });
                             r.to_string()
                         }
