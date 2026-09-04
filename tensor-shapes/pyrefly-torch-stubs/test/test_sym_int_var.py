@@ -55,22 +55,22 @@ def test_intvar_inference():
 
 def test_intvar_add(x: Tensor[[N, M]]) -> Tensor[[N + 1, M]]:
     """N + 1 in return type"""
-    return x  # type: ignore[bad-return]
+    return x  # type: ignore[pyrefly:bad-return]
 
 
 def test_intvar_mul(x: Tensor[[N, M]]) -> Tensor[[N * 2, M]]:
     """N * 2 in return type"""
-    return x  # type: ignore[bad-return]
+    return x  # type: ignore[pyrefly:bad-return]
 
 
 def test_intvar_sub(x: Tensor[[N, M]]) -> Tensor[[N - 1, M]]:
     """N - 1 in return type"""
-    return x  # type: ignore[bad-return]
+    return x  # type: ignore[pyrefly:bad-return]
 
 
 def test_intvar_two_vars(x: Tensor[[N, M]]) -> Tensor[[N + M, 3]]:
     """N + M in return type"""
-    return x  # type: ignore[bad-return]
+    return x  # type: ignore[pyrefly:bad-return]
 
 
 # ============================================================================
@@ -125,7 +125,7 @@ def test_inttuple_with_arithmetic[Ns: IntTuple, N: IntVar](
     x: Tensor[[*Elements[Ns], N]],
 ) -> Tensor[[*Elements[Ns], N + 1]]:
     """IntTuple carrier with IntVar arithmetic"""
-    return x  # type: ignore[bad-return]
+    return x  # type: ignore[pyrefly:bad-return]
 
 
 # ============================================================================

@@ -5194,7 +5194,19 @@
     }
   ],
   "directives_type_checking.py": [],
-  "directives_type_ignore.py": [],
+  "directives_type_ignore.py": [
+    {
+      "code": -2,
+      "column": 10,
+      "concise_description": "`Literal['']` is not assignable to `int`",
+      "description": "`Literal['']` is not assignable to `int`",
+      "line": 16,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 12,
+      "stop_line": 16
+    }
+  ],
   "directives_type_ignore_file1.py": [],
   "directives_type_ignore_file2.py": [
     {

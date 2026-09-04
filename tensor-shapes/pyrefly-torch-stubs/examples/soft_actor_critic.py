@@ -129,7 +129,7 @@ class BetaDist(pyd.transformed_distribution.TransformedDistribution):
             self, x: Tensor[S], y: Tensor[S]
         ) -> Tensor[S]:
             # Constant Jacobian — scalar broadcasts to match input shape
-            return torch.tensor(math.log(2.0)).unsqueeze(0)  # type: ignore[bad-return]
+            return torch.tensor(math.log(2.0)).unsqueeze(0)  # type: ignore[pyrefly:bad-return]
 
     def __init__(self, alpha: Tensor, beta: Tensor) -> None:
         self.base_dist = pyd.beta.Beta(alpha, beta)

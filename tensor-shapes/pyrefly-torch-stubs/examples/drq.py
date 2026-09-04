@@ -100,7 +100,7 @@ class SquashedNormal[EventShape: IntTuple](TransformedDistribution[EventShape]):
         self.scale = scale
         base_dist = Normal(loc, scale)
         tfms: list[Transform] = [TanhTransform()]
-        super().__init__(base_dist, tfms)  # type: ignore[bad-argument-type]
+        super().__init__(base_dist, tfms)  # type: ignore[pyrefly:bad-argument-type]
 
     @property
     def mean(self) -> Tensor[EventShape]:
