@@ -1557,6 +1557,11 @@ impl<'a> TypeDisplayContext<'a> {
                 }
                 output.write_str("type[Any]")
             }
+            // `ClassDef` already renders as `type[C]`; wrapping again would print
+            // `type[type[C]]` (e.g. for a quoted name inside `type['C']`).
+            Type::Type(ty) if matches!(ty.as_ref(), Type::ClassDef(_)) => {
+                self.fmt_helper_generic(ty, false, output)
+            }
             Type::Type(ty) => {
                 if self.always_display_builtins_module_name {
                     output.write_str("builtins.")?;
