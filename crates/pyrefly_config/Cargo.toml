@@ -18,7 +18,6 @@ dupe = "0.9.1"
 enum-iterator = "2.3.0"
 itertools = "0.15.0"
 parse-display = "0.8.2"
-pep440_rs = "0.7"
 pyrefly_build = { path = "../pyrefly_build" }
 pyrefly_python = { path = "../pyrefly_python" }
 pyrefly_util = { path = "../pyrefly_util" }
@@ -41,4 +40,5 @@ pulldown-cmark = "0.13.4"
 tempfile = "3.27.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+uv-pep440 = "0.0.76"
 which = "8.0.5"

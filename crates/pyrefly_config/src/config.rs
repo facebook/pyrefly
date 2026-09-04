@@ -23,8 +23,6 @@ use clap::ValueEnum;
 use derivative::Derivative;
 use dupe::Dupe as _;
 use itertools::Itertools;
-use pep440_rs::Version;
-use pep440_rs::VersionSpecifiers;
 use pyrefly_build::BuildSystem;
 use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::SourceDatabase;
@@ -61,6 +59,10 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::error;
+#[cfg(not(target_arch = "wasm32"))]
+use uv_pep440::Version;
+#[cfg(not(target_arch = "wasm32"))]
+use uv_pep440::VersionSpecifiers;
 
 use crate::base::ConfigBase;
 use crate::base::ExtraConfigs;
@@ -1795,6 +1797,7 @@ impl ConfigFile {
                 )));
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             if let Some(required_version) = &config.required_version {
                 match required_version.parse::<VersionSpecifiers>() {
                     Ok(specifiers) => {
@@ -1812,6 +1815,12 @@ impl ConfigFile {
                         "Invalid `required-version` `{required_version}`: {error}"
                     ))),
                 }
+            }
+            #[cfg(target_arch = "wasm32")]
+            if config.required_version.is_some() {
+                errors.push(ConfigError::error(anyhow!(
+                    "`required-version` is not supported on WebAssembly"
+                )));
             }
 
             if !config.root.extras.0.is_empty() {
