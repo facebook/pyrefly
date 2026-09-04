@@ -89,6 +89,19 @@ def _patch_torch_if_available() -> None:
 _patch_torch_if_available()
 
 
+def _patch_jax_if_available() -> None:
+    try:
+        import jax  # @manual
+    except ImportError:
+        return
+
+    if hasattr(jax, "Array") and not hasattr(jax.Array, "__class_getitem__"):
+        jax.Array.__class_getitem__ = classmethod(_return_class)
+
+
+_patch_jax_if_available()
+
+
 class IntTuple:
     """Tuple-valued shape annotation surface.
 

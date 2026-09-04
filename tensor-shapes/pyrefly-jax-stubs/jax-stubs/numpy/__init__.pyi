@@ -1283,6 +1283,15 @@ def reshape[Shape: _Shape, NewShape: Flag[_NewShape]](
     out_sharding: Any = ...,
 ) -> Array[reshape_shape(Shape, NewShape)]: ...
 @overload
+def reshape[NewShape: _Shape](
+    a: Array[Any],
+    shape: NewShape,
+    order: str = ...,
+    *,
+    copy: bool | None = ...,
+    out_sharding: Any = ...,
+) -> Array[NewShape]: ...
+@overload
 def reshape(
     a: Array[Any],
     shape: Sequence[int],
@@ -2262,6 +2271,24 @@ def cov(
     aweights: Any = None,
     dtype: Any = None,
 ) -> Array[IntTuple]: ...
+@overload
+def where[Shape: _Shape](
+    condition: Any, x: int | float | complex, y: Array[Shape], /
+) -> Array[Shape]: ...
+@overload
+def where[Shape: _Shape](
+    condition: Any, x: Array[Shape], y: int | float | complex, /
+) -> Array[Shape]: ...
+@overload
+def where[Shape1: _Shape, Shape2: _Shape](
+    condition: Any, x: Array[Shape1], y: Array[Shape2], /
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def where[Shape: _Shape](
+    condition: Array[Shape], x: int | float | complex, y: int | float | complex, /
+) -> Array[Shape]: ...
+@overload
+def where(condition: Array[Any], /) -> tuple[Array[IntTuple], ...]: ...
 
 float32: Any
 float64: Any
