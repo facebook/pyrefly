@@ -37,6 +37,8 @@ use percent_encoding::CONTROLS;
 use percent_encoding::utf8_percent_encode;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::args::ConfigOverrideArgs;
+use pyrefly_config::config::BaselineFormat;
+use pyrefly_config::config::BaselineMatchingMode;
 use pyrefly_config::config::ConfigFile;
 use pyrefly_config::config::OutputFormat;
 use pyrefly_config::config::SynthesizedPresetReason;
@@ -584,6 +586,12 @@ impl OutputArgs {
                 .baseline_error_level
                 .or_else(|| config.and_then(|config| config.baseline_error_level))
                 .unwrap_or(Severity::Ignore),
+            baseline_matching_mode: config
+                .map(|config| config.baseline_matching_mode)
+                .unwrap_or_default(),
+            baseline_format: config
+                .map(|config| config.baseline_format)
+                .unwrap_or_default(),
             output_format: self
                 .output_format
                 .or_else(|| config.and_then(|config| config.output_format))
@@ -613,6 +621,8 @@ impl OutputArgs {
 struct OutputDefaults {
     baseline: Option<PathBuf>,
     baseline_error_level: Severity,
+    baseline_matching_mode: BaselineMatchingMode,
+    baseline_format: BaselineFormat,
     output_format: OutputFormat,
     min_severity: Severity,
 }
@@ -844,8 +854,17 @@ fn write_baseline_errors_to_file(path: &Path, errors: &BaselineErrors) -> anyhow
     f(path, errors).with_context(|| format!("while writing baseline to `{}`", path.display()))
 }
 
-fn write_baseline_to_file(path: &Path, relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
-    write_baseline_errors_to_file(path, &BaselineErrors::from_errors(relative_to, errors))
+fn write_baseline_to_file(
+    path: &Path,
+    relative_to: &Path,
+    errors: &[Error],
+    matching_mode: BaselineMatchingMode,
+    format: BaselineFormat,
+) -> anyhow::Result<()> {
+    write_baseline_errors_to_file(
+        path,
+        &BaselineErrors::from_errors(relative_to, errors).with_format(matching_mode, format),
+    )
 }
 
 fn write_error_json_to_console(relative_to: &Path, errors: &[Error]) -> anyhow::Result<()> {
@@ -1889,6 +1908,7 @@ impl CheckArgs {
             &mut collected,
             defaults.baseline.as_deref(),
             relative_to.as_path(),
+            defaults.baseline_matching_mode,
             self.output.prune_baseline || self.output.error_stale_baseline,
         );
 
@@ -1997,7 +2017,13 @@ impl CheckArgs {
                     error.error_kind(),
                 )
             });
-            write_baseline_to_file(baseline_path, relative_to.as_path(), &new_baseline)?;
+            write_baseline_to_file(
+                baseline_path,
+                relative_to.as_path(),
+                &new_baseline,
+                defaults.baseline_matching_mode,
+                defaults.baseline_format,
+            )?;
         } else if rewriting_baseline {
             let baseline_path = defaults
                 .baseline
@@ -2007,7 +2033,8 @@ impl CheckArgs {
                 baseline_path,
                 &BaselineErrors {
                     errors: retained_baseline_entries,
-                },
+                }
+                .with_format(defaults.baseline_matching_mode, defaults.baseline_format),
             )?;
         }
         if rewriting_baseline {
@@ -2862,8 +2889,30 @@ def go(w: Widget) -> int:
 
         assert_eq!(defaults.baseline, None);
         assert_eq!(defaults.baseline_error_level, Severity::Ignore);
+        assert_eq!(
+            defaults.baseline_matching_mode,
+            BaselineMatchingMode::Column
+        );
+        assert_eq!(defaults.baseline_format, BaselineFormat::Full);
         assert_eq!(defaults.output_format, OutputFormat::default());
         assert_eq!(defaults.min_severity, Severity::Error);
+    }
+
+    #[test]
+    fn output_args_inherit_baseline_matching_and_format() {
+        let output = OutputArgs::parse_from(["pyrefly-check"]);
+        let config = ConfigFile {
+            baseline_matching_mode: BaselineMatchingMode::ConciseDescription,
+            baseline_format: BaselineFormat::Minimal,
+            ..Default::default()
+        };
+        let defaults = output.resolve(Some(&config));
+
+        assert_eq!(
+            defaults.baseline_matching_mode,
+            BaselineMatchingMode::ConciseDescription
+        );
+        assert_eq!(defaults.baseline_format, BaselineFormat::Minimal);
     }
 
     #[test]

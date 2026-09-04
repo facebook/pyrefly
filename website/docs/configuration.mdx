@@ -527,7 +527,40 @@ more details on how baseline files work.
     - `baseline` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
     - Errors suppressed by the baseline file are still shown in the IDE.
-    - Errors are matched with the baseline by file, error code, and column number.
+
+### `baseline-matching-mode`
+
+Controls how diagnostics are matched against baseline entries. `"column"`
+matches the file, error kind, and starting column. `"concise_description"`
+matches the file, error kind, and concise description.
+
+```toml
+baseline-matching-mode = "concise_description"
+```
+
+- Type: `"column"` | `"concise_description"`
+- Default: `"column"`
+- Notes:
+    - `baseline-matching-mode` is a **project-level setting** and cannot be
+      overridden in [`sub-config`](#sub-configs) sections.
+    - After changing modes, regenerate a baseline that does not contain the new
+      mode's required field with `pyrefly check --update-baseline`.
+
+### `baseline-format`
+
+Controls how much information `--update-baseline` writes for each baseline
+entry. `"full"` writes all baseline metadata. `"minimal"` writes only the file,
+error kind, and the field required by `baseline-matching-mode`.
+
+```toml
+baseline-format = "minimal"
+```
+
+- Type: `"full"` | `"minimal"`
+- Default: `"full"`
+- Notes:
+    - `baseline-format` is a **project-level setting** and cannot be overridden
+      in [`sub-config`](#sub-configs) sections.
 
 ### `baseline-error-level`
 

@@ -8,22 +8,31 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
-use std::path::PathBuf;
 
+use anyhow::Context;
 use anyhow::Result;
 use pyrefly_util::absolutize::Absolutize;
 
+use crate::config::config::BaselineMatchingMode;
 use crate::error::error::Error;
 use crate::error::legacy::BaselineError;
 use crate::error::legacy::BaselineErrors;
 
-/// If an error with an exactly matching path, error slug, and starting column exist in the baseline, we ignore it.
-/// Keys always use absolute paths internally so that comparison is decoupled from path format in baseline file.
+const INVALID_BASELINE_GUIDANCE: &str =
+    "baseline file is invalid; rerun with `--update-baseline` to regenerate it";
+
+/// Keys use absolute paths internally so comparison is independent of the baseline's path format.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct BaselineKey {
     path: String,
     name: String,
-    column: usize,
+    matching_field: BaselineMatchingField,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum BaselineMatchingField {
+    Column(usize),
+    ConciseDescription(String),
 }
 
 /// Normalize a path to an absolute, forward-slash string.
@@ -34,26 +43,51 @@ pub(crate) fn normalize_baseline_path(path: &Path, relative_to: &Path) -> String
 }
 
 impl BaselineKey {
-    fn from_baseline_error(error: &BaselineError, relative_to: &Path) -> Self {
-        Self {
+    fn from_baseline_error(
+        error: &BaselineError,
+        relative_to: &Path,
+        matching_mode: BaselineMatchingMode,
+    ) -> Result<Self> {
+        let matching_field = match matching_mode {
+            BaselineMatchingMode::Column => BaselineMatchingField::Column(error.column.context(
+                "missing field `column`, required by `baseline-matching-mode = \"column\"`",
+            )?),
+            BaselineMatchingMode::ConciseDescription => BaselineMatchingField::ConciseDescription(
+                error.concise_description.clone().context(
+                    "missing field `concise_description`, required by \
+                         `baseline-matching-mode = \"concise_description\"`",
+                )?,
+            ),
+        };
+        Ok(Self {
             path: normalize_baseline_path(Path::new(&error.path), relative_to),
             name: error.name.clone(),
-            column: error.column,
-        }
+            matching_field,
+        })
     }
 
-    fn from_error(error: &Error) -> Self {
+    fn from_error(error: &Error, matching_mode: BaselineMatchingMode) -> Self {
+        let matching_field = match matching_mode {
+            BaselineMatchingMode::Column => {
+                BaselineMatchingField::Column(error.display_range().start.column().get() as usize)
+            }
+            BaselineMatchingMode::ConciseDescription => {
+                BaselineMatchingField::ConciseDescription(error.msg_header().to_owned())
+            }
+        };
         Self {
             path: error.path().as_path().to_string_lossy().replace('\\', "/"),
             name: error.error_kind().to_name().to_owned(),
-            column: error.display_range().start.column().get() as usize,
+            matching_field,
         }
     }
 }
 
 /// A lightweight, keys-only baseline matcher for the language server.
+#[derive(Debug)]
 pub struct BaselineProcessor {
     baseline_keys: HashSet<BaselineKey>,
+    matching_mode: BaselineMatchingMode,
 }
 
 impl BaselineProcessor {
@@ -61,23 +95,36 @@ impl BaselineProcessor {
     /// that was used when the baseline was written (i.e. the resolved
     /// `--relative-to` value), so that relative paths in the file are resolved
     /// correctly.
-    pub fn from_json(content: &str, relative_to: &Path) -> Result<Self> {
-        let baseline_file: BaselineErrors = serde_json::from_str(content)?;
-        Ok(Self::from_baseline_errors(baseline_file, relative_to))
+    pub fn from_json(
+        content: &str,
+        relative_to: &Path,
+        matching_mode: BaselineMatchingMode,
+    ) -> Result<Self> {
+        let baseline_file: BaselineErrors =
+            serde_json::from_str(content).context(INVALID_BASELINE_GUIDANCE)?;
+        Self::from_baseline_errors(baseline_file, relative_to, matching_mode)
+            .context(INVALID_BASELINE_GUIDANCE)
     }
 
-    fn from_baseline_errors(baseline_errors: BaselineErrors, relative_to: &Path) -> Self {
-        Self {
-            baseline_keys: baseline_errors
-                .errors
-                .iter()
-                .map(|error| BaselineKey::from_baseline_error(error, relative_to))
-                .collect(),
-        }
+    fn from_baseline_errors(
+        baseline_errors: BaselineErrors,
+        relative_to: &Path,
+        matching_mode: BaselineMatchingMode,
+    ) -> Result<Self> {
+        let baseline_keys = baseline_errors
+            .errors
+            .iter()
+            .map(|error| BaselineKey::from_baseline_error(error, relative_to, matching_mode))
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            baseline_keys,
+            matching_mode,
+        })
     }
 
     pub fn matches_baseline(&self, error: &Error) -> bool {
-        self.baseline_keys.contains(&BaselineKey::from_error(error))
+        self.baseline_keys
+            .contains(&BaselineKey::from_error(error, self.matching_mode))
     }
 
     /// Baseline suppressions are processed last, after inline and config suppressions.
@@ -106,28 +153,45 @@ fn is_definitely_unused(
 
 /// A baseline matcher that also retains rows and tracks matches for CLI maintenance actions.
 pub struct TrackedBaselineProcessor {
-    entries: Vec<BaselineError>,
+    entries: Vec<(BaselineError, BaselineKey)>,
     keys: HashMap<BaselineKey, bool>,
-    relative_to: PathBuf,
+    matching_mode: BaselineMatchingMode,
 }
 
 impl TrackedBaselineProcessor {
-    pub fn from_json(content: &str, relative_to: &Path) -> Result<Self> {
-        let baseline_file: BaselineErrors = serde_json::from_str(content)?;
-        Ok(Self::from_baseline_errors(baseline_file, relative_to))
+    pub fn from_json(
+        content: &str,
+        relative_to: &Path,
+        matching_mode: BaselineMatchingMode,
+    ) -> Result<Self> {
+        let baseline_file: BaselineErrors =
+            serde_json::from_str(content).context(INVALID_BASELINE_GUIDANCE)?;
+        Self::from_baseline_errors(baseline_file, relative_to, matching_mode)
+            .context(INVALID_BASELINE_GUIDANCE)
     }
 
-    fn from_baseline_errors(baseline_errors: BaselineErrors, relative_to: &Path) -> Self {
-        let entries = baseline_errors.errors;
+    fn from_baseline_errors(
+        baseline_errors: BaselineErrors,
+        relative_to: &Path,
+        matching_mode: BaselineMatchingMode,
+    ) -> Result<Self> {
+        let entries = baseline_errors
+            .errors
+            .into_iter()
+            .map(|error| {
+                let key = BaselineKey::from_baseline_error(&error, relative_to, matching_mode)?;
+                Ok((error, key))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let keys = entries
             .iter()
-            .map(|error| (BaselineKey::from_baseline_error(error, relative_to), false))
+            .map(|(_, key)| (key.clone(), false))
             .collect();
-        Self {
+        Ok(Self {
             entries,
             keys,
-            relative_to: relative_to.to_owned(),
-        }
+            matching_mode,
+        })
     }
 
     /// Baseline suppressions are processed last, after inline and config suppressions.
@@ -139,7 +203,10 @@ impl TrackedBaselineProcessor {
         let mut remaining_errors = Vec::new();
 
         for error in shown_errors.drain(..) {
-            if let Some(matched) = self.keys.get_mut(&BaselineKey::from_error(&error)) {
+            if let Some(matched) = self
+                .keys
+                .get_mut(&BaselineKey::from_error(&error, self.matching_mode))
+            {
                 *matched = true;
                 baseline_errors.push(error);
             } else {
@@ -160,8 +227,7 @@ impl TrackedBaselineProcessor {
         let retained_entries = self
             .entries
             .into_iter()
-            .filter_map(|entry| {
-                let key = BaselineKey::from_baseline_error(&entry, &self.relative_to);
+            .filter_map(|(entry, key)| {
                 let matched = self.keys[&key];
                 let definitely_unused =
                     is_definitely_unused(matched, checked_paths.contains(&key.path), || {
@@ -231,11 +297,11 @@ mod tests {
             ErrorKind::BadReturn,
         );
 
-        let key = BaselineKey::from_error(&error);
+        let key = BaselineKey::from_error(&error, BaselineMatchingMode::Column);
 
         assert_eq!(key.path, "/workspace/test/path.py");
         assert_eq!(key.name, "bad-return");
-        assert_eq!(key.column, 1);
+        assert_eq!(key.matching_field, BaselineMatchingField::Column(1));
     }
 
     #[test]
@@ -259,8 +325,12 @@ mod tests {
         "#;
 
         let baseline_file: BaselineErrors = serde_json::from_str(baseline_json).unwrap();
-        let processor =
-            BaselineProcessor::from_baseline_errors(baseline_file, Path::new("/workspace"));
+        let processor = BaselineProcessor::from_baseline_errors(
+            baseline_file,
+            Path::new("/workspace"),
+            BaselineMatchingMode::Column,
+        )
+        .unwrap();
 
         let module = Module::new(
             ModuleName::from_str("test_module"),
@@ -315,6 +385,82 @@ mod tests {
     }
 
     #[test]
+    fn test_baseline_matching_by_concise_description() {
+        let baseline_json = r#"
+        {
+            "errors": [{
+                "path": "/workspace/test.py",
+                "name": "bad-return",
+                "concise_description": "Expected description"
+            }]
+        }
+        "#;
+        let processor = BaselineProcessor::from_json(
+            baseline_json,
+            Path::new("/workspace"),
+            BaselineMatchingMode::ConciseDescription,
+        )
+        .unwrap();
+        let module = Module::new(
+            ModuleName::from_str("test_module"),
+            ModulePath::filesystem(PathBuf::from("/workspace/test.py")),
+            Arc::new("test content 123456789".to_owned()),
+        );
+
+        let matching = Error::new(
+            module.clone(),
+            TextRange::new(TextSize::new(8), TextSize::new(10)),
+            "Expected description".to_owned(),
+            Vec::new(),
+            ErrorKind::BadReturn,
+        );
+        assert!(processor.matches_baseline(&matching));
+
+        let different_description = Error::new(
+            module,
+            TextRange::new(TextSize::new(0), TextSize::new(2)),
+            "Different description".to_owned(),
+            Vec::new(),
+            ErrorKind::BadReturn,
+        );
+        assert!(!processor.matches_baseline(&different_description));
+    }
+
+    #[test]
+    fn test_baseline_requires_the_configured_matching_field() {
+        let column_only = r#"
+        {"errors": [{"path": "test.py", "name": "bad-return", "column": 1}]}
+        "#;
+        let err = BaselineProcessor::from_json(
+            column_only,
+            Path::new("/workspace"),
+            BaselineMatchingMode::ConciseDescription,
+        )
+        .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("baseline file is invalid"));
+        assert!(message.contains("missing field `concise_description`"));
+        assert!(message.contains("rerun with `--update-baseline`"));
+
+        let description_only = r#"
+        {
+            "errors": [{
+                "path": "test.py",
+                "name": "bad-return",
+                "concise_description": "test"
+            }]
+        }
+        "#;
+        let err = BaselineProcessor::from_json(
+            description_only,
+            Path::new("/workspace"),
+            BaselineMatchingMode::Column,
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("missing field `column`"));
+    }
+
+    #[test]
     fn test_unused_entry_count() {
         let baseline_json = serde_json::json!({
             "errors": [
@@ -333,8 +479,12 @@ mod tests {
             ]
         });
         let baseline_file: BaselineErrors = serde_json::from_value(baseline_json).unwrap();
-        let mut processor =
-            TrackedBaselineProcessor::from_baseline_errors(baseline_file, Path::new("/workspace"));
+        let mut processor = TrackedBaselineProcessor::from_baseline_errors(
+            baseline_file,
+            Path::new("/workspace"),
+            BaselineMatchingMode::Column,
+        )
+        .unwrap();
 
         let module = Module::new(
             ModuleName::from_str("test_module"),
@@ -392,8 +542,12 @@ mod tests {
             ]
         });
         let baseline_file: BaselineErrors = serde_json::from_value(baseline_json).unwrap();
-        let mut processor =
-            TrackedBaselineProcessor::from_baseline_errors(baseline_file, Path::new("/workspace"));
+        let mut processor = TrackedBaselineProcessor::from_baseline_errors(
+            baseline_file,
+            Path::new("/workspace"),
+            BaselineMatchingMode::Column,
+        )
+        .unwrap();
 
         let module = Module::new(
             ModuleName::from_str("test_module"),
@@ -443,7 +597,12 @@ mod tests {
         });
 
         let baseline_file: BaselineErrors = serde_json::from_value(baseline_json).unwrap();
-        let processor = BaselineProcessor::from_baseline_errors(baseline_file, &cwd);
+        let processor = BaselineProcessor::from_baseline_errors(
+            baseline_file,
+            &cwd,
+            BaselineMatchingMode::Column,
+        )
+        .unwrap();
 
         let module = Module::new(
             ModuleName::from_str("foo"),
@@ -485,8 +644,12 @@ mod tests {
         });
 
         let baseline_file: BaselineErrors = serde_json::from_value(baseline_json).unwrap();
-        let processor =
-            BaselineProcessor::from_baseline_errors(baseline_file, Path::new("/workspace"));
+        let processor = BaselineProcessor::from_baseline_errors(
+            baseline_file,
+            Path::new("/workspace"),
+            BaselineMatchingMode::Column,
+        )
+        .unwrap();
 
         // Simulate a Windows-style path with backslashes in the error.
         let module = Module::new(
@@ -519,7 +682,12 @@ mod tests {
             }]
         });
         let baseline_file: BaselineErrors = serde_json::from_value(baseline_json).unwrap();
-        let processor = BaselineProcessor::from_baseline_errors(baseline_file, &relative_to);
+        let processor = BaselineProcessor::from_baseline_errors(
+            baseline_file,
+            &relative_to,
+            BaselineMatchingMode::Column,
+        )
+        .unwrap();
 
         let module = Module::new(
             ModuleName::from_str("foo"),

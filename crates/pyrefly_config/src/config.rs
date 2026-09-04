@@ -526,6 +526,40 @@ impl ImportLookupPathPart<'_> {
     }
 }
 
+/// Fields used to match diagnostics against baseline entries.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BaselineMatchingMode {
+    /// Match by path, error kind, and starting column.
+    #[default]
+    Column,
+    /// Match by path, error kind, and concise description.
+    ConciseDescription,
+}
+
+impl BaselineMatchingMode {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Amount of diagnostic information written to a baseline file.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BaselineFormat {
+    /// Write all available baseline metadata.
+    #[default]
+    Full,
+    /// Write only the fields required for matching.
+    Minimal,
+}
+
+impl BaselineFormat {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[skip_serializing_none]
 #[derive(Debug, Deserialize, Serialize, Clone, Derivative)]
 #[serde(rename_all = "kebab-case")]
@@ -617,6 +651,14 @@ pub struct ConfigFile {
     /// Severity assigned to errors that match the baseline.
     /// Defaults to `ignore`.
     pub baseline_error_level: Option<Severity>,
+
+    /// Fields used to match diagnostics against baseline entries.
+    #[serde(default, skip_serializing_if = "BaselineMatchingMode::is_default")]
+    pub baseline_matching_mode: BaselineMatchingMode,
+
+    /// Amount of diagnostic information written to the baseline.
+    #[serde(default, skip_serializing_if = "BaselineFormat::is_default")]
+    pub baseline_format: BaselineFormat,
 
     /// Default error output format for CLI checks when `--output-format` is not set.
     pub output_format: Option<OutputFormat>,
@@ -734,6 +776,8 @@ impl Default for ConfigFile {
             typeshed_path: None,
             baseline: None,
             baseline_error_level: None,
+            baseline_matching_mode: BaselineMatchingMode::default(),
+            baseline_format: BaselineFormat::default(),
             min_severity: None,
             output_format: None,
             skip_lsp_config_indexing: false,
@@ -2177,6 +2221,8 @@ mod tests {
                 typeshed_path: None,
                 baseline: None,
                 baseline_error_level: None,
+                baseline_matching_mode: BaselineMatchingMode::Column,
+                baseline_format: BaselineFormat::Full,
                 min_severity: None,
                 skip_lsp_config_indexing: false,
                 extra_file_extensions: Vec::new(),
@@ -2504,6 +2550,8 @@ mod tests {
             typeshed_path: Some(PathBuf::from(typeshed)),
             baseline: Some(PathBuf::from("baseline.json")),
             baseline_error_level: None,
+            baseline_matching_mode: BaselineMatchingMode::Column,
+            baseline_format: BaselineFormat::Full,
             min_severity: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
@@ -2578,6 +2626,8 @@ mod tests {
             typeshed_path: Some(expected_typeshed),
             baseline: Some(test_path.join("baseline.json")),
             baseline_error_level: None,
+            baseline_matching_mode: BaselineMatchingMode::Column,
+            baseline_format: BaselineFormat::Full,
             min_severity: None,
             skip_lsp_config_indexing: false,
             extra_file_extensions: Vec::new(),
@@ -2665,10 +2715,24 @@ mod tests {
         let config_str = r#"
 baseline = "baseline.json"
 baseline-error-level = "warn"
+baseline-matching-mode = "concise_description"
+baseline-format = "minimal"
 "#;
         let config = ConfigFile::parse_config(config_str).unwrap();
         assert_eq!(config.baseline, Some(PathBuf::from("baseline.json")));
         assert_eq!(config.baseline_error_level, Some(Severity::Warn));
+        assert_eq!(
+            config.baseline_matching_mode,
+            BaselineMatchingMode::ConciseDescription
+        );
+        assert_eq!(config.baseline_format, BaselineFormat::Minimal);
+
+        let defaults = ConfigFile::parse_config("").unwrap();
+        assert_eq!(
+            defaults.baseline_matching_mode,
+            BaselineMatchingMode::Column
+        );
+        assert_eq!(defaults.baseline_format, BaselineFormat::Full);
     }
 
     #[test]
