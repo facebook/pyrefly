@@ -2602,10 +2602,10 @@ mod tests {
 
     #[test]
     fn any_middle_recovers_with_gradual_unbounded_middle() {
-        let shapeless = IntTuple::unpacked(Vec::new(), Type::Any(AnyStyle::Implicit), Vec::new());
+        let shapeless = IntTuple::unpacked(Vec::new(), Type::any_implicit(), Vec::new());
         assert_eq!(shapeless, IntTuple::shapeless());
 
-        let shape = IntTuple::unpacked(vec![dim(1)], Type::Any(AnyStyle::Implicit), vec![dim(2)]);
+        let shape = IntTuple::unpacked(vec![dim(1)], Type::any_implicit(), vec![dim(2)]);
 
         assert_eq!(
             shape,

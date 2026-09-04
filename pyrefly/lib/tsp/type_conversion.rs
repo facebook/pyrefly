@@ -1171,7 +1171,7 @@ mod tests {
 
     #[test]
     fn test_convert_any() {
-        let ty = PyreflyType::Any(AnyStyle::Implicit);
+        let ty = PyreflyType::any_implicit();
         let tsp = convert_type(&ty);
         match tsp {
             TspType::BuiltInType(b) => {

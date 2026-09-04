@@ -6620,7 +6620,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     Type::SpecialForm(SpecialForm::TypeForm) => {
                         // Bare TypeForm (no subscript) is equivalent to TypeForm[Any]
-                        Some(Type::TypeForm(Box::new(Type::Any(AnyStyle::Implicit))))
+                        Some(Type::TypeForm(Box::new(Type::any_implicit())))
                     }
                     Type::SpecialForm(SpecialForm::SelfType) => {
                         // `typing.Self` substitutes to the concrete `SelfType` of

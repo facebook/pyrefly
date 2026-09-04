@@ -1722,9 +1722,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let metadata = self.get_metadata_for_class(tensor.base_class.class_object());
                 match self.get_shaped_array_attribute(tensor, attr_name) {
                     Some(attr) => acc.found_class_attribute(attr, base),
-                    None if metadata.has_base_any() => {
-                        acc.found_type(Type::Any(AnyStyle::Implicit), base)
-                    }
+                    None if metadata.has_base_any() => acc.found_type(Type::any_implicit(), base),
                     None => acc.not_found(NotFoundOn::ClassInstance(
                         tensor.base_class.class_object().dupe(),
                         base,

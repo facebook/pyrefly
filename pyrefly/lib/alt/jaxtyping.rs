@@ -504,7 +504,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
                 // Anonymous dim: "_" matches any single dimension, not bound to a name
                 if token == "_" {
-                    return Type::Any(AnyStyle::Implicit);
+                    return Type::any_implicit();
                 }
 
                 // Integer literal: "3", "-1", etc.

@@ -1395,7 +1395,7 @@ impl Type {
     }
 
     pub fn any_tuple() -> Self {
-        Self::unbounded_tuple(Type::Any(AnyStyle::Implicit))
+        Self::unbounded_tuple(Type::any_implicit())
     }
 
     pub fn is_any(&self) -> bool {
@@ -2068,7 +2068,7 @@ impl Type {
     // Attempt at a function that will convert @ to Any for now.
     pub fn clean_var(self) -> Type {
         self.transform(&mut |ty| match &ty {
-            Type::Var(_) => *ty = Type::Any(AnyStyle::Implicit),
+            Type::Var(_) => *ty = Type::any_implicit(),
             _ => {}
         })
     }

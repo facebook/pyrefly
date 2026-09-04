@@ -89,7 +89,6 @@ use crate::binding::binding::UndecoratedFunctionRangeAnswer;
 use crate::error::collector::ErrorCollector;
 use crate::types::annotation::Annotation;
 use crate::types::type_info::TypeInfo;
-use crate::types::types::AnyStyle;
 use crate::types::types::TParams;
 use crate::types::types::Type;
 use crate::types::types::Var;
@@ -274,7 +273,7 @@ impl<Ans: LookupAnswer> Solve<Ans> for KeyExport {
         // returning Unknown here avoids leaking a Var across module boundaries
         // in iterative-fixpoint SCC solving (where cross-module back-edges on
         // KeyExport would otherwise return a Type::Var from a foreign solver).
-        Type::Any(AnyStyle::Implicit)
+        Type::any_implicit()
     }
 }
 
