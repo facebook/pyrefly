@@ -140,7 +140,11 @@ available tooling differs. **How to detect which one you are in:** check for a
 ## Feature guidelines
 
 - When working on a feature, the first commit should be a failing test if
-  possible
+  possible.
+- Avoid adding configuration flags that do nothing except control what errors
+  are reported. The right way to make an error configurable is to add a
+  dedicated error kind for it, so that reporting can be configured by adjusting
+  the error kind's severity.
 
 ### Running tests
 
