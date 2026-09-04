@@ -11,6 +11,7 @@
 use pyrefly_types::callable::Params;
 use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::class::Class;
+use pyrefly_types::identity::IdentityIgnored;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::type_alias::TypeAliasData;
@@ -208,7 +209,7 @@ pub(crate) fn type_to_structured(
                 } else {
                     let inner_union = Type::Union(Box::new(Union {
                         members: non_none.into_iter().cloned().collect(),
-                        display_name: None,
+                        display_name: IdentityIgnored(None),
                     }));
                     type_to_structured(&inner_union, table, pending_class_traits)
                 };

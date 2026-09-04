@@ -4071,14 +4071,14 @@ mod tests {
                 ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
                 ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
             ],
-            display_name: None,
+            display_name: IdentityIgnored(None),
         }));
         let mismatched_union = Type::Union(Box::new(Union {
             members: vec![
                 ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
                 ShapedArrayType::new(array, other_shape).to_type(),
             ],
-            display_name: None,
+            display_name: IdentityIgnored(None),
         }));
 
         assert_eq!(extract::shaped_array_shape(&union), Some(shape));

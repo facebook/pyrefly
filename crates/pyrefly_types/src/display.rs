@@ -1346,7 +1346,7 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::Union(u)
                 if !(self.always_display_expanded_unions || is_toplevel)
-                    && let Some((module, name)) = &u.display_name =>
+                    && let Some((module, name)) = &u.display_name.0 =>
             {
                 if self.always_display_module_name && *module != ModuleName::unknown() {
                     output.write_reference(*module, name.as_ref())
@@ -1897,6 +1897,7 @@ pub mod tests {
     use crate::dimension::Int;
     use crate::function::FuncMetadata;
     use crate::function::Function;
+    use crate::identity::IdentityIgnored;
     use crate::literal::Lit;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
@@ -2539,7 +2540,7 @@ pub mod tests {
         assert_eq!(
             Type::type_of(Type::Union(Box::new(Union {
                 members: vec![nonlit1, nonlit2],
-                display_name: Some((ModuleName::unknown(), Name::new("MyUnion")))
+                display_name: IdentityIgnored(Some((ModuleName::unknown(), Name::new("MyUnion"),)))
             })))
             .to_string(),
             "type[MyUnion]"
