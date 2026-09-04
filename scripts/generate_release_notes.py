@@ -4,7 +4,6 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-# pyre-strict
 
 """
 Release Notes Generator
@@ -118,13 +117,46 @@ def resolve_ref_date(
 def get_commits_between_tags(
     client: GitHubClient, owner: str, repo: str, from_tag: str, to_tag: str
 ) -> List[Dict[str, Any]]:
-    """Get all commits between two tags using the GitHub compare API."""
+    """
+    Get all commits between two tags using the GitHub compare API.
+
+    Paginates through all results. The compare endpoint caps each response at
+    250 commits while reporting the true size of the range in `total_commits`,
+    so a single unpaginated request silently truncates any longer range.
+    """
     url = f"{client.base_url}/repos/{owner}/{repo}/compare/{from_tag}...{to_tag}"
-    try:
-        comparison = client._make_request(url)
-        return comparison.get("commits", [])
-    except Exception as e:
-        raise ValueError(f"Could not compare tags {from_tag}...{to_tag}: {e}")
+    commits: List[Dict[str, Any]] = []
+    total: Optional[int] = None
+    page = 1
+
+    while True:
+        try:
+            comparison = client._make_request(f"{url}?per_page=100&page={page}")
+        except Exception as e:
+            raise ValueError(
+                f"Could not compare tags {from_tag}...{to_tag}: {e}"
+            ) from e
+        # Latch the range size from the first page. GitHub recomputes
+        # `total_commits` on every response, so commits landing mid-pagination
+        # would otherwise shift the termination target out from under the loop.
+        if total is None:
+            total = comparison["total_commits"]
+        page_commits = comparison.get("commits", [])
+        if not page_commits:
+            break
+        commits.extend(page_commits)
+        if len(commits) >= total:
+            break
+        page += 1
+
+    # Notes generated from a partial range silently omit whole features rather
+    # than looking wrong, so refuse to summarize a short read.
+    if len(commits) != total:
+        raise ValueError(
+            f"Expected {total} commits between {from_tag} and {to_tag}, but the "
+            f"compare API returned {len(commits)}."
+        )
+    return commits
 
 
 def get_closed_issues_between_dates(

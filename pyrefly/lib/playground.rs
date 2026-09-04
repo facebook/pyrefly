@@ -23,6 +23,7 @@ use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::LiveSourceDatabase;
 use pyrefly_build::source_db::ModuleEnumerator;
 use pyrefly_build::source_db::SourceDatabase;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
@@ -33,18 +34,25 @@ use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lined_buffer::DisplayPos;
 use pyrefly_util::lined_buffer::DisplayRange;
 use pyrefly_util::lined_buffer::LineNumber;
+use pyrefly_util::lined_buffer::LinedBuffer;
 use pyrefly_util::prelude::VecExt;
 use pyrefly_util::thread_pool::ThreadCount;
+use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
+use crate::config::config::toml_error_span;
 use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
+use crate::config::pyproject::PyProject;
 use crate::lsp::wasm::hover::get_hover;
 use crate::state::load::FileContents;
+use crate::state::lsp::AllOffPartial;
+use crate::state::lsp::InlayHintConfig;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::state::State;
@@ -167,6 +175,32 @@ impl Range {
 pub struct DefinitionLocation {
     pub filename: String,
     pub range: Range,
+}
+
+fn toml_parse_error_range<T: DeserializeOwned>(
+    contents: &str,
+    err: &anyhow::Error,
+) -> (i32, i32, i32, i32) {
+    let Some(span) = toml_error_span::<T>(contents, err) else {
+        return (1, 1, 1, 1);
+    };
+    // Delegate byte-offset -> (line, column) conversion to `LinedBuffer` so the
+    // config diagnostic uses the same UTF-scalar column convention as every other
+    // diagnostic and clamps offsets that land inside a multi-byte character.
+    let lined_buffer = LinedBuffer::new(Arc::new(contents.to_owned()));
+    let range = lined_buffer.display_range(
+        TextRange::new(
+            TextSize::new(span.start as u32),
+            TextSize::new(span.end as u32),
+        ),
+        None,
+    );
+    (
+        range.start.line_within_file().get() as i32,
+        range.start.column().get() as i32,
+        range.end.line_within_file().get() as i32,
+        range.end.column().get() as i32,
+    )
 }
 
 #[derive(Serialize, Clone)]
@@ -303,23 +337,36 @@ impl Playground {
         // config precedence: pyrefly.toml beats pyproject.toml's [tool.pyrefly].
         let config_result = files
             .get("pyrefly.toml")
-            .map(|cfg| ("pyrefly.toml", ConfigFile::parse_config(cfg).map(Some)))
+            .map(|cfg| {
+                (
+                    "pyrefly.toml",
+                    ConfigFile::parse_config(cfg).map(Some).map_err(|err| {
+                        let range = toml_parse_error_range::<ConfigFile>(cfg, &err);
+                        (err, range)
+                    }),
+                )
+            })
             .or_else(|| {
                 files.get("pyproject.toml").map(|cfg| {
                     (
                         "pyproject.toml",
-                        ConfigFile::parse_pyproject_toml(cfg).map(|(config, _)| config),
+                        ConfigFile::parse_pyproject_toml(cfg)
+                            .map(|(config, _)| config)
+                            .map_err(|err| {
+                                let range = toml_parse_error_range::<PyProject>(cfg, &err);
+                                (err, range)
+                            }),
                     )
                 })
             });
         let parsed_config = match config_result {
             Some((_, Ok(config))) => config,
-            Some((filename, Err(err))) => {
+            Some((filename, Err((err, (start_line, start_col, end_line, end_col))))) => {
                 self.config_diagnostics.push(Diagnostic {
-                    start_line: 1,
-                    start_col: 1,
-                    end_line: 1,
-                    end_col: 1,
+                    start_line,
+                    start_col,
+                    end_line,
+                    end_col,
                     message_header: "TOML parse error".to_owned(),
                     message_details: err.to_string(),
                     kind: "parse-error".to_owned(),
@@ -528,7 +575,7 @@ impl Playground {
                     start_col: range.start.column().get() as i32,
                     end_line: range.end.line_within_file().get() as i32,
                     end_col: range.end.column().get() as i32,
-                    message_header: format!("Import `{}` is unused", unused.name.as_str()),
+                    message_header: format!("Import `{}` may be unused", unused.name.as_str()),
                     message_details: String::new(),
                     kind: "unused-import".to_owned(),
                     // MarkerSeverity.Hint (1)
@@ -548,6 +595,9 @@ impl Playground {
         if let Some(bindings) = transaction.get_bindings(handle) {
             let module_info = bindings.module();
             for unused in bindings.unused_variables() {
+                if Ast::is_intentionally_unused(unused.name.as_str()) {
+                    continue;
+                }
                 let range = module_info.display_range(unused.range);
                 items.push(Diagnostic {
                     start_line: range.start.line_within_file().get() as i32,
@@ -574,6 +624,9 @@ impl Playground {
         if let Some(bindings) = transaction.get_bindings(handle) {
             let module_info = bindings.module();
             for unused in bindings.unused_parameters() {
+                if Ast::is_intentionally_unused(unused.name.as_str()) {
+                    continue;
+                }
                 let range = module_info.display_range(unused.range);
                 items.push(Diagnostic {
                     start_line: range.start.line_within_file().get() as i32,
@@ -706,7 +759,7 @@ impl Playground {
             )
     }
 
-    pub fn inlay_hint(&self) -> Vec<InlayHint> {
+    pub fn inlay_hint(&self, call_argument_names: bool) -> Vec<InlayHint> {
         let handle = match self.handles.get(&self.active_filename) {
             Some(h) => h,
             None => return Vec::new(),
@@ -714,16 +767,22 @@ impl Playground {
         let transaction = self.state.transaction();
         transaction
             .get_module_info(handle)
-            .zip(transaction.inlay_hints(handle, Default::default()))
+            .zip(transaction.inlay_hints(
+                handle,
+                InlayHintConfig {
+                    call_argument_names: if call_argument_names {
+                        AllOffPartial::All
+                    } else {
+                        AllOffPartial::Off
+                    },
+                    ..Default::default()
+                },
+                Default::default(),
+            ))
             .map(|(info, hints)| {
-                hints.into_map(|hint_data| {
-                    let position = Position::from_display_pos(info.display_pos(hint_data.position));
-                    // Concatenate all label parts into a single string for the playground
-                    let label: String = hint_data
-                        .label_parts
-                        .iter()
-                        .map(|(text, _)| text.as_str())
-                        .collect();
+                hints.into_map(|hint| {
+                    let position = Position::from_display_pos(info.display_pos(hint.position));
+                    let label = hint.label_parts.into_iter().map(|(text, _)| text).collect();
                     InlayHint { label, position }
                 })
             })
@@ -735,6 +794,31 @@ impl Playground {
 mod tests {
     use super::*;
     use crate::config::error_kind::ErrorKind;
+
+    #[test]
+    fn test_parameter_name_inlay_hints_can_be_enabled() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "def f(value: int) -> None:\n    pass\n\nf(1)".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+
+        assert!(
+            state
+                .inlay_hint(false)
+                .iter()
+                .all(|hint| hint.label != "value= ")
+        );
+        assert!(
+            state
+                .inlay_hint(true)
+                .iter()
+                .any(|hint| hint.label == "value= ")
+        );
+    }
 
     #[test]
     fn test_autocomplete_includes_auto_import_edit() {
@@ -1087,6 +1171,31 @@ mod tests {
     }
 
     #[test]
+    fn test_config_toml_parse_error_range() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert("main.py".to_owned(), String::new());
+        files.insert(
+            "pyrefly.toml".to_owned(),
+            "preset = \"strict\"\npytorch-efficiency-lints = \"true\"\n".to_owned(),
+        );
+
+        state.update_sandbox_files(files, true);
+
+        let diagnostic = state
+            .get_errors()
+            .into_iter()
+            .find(|error| error.filename == "pyrefly.toml")
+            .expect("expected a pyrefly.toml parse diagnostic");
+        assert_eq!(diagnostic.message_header, "TOML parse error");
+        // The diagnostic points at the offending value on line 2. Column 28 is
+        // the opening quote of `"true"`: `pytorch-efficiency-lints = ` is 27
+        // characters, so the value begins at 1-based column 28.
+        assert_eq!(diagnostic.start_line, 2);
+        assert_eq!(diagnostic.start_col, 28);
+    }
+
+    #[test]
     fn test_nested_folder_imports() {
         let mut state = Playground::new(None).unwrap();
         let mut files = SmallMap::new();
@@ -1146,7 +1255,10 @@ mod tests {
             .collect();
 
         assert_eq!(unused_imports.len(), 1, "Should detect 1 unused import");
-        assert_eq!(unused_imports[0].message_header, "Import `Dict` is unused");
+        assert_eq!(
+            unused_imports[0].message_header,
+            "Import `Dict` may be unused"
+        );
         assert_eq!(unused_imports[0].severity, 1); // MarkerSeverity.Hint
     }
 
@@ -1156,7 +1268,7 @@ mod tests {
         let mut files = SmallMap::new();
         files.insert(
             "main.py".to_owned(),
-            "def foo():\n    x = 42\n    y = 10\n    return y".to_owned(),
+            "def foo():\n    x = 42\n    _ignored = 0\n    y = 10\n    return y".to_owned(),
         );
         state.update_sandbox_files(files, true);
         state.set_active_file("main.py");
@@ -1173,12 +1285,28 @@ mod tests {
     }
 
     #[test]
+    fn test_pytest_tracebackhide_not_reported_as_unused() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "main.py".to_owned(),
+            "def foo():\n    __tracebackhide__ = True".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+
+        let errors = state.get_errors();
+        assert!(errors.iter().all(|error| error.kind != "unused-variable"));
+    }
+
+    #[test]
     fn test_unused_parameter_diagnostics() {
         let mut state = Playground::new(None).unwrap();
         let mut files = SmallMap::new();
         files.insert(
             "main.py".to_owned(),
-            "def greet(name: str, age: int) -> str:\n    return f\"Hello {name}\"".to_owned(),
+            "def greet(name: str, age: int, _unused: bool) -> str:\n    return f\"Hello {name}\""
+                .to_owned(),
         );
         state.update_sandbox_files(files, true);
         state.set_active_file("main.py");
@@ -1192,7 +1320,7 @@ mod tests {
         assert_eq!(
             unused_parameters.len(),
             1,
-            "Should detect 1 unused parameter"
+            "Should detect 1 unused parameter and skip the underscore-prefixed parameter"
         );
         assert_eq!(
             unused_parameters[0].message_header,

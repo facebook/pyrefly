@@ -1,10 +1,7 @@
-# Portions (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 #
-# This source code is adapted from pytorch/benchmark (TorchBenchmark),
-# which is licensed under the BSD 3-Clause License:
-# https://github.com/pytorch/benchmark/blob/main/LICENSE
-#
-# This adaptation adds tensor shape type annotations for pyrefly.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
 
 """
 SAM (Segment Anything Model) from TorchBenchmark with shape annotations.
@@ -21,7 +18,7 @@ Port notes:
   trackable. window_size=0 means global attention (no partition).
 - Relative positional embeddings (get_rel_pos, add_decomposed_rel_pos) included.
   get_rel_pos is fully typed: F.interpolate, torch.arange, fancy indexing all
-  tracked. add_decomposed_rel_pos takes independent dims first (bare Dim params)
+  tracked. add_decomposed_rel_pos takes independent dims first (bare Int params)
   so the checker binds QH/QW/KH/KW before processing derived expressions in
   tensor types. ImageAttention/ViTBlock use IS (class param) for square spatial
   dims — same type var for both rel_pos (construction) and forward (usage).
@@ -30,7 +27,7 @@ Port notes:
   followed by reshape+permute+reshape+unbind. This entire chain is fully
   shape-tracked through all 4 steps, producing typed q/k/v tensors.
   Attention matmul, softmax, and head reassemble are also tracked.
-  `self.scale: float` annotation prevents `Any` from `Dim ** float` (typeshed gap).
+  `self.scale: float` annotation prevents `Any` from `Int ** float` (typeshed gap).
 - The two-way transformer's Attention (cross-attention) is cleaner: separate
   Q/K/V projections with reshape→transpose for multi-head, similar to LLaMA.
   Fully shape-tracked.
@@ -62,9 +59,10 @@ from typing import Any, assert_type, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from shape_extensions import Elements, IntTuple, IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
@@ -73,7 +71,7 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class LayerNorm2d[C](nn.Module):
+class LayerNorm2d[C: IntVar](nn.Module):
     """Channel-wise LayerNorm for (B, C, H, W) tensors.
 
     Normalizes along channel dim. Shape-preserving.
@@ -81,35 +79,37 @@ class LayerNorm2d[C](nn.Module):
     (B, C, H, W) → (B, C, H, W)
     """
 
-    def __init__(self, num_channels: Dim[C], eps: float = 1e-6) -> None:
+    def __init__(self, num_channels: Int[C], eps: float = 1e-6) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.ones(num_channels))
         self.bias = nn.Parameter(torch.zeros(num_channels))
         self.eps = eps
 
-    def forward[B, H, W](self, x: Tensor[B, C, H, W]) -> Tensor[B, C, H, W]:
+    def forward[B: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, C, H, W]]
+    ) -> Tensor[[B, C, H, W]]:
         u = x.mean(1, keepdim=True)
         s = (x - u).pow(2).mean(1, keepdim=True)
         x_norm = (x - u) / torch.sqrt(s + self.eps)
         out = self.weight[:, None, None] * x_norm + self.bias[:, None, None]
-        assert_type(out, Tensor[B, C, H, W])
+        assert_type(out, Tensor[[B, C, H, W]])
         return out
 
 
-class MLPBlock[D, MlpDim](nn.Module):
+class MLPBlock[D: IntVar, MlpDim: IntVar](nn.Module):
     """MLP block: Linear → GELU → Linear. Shape-preserving.
 
     (*, D) → (*, D)
     """
 
-    def __init__(self, embedding_dim: Dim[D], mlp_dim: Dim[MlpDim]) -> None:
+    def __init__(self, embedding_dim: Int[D], mlp_dim: Int[MlpDim]) -> None:
         super().__init__()
         self.lin1 = nn.Linear(embedding_dim, mlp_dim)
         self.lin2 = nn.Linear(mlp_dim, embedding_dim)
 
-    def forward[B, N](self, x: Tensor[B, N, D]) -> Tensor[B, N, D]:
+    def forward[B: IntVar, N: IntVar](self, x: Tensor[[B, N, D]]) -> Tensor[[B, N, D]]:
         h = nn.functional.gelu(self.lin1(x))
-        assert_type(h, Tensor[B, N, MlpDim])
+        assert_type(h, Tensor[[B, N, MlpDim]])
         return self.lin2(h)
 
 
@@ -118,9 +118,15 @@ class MLPBlock[D, MlpDim](nn.Module):
 # ============================================================================
 
 
-def window_partition[B, H, W, WS, D](
-    x: Tensor[B, H, W, D], window_size: Dim[WS]
-) -> Tensor[B * (H // WS) * (W // WS), WS, WS, D]:
+def window_partition[
+    B: IntVar,
+    H: IntVar,
+    W: IntVar,
+    WS: IntVar,
+    D: IntVar,
+](
+    x: Tensor[[B, H, W, D]], window_size: Int[WS]
+) -> Tensor[[B * (H // WS) * (W // WS), WS, WS, D]]:
     """Partition into non-overlapping windows.
 
     Original: image_encoder.py window_partition function.
@@ -141,13 +147,19 @@ def window_partition[B, H, W, WS, D](
     )
 
 
-def window_unpartition[B, H, W, WS, D](
-    window_size: Dim[WS],
-    h: Dim[H],
-    w: Dim[W],
-    batch_size: Dim[B],
-    windows: Tensor[B * (H // WS) * (W // WS), WS, WS, D],
-) -> Tensor[B, H, W, D]:
+def window_unpartition[
+    B: IntVar,
+    H: IntVar,
+    W: IntVar,
+    WS: IntVar,
+    D: IntVar,
+](
+    window_size: Int[WS],
+    h: Int[H],
+    w: Int[W],
+    batch_size: Int[B],
+    windows: Tensor[[B * (H // WS) * (W // WS), WS, WS, D]],
+) -> Tensor[[B, H, W, D]]:
     """Undo window partition: reassemble windows into spatial grid.
 
     Original: image_encoder.py window_unpartition function.
@@ -167,15 +179,15 @@ def window_unpartition[B, H, W, WS, D](
 # ============================================================================
 
 
-def get_rel_pos[QS, KS, HD, RP](
-    q_size: Dim[QS], k_size: Dim[KS], rel_pos: Tensor[RP, HD]
-) -> Tensor[QS, KS, HD]:
+def get_rel_pos[QS: IntVar, KS: IntVar, HD: IntVar, RP: IntVar](
+    q_size: Int[QS], k_size: Int[KS], rel_pos: Tensor[[RP, HD]]
+) -> Tensor[[QS, KS, HD]]:
     """Get relative positional embeddings for query/key size pair.
 
     Original: image_encoder.py get_rel_pos function.
 
     Uses F.interpolate to resize the learned embedding table if needed,
-    then indexes by computed relative coordinates. With Dim-typed args,
+    then indexes by computed relative coordinates. With Int-typed args,
     the full chain is shape-tracked: reshape, permute, interpolate,
     arange, broadcasting subtraction, and fancy indexing all produce
     typed outputs.
@@ -203,16 +215,25 @@ def get_rel_pos[QS, KS, HD, RP](
     return rel_pos_resized[relative_coords.long()]
 
 
-def add_decomposed_rel_pos[B, QH, QW, KH, KW, HD, RPH, RPW](
-    q_h: Dim[QH],
-    q_w: Dim[QW],
-    k_h: Dim[KH],
-    k_w: Dim[KW],
-    attn: Tensor[B, QH * QW, KH * KW],
-    q: Tensor[B, QH * QW, HD],
-    rel_pos_h: Tensor[RPH, HD],
-    rel_pos_w: Tensor[RPW, HD],
-) -> Tensor[B, QH * QW, KH * KW]:
+def add_decomposed_rel_pos[
+    B: IntVar,
+    QH: IntVar,
+    QW: IntVar,
+    KH: IntVar,
+    KW: IntVar,
+    HD: IntVar,
+    RPH: IntVar,
+    RPW: IntVar,
+](
+    q_h: Int[QH],
+    q_w: Int[QW],
+    k_h: Int[KH],
+    k_w: Int[KW],
+    attn: Tensor[[B, QH * QW, KH * KW]],
+    q: Tensor[[B, QH * QW, HD]],
+    rel_pos_h: Tensor[[RPH, HD]],
+    rel_pos_w: Tensor[[RPW, HD]],
+) -> Tensor[[B, QH * QW, KH * KW]]:
     """Add decomposed relative position bias to attention scores.
 
     Original: image_encoder.py add_decomposed_rel_pos function.
@@ -221,16 +242,16 @@ def add_decomposed_rel_pos[B, QH, QW, KH, KW, HD, RPH, RPW](
     (from MViTv2). Computes q @ Rh and q @ Rw via torch.einsum, then adds
     to attention map with broadcasting.
 
-    Independent type params (QH, QW, KH, KW) appear as bare Dim params
+    Independent type params (QH, QW, KH, KW) appear as bare Int params
     first, so the checker binds them before processing derived expressions
     (QH*QW, 2*QH-1) in the tensor types.
 
     Shape-preserving on attn: (B, QH*QW, KH*KW) → (B, QH*QW, KH*KW)
     """
     rh = get_rel_pos(q_h, k_h, rel_pos_h)
-    assert_type(rh, Tensor[QH, KH, HD])
+    assert_type(rh, Tensor[[QH, KH, HD]])
     rw = get_rel_pos(q_w, k_w, rel_pos_w)
-    assert_type(rw, Tensor[QW, KW, HD])
+    assert_type(rw, Tensor[[QW, KW, HD]])
 
     b, _, dim = q.shape
     r_q = q.reshape(b, q_h, q_w, dim)
@@ -252,13 +273,13 @@ def add_decomposed_rel_pos[B, QH, QW, KH, KW, HD, RPH, RPW](
 # ============================================================================
 
 
-class ImageAttention[D, NHead, IS](nn.Module):
+class ImageAttention[D: IntVar, NHead: IntVar, IS: IntVar](nn.Module):
     """Multi-head self-attention in BHWC format.
 
     Combined QKV projection: Linear(D, 3*D) → reshape+permute+unbind → q, k, v
     → scaled dot-product attention → view+permute+reshape → output projection.
     Fully shape-tracked through the entire chain (reshape, permute, unbind,
-    matmul, view all tracked with Dim args).
+    matmul, view all tracked with Int args).
 
     When use_rel_pos=True, learned relative position embeddings of shape
     (2*IS-1, D//NHead) are tracked via the IS type param.
@@ -268,11 +289,11 @@ class ImageAttention[D, NHead, IS](nn.Module):
 
     def __init__(
         self,
-        dim: Dim[D],
-        num_heads: Dim[NHead],
+        dim: Int[D],
+        num_heads: Int[NHead],
         use_rel_pos: bool = False,
         rel_pos_zero_init: bool = True,
-        input_size: Dim[IS] | None = None,
+        input_size: Int[IS] | None = None,
     ) -> None:
         super().__init__()
         self.num_heads = num_heads
@@ -284,7 +305,7 @@ class ImageAttention[D, NHead, IS](nn.Module):
         if use_rel_pos:
             assert input_size is not None
             # Learned relative position embeddings for height and width
-            # Shape: (2*IS-1, D//NHead). Tracked via Dim[IS] type param.
+            # Shape: (2*IS-1, D//NHead). Tracked via Int[IS] type param.
             self.rel_pos_h = nn.Parameter(
                 torch.zeros(2 * input_size - 1, self.head_dim)
             )
@@ -292,25 +313,27 @@ class ImageAttention[D, NHead, IS](nn.Module):
                 torch.zeros(2 * input_size - 1, self.head_dim)
             )
 
-    def forward[B, H, W](self, x: Tensor[B, H, W, D]) -> Tensor[B, H, W, D]:
+    def forward[B: IntVar, H: IntVar, W: IntVar](
+        self, x: Tensor[[B, H, W, D]]
+    ) -> Tensor[[B, H, W, D]]:
         b, h, w, d = x.size()
         # Combined QKV: (B, H, W, D) → Linear → (B, H, W, 3*D)
         qkv_out = self.qkv(x)
-        assert_type(qkv_out, Tensor[B, H, W, 3 * D])
+        assert_type(qkv_out, Tensor[[B, H, W, 3 * D]])
         # Reshape+permute+unbind: fully tracked through the chain
         # (B, H*W, 3, NHead, HeadDim) → (3, B, NHead, H*W, HeadDim)
         # → (3, B*NHead, H*W, HeadDim) → unbind → q, k, v
         qkv_reshaped = qkv_out.reshape(b, h * w, 3, self.num_heads, self.head_dim)
-        assert_type(qkv_reshaped, Tensor[B, H * W, 3, NHead, D // NHead])
+        assert_type(qkv_reshaped, Tensor[[B, H * W, 3, NHead, D // NHead]])
         qkv_perm = qkv_reshaped.permute(2, 0, 3, 1, 4)
-        assert_type(qkv_perm, Tensor[3, B, NHead, H * W, D // NHead])
+        assert_type(qkv_perm, Tensor[[3, B, NHead, H * W, D // NHead]])
         qkv_flat = qkv_perm.reshape(3, b * self.num_heads, h * w, self.head_dim)
-        assert_type(qkv_flat, Tensor[3, B * NHead, H * W, D // NHead])
+        assert_type(qkv_flat, Tensor[[3, B * NHead, H * W, D // NHead]])
         q, k, v = qkv_flat.unbind(0)
-        assert_type(q, Tensor[B * NHead, H * W, D // NHead])
+        assert_type(q, Tensor[[B * NHead, H * W, D // NHead]])
         # Scaled dot-product attention
         attn = (q * self.scale) @ k.transpose(-2, -1)
-        assert_type(attn, Tensor[B * NHead, H * W, H * W])
+        assert_type(attn, Tensor[[B * NHead, H * W, H * W]])
         # Add relative positional embeddings if enabled
         if self.use_rel_pos:
             attn = add_decomposed_rel_pos(
@@ -325,14 +348,14 @@ class ImageAttention[D, NHead, IS](nn.Module):
             )
         attn = F.softmax(attn, dim=-1)
         out = attn @ v
-        assert_type(out, Tensor[B * NHead, H * W, D // NHead])
+        assert_type(out, Tensor[[B * NHead, H * W, D // NHead]])
         # Reassemble heads: view+permute+reshape fully tracked
         result = (
             out.view(b, self.num_heads, h, w, self.head_dim)
             .permute(0, 2, 3, 1, 4)
             .reshape(b, h, w, d)
         )
-        assert_type(result, Tensor[B, H, W, D])
+        assert_type(result, Tensor[[B, H, W, D]])
         return self.proj(result)
 
 
@@ -341,11 +364,17 @@ class ImageAttention[D, NHead, IS](nn.Module):
 # ============================================================================
 
 
-class ViTBlock[D, NHead, MlpDim, IS, WS](nn.Module):
+class ViTBlock[
+    D: IntVar,
+    NHead: IntVar,
+    MlpDim: IntVar,
+    IS: IntVar,
+    WS: IntVar,
+](nn.Module):
     """Vision Transformer block in BHWC format.
 
     Supports both global attention (window_size=None) and windowed attention
-    (window_size=Dim[WS]). With windowed attention, the block partitions the
+    (window_size=Int[WS]). With windowed attention, the block partitions the
     spatial grid into non-overlapping windows before attention, then unpartitions.
 
     (B, IS, IS, D) → (B, IS, IS, D)
@@ -353,12 +382,12 @@ class ViTBlock[D, NHead, MlpDim, IS, WS](nn.Module):
 
     def __init__(
         self,
-        dim: Dim[D],
-        num_heads: Dim[NHead],
-        mlp_dim: Dim[MlpDim],
+        dim: Int[D],
+        num_heads: Int[NHead],
+        mlp_dim: Int[MlpDim],
         use_rel_pos: bool = False,
-        window_size: Dim[WS] | None = None,
-        input_size: Dim[IS] | None = None,
+        window_size: Int[WS] | None = None,
+        input_size: Int[IS] | None = None,
     ) -> None:
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
@@ -372,7 +401,7 @@ class ViTBlock[D, NHead, MlpDim, IS, WS](nn.Module):
         self.mlp = MLPBlock(dim, mlp_dim)
         self.window_size = window_size
 
-    def forward[B](self, x: Tensor[B, IS, IS, D]) -> Tensor[B, IS, IS, D]:
+    def forward[B: IntVar](self, x: Tensor[[B, IS, IS, D]]) -> Tensor[[B, IS, IS, D]]:
         shortcut = x
         x_normed = self.norm1(x)
         if self.window_size is not None:
@@ -390,24 +419,24 @@ class ViTBlock[D, NHead, MlpDim, IS, WS](nn.Module):
             attn_result = self.attn(x_normed)
         # Self-attention with residual
         h = shortcut + attn_result
-        assert_type(h, Tensor[B, IS, IS, D])
+        assert_type(h, Tensor[[B, IS, IS, D]])
         # MLP with residual
         normed = self.norm2(h)
-        assert_type(normed, Tensor[B, IS, IS, D])
+        assert_type(normed, Tensor[[B, IS, IS, D]])
         # MLPBlock expects (B, N, D) — reshape (B, IS, IS, D) → (B, IS*IS, D)
         b, ht, wt, d = h.size()
-        assert_type(b, Dim[B])
-        assert_type(ht, Dim[IS])
-        assert_type(wt, Dim[IS])
+        assert_type(b, Int[B])
+        assert_type(ht, Int[IS])
+        assert_type(wt, Int[IS])
         normed_flat = normed.reshape(b, ht * wt, d)
-        assert_type(normed_flat, Tensor[B, IS * IS, D])
+        assert_type(normed_flat, Tensor[[B, IS * IS, D]])
         mlp_out_flat = self.mlp(normed_flat)
-        assert_type(mlp_out_flat, Tensor[B, IS * IS, D])
+        assert_type(mlp_out_flat, Tensor[[B, IS * IS, D]])
         # Reshape back to (B, IS, IS, D)
         mlp_out = mlp_out_flat.view(b, ht, wt, d)
-        assert_type(mlp_out, Tensor[B, IS, IS, D])
+        assert_type(mlp_out, Tensor[[B, IS, IS, D]])
         out = h + mlp_out
-        assert_type(out, Tensor[B, IS, IS, D])
+        assert_type(out, Tensor[[B, IS, IS, D]])
         return out
 
 
@@ -416,25 +445,25 @@ class ViTBlock[D, NHead, MlpDim, IS, WS](nn.Module):
 # ============================================================================
 
 
-class PatchEmbed[EmbDim](nn.Module):
+class PatchEmbed[EmbDim: IntVar](nn.Module):
     """Patch embedding: Conv2d with kernel_size=stride=16, then permute to BHWC.
 
     For square input (B, 3, S, S) where S is a multiple of 16:
     Conv2d output: (B, EmbDim, (S-16)//16+1, (S-16)//16+1) → permute → BHWC
     """
 
-    def __init__(self, embed_dim: Dim[EmbDim]) -> None:
+    def __init__(self, embed_dim: Int[EmbDim]) -> None:
         super().__init__()
         self.proj = nn.Conv2d(3, embed_dim, kernel_size=16, stride=16)
 
-    def forward[B, S](
-        self, x: Tensor[B, 3, S, S]
-    ) -> Tensor[B, (S - 16) // 16 + 1, (S - 16) // 16 + 1, EmbDim]:
+    def forward[B: IntVar, S: IntVar](
+        self, x: Tensor[[B, 3, S, S]]
+    ) -> Tensor[[B, (S - 16) // 16 + 1, (S - 16) // 16 + 1, EmbDim]]:
         h = self.proj(x)
-        assert_type(h, Tensor[B, EmbDim, (S - 16) // 16 + 1, (S - 16) // 16 + 1])
+        assert_type(h, Tensor[[B, EmbDim, (S - 16) // 16 + 1, (S - 16) // 16 + 1]])
         # BCHW → BHWC
         out = h.permute(0, 2, 3, 1)
-        assert_type(out, Tensor[B, (S - 16) // 16 + 1, (S - 16) // 16 + 1, EmbDim])
+        assert_type(out, Tensor[[B, (S - 16) // 16 + 1, (S - 16) // 16 + 1, EmbDim]])
         return out
 
 
@@ -443,7 +472,7 @@ class PatchEmbed[EmbDim](nn.Module):
 # ============================================================================
 
 
-class ImageEncoderViT[EmbDim, OutC](nn.Module):
+class ImageEncoderViT[EmbDim: IntVar, OutC: IntVar](nn.Module):
     """Vision Transformer image encoder with neck (square images).
 
     Architecture (patch_size=16):
@@ -460,8 +489,8 @@ class ImageEncoderViT[EmbDim, OutC](nn.Module):
 
     def __init__(
         self,
-        embed_dim: Dim[EmbDim],
-        out_chans: Dim[OutC],
+        embed_dim: Int[EmbDim],
+        out_chans: Int[OutC],
         depth: int,
         num_heads: int,
         mlp_ratio: float = 4.0,
@@ -501,27 +530,27 @@ class ImageEncoderViT[EmbDim, OutC](nn.Module):
         )
         self.neck_ln2 = LayerNorm2d(out_chans)
 
-    def forward[B, S](
-        self, x: Tensor[B, 3, S, S]
-    ) -> Tensor[B, OutC, (S - 16) // 16 + 1, (S - 16) // 16 + 1]:
+    def forward[B: IntVar, S: IntVar](
+        self, x: Tensor[[B, 3, S, S]]
+    ) -> Tensor[[B, OutC, (S - 16) // 16 + 1, (S - 16) // 16 + 1]]:
         # Patch embedding: (B, 3, S, S) → (B, PS, PS, EmbDim) in BHWC
         # where PS = (S-16)//16+1
         h = self.patch_embed(x)
-        assert_type(h, Tensor[B, (S - 16) // 16 + 1, (S - 16) // 16 + 1, EmbDim])
+        assert_type(h, Tensor[[B, (S - 16) // 16 + 1, (S - 16) // 16 + 1, EmbDim]])
         # Transformer blocks (shape-preserving in BHWC).
         # Each block's forward uses IS (class param) for spatial dims.
         # ModuleList stores blocks as ViTBlock[EmbDim, Any, Any, Any],
         # erasing IS to Any. Re-annotate after the loop.
         for blk in self.blocks:
             h = blk(h)
-        h_blocked: Tensor[B, (S - 16) // 16 + 1, (S - 16) // 16 + 1, EmbDim] = h  # type: ignore[bad-assignment]
+        h_blocked: Tensor[[B, (S - 16) // 16 + 1, (S - 16) // 16 + 1, EmbDim]] = h  # type: ignore[bad-assignment]
         # Neck: permute to BCHW
         h_bchw = h_blocked.permute(0, 3, 1, 2)
-        assert_type(h_bchw, Tensor[B, EmbDim, (S - 16) // 16 + 1, (S - 16) // 16 + 1])
+        assert_type(h_bchw, Tensor[[B, EmbDim, (S - 16) // 16 + 1, (S - 16) // 16 + 1]])
         n1 = self.neck_ln1(self.neck_conv1(h_bchw))
-        assert_type(n1, Tensor[B, OutC, (S - 16) // 16 + 1, (S - 16) // 16 + 1])
+        assert_type(n1, Tensor[[B, OutC, (S - 16) // 16 + 1, (S - 16) // 16 + 1]])
         n2 = self.neck_ln2(self.neck_conv2(n1))
-        assert_type(n2, Tensor[B, OutC, (S - 16) // 16 + 1, (S - 16) // 16 + 1])
+        assert_type(n2, Tensor[[B, OutC, (S - 16) // 16 + 1, (S - 16) // 16 + 1]])
         return n2
 
 
@@ -530,7 +559,7 @@ class ImageEncoderViT[EmbDim, OutC](nn.Module):
 # ============================================================================
 
 
-class CrossAttention[D, IntDim, NHead](nn.Module):
+class CrossAttention[D: IntVar, IntDim: IntVar, NHead: IntVar](nn.Module):
     """Cross-attention with optional dimension downsampling.
 
     Separate Q/K/V projections: D → IntDim. Multi-head attention with
@@ -541,9 +570,9 @@ class CrossAttention[D, IntDim, NHead](nn.Module):
 
     def __init__(
         self,
-        embedding_dim: Dim[D],
-        internal_dim: Dim[IntDim],
-        num_heads: Dim[NHead],
+        embedding_dim: Int[D],
+        internal_dim: Int[IntDim],
+        num_heads: Int[NHead],
     ) -> None:
         super().__init__()
         self.num_heads = num_heads
@@ -554,41 +583,41 @@ class CrossAttention[D, IntDim, NHead](nn.Module):
         self.v_proj = nn.Linear(embedding_dim, internal_dim)
         self.out_proj = nn.Linear(internal_dim, embedding_dim)
 
-    def forward[B, NQ, NK](
-        self, q: Tensor[B, NQ, D], k: Tensor[B, NK, D], v: Tensor[B, NK, D]
-    ) -> Tensor[B, NQ, D]:
+    def forward[B: IntVar, NQ: IntVar, NK: IntVar](
+        self, q: Tensor[[B, NQ, D]], k: Tensor[[B, NK, D]], v: Tensor[[B, NK, D]]
+    ) -> Tensor[[B, NQ, D]]:
         b, nq, _ = q.size()
-        assert_type(b, Dim[B])
-        assert_type(nq, Dim[NQ])
+        assert_type(b, Int[B])
+        assert_type(nq, Int[NQ])
         # Project
         q_proj = self.q_proj(q)
-        assert_type(q_proj, Tensor[B, NQ, IntDim])
+        assert_type(q_proj, Tensor[[B, NQ, IntDim]])
         k_proj = self.k_proj(k)
-        assert_type(k_proj, Tensor[B, NK, IntDim])
+        assert_type(k_proj, Tensor[[B, NK, IntDim]])
         v_proj = self.v_proj(v)
-        assert_type(v_proj, Tensor[B, NK, IntDim])
+        assert_type(v_proj, Tensor[[B, NK, IntDim]])
         # Separate heads: (B, N, IntDim) → (B, N, NHead, HeadDim) → (B, NHead, N, HeadDim)
         q_heads = q_proj.reshape(b, nq, self.num_heads, self.head_dim).transpose(1, 2)
-        assert_type(q_heads, Tensor[B, NHead, NQ, IntDim // NHead])
+        assert_type(q_heads, Tensor[[B, NHead, NQ, IntDim // NHead]])
         nk = k.size(1)
-        assert_type(nk, Dim[NK])
+        assert_type(nk, Int[NK])
         k_heads = k_proj.reshape(b, nk, self.num_heads, self.head_dim).transpose(1, 2)
-        assert_type(k_heads, Tensor[B, NHead, NK, IntDim // NHead])
+        assert_type(k_heads, Tensor[[B, NHead, NK, IntDim // NHead]])
         v_heads = v_proj.reshape(b, nk, self.num_heads, self.head_dim).transpose(1, 2)
-        assert_type(v_heads, Tensor[B, NHead, NK, IntDim // NHead])
+        assert_type(v_heads, Tensor[[B, NHead, NK, IntDim // NHead]])
         # Attention: (B, NHead, NQ, HeadDim) @ (B, NHead, HeadDim, NK) → (B, NHead, NQ, NK)
         attn = torch.matmul(q_heads * self.scale, k_heads.transpose(2, 3))
-        assert_type(attn, Tensor[B, NHead, NQ, NK])
+        assert_type(attn, Tensor[[B, NHead, NQ, NK]])
         attn = F.softmax(attn.float(), dim=-1)
-        assert_type(attn, Tensor[B, NHead, NQ, NK])
+        assert_type(attn, Tensor[[B, NHead, NQ, NK]])
         # (B, NHead, NQ, NK) @ (B, NHead, NK, HeadDim) → (B, NHead, NQ, HeadDim)
         out = torch.matmul(attn, v_heads)
-        assert_type(out, Tensor[B, NHead, NQ, IntDim // NHead])
+        assert_type(out, Tensor[[B, NHead, NQ, IntDim // NHead]])
         # Recombine: (B, NHead, NQ, HeadDim) → transpose → (B, NQ, NHead, HeadDim)
         # → reshape → (B, NQ, IntDim)
         out_t = out.transpose(1, 2).contiguous()
         # reshape merges last two dims; NHead * (IntDim // NHead) = IntDim can't be proven
-        out_flat: Tensor[B, NQ, IntDim] = out_t.reshape(  # type: ignore[bad-assignment]
+        out_flat: Tensor[[B, NQ, IntDim]] = out_t.reshape(  # type: ignore[bad-assignment]
             b, nq, self.num_heads * self.head_dim
         )
         return self.out_proj(out_flat)
@@ -599,7 +628,7 @@ class CrossAttention[D, IntDim, NHead](nn.Module):
 # ============================================================================
 
 
-class TwoWayAttentionBlock[D, NHead, MlpDim](nn.Module):
+class TwoWayAttentionBlock[D: IntVar, NHead: IntVar, MlpDim: IntVar](nn.Module):
     """Bidirectional cross-attention block.
 
     Four operations:
@@ -613,9 +642,9 @@ class TwoWayAttentionBlock[D, NHead, MlpDim](nn.Module):
 
     def __init__(
         self,
-        embedding_dim: Dim[D],
-        num_heads: Dim[NHead],
-        mlp_dim: Dim[MlpDim],
+        embedding_dim: Int[D],
+        num_heads: Int[NHead],
+        mlp_dim: Int[MlpDim],
         downsample_rate: int = 2,
     ) -> None:
         super().__init__()
@@ -633,42 +662,42 @@ class TwoWayAttentionBlock[D, NHead, MlpDim](nn.Module):
         )
         self.norm4 = nn.LayerNorm(embedding_dim)
 
-    def forward[B, NQ, NK](
+    def forward[B: IntVar, NQ: IntVar, NK: IntVar](
         self,
-        queries: Tensor[B, NQ, D],
-        keys: Tensor[B, NK, D],
-        query_pe: Tensor[B, NQ, D],
-        key_pe: Tensor[B, NK, D],
-    ) -> tuple[Tensor[B, NQ, D], Tensor[B, NK, D]]:
+        queries: Tensor[[B, NQ, D]],
+        keys: Tensor[[B, NK, D]],
+        query_pe: Tensor[[B, NQ, D]],
+        key_pe: Tensor[[B, NK, D]],
+    ) -> tuple[Tensor[[B, NQ, D]], Tensor[[B, NK, D]]]:
         # 1. Self-attention on queries
         q_pe = queries + query_pe
         attn_out = self.self_attn(q_pe, q_pe, queries)
-        assert_type(attn_out, Tensor[B, NQ, D])
+        assert_type(attn_out, Tensor[[B, NQ, D]])
         queries = queries + attn_out
         queries = self.norm1(queries)
-        assert_type(queries, Tensor[B, NQ, D])
+        assert_type(queries, Tensor[[B, NQ, D]])
         # 2. Cross-attention: queries → keys
         q = queries + query_pe
         k = keys + key_pe
         attn_out2 = self.cross_attn_token_to_image(q, k, keys)
-        assert_type(attn_out2, Tensor[B, NQ, D])
+        assert_type(attn_out2, Tensor[[B, NQ, D]])
         queries = queries + attn_out2
         queries = self.norm2(queries)
-        assert_type(queries, Tensor[B, NQ, D])
+        assert_type(queries, Tensor[[B, NQ, D]])
         # 3. MLP on queries
         mlp_out = self.mlp(queries)
-        assert_type(mlp_out, Tensor[B, NQ, D])
+        assert_type(mlp_out, Tensor[[B, NQ, D]])
         queries = queries + mlp_out
         queries = self.norm3(queries)
-        assert_type(queries, Tensor[B, NQ, D])
+        assert_type(queries, Tensor[[B, NQ, D]])
         # 4. Cross-attention: keys → queries
         q4 = queries + query_pe
         k4 = keys + key_pe
         attn_out3 = self.cross_attn_image_to_token(k4, q4, queries)
-        assert_type(attn_out3, Tensor[B, NK, D])
+        assert_type(attn_out3, Tensor[[B, NK, D]])
         keys = keys + attn_out3
         keys = self.norm4(keys)
-        assert_type(keys, Tensor[B, NK, D])
+        assert_type(keys, Tensor[[B, NK, D]])
         return queries, keys
 
 
@@ -677,7 +706,7 @@ class TwoWayAttentionBlock[D, NHead, MlpDim](nn.Module):
 # ============================================================================
 
 
-class TwoWayTransformer[D, NHead, MlpDim](nn.Module):
+class TwoWayTransformer[D: IntVar, NHead: IntVar, MlpDim: IntVar](nn.Module):
     """Two-way transformer decoder with bidirectional cross-attention.
 
     Used in SAM's mask decoder: image features and prompt tokens attend to
@@ -695,9 +724,9 @@ class TwoWayTransformer[D, NHead, MlpDim](nn.Module):
 
     def __init__(
         self,
-        embedding_dim: Dim[D],
-        num_heads: Dim[NHead],
-        mlp_dim: Dim[MlpDim],
+        embedding_dim: Int[D],
+        num_heads: Int[NHead],
+        mlp_dim: Int[MlpDim],
         depth: int,
         downsample_rate: int = 2,
     ) -> None:
@@ -712,26 +741,26 @@ class TwoWayTransformer[D, NHead, MlpDim](nn.Module):
         self.final_attn = CrossAttention(embedding_dim, internal_dim, num_heads)
         self.norm_final = nn.LayerNorm(embedding_dim)
 
-    def forward[B, NQ, NK](
+    def forward[B: IntVar, NQ: IntVar, NK: IntVar](
         self,
-        image_tokens: Tensor[B, NK, D],
-        image_pe: Tensor[B, NK, D],
-        queries: Tensor[B, NQ, D],
-    ) -> tuple[Tensor[B, NQ, D], Tensor[B, NK, D]]:
+        image_tokens: Tensor[[B, NK, D]],
+        image_pe: Tensor[[B, NK, D]],
+        queries: Tensor[[B, NQ, D]],
+    ) -> tuple[Tensor[[B, NQ, D]], Tensor[[B, NK, D]]]:
         # Apply two-way attention blocks
         keys = image_tokens
         for layer in self.layers:
             queries, keys = layer(queries, keys, queries, image_pe)
-        assert_type(queries, Tensor[B, NQ, D])
-        assert_type(keys, Tensor[B, NK, D])
+        assert_type(queries, Tensor[[B, NQ, D]])
+        assert_type(keys, Tensor[[B, NK, D]])
         # Final cross-attention: queries attend to image
         q = queries + queries  # query + query_pe (using queries as its own PE here)
         k = keys + image_pe
         final_out = self.final_attn(q, k, keys)
-        assert_type(final_out, Tensor[B, NQ, D])
+        assert_type(final_out, Tensor[[B, NQ, D]])
         queries = queries + final_out
         queries = self.norm_final(queries)
-        assert_type(queries, Tensor[B, NQ, D])
+        assert_type(queries, Tensor[[B, NQ, D]])
         return queries, keys
 
 
@@ -740,7 +769,7 @@ class TwoWayTransformer[D, NHead, MlpDim](nn.Module):
 # ============================================================================
 
 
-class PositionalEmbeddingRandom[D](nn.Module):
+class PositionalEmbeddingRandom[D: IntVar](nn.Module):
     """Positional encoding using random spatial frequencies.
 
     Original: sam/prompt_encoder.py PositionEmbeddingRandom.
@@ -751,13 +780,15 @@ class PositionalEmbeddingRandom[D](nn.Module):
     (..., 2) → (..., 2*D) via sin/cos encoding
     """
 
-    def __init__(self, num_pos_feats: Dim[D]) -> None:
+    def __init__(self, num_pos_feats: Int[D]) -> None:
         super().__init__()
-        self.positional_encoding_gaussian_matrix: Tensor[2, D] = nn.Buffer(
+        self.positional_encoding_gaussian_matrix: Tensor[[2, D]] = nn.Buffer(
             torch.randn(2, num_pos_feats), persistent=False
         )
 
-    def _pe_encoding[*Batch](self, coords: Tensor[*Batch, 2]) -> Tensor[*Batch, 2 * D]:
+    def _pe_encoding[Batch: IntTuple](
+        self, coords: Tensor[[*Elements[Batch], 2]]
+    ) -> Tensor[[*Elements[Batch], 2 * D]]:
         """Encode coordinates to positional features.
 
         coords: (*Batch, 2) normalized to [0, 1]
@@ -790,7 +821,7 @@ class PositionalEmbeddingRandom[D](nn.Module):
 # ============================================================================
 
 
-class PromptEncoder[D, ES, MIC](nn.Module):
+class PromptEncoder[D: IntVar, ES: IntVar, MIC: IntVar](nn.Module):
     """Encodes prompts (points, boxes, masks) for the mask decoder.
 
     Original: sam/prompt_encoder.py PromptEncoder.
@@ -810,10 +841,10 @@ class PromptEncoder[D, ES, MIC](nn.Module):
 
     def __init__(
         self,
-        embed_dim: Dim[D],
-        emb_size: Dim[ES],
+        embed_dim: Int[D],
+        emb_size: Int[ES],
         input_image_size: tuple[int, int],
-        mask_in_chans: Dim[MIC],
+        mask_in_chans: Int[MIC],
     ) -> None:
         super().__init__()
         self.embed_dim = embed_dim
@@ -864,7 +895,7 @@ class PromptEncoder[D, ES, MIC](nn.Module):
             labels = torch.cat([labels, padding_label], dim=1)
         # Positional encoding: coords @ buffer(2, D) → (..., D) → cat(sin,cos) → (..., 2*D)
         # Division by input_image_size normalizes to [0,1]; torch.tensor([...]) needs annotation
-        scale: Tensor[2] = torch.tensor(list(reversed(self.input_image_size))).float()
+        scale: Tensor[[2]] = torch.tensor(list(reversed(self.input_image_size))).float()
         point_embedding = self.pe_layer._pe_encoding(points / scale)
         # Add type embeddings: labels 0/1 map to point_embeddings[0/1]
         # Data-dependent masking: (labels == 1) selects which points get which embedding
@@ -890,16 +921,16 @@ class PromptEncoder[D, ES, MIC](nn.Module):
         """
         boxes = boxes + 0.5
         coords = boxes.reshape(-1, 2, 2)
-        scale: Tensor[2] = torch.tensor(list(reversed(self.input_image_size))).float()
+        scale: Tensor[[2]] = torch.tensor(list(reversed(self.input_image_size))).float()
         corner_embedding: Tensor = self.pe_layer._pe_encoding(coords / scale)
         # Add corner type embeddings (top-left=idx 2, bottom-right=idx 3)
         corner_embedding[:, 0, :] += self.point_embeddings[2].weight
         corner_embedding[:, 1, :] += self.point_embeddings[3].weight
         return corner_embedding
 
-    def _embed_masks[B](
-        self, masks: Tensor[B, 1, 4 * ES, 4 * ES]
-    ) -> Tensor[B, D, ES, ES]:
+    def _embed_masks[B: IntVar](
+        self, masks: Tensor[[B, 1, 4 * ES, 4 * ES]]
+    ) -> Tensor[[B, D, ES, ES]]:
         """Downsample mask prompts to image embedding resolution.
 
         masks: (B, 1, 4*ES, 4*ES) — input at 4× embedding resolution
@@ -914,12 +945,12 @@ class PromptEncoder[D, ES, MIC](nn.Module):
         h = F.gelu(h)
         return self.mask_downscaling_conv3(h)
 
-    def forward[B, N, M](
+    def forward[B: IntVar, N: IntVar, M: IntVar](
         self,
-        points: tuple[Tensor[B, N, 2], Tensor[B, N]] | None,
-        boxes: Tensor[B, M, 4] | None,
-        masks: Tensor[B, 1, 4 * ES, 4 * ES] | None,
-    ) -> tuple[Tensor, Tensor[B, D, ES, ES]]:
+        points: tuple[Tensor[[B, N, 2]], Tensor[[B, N]]] | None,
+        boxes: Tensor[[B, M, 4]] | None,
+        masks: Tensor[[B, 1, 4 * ES, 4 * ES]] | None,
+    ) -> tuple[Tensor, Tensor[[B, D, ES, ES]]]:
         """Encode all prompt types.
 
         Args:
@@ -929,7 +960,7 @@ class PromptEncoder[D, ES, MIC](nn.Module):
 
         Returns:
             sparse_embeddings: (B, NTokens, D) — bare Tensor (data-dependent token count)
-            dense_embeddings: Tensor[B, D, ES, ES]
+            dense_embeddings: Tensor[[B, D, ES, ES]]
         """
         bs = self._get_batch_size(points, boxes, masks)
         sparse_embeddings: Tensor = torch.empty(
@@ -951,12 +982,12 @@ class PromptEncoder[D, ES, MIC](nn.Module):
             )
         return sparse_embeddings, dense_embeddings
 
-    def _get_batch_size[B, N, M](
+    def _get_batch_size[B: IntVar, N: IntVar, M: IntVar](
         self,
-        points: tuple[Tensor[B, N, 2], Tensor[B, N]] | None,
-        boxes: Tensor[B, M, 4] | None,
-        masks: Tensor[B, 1, 4 * ES, 4 * ES] | None,
-    ) -> Dim[B]:
+        points: tuple[Tensor[[B, N, 2]], Tensor[[B, N]]] | None,
+        boxes: Tensor[[B, M, 4]] | None,
+        masks: Tensor[[B, 1, 4 * ES, 4 * ES]] | None,
+    ) -> Int[B]:
         """Infer batch size from whichever prompt is provided."""
         if points is not None:
             return points[0].shape[0]
@@ -973,7 +1004,7 @@ class PromptEncoder[D, ES, MIC](nn.Module):
 # ============================================================================
 
 
-class HypernetworkMLP[In, Hidden, Out](nn.Module):
+class HypernetworkMLP[In: IntVar, Hidden: IntVar, Out: IntVar](nn.Module):
     """3-layer MLP used as hypernetwork in mask decoder and for IoU prediction.
 
     Original: sam/common.py MLP class (with num_layers=3).
@@ -985,9 +1016,9 @@ class HypernetworkMLP[In, Hidden, Out](nn.Module):
 
     def __init__(
         self,
-        input_dim: Dim[In],
-        hidden_dim: Dim[Hidden],
-        output_dim: Dim[Out],
+        input_dim: Int[In],
+        hidden_dim: Int[Hidden],
+        output_dim: Int[Out],
         sigmoid_output: bool = False,
     ) -> None:
         super().__init__()
@@ -996,18 +1027,18 @@ class HypernetworkMLP[In, Hidden, Out](nn.Module):
         self.fc3 = nn.Linear(hidden_dim, output_dim)
         self.sigmoid_output = sigmoid_output
 
-    def forward[B](self, x: Tensor[B, In]) -> Tensor[B, Out]:
+    def forward[B: IntVar](self, x: Tensor[[B, In]]) -> Tensor[[B, Out]]:
         """Forward pass: Linear→ReLU→Linear→ReLU→Linear.
 
         Typed like BottomMLP/TopMLP. When called with unrefined input,
         the NNModule DSL still preserves the output dim from fc3.
         """
         h = F.relu(self.fc1(x))
-        assert_type(h, Tensor[B, Hidden])
+        assert_type(h, Tensor[[B, Hidden]])
         h = F.relu(self.fc2(h))
-        assert_type(h, Tensor[B, Hidden])
+        assert_type(h, Tensor[[B, Hidden]])
         out = self.fc3(h)
-        assert_type(out, Tensor[B, Out])
+        assert_type(out, Tensor[[B, Out]])
         if self.sigmoid_output:
             out = torch.sigmoid(out)
         return out
@@ -1018,7 +1049,12 @@ class HypernetworkMLP[In, Hidden, Out](nn.Module):
 # ============================================================================
 
 
-class MaskDecoder[D, NHead, MlpDim, NumMasks](nn.Module):
+class MaskDecoder[
+    D: IntVar,
+    NHead: IntVar,
+    MlpDim: IntVar,
+    NumMasks: IntVar,
+](nn.Module):
     """Predicts masks and IoU scores from image and prompt embeddings.
 
     Original: sam/mask_decoder.py MaskDecoder.
@@ -1038,10 +1074,10 @@ class MaskDecoder[D, NHead, MlpDim, NumMasks](nn.Module):
 
     def __init__(
         self,
-        transformer_dim: Dim[D],
-        num_heads: Dim[NHead],
-        mlp_dim: Dim[MlpDim],
-        num_multimask_outputs: Dim[NumMasks],
+        transformer_dim: Int[D],
+        num_heads: Int[NHead],
+        mlp_dim: Int[MlpDim],
+        num_multimask_outputs: Int[NumMasks],
         transformer_depth: int = 2,
     ) -> None:
         super().__init__()
@@ -1074,12 +1110,12 @@ class MaskDecoder[D, NHead, MlpDim, NumMasks](nn.Module):
             transformer_dim, 256, num_mask_tokens
         )
 
-    def forward[B, IH, IW](
+    def forward[B: IntVar, IH: IntVar, IW: IntVar](
         self,
-        image_embeddings: Tensor[B, D, IH, IW],
+        image_embeddings: Tensor[[B, D, IH, IW]],
         image_pe: Tensor,  # batch dim may be 1; keep unrefined
         sparse_prompt_embeddings: Tensor,  # data-dependent token count
-        dense_prompt_embeddings: Tensor[B, D, IH, IW],
+        dense_prompt_embeddings: Tensor[[B, D, IH, IW]],
         multimask_output: bool,
     ) -> tuple[Tensor, Tensor]:
         """Predict masks and IoU scores.
@@ -1107,12 +1143,12 @@ class MaskDecoder[D, NHead, MlpDim, NumMasks](nn.Module):
         else:
             return masks[:, 0:1, :, :], iou_pred[:, 0:1]
 
-    def predict_masks[B, IH, IW](
+    def predict_masks[B: IntVar, IH: IntVar, IW: IntVar](
         self,
-        image_embeddings: Tensor[B, D, IH, IW],
+        image_embeddings: Tensor[[B, D, IH, IW]],
         image_pe: Tensor,
         sparse_prompt_embeddings: Tensor,
-        dense_prompt_embeddings: Tensor[B, D, IH, IW],
+        dense_prompt_embeddings: Tensor[[B, D, IH, IW]],
     ) -> tuple[Tensor, Tensor]:
         """Run transformer and generate all mask predictions.
 
@@ -1133,32 +1169,32 @@ class MaskDecoder[D, NHead, MlpDim, NumMasks](nn.Module):
         tokens: Tensor = torch.cat((output_tokens, sparse_prompt_embeddings), dim=1)
         # Prepare image tokens: add dense prompt, flatten to sequence
         src = image_embeddings + dense_prompt_embeddings
-        assert_type(src, Tensor[B, D, IH, IW])
+        assert_type(src, Tensor[[B, D, IH, IW]])
         b, c, h, w = src.shape
         src_flat = src.flatten(2).transpose(1, 2)
-        assert_type(src_flat, Tensor[B, IH * IW, D])
+        assert_type(src_flat, Tensor[[B, IH * IW, D]])
         pos_src: Tensor = image_pe.flatten(2).transpose(1, 2)
         # Expand pos encoding if needed
         if pos_src.shape[0] != b:
             pos_src = pos_src.expand(b, -1, -1)
         # Run two-way transformer
         hs, src_out = self.transformer(src_flat, pos_src, tokens)
-        # src_out should be Tensor[B, IH*IW, D] if transformer tracks it
+        # src_out should be Tensor[[B, IH*IW, D]] if transformer tracks it
         # (src_flat is typed, but pos_src and tokens are bare)
         iou_token_out: Tensor = hs[:, 0, :]
         num_mask_tokens = self.num_multimask_outputs + 1
         mask_tokens_out: Tensor = hs[:, 1 : 1 + num_mask_tokens, :]
         # Reshape back to spatial
         src_spatial = src_out.transpose(1, 2).view(b, c, h, w)
-        assert_type(src_spatial, Tensor[B, D, IH, IW])
+        assert_type(src_spatial, Tensor[[B, D, IH, IW]])
         # Upscale: ConvTranspose2d(D, D//4, k=2, s=2) → LN → GELU
         upscaled = self.output_upscaling_conv1(src_spatial)
-        assert_type(upscaled, Tensor[B, D // 4, 2 * IH, 2 * IW])
+        assert_type(upscaled, Tensor[[B, D // 4, 2 * IH, 2 * IW]])
         upscaled = self.output_upscaling_ln(upscaled)
         upscaled = F.gelu(upscaled)
         # ConvTranspose2d(D//4, D//8, k=2, s=2) → GELU
         upscaled = self.output_upscaling_conv2(upscaled)
-        assert_type(upscaled, Tensor[B, D // 8, 4 * IH, 4 * IW])
+        assert_type(upscaled, Tensor[[B, D // 8, 4 * IH, 4 * IW]])
         upscaled = F.gelu(upscaled)
         # Generate masks via hypernetwork MLPs
         # mask_tokens_out[:, i, :] is unrefined slice; HypernetworkMLP output
@@ -1183,7 +1219,14 @@ class MaskDecoder[D, NHead, MlpDim, NumMasks](nn.Module):
 # ============================================================================
 
 
-class Sam[EmbDim, D, NHead, MlpDim, NumMasks, ES](nn.Module):
+class Sam[
+    EmbDim: IntVar,
+    D: IntVar,
+    NHead: IntVar,
+    MlpDim: IntVar,
+    NumMasks: IntVar,
+    ES: IntVar,
+](nn.Module):
     """Segment Anything Model — top-level orchestration.
 
     Original: sam/build_sam.py + sam/modeling/sam.py Sam class.
@@ -1205,18 +1248,19 @@ class Sam[EmbDim, D, NHead, MlpDim, NumMasks, ES](nn.Module):
         self.prompt_encoder = prompt_encoder
         self.mask_decoder = mask_decoder
 
-    def forward[B, S, N, M](
+    def forward[B: IntVar, N: IntVar, M: IntVar](
         self,
-        images: Tensor[B, 3, S, S],
-        points: tuple[Tensor[B, N, 2], Tensor[B, N]] | None = None,
-        boxes: Tensor[B, M, 4] | None = None,
-        masks: Tensor[B, 1, 4 * ES, 4 * ES] | None = None,
+        images: Tensor[[B, 3, 16 * ES, 16 * ES]],
+        points: tuple[Tensor[[B, N, 2]], Tensor[[B, N]]] | None = None,
+        boxes: Tensor[[B, M, 4]] | None = None,
+        masks: Tensor[[B, 1, 4 * ES, 4 * ES]] | None = None,
         multimask_output: bool = True,
     ) -> tuple[Tensor, Tensor]:
         """Run SAM end-to-end.
 
         Args:
-            images: (B, 3, S, S) — input images (square)
+            images: (B, 3, 16*ES, 16*ES) - square inputs whose patch-16
+                embedding grid matches the prompt encoder's ESxES dense output
             points: (coords (B, N, 2), labels (B, N)) or None
             boxes: (B, M, 4) or None
             masks: (B, 1, 4*ES, 4*ES) or None
@@ -1226,8 +1270,8 @@ class Sam[EmbDim, D, NHead, MlpDim, NumMasks, ES](nn.Module):
             pred_masks: predicted segmentation masks — unrefined
             iou_predictions: predicted IoU scores — unrefined
 
-        Image encoder produces typed output (Tensor[B, D, PH, PH]).
-        Prompt encoder dense output typed (Tensor[B, D, ES, ES]).
+        Image encoder produces typed output (Tensor[[B, D, PH, PH]]).
+        Prompt encoder dense output typed (Tensor[[B, D, ES, ES]]).
         Mask decoder types image-side params. Token-side and final mask
         generation remain shapeless.
         """
@@ -1254,17 +1298,17 @@ class Sam[EmbDim, D, NHead, MlpDim, NumMasks, ES](nn.Module):
 def test_layer_norm_2d():
     """Test LayerNorm2d: shape-preserving on (B, C, H, W)."""
     ln = LayerNorm2d(64)
-    x: Tensor[2, 64, 16, 16] = torch.randn(2, 64, 16, 16)
+    x: Tensor[[2, 64, 16, 16]] = torch.randn(2, 64, 16, 16)
     out = ln(x)
-    assert_type(out, Tensor[2, 64, 16, 16])
+    assert_type(out, Tensor[[2, 64, 16, 16]])
 
 
 def test_mlp_block():
     """Test MLPBlock: (B, N, D) → (B, N, D)."""
     mlp = MLPBlock(192, 768)
-    x: Tensor[2, 256, 192] = torch.randn(2, 256, 192)
+    x: Tensor[[2, 256, 192]] = torch.randn(2, 256, 192)
     out = mlp(x)
-    assert_type(out, Tensor[2, 256, 192])
+    assert_type(out, Tensor[[2, 256, 192]])
 
 
 def test_patch_embed():
@@ -1272,42 +1316,42 @@ def test_patch_embed():
     Conv2d output: (256-16)//16+1 = 16.
     """
     pe = PatchEmbed(192)
-    x: Tensor[1, 3, 256, 256] = torch.randn(1, 3, 256, 256)
+    x: Tensor[[1, 3, 256, 256]] = torch.randn(1, 3, 256, 256)
     out = pe(x)
     # (256-16)//16+1 = 240//16+1 = 15+1 = 16
-    assert_type(out, Tensor[1, (256 - 16) // 16 + 1, (256 - 16) // 16 + 1, 192])
+    assert_type(out, Tensor[[1, (256 - 16) // 16 + 1, (256 - 16) // 16 + 1, 192]])
 
 
 def test_image_attention():
     """Test ImageAttention: (B, H, W, D) → (B, H, W, D)."""
     attn = ImageAttention(192, 4)
-    x: Tensor[1, 16, 16, 192] = torch.randn(1, 16, 16, 192)
+    x: Tensor[[1, 16, 16, 192]] = torch.randn(1, 16, 16, 192)
     out = attn(x)
-    assert_type(out, Tensor[1, 16, 16, 192])
+    assert_type(out, Tensor[[1, 16, 16, 192]])
 
 
 def test_image_attention_rel_pos():
     """Test ImageAttention with relative positional embeddings."""
     attn = ImageAttention(192, 4, use_rel_pos=True, input_size=16)
-    x: Tensor[1, 16, 16, 192] = torch.randn(1, 16, 16, 192)
+    x: Tensor[[1, 16, 16, 192]] = torch.randn(1, 16, 16, 192)
     out = attn(x)
-    assert_type(out, Tensor[1, 16, 16, 192])
+    assert_type(out, Tensor[[1, 16, 16, 192]])
 
 
 def test_vit_block():
     """Test ViTBlock: (B, H, W, D) → (B, H, W, D)."""
     block = ViTBlock(192, 4, 768)
-    x: Tensor[1, 16, 16, 192] = torch.randn(1, 16, 16, 192)
+    x: Tensor[[1, 16, 16, 192]] = torch.randn(1, 16, 16, 192)
     out = block(x)
-    assert_type(out, Tensor[1, 16, 16, 192])
+    assert_type(out, Tensor[[1, 16, 16, 192]])
 
 
 def test_image_encoder():
     """Test ImageEncoderViT: (B, 3, 256, 256) → (B, 64, 16, 16)."""
     enc = ImageEncoderViT(192, 64, depth=4, num_heads=4)
-    x: Tensor[1, 3, 256, 256] = torch.randn(1, 3, 256, 256)
+    x: Tensor[[1, 3, 256, 256]] = torch.randn(1, 3, 256, 256)
     out = enc(x)
-    assert_type(out, Tensor[1, 64, (256 - 16) // 16 + 1, (256 - 16) // 16 + 1])
+    assert_type(out, Tensor[[1, 64, (256 - 16) // 16 + 1, (256 - 16) // 16 + 1]])
 
 
 def test_image_encoder_rel_pos():
@@ -1323,87 +1367,87 @@ def test_image_encoder_rel_pos():
         window_size=8,
         global_attn_indexes=(1, 3),
     )
-    x: Tensor[1, 3, 256, 256] = torch.randn(1, 3, 256, 256)
+    x: Tensor[[1, 3, 256, 256]] = torch.randn(1, 3, 256, 256)
     out = enc(x)
-    assert_type(out, Tensor[1, 64, (256 - 16) // 16 + 1, (256 - 16) // 16 + 1])
+    assert_type(out, Tensor[[1, 64, (256 - 16) // 16 + 1, (256 - 16) // 16 + 1]])
 
 
 def test_cross_attention():
     """Test CrossAttention: different sequence lengths for Q and K."""
     attn = CrossAttention(256, 128, 8)
-    q: Tensor[1, 5, 256] = torch.randn(1, 5, 256)
-    k: Tensor[1, 64, 256] = torch.randn(1, 64, 256)
-    v: Tensor[1, 64, 256] = torch.randn(1, 64, 256)
+    q: Tensor[[1, 5, 256]] = torch.randn(1, 5, 256)
+    k: Tensor[[1, 64, 256]] = torch.randn(1, 64, 256)
+    v: Tensor[[1, 64, 256]] = torch.randn(1, 64, 256)
     out = attn(q, k, v)
-    assert_type(out, Tensor[1, 5, 256])
+    assert_type(out, Tensor[[1, 5, 256]])
 
 
 def test_two_way_attention_block():
     """Test TwoWayAttentionBlock: bidirectional cross-attention."""
     block = TwoWayAttentionBlock(256, 8, 2048)
-    queries: Tensor[1, 5, 256] = torch.randn(1, 5, 256)
-    keys: Tensor[1, 64, 256] = torch.randn(1, 64, 256)
-    q_pe: Tensor[1, 5, 256] = torch.randn(1, 5, 256)
-    k_pe: Tensor[1, 64, 256] = torch.randn(1, 64, 256)
+    queries: Tensor[[1, 5, 256]] = torch.randn(1, 5, 256)
+    keys: Tensor[[1, 64, 256]] = torch.randn(1, 64, 256)
+    q_pe: Tensor[[1, 5, 256]] = torch.randn(1, 5, 256)
+    k_pe: Tensor[[1, 64, 256]] = torch.randn(1, 64, 256)
     out_q, out_k = block(queries, keys, q_pe, k_pe)
-    assert_type(out_q, Tensor[1, 5, 256])
-    assert_type(out_k, Tensor[1, 64, 256])
+    assert_type(out_q, Tensor[[1, 5, 256]])
+    assert_type(out_k, Tensor[[1, 64, 256]])
 
 
 def test_two_way_transformer():
     """Test TwoWayTransformer: stacked bidirectional attention."""
     transformer = TwoWayTransformer(256, 8, 2048, depth=2)
-    image_tokens: Tensor[1, 64, 256] = torch.randn(1, 64, 256)
-    image_pe: Tensor[1, 64, 256] = torch.randn(1, 64, 256)
-    queries: Tensor[1, 5, 256] = torch.randn(1, 5, 256)
+    image_tokens: Tensor[[1, 64, 256]] = torch.randn(1, 64, 256)
+    image_pe: Tensor[[1, 64, 256]] = torch.randn(1, 64, 256)
+    queries: Tensor[[1, 5, 256]] = torch.randn(1, 5, 256)
     out_q, out_k = transformer(image_tokens, image_pe, queries)
-    assert_type(out_q, Tensor[1, 5, 256])
-    assert_type(out_k, Tensor[1, 64, 256])
+    assert_type(out_q, Tensor[[1, 5, 256]])
+    assert_type(out_k, Tensor[[1, 64, 256]])
 
 
 def test_prompt_encoder():
     """Test PromptEncoder with point prompts."""
     pe = PromptEncoder(256, 16, input_image_size=(256, 256), mask_in_chans=16)
     # Point prompts: 2 points
-    coords: Tensor[1, 2, 2] = torch.rand(1, 2, 2)
-    labels: Tensor[1, 2] = torch.tensor([[1, 0]])
+    coords: Tensor[[1, 2, 2]] = torch.rand(1, 2, 2)
+    labels: Tensor[[1, 2]] = torch.tensor([[1, 0]])
     sparse, dense = pe(points=(coords, labels), boxes=None, masks=None)
     # sparse: (1, N, 256) — N is data-dependent
-    assert_type(dense, Tensor[1, 256, 16, 16])
+    assert_type(dense, Tensor[[1, 256, 16, 16]])
 
 
 def test_prompt_encoder_with_mask():
     """Test PromptEncoder with mask prompt."""
     pe = PromptEncoder(256, 16, input_image_size=(256, 256), mask_in_chans=16)
     # 4*ES = 4*16 = 64
-    mask: Tensor[1, 1, 64, 64] = torch.randn(1, 1, 64, 64)
+    mask: Tensor[[1, 1, 64, 64]] = torch.randn(1, 1, 64, 64)
     sparse, dense = pe(points=None, boxes=None, masks=mask)
-    assert_type(dense, Tensor[1, 256, 16, 16])
+    assert_type(dense, Tensor[[1, 256, 16, 16]])
 
 
 def test_hypernetwork_mlp():
     """Test HypernetworkMLP: (B, In) → (B, Out)."""
     mlp = HypernetworkMLP(256, 256, 32)
-    x: Tensor[2, 256] = torch.randn(2, 256)
+    x: Tensor[[2, 256]] = torch.randn(2, 256)
     out = mlp(x)
-    assert_type(out, Tensor[2, 32])
+    assert_type(out, Tensor[[2, 32]])
 
 
 def test_hypernetwork_mlp_sigmoid():
     """Test HypernetworkMLP with sigmoid output."""
     mlp = HypernetworkMLP(128, 64, 4, sigmoid_output=True)
-    x: Tensor[1, 128] = torch.randn(1, 128)
+    x: Tensor[[1, 128]] = torch.randn(1, 128)
     out = mlp(x)
-    assert_type(out, Tensor[1, 4])
+    assert_type(out, Tensor[[1, 4]])
 
 
 def test_mask_decoder():
     """Test MaskDecoder with pre-computed embeddings."""
     decoder = MaskDecoder(256, 8, 2048, 3, transformer_depth=2)
-    image_emb: Tensor[1, 256, 16, 16] = torch.randn(1, 256, 16, 16)
-    image_pe: Tensor[1, 256, 16, 16] = torch.randn(1, 256, 16, 16)
-    sparse_prompt: Tensor[1, 2, 256] = torch.randn(1, 2, 256)
-    dense_prompt: Tensor[1, 256, 16, 16] = torch.randn(1, 256, 16, 16)
+    image_emb: Tensor[[1, 256, 16, 16]] = torch.randn(1, 256, 16, 16)
+    image_pe: Tensor[[1, 256, 16, 16]] = torch.randn(1, 256, 16, 16)
+    sparse_prompt: Tensor[[1, 2, 256]] = torch.randn(1, 2, 256)
+    dense_prompt: Tensor[[1, 256, 16, 16]] = torch.randn(1, 256, 16, 16)
     masks, iou_pred = decoder(image_emb, image_pe, sparse_prompt, dense_prompt, True)
 
 
@@ -1415,7 +1459,7 @@ def test_sam_end_to_end():
     )
     mask_decoder = MaskDecoder(256, 8, 2048, 3, transformer_depth=2)
     model = Sam(image_encoder, prompt_encoder, mask_decoder)
-    images: Tensor[1, 3, 256, 256] = torch.randn(1, 3, 256, 256)
-    coords: Tensor[1, 1, 2] = torch.rand(1, 1, 2)
-    labels: Tensor[1, 1] = torch.tensor([[1]])
+    images: Tensor[[1, 3, 256, 256]] = torch.randn(1, 3, 256, 256)
+    coords: Tensor[[1, 1, 2]] = torch.rand(1, 1, 2)
+    labels: Tensor[[1, 1]] = torch.tensor([[1]])
     pred_masks, iou_predictions = model(images, points=(coords, labels))

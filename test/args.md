@@ -29,6 +29,22 @@ $ mkdir $TMPDIR/site_package_path && \
 [0]
 ```
 
+## Partial stub packages fall back to runtime modules
+
+```scrut {output_stream.stdout}
+$ touch $TMPDIR/pyrefly.toml && \
+> mkdir -p $TMPDIR/partial_site/lib $TMPDIR/partial_site/lib-stubs && \
+> echo 'a = "runtime"' > $TMPDIR/partial_site/lib/__init__.py && \
+> echo 'c = "runtime"' > $TMPDIR/partial_site/lib/b.py && \
+> echo 'partial' > $TMPDIR/partial_site/lib-stubs/py.typed && \
+> echo 'c: int' > $TMPDIR/partial_site/lib-stubs/b.pyi && \
+> echo -e 'from typing import reveal_type\nfrom lib import a\nfrom lib.b import c\nreveal_type(a)\nreveal_type(c)' > $TMPDIR/partial.py && \
+> $PYREFLY check $TMPDIR/partial.py --python-version 3.13.0 --site-package-path $TMPDIR/partial_site --output-format=min-text
+ INFO * revealed type: str * (glob)
+ INFO * revealed type: int * (glob)
+[0]
+```
+
 ## Error on missing source
 
 ```scrut {output_stream.stdout}

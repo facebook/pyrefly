@@ -8,14 +8,13 @@
 use dupe::Dupe;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::FuncDefIndex;
+use pyrefly_types::function::FuncDefIndex;
 use ruff_python_ast::AnyNodeRef;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use serde::Serialize;
 use starlark_map::Hashed;
 
-use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::KeyClass;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::report::pysa::class::ClassId;
@@ -77,13 +76,9 @@ pub fn get_scope_parent(context: &ModuleAnswersContext, range: TextRange) -> Sco
                     .bindings
                     .key_to_idx_hashed_opt(Hashed::new(&key))
                     .unwrap();
-                let decorated_function = DecoratedFunction::from_bindings_answers(
-                    idx,
-                    &context.bindings,
-                    &context.answers,
-                );
+                let undecorated = context.undecorated_function(idx);
                 Some(ScopeParent::Function {
-                    func_def_index: decorated_function.undecorated.def_index,
+                    func_def_index: undecorated.def_index,
                 })
             }
             _ => None,

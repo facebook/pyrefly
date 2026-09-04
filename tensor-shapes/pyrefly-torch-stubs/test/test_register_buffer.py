@@ -27,7 +27,7 @@ class ModuleWithBuffer(nn.Module):
         # Use nn.Buffer to create self.mask
         self.mask = nn.Buffer(torch.ones(size, size))
 
-    def forward(self, x: Tensor[10, 20]) -> Tensor:
+    def forward(self, x: Tensor[[10, 20]]) -> Tensor:
         """Forward pass that accesses the buffer"""
         # Should not error - self.mask exists
         mask: Tensor = self.mask
@@ -42,7 +42,7 @@ class ModuleWithParameter(nn.Module):
         # Use nn.Parameter to create self.weight
         self.weight = nn.Parameter(torch.randn(dim, dim))
 
-    def forward(self, x: Tensor[5, 5]) -> Tensor[5, 5]:
+    def forward(self, x: Tensor[[5, 5]]) -> Tensor[[5, 5]]:
         """Forward pass that accesses the parameter"""
         # Should not error - self.weight exists
         weight: Tensor = self.weight
@@ -58,7 +58,7 @@ class ModuleWithMultipleBuffers(nn.Module):
         self.buffer2 = nn.Buffer(torch.ones(3, 3))
         self.param1 = nn.Parameter(torch.randn(3, 3))
 
-    def forward(self, x: Tensor[3, 3]) -> Tensor[3, 3]:
+    def forward(self, x: Tensor[[3, 3]]) -> Tensor[[3, 3]]:
         """Use all attributes"""
         b1: Tensor = self.buffer1
         b2: Tensor = self.buffer2
@@ -75,7 +75,7 @@ class ConditionalBuffer(nn.Module):
             # Conditionally create buffer
             self.bias = nn.Buffer(torch.zeros(10))
 
-    def forward(self, x: Tensor[10]) -> Tensor[10]:
+    def forward(self, x: Tensor[[10]]) -> Tensor[[10]]:
         """Access conditionally created buffer"""
         # This should be allowed - Pyrefly tracks it
         bias: Tensor = self.bias
@@ -85,26 +85,26 @@ class ConditionalBuffer(nn.Module):
 def test_buffer():
     """Test basic Buffer"""
     module = ModuleWithBuffer(10)
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
     assert_type(module(x), Tensor)
 
 
 def test_parameter():
     """Test basic Parameter"""
     module = ModuleWithParameter(5)
-    x: Tensor[5, 5] = torch.randn(5, 5)
-    assert_type(module(x), Tensor[5, 5])
+    x: Tensor[[5, 5]] = torch.randn(5, 5)
+    assert_type(module(x), Tensor[[5, 5]])
 
 
 def test_multiple():
     """Test multiple Buffer/Parameter"""
     module = ModuleWithMultipleBuffers()
-    x: Tensor[3, 3] = torch.randn(3, 3)
-    assert_type(module(x), Tensor[3, 3])
+    x: Tensor[[3, 3]] = torch.randn(3, 3)
+    assert_type(module(x), Tensor[[3, 3]])
 
 
 def test_conditional_buffer():
     """Test conditionally created buffer"""
     module = ConditionalBuffer(True)
-    x: Tensor[10] = torch.randn(10)
-    assert_type(module(x), Tensor[10])
+    x: Tensor[[10]] = torch.randn(10)
+    assert_type(module(x), Tensor[[10]])

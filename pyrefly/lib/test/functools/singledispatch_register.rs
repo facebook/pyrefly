@@ -47,7 +47,6 @@ def g(arg: int) -> None:
 );
 
 functools_testcase!(
-    bug = "pyrefly does not check that the dispatch type passed to .register() is a subtype of the fallback function's first argument",
     test_singledispatch_register_explicit_type_not_subtype,
     r#"
 from functools import singledispatch
@@ -56,16 +55,43 @@ from functools import singledispatch
 def f(arg: int) -> None:
     pass
 
-# WANT: Dispatch type "str" must be subtype of fallback function first argument "int"
-@f.register(str)
+@f.register(str)  # E: Dispatch type `str` is not a subtype of fallback first argument type `int`
 def g(arg) -> None:
     pass
 "#,
 );
 
 functools_testcase!(
-    bug = "pyrefly does not check that the @register dispatch type is a subtype of the fallback's first argument",
-    test_singledispatch_register_custom_class_not_subtype,
+    test_singledispatch_varargs_fallback_register_not_subtype,
+    r#"
+from functools import singledispatch
+
+@singledispatch
+def f(*args: int) -> None:
+    pass
+
+@f.register(str)  # E: Dispatch type `str` is not a subtype of fallback first argument type `int`
+def g(arg) -> None:
+    pass
+"#,
+);
+
+// A `.register(C)` argument is a value, not a type form, so a name that collides with a special
+// form (here `typing.Union`) must not be misread as that form and flagged `invalid-annotation`.
+functools_testcase!(
+    test_singledispatch_register_special_form_named_arg_no_error,
+    r#"
+from functools import singledispatch
+from typing import Union
+@singledispatch
+def f(op: object) -> None: ...
+@f.register(Union)
+def _(op) -> None: ...
+"#,
+);
+
+functools_testcase!(
+    test_singledispatch_custom_class_passed_as_type_to_register,
     r#"
 from functools import singledispatch
 class A: pass
@@ -73,16 +99,14 @@ class A: pass
 @singledispatch
 def f(arg: int) -> None:
     pass
-@f.register(A)
-# WANT: Dispatch type "A" must be subtype of fallback function first argument "int"
+@f.register(A)  # E: Dispatch type `A` is not a subtype of fallback first argument type `int`
 def g(arg) -> None:
     pass
 "#,
 );
 
 functools_testcase!(
-    bug = "pyrefly does not check that a @register'd dispatch type is a subtype of the fallback function's first argument",
-    test_singledispatch_register_impl_type_not_subtype,
+    test_singledispatch_dispatch_type_is_not_asubtype_of_fallback_first_argument,
     r#"
 from functools import singledispatch
 
@@ -98,15 +122,13 @@ def f(arg: A) -> None:
 def g(arg: B) -> None:
     pass
 
-@f.register
-# WANT: Dispatch type "C" must be subtype of fallback function first argument "A"
+@f.register  # E: Dispatch type `C` is not a subtype of fallback first argument type `A`
 def h(arg: C) -> None:
     pass
 "#,
 );
 
 functools_testcase!(
-    bug = "pyrefly does not check that the register dispatch type is a subtype of the fallback function's first argument type",
     test_singledispatch_register_class_with_any_ctor_not_subtype,
     r#"
 from functools import singledispatch
@@ -120,8 +142,7 @@ class ConstExpr:
 def f(arg: Base) -> ConstExpr:  # E: Function declared to return `ConstExpr` but is missing an explicit `return`
     pass
 
-# WANT: Dispatch type "ConstExpr" must be subtype of fallback function first argument "Base"
-@f.register(ConstExpr)
+@f.register(ConstExpr)  # E: Dispatch type `ConstExpr` is not a subtype of fallback first argument type `Base`
 def g(arg: ConstExpr) -> ConstExpr:  # E: Function declared to return `ConstExpr` but is missing an explicit `return`
     pass
 "#,
@@ -154,9 +175,10 @@ def h(a: Missing) -> None:
 "#,
 );
 
+// Bare `@f.register` returns the impl's own type, so direct calls to the registered function are
+// argument-checked.
 functools_testcase!(
-    bug = "pyrefly does not check argument types when calling singledispatch-registered impls directly",
-    test_singledispatch_registered_impl_direct_call_arg_check,
+    test_singledispatch_registered_impl_bare_direct_call_arg_check,
     r#"
 from functools import singledispatch
 
@@ -165,23 +187,32 @@ def f(arg, arg2: str) -> bool:
     return False
 
 @f.register
-def g(arg: int, arg2: str) -> bool:  # E: Function declared to return `bool` but is missing an explicit `return`
-    pass
+def g(arg: int, arg2: str) -> bool:
+    return True
+
+g('a', 'a')  # E: Argument `Literal['a']` is not assignable to parameter `arg` with type `int` in function `g`
+g(1, 1)  # E: Argument `Literal[1]` is not assignable to parameter `arg2` with type `str` in function `g`
+g(1, 'a')
+"#,
+);
+
+// Explicit `@f.register(C)` returns the impl's own type, so direct calls to the registered function
+// are argument-checked (its unannotated first parameter is not).
+functools_testcase!(
+    test_singledispatch_registered_impl_explicit_direct_call_arg_check,
+    r#"
+from functools import singledispatch
+
+@singledispatch
+def f(arg, arg2: str) -> bool:
+    return False
 
 @f.register(str)
-def h(arg, arg2: str) -> bool:  # E: Function declared to return `bool` but is missing an explicit `return`
-    pass
+def h(arg, arg2: str) -> bool:
+    return True
 
-# WANT: Argument 1 to "g" has incompatible type "str"; expected "int"
-g('a', 'a')
-# WANT: Argument 2 to "g" has incompatible type "int"; expected "str"
-g(1, 1)
-
-# don't show errors for incorrect first argument here, because there's no type annotation for the
-# first argument
 h(1, 'a')
-# WANT: Argument 2 to "h" has incompatible type "int"; expected "str"
-h('a', 1)
+h('a', 1)  # E: Argument `Literal[1]` is not assignable to parameter `arg2` with type `str` in function `h`
 "#,
 );
 
@@ -202,7 +233,6 @@ def default(val) -> int:
 
 // Edge case
 functools_testcase!(
-    bug = "registered impl dispatch type not a subtype of fallback first arg should error",
     test_singledispatch_register_subtype_of_fallback,
     r#"
 from functools import singledispatch
@@ -213,8 +243,7 @@ class C: pass
 def f(arg: A) -> None: ...
 @f.register
 def g(arg: B) -> None: ...
-@f.register
-# WANT: Dispatch type `C` is not a subtype of fallback first argument type `A`
+@f.register  # E: Dispatch type `C` is not a subtype of fallback first argument type `A`
 def h(arg: C) -> None: ...
 "#,
 );
@@ -245,5 +274,146 @@ g = singledispatch(f_impl)
 reveal_type(g)  # E: revealed type: _SingleDispatchCallable[str]
 g.register(int, int_impl)
 reveal_type(g(1))  # E: revealed type: str
+"#,
+);
+
+functools_testcase!(
+    test_singledispatch_register_bare_functional_preserves_signature,
+    r#"
+from typing import reveal_type
+from functools import singledispatch
+@singledispatch
+def f(arg: object) -> str: return "base"
+def impl(arg: int) -> str: return "int"
+g = f.register(impl)
+reveal_type(g)  # E: revealed type: (arg: int) -> str
+g("wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `arg` with type `int` in function `impl`
+"#,
+);
+
+functools_testcase!(
+    test_singledispatch_register_two_step_call_preserves_signature,
+    r#"
+from typing import reveal_type
+from functools import singledispatch
+@singledispatch
+def f(arg: object) -> str: return "base"
+def impl(arg: int) -> str: return "int"
+reveal_type(f.register(int)(impl))  # E: revealed type: (arg: int) -> str
+deco = f.register(int)
+registered = deco(impl)
+reveal_type(registered)  # E: revealed type: (arg: int) -> str
+registered("wrong")  # E: Argument `Literal['wrong']` is not assignable to parameter `arg` with type `int` in function `impl`
+"#,
+);
+
+// Registration is not position-sensitive: `f.register(...)` returns the impl and never mutates the
+// dispatcher, so `f(...)` stays fallback-typed above and below the register call.
+functools_testcase!(
+    test_singledispatch_register_not_position_sensitive,
+    r#"
+from typing import reveal_type
+from functools import singledispatch
+@singledispatch
+def f(arg: object) -> str: return "base"
+def impl(arg: int) -> int: return arg
+reveal_type(f(1))  # E: revealed type: str
+r = f.register(int)(impl)
+reveal_type(r)  # E: revealed type: (arg: int) -> int
+reveal_type(f(1))  # E: revealed type: str
+"#,
+);
+
+// An overloaded impl applied by call keeps its overloads (not the stub's erased `(...) -> _T`), so a
+// call that matches no overload is still reported.
+functools_testcase!(
+    test_singledispatch_register_two_step_overloaded_impl,
+    r#"
+from functools import singledispatch
+from typing import overload
+@singledispatch
+def f(arg: object) -> str: return "base"
+@overload
+def impl(arg: int) -> str: ...
+@overload
+def impl(arg: bytes) -> str: ...
+def impl(arg: object) -> str: return "int"
+registered = f.register(int)(impl)
+registered("wrong")  # E: No matching overload found for function `impl`
+"#,
+);
+
+// A functional or bare register call returns the impl itself, so calling the captured result yields
+// the impl's return type rather than being misread as applying a register decorator.
+functools_testcase!(
+    test_singledispatch_register_functional_capture_call,
+    r#"
+from typing import reveal_type
+from functools import singledispatch
+@singledispatch
+def f(arg: object) -> str: return "base"
+def impl(arg: int) -> str: return "int"
+g = f.register(int, impl)
+reveal_type(g(1))  # E: revealed type: str
+h = f.register(impl)
+reveal_type(h(1))  # E: revealed type: str
+"#,
+);
+
+// A malformed application of the register decorator (wrong arity, or a non-callable argument) is
+// checked normally rather than silently taking the argument's type.
+functools_testcase!(
+    test_singledispatch_register_two_step_call_malformed,
+    r#"
+from functools import singledispatch
+@singledispatch
+def f(arg: object) -> str: return "base"
+def impl(arg: int) -> str: return "int"
+f.register(int)(impl, impl)  # E: Expected 1 positional argument, got 2
+f.register(int)(42)  # E: Argument `Literal[42]` is not assignable to parameter with type `(...) -> str`
+"#,
+);
+
+// The non-subtype dispatch class is checked once at the `.register(C)` call, not re-reported when the
+// returned decorator is applied.
+functools_testcase!(
+    test_singledispatch_register_two_step_call_not_subtype,
+    r#"
+from functools import singledispatch
+@singledispatch
+def f(arg: int) -> str: return ""
+def impl(arg: str) -> str: return ""
+f.register(str)(impl)  # E: Dispatch type `str` is not a subtype of fallback first argument type `int`
+"#,
+);
+
+// An overloaded impl registered with bare `@f.register` is still subtype-checked against the
+// fallback (the dispatch type comes from the impl's first parameter).
+functools_testcase!(
+    test_singledispatch_register_overloaded_impl_subtype_checked,
+    r#"
+from functools import singledispatch
+from typing import overload
+@singledispatch
+def f(arg: int) -> str: return ""
+@overload
+def g(arg: str) -> str: ...
+@overload
+def g(arg: str, y: int) -> str: ...
+@f.register  # E: Dispatch type `str` is not a subtype of fallback first argument type `int`
+def g(arg: str, y: int = 0) -> str: return ""
+"#,
+);
+
+// The bare-functional signature-preserving path applies only to exactly `register(impl)`; a stray
+// keyword falls through to the stub, which rejects it.
+functools_testcase!(
+    test_singledispatch_register_bare_functional_extra_kwarg,
+    r#"
+from functools import singledispatch
+@singledispatch
+def f(arg: object) -> str: return "base"
+def impl(arg: int) -> str: return "int"
+f.register(impl, foo=1)  # E: No matching overload found for function `functools.register`
 "#,
 );

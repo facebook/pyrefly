@@ -41,17 +41,18 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
 use crate::callable::IdentityIgnored;
+use crate::dimension::Int;
 use crate::dimension::ShapeError;
-use crate::dimension::SizeExpr;
 use crate::dimension::canonicalize;
+use crate::einsum::EinsumClassification;
+use crate::einsum::EinsumLocation;
+use crate::einsum::parse_einsum_equation;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
 use crate::lit_int::LitInt;
 use crate::literal::Lit;
-use crate::shaped_array::ShapedArrayShape;
-use crate::shaped_array::ShapedArrayShapeArgStyle;
-use crate::shaped_array::ShapedArrayType;
-use crate::shaped_array::shape_to_tuple_carrier_arg;
+use crate::shaped_array::IntTuple;
+use crate::shaped_array::IntTupleView;
 use crate::tuple::Tuple;
 use crate::types::Type;
 
@@ -68,10 +69,10 @@ enum Val {
     Bool(bool),
     /// String literal (e.g., einsum spec).
     Str(String),
-    /// Single tensor dimension — a symbolic `Type` (SizeExpr, Quantified, etc.).
+    /// Single tensor dimension: a symbolic `Type` (`Int`, `Quantified`, etc.).
     Dim(Type),
     /// Full tensor shape with concrete rank.
-    Shape(ShapedArrayShape),
+    Shape(IntTuple),
     /// Homogeneous list. Elements are all the same variant (Int, Dim, Shape, …).
     List(Vec<Val>),
     /// Variadic shape: prefix dims + variadic middle + suffix dims.
@@ -106,14 +107,14 @@ impl Val {
         }
     }
 
-    /// Convert to a `Type::Size` for use in dimension arithmetic within the DSL evaluator.
-    /// `Int(n)` becomes `Size(Literal(n))`; `Dim(ty)` passes through as-is.
+    /// Convert to a `Type::Int` for use in dimension arithmetic within the DSL evaluator.
+    /// `Int(n)` becomes `Type::Int(Int::Literal(n))`; `Dim(ty)` passes through as-is.
     /// This is for *internal* symbolic computation, not for producing user-facing types
     /// (see `val_to_scalar_type` for that).
     pub fn as_size(&self) -> Type {
         match self {
             Val::Dim(ty) => ty.clone(),
-            Val::Int(n) => Type::Size(SizeExpr::Literal(*n)),
+            Val::Int(n) => Type::Int(Int::Literal(*n)),
             _ => panic!("IR bug: expected Dim or Int, got {}", self.variant_name()),
         }
     }
@@ -127,9 +128,9 @@ impl Val {
         }
     }
 
-    /// Extract as `&ShapedArrayShape`. Panics if not `Shape` — the DSL type checker
+    /// Extract as `&IntTuple`. Panics if not `Shape` — the DSL type checker
     /// guarantees this won't happen for well-typed DSL code.
-    pub fn as_shape(&self) -> &ShapedArrayShape {
+    pub fn as_shape(&self) -> &IntTuple {
         match self {
             Val::Shape(s) => s,
             _ => panic!("IR bug: expected Shape, got {}", self.variant_name()),
@@ -145,7 +146,7 @@ impl Val {
         }
     }
 
-    /// Extract a list of `Type::Size` values from a `Val::List`, for use in shape arithmetic.
+    /// Extract a list of `Type::Int` values from a `Val::List`, for use in shape arithmetic.
     pub fn as_size_list(&self) -> Vec<Type> {
         self.as_list().iter().map(|v| v.as_size()).collect()
     }
@@ -172,23 +173,23 @@ impl Val {
 /// These are used in `bind_dsl_params()` to convert bound Python types
 /// to runtime values. Each returns `None` if the type doesn't match.
 mod extract {
-    use crate::dimension::SizeExpr;
+    use crate::dimension::Int;
     use crate::literal::Lit;
-    use crate::shaped_array::ShapedArrayShape;
+    use crate::shaped_array::IntTuple;
     use crate::tuple::Tuple;
     use crate::types::Type;
 
-    /// Extract a ShapedArrayShape from a Type.
+    /// Extract a IntTuple from a Type.
     /// Returns None for non-shaped-arrays and shapeless arrays.
     /// Allows both Concrete and Unpacked shapes through so DSL ops that
     /// support variadic shapes (e.g., slicing) can operate on them.
-    pub fn shaped_array_shape(ty: &Type) -> Option<ShapedArrayShape> {
+    pub fn shaped_array_shape(ty: &Type) -> Option<IntTuple> {
         match ty {
             Type::ShapedArray(shaped_array) => {
                 if shaped_array.is_shapeless() {
                     None
                 } else {
-                    Some(shaped_array.shape.clone())
+                    Some(shaped_array.shape().clone())
                 }
             }
             Type::Union(union) => {
@@ -213,18 +214,16 @@ mod extract {
     }
 
     /// Extract symbolic dimension from Type.
-    /// Handles Dim[N], SizeExpr, Quantified, Var, etc.
+    /// Handles `Int`, `Quantified`, `Var`, etc.
     pub fn dimension(ty: &Type) -> Option<Type> {
         match ty {
-            // Dim[inner] -> extract inner (could be Quantified, SizeExpr, etc.)
-            Type::Dim(inner) => Some((**inner).clone()),
-            // Already a SizeExpr
-            Type::Size(_) => Some(ty.clone()),
+            // Already a symbolic integer expression.
+            Type::Int(_) => Some(ty.clone()),
             // Type variable or quantified
             Type::Quantified(_) | Type::Var(_) => Some(ty.clone()),
-            // Literal int -> wrap in SizeExpr
+            // Literal int -> wrap in `Int`.
             Type::Literal(lit) if let Lit::Int(n) = &lit.value => {
-                n.as_i64().map(|v| Type::Size(SizeExpr::Literal(v)))
+                n.as_i64().map(|v| Type::Int(Int::Literal(v)))
             }
             _ => None,
         }
@@ -256,6 +255,7 @@ mod extract {
     /// Also handles nested tuples (e.g., from variadic binding of tuple args).
     pub fn dim_list(ty: &Type) -> Option<Vec<Type>> {
         match ty {
+            Type::IntTuple(shape) => dim_list(&shape.to_tuple_type()),
             Type::Tuple(Tuple::Concrete(elts)) => {
                 // First, try to extract dimensions directly
                 let result = elts.iter().map(dimension).collect::<Option<Vec<Type>>>();
@@ -291,7 +291,7 @@ mod extract {
     /// Extract list or tuple of shaped-array shapes.
     /// Handles tuple[Array[...], ...].
     /// Returns None for list types (can't determine element count) or unbounded tuples.
-    pub fn shaped_array_list(ty: &Type) -> Option<Vec<ShapedArrayShape>> {
+    pub fn shaped_array_list(ty: &Type) -> Option<Vec<IntTuple>> {
         use crate::tuple::Tuple;
 
         match ty {
@@ -1550,10 +1550,10 @@ fn dim_type() -> DslType {
 }
 
 /// True if this type contains `symint` (possibly inside a union).
-fn contains_symint(ty: &DslType) -> bool {
+fn contains_int(ty: &DslType) -> bool {
     match ty {
         DslType::SymInt => true,
-        DslType::Union(types) => types.iter().any(contains_symint),
+        DslType::Union(types) => types.iter().any(contains_int),
         _ => false,
     }
 }
@@ -1694,7 +1694,7 @@ fn return_type_compatible(inferred: &DslType, declared: &DslType) -> bool {
     }
     match (inferred, declared) {
         _ if inferred == declared => true,
-        // Val::Int is valid for a declared SymInt via val_to_scalar_type.
+        // Val::Int is valid for a declared Int via val_to_scalar_type.
         (DslType::Int, DslType::SymInt) => true,
         (DslType::List(inferred_inner), DslType::List(declared_inner)) => {
             return_type_compatible(inferred_inner, declared_inner)
@@ -1848,7 +1848,7 @@ fn build_fn_ret_types(fndefs: &[DslFnDef], errors: &mut Vec<DslCompileError>) ->
 /// the result is `int | symint` (will generate DimAdd etc.); otherwise
 /// the result is `int` (will generate IntAdd etc.).
 fn arithmetic_result(a: &DslType, b: &DslType) -> DslType {
-    if contains_symint(a) || contains_symint(b) {
+    if contains_int(a) || contains_int(b) {
         dim_type()
     } else {
         DslType::Int
@@ -2305,9 +2305,9 @@ fn extract_dsl_val(actual_arg_type: &Type, expected_param_type: &DslType) -> Opt
                     .iter()
                     .all(|v| matches!(v, DslType::Int | DslType::SymInt)) =>
             {
-                // dim_list handles Tuple(Concrete([Literal, Size, ...])) for
+                // dim_list handles Tuple(Concrete([Literal, Type::Int, ...])) for
                 // both literal ints and symbolic dims.  Convert concrete
-                // Size(Literal(n)) → Val::Int(n) so == comparisons against
+                // Type::Int(Int::Literal(n)) → Val::Int(n) so == comparisons against
                 // literal ints work naturally in the interpreter.
                 let dims = extract::dim_list(actual_arg_type)?;
                 Some(Val::List(dims.into_iter().map(dim_val).collect()))
@@ -2545,8 +2545,8 @@ fn eval_dsl_expr(
                         Val::Int(n) => Ok(Val::Int(-n)),
                         Val::Dim(ty) => {
                             // Negate symbolic: 0 - ty
-                            let zero = Type::Size(SizeExpr::Literal(0));
-                            Ok(Val::Dim(canonicalize(Type::Size(SizeExpr::sub(
+                            let zero = Type::Int(Int::Literal(0));
+                            Ok(Val::Dim(canonicalize(Type::Int(Int::sub(
                                 zero,
                                 ty.clone(),
                             )))))
@@ -2598,27 +2598,35 @@ fn eval_dsl_expr(
         DslExpr::Shape(inner) => {
             let val = eval_dsl_expr(inner, env, fns, op_name)?;
             let shape = val.as_shape();
-            match shape.as_tuple() {
-                Tuple::Concrete(dims) => {
-                    // Use dim_val to convert concrete Size(Literal(n)) to Val::Int(n)
-                    // so comparisons against literal ints (e.g., `d != 1` in squeeze)
-                    // work naturally.
-                    let vals: Vec<Val> = dims.iter().map(|d| dim_val(d.clone())).collect();
+            match shape.view() {
+                IntTupleView::Concrete(dims) => {
+                    // Use dim_val to convert concrete
+                    // Type::Int(Int::Literal(n)) to Val::Int(n) so comparisons
+                    // against literal ints (e.g., `d != 1` in squeeze) work naturally.
+                    let vals: Vec<Val> =
+                        dims.iter().map(|d| dim_val(Type::Int(d.clone()))).collect();
                     Ok(Val::List(vals))
                 }
-                Tuple::Unbounded(_) => Ok(Val::Unpacked {
+                IntTupleView::Gradual => Ok(Val::Unpacked {
                     prefix: Vec::new(),
-                    middle: Type::any_tuple(),
+                    middle: IntTuple::shapeless().to_shape_arg_type(),
                     suffix: Vec::new(),
                 }),
-                Tuple::Unpacked(unpacked) => {
-                    let (prefix, middle, suffix) = &**unpacked;
-                    Ok(Val::Unpacked {
-                        prefix: prefix.iter().map(|d| dim_val(d.clone())).collect(),
-                        middle: middle.clone(),
-                        suffix: suffix.iter().map(|d| dim_val(d.clone())).collect(),
-                    })
-                }
+                IntTupleView::Unpacked {
+                    prefix,
+                    middle,
+                    suffix,
+                } => Ok(Val::Unpacked {
+                    prefix: prefix
+                        .iter()
+                        .map(|d| dim_val(Type::Int(d.clone())))
+                        .collect(),
+                    middle: middle.clone(),
+                    suffix: suffix
+                        .iter()
+                        .map(|d| dim_val(Type::Int(d.clone())))
+                        .collect(),
+                }),
             }
         }
 
@@ -2632,7 +2640,7 @@ fn eval_dsl_expr(
                 } => {
                     let prefix_types = prefix.iter().map(|v| v.as_size()).collect();
                     let suffix_types = suffix.iter().map(|v| v.as_size()).collect();
-                    Ok(Val::Shape(ShapedArrayShape::unpacked(
+                    Ok(Val::Shape(IntTuple::unpacked_from_types(
                         prefix_types,
                         middle,
                         suffix_types,
@@ -2640,7 +2648,7 @@ fn eval_dsl_expr(
                 }
                 _ => {
                     let dims = val.as_size_list();
-                    Ok(Val::Shape(ShapedArrayShape::from_types(dims)))
+                    Ok(Val::Shape(IntTuple::from_types(dims)))
                 }
             }
         }
@@ -2679,12 +2687,13 @@ fn val_as_bool(val: &Val, op_name: &str) -> Result<bool, ShapeError> {
     }
 }
 
-/// Normalize a canonical `Type` to `Val`. If it's a concrete `Size(Literal(n))`,
+/// Normalize a canonical `Type` to `Val`. If it's a concrete
+/// `Type::Int(Int::Literal(n))`,
 /// produce `Val::Int(n)` so equality checks against literal ints work naturally.
 /// Otherwise produce `Val::Dim(ty)`.
 fn dim_val(ty: Type) -> Val {
     match &ty {
-        Type::Size(SizeExpr::Literal(n)) => Val::Int(*n),
+        Type::Int(Int::Literal(n)) => Val::Int(*n),
         _ => Val::Dim(ty),
     }
 }
@@ -2784,7 +2793,7 @@ fn eval_unpacked_slice(
 
 /// Evaluate a binary operation, dispatching on runtime Val variants.
 ///
-/// Arithmetic: both Int → concrete i64; either Dim → symbolic SizeExpr; + on Lists → concat.
+/// Arithmetic: both Int → concrete i64; either Dim → symbolic integer expression; + on Lists → concat.
 /// Comparison: concrete on Int; == None → is_none(); on Str → string compare.
 /// Note: And/Or are short-circuited in eval_dsl_expr and never reach here.
 fn eval_binop(lval: &Val, op: DslOp, rval: &Val, op_name: &str) -> Result<Val, ShapeError> {
@@ -2835,7 +2844,7 @@ fn eval_binop(lval: &Val, op: DslOp, rval: &Val, op_name: &str) -> Result<Val, S
             _ => {
                 let a = lval.as_size();
                 let b = rval.as_size();
-                Ok(dim_val(canonicalize(Type::Size(SizeExpr::add(a, b)))))
+                Ok(dim_val(canonicalize(Type::Int(Int::add(a, b)))))
             }
         },
         DslOp::Sub => match (lval, rval) {
@@ -2843,7 +2852,7 @@ fn eval_binop(lval: &Val, op: DslOp, rval: &Val, op_name: &str) -> Result<Val, S
             _ => {
                 let a = lval.as_size();
                 let b = rval.as_size();
-                Ok(dim_val(canonicalize(Type::Size(SizeExpr::sub(a, b)))))
+                Ok(dim_val(canonicalize(Type::Int(Int::sub(a, b)))))
             }
         },
         DslOp::Mul => match (lval, rval) {
@@ -2851,7 +2860,7 @@ fn eval_binop(lval: &Val, op: DslOp, rval: &Val, op_name: &str) -> Result<Val, S
             _ => {
                 let a = lval.as_size();
                 let b = rval.as_size();
-                Ok(dim_val(canonicalize(Type::Size(SizeExpr::mul(a, b)))))
+                Ok(dim_val(canonicalize(Type::Int(Int::mul(a, b)))))
             }
         },
         DslOp::FloorDiv => match (lval, rval) {
@@ -2866,7 +2875,7 @@ fn eval_binop(lval: &Val, op: DslOp, rval: &Val, op_name: &str) -> Result<Val, S
             _ => {
                 let a = lval.as_size();
                 let b = rval.as_size();
-                Ok(dim_val(canonicalize(Type::Size(SizeExpr::floor_div(a, b)))))
+                Ok(dim_val(canonicalize(Type::Int(Int::floor_div(a, b)))))
             }
         },
         DslOp::Mod => match (lval, rval) {
@@ -2922,7 +2931,13 @@ fn val_eq(a: &Val, b: &Val) -> bool {
         (Val::Int(x), Val::Int(y)) => x == y,
         (Val::Str(x), Val::Str(y)) => x == y,
         (Val::Bool(x), Val::Bool(y)) => x == y,
+        // Structurally equal symbolic dims compare equal (e.g. `int_min(N, N) == N`),
+        // matching how a literal dim compares equal to the same integer.
+        (Val::Dim(x), Val::Dim(y)) => x == y,
         (Val::None, Val::None) => true,
+        (Val::Int(x), Val::Dim(y)) | (Val::Dim(y), Val::Int(x)) => {
+            *y == Type::Int(Int::Literal(*x))
+        }
         _ => false,
     }
 }
@@ -2952,9 +2967,9 @@ fn eval_call(
                     Ok(Val::Int(product))
                 } else {
                     let dims = args[0].as_size_list();
-                    let mut product = Type::Size(SizeExpr::Literal(1));
+                    let mut product = Type::Int(Int::Literal(1));
                     for d in dims {
-                        product = canonicalize(Type::Size(SizeExpr::mul(product, d)));
+                        product = canonicalize(Type::Int(Int::mul(product, d)));
                     }
                     Ok(dim_val(product))
                 }
@@ -2973,9 +2988,9 @@ fn eval_call(
                     Ok(Val::Int(total))
                 } else {
                     let dims = args[0].as_size_list();
-                    let mut total = Type::Size(SizeExpr::Literal(0));
+                    let mut total = Type::Int(Int::Literal(0));
                     for d in dims {
-                        total = canonicalize(Type::Size(SizeExpr::add(total, d)));
+                        total = canonicalize(Type::Int(Int::add(total, d)));
                     }
                     Ok(dim_val(total))
                 }
@@ -3012,66 +3027,60 @@ fn eval_call(
                     1,
                     "DSL bug: {op_name}: einsum_parse takes 1 arg"
                 );
-                let spec = args[0].as_str_val();
-
-                // Parse spec: "ij,jk->ik"
-                let parts: Vec<&str> = spec.split("->").collect();
-                if parts.len() != 2 {
-                    return Err(ShapeError::ShapeComputation {
-                        message: format!("einsum spec must contain '->', got: {}", spec),
-                    });
-                }
-                let input_specs: Vec<Vec<char>> = parts[0]
-                    .split(',')
-                    .map(|s| s.trim().chars().filter(|c| c.is_alphanumeric()).collect())
-                    .collect();
-                let output_spec: Vec<char> = parts[1]
-                    .trim()
-                    .chars()
-                    .filter(|c| c.is_alphanumeric())
-                    .collect();
-
-                // Build char → (input_idx, dim_pos) map, collecting consistency
-                // check pairs for labels that appear in multiple positions.
-                let mut char_to_location: HashMap<char, (usize, usize)> = HashMap::new();
-                let mut check_pairs: Vec<Val> = Vec::new();
-                for (input_idx, spec_chars) in input_specs.iter().enumerate() {
-                    for (pos, ch) in spec_chars.iter().enumerate() {
-                        if let Some(&(prev_input, prev_pos)) = char_to_location.get(ch) {
-                            // Each check pair is [idx1, pos1, idx2, pos2].
-                            check_pairs.push(Val::List(vec![
-                                Val::Int(prev_input as i64),
-                                Val::Int(prev_pos as i64),
-                                Val::Int(input_idx as i64),
-                                Val::Int(pos as i64),
-                            ]));
-                        } else {
-                            char_to_location.insert(*ch, (input_idx, pos));
-                        }
+                let equation = match parse_einsum_equation(args[0].as_str_val()) {
+                    EinsumClassification::Supported(equation) => equation,
+                    EinsumClassification::Unsupported(unsupported) => {
+                        return Err(ShapeError::Unsupported {
+                            message: unsupported.message(),
+                        });
                     }
-                }
-
-                // Build output_map: for each output char, resolve to [input_idx, dim_pos].
-                let mut output_map: Vec<Val> = Vec::new();
-                for ch in &output_spec {
-                    let &(input_idx, dim_pos) =
-                        char_to_location
-                            .get(ch)
-                            .ok_or_else(|| ShapeError::ShapeComputation {
-                                message: format!(
-                                    "einsum: output index '{}' not found in inputs",
-                                    ch
-                                ),
-                            })?;
-                    output_map.push(Val::List(vec![
-                        Val::Int(input_idx as i64),
-                        Val::Int(dim_pos as i64),
-                    ]));
-                }
+                    EinsumClassification::Invalid(error) => {
+                        return Err(ShapeError::ShapeComputation {
+                            message: error.message(),
+                        });
+                    }
+                };
+                let location_pair = |location: EinsumLocation| {
+                    [
+                        Val::Int(location.input as i64),
+                        Val::Int(location.dimension as i64),
+                    ]
+                };
+                let output_map = equation
+                    .output
+                    .iter()
+                    .map(|label| {
+                        Val::List(
+                            location_pair(equation.labels[*label].locations[0])
+                                .into_iter()
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                let check_pairs = equation
+                    .equalities()
+                    .map(|(first, second)| {
+                        Val::List(
+                            location_pair(first)
+                                .into_iter()
+                                .chain(location_pair(second))
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                let input_ranks = equation
+                    .input_ranks
+                    .iter()
+                    .enumerate()
+                    .map(|(input, rank)| {
+                        Val::List(vec![Val::Int(input as i64), Val::Int(*rank as i64)])
+                    })
+                    .collect();
 
                 Ok(Val::List(vec![
                     Val::List(output_map),
                     Val::List(check_pairs),
+                    Val::List(input_ranks),
                 ]))
             }
             DslBuiltin::Enumerate => {
@@ -3223,43 +3232,31 @@ fn eval_dsl_body(
     }
 }
 
-/// Inject a computed `ShapedArrayShape` into a fixture `Type`, preserving the base class.
+/// Inject a computed `IntTuple` into a fixture `Type`, preserving the base class.
 /// Falls back to `ret_type` unchanged if it isn't a shaped-array type.
-fn inject_shape(shape: ShapedArrayShape, ret_type: &Type) -> Type {
+fn inject_shape(shape: IntTuple, ret_type: &Type) -> Type {
     match ret_type {
         Type::ShapedArray(t) => {
-            let mut base_class = t.base_class.clone();
-            if let ShapedArrayShapeArgStyle::TupleCarrier { index } = t.shape_arg_style {
-                let carrier = base_class
-                    .targs_mut()
-                    .as_mut()
-                    .get_mut(index)
-                    .expect("shape argument index should point to a class type argument");
-                *carrier = shape_to_tuple_carrier_arg(&shape);
-            }
-            ShapedArrayType::new(base_class, shape)
-                .with_syntax(t.syntax)
-                .with_shape_arg_style(t.shape_arg_style)
-                .to_type()
+            let mut t = (**t).clone();
+            t.set_shape(shape);
+            t.to_type()
         }
         _ => ret_type.clone(),
     }
 }
 
-/// Convert a DSL `Val` to a user-facing `Type` for output from a shape function.
-/// Unlike `Val::as_size` (which produces `Type::Size` for internal arithmetic),
-/// this produces the types that appear in type-checker diagnostics:
+/// Convert a DSL scalar `Val` to a `Type` for output from a shape function:
 /// - `Val::Int(n)` → `Literal[n]`
-/// - `Val::Dim(SizeExpr::Literal(n))` → `Literal[n]` (concrete dims become literals)
-/// - `Val::Dim(symbolic)` → `Dim[symbolic]`
+/// - `Val::Dim(Int::Literal(n))` → `Literal[n]` (concrete dims become literals)
+/// - `Val::Dim(symbolic)` → canonical `Int[...]`
 fn val_to_scalar_type(val: &Val) -> Type {
     match val {
         Val::Int(n) => Lit::Int(LitInt::new(*n)).to_implicit_type(),
         Val::Dim(ty) => {
-            if let Some(n) = ty.as_shape_literal() {
-                Lit::Int(LitInt::new(n)).to_implicit_type()
-            } else {
-                Type::Dim(Box::new(ty.clone()))
+            let dim = Int::from_type(ty).unwrap_or_else(|| Int::Symbolic(Box::new(ty.clone())));
+            match dim {
+                Int::Literal(n) => Lit::Int(LitInt::new(n)).to_implicit_type(),
+                dim => canonicalize(Type::Int(dim)),
             }
         }
         _ => unreachable!(
@@ -3271,10 +3268,7 @@ fn val_to_scalar_type(val: &Val) -> Type {
 
 /// Inject a list of computed shapes into the fixture return type's tuple structure.
 /// Returns `None` if shapes is empty or the fixture type doesn't match.
-fn inject_shapes_into_tuple(
-    shapes: Vec<ShapedArrayShape>,
-    expected_return_type: &Type,
-) -> Option<Type> {
+fn inject_shapes_into_tuple(shapes: Vec<IntTuple>, expected_return_type: &Type) -> Option<Type> {
     if shapes.is_empty() {
         return None;
     }
@@ -3321,8 +3315,7 @@ fn val_to_type(
             // allows list[ShapedArray] for a declared ShapedArray return, so
             // this path is guarded by check_body's static validation.
             Val::List(items) => {
-                let shapes: Vec<ShapedArrayShape> =
-                    items.iter().map(|v| v.as_shape().clone()).collect();
+                let shapes: Vec<IntTuple> = items.iter().map(|v| v.as_shape().clone()).collect();
                 if shapes.len() == 1 {
                     return inject_shape(shapes.into_iter().next().unwrap(), expected_return_type);
                 }
@@ -3337,11 +3330,11 @@ fn val_to_type(
         },
 
         // Int and Bool synthesize Literal[n] / Literal[bool] from the DSL's
-        // traced runtime value, just like SymInt does via `val_to_scalar_type`.
-        // This is intentionally load-bearing: functions like `dim_ir`,
-        // `numel_ir`, and `size_ir(dim=N)` trace exact integer results, and
-        // downstream consumers (assert_type, reshape validation, shape
-        // inference) rely on the literal precision. Returning
+        // traced runtime value, just like Int does via `val_to_scalar_type`.
+        // This is intentionally load-bearing: functions like `dim_ir` and
+        // `size_ir(dim=N)` trace exact integer results, and downstream
+        // consumers (assert_type, reshape validation, shape inference) rely on
+        // the literal precision. Returning
         // `expected_return_type` here would discard the traced value and
         // produce `int` instead of e.g. `Literal[3]`.
         //
@@ -3360,8 +3353,8 @@ fn val_to_type(
             ),
         },
 
-        // SymInt synthesizes a type from the traced `Val`: `val_to_scalar_type`
-        // returns `Type::Dim` for `Val::Dim` and `Literal[n]` for `Val::Int`.
+        // Int synthesizes a type from the traced `Val`: `val_to_scalar_type`
+        // returns canonical `Int` for symbolic dims and `Literal[n]` for ints.
         // The trace value is load-bearing for shape inference — downstream
         // tensor shape types are built from these dimension representations.
         DslType::SymInt => val_to_scalar_type(&val),
@@ -3411,8 +3404,7 @@ fn val_to_type(
         DslType::List(inner) => match inner.as_ref() {
             DslType::ShapedArray => {
                 let items = val.as_list();
-                let shapes: Vec<ShapedArrayShape> =
-                    items.iter().map(|v| v.as_shape().clone()).collect();
+                let shapes: Vec<IntTuple> = items.iter().map(|v| v.as_shape().clone()).collect();
                 if is_unbounded {
                     // Unbounded: build Tuple::Unbounded with computed element shape
                     if let (Some(first), Type::Tuple(Tuple::Unbounded(elem))) =
@@ -3437,12 +3429,11 @@ fn val_to_type(
             let items = val.as_list();
             let all_shaped_array = elems.iter().all(|e| matches!(e, DslType::ShapedArray));
             if all_shaped_array {
-                let shapes: Vec<ShapedArrayShape> =
-                    items.iter().map(|v| v.as_shape().clone()).collect();
+                let shapes: Vec<IntTuple> = items.iter().map(|v| v.as_shape().clone()).collect();
                 inject_shapes_into_tuple(shapes, expected_return_type)
                     .unwrap_or_else(|| expected_return_type.clone())
             } else {
-                // All ints/symints → per-element normalization
+                // All ints/ints → per-element normalization
                 let all_int_like = elems
                     .iter()
                     .all(|e| matches!(e, DslType::Int | DslType::SymInt));
@@ -3908,9 +3899,20 @@ mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::class::PrecomputedTParams;
+    use crate::quantified::AnchorIndex;
+    use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
+    use crate::quantified::QuantifiedKind;
+    use crate::quantified::QuantifiedOrigin;
+    use crate::shaped_array::ShapedArrayType;
     use crate::tuple::Tuple;
+    use crate::type_var::PreInferenceVariance;
+    use crate::type_var::Restriction;
+    use crate::types::AnyStyle;
     use crate::types::TArgs;
     use crate::types::Union;
+    use crate::types::Var;
 
     fn parse_dsl_functions(source: &str) -> Vec<ShapeDslFunction> {
         let (module, _, _) = Ast::parse(source, PySourceType::Stub);
@@ -3938,8 +3940,84 @@ mod tests {
             Identifier::new(Name::new(name), TextRange::empty(TextSize::new(0))),
             NestingContext::toplevel(),
             module,
-            None,
+            PrecomputedTParams::NotGeneric,
+            false,
         )
+    }
+
+    fn fake_intvar(name: &str) -> Type {
+        let index = name.bytes().fold(0, |acc: u32, byte| {
+            acc.wrapping_mul(16777619) ^ u32::from(byte)
+        });
+        Type::Quantified(Box::new(Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str("__test__"),
+                AnchorIndex::new(TextRange::default(), index),
+                QuantifiedOrigin::Pep695,
+            ),
+            Name::new(name),
+            QuantifiedKind::IntVar,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Invariant,
+        )))
+    }
+
+    #[test]
+    fn test_val_to_scalar_type_uses_canonical_size_for_symbolic_dims() {
+        let gradual = Type::Int(Int::Symbolic(Box::new(Type::Int(Int::Int))));
+        assert_eq!(val_to_scalar_type(&Val::Dim(gradual)), Type::Int(Int::Int));
+
+        let quantified = fake_intvar("N");
+        assert_eq!(
+            val_to_scalar_type(&Val::Dim(quantified)),
+            Type::Int(Int::Symbolic(Box::new(fake_intvar("N"))))
+        );
+
+        assert_eq!(
+            val_to_scalar_type(&Val::Dim(Type::Var(Var::ZERO))),
+            Type::Int(Int::Symbolic(Box::new(Type::Var(Var::ZERO))))
+        );
+
+        let any = Type::Any(AnyStyle::Error);
+        assert_eq!(
+            val_to_scalar_type(&Val::Dim(any.clone())),
+            Type::Int(Int::Symbolic(Box::new(any)))
+        );
+    }
+
+    #[test]
+    fn test_val_to_scalar_type_preserves_symbolic_size_arithmetic() {
+        let n = Int::Symbolic(Box::new(fake_intvar("N")));
+        let m = Int::Symbolic(Box::new(fake_intvar("M")));
+        assert_eq!(
+            val_to_scalar_type(&Val::Dim(Type::Int(Int::Mul(
+                Box::new(n.clone()),
+                Box::new(m.clone()),
+            )))),
+            Type::Int(Int::Mul(Box::new(m), Box::new(n)))
+        );
+    }
+
+    #[test]
+    fn test_val_to_scalar_type_preserves_concrete_dim_literals() {
+        let literal = Lit::Int(LitInt::new(3)).to_implicit_type();
+        assert_eq!(
+            val_to_scalar_type(&Val::Dim(Type::Int(Int::Literal(3)))),
+            literal
+        );
+    }
+
+    #[test]
+    fn test_extract_dim_list_accepts_int_tuple() {
+        let shape = Type::IntTuple(Box::new(IntTuple::new(vec![
+            Int::Literal(2),
+            Int::Literal(3),
+        ])));
+        assert_eq!(
+            extract::dim_list(&shape),
+            Some(vec![Type::Int(Int::Literal(2)), Type::Int(Int::Literal(3)),])
+        );
     }
 
     #[test]
@@ -3948,7 +4026,7 @@ mod tests {
             fake_class("Tensor", "torch"),
             TArgs::default(),
         ));
-        let shape = ShapedArrayShape::new(vec![SizeExpr::Literal(2)]);
+        let shape = IntTuple::new(vec![Int::Literal(2)]);
 
         assert!(extract::shaped_array_shape(&torch_tensor).is_none());
         assert!(
@@ -3961,8 +4039,8 @@ mod tests {
     #[test]
     fn test_shape_dsl_extracts_registered_shaped_array_tuple() {
         let array = ClassType::new(fake_class("Array", "arrays"), TArgs::default());
-        let first_shape = ShapedArrayShape::new(vec![SizeExpr::Literal(2)]);
-        let second_shape = ShapedArrayShape::new(vec![SizeExpr::Literal(3)]);
+        let first_shape = IntTuple::new(vec![Int::Literal(2)]);
+        let second_shape = IntTuple::new(vec![Int::Literal(3)]);
         let first = ShapedArrayType::new(array.clone(), first_shape.clone()).to_type();
         let second = ShapedArrayType::new(array.clone(), second_shape.clone()).to_type();
 
@@ -3986,8 +4064,8 @@ mod tests {
     #[test]
     fn test_shape_dsl_extracts_same_shape_union() {
         let array = ClassType::new(fake_class("Array", "arrays"), TArgs::default());
-        let shape = ShapedArrayShape::new(vec![SizeExpr::Literal(2)]);
-        let other_shape = ShapedArrayShape::new(vec![SizeExpr::Literal(3)]);
+        let shape = IntTuple::new(vec![Int::Literal(2)]);
+        let other_shape = IntTuple::new(vec![Int::Literal(3)]);
         let union = Type::Union(Box::new(Union {
             members: vec![
                 ShapedArrayType::new(array.clone(), shape.clone()).to_type(),

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 def test_simple_setitem():
     """Test basic tensor item assignment"""
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
 
     # Simple index assignment
     x[0] = 1.0
@@ -28,7 +28,7 @@ def test_simple_setitem():
 
 def test_slice_setitem():
     """Test tensor slice assignment"""
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
 
     # Slice assignment
     x[0:5] = 0.0
@@ -37,8 +37,8 @@ def test_slice_setitem():
 
 def test_boolean_mask_setitem():
     """Test tensor assignment with boolean mask"""
-    logits: Tensor[32, 100] = torch.randn(32, 100)
-    v: Tensor[32, 1] = torch.randn(32, 1)
+    logits: Tensor[[32, 100]] = torch.randn(32, 100)
+    v: Tensor[[32, 1]] = torch.randn(32, 1)
 
     # Boolean mask assignment (like in nanogpt.py)
     logits[logits < v[:, [-1]]] = -float("Inf")
@@ -46,7 +46,7 @@ def test_boolean_mask_setitem():
 
 def test_advanced_indexing_setitem():
     """Test advanced indexing assignment"""
-    x: Tensor[10, 20, 30] = torch.randn(10, 20, 30)
+    x: Tensor[[10, 20, 30]] = torch.randn(10, 20, 30)
 
     # Multi-dimensional indexing
     x[0, :, 5:10] = 1.0

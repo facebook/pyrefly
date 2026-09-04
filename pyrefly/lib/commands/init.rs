@@ -107,6 +107,7 @@ impl InitArgs {
 
     pub fn run(
         &self,
+        version: &str,
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
@@ -129,7 +130,7 @@ impl InitArgs {
             Ok((_, config_path)) => {
                 // 2. Run pyrefly check
                 let check_result =
-                    self.run_check(config_path.clone(), wrapper.clone(), thread_count);
+                    self.run_check(config_path.clone(), version, wrapper.clone(), thread_count);
 
                 // Check if there are errors and if there are fewer than 100
                 if let Ok((_, errors)) = check_result {
@@ -142,6 +143,7 @@ impl InitArgs {
                         return self.prompt_error_suppression(
                             config_path,
                             error_count,
+                            version,
                             wrapper,
                             thread_count,
                         );
@@ -155,6 +157,7 @@ impl InitArgs {
     fn run_check(
         &self,
         config_path: Option<PathBuf>,
+        version: &str,
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
     ) -> anyhow::Result<(CommandExitStatus, Vec<CheckError>)> {
@@ -172,7 +175,7 @@ impl InitArgs {
         )?;
 
         // Run the check directly
-        let res = check_args.run_once(filtered_globs, config_finder, upsell, thread_count);
+        let res = check_args.run_once(version, filtered_globs, config_finder, upsell, thread_count);
         if let Err(e) = &res {
             error!("Failed to run pyrefly check: {}", e);
         }
@@ -183,6 +186,7 @@ impl InitArgs {
         &self,
         config_path: Option<PathBuf>,
         error_count: usize,
+        version: &str,
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
     ) -> anyhow::Result<CommandExitStatus> {
@@ -212,6 +216,7 @@ impl InitArgs {
 
             // Run the check with suppress-errors flag
             match suppress_args.run_once(
+                version,
                 suppress_globs,
                 suppress_config_finder,
                 suppress_upsell,
@@ -380,6 +385,8 @@ impl InitArgs {
 #[cfg(test)]
 mod test {
     use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+
+    const TEST_VERSION: &str = "0.0.0";
     use tempfile;
     use tempfile::TempDir;
 
@@ -404,13 +411,13 @@ mod test {
     fn run_init_on_dir(dir: &TempDir) -> anyhow::Result<CommandExitStatus> {
         let mut args = InitArgs::new(dir.path().to_path_buf());
         args.non_interactive = true;
-        args.run(None, TEST_THREAD_COUNT)
+        args.run(TEST_VERSION, None, TEST_THREAD_COUNT)
     }
 
     fn run_init_on_file(dir: &TempDir, file: &str) -> anyhow::Result<CommandExitStatus> {
         let mut args = InitArgs::new(dir.path().join(file));
         args.non_interactive = true;
-        args.run(None, TEST_THREAD_COUNT)
+        args.run(TEST_VERSION, None, TEST_THREAD_COUNT)
     }
 
     fn run_init_non_interactive(dir: &TempDir) -> anyhow::Result<CommandExitStatus> {
@@ -421,7 +428,7 @@ mod test {
             dry_run: false,
             print_config: false,
         };
-        args.run(None, TEST_THREAD_COUNT)
+        args.run(TEST_VERSION, None, TEST_THREAD_COUNT)
     }
 
     fn run_init_dry_run(dir: &TempDir) -> anyhow::Result<CommandExitStatus> {
@@ -432,7 +439,7 @@ mod test {
             dry_run: true,
             print_config: false,
         };
-        args.run(None, TEST_THREAD_COUNT)
+        args.run(TEST_VERSION, None, TEST_THREAD_COUNT)
     }
 
     fn assert_success(status: CommandExitStatus) {
@@ -810,7 +817,7 @@ files = [\"from_mypy.py\"]
             dry_run: false,
             print_config: false,
         };
-        let status = args.run(None, TEST_THREAD_COUNT)?;
+        let status = args.run(TEST_VERSION, None, TEST_THREAD_COUNT)?;
         assert_success(status);
         check_file_in(
             tmp.path(),
@@ -850,7 +857,7 @@ files = [\"from_mypy.py\"]
             dry_run: true,
             print_config: false,
         };
-        let status = args.run(None, TEST_THREAD_COUNT)?;
+        let status = args.run(TEST_VERSION, None, TEST_THREAD_COUNT)?;
         assert_user_error(status);
         Ok(())
     }
@@ -865,7 +872,7 @@ files = [\"from_mypy.py\"]
             dry_run: true,
             print_config: false,
         };
-        let status = args.run(None, TEST_THREAD_COUNT)?;
+        let status = args.run(TEST_VERSION, None, TEST_THREAD_COUNT)?;
         assert_user_error(status);
         Ok(())
     }
@@ -903,7 +910,7 @@ files = [\"from_mypy.py\"]
             dry_run: true,
             print_config: true,
         };
-        let status = args.run(None, TEST_THREAD_COUNT)?;
+        let status = args.run(TEST_VERSION, None, TEST_THREAD_COUNT)?;
         assert_success(status);
         assert!(!tmp.path().join("pyrefly.toml").exists());
         Ok(())
@@ -919,7 +926,7 @@ files = [\"from_mypy.py\"]
             dry_run: false,
             print_config: true,
         };
-        let status = args.run(None, TEST_THREAD_COUNT)?;
+        let status = args.run(TEST_VERSION, None, TEST_THREAD_COUNT)?;
         assert_success(status);
         assert!(tmp.path().join("pyrefly.toml").exists());
         Ok(())
@@ -936,7 +943,7 @@ files = [\"from_mypy.py\"]
             dry_run: false,
             print_config: true,
         };
-        let status = args.run(None, TEST_THREAD_COUNT)?;
+        let status = args.run(TEST_VERSION, None, TEST_THREAD_COUNT)?;
         assert_user_error(status);
         let unchanged = fs_anyhow::read_to_string(&tmp.path().join("pyrefly.toml"))?;
         assert_eq!(unchanged, "# sentinel\n");

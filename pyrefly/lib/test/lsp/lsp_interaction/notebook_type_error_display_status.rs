@@ -6,10 +6,10 @@
  */
 
 use lsp_types::Url;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 /// Verifies that typeErrorDisplayStatus resolves the notebook file's config
 /// for notebook cells, rather than defaulting to NoConfigFile.
