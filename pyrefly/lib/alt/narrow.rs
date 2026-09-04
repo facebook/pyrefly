@@ -2257,8 +2257,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         })
     }
 
-    /// Whether the subject type is closed enough for default exhaustiveness checking.
-    pub(crate) fn should_check_exhaustiveness_by_default(&self, ty: &Type) -> bool {
+    /// Whether the subject type is closed for exhaustiveness checking.
+    fn is_closed_type_for_exhaustiveness_check(&self, ty: &Type) -> bool {
         match ty {
             Type::ClassType(cls) => {
                 // Non-subclassable classes are exhaustible, with the exception of Flag enums,
@@ -2280,7 +2280,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     && union
                         .members
                         .iter()
-                        .all(|m| self.should_check_exhaustiveness_by_default(m))
+                        .all(|m| self.is_closed_type_for_exhaustiveness_check(m))
             }
 
             _ => false,
@@ -2320,11 +2320,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) {
         let (op, narrow_range) = narrow_ops_for_fall_through;
         let subject_info = self.with_type_for_exhaustiveness_check(self.get_idx(*subject_idx));
-        if !self.solver().check_all_matches
-            && !self.should_check_exhaustiveness_by_default(subject_info.ty())
-        {
-            return;
-        }
+        let error_kind = if self.is_closed_type_for_exhaustiveness_check(subject_info.ty()) {
+            ErrorKind::NonExhaustiveMatch
+        } else {
+            ErrorKind::NonExhaustiveMatchOpenType
+        };
         let ignore_errors = self.error_swallower();
         // Get the narrowed type of the match subject when none of the cases match
         let mut remaining_ty = match narrowing_subject {
@@ -2364,8 +2364,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ctx.display(&subject_display).to_string()
         };
         let message = format!("Match on `{displayed_subject}` is not exhaustive");
-        let mut builder =
-            errors.error_builder(*subject_range, ErrorKind::NonExhaustiveMatch, message);
+        let mut builder = errors.error_builder(*subject_range, error_kind, message);
         if let Some(missing_cases) = self.format_missing_cases(&remaining_ty) {
             builder = builder.with_detail(format!("Missing cases: {}", missing_cases));
         }

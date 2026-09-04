@@ -300,14 +300,6 @@ pub struct ConfigOverrideArgs {
         num_args = 0..=1
     )]
     infer_with_first_use: Option<bool>,
-    /// Check every match statement for exhaustiveness instead of limiting checks to closed subject types.
-    #[arg(
-        long,
-        default_missing_value = "true",
-        require_equals = true,
-        num_args = 0..=1
-    )]
-    check_all_matches: Option<bool>,
     /// Whether to respect ignore files (.gitignore, .ignore, .git/exclude).
     #[arg(
         long,
@@ -434,7 +426,6 @@ impl ConfigOverrideArgs {
             replace_untyped_imports_with_any,
             ignore_errors_in_generated_code,
             infer_with_first_use,
-            check_all_matches,
             use_ignore_files,
             untyped_def_behavior,
             check_unannotated_defs,
@@ -462,7 +453,6 @@ impl ConfigOverrideArgs {
             || replace_untyped_imports_with_any.is_some()
             || ignore_errors_in_generated_code.is_some()
             || infer_with_first_use.is_some()
-            || check_all_matches.is_some()
             || use_ignore_files.is_some()
             || untyped_def_behavior.is_some()
             || check_unannotated_defs.is_some()
@@ -629,9 +619,6 @@ impl ConfigOverrideArgs {
         }
         if let Some(x) = &self.infer_with_first_use {
             config.root.infer_with_first_use = Some(*x);
-        }
-        if let Some(x) = &self.check_all_matches {
-            config.root.check_all_matches = Some(*x);
         }
         if let Some(x) = &self.recursion_depth_limit {
             config.root.recursion_depth_limit = Some(*x);

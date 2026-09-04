@@ -114,6 +114,15 @@ fn check_module(code: Arc<FileContents>, module: &str, path: &str) -> usize {
 /// unresolved name is noticed. Work done there on behalf of an error is
 /// therefore still reachable at this level, and still thrown away.
 fn check_module_at(code: Arc<FileContents>, module: &str, path: &str, require: Require) -> usize {
+    check_module_error_counts(code, module, path, require).0
+}
+
+fn check_module_error_counts(
+    code: Arc<FileContents>,
+    module: &str,
+    path: &str,
+    require: Require,
+) -> (usize, usize) {
     let sys_info = SysInfo::new(PythonVersion::default(), PythonPlatform::default());
     let h = Handle::new(
         ModuleName::from_str(module),
@@ -124,7 +133,8 @@ fn check_module_at(code: Arc<FileContents>, module: &str, path: &str, require: R
     t.set_memory(vec![(PathBuf::from(path), Some(code))]);
     t.run(&[h.dupe()], require, None);
     let errors = t.get_errors([&h]);
-    errors.collect_errors().ordinary.len()
+    let collected = errors.collect_errors();
+    (collected.ordinary.len(), collected.disabled.len())
 }
 
 /// Join a range `0..n` into a single string, formatting each index with `f` and
@@ -162,6 +172,18 @@ fn exhaustive_match(count: usize) -> String {
          class Phase(Enum):\n{members}\n\
          def classify(p: Phase) -> int:\n    match p:\n{arms}\n        case _:\n            assert_never(p)"
     )
+}
+
+/// `matches` non-exhaustive matches over `int`, each with `arms` literal cases.
+/// The open-type diagnostic is disabled by default, so all exhaustiveness work
+/// performed for these matches is discarded.
+fn disabled_open_match_exhaustiveness(matches: usize, arms: usize) -> String {
+    let arms = joined(arms, "\n", |i| {
+        format!("        case {i}:\n            return {i}")
+    });
+    joined(matches, "\n", |i| {
+        format!("def classify_{i}(value: int) -> int:\n    match value:\n{arms}\n    return -1\n")
+    })
 }
 
 /// A `Protocol` with `methods` members and a class implementing all of them with
@@ -431,6 +453,21 @@ fn enum_members(c: &mut Criterion) {
 
 fn enum_exhaustiveness(c: &mut Criterion) {
     measure(c, "exhaustive_match_48", exhaustive_match(48), 0);
+}
+
+fn disabled_open_match_exhaustiveness_check(c: &mut Criterion) {
+    const MATCHES: usize = 256;
+    let code = Arc::new(FileContents::from_source(
+        disabled_open_match_exhaustiveness(MATCHES, 8),
+    ));
+    assert_eq!(
+        check_module_error_counts(code.dupe(), "bench", BENCH_FILE, Require::Errors),
+        (0, MATCHES),
+        "benchmark should produce one disabled open-type diagnostic per match"
+    );
+    c.bench_function("disabled_open_match_exhaustiveness_256x8", |b| {
+        b.iter(|| check_module(code.dupe(), "bench", BENCH_FILE))
+    });
 }
 
 fn protocol_mismatch(c: &mut Criterion) {
@@ -902,6 +939,7 @@ criterion_group!(
     smoke,
     enum_members,
     enum_exhaustiveness,
+    disabled_open_match_exhaustiveness_check,
     protocol_mismatch,
     union_narrowing,
     isinstance_narrowing,

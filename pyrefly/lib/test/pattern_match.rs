@@ -932,8 +932,8 @@ def describe_int(x: int):
 );
 
 testcase!(
-    test_check_all_matches_reports_open_domains,
-    TestEnv::new().enable_check_all_matches(),
+    test_non_exhaustive_match_open_type_reports_open_domains,
+    TestEnv::new().enable_non_exhaustive_match_open_type_error(),
     r#"
 def describe_int(x: int):
     match x: # E: Match on `int` is not exhaustive
