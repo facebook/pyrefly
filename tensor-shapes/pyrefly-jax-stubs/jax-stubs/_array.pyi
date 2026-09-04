@@ -20,15 +20,17 @@ from jax._shapes import (
     reduce_shape,
     reshape_shape,
     reverse_shape,
+    sort_shape,
     squeeze_shape,
     swapaxes_shape,
     trace_shape,
 )
-from shape_extensions import broadcast, Flag, Index, index_shape, IntTuple, IntVar
+from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple, IntVar
 
 type _Shape = IntTuple
 type _AnyShape = tuple[Any, ...]
 type _Axis = int | tuple[int, ...] | None
+type _Scalar = bool | int | float | complex
 
 class _ArrayIndex(Protocol):
     @property
@@ -555,4 +557,141 @@ class Array[Shape: _Shape = _AnyShape]:
         axis2: int = 1,
         dtype: Any = None,
         out: None = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def sort[Axis: Flag[int | None] = -1](
+        self,
+        axis: Axis = -1,
+        *,
+        kind: None = None,
+        order: None = None,
+        stable: bool = True,
+        descending: bool = False,
+    ) -> Array[sort_shape(Shape, Axis)]: ...
+    @overload
+    def sort(
+        self,
+        axis: int | None = -1,
+        *,
+        kind: None = None,
+        order: None = None,
+        stable: bool = True,
+        descending: bool = False,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def argsort[Axis: Flag[int | None] = -1](
+        self,
+        axis: Axis = -1,
+        *,
+        kind: None = None,
+        order: None = None,
+        stable: bool = True,
+        descending: bool = False,
+    ) -> Array[sort_shape(Shape, Axis)]: ...
+    @overload
+    def argsort(
+        self,
+        axis: int | None = -1,
+        *,
+        kind: None = None,
+        order: None = None,
+        stable: bool = True,
+        descending: bool = False,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def argpartition[Axis: Flag[int] = -1](
+        self,
+        kth: int | Sequence[int],
+        axis: Axis = -1,
+    ) -> Array[sort_shape(Shape, Axis)]: ...
+    @overload
+    def argpartition(
+        self,
+        kth: int | Sequence[int],
+        axis: int = -1,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def nonzero[Size: IntVar](
+        self,
+        *,
+        fill_value: Any = None,
+        size: Int[Size],
+    ) -> tuple[Array[[Size]], ...]: ...
+    @overload
+    def nonzero(
+        self,
+        *,
+        fill_value: Any = None,
+        size: int | None = None,
+    ) -> tuple[Array[IntTuple], ...]: ...
+    @overload
+    def searchsorted(
+        self,
+        v: _Scalar,
+        side: str = "left",
+        sorter: Any = None,
+        *,
+        method: str = "scan",
+    ) -> Array[[]]: ...
+    @overload
+    def searchsorted[OtherShape: _Shape](
+        self,
+        v: Array[OtherShape],
+        side: str = "left",
+        sorter: Any = None,
+        *,
+        method: str = "scan",
+    ) -> Array[OtherShape]: ...
+    @overload
+    def searchsorted(
+        self,
+        v: Any,
+        side: str = "left",
+        sorter: Any = None,
+        *,
+        method: str = "scan",
+    ) -> Array[IntTuple]: ...
+    @overload
+    def choose(
+        self,
+        choices: Sequence[Array[Shape] | _Scalar],
+        out: Any = None,
+        mode: str = "raise",
+    ) -> Array[Shape]: ...
+    @overload
+    def choose(
+        self,
+        choices: Any,
+        out: Any = None,
+        mode: str = "raise",
+    ) -> Array[IntTuple]: ...
+    @overload
+    def clip(
+        self,
+        min: _Scalar | None = None,
+        max: _Scalar | None = None,
+    ) -> Array[Shape]: ...
+    @overload
+    def clip[OtherShape: _Shape](
+        self,
+        min: Array[OtherShape],
+        max: _Scalar | None = None,
+    ) -> Array[broadcast(Shape, OtherShape)]: ...
+    @overload
+    def clip[OtherShape: _Shape](
+        self,
+        min: _Scalar | None,
+        max: Array[OtherShape],
+    ) -> Array[broadcast(Shape, OtherShape)]: ...
+    @overload
+    def clip[Shape2: _Shape, Shape3: _Shape](
+        self,
+        min: Array[Shape2],
+        max: Array[Shape3],
+    ) -> Array[broadcast(broadcast(Shape, Shape2), Shape3)]: ...
+    @overload
+    def clip(
+        self,
+        min: Any = None,
+        max: Any = None,
     ) -> Array[IntTuple]: ...
