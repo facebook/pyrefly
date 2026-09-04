@@ -158,3 +158,37 @@ def test_multi_argument_arange_length_is_gradual() -> None:
 def test_dtype_argument_preserves_shape() -> None:
     assert_shape(jnp.zeros(4, jnp.int32), (4,))
     assert_shape(jnp.ones((3, 4), jnp.float32), (3, 4))
+
+
+def test_array_and_asarray() -> None:
+    # Python scalars
+    assert_shape(jnp.array(5), ())
+    assert_shape(jnp.asarray(5), ())
+    assert_shape(jnp.array(2.5), ())
+    assert_shape(jnp.asarray(2.5), ())
+    assert_shape(jnp.array(True), ())
+    assert_shape(jnp.asarray(True), ())
+    assert_shape(jnp.array(1 + 2j), ())
+    assert_shape(jnp.asarray(1 + 2j), ())
+    assert_shape(jnp.array(5, dtype=jnp.float32), ())
+    assert_shape(jnp.asarray(5, dtype=jnp.float32), ())
+
+    # JAX Array inputs
+    x0 = jnp.ones(())
+    x1 = jnp.ones(4)
+    x2 = jnp.ones((2, 3))
+    x3 = jnp.ones((2, 3, 4))
+    assert_shape(jnp.array(x0), ())
+    assert_shape(jnp.asarray(x0), ())
+    assert_shape(jnp.array(x1), (4,))
+    assert_shape(jnp.asarray(x1), (4,))
+    assert_shape(jnp.array(x2), (2, 3))
+    assert_shape(jnp.asarray(x2), (2, 3))
+    assert_shape(jnp.array(x3), (2, 3, 4))
+    assert_shape(jnp.asarray(x3), (2, 3, 4))
+
+    # Generic inputs
+    assert jnp.array([1, 2, 3]).shape == (3,)
+    assert jnp.asarray([1, 2, 3]).shape == (3,)
+    assert jnp.array([[1, 2], [3, 4]]).shape == (2, 2)
+    assert jnp.asarray([[1, 2], [3, 4]]).shape == (2, 2)
