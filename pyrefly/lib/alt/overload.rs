@@ -834,7 +834,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             if matched_overloads.len() > 1 {
-                // Step 5, part 1: for each overload, check whether it's the case that all possible
+                // Step 5: for each overload, check whether it's the case that all possible
                 // materializations of each argument are assignable to the corresponding parameter.
                 // If so, eliminate all subsequent overloads.
                 //
@@ -956,37 +956,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn disambiguate_overloads(&self, matched_overloads: &[CalledOverload<'_>]) -> Option<usize> {
-        // When a call to an overloaded function may match multiple overloads, the spec says to
-        // return Any when the return types are not all equivalent.
-        // However, neither mypy nor pyright fully follows this part of the spec, and many
-        // third-party libraries have come to rely on mypy and pyright's behavior. So we do the
-        // following for ecosystem compatibility:
+        // Step 6: does there exist a return type that is consistent with all materializations of
+        // every other return type? If so, use this return type. Else, return Any.
         //
-        // Step 6: does there exist a return type such that (1) all materializations of every other
-        // return type are assignable to it, and (2) the return type is assignable to every other
-        // return type? If so, use this return type. Else, return Any.
-        //
-        // We check materializations rather than assignability for (1) so that we end up with the
-        // most "general" return type. E.g., if the candidates are `A[None]` and `A[Any]`, we want
-        // to select `A[Any]`.
+        // We check materializations so that we end up with the most "general" return type. E.g.,
+        // if the candidates are `A[None]` and `A[Any]`, we want to select `A[Any]`.
         //
         // First, find a candidate return type.
         let mut candidate = 0;
         for (i, o) in matched_overloads.iter().enumerate().skip(1) {
-            if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
+            if !self.is_consistent(&o.res.materialize(), &matched_overloads[candidate].res) {
                 candidate = i;
             }
         }
         // We've already checked every return type after the candidate.
         // Check every return type before the candidate.
         for o in matched_overloads.iter().take(candidate) {
-            if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
-                return None;
-            }
-        }
-        // Check that the candidate is assignable to every other return type.
-        for o in matched_overloads.iter() {
-            if !self.is_subset_eq(&matched_overloads[candidate].res, &o.res) {
+            if !self.is_consistent(&o.res.materialize(), &matched_overloads[candidate].res) {
                 return None;
             }
         }
