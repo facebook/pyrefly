@@ -9,11 +9,11 @@ use lsp_types::DocumentSymbol;
 use lsp_types::DocumentSymbolResponse;
 use lsp_types::SymbolKind;
 use lsp_types::request::DocumentSymbolRequest;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 /// Unwrap a document symbol response into the nested (hierarchical) form.
 fn unwrap_nested(response: Option<DocumentSymbolResponse>) -> Vec<DocumentSymbol> {

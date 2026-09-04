@@ -1,0 +1,151 @@
+---
+title: Mypy vs Pyright vs Pyrefly
+slug: /compare
+description:
+    Compare mypy, Pyright, and Pyrefly for Python type checking, IDE support,
+    configuration, framework support, strictness, and migration cost.
+keywords:
+    - mypy vs pyright
+    - mypy vs pyright vs pyrefly
+    - pyrefly vs mypy
+    - pyrefly vs pyright
+    - best python type checker
+    - python static type checker
+    - mypy alternative
+    - pyright alternative
+    - pylance alternative
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+This page sets out how mypy, Pyright, and Pyrefly differ, so you can judge
+whether moving to Pyrefly is worth it for your project. Every codebase has its
+own constraints, and which tool you should choose depends on what you find works
+best for your specific needs.
+
+Where the sections below cite numbers, they come from the benchmarks and
+dashboards linked under [References](#references). All three tools make changes
+over time, so treat any figure as a snapshot and rerun it if the decision hinges
+on it.
+
+## At a glance
+
+| Question                                                                                                                                                              | mypy                                       | Pyright                                     | Pyrefly                                                            |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------- | ------------------------------------------------------------------ |
+| What is it written in?                                                                                                                                                | Python                                     | TypeScript                                  | Rust                                                               |
+| How fast is it? ([benchmarks](https://pyrefly.org/blog/v1.1/))                                                                                                        | Slow (18.3s for pandas, 36.3s for pytorch) | Faster (8.8s for pandas, 16.7s for pytorch) | Fastest (1.5s for pandas, 2.1s for pytorch)                        |
+| Can it be used as a language server?                                                                                                                                  | No                                         | Yes                                         | Yes                                                                |
+| How closely does it follow the typing spec? ([dashboard](https://htmlpreview.github.io/?https://github.com/python/typing/blob/main/conformance/results/results.html)) | 108.5/145 conformance tests (74.8%)        | 135.5/145 (93.4%)                           | 140.5/145 (96.9%)                                                  |
+| How is it configured?                                                                                                                                                 | `mypy.ini`, `setup.cfg`, or `[tool.mypy]`  | `pyrightconfig.json` or `[tool.pyright]`    | `pyrefly.toml` or `[tool.pyrefly]`                                 |
+| Can it infer types for code that has no annotations? ([details](https://pyrefly.org/blog/container-inference-comparison/))                                            | Some inference: empty containers           | Some inference: return types                | Advanced inference: empty containers, parameters, and return types |
+| Can it automatically add type annotations to my codebase?                                                                                                             | No                                         | No                                          | Yes, with [`pyrefly infer`](autotype.mdx)                          |
+| Pydantic support                                                                                                                                                      | Plugin                                     | Partial support via `dataclass_transform`   | Built-in                                                           |
+| Django support                                                                                                                                                        | Plugin                                     | Partial support via stubs                   | Built-in                                                           |
+| attrs support                                                                                                                                                         | Built-in                                   | Partial support via `dataclass_transform`   | Built-in                                                           |
+
+## Choose Pyrefly when
+
+- You need a faster language server or type checker, particularly if your large
+  codebase currently struggles with Mypy/Pyright
+- You want one project to power CLI checking and language-server features, so
+  the two cannot drift apart;
+- Your codebase uses Pydantic, Django, or attrs and you don't want the overhead
+  of plugins
+- You work on AI/ML workflows and are interested in new features like tensor
+  shape checking (read the [docs](https://pyrefly.org/en/docs/tensor-shapes/))
+
+Pyrefly is not a reimplementation of either mypy nor Pyright and will not
+produce identical diagnostics. A successful migration ends in understood and
+accepted differences rather than in matching output.
+
+## Strict modes
+
+Different type checkers have a different interpretation of what "strictness" means, and what the default strictness should be. [How different checkers handle empty containers](https://pyrefly.org/blog/container-inference-comparison/) is a clear example of this, given `x = []` followed by `x.append(1)`, mypy and
+Pyrefly infer the element type from that first use and flag a later
+`x.append("two")`, while Pyright infers `list[Any]` and reports nothing.
+Pyrefly's behavior here can be adjusted using the
+[`infer-with-first-use`](configuration.mdx#infer-with-first-use) config.
+
+All three tools also have a setting called `strict`, and the three are not equivalent.
+Each enables a different set of checks:
+
+| Checker | Setting                       | What it enables                                                                                   |
+| ------- | ----------------------------- | ------------------------------------------------------------------------------------------------- |
+| mypy    | `strict = true`               | A bundle of optional checks. Which checks the bundle contains changes between releases.           |
+| Pyright | `typeCheckingMode = "strict"` | Pyright's strict rule defaults, which can be overridden per rule.                                 |
+| Pyrefly | `preset = "strict"`           | Pyrefly's strict error kinds and behavior settings. Any setting you specify overrides the preset. |
+
+Because the bundles differ, code that passes one tool's strict mode will not
+necessarily pass another's. When comparing configurations, it is more reliable
+to look at the specific policies you care about, such as implicit `Any`, missing
+annotations, override decorators, and unused ignores, than to match the strict
+settings to each other. [mypy strict mode](migrate/mypy/strict-mode.mdx) and
+[Pyright strict mode](migrate/pyright/strict-mode.mdx) cover what each one turns
+on and their closest Pyrefly equivalents.
+
+## Try it alongside your current checker
+
+```sh
+# uv
+uv add --dev pyrefly
+
+# pip
+python -m pip install pyrefly
+```
+
+To see what Pyrefly reports on your code without changing anything in the
+project:
+
+```sh
+pyrefly check
+```
+
+That works with no Pyrefly config. If Pyrefly finds an existing mypy or Pyright
+configuration and no Pyrefly config governs the files, it reads that
+configuration for the run without writing anything to disk.
+
+Once you decide to go ahead, run `pyrefly init` to convert that configuration
+into a native one you can commit. Check out
+[Migrate from mypy](migrate/mypy/index.mdx) and
+[Migrate from Pyright](migrate/pyright/index.mdx) for a more detailed
+walkthrough.
+
+## Blocked by something?
+
+If a specific feature, diagnostic, plugin, or configuration option is what stops
+you from adopting Pyrefly, please
+[open an issue on GitHub](https://github.com/facebook/pyrefly/issues). Gaps that
+block real migrations are the ones we prioritize.
+
+## Next steps
+
+- Migrating from mypy: [Migrate from mypy](migrate/mypy/index.mdx).
+- Migrating from Pyright or Pylance:
+  [Migrate from Pyright](migrate/pyright/index.mdx).
+- Starting from scratch: [Installation](installation.mdx) and
+  [Configuration](configuration.mdx).
+
+## References
+
+- [Typing conformance results](https://github.com/python/typing/blob/main/conformance/results/results.html)
+  from the `python/typing` repository.
+- [Type checker performance dashboard](https://python-type-checking.com/typecheck_benchmark/),
+  which reruns the benchmark daily.
+- [The Python typing specification](https://typing.readthedocs.io/en/latest/spec/).
+- [Speed and memory usage](https://pyrefly.org/blog/speed-and-memory-comparison/)
+  benchmarks a full check across 53 popular open-source packages, and explains
+  what drives the spread between them.
+- [Typing spec conformance](https://pyrefly.org/blog/typing-conformance-comparison/)
+  covers what the conformance suite measures, the current standings, and the
+  limits of the score.
+- [Empty container inference](https://pyrefly.org/blog/container-inference-comparison/)
+  works through the three strategies checkers use for `x = []` and the
+  trade-offs of each.
+- [Are you really expected to run five type checkers now?](https://pyrefly.org/blog/too-many-type-checkers/)
+  argues for running many checkers over your test suite and one over your
+  source, which is useful if you maintain a library.

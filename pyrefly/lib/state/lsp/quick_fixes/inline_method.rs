@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use dupe::Dupe;
 use lsp_types::CodeActionKind;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
@@ -25,7 +26,6 @@ use ruff_text_size::TextSize;
 
 use super::types::LocalRefactorCodeAction;
 use crate::state::lsp::Transaction;
-use crate::state::lsp::quick_fixes::extract_shared::expr_needs_parens;
 use crate::state::lsp::quick_fixes::extract_shared::find_local_definition;
 use crate::state::lsp::quick_fixes::extract_shared::first_parameter_name;
 use crate::state::lsp::quick_fixes::extract_shared::is_disallowed_scope_expr;
@@ -95,6 +95,7 @@ pub(crate) fn inline_method_code_actions(
         [Stmt::Return(ret)] => ret.value.as_deref(),
         _ => return None,
     };
+    let call_parent = Ast::parent_node(ast.as_ref(), call.range());
     let (expr_range, expr_text, replacements, needs_outer_parens) = if let Some(expr) = return_expr
     {
         let expr_text = module_info.code_at(expr.range()).to_owned();
@@ -103,7 +104,7 @@ pub(crate) fn inline_method_code_actions(
             expr.range(),
             expr_text,
             replacements,
-            expr_needs_parens(expr),
+            Ast::needs_brackets(call_parent, expr),
         )
     } else {
         let none_text = "None".to_owned();
@@ -268,7 +269,7 @@ fn build_param_map(
             ..receiver_expr.range().end().to_usize().min(source.len())];
         map.insert(
             receiver_name.to_owned(),
-            wrap_if_needed(receiver_expr, receiver_text),
+            wrap_if_needed(None, receiver_expr, receiver_text),
         );
         params.remove(0);
     }
@@ -304,7 +305,10 @@ fn build_param_map(
         } else {
             return None;
         };
-        map.insert(param_name.to_owned(), wrap_if_needed(arg_expr, arg_text));
+        map.insert(
+            param_name.to_owned(),
+            wrap_if_needed(None, arg_expr, arg_text),
+        );
     }
     Some(map)
 }

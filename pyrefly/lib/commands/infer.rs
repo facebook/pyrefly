@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -24,10 +25,13 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
+use crate::annotation::format_annotation;
 use crate::commands::check::Handles;
 use crate::commands::check::{self};
 use crate::commands::config_finder::ConfigConfigurerWrapper;
-use crate::commands::files::{FilesArgs, UpsellDecision, get_project_config_for_current_dir};
+use crate::commands::files::FilesArgs;
+use crate::commands::files::UpsellDecision;
+use crate::commands::files::get_project_config_for_current_dir;
 use crate::commands::util::CommandExitStatus;
 use crate::config::error_kind::ErrorKind;
 use crate::lsp::wasm::inlay_hints::ParameterAnnotation;
@@ -37,7 +41,6 @@ use crate::state::lsp::AnnotationKind;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::types::class::Class;
-use crate::types::display::TypeDisplayContext;
 use crate::types::heap::TypeHeap;
 use crate::types::simplify::unions_with_literals;
 use crate::types::stdlib::Stdlib;
@@ -80,6 +83,9 @@ pub struct InferFlags {
         num_args = 0..=1
     )]
     pub imports: Option<bool>,
+    /// Print what would change and exit (1 if any changes, else 0), without writing any files.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 impl InferFlags {
@@ -89,6 +95,7 @@ impl InferFlags {
             return_types: Some(true),
             parameter_types: Some(true),
             imports: Some(true),
+            dry_run: false,
         }
     }
 
@@ -106,6 +113,10 @@ impl InferFlags {
 
     pub fn imports(&self) -> bool {
         self.imports.unwrap_or(true)
+    }
+
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
     }
 }
 
@@ -192,7 +203,13 @@ fn format_hints(
             if matches!(sub_type, Type::SelfType(_)) {
                 return;
             }
-            if let Some(qname) = sub_type.qname() {
+            // A DataFrame/Series renders as its underlying class, which `universe` does not visit.
+            let qname = match sub_type {
+                Type::DataFrame(schema) => Some(schema.underlying.qname()),
+                Type::Series(schema) => Some(schema.underlying.qname()),
+                _ => sub_type.qname(),
+            };
+            if let Some(qname) = qname {
                 let module_name = qname.module_name();
                 if module_name != ModuleName::builtins() && module_name != current_module_name {
                     hint_imports.push((module_name, importable_name_for_qname(qname)));
@@ -202,7 +219,16 @@ fn format_hints(
         if contains_self_type {
             hint_imports.push((ModuleName::typing(), "Self".to_owned()));
         }
-        let formatted_hint = hint_to_string(hint, stdlib, enum_members, heap);
+        let mut typing_imports = BTreeSet::new();
+        let mut uses_incomplete = false;
+        let formatted_hint = hint_to_string(
+            hint,
+            stdlib,
+            enum_members,
+            heap,
+            &mut typing_imports,
+            &mut uses_incomplete,
+        );
         // TODO: Put these behind a flag
         if formatted_hint.contains("Any") {
             continue;
@@ -219,12 +245,20 @@ fn format_hints(
         if formatted_hint.contains("Overload") {
             continue;
         }
+        if uses_incomplete {
+            continue;
+        }
         if formatted_hint == "None" && kind == AnnotationKind::Parameter {
             continue;
         }
         if !is_container && kind == AnnotationKind::Variable {
             continue;
         }
+        needed_imports.extend(
+            typing_imports
+                .into_iter()
+                .map(|name| (ModuleName::typing(), name.to_owned())),
+        );
         // Only record imports for types that pass all filters above
         needed_imports.extend(hint_imports);
         match kind {
@@ -256,6 +290,8 @@ fn hint_to_string(
     stdlib: &Stdlib,
     enum_members: &dyn Fn(&Class) -> Option<usize>,
     heap: &TypeHeap,
+    typing_imports: &mut BTreeSet<&'static str>,
+    uses_incomplete: &mut bool,
 ) -> String {
     let hint = hint.promote_implicit_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
@@ -263,9 +299,7 @@ fn hint_to_string(
         Type::Union(u) => unions_with_literals(u.members, stdlib, enum_members, heap),
         _ => hint,
     };
-    let mut ctx = TypeDisplayContext::new(&[&hint]);
-    ctx.render_self_type_as_self();
-    ctx.display(&hint).to_string()
+    format_annotation(&hint, typing_imports, uses_incomplete)
 }
 
 impl InferArgs {
@@ -317,6 +351,7 @@ impl InferArgs {
         // Type-check all handles at once so the work can be parallelised across
         // the thread pool, instead of checking one file at a time sequentially.
         transaction.run(&handles, Require::Everything, None);
+        let mut any_changes = false;
         for handle in handles {
             let stdlib = transaction.get_stdlib(&handle);
             let inferred_types: Option<Vec<(ruff_text_size::TextSize, Type, AnnotationKind)>> =
@@ -354,9 +389,8 @@ impl InferArgs {
                 );
                 let sorted = sort_inlay_hints(formatted);
                 let file_path = handle.path().as_path();
-                Self::add_annotations_to_file(file_path, sorted)?;
-                // Add imports for types used in the new annotations
-                if flags.imports()
+                // Build import edits once so dry-run and write share them.
+                let imports: Vec<ImportEdit> = if flags.imports()
                     && !needed_imports.is_empty()
                     && let Some(ast) = transaction.get_ast(&handle)
                 {
@@ -382,55 +416,80 @@ impl InferArgs {
                             .cmp(&b.range.start())
                             .then_with(|| a.insert_text.cmp(&b.insert_text))
                     });
-                    Self::add_imports_to_file(file_path, imports)?;
+                    imports
+                } else {
+                    Vec::new()
+                };
+                if flags.dry_run() {
+                    if !sorted.is_empty() || !imports.is_empty() {
+                        any_changes = true;
+                        println!(
+                            "{}: would add {} annotation(s) and {} import(s)",
+                            file_path.display(),
+                            sorted.len(),
+                            imports.len()
+                        );
+                    }
+                } else {
+                    Self::add_annotations_to_file(file_path, sorted)?;
+                    if !imports.is_empty() {
+                        Self::add_imports_to_file(file_path, imports)?;
+                    }
                 }
             }
         }
-        // Add imports for any remaining unknown names after inserting annotations.
-        let check_args = check::CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
-        let current_dir_config =
-            get_project_config_for_current_dir(ConfigOverrideArgs::default(), None)?.0;
-        let config_finder = ConfigFinder::new_constant(current_dir_config);
-        let state = holder.as_ref();
-        let (_, errors, _) = check_args.run_once(
-            files_to_check,
-            config_finder,
-            UpsellDecision::Skip,
-            thread_count,
-        )?;
-        for error in errors {
-            if error.error_kind() != ErrorKind::UnknownName {
-                continue;
-            }
-            let module_info = error.module();
-            let module_path = module_info.path().clone();
-            let config = state.config_finder().python_file(
-                ModuleNameWithKind::guaranteed(ModuleName::unknown()),
-                &module_path,
-            );
-            let handle = config.handle_from_module_path(module_path);
-            if let Some(ast) = transaction.get_ast(&handle) {
-                let error_range = error.range();
-                let unknown_name = module_info.code_at(error_range);
-                let imports: Vec<ImportEdit> = transaction
-                    .search_exports_exact(unknown_name, None)
-                    .expect("infer import search should not be cancelled")
-                    .into_iter()
-                    .map(|(handle_to_import_from, _)| {
-                        insert_import_edit_with_forced_import_format(
-                            &ast,
-                            handle.dupe(),
-                            handle_to_import_from.dupe(),
-                            unknown_name,
-                            true,
-                        )
-                    })
-                    .collect();
-                let path = error.path();
-                Self::add_imports_to_file(path.as_path(), imports)?;
+        if !flags.dry_run() {
+            // Add imports for any remaining unknown names after inserting annotations.
+            let check_args =
+                check::CheckArgs::parse_from(["check", "--output-format", "omit-errors"]);
+            let current_dir_config =
+                get_project_config_for_current_dir(ConfigOverrideArgs::default(), None)?.0;
+            let config_finder = ConfigFinder::new_constant(current_dir_config);
+            let state = holder.as_ref();
+            let (_, errors, _) = check_args.run_once(
+                files_to_check,
+                config_finder,
+                UpsellDecision::Skip,
+                thread_count,
+            )?;
+            for error in errors {
+                if error.error_kind() != ErrorKind::UnknownName {
+                    continue;
+                }
+                let module_info = error.module();
+                let module_path = module_info.path().clone();
+                let config = state.config_finder().python_file(
+                    ModuleNameWithKind::guaranteed(ModuleName::unknown()),
+                    &module_path,
+                );
+                let handle = config.handle_from_module_path(module_path);
+                if let Some(ast) = transaction.get_ast(&handle) {
+                    let error_range = error.range();
+                    let unknown_name = module_info.code_at(error_range);
+                    let imports: Vec<ImportEdit> = transaction
+                        .search_exports_exact(unknown_name, None)
+                        .expect("infer import search should not be cancelled")
+                        .into_iter()
+                        .map(|(handle_to_import_from, _, _)| {
+                            insert_import_edit_with_forced_import_format(
+                                &ast,
+                                handle.dupe(),
+                                handle_to_import_from.dupe(),
+                                unknown_name,
+                                true,
+                            )
+                        })
+                        .collect();
+                    let path = error.path();
+                    Self::add_imports_to_file(path.as_path(), imports)?;
+                }
             }
         }
-        Ok(CommandExitStatus::Success)
+        Ok(if flags.dry_run() && any_changes {
+            CommandExitStatus::UserError
+        } else {
+            CommandExitStatus::Success
+        })
     }
 
     fn add_annotations_to_file(
@@ -550,6 +609,51 @@ mod test {
     }
 
     #[test]
+    fn infer_dataframe_return_uses_plain_class() -> anyhow::Result<()> {
+        let tdir = tempfile::TempDir::with_prefix("pyrefly_infer_df").unwrap();
+        let frame_dir = tdir.path().join("polars").join("dataframe");
+        fs_anyhow::create_dir_all(&frame_dir)?;
+        fs_anyhow::write(
+            &tdir.path().join("polars").join("__init__.py"),
+            "from polars.dataframe.frame import DataFrame as DataFrame\n",
+        )?;
+        fs_anyhow::write(&frame_dir.join("__init__.py"), "")?;
+        fs_anyhow::write(
+            &frame_dir.join("frame.py"),
+            "class DataFrame:\n    def __init__(self, data: object = None) -> None: ...\n",
+        )?;
+
+        let input = "import polars as pl\ndef make():\n    return pl.DataFrame({\"a\": [1]})\n";
+        let test_path = tdir.path().join("test.py");
+        fs_anyhow::write(&test_path, input)?;
+        let config_path = tdir.path().join("pyrefly.toml");
+        fs_anyhow::write(
+            &config_path,
+            "project_includes = [\"test.py\"]\nproject_excludes = []\n",
+        )?;
+
+        let args = InferArgs::parse_from(["infer", "--config", &config_path.display().to_string()]);
+        let result = args.run(None, TEST_THREAD_COUNT);
+        assert!(result.is_ok(), "infer command failed: {:?}", result.err());
+
+        let got = fs_anyhow::read_to_string(&test_path)?;
+        // Emits the plain class and adds its import, discovered from the stripped class QName.
+        assert!(
+            got.contains("-> DataFrame:"),
+            "expected a plain class return annotation, got:\n{got}"
+        );
+        assert!(
+            !got.contains("DataFrame["),
+            "the schema display form is not legal annotation syntax, got:\n{got}"
+        );
+        assert!(
+            got.contains("from polars.dataframe.frame import DataFrame"),
+            "the plain class import must be added, got:\n{got}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_literal() -> anyhow::Result<()> {
         // Test return type annotation for integer literal
         assert_annotations(
@@ -615,6 +719,30 @@ def foo() -> str:
     example(1, 2, 3)
     "#,
             None,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_constructor_parameter() -> anyhow::Result<()> {
+        let mut flags = InferFlags::default();
+        flags.return_types = Some(false);
+        assert_annotations(
+            r#"
+class Example:
+    def __init__(self, value):
+        self.value = value
+
+Example(42)
+"#,
+            r#"
+class Example:
+    def __init__(self, value: int):
+        self.value = value
+
+Example(42)
+"#,
+            Some(flags),
         );
         Ok(())
     }
@@ -898,6 +1026,69 @@ class C:
     }
 
     #[test]
+    fn test_callable_annotations_use_python_syntax() -> anyhow::Result<()> {
+        assert_annotations(
+            r#"def call_it(fn):
+    return fn()
+
+call_it(lambda: 0)
+
+def make_formatter():
+    def format_one(n: int) -> str:
+        return str(n)
+    return format_one
+
+class Runner:
+    def run(self) -> None:
+        pass
+
+def swallow(fn):
+    fn()
+
+swallow(Runner().run)
+
+def maybe_callback(flag: bool):
+    if flag:
+        return lambda: 1
+    return None
+
+def callbacks():
+    return [lambda: 1]
+"#,
+            r#"from typing import Callable
+def call_it(fn: Callable[[], int]):
+    return fn()
+
+call_it(lambda: 0)
+
+def make_formatter() -> Callable[[int], str]:
+    def format_one(n: int) -> str:
+        return str(n)
+    return format_one
+
+class Runner:
+    def run(self) -> None:
+        pass
+
+def swallow(fn: Callable[[], None]) -> None:
+    fn()
+
+swallow(Runner().run)
+
+def maybe_callback(flag: bool):
+    if flag:
+        return lambda: 1
+    return None
+
+def callbacks():
+    return [lambda: 1]
+"#,
+            None,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_imports() -> anyhow::Result<()> {
         let file_one = r#"
         from file_two import get_a
@@ -1062,6 +1253,130 @@ def foo() -> ExampleA:
     return get_a()
 "#;
         assert_imports_and_annotations(file_one, file_two, output);
+        Ok(())
+    }
+
+    // -- dry-run tests --
+
+    fn run_dry_run(input: &str) -> (CommandExitStatus, String) {
+        let flags = InferFlags {
+            dry_run: true,
+            ..InferFlags::default()
+        };
+        let tdir = tempfile::tempdir().unwrap();
+        let path = tdir.path().join("test.py");
+        fs_anyhow::write(&path, input).unwrap();
+        let mut t = TestEnv::new();
+        t.add(&path.display().to_string(), input);
+        let includes =
+            Globs::new(vec![format!("{}/**/*", tdir.path().display()).to_owned()]).unwrap();
+        let f_globs = Box::new(FilteredGlobs::new(
+            includes,
+            Globs::empty(),
+            None,
+            HiddenDirFilter::Disabled,
+        ));
+        let config_finder = t.config_finder();
+        let status = InferArgs::run_inner(f_globs, config_finder, flags, TEST_THREAD_COUNT)
+            .expect("run_inner should not error");
+        let on_disk = fs_anyhow::read_to_string(&path).unwrap();
+        (status, on_disk)
+    }
+
+    #[test]
+    fn test_dry_run_changes_present_exits_1_and_file_unchanged() -> anyhow::Result<()> {
+        // A file that would receive annotations: dry-run must leave it unchanged
+        // and return UserError (exit 1).
+        let input = r#"
+def foo():
+    return 1
+"#;
+        let (status, on_disk) = run_dry_run(input);
+        assert_eq!(
+            status,
+            CommandExitStatus::UserError,
+            "dry-run with changes should return UserError"
+        );
+        assert_str_eq!(input, on_disk, "dry-run must not modify the file");
+        Ok(())
+    }
+
+    #[test]
+    fn test_dry_run_no_changes_exits_0() -> anyhow::Result<()> {
+        // A fully-annotated file: dry-run must return Success (exit 0).
+        let input = r#"
+def foo() -> int:
+    return 1
+"#;
+        let (status, on_disk) = run_dry_run(input);
+        assert_eq!(
+            status,
+            CommandExitStatus::Success,
+            "dry-run with no changes should return Success"
+        );
+        assert_str_eq!(input, on_disk, "dry-run must not modify the file");
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_dry_run_still_writes_regression() -> anyhow::Result<()> {
+        // Without --dry-run, infer must still annotate the file (R6 regression guard).
+        let input = r#"
+def foo():
+    return 1
+"#;
+        let expected = r#"
+def foo() -> int:
+    return 1
+"#;
+        assert_annotations(input, expected, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_dry_run_multiple_files_any_change_exits_1() -> anyhow::Result<()> {
+        // Two files: one missing annotations, one fully annotated.
+        // Dry-run must exit 1 (any file would change) and leave BOTH files unmodified.
+        let unannotated = "def foo():\n    return 1\n";
+        let annotated = "def bar() -> int:\n    return 2\n";
+        let configuration =
+            "project_includes = [\"unannotated.py\", \"annotated.py\"]\nproject_excludes = []\n";
+        let tdir = tempfile::TempDir::with_prefix("pyrefly_infer_test_multi").unwrap();
+        let unannotated_path = tdir.path().join("unannotated.py");
+        let annotated_path = tdir.path().join("annotated.py");
+        let config_path = tdir.path().join("pyrefly.toml");
+        fs_anyhow::write(&unannotated_path, unannotated).unwrap();
+        fs_anyhow::write(&annotated_path, annotated).unwrap();
+        fs_anyhow::write(&config_path, configuration).unwrap();
+
+        let mut t = TestEnv::new();
+        t.add(&unannotated_path.display().to_string(), unannotated);
+        t.add(&annotated_path.display().to_string(), annotated);
+        t.add(&config_path.display().to_string(), configuration);
+
+        let args = InferArgs::parse_from([
+            "infer",
+            "--dry-run",
+            "--config",
+            &config_path.display().to_string(),
+        ]);
+        let status = args.run(None, TEST_THREAD_COUNT)?;
+
+        assert_eq!(
+            status,
+            CommandExitStatus::UserError,
+            "dry-run with at least one changed file should return UserError"
+        );
+        assert_str_eq!(
+            unannotated,
+            fs_anyhow::read_to_string(&unannotated_path).unwrap(),
+            "dry-run must not modify unannotated.py"
+        );
+        assert_str_eq!(
+            annotated,
+            fs_anyhow::read_to_string(&annotated_path).unwrap(),
+            "dry-run must not modify annotated.py"
+        );
         Ok(())
     }
 }

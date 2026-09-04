@@ -186,7 +186,8 @@ fn fixture_return_type(
     Some(
         ty.promote_implicit_literals(&stdlib)
             .explicit_any()
-            .clean_var(),
+            .clean_var()
+            .strip_library_schemas(),
     )
 }
 

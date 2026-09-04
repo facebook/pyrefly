@@ -103,7 +103,7 @@ fn unions_internal(
         collapse_tuple_unions_with_empty(&mut res, heap);
         collapse_builtins_type(&mut res, heap);
         collapse_wide_tuple_unions(&mut res, heap);
-        collapse_quantifieds(&mut res, heap);
+        collapse_quantifieds(&mut res, stdlib, heap);
         // Second pass: squashing can still leave a pathologically large union (e.g. thousands
         // of distinct class types). Widen anything still over the cap to `Any`.
         if res.len() > MAX_UNION_MEMBERS {
@@ -369,7 +369,7 @@ fn collapse_tuple_unions_with_empty(types: &mut Vec<Type>, heap: &TypeHeap) {
                 empty_is_redundant = true;
             }
             Type::Tuple(Tuple::Unpacked(unpacked)) => {
-                let (prefix, middle, suffix) = &**unpacked;
+                let (prefix, middle, suffix) = unpacked.parts();
                 if prefix.len() + suffix.len() == 1
                     && let Type::Tuple(Tuple::Unbounded(elem)) = middle
                     && prefix
@@ -445,7 +445,7 @@ fn collapse_builtins_type(types: &mut Vec<Type>, heap: &TypeHeap) {
 /// A restricted quantified `Q` whose restriction consists of the types `c_1, ..., c_n` is fully
 /// covered by the union `(Q & c_1) | ... | (Q & c_n)`: every value of `Q` satisfies one of its
 /// restrictions, so the union collapses to just `Q`.
-fn collapse_quantifieds(types: &mut Vec<Type>, heap: &TypeHeap) {
+fn collapse_quantifieds(types: &mut Vec<Type>, stdlib: Option<&Stdlib>, heap: &TypeHeap) {
     // For each quantified appearing in a `Q & t` member, gather the `t`s.
     let mut quantified_intersects: SmallMap<&Quantified, Vec<(usize, &Type)>> = SmallMap::new();
     for (idx, ty) in types.iter().enumerate() {
@@ -458,10 +458,20 @@ fn collapse_quantifieds(types: &mut Vec<Type>, heap: &TypeHeap) {
     let mut indices_to_remove = SmallSet::new();
     let mut quantifieds_to_collapse = Vec::new();
     for (q, ts) in quantified_intersects {
+        let extension_types;
         let restrictions = match q.restriction() {
             Restriction::Constraints(cs) => cs.iter().collect(),
             Restriction::Bound(Type::Union(u)) => u.members.iter().collect(),
             Restriction::Bound(b) => vec![b],
+            Restriction::ShapeExtension(extension) => {
+                let Some(stdlib) = stdlib else {
+                    // Raw union construction cannot materialize the builtin domain, so preserve
+                    // the unsimplified intersection until a Stdlib-aware normalization boundary.
+                    continue;
+                };
+                extension_types = extension.upper_bound_members(stdlib);
+                extension_types.iter().collect()
+            }
             Restriction::Unrestricted => continue,
         };
         if restrictions.iter().all(|r| ts.iter().any(|(_, t)| t == r)) {
@@ -498,7 +508,7 @@ pub fn simplify_tuples(tuple: Tuple, _heap: &TypeHeap) -> Tuple {
     match tuple {
         Tuple::Concrete(elts) => Tuple::Concrete(flatten_unpacked_concrete_tuples(elts)),
         Tuple::Unpacked(unpacked) => {
-            let (prefix, middle, suffix) = *unpacked;
+            let (prefix, middle, suffix) = unpacked.into_parts();
             if prefix.is_empty()
                 && suffix.is_empty()
                 && let Type::Tuple(middle) = middle
@@ -516,7 +526,7 @@ pub fn simplify_tuples(tuple: Tuple, _heap: &TypeHeap) -> Tuple {
                     ))
                 }
                 Type::Tuple(Tuple::Unpacked(m_unpacked)) => {
-                    let (m_prefix, m_middle, m_suffix) = *m_unpacked;
+                    let (m_prefix, m_middle, m_suffix) = m_unpacked.into_parts();
                     let mut new_prefix = flatten_unpacked_concrete_tuples(prefix);
                     new_prefix.extend(flatten_unpacked_concrete_tuples(m_prefix));
                     let mut new_suffix = flatten_unpacked_concrete_tuples(m_suffix);
@@ -532,6 +542,31 @@ pub fn simplify_tuples(tuple: Tuple, _heap: &TypeHeap) -> Tuple {
         }
         _ => tuple,
     }
+}
+
+/// Simplify a tuple, distributing an unpacked union into a union of tuple types.
+pub fn simplify_tuples_and_distribute_unpacking(tuple: Tuple, heap: &TypeHeap) -> Type {
+    let tuple = simplify_tuples(tuple, heap);
+    let Tuple::Unpacked(unpacked) = tuple else {
+        return heap.mk_tuple(tuple);
+    };
+    let (prefix, middle, suffix) = unpacked.into_parts();
+    let Type::Union(union) = middle else {
+        return heap.mk_unpacked_tuple(prefix, middle, suffix);
+    };
+    unions(
+        union
+            .members
+            .into_iter()
+            .map(|middle| {
+                simplify_tuples_and_distribute_unpacking(
+                    Tuple::unpacked(prefix.clone(), middle, suffix.clone()),
+                    heap,
+                )
+            })
+            .collect(),
+        heap,
+    )
 }
 
 const TUPLE_UNION_WIDENING_THRESHOLD: usize = 256;
@@ -572,7 +607,7 @@ fn collect_tuple_elements(tuple: &Tuple, heap: &TypeHeap, out: &mut Vec<Type>) {
             out.push((**elem).clone());
         }
         Tuple::Unpacked(unpacked) => {
-            let (prefix, middle, suffix) = unpacked.as_ref();
+            let (prefix, middle, suffix) = unpacked.parts();
             for elt in prefix {
                 collect_tuple_member(elt, heap, out);
             }
@@ -623,6 +658,7 @@ mod tests {
     use crate::quantified::QuantifiedKind;
     use crate::quantified::QuantifiedOrigin;
     use crate::simplify::intersect;
+    use crate::simplify::simplify_tuples_and_distribute_unpacking;
     use crate::simplify::unions;
     use crate::tuple::Tuple;
     use crate::type_var::PreInferenceVariance;
@@ -685,6 +721,27 @@ mod tests {
         let heap = TypeHeap::new();
         let xs = vec![Type::None];
         assert_eq!(intersect(xs, Type::never(), &heap), Type::None);
+    }
+
+    #[test]
+    fn test_simplify_tuple_type_distributes_unpacked_union() {
+        let heap = TypeHeap::new();
+        let middle = Type::union(vec![
+            Type::concrete_tuple(Vec::new()),
+            Type::concrete_tuple(vec![Type::any_explicit()]),
+        ]);
+        let actual = simplify_tuples_and_distribute_unpacking(
+            Tuple::unpacked(vec![Type::None], middle, Vec::new()),
+            &heap,
+        );
+        let expected = unions(
+            vec![
+                Type::concrete_tuple(vec![Type::None]),
+                Type::concrete_tuple(vec![Type::None, Type::any_explicit()]),
+            ],
+            &heap,
+        );
+        assert_eq!(actual, expected);
     }
 
     #[test]

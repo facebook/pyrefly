@@ -1,0 +1,2 @@
+project-includes = [""]
+project-excludes = ["excluded_by_config.py"]

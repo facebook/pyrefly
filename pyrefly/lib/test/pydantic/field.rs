@@ -13,6 +13,39 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 pydantic_testcase!(
+    test_field_conflicting_defaults_uses_overload_error,
+    r#"
+from pydantic import BaseModel, Field, PrivateAttr
+
+class Model(BaseModel):
+    value: int = Field(default=1, default_factory=int)  # E: No matching overload found for function `pydantic.fields.Field`
+    _private: int = PrivateAttr(default=1, default_factory=int)  # E: No matching overload found for function `pydantic.fields.PrivateAttr`
+"#,
+);
+
+// See https://github.com/facebook/pyrefly/issues/4569. Not pydantic-specific — `Field`
+// just happens to be a TypeVar-returning generic function, the shape that triggers the
+// underlying bug (see test_call_hint_with_wide_literal_union in test::contextual for the
+// general-purpose reproduction and fix).
+pydantic_testcase!(
+    test_field_default_with_wide_literal_type,
+    r#"
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+T4 = Literal["a", "b", "c", "d"]
+T5 = Literal["a", "b", "c", "d", "e"]
+
+class Works(BaseModel):
+    value: T4 = Field("a")
+
+class AlsoWorks(BaseModel):
+    value: T5 = Field("a")
+"#,
+);
+
+pydantic_testcase!(
     test_field_right_type,
     r#"
 from pydantic import BaseModel, Field
@@ -152,6 +185,19 @@ Example(id="123")  # E: Missing argument `attribute_1`
 );
 
 pydantic_testcase!(
+    test_frozen_field_override_covariant,
+    r#"
+from pydantic import BaseModel, Field
+
+class Foo(BaseModel):
+    id: int | None = Field(frozen=True)
+
+class Bar(Foo):
+    id: int = Field(frozen=True)
+"#,
+);
+
+pydantic_testcase!(
     bug = "consider erroring on invalid5 and invalid6",
     test_discriminated_unions,
     r#"
@@ -237,6 +283,22 @@ class Foo(BaseModel):
 
 Foo(a=1)
 Foo()  # E: Missing argument `a`
+    "#,
+);
+
+pydantic_testcase!(
+    test_inherited_fields_are_init_fields,
+    r#"
+from pydantic import BaseModel
+
+class SuperBase(BaseModel, extra="forbid"):
+    x: int
+
+class Derived(SuperBase, extra="forbid"):
+    z: int
+
+Derived(x=1, z=1)
+Derived(z=1)  # E: Missing argument `x`
     "#,
 );
 
@@ -455,5 +517,38 @@ class Right:
     __slots__ = ("y",)
 
 class Conflict(Left, Right): ...  # E: inherits from incompatible disjoint bases `BaseModel`, `Right`
+"#,
+);
+
+// pydantic field named 'self' must not collide with the synthesized '__init__''s implicit 'self' param.
+// same as the stdlib dataclass fix.
+pydantic_testcase!(
+    test_pydantic_field_named_self,
+    r#"
+from pydantic import BaseModel
+from typing import assert_type
+
+class Model(BaseModel):
+    self: str
+
+m = Model(self="test")
+assert_type(m.self, str)
+"#,
+);
+
+// pydantic `BaseModel` does not honor `Field(init=False)`,
+// unlike stdlib/attrs dataclasses and unlike pydantic.dataclass
+// The field stays a real keyword parameter of the synthesized `__init__`,
+// and it is type-checked.
+pydantic_testcase!(
+    test_pydantic_model_field_init_false_ignored,
+    r#"
+from typing import reveal_type
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    x: int = Field(init=False, default=0)
+
+reveal_type(Model.__init__)  # E: revealed type: (self: Model, *, x: LaxInt = ..., **Unknown) -> None
 "#,
 );

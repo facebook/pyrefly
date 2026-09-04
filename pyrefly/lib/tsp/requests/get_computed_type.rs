@@ -8,37 +8,42 @@
 //! Implementation of the `typeServer/getComputedType` TSP request.
 
 use lsp_server::ResponseError;
+use pyrefly_util::telemetry::TelemetryEvent;
 use tsp_types::GetTypeParams;
 use tsp_types::Type;
 
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::tsp::server::TspConnection;
+use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::tsp::server::TspServer;
 use crate::tsp::validation::parse_uri;
 
-impl<T: TspInterface> TspConnection<T> {
+impl<T: TspInterface> TspServer<T> {
     /// Return the computed (inferred) type at the given position.
     ///
     /// The computed type reflects the type checker's analysis of the code
     /// flow — e.g. after narrowing inside an `isinstance` guard the computed
     /// type of a variable may be more specific than its declared annotation.
-    pub fn handle_get_computed_type(
-        &self,
+    pub fn handle_get_computed_type<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         params: GetTypeParams,
     ) -> Result<Option<Type>, ResponseError> {
         self.validate_snapshot(params.snapshot)?;
         // Validate the URI is parseable (rejects malformed strings).
         // Any valid scheme is accepted — notebook cell URIs are resolved
-        // to notebook paths inside get_type_at_position.
+        // to notebook paths inside computed_type_at_range.
         parse_uri(params.uri())?;
         let start = params.position();
         let end = params.end_position();
-        let ty = self.inner().get_computed_type_at_range(
+        Ok(self.inner().computed_type_at_range(
+            ide_transaction_manager,
+            telemetry_event,
             params.uri(),
             start.line,
             start.character,
             end.line,
             end.character,
-        );
-        Ok(ty.map(|t| self.convert_type(&t, Some(params.uri()))))
+        ))
     }
 }

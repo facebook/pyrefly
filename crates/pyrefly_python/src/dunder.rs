@@ -140,6 +140,7 @@ pub const CONTAINS: Name = Name::new_static("__contains__");
 pub const DATACLASS_FIELDS: Name = Name::new_static("__dataclass_fields__");
 pub const DEFAULTS: Name = Name::new_static("__defaults__");
 pub const DELATTR: Name = Name::new_static("__delattr__");
+pub const DELETE: Name = Name::new_static("__delete__");
 pub const DELITEM: Name = Name::new_static("__delitem__");
 pub const DICT: Name = Name::new_static("__dict__");
 pub const DOC: Name = Name::new_static("__doc__");

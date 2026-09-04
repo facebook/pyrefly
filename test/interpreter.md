@@ -6,9 +6,9 @@
 $ mkdir $TMPDIR/interpreters && touch $TMPDIR/interpreters/test.py \
 > touch $TMPDIR/test-interpreter && \
 > echo 'python-interpreter = "$TMPDIR/test-interpreter"' > $TMPDIR/interpreters/pyrefly.toml && \
-> mkdir $TMPDIR/interpreters/venv && touch $TMPDIR/interpreters/venv/python3 && \
+> mkdir -p $TMPDIR/interpreters/venv/bin && touch $TMPDIR/interpreters/venv/bin/python && \
 > touch $TMPDIR/interpreters/venv/pyvenv.cfg && \
-> mkdir $TMPDIR/alternative-venv && touch $TMPDIR/alternative-venv/python3 && \
+> mkdir -p $TMPDIR/alternative-venv/bin && touch $TMPDIR/alternative-venv/bin/python && \
 > touch $TMPDIR/alternative-venv/pyvenv.cfg && \
 > VIRTUAL_ENV=$TMPDIR/alternative-venv $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml \
 > --python-interpreter-path "cli-interpreter"
@@ -38,7 +38,7 @@ Configuration at * (glob)
 $ echo "" > $TMPDIR/interpreters/pyrefly.toml && \
 > VIRTUAL_ENV=$TMPDIR/alternative-venv $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
 Configuration at * (glob)
-  Using interpreter: */alternative-venv/python3 (glob)
+  Using interpreter: */alternative-venv/bin/python (glob)
 * (glob+)
 [0]
 ```
@@ -51,7 +51,7 @@ Configuration at * (glob)
 $ echo "" > $TMPDIR/interpreters/pyrefly.toml && \
 > $PYREFLY dump-config -c $TMPDIR/interpreters/pyrefly.toml
 Configuration at * (glob)
-  Using interpreter: */interpreters/venv/python3 (glob)
+  Using interpreter: */interpreters/venv/bin/python (glob)
 * (glob+)
 [0]
 ```
