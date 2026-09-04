@@ -101,6 +101,7 @@ use crate::binding::pytest::PytestBindingInfo;
 use crate::binding::pytest::is_pytest_fixture_function;
 use crate::binding::scope::Exportable;
 use crate::binding::scope::FlowStyle;
+use crate::binding::scope::MutableCaptureError;
 use crate::binding::scope::NameReadInfo;
 use crate::binding::scope::ScopeTrace;
 use crate::binding::scope::Scopes;
@@ -1489,9 +1490,14 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::Forward(idx)
             }
             Err(error) => {
-                let should_suppress = matches!(kind, MutableCaptureKind::Nonlocal)
+                let should_suppress = (matches!(kind, MutableCaptureKind::Nonlocal)
                     && self.scopes.in_module_or_class_top_level()
-                    && !self.scopes.in_class_body();
+                    && !self.scopes.in_class_body())
+                    || (matches!(kind, MutableCaptureKind::Global)
+                        && matches!(error, MutableCaptureError::NotFound)
+                        && self
+                            .scopes
+                            .global_capture_self_defined(Hashed::new(&name.id)));
                 if !should_suppress {
                     self.error(name.range, ErrorKind::UnknownName, error.message(name));
                 }
