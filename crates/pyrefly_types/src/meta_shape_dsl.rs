@@ -40,7 +40,6 @@ use ruff_python_ast::UnaryOp as RuffUnaryOp;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
-use crate::callable::IdentityIgnored;
 use crate::dimension::Int;
 use crate::dimension::ShapeError;
 use crate::dimension::canonicalize;
@@ -49,6 +48,7 @@ use crate::einsum::EinsumLocation;
 use crate::einsum::parse_einsum_equation;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
+use crate::identity::IdentityIgnored;
 use crate::lit_int::LitInt;
 use crate::literal::Lit;
 use crate::shaped_array::IntTuple;

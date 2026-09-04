@@ -27,10 +27,10 @@ use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 
 use crate::callable::Callable;
-use crate::callable::IdentityIgnored;
 use crate::class::Class;
 use crate::class::ClassType;
 use crate::equality::TypeEq;
+use crate::identity::IdentityIgnored;
 use crate::keywords::DataclassTransformMetadata;
 use crate::meta_shape_dsl::ShapeDslFunction;
 use crate::meta_shape_dsl::ShapeTransform;
