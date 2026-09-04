@@ -1541,11 +1541,12 @@ the non-convergence.
 
 Default severity: `warn`
 
-Pyrefly warns when a `match` statement may fall through without matching a case. By
-default, this check applies to closed subject types such as enums, literal unions,
-`None`, `bool`, and non-subclassable classes. Set
-[`check-all-matches`](./configuration.mdx#check-all-matches) to check open-domain
-subjects as well. Add the missing cases or a default arm.
+Pyrefly warns when a `match` over a closed subject type, such as an enum, literal
+union, `None`, `bool`, or non-subclassable class, may fall through without matching
+a case. Add the missing cases or a default arm.
+
+Non-exhaustive matches over open subject types are reported under a sub-kind,
+[non-exhaustive-match-open-type](#non-exhaustive-match-open-type).
 
 ```python
 from enum import Enum
@@ -1559,6 +1560,16 @@ def describe(color: Color) -> str:
     case Color.RED:
       return "danger"
 ```
+
+## non-exhaustive-match-open-type
+
+Default severity: `ignore`
+
+Enable this error kind to have Pyrefly report when a `match` over an open
+subject type such as `int`, `str`, or `object` is non-exhaustive.
+
+This is a sub-kind of [non-exhaustive-match](#non-exhaustive-match), so
+configuring or suppressing the parent kind also applies to this diagnostic.
 
 ## not-a-type
 
