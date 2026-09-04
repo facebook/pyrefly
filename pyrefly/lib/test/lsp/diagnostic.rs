@@ -6,6 +6,7 @@
  */
 
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 
 use crate::state::require::Require;
 use crate::state::state::State;
@@ -34,18 +35,21 @@ fn get_unused_import_diagnostics(state: &State, handle: &Handle) -> String {
 fn get_unused_variable_diagnostics(state: &State, handle: &Handle) -> String {
     let transaction = state.transaction();
     if let Some(bindings) = transaction.get_bindings(handle) {
-        let unused_variables = bindings.unused_variables();
-        if unused_variables.is_empty() {
-            return "No unused variables".to_owned();
-        }
         let mut report = String::new();
-        for (i, unused) in unused_variables.iter().enumerate() {
-            if i > 0 {
+        for unused in bindings.unused_variables() {
+            if Ast::is_intentionally_unused(unused.name.as_str()) {
+                continue;
+            }
+            if !report.is_empty() {
                 report.push_str(", ");
             }
             report.push_str(&format!("Variable `{}` is unused", unused.name.as_str()));
         }
-        report
+        if report.is_empty() {
+            "No unused variables".to_owned()
+        } else {
+            report
+        }
     } else {
         "No bindings".to_owned()
     }
@@ -136,23 +140,23 @@ def process(items: List[str]):
 }
 
 #[test]
-fn test_symvar_type_parameter_marker_imports_are_used() {
+fn test_intvar_type_parameter_marker_imports_are_used() {
     let code = r#"
 from os import path
-from shape_extensions import Dim, SymVar
+from shape_extensions import Int, IntVar
 import shape_extensions as se
 
-def direct[N: SymVar](x: Dim[N]) -> Dim[N]:
+def direct[N: IntVar](x: Int[N]) -> Int[N]:
     return x
 
-def module_alias[N: se.SymVar](x: se.Dim[N]) -> se.Dim[N]:
+def module_alias[N: se.IntVar](x: se.Int[N]) -> se.Int[N]:
     return x
 "#;
     let shape_extensions = r#"
 from typing import _SpecialForm
 
-class Dim[T]: ...
-SymVar: _SpecialForm
+class Int[T]: ...
+IntVar: _SpecialForm
 "#;
     let (handles, state) = mk_multi_file_state(
         &[("main", code), ("shape_extensions", shape_extensions)],
@@ -291,6 +295,39 @@ def main():
     unused_var = "this is unused"
     used_var = "this is used"
     print(used_var)
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "Variable `unused_var` is unused");
+}
+
+#[test]
+fn test_pytest_tracebackhide_not_reported_as_unused() {
+    let code = r#"
+def helper() -> None:
+    __tracebackhide__ = True
+    unused_var = True
+"#;
+    let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
+    let handle = handles.get("main").unwrap();
+    let report = get_unused_variable_diagnostics(&state, handle);
+    assert_eq!(report, "Variable `unused_var` is unused");
+}
+
+#[test]
+fn test_unused_variable_in_override() {
+    let code = r#"
+from typing_extensions import override
+
+class Base:
+    def method(self) -> None:
+        pass
+
+class Child(Base):
+    @override
+    def method(self) -> None:
+        unused_var = "this is unused"
 "#;
     let (handles, state) = mk_multi_file_state(&[("main", code)], Require::Exports, true);
     let handle = handles.get("main").unwrap();

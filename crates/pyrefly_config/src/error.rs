@@ -181,6 +181,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_unknown_column_can_be_downgraded() {
+        for severity in [Severity::Warn, Severity::Ignore] {
+            let config =
+                ErrorDisplayConfig::new(HashMap::from([(ErrorKind::UnknownColumn, severity)]));
+            assert_eq!(config.severity(ErrorKind::UnknownColumn), severity);
+        }
+    }
+
+    #[test]
     fn test_severity_parent_kind_fallback() {
         // Setting bad-override to ignore should also ignore bad-override-mutable-attribute
         let config =

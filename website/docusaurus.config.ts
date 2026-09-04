@@ -94,9 +94,23 @@ async function generateLlmsTxt({ content, routes, outDir }, context) {
     const currentVersionDocsRoutes = (
         allDocsRouteConfig.props.version as Record<string, unknown>
     ).docs as Record<string, Record<string, unknown>>;
-    // for every single docs route we now parse a path (which is the key) and a title
-    const docsRecords = Object.entries(currentVersionDocsRoutes).map(([path, record]) => {
-        return `- [${record.title}](${path}): ${record.description}`;
+    // `currentVersionDocsRoutes` is keyed by doc id and carries no permalink, so a page with a
+    // custom `slug:` in front matter would otherwise be listed at its id rather than its URL.
+    // The individual doc routes do have the permalink, keyed by source file, and a doc's id is
+    // its source path relative to the docs directory with the extension removed.
+    const permalinksByDocId = new Map<string, string>();
+    for (const docRoute of allDocsRouteConfig.routes?.[0]?.routes ?? []) {
+        const sourceFilePath = docRoute.metadata?.sourceFilePath;
+        if (sourceFilePath == null) {
+            continue;
+        }
+        const docId = sourceFilePath
+            .replace(/^docs\//, "")
+            .replace(/\.mdx?$/, "");
+        permalinksByDocId.set(docId, docRoute.path);
+    }
+    const docsRecords = Object.entries(currentVersionDocsRoutes).map(([id, record]) => {
+        return `- [${record.title}](${permalinksByDocId.get(id) ?? id}): ${record.description}`;
     });
     const llmsTxt = `# ${context.siteConfig.title}\n\n## Docs\n\n${docsRecords.join("\n")}`;
     const llmsTxtPath = path.join(outDir, "llms.txt");
@@ -361,6 +375,65 @@ const config: Config = {
                     url: 'https://github.com/migeed-z/pyrefly-type-challenge',
                   },
                 });
+                // The AI landing page, plus one URL per ad placement that
+                // points at it.
+                addRoute({
+                  path: '/ai',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycoders-1',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycoders-2',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython-social1',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython-social2',
+                  component: '@site/src/components/landing-page/aiLandingPage.tsx',
+                  exact: true,
+                });
+                // The preset landing page, plus one URL per ad placement that
+                // points at it.
+                addRoute({
+                  path: '/presets',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython1',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycoders-social1',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/pycoders-social2',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython-web-square1',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
+                addRoute({
+                  path: '/realpython-web-banner1',
+                  component: '@site/src/components/landing-page/presetLandingPage.tsx',
+                  exact: true,
+                });
               },
             };
         },
@@ -409,6 +482,23 @@ const config: Config = {
                     ],
                 },
                 {
+                    title: 'Follow Us',
+                    items: [
+                        {
+                            label: 'X (Twitter)',
+                            href: 'https://x.com/pyrefly_dev',
+                        },
+                        {
+                            label: 'Bluesky',
+                            href: 'https://bsky.app/profile/pyrefly-dev.bsky.social',
+                        },
+                        {
+                            label: 'Mastodon',
+                            href: 'https://mastodon.social/@pyrefly',
+                        },
+                    ],
+                },
+                {
                     title: 'Legal',
                     // Please do not remove the privacy and terms, it's a legal requirement.
                     items: [
@@ -431,11 +521,6 @@ const config: Config = {
                     ],
                 },
             ],
-            logo: {
-                alt: 'Meta Open Source Logo',
-                src: 'img/meta_open_source_logo.svg',
-                href: 'https://opensource.fb.com/',
-            },
             // Please do not remove the credits, help to publicize Docusaurus :)
             copyright: `Copyright © ${new Date().getFullYear()} Meta Platforms, Inc. Built with Docusaurus.`,
         },

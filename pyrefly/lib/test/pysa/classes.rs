@@ -9,8 +9,8 @@ use std::collections::HashMap;
 
 use dupe::Dupe;
 use pretty_assertions::assert_eq;
-use pyrefly_types::callable::FuncDefIndex;
 use pyrefly_types::class::ClassType;
+use pyrefly_types::function::FuncDefIndex;
 use pyrefly_types::types::Type;
 
 use crate::report::pysa::call_graph::Target;
@@ -273,7 +273,7 @@ class Foo:
                 "Bar".into(),
                 PysaClassField {
                     type_: PysaType::from_type(
-                        &context.answers_context.answers.heap().mk_type(
+                        &context.answers_context.answers.heap().mk_type_of(
                             context
                                 .answers_context
                                 .answers

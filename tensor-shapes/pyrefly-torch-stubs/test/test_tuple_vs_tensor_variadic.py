@@ -8,7 +8,7 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import SizeTuple
+from shape_extensions import IntTuple
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -31,7 +31,7 @@ assert_type(t_, tuple[Foo[int], Foo[str]])
 
 
 # Test with tensor types
-def tensor_identity[Ts: SizeTuple](x: Tensor[Ts]) -> Tensor[Ts]:
+def tensor_identity[Ts: IntTuple](x: Tensor[Ts]) -> Tensor[Ts]:
     return x
 
 

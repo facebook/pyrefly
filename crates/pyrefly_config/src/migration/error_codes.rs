@@ -36,8 +36,7 @@ impl ConfigOptionMigrater for ErrorCodes {
             util::get_bool_or_default(mypy_cfg, "mypy", "disallow_any_explicit");
         let report_deprecated_as_note =
             util::get_bool_or_default(mypy_cfg, "mypy", "report_deprecated_as_note");
-        let allow_redefinitions =
-            util::get_bool_or_default(mypy_cfg, "mypy", "allow_redefinitions");
+        let allow_redefinition = util::get_bool_or_default(mypy_cfg, "mypy", "allow_redefinition");
         let strict = util::get_bool_or_default(mypy_cfg, "mypy", "strict");
         let mypy_flags = MypyErrorConfigFlags {
             warn_return_any,
@@ -47,7 +46,7 @@ impl ConfigOptionMigrater for ErrorCodes {
             disallow_any_generics,
             disallow_any_explicit,
             report_deprecated_as_note,
-            allow_redefinitions,
+            allow_redefinition,
             strict,
         };
         let disable_error_code = util::string_to_array(&mypy_cfg.get("mypy", "disable_error_code"));
@@ -282,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn test_migrate_from_pyright_implicit_any_variable() {
+    fn test_migrate_from_pyright_unknown_variable_type() {
         let mut pyright_cfg = default_pyright_config();
         pyright_cfg.errors.report_unknown_variable_type = Some(Severity::Error);
 
@@ -294,7 +293,7 @@ mod tests {
         assert!(result.is_ok());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
         assert_eq!(
-            errors.severity(ErrorKind::ImplicitAnyVariable),
+            errors.severity(ErrorKind::UnknownVariableType),
             Severity::Error
         );
     }
@@ -311,9 +310,9 @@ mod tests {
 
         assert!(result.is_ok());
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
-        // `reportUnknownMemberType` maps to `implicit-any-attribute`.
+        // `reportUnknownMemberType` maps to `unknown-attribute-type`.
         assert_eq!(
-            errors.severity(ErrorKind::ImplicitAnyAttribute),
+            errors.severity(ErrorKind::UnknownAttributeType),
             Severity::Error
         );
     }
@@ -355,6 +354,24 @@ mod tests {
     }
 
     #[test]
+    fn test_migrate_from_pyright_unknown_argument_type() {
+        let mut pyright_cfg = default_pyright_config();
+        pyright_cfg.errors.report_unknown_argument_type = Some(Severity::Error);
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let error_codes = ErrorCodes;
+        let result = error_codes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+
+        assert!(result.is_ok());
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(
+            errors.severity(ErrorKind::UnknownArgumentType),
+            Severity::Error
+        );
+    }
+
+    #[test]
     fn test_migrate_from_pyright_use_max_severity() {
         let mut pyright_cfg = default_pyright_config();
         pyright_cfg.errors.report_unknown_parameter_type = Some(Severity::Error);
@@ -376,7 +393,10 @@ mod tests {
             errors.severity(ErrorKind::ImplicitAnyParameter),
             Severity::Error
         );
-        assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Warn);
+        assert_eq!(
+            errors.severity(ErrorKind::UnknownArgumentType),
+            Severity::Warn
+        );
         assert_eq!(errors.severity(ErrorKind::UnboundName), Severity::Error);
     }
 
@@ -487,7 +507,30 @@ mod tests {
         let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
         assert_eq!(errors.severity(ErrorKind::RedundantCast), Severity::Warn);
         assert_eq!(errors.severity(ErrorKind::NoAnyReturn), Severity::Error);
+        assert_eq!(
+            errors.severity(ErrorKind::ImplicitAnyParameter),
+            Severity::Error
+        );
+        assert_eq!(
+            errors.severity(ErrorKind::UnannotatedReturn),
+            Severity::Error
+        );
+        assert_eq!(errors.severity(ErrorKind::ImplicitAny), Severity::Error);
         assert_eq!(errors.severity(ErrorKind::ExplicitAny), Severity::Ignore);
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_allow_redefinition() {
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set("mypy", "allow_redefinition", Some("True".to_owned()));
+
+        let mut pyrefly_cfg = ConfigFile::default();
+        ErrorCodes
+            .migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg)
+            .expect("allow_redefinition should migrate");
+
+        let errors = pyrefly_cfg.root.errors.as_ref().unwrap();
+        assert_eq!(errors.severity(ErrorKind::Redefinition), Severity::Ignore);
     }
 
     #[test]

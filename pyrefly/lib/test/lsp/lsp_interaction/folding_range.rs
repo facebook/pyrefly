@@ -8,11 +8,10 @@
 use lsp_types::FoldingRange;
 use lsp_types::FoldingRangeKind;
 use lsp_types::Url;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 use tempfile::TempDir;
-
-use super::object_model::InitializeSettings;
-use super::object_model::LspInteraction;
 
 fn get_test_files_root() -> TempDir {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");

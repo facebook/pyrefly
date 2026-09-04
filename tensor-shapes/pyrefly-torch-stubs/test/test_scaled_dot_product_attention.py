@@ -7,14 +7,14 @@
 
 from typing import assert_type, TYPE_CHECKING
 
-from shape_extensions import SymVar
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
     from torch.nn import functional as F
 
 
-def test_self_attention[B: SymVar, NHead: SymVar, T: SymVar, D: SymVar](
+def test_self_attention[B: IntVar, NHead: IntVar, T: IntVar, D: IntVar](
     q: Tensor[[B, NHead, T, D]],
     k: Tensor[[B, NHead, T, D]],
     v: Tensor[[B, NHead, T, D]],
@@ -24,7 +24,13 @@ def test_self_attention[B: SymVar, NHead: SymVar, T: SymVar, D: SymVar](
     assert_type(out, Tensor[[B, NHead, T, D]])
 
 
-def test_cross_attention[B: SymVar, H: SymVar, Tq: SymVar, Tkv: SymVar, D: SymVar](
+def test_cross_attention[
+    B: IntVar,
+    H: IntVar,
+    Tq: IntVar,
+    Tkv: IntVar,
+    D: IntVar,
+](
     query: Tensor[[B, H, Tq, D]],
     key: Tensor[[B, H, Tkv, D]],
     value: Tensor[[B, H, Tkv, D]],
@@ -35,12 +41,12 @@ def test_cross_attention[B: SymVar, H: SymVar, Tq: SymVar, Tkv: SymVar, D: SymVa
 
 
 def test_different_value_dim[
-    B: SymVar,
-    H: SymVar,
-    Tq: SymVar,
-    Tkv: SymVar,
-    D: SymVar,
-    Dv: SymVar,
+    B: IntVar,
+    H: IntVar,
+    Tq: IntVar,
+    Tkv: IntVar,
+    D: IntVar,
+    Dv: IntVar,
 ](
     query: Tensor[[B, H, Tq, D]],
     key: Tensor[[B, H, Tkv, D]],
@@ -51,7 +57,7 @@ def test_different_value_dim[
     assert_type(out, Tensor[[B, H, Tq, Dv]])
 
 
-def test_symbolic_arith[B: SymVar, H: SymVar, T: SymVar, E: SymVar](
+def test_symbolic_arith[B: IntVar, H: IntVar, T: IntVar, E: IntVar](
     q: Tensor[[B, H, T, (E // H)]],
     k: Tensor[[B, H, T, (E // H)]],
     v: Tensor[[B, H, T, (E // H)]],

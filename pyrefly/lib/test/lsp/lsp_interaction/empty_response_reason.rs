@@ -12,16 +12,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lsp_types::Url;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
+use pyrefly_lsp_test::object_model::RecordedTelemetryEvent;
+use pyrefly_lsp_test::object_model::TestTelemetry;
 use pyrefly_util::telemetry::EmptyResponseReason;
 use pyrefly_util::telemetry::TelemetryEventKind;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::object_model::LspInteractionArgs;
-use crate::object_model::RecordedTelemetryEvent;
-use crate::object_model::TestTelemetry;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(30);
 

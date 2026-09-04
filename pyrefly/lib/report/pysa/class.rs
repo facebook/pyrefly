@@ -8,7 +8,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Not;
-use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_python::ast::Ast;
@@ -29,7 +28,6 @@ use serde::ser::SerializeStruct;
 use starlark_map::Hashed;
 
 use crate::alt::class::class_field::ClassField;
-use crate::alt::class::class_field::WithDefiningClass;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::BindingClass;
 use crate::binding::binding::BindingClassField;
@@ -278,11 +276,11 @@ pub fn get_all_classes(context: &ModuleAnswersContext) -> impl Iterator<Item = C
         .map(|idx| context.answers.get_idx(idx).unwrap().0.dupe().unwrap())
 }
 
-pub fn get_class_field_from_current_class_only(
+pub fn get_class_field_from_current_class_only<'a>(
     class: &Class,
     field_name: &Name,
-    context: &ModuleAnswersContext,
-) -> Option<Arc<ClassField>> {
+    context: &'a ModuleAnswersContext,
+) -> Option<&'a ClassField> {
     // This inlines the logic from `AnswersSolver::get_field_from_current_class_only`,
     // `get_non_synthesized_field_from_current_class_only`, and
     // `get_synthesized_field_from_current_class_only`.
@@ -303,19 +301,21 @@ pub fn get_class_field_from_current_class_only(
     let key = KeyClassSynthesizedFields(class.index());
     let idx = context.bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
     let synthesized_fields = context.answers.get_idx(idx)?;
-    Some(synthesized_fields.get(field_name)?.inner.dupe())
+    Some(synthesized_fields.get(field_name)?.inner.as_ref())
 }
 
-pub fn get_super_class_member(
+pub fn get_super_class_member_defining_class(
     class: &Class,
     field_name: &Name,
     start_lookup_cls: Option<&ClassType>,
     context: &ModuleContext,
-) -> Option<WithDefiningClass<Arc<ClassField>>> {
+) -> Option<Class> {
     context
         .resolver
         .with_solver("pysa_super_class_member", |solver| {
-            solver.get_super_class_member(class, start_lookup_cls, field_name)
+            solver
+                .get_super_class_member(class, start_lookup_cls, field_name)
+                .map(|member| member.defining_class)
         })
         .flatten()
 }
@@ -334,7 +334,7 @@ pub fn get_class_field_declaration<'a>(
         .map(|idx| context.bindings.get(idx))
 }
 
-pub fn get_class_mro(class: &Class, context: &ModuleAnswersContext) -> Arc<ClassMro> {
+pub fn get_class_mro<'a>(class: &Class, context: &'a ModuleAnswersContext) -> &'a ClassMro {
     assert_eq!(class.module(), &context.module_info);
     context
         .answers
@@ -342,10 +342,12 @@ pub fn get_class_mro(class: &Class, context: &ModuleAnswersContext) -> Arc<Class
         .unwrap()
 }
 
+/// The fields borrow from `context`, not from `class`, so they outlive a
+/// caller that iterates the classes of a module one owned `Class` at a time.
 pub fn get_class_fields<'a>(
-    class: &'a Class,
+    class: &Class,
     context: &'a ModuleAnswersContext,
-) -> impl Iterator<Item = (Cow<'a, Name>, Arc<ClassField>)> {
+) -> impl Iterator<Item = (Cow<'a, Name>, &'a ClassField)> + use<'a> {
     let class_fields = context
         .bindings
         .get_class_fields(class.index())
@@ -367,7 +369,7 @@ pub fn get_class_fields<'a>(
     let synthesized_fields = synthesized_fields
         .fields()
         .filter(|(name, _)| !class_fields.contains(name))
-        .map(|(name, field)| (Cow::Owned(name.clone()), field.inner.dupe()))
+        .map(|(name, field)| (Cow::Owned(name.clone()), field.inner.as_ref()))
         // Required by the borrow checker.
         // This is fine since the amount of synthesized fields should be small.
         .collect::<Vec<_>>()
@@ -571,7 +573,7 @@ pub fn export_all_classes(context: &ModuleContext) -> HashMap<ClassId, ClassDefi
             .map(|base_class| ClassRef::from_class(base_class, context))
             .collect::<Vec<_>>();
 
-        let mro = match &*get_class_mro(&class, &context.answers_context) {
+        let mro = match get_class_mro(&class, &context.answers_context) {
             ClassMro::Resolved { ancestors, .. } => PysaClassMro::Resolved(
                 ancestors
                     .iter()

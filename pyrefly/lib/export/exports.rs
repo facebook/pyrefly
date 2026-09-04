@@ -16,7 +16,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::Deprecation;
+use pyrefly_types::function::Deprecation;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -57,6 +57,11 @@ pub trait LookupExport {
 
     /// If `name` is a re-export, return the module it is re-exported from. Records a dependency on `name` from `module` regardless of if it exists.
     fn reexport_source(&self, module: ModuleName, name: &Name) -> Option<ModuleName>;
+
+    /// Check if a name is only an *implicit* re-export (available via a plain
+    /// import, not part of the module's public interface). Records a dependency
+    /// on `name` from `module` regardless of if it exists.
+    fn is_implicit_reexport(&self, module: ModuleName, name: &Name) -> bool;
 
     /// Check if an export is a special export. Records a dependency on `name` from `module` regardless of if it exists.
     fn is_special_export(&self, module: ModuleName, name: &Name) -> Option<SpecialExport>;
@@ -105,14 +110,20 @@ pub struct Exports {
     /// but they take up very little space, so not worth the hassle to detect when
     /// calculation completes.
     definitions: Definitions,
+    /// Names statically known to be in a partially resolvable explicit `__all__`.
+    partially_known_dunder_all: SmallSet<Name>,
+    /// Names statically known to be in a user-defined explicit `__all__`.
+    explicit_dunder_all_names: Option<SmallSet<Name>>,
     /// Names that are available via `from <this_module> import *`
     wildcard: Calculation<Arc<SmallSet<Name>>>,
     /// Names that are available via `from <this_module> import <name>` along with their locations
     exports: Calculation<Arc<SmallMap<Name, ExportLocation>>>,
-    /// If this module has a docstring, the range is stored here. Docstrings for exports themselves are stored in exports.
-    /// While putting the module docstring range on exports is a bit weird (it doesn't actually have much to do with exports),
-    /// we can't put it on the Module as that doesn't have the AST, and we can't get it from the AST as we often throw that away,
-    /// so here makes sense.
+    // The fields below are derived from the AST but are not exports. They live
+    // here because `Exports` is the only per-module artifact that is always
+    // available: `Module` does not carry the AST, and the AST itself is evicted
+    // once answers are computed unless the module is required at `Everything`.
+    /// The range of this module's docstring, if it has one. Docstrings for the
+    /// exports themselves are stored in `exports`.
     docstring_range: Option<TextRange>,
 }
 
@@ -138,6 +149,8 @@ impl Exports {
             sys_info,
         );
         definitions.inject_implicit_globals();
+        let partially_known_dunder_all = Self::get_partially_known_dunder_all(&definitions);
+        let explicit_dunder_all_names = Self::compute_explicit_dunder_all_names(&definitions);
         definitions.ensure_dunder_all(module_info.path().style());
         if module_info.name() == ModuleName::builtins() {
             // The `builtins` module is a bit weird. It has no `__all__` in TypeShed,
@@ -156,6 +169,8 @@ impl Exports {
             module_name: module_info.name(),
             is_init: module_info.path().is_init(),
             definitions,
+            partially_known_dunder_all,
+            explicit_dunder_all_names,
             wildcard: Calculation::new(),
             exports: Calculation::new(),
             docstring_range: Docstring::range_from_stmts(x),
@@ -240,6 +255,16 @@ impl Exports {
                         || self_defs.special_exports.get(name)
                             != other_defs.special_exports.get(name)
                         || self_def.main_guard_only != other_def.main_guard_only
+                        || self.partially_known_dunder_all.contains(name)
+                            != other.partially_known_dunder_all.contains(name)
+                        || self
+                            .explicit_dunder_all_names
+                            .as_ref()
+                            .is_some_and(|all| all.contains(name))
+                            != other
+                                .explicit_dunder_all_names
+                                .as_ref()
+                                .is_some_and(|all| all.contains(name))
                     {
                         changed.0.names.entry(name.clone()).or_default().metadata = true;
                     }
@@ -294,21 +319,55 @@ impl Exports {
             .contains(name)
     }
 
-    /// Return an iterator with entries in `__all__` that are user-defined or None if `__all__` was not present.
-    pub fn get_explicit_dunder_all_names_iter(&self) -> Option<impl Iterator<Item = &Name>> {
-        match self.definitions.dunder_all.kind {
-            DunderAllKind::Specified => Some(
-                self.definitions
-                    .dunder_all
-                    .entries
-                    .iter()
-                    .filter_map(|entry| match entry {
-                        DunderAllEntry::Name(_, name) => Some(name),
-                        _ => None,
-                    }),
-            ),
-            _ => None,
+    /// Returns the entries in a user-defined `__all__`, or `None` if `__all__` was not present.
+    pub fn explicit_dunder_all_names(&self) -> Option<&SmallSet<Name>> {
+        self.explicit_dunder_all_names.as_ref()
+    }
+
+    /// Returns statically known entries in an explicit `__all__`.
+    fn compute_explicit_dunder_all_names(definitions: &Definitions) -> Option<SmallSet<Name>> {
+        if definitions.dunder_all.kind != DunderAllKind::Specified {
+            return None;
         }
+
+        let mut names = SmallSet::new();
+
+        for entry in &definitions.dunder_all.entries {
+            match entry {
+                DunderAllEntry::Name(_, name) => {
+                    names.insert(name.clone());
+                }
+                DunderAllEntry::Remove(_, name) => {
+                    names.shift_remove(name);
+                }
+                DunderAllEntry::Module(..) => {}
+            }
+        }
+
+        Some(names)
+    }
+
+    // Returns statically known entries in an unresolvable `__all__`.
+    pub fn get_partially_known_dunder_all(definitions: &Definitions) -> SmallSet<Name> {
+        let mut names = SmallSet::new();
+
+        if !matches!(definitions.dunder_all.kind, DunderAllKind::Unresolvable(_)) {
+            return names;
+        }
+
+        for entry in &definitions.dunder_all.entries {
+            match entry {
+                DunderAllEntry::Name(_, name) => {
+                    names.insert(name.clone());
+                }
+                DunderAllEntry::Remove(_, name) => {
+                    names.shift_remove(name);
+                }
+                DunderAllEntry::Module(..) => {}
+            }
+        }
+
+        names
     }
 
     /// Returns entries in `__all__` that don't exist in the module's definitions.
@@ -446,6 +505,33 @@ impl Exports {
             .is_some_and(|definition| matches!(definition.style, DefinitionStyle::ImportAsEq(_)))
     }
 
+    /// Returns true if `name` is available from this module only as an *implicit*
+    /// re-export: it was brought in by a plain `import`/`from ... import ...`
+    /// (without a redundant `as` alias) and is not listed in an explicit `__all__`.
+    /// Per the typing spec such names are not part of the module's public interface.
+    /// Names defined locally, redundantly aliased (`as` same-name), or introduced
+    /// via a wildcard import are not implicit re-exports.
+    pub fn is_implicit_reexport(&self, name: &Name) -> bool {
+        if self.partially_known_dunder_all.contains(name) {
+            return false;
+        }
+        if self
+            .explicit_dunder_all_names
+            .as_ref()
+            .is_some_and(|all| all.contains(name))
+        {
+            return false;
+        }
+        self.definitions.definitions.get(name).is_some_and(|def| {
+            matches!(
+                def.style,
+                DefinitionStyle::Import(_)
+                    | DefinitionStyle::ImportModule(_)
+                    | DefinitionStyle::ImportAs(..)
+            )
+        })
+    }
+
     /// Returns the range of the unresolvable `__all__` RHS, if applicable.
     pub fn unresolvable_dunder_all_range(&self) -> Option<TextRange> {
         match self.definitions.dunder_all.kind {
@@ -499,6 +585,10 @@ mod tests {
 
         fn reexport_source(&self, _module: ModuleName, _name: &Name) -> Option<ModuleName> {
             None
+        }
+
+        fn is_implicit_reexport(&self, _module: ModuleName, _name: &Name) -> bool {
+            false
         }
 
         fn docstring_range(&self, _module: ModuleName, _name: &Name) -> Option<TextRange> {

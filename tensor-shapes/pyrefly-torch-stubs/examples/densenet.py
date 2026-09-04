@@ -32,7 +32,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim, SymVar
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
 
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class DenseLayer[InC: SymVar, BnC: SymVar, GR: SymVar](nn.Module):
+class DenseLayer[InC: IntVar, BnC: IntVar, GR: IntVar](nn.Module):
     """Single dense layer with bottleneck.
 
     Architecture: BN → ReLU → 1x1 Conv(InC → BnC) → BN → ReLU → 3x3 Conv(BnC → GR)
@@ -54,7 +54,7 @@ class DenseLayer[InC: SymVar, BnC: SymVar, GR: SymVar](nn.Module):
     """
 
     def __init__(
-        self, c_in: Dim[InC], bn_channels: Dim[BnC], growth_rate: Dim[GR]
+        self, c_in: Int[InC], bn_channels: Int[BnC], growth_rate: Int[GR]
     ) -> None:
         super().__init__()
         self.bn1 = nn.BatchNorm2d(c_in)
@@ -64,7 +64,7 @@ class DenseLayer[InC: SymVar, BnC: SymVar, GR: SymVar](nn.Module):
             bn_channels, growth_rate, kernel_size=3, padding=1, bias=False
         )
 
-    def forward[B: SymVar, H: SymVar, W: SymVar](
+    def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, InC, H, W]]
     ) -> Tensor[[B, InC + GR, H, W]]:
         # WORKAROUND: F.relu instead of configurable act_fn()
@@ -82,7 +82,7 @@ class DenseLayer[InC: SymVar, BnC: SymVar, GR: SymVar](nn.Module):
         return result
 
 
-class TransitionLayer[InC: SymVar, OutC: SymVar](nn.Module):
+class TransitionLayer[InC: IntVar, OutC: IntVar](nn.Module):
     """Transition between dense blocks: BN → ReLU → 1x1 Conv → AvgPool(2).
 
     Reduces channels from InC to OutC and halves spatial dimensions.
@@ -91,13 +91,13 @@ class TransitionLayer[InC: SymVar, OutC: SymVar](nn.Module):
     Output: Tensor[[B, OutC, (H-2)//2+1, (W-2)//2+1]]
     """
 
-    def __init__(self, c_in: Dim[InC], c_out: Dim[OutC]) -> None:
+    def __init__(self, c_in: Int[InC], c_out: Int[OutC]) -> None:
         super().__init__()
         self.bn = nn.BatchNorm2d(c_in)
         self.conv = nn.Conv2d(c_in, c_out, kernel_size=1, bias=False)
         self.pool = nn.AvgPool2d(2)
 
-    def forward[B: SymVar, H: SymVar, W: SymVar](
+    def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, InC, H, W]]
     ) -> Tensor[[B, OutC, (H - 2) // 2 + 1, (W - 2) // 2 + 1]]:
         # WORKAROUND: F.relu instead of configurable act_fn()
@@ -115,7 +115,7 @@ class TransitionLayer[InC: SymVar, OutC: SymVar](nn.Module):
 # ============================================================================
 
 
-class DenseBlock[C: SymVar, GR: SymVar, BnC: SymVar](nn.Module):
+class DenseBlock[C: IntVar, GR: IntVar, BnC: IntVar](nn.Module):
     """Dense block with 6 layers, using recursive forward.
 
     Each DenseLayer adds GR channels via concatenation.
@@ -127,7 +127,7 @@ class DenseBlock[C: SymVar, GR: SymVar, BnC: SymVar](nn.Module):
     """
 
     def __init__(
-        self, c_in: Dim[C], growth_rate: Dim[GR], bn_channels: Dim[BnC]
+        self, c_in: Int[C], growth_rate: Int[GR], bn_channels: Int[BnC]
     ) -> None:
         super().__init__()
         layers: list[DenseLayer[Any, Any, Any]] = [
@@ -140,33 +140,53 @@ class DenseBlock[C: SymVar, GR: SymVar, BnC: SymVar](nn.Module):
         ]
         self.layers = nn.ModuleList(layers)
 
-    def _apply_layer[B: SymVar, Ch: SymVar, H: SymVar, W: SymVar](
+    def _apply_layer[B: IntVar, Ch: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, Ch, H, W]], depth: int
     ) -> Tensor[[B, Ch + GR, H, W]]:
         idx = len(self.layers) - depth
         layer: DenseLayer[Ch, BnC, GR] = self.layers[idx]
         return layer(x)
 
-    def forward[B: SymVar, H: SymVar, W: SymVar](
+    def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
     ) -> Tensor[[B, C + 6 * GR, H, W]]:
         return _dense_chain(self, x, 6)
 
 
 @overload
-def _dense_chain[GR: SymVar, B: SymVar, Ch: SymVar, H: SymVar, W: SymVar](
-    block: DenseBlock[Any, GR, Any], x: Tensor[[B, Ch, H, W]], depth: Dim[1]
+def _dense_chain[
+    GR: IntVar,
+    B: IntVar,
+    Ch: IntVar,
+    H: IntVar,
+    W: IntVar,
+](
+    block: DenseBlock[Any, GR, Any], x: Tensor[[B, Ch, H, W]], depth: Int[1]
 ) -> Tensor[[B, Ch + GR, H, W]]: ...
 
 
 @overload
-def _dense_chain[I: SymVar, GR: SymVar, B: SymVar, Ch: SymVar, H: SymVar, W: SymVar](
-    block: DenseBlock[Any, GR, Any], x: Tensor[[B, Ch, H, W]], depth: Dim[I]
+def _dense_chain[
+    I: IntVar,
+    GR: IntVar,
+    B: IntVar,
+    Ch: IntVar,
+    H: IntVar,
+    W: IntVar,
+](
+    block: DenseBlock[Any, GR, Any], x: Tensor[[B, Ch, H, W]], depth: Int[I]
 ) -> Tensor[[B, Ch + I * GR, H, W]]: ...
 
 
-def _dense_chain[I: SymVar, GR: SymVar, B: SymVar, Ch: SymVar, H: SymVar, W: SymVar](
-    block: DenseBlock[Any, GR, Any], x: Tensor[[B, Ch, H, W]], depth: Dim[I]
+def _dense_chain[
+    I: IntVar,
+    GR: IntVar,
+    B: IntVar,
+    Ch: IntVar,
+    H: IntVar,
+    W: IntVar,
+](
+    block: DenseBlock[Any, GR, Any], x: Tensor[[B, Ch, H, W]], depth: Int[I]
 ) -> Tensor[[B, Ch + GR, H, W]] | Tensor[[B, Ch + I * GR, H, W]]:
     y = block._apply_layer(x, depth)
     if depth == 1:
@@ -218,7 +238,7 @@ class DenseNet(nn.Module):
         self.out_flatten = nn.Flatten()
         self.out_linear = nn.Linear(184, 10)
 
-    def forward[B: SymVar](self, x: Tensor[[B, 3, 32, 32]]) -> Tensor[[B, 10]]:
+    def forward[B: IntVar](self, x: Tensor[[B, 3, 32, 32]]) -> Tensor[[B, 10]]:
         # Input convolution
         h0 = self.input_conv(x)
         assert_type(h0, Tensor[[B, 32, 32, 32]])

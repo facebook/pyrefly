@@ -681,6 +681,38 @@ assert_type(x, LiteralString)
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/2517
+testcase!(
+    test_import_string_ascii_uppercase_dict_keys,
+    r#"
+from string import ascii_uppercase
+from typing import assert_type
+
+letter_to_index = {char: i for i, char in enumerate(ascii_uppercase)}
+assert_type(letter_to_index, dict[str, int])
+
+def encode(message: str) -> list[int]:
+    result = []
+    for letter in message:
+        result.append(letter_to_index[letter])
+    return result
+"#,
+);
+
+// A `dict[LiteralString, int]` annotation pins the key type, so the inferred dict
+// literal keys must stay `LiteralString` (dict is invariant in its key) rather than
+// being widened to `str`.
+testcase!(
+    test_dict_literal_string_key_hint_preserved,
+    r#"
+from typing import LiteralString, assert_type
+
+def f(k: LiteralString) -> None:
+    d: dict[LiteralString, int] = {k: 1}
+    assert_type(d, dict[LiteralString, int])
+"#,
+);
+
 fn env_from_self_import_mod_in_package() -> TestEnv {
     let mut env = TestEnv::new();
     env.add_with_path(
@@ -741,10 +773,7 @@ from typing import reveal_type
 
 def test():
     i = Interpret()
-    # Deliberately don't specify the type of i.x, as sometimes
-    # it works out to None, sometimes Unknown.
-    # Plenty of errors here.
-    reveal_type(i.x) # E:
+    reveal_type(i.x) # E: revealed type: Unknown
 "#,
 );
 
@@ -987,6 +1016,85 @@ testcase!(
 from foo import *
 
 x()  # E: `foo.x` is deprecated
+"#,
+);
+
+fn env_reexport_deprecated() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "mypkg._private",
+        "mypkg/_private.py",
+        r#"
+from warnings import deprecated
+
+@deprecated("Don't use this class")
+class MyClass: ...
+
+@deprecated("Don't use this function")
+def my_func(): ...
+
+class NonDeprecatedClass: ...
+"#,
+    );
+    t.add_with_path(
+        "mypkg",
+        "mypkg/__init__.py",
+        r#"
+from mypkg._private import MyClass, my_func, NonDeprecatedClass # E: `MyClass` is deprecated # E: `my_func` is deprecated
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_deprecated_reexport_warn,
+    env_reexport_deprecated(),
+    r#"
+from mypkg import MyClass # E: `MyClass` is deprecated
+from mypkg import my_func # E: `my_func` is deprecated
+from mypkg import NonDeprecatedClass
+
+_ = MyClass()
+my_func()  # E: `mypkg._private.my_func` is deprecated
+"#,
+);
+
+fn env_chained_reexport_deprecated() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add_with_path(
+        "pkg.origin",
+        "pkg/origin.py",
+        r#"
+from warnings import deprecated
+
+@deprecated("Deprecation message")
+class DepClass: ...
+"#,
+    );
+    t.add_with_path(
+        "pkg.middle",
+        "pkg/middle.py",
+        r#"
+from pkg.origin import DepClass as MiddleClass # E: `DepClass` is deprecated
+"#,
+    );
+    t.add_with_path(
+        "pkg.outer",
+        "pkg/outer.py",
+        r#"
+from pkg.middle import MiddleClass # E: `MiddleClass` is deprecated
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_deprecated_chained_reexport_warn,
+    env_chained_reexport_deprecated(),
+    r#"
+from pkg.outer import MiddleClass # E: `MiddleClass` is deprecated
+
+_ = MiddleClass()
 "#,
 );
 
@@ -1252,9 +1360,9 @@ def abs(x: object) -> str: ...
     )
 }
 
+// A name defined in both the stdlib `builtins` and the user's `__builtins__.pyi`
+// resolves to the user's `__builtins__` definition, which shadows the stdlib one.
 testcase!(
-    // A name defined in both the stdlib `builtins` and the user's `__builtins__.pyi`
-    // resolves to the user's `__builtins__` definition, which shadows the stdlib one.
     test_extra_builtins_shadows_builtin,
     env_extra_builtins_shadows_builtin(),
     r#"
@@ -1328,12 +1436,13 @@ testcase!(
     r#"
 from foo_stub import X
 from bar_source import Y
-from typing import Any, assert_type, reveal_type
+from types import EllipsisType
+from typing import Any, assert_type
 
 assert_type(X, Any)
 assert_type(X.anything, Any)
 
-reveal_type(Y)  # E: Ellipsis
+assert_type(Y, EllipsisType)
 Y.anything  # E: `EllipsisType` has no attribute `anything`
     "#,
 );
@@ -1429,6 +1538,38 @@ testcase!(
     r#"
 from a import X
 from b import X  # E: Cannot assign to `X` because it is imported as final
+"#,
+);
+
+/// A re-export chain may pass through the same module more than once under
+/// different names, so walking it terminates on a repeated (module, name) pair
+/// rather than a repeated module. Here `m.name1` resolves via `n.name2` back to
+/// `m.name3`, which is the `Final` definition the reassignment must report.
+fn env_final_reexport_revisits_module() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "m",
+        r#"
+from typing import Final
+from n import name2 as name1
+name3: Final[int] = 1
+"#,
+    );
+    t.add(
+        "n",
+        r#"
+from m import name3 as name2
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_import_final_through_reexport_revisiting_module,
+    env_final_reexport_revisits_module(),
+    r#"
+from m import name1
+name1 = 2  # E: Cannot assign to `name1` because it is imported as final
 "#,
 );
 
@@ -1593,6 +1734,7 @@ y: str = "hello"
 _name = "x"
 __all__ = ["y"]
 __all__.append(_name)  # E: `__all__` could not be statically analyzed
+__all__.remove("y")
 "#,
     )
 }
@@ -2035,6 +2177,18 @@ assert_type(c.value, int)
 "#,
 );
 
+// Test import_python with empty string second argument (treated as wildcard).
+testcase!(
+    test_import_python_empty_string_wildcard,
+    env_import_thrift(),
+    r#"
+from typing import assert_type
+import_python("service/types.thrift", "")
+c = MyConfig()
+assert_type(c.value, int)
+"#,
+);
+
 // Test import_thrift with dot separators.
 testcase!(
     test_import_thrift_dot_separator,
@@ -2244,5 +2398,133 @@ testcase!(
     r#"
 from pkg import my_typing as mt
 x: mt.Annotated[int, "metadata"] = 5
+"#,
+);
+
+fn env_implicit_reexport() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+a: int = 1
+b: int = 2
+c: int = 3
+"#,
+    );
+    t.add(
+        "bar",
+        r#"
+from foo import a
+from foo import b as b
+from foo import c
+d: int = 4
+__all__ = ["c"]
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_implicit_reexport,
+    env_implicit_reexport().enable_implicit_reexport_error(),
+    r#"
+from bar import a  # E: `a` is not exported from module `bar`
+from bar import b
+from bar import c
+from bar import d
+"#,
+);
+
+testcase!(
+    test_implicit_reexport_off_by_default,
+    env_implicit_reexport(),
+    r#"
+from bar import a
+"#,
+);
+
+fn env_implicit_reexport_wildcard() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add("foo", "a: int = 1");
+    t.add("bar", "from foo import *");
+    t
+}
+
+testcase!(
+    test_implicit_reexport_wildcard_ok,
+    env_implicit_reexport_wildcard().enable_implicit_reexport_error(),
+    r#"
+from bar import a
+"#,
+);
+
+fn env_implicit_reexport_unresolvable_all() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+a: int = 1
+b: int = 2
+c: int = 3
+d: int = 4
+e: int = 5
+"#,
+    );
+    t.add(
+        "bar",
+        r#"
+from foo import a
+from foo import b as b
+from foo import c
+from foo import d
+from foo import e
+f: int = 4
+__all__ = ["c", "e"]
+__all__.append("d")
+__all__.remove("e")
+for name in ["f"]:
+    __all__.append(name)  # E: `__all__` could not be statically analyzed
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_implicit_reexport_unresolvable_all,
+    env_implicit_reexport_unresolvable_all().enable_implicit_reexport_error(),
+    r#"
+from bar import a  # E: `a` is not exported from module `bar`
+from bar import b
+from bar import c
+from bar import d
+from bar import e  # E: `e` is not exported from module `bar`
+from bar import f
+"#,
+);
+
+fn env_implicit_reexport_removed_from_all() -> TestEnv {
+    let mut t = TestEnv::new();
+    t.add(
+        "foo",
+        r#"
+c: int = 3
+"#,
+    );
+    t.add(
+        "bar",
+        r#"
+from foo import c
+__all__ = ["c"]
+__all__.remove("c")
+"#,
+    );
+    t
+}
+
+testcase!(
+    test_implicit_reexport_removed_from_all,
+    env_implicit_reexport_removed_from_all().enable_implicit_reexport_error(),
+    r#"
+from bar import c  # E: `c` is not exported from module `bar`
 "#,
 );

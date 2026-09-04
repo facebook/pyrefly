@@ -425,14 +425,17 @@ impl RuleOverrides {
             self.report_missing_parameter_type,
             ErrorKind::ImplicitAnyParameter,
         );
-        add(self.report_unknown_argument_type, ErrorKind::ImplicitAny);
+        add(
+            self.report_unknown_argument_type,
+            ErrorKind::UnknownArgumentType,
+        );
         add(
             self.report_unknown_variable_type,
-            ErrorKind::ImplicitAnyVariable,
+            ErrorKind::UnknownVariableType,
         );
         add(
             self.report_unknown_member_type,
-            ErrorKind::ImplicitAnyAttribute,
+            ErrorKind::UnknownAttributeType,
         );
         add(
             self.report_unknown_lambda_type,

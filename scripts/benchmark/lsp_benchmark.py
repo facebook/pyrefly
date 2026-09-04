@@ -4,7 +4,6 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-# pyre-unsafe
 
 """Benchmark `textDocument/definition` between LSP servers on a codebase.
 
@@ -76,7 +75,6 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-
 
 JsonObj = Dict[str, Any]
 

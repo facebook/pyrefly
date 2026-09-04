@@ -1,0 +1,1 @@
+project-excludes = ["excluded.qmd"]

@@ -14,7 +14,7 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
-from shape_extensions import Elements, SizeTuple, SymVar
+from shape_extensions import Elements, IntTuple, IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -48,7 +48,7 @@ def test_add_bare_linear_outputs():
 # --- Shaped inputs: explicitly variadic with different TypeVarTuples ---
 
 
-def add_different_variadics[As: SizeTuple, Bs: SizeTuple, C: SymVar](
+def add_different_variadics[As: IntTuple, Bs: IntTuple, C: IntVar](
     a: Tensor[[*Elements[As], C]], b: Tensor[[*Elements[Bs], C]]
 ) -> Tensor:
     """Add two tensors with different variadic batch dims.
@@ -67,7 +67,7 @@ def test_add_shaped_different_variadics():
 # --- Same variadic: should still broadcast correctly ---
 
 
-def add_same_variadic[Bs: SizeTuple, C: SymVar](
+def add_same_variadic[Bs: IntTuple, C: IntVar](
     a: Tensor[[*Elements[Bs], C]], b: Tensor[[*Elements[Bs], C]]
 ) -> Tensor[[*Elements[Bs], C]]:
     """Add two tensors with the same variadic and same suffix.
@@ -86,7 +86,7 @@ def test_add_same_variadic():
 # --- Mul with different variadics ---
 
 
-def mul_different_variadics[As: SizeTuple, Bs: SizeTuple, C: SymVar](
+def mul_different_variadics[As: IntTuple, Bs: IntTuple, C: IntVar](
     a: Tensor[[*Elements[As], C]], b: Tensor[[*Elements[Bs], C]]
 ) -> Tensor:
     """Multiply tensors with different variadic middles.

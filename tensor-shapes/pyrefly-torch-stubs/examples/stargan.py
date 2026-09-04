@@ -24,7 +24,7 @@ Port notes:
 - Fixed conv_dim=64 (default) and 128x128 image size (StarGAN standard).
   repeat_num=6 for both Generator bottleneck and Discriminator depth.
 - Condition broadcast uses .view().expand() — both operations are fully
-  shape-tracked when args are Dim values or literals. Verified by assert_type.
+  shape-tracked when args are Int values or literals. Verified by assert_type.
 
 Key patterns exercised:
 - nn.Sequential for large pipelines (faithful to original)
@@ -40,7 +40,7 @@ import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim, SymVar
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
 
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class ResidualBlock[C: SymVar](nn.Module):
+class ResidualBlock[C: IntVar](nn.Module):
     """Shape-preserving residual block with InstanceNorm2d.
 
     Conv2d(C, C, 3, 1, 1) → InstanceNorm → ReLU → Conv2d(C, C, 3, 1, 1) → InstanceNorm
@@ -58,7 +58,7 @@ class ResidualBlock[C: SymVar](nn.Module):
     (B, C, H, W) → (B, C, H, W)
     """
 
-    def __init__(self, dim: Dim[C]) -> None:
+    def __init__(self, dim: Int[C]) -> None:
         super().__init__()
         self.conv_block = nn.Sequential(
             nn.Conv2d(dim, dim, kernel_size=3, stride=1, padding=1),
@@ -68,7 +68,7 @@ class ResidualBlock[C: SymVar](nn.Module):
             nn.InstanceNorm2d(dim, affine=True, track_running_stats=True),
         )
 
-    def forward[B: SymVar, H: SymVar, W: SymVar](
+    def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, C, H, W]]
     ) -> Tensor[[B, C, H, W]]:
         return x + self.conv_block(x)
@@ -79,7 +79,7 @@ class ResidualBlock[C: SymVar](nn.Module):
 # ============================================================================
 
 
-class Generator[CDim: SymVar](nn.Module):
+class Generator[CDim: IntVar](nn.Module):
     """StarGAN generator: image + condition → translated image.
 
     Architecture (128x128, conv_dim=64):
@@ -100,7 +100,7 @@ class Generator[CDim: SymVar](nn.Module):
     (B, 3, 128, 128), (B, CDim) → (B, 3, 128, 128)
     """
 
-    def __init__(self, c_dim: Dim[CDim]) -> None:
+    def __init__(self, c_dim: Int[CDim]) -> None:
         super().__init__()
         self.main = nn.Sequential(
             # Encoder
@@ -132,7 +132,7 @@ class Generator[CDim: SymVar](nn.Module):
             nn.Tanh(),
         )
 
-    def forward[B: SymVar, S: SymVar](
+    def forward[B: IntVar, S: IntVar](
         self, x: Tensor[[B, 3, S, S]], c: Tensor[[B, CDim]]
     ) -> Tensor[[B, 3, S, S]]:
         # Condition injection: broadcast (B, CDim) → (B, CDim, S, S)
@@ -153,7 +153,7 @@ class Generator[CDim: SymVar](nn.Module):
 # ============================================================================
 
 
-class Discriminator[CDim: SymVar, S: SymVar](nn.Module):
+class Discriminator[CDim: IntVar, S: IntVar](nn.Module):
     """StarGAN PatchGAN discriminator with dual heads.
 
     Architecture (conv_dim=64, repeat_num=6):
@@ -165,7 +165,7 @@ class Discriminator[CDim: SymVar, S: SymVar](nn.Module):
     (B, 3, S, S) → (Tensor[[B, 1, S//64, S//64]], Tensor[[B, CDim]])
     """
 
-    def __init__(self, c_dim: Dim[CDim], image_size: Dim[S]) -> None:
+    def __init__(self, c_dim: Int[CDim], image_size: Int[S]) -> None:
         super().__init__()
         self.main = nn.Sequential(
             nn.Conv2d(3, 64, kernel_size=4, stride=2, padding=1),
@@ -185,7 +185,7 @@ class Discriminator[CDim: SymVar, S: SymVar](nn.Module):
         self.conv_src = nn.Conv2d(2048, 1, kernel_size=3, stride=1, padding=1)
         self.conv_cls = nn.Conv2d(2048, c_dim, kernel_size=image_size // 64)
 
-    def forward[B: SymVar](
+    def forward[B: IntVar](
         self, x: Tensor[[B, 3, S, S]]
     ) -> tuple[Tensor[[B, 1, S // 64, S // 64]], Tensor[[B, CDim]]]:
         h = self.main(x)

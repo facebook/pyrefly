@@ -151,8 +151,8 @@ mod impl_ {
                 Binding::Forward(next)
                 | Binding::PromoteForward(next)
                 | Binding::ForwardToFirstUse(next)
-                | Binding::Narrow(next, ..)
-                | Binding::LoopPhi(next, ..) => current = *next,
+                | Binding::Narrow(next, ..) => current = *next,
+                Binding::LoopPhi(phi) => current = phi.0,
                 // All branches of a Phi node originate from the same variable definition,
                 // so any branch will lead to the same Key::Definition. We follow the first.
                 Binding::Phi(_, branches) if !branches.is_empty() => {

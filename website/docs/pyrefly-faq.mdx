@@ -31,7 +31,7 @@ Here are the main reasons to consider Pyrefly:
     * [`pyrefly coverage`](./report.mdx) to measure type coverage across your codebase and enforce it in CI.
     * [Error baselines](./error-suppressions.mdx#baseline-files-experimental) to track and suppress pre-existing errors without modifying source code.
     * [`pyrefly infer`](./autotype.mdx) to automatically add inferred type annotations to your code.
-    * [`pyrefly init`](./migrating-to-pyrefly.mdx) for automatic config migration from mypy or pyright.
+    * [`pyrefly init`](./migrate/index.mdx) for automatic config migration from mypy or pyright.
     * [`pyrefly suppress`](./error-suppressions.mdx#upgrading-pyrefly-and-other-changes-that-introduce-new-type-errors) for automatic bulk error suppression during upgrades.
 
 ## How do I pronounce Pyrefly?
@@ -77,6 +77,13 @@ Great question. We have made a substantial investment in Pyrefly, use it interna
 ## This is cool, I want to learn more about the technical details.
 
 See our [README.md](https://github.com/facebook/pyrefly/blob/main/README.md) for the high level design. We plan to add more detailed documentation along with announcements on [https://engineering.fb.com](https://engineering.fb.com/)
+
+## Can I run Pyrefly in the browser / WebAssembly?
+
+Yes, in the [sandbox](https://pyrefly.org/sandbox/). Pyrefly compiles to
+WebAssembly for that playground. The WASM crate is **not** a stable embeddable
+API yet. See [WebAssembly](./wasm.mdx) for how to build it and what `State`
+currently exposes.
 
 ## I don't like Python's Type System. Stop wasting your time.
 

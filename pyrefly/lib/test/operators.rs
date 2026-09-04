@@ -21,6 +21,20 @@ def f(a: int, b: int) -> None:
 );
 
 testcase!(
+    test_dict_union_literal_keys,
+    r#"
+from typing import Literal
+
+Allowed = Literal["a", "b", "c"]
+d: dict[Allowed, int] = {"a": 0, "b": 0}
+e: dict[Allowed, int] = d | {"c": 0}
+d |= {"c": 0}
+bad_key: dict[Allowed, int] = d | {"not-allowed": 0}  # E: `dict[Literal['a', 'b', 'c'] | str, int]` is not assignable to `dict[Allowed, int]`
+bad_value: dict[Allowed, int] = d | {"a": "not-an-int"}  # E: `dict[Literal['a', 'b', 'c'] | str, int | str]` is not assignable to `dict[Allowed, int]`
+    "#,
+);
+
+testcase!(
     test_bounded_type_var_comparison,
     r#"
 def compare[T: int](x: T, y: T) -> bool:
@@ -561,7 +575,7 @@ def f(x: Any):
 testcase!(
     test_binop_on_any,
     r#"
-from typing import Any, assert_type
+from typing import Any, Self, assert_type
 
 def f(x: Any):
     assert_type(1 + x, Any)
@@ -570,6 +584,14 @@ def f(x: Any):
 def f2(x: int | Any):
     assert_type(1 + x, int | Any)
     assert_type(x < 10,  bool | Any )
+
+class C:
+    def __add__(self, other: object, /) -> Self: ...
+    def __radd__(self, other: object, /) -> Self: ...
+
+def f3(x: C, y: Any) -> None:
+    assert_type(x + y, Any)
+    assert_type(y + x, Any)
     "#,
 );
 
@@ -908,6 +930,27 @@ True & ThisClassDoesNotWork(False)
     "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3876
+testcase!(
+    test_reflected_dunder_subclass_priority,
+    r#"
+from enum import IntFlag
+from typing import assert_type
+
+class Color(IntFlag):
+    RED = 1
+    GREEN = 2
+
+def f(x: int, c: Color) -> None:
+    # `int & Color` invokes `Color.__rand__` at runtime because `Color` is a
+    # proper subclass of `int` that overrides the reflected dunder, so the result
+    # keeps the flag type instead of widening to `int`.
+    assert_type(x & c, Color)
+    assert_type(x | c, Color)
+    assert_type(x ^ c, Color)
+"#,
+);
+
 testcase!(
     test_type_of_typevar_equality,
     r#"
@@ -946,6 +989,31 @@ def test(a: A, b: B, c: C) -> None:
     a < b < c  # Should be OK: (a < b) and (b < c)
     a < c      # E: `<` is not supported between `A` and `C`
     "#,
+);
+
+// https://github.com/facebook/pyrefly/issues/4342
+testcase!(
+    test_date_datetime_comparison,
+    r#"
+from datetime import date, datetime
+
+d = date.today()
+dt = datetime.now()
+
+dt < d  # E: `<` is not supported between `datetime` and `date`
+dt <= d  # E: `<=` is not supported between `datetime` and `date`
+dt > d  # E: `>` is not supported between `datetime` and `date`
+dt >= d  # E: `>=` is not supported between `datetime` and `date`
+d < dt  # E: `<` is not supported between `date` and `datetime`
+d <= dt  # E: `<=` is not supported between `date` and `datetime`
+d > dt  # E: `>` is not supported between `date` and `datetime`
+d >= dt  # E: `>=` is not supported between `date` and `datetime`
+
+dt == d
+dt != d
+d < date.today()
+dt < datetime.now()
+"#,
 );
 
 testcase!(

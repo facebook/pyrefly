@@ -18,6 +18,7 @@ use pyrefly_config::config::FallbackSearchPath;
 use pyrefly_config::resolve_unconfigured::UnconfiguredOverride;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::arc_id::WeakArcId;
+use pyrefly_util::globs::Globs;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::lock::RwLock;
 use serde::Deserialize;
@@ -69,6 +70,13 @@ impl PythonInfo {
 pub struct Workspace {
     python_info: Option<PythonInfo>,
     search_path: Option<Vec<PathBuf>>,
+    /// Extra `project_excludes` globs contributed by the client, already
+    /// rewritten relative to this workspace's root. Appended to (never
+    /// replacing) whatever the resolved `ConfigFile` excludes, so an editor
+    /// marking a directory as excluded can only ever remove files from the
+    /// project, not silently re-include files the project's own config
+    /// excluded.
+    project_excludes: Option<Globs>,
     pub disable_language_services: bool,
     pub disabled_language_services: Option<DisabledLanguageServices>,
     pub runnable_code_lens: bool,
@@ -145,6 +153,12 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
                 if let Some(search_path) = w.search_path.clone() {
                     config.search_path_from_args = search_path;
                 }
+                if let Some(project_excludes) = &w.project_excludes {
+                    // Runs before `config.configure()` below, so the exclude
+                    // heuristics (required excludes, site packages) are still
+                    // layered on top of the combined list.
+                    config.project_excludes.append(project_excludes.globs());
+                }
                 // If we already have a static fallback search path (meaning no config was found
                 // and we're already using heuristics), insert workspace root as first
                 // fallback_search_path so our handles (which are created from first fallback)
@@ -177,7 +191,7 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
 
         // we print the errors here instead of returning them since
         // it gives the most immediate feedback for config loading errors
-        for error in errors.drain(..).chain(config.configure()) {
+        for error in errors.drain(..).chain(config.configure_at(root)) {
             error.print();
         }
         let config = ArcId::new(config);
@@ -243,7 +257,16 @@ struct PyreflyClientConfig {
     #[serde(default)]
     disable_type_errors: bool,
     disable_language_services: Option<bool>,
+    /// deprecated, use `extra_search_paths`
     extra_paths: Option<Vec<PathBuf>>,
+    extra_search_paths: Option<Vec<PathBuf>>,
+    /// Globs excluded from the project, in addition to the `project-excludes`
+    /// of whatever config Pyrefly resolves for a file. Relative patterns are
+    /// interpreted relative to the workspace folder they're scoped to. Lets
+    /// editors that own their own notion of excluded directories (e.g.
+    /// PyCharm's "Excluded" content roots) push it down without writing a
+    /// `pyrefly.toml`.
+    extra_project_excludes: Option<Globs>,
     runnable_code_lens: Option<bool>,
     diagnostic_mode: Option<DiagnosticMode>,
     #[serde(default, deserialize_with = "deserialize_analysis")]
@@ -328,6 +351,18 @@ impl DisabledLanguageServices {
     }
 }
 
+/// How Pyrefly's LSP server is being driven.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServerMode {
+    /// Pyrefly is its own language server (the standalone Pyrefly VS Code
+    /// extension, or any direct LSP client).
+    LanguageServer,
+    /// Pyrefly is another editor's backing type server, driven over TSP
+    /// (Type Server Protocol) — e.g. Pylance. Forwarded `pyrefly.*` client
+    /// settings are ignored because the host owns that behavior.
+    TypeServer,
+}
+
 /// https://code.visualstudio.com/docs/python/settings-reference#_pylance-language-server
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -342,6 +377,14 @@ pub struct LspAnalysisConfig {
     // TODO: this is not a pylance setting. it should be in pyrefly settings
     #[serde(default)]
     pub show_hover_go_to_links: Option<bool>,
+    /// Debounce window (milliseconds) for inlay hint requests. VS Code exposes
+    /// no client-side inlay-hint debounce (microsoft/vscode#133730), so without
+    /// this, hints recompute on every keystroke and their widths jitter
+    /// distractingly. When the document was edited within this window, the
+    /// request is deferred until editing pauses. `0` disables debouncing.
+    // TODO: this is not a pylance setting. it should be in pyrefly settings
+    #[serde(default)]
+    pub inlay_hint_debounce_ms: Option<u64>,
 }
 
 fn deserialize_analysis<'de, D>(deserializer: D) -> Result<Option<LspAnalysisConfig>, D::Error>
@@ -499,12 +542,20 @@ impl Workspaces {
     /// Applies the LSP client configuration to the `scope_uri` (workspace) given.
     ///
     /// The `modified` flag is changed to `true` when the configuration gets applied to the
-    /// `scope_uri` matching a valid workspace
+    /// `scope_uri` matching a valid workspace.
+    ///
+    /// In [`ServerMode::TypeServer`] the whole `pyrefly.*` settings block is
+    /// ignored. The host (e.g. Pylance) still forwards it over LSP, but those
+    /// settings configure the standalone Pyrefly extension, which the host now
+    /// owns. Ignoring them also stops a stale setting (e.g. `disableTypeErrors`
+    /// left over from running the extension) from silently suppressing the
+    /// diagnostics the host asked us to compute.
     pub fn apply_client_configuration(
         &self,
         modified: &mut bool,
         scope_uri: &Option<Url>,
         config: Value,
+        mode: ServerMode,
     ) {
         let config = match serde_json::from_value::<LspConfig>(config.clone()) {
             Err(e) => {
@@ -520,10 +571,16 @@ impl Workspaces {
             self.update_pythonpath(modified, scope_uri, &python_path);
         }
 
-        if let Some(pyrefly) = config.pyrefly {
+        if let Some(pyrefly) = config.pyrefly
+            && mode == ServerMode::LanguageServer
+        {
             if let Some(extra_paths) = pyrefly.extra_paths {
                 self.update_search_paths(modified, scope_uri, extra_paths);
             }
+            if let Some(extra_paths) = pyrefly.extra_search_paths {
+                self.update_search_paths(modified, scope_uri, extra_paths);
+            }
+            self.update_project_excludes(modified, scope_uri, pyrefly.extra_project_excludes);
             if let Some(disable_language_services) = pyrefly.disable_language_services {
                 self.update_disable_language_services(scope_uri, disable_language_services);
             }
@@ -805,6 +862,43 @@ impl Workspaces {
             None => {
                 *modified = true;
                 self.default.write().search_path = Some(search_paths);
+            }
+        }
+    }
+
+    /// Updates the client-provided `project_excludes` for scope uri.
+    ///
+    /// Patterns are rewritten relative to the workspace root, so clients can
+    /// send workspace-relative globs. The catch-all default workspace has no
+    /// root to anchor to, so patterns applied to it must be absolute to match
+    /// anything — in practice this is fine, because `initializationOptions`
+    /// are applied to every workspace folder as well as to the default.
+    fn update_project_excludes(
+        &self,
+        modified: &mut bool,
+        scope_uri: &Option<Url>,
+        project_excludes: Option<Globs>,
+    ) {
+        let mut workspaces = self.workspaces.write();
+        match scope_uri {
+            Some(scope_uri) => {
+                if let Ok(workspace_path) = scope_uri.to_file_path()
+                    && let Some(workspace) = workspaces.get_mut(&workspace_path)
+                {
+                    let project_excludes =
+                        project_excludes.map(|globs| globs.from_root(&workspace_path));
+                    if workspace.project_excludes != project_excludes {
+                        *modified = true;
+                        workspace.project_excludes = project_excludes;
+                    }
+                }
+            }
+            None => {
+                let mut default = self.default.write();
+                if default.project_excludes != project_excludes {
+                    *modified = true;
+                    default.project_excludes = project_excludes;
+                }
             }
         }
     }
@@ -1208,7 +1302,12 @@ mod tests {
         fn empty_payload_does_not_flag_modified() {
             let workspaces = Workspaces::new(Workspace::new(), &[]);
             let mut modified = false;
-            workspaces.apply_client_configuration(&mut modified, &None, json!({}));
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({}),
+                ServerMode::LanguageServer,
+            );
             assert!(!modified);
         }
 
@@ -1224,6 +1323,7 @@ mod tests {
                 &mut modified,
                 &None,
                 json!({ "pyrefly": { "disableLanguageServices": true } }),
+                ServerMode::LanguageServer,
             );
             assert!(!modified);
             assert!(!workspaces.default.read().disable_type_errors);
@@ -1239,9 +1339,33 @@ mod tests {
                 &mut modified,
                 &None,
                 json!({ "pyrefly": { "disableTypeErrors": true } }),
+                ServerMode::LanguageServer,
             );
             assert!(modified);
             assert!(workspaces.default.read().disable_type_errors);
+        }
+
+        /// In [`ServerMode::TypeServer`] the whole `pyrefly.*` client-settings
+        /// block is ignored: the host owns this behavior, and a stale setting
+        /// forwarded over LSP must not take effect. Nothing is applied, so
+        /// `modified` stays false too.
+        #[test]
+        fn type_server_mode_ignores_pyrefly_settings() {
+            let workspaces = Workspaces::new(Workspace::new(), &[]);
+            let mut modified = false;
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({ "pyrefly": {
+                    "disableTypeErrors": true,
+                    "displayTypeErrors": "force-off",
+                    "disableLanguageServices": true,
+                } }),
+                ServerMode::TypeServer,
+            );
+            assert!(!modified);
+            assert!(!workspaces.default.read().disable_type_errors);
+            assert!(!workspaces.default.read().disable_language_services);
         }
 
         /// A user removing `displayTypeErrors` from settings must clear
@@ -1252,7 +1376,12 @@ mod tests {
             let workspaces = Workspaces::new(Workspace::new(), &[]);
             workspaces.default.write().display_type_errors = Some(DisplayTypeErrors::ForceOn);
             let mut modified = false;
-            workspaces.apply_client_configuration(&mut modified, &None, json!({ "pyrefly": {} }));
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({ "pyrefly": {} }),
+                ServerMode::LanguageServer,
+            );
             assert!(modified);
             assert_eq!(workspaces.default.read().display_type_errors, None);
         }
@@ -1264,9 +1393,122 @@ mod tests {
             let workspaces = Workspaces::new(Workspace::new(), &[]);
             workspaces.default.write().type_checking_mode = Some(TypeCheckingMode::Strict);
             let mut modified = false;
-            workspaces.apply_client_configuration(&mut modified, &None, json!({ "pyrefly": {} }));
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({ "pyrefly": {} }),
+                ServerMode::LanguageServer,
+            );
             assert!(modified);
             assert_eq!(workspaces.default.read().type_checking_mode, None);
+        }
+
+        /// `extraSearchPaths` is the current name for the client-provided
+        /// search path, and must reach the workspace on its own.
+        #[test]
+        fn extra_search_paths_are_honored() {
+            let workspaces = Workspaces::new(Workspace::new(), &[]);
+            let mut modified = false;
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({ "pyrefly": { "extraSearchPaths": ["/some/path"] } }),
+                ServerMode::LanguageServer,
+            );
+            assert!(modified);
+            assert_eq!(
+                workspaces.default.read().search_path,
+                Some(vec![PathBuf::from("/some/path")])
+            );
+        }
+
+        /// A client sending both the current and the deprecated key must get
+        /// the current one. This holds only because `apply_client_configuration`
+        /// applies `extra_paths` before `extra_search_paths` and each write
+        /// replaces the whole search path — swapping that order silently
+        /// inverts the documented precedence.
+        #[test]
+        fn extra_search_paths_wins_over_deprecated_extra_paths() {
+            let workspaces = Workspaces::new(Workspace::new(), &[]);
+            let mut modified = false;
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({ "pyrefly": {
+                    "extraPaths": ["/deprecated"],
+                    "extraSearchPaths": ["/current"],
+                } }),
+                ServerMode::LanguageServer,
+            );
+            assert_eq!(
+                workspaces.default.read().search_path,
+                Some(vec![PathBuf::from("/current")])
+            );
+        }
+
+        /// `extraProjectExcludes` globs are stored rewritten relative to the
+        /// workspace root, so a client can send workspace-relative patterns
+        /// (which is what an editor reporting excluded content roots has).
+        // Unix-only because it spells absolute paths literally; the
+        // `test_client_project_excludes` LSP test covers rooting portably.
+        #[cfg(unix)]
+        #[test]
+        fn project_excludes_are_rooted_at_the_workspace() {
+            let root = PathBuf::from("/projects/my_project");
+            let workspaces = Workspaces::new(Workspace::new(), std::slice::from_ref(&root));
+            let mut modified = false;
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &Some(Url::from_directory_path(&root).unwrap()),
+                json!({ "pyrefly": { "extraProjectExcludes": ["generated", "/abs/vendor"] } }),
+                ServerMode::LanguageServer,
+            );
+            assert!(modified);
+            let excludes = workspaces
+                .workspaces
+                .read()
+                .get(&root)
+                .unwrap()
+                .project_excludes
+                .clone()
+                .unwrap();
+            assert!(excludes.covers(Path::new("/projects/my_project/generated/a.py")));
+            assert!(excludes.covers(Path::new("/abs/vendor/b.py")));
+            assert!(!excludes.covers(Path::new("/projects/my_project/src/c.py")));
+        }
+
+        /// Removing `extraProjectExcludes` from settings must clear the prior value
+        /// and flag `modified`, otherwise a directory stays excluded after the
+        /// user un-excludes it. Re-asserting the same value must not.
+        #[test]
+        fn project_excludes_clear_and_repeat() {
+            let workspaces = Workspaces::new(Workspace::new(), &[]);
+            let mut modified = false;
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({ "pyrefly": { "extraProjectExcludes": ["/abs/generated"] } }),
+                ServerMode::LanguageServer,
+            );
+            assert!(modified);
+
+            modified = false;
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({ "pyrefly": { "extraProjectExcludes": ["/abs/generated"] } }),
+                ServerMode::LanguageServer,
+            );
+            assert!(!modified);
+
+            workspaces.apply_client_configuration(
+                &mut modified,
+                &None,
+                json!({ "pyrefly": {} }),
+                ServerMode::LanguageServer,
+            );
+            assert!(modified);
+            assert_eq!(workspaces.default.read().project_excludes, None);
         }
 
         /// Re-asserting the same `typeCheckingMode` value must not flag
@@ -1281,6 +1523,7 @@ mod tests {
                 &mut modified,
                 &None,
                 json!({ "pyrefly": { "typeCheckingMode": "strict" } }),
+                ServerMode::LanguageServer,
             );
             assert!(!modified);
         }

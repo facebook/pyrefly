@@ -30,13 +30,12 @@ use std::thread::available_parallelism;
 use std::time::Instant;
 
 use lsp_types::Url;
-use pyrefly::commands::lsp::IndexingMode;
-use pyrefly::commands::lsp::LspArgs;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use pyrefly_util::thread_pool::ThreadCount;
-
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::object_model::LspInteractionArgs;
 
 /// Peak resident set size of this process in bytes, read from `VmHWM` in
 /// `/proc/self/status`. The LSP server runs in a thread of this process, so its

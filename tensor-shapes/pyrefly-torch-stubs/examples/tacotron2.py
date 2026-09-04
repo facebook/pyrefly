@@ -43,10 +43,10 @@ from typing import assert_type, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from shape_extensions import Elements, SizeTuple, SymVar
+from shape_extensions import Elements, IntTuple, IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
@@ -55,18 +55,18 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class Prenet[NMel: SymVar](nn.Module):
+class Prenet[NMel: IntVar](nn.Module):
     """Decoder prenet: 2 Linear layers with always-on dropout.
 
     (B, NMel) → (B, 256)
     """
 
-    def __init__(self, n_mel: Dim[NMel]) -> None:
+    def __init__(self, n_mel: Int[NMel]) -> None:
         super().__init__()
         self.fc1 = nn.Linear(n_mel, 256)
         self.fc2 = nn.Linear(256, 256)
 
-    def forward[Bs: SizeTuple](
+    def forward[Bs: IntTuple](
         self, x: Tensor[[*Elements[Bs], NMel]]
     ) -> Tensor[[*Elements[Bs], 256]]:
         h = F.dropout(F.relu(self.fc1(x)), p=0.5, training=True)
@@ -79,7 +79,7 @@ class Prenet[NMel: SymVar](nn.Module):
 # ============================================================================
 
 
-class Postnet[NMel: SymVar](nn.Module):
+class Postnet[NMel: IntVar](nn.Module):
     """Post-processing network: 5 Conv1d layers, shape-preserving on NMel.
 
     Architecture (with kernel_size=5, padding=2, all shape-preserving on T):
@@ -90,7 +90,7 @@ class Postnet[NMel: SymVar](nn.Module):
     (B, NMel, T) → (B, NMel, T)
     """
 
-    def __init__(self, n_mel: Dim[NMel]) -> None:
+    def __init__(self, n_mel: Int[NMel]) -> None:
         super().__init__()
         self.conv1 = nn.Conv1d(n_mel, 512, kernel_size=5, stride=1, padding=2)
         self.bn1 = nn.BatchNorm1d(512)
@@ -103,7 +103,7 @@ class Postnet[NMel: SymVar](nn.Module):
         self.conv5 = nn.Conv1d(512, n_mel, kernel_size=5, stride=1, padding=2)
         self.bn5 = nn.BatchNorm1d(n_mel)
 
-    def forward[B: SymVar, T: SymVar](
+    def forward[B: IntVar, T: IntVar](
         self, x: Tensor[[B, NMel, T]]
     ) -> Tensor[[B, NMel, T]]:
         h = F.dropout(torch.tanh(self.bn1(self.conv1(x))), 0.5, self.training)
@@ -124,7 +124,7 @@ class Postnet[NMel: SymVar](nn.Module):
 # ============================================================================
 
 
-class Encoder[EmbDim: SymVar](nn.Module):
+class Encoder[EmbDim: IntVar](nn.Module):
     """Tacotron2 encoder: Conv1d stack + BiLSTM.
 
     Architecture:
@@ -138,7 +138,7 @@ class Encoder[EmbDim: SymVar](nn.Module):
     (B, EmbDim, T) → (B, T, EmbDim)
     """
 
-    def __init__(self, embed_dim: Dim[EmbDim]) -> None:
+    def __init__(self, embed_dim: Int[EmbDim]) -> None:
         super().__init__()
         self.conv1 = nn.Conv1d(embed_dim, embed_dim, kernel_size=5, stride=1, padding=2)
         self.bn1 = nn.BatchNorm1d(embed_dim)
@@ -156,7 +156,7 @@ class Encoder[EmbDim: SymVar](nn.Module):
             bidirectional=True,
         )
 
-    def forward[B: SymVar, T: SymVar](
+    def forward[B: IntVar, T: IntVar](
         self, x: Tensor[[B, EmbDim, T]]
     ) -> Tensor[[B, T, EmbDim]]:
         # Conv stack (shape-preserving on T)
@@ -193,7 +193,7 @@ class LocationLayer(nn.Module):
         self.location_conv = nn.Conv1d(2, 32, kernel_size=31, stride=1, padding=15)
         self.location_dense = nn.Linear(32, 128, bias=False)
 
-    def forward[B: SymVar, T: SymVar](
+    def forward[B: IntVar, T: IntVar](
         self, attention_weights_cat: Tensor[[B, 2, T]]
     ) -> Tensor[[B, T, 128]]:
         processed = self.location_conv(attention_weights_cat)
@@ -203,7 +203,7 @@ class LocationLayer(nn.Module):
         return self.location_dense(processed_t)
 
 
-class Attention[EmbDim: SymVar](nn.Module):
+class Attention[EmbDim: IntVar](nn.Module):
     """Location-sensitive additive attention.
 
     Computes alignment energies from:
@@ -216,14 +216,14 @@ class Attention[EmbDim: SymVar](nn.Module):
     - attention_weights: (B, T) — alignment probabilities
     """
 
-    def __init__(self, embed_dim: Dim[EmbDim]) -> None:
+    def __init__(self, embed_dim: Int[EmbDim]) -> None:
         super().__init__()
         self.query_layer = nn.Linear(1024, 128, bias=False)
         self.memory_layer = nn.Linear(embed_dim, 128, bias=False)
         self.v = nn.Linear(128, 1, bias=False)
         self.location_layer = LocationLayer()
 
-    def forward[B: SymVar, T: SymVar](
+    def forward[B: IntVar, T: IntVar](
         self,
         query: Tensor[[B, 1024]],
         memory: Tensor[[B, T, EmbDim]],
@@ -258,7 +258,7 @@ class Attention[EmbDim: SymVar](nn.Module):
 # ============================================================================
 
 
-class DecoderStep[EmbDim: SymVar](nn.Module):
+class DecoderStep[EmbDim: IntVar](nn.Module):
     """Single decoder step using LSTMCell (non-autoregressive view).
 
     One step of the autoregressive decoder, exposing the shape flow:
@@ -271,14 +271,14 @@ class DecoderStep[EmbDim: SymVar](nn.Module):
         → gate_layer → (B, 1)  [stop token]
     """
 
-    def __init__(self, embed_dim: Dim[EmbDim]) -> None:
+    def __init__(self, embed_dim: Int[EmbDim]) -> None:
         super().__init__()
         self.attention_rnn = nn.LSTMCell(256 + embed_dim, 1024)
         self.decoder_rnn = nn.LSTMCell(1024 + embed_dim, 1024)
         self.linear_projection = nn.Linear(1024 + embed_dim, 80)
         self.gate_layer = nn.Linear(1024 + embed_dim, 1)
 
-    def forward[B: SymVar](
+    def forward[B: IntVar](
         self,
         prenet_out: Tensor[[B, 256]],
         attention_context: Tensor[[B, EmbDim]],
@@ -321,7 +321,7 @@ class DecoderStep[EmbDim: SymVar](nn.Module):
 # ============================================================================
 
 
-class Tacotron2[NSymbols: SymVar](nn.Module):
+class Tacotron2[NSymbols: IntVar](nn.Module):
     """Tacotron2 TTS model.
 
     tokens (B, T_text) → Embedding → (B, T_text, 512)
@@ -333,7 +333,7 @@ class Tacotron2[NSymbols: SymVar](nn.Module):
     is not fully typed (it requires variable-length list accumulation).
     """
 
-    def __init__(self, n_symbols: Dim[NSymbols], max_decoder_steps: int = 1000) -> None:
+    def __init__(self, n_symbols: Int[NSymbols], max_decoder_steps: int = 1000) -> None:
         super().__init__()
         self.embedding = nn.Embedding(n_symbols, 512)
         self.encoder = Encoder(512)
@@ -343,7 +343,7 @@ class Tacotron2[NSymbols: SymVar](nn.Module):
         self.postnet = Postnet(80)
         self.max_decoder_steps = max_decoder_steps
 
-    def forward[B: SymVar, T: SymVar](
+    def forward[B: IntVar, T: IntVar](
         self, tokens: Tensor[[B, T]], teacher_forcing_mel: Tensor | None = None
     ) -> Tensor:
         """Run Tacotron2 end-to-end.
@@ -424,7 +424,7 @@ class Tacotron2[NSymbols: SymVar](nn.Module):
 # ============================================================================
 
 
-class ConvNorm[InC: SymVar, OutC: SymVar](nn.Module):
+class ConvNorm[InC: IntVar, OutC: IntVar](nn.Module):
     """Thin wrapper around Conv1d with Xavier uniform initialization.
 
     Original: tacotron2/layers.py ConvNorm class.
@@ -434,8 +434,8 @@ class ConvNorm[InC: SymVar, OutC: SymVar](nn.Module):
 
     def __init__(
         self,
-        in_channels: Dim[InC],
-        out_channels: Dim[OutC],
+        in_channels: Int[InC],
+        out_channels: Int[OutC],
         kernel_size: int = 1,
         stride: int = 1,
         padding: int = 0,
@@ -452,24 +452,24 @@ class ConvNorm[InC: SymVar, OutC: SymVar](nn.Module):
         )
         nn.init.xavier_uniform_(self.conv.weight)
 
-    def forward[B: SymVar, T: SymVar](
+    def forward[B: IntVar, T: IntVar](
         self, x: Tensor[[B, InC, T]]
     ) -> Tensor[[B, OutC, T]]:
-        return self.conv(x)
+        return self.conv(x)  # type: ignore[bad-return]  # wrapper is used only for shape-preserving convs here
 
 
-class LinearNorm[InF: SymVar, OutF: SymVar](nn.Module):
+class LinearNorm[InF: IntVar, OutF: IntVar](nn.Module):
     """Thin wrapper around Linear with Xavier uniform initialization.
 
     Original: tacotron2/layers.py LinearNorm class.
     """
 
-    def __init__(self, in_features: Dim[InF], out_features: Dim[OutF]) -> None:
+    def __init__(self, in_features: Int[InF], out_features: Int[OutF]) -> None:
         super().__init__()
         self.linear = nn.Linear(in_features, out_features)
         nn.init.xavier_uniform_(self.linear.weight)
 
-    def forward[B: SymVar](self, x: Tensor[[B, InF]]) -> Tensor[[B, OutF]]:
+    def forward[B: IntVar](self, x: Tensor[[B, InF]]) -> Tensor[[B, OutF]]:
         return self.linear(x)
 
 
