@@ -37,11 +37,12 @@ a: Solutions
 b: Answers
 c: Exports
 
-(36 builtin demands hidden)
+(35 builtin demands hidden)
 a -> b::Exports(is_special_export)
 b -> c::Exports(get_wildcard)
 a -> b::Load(module_exists)
 a -> b::Exports(export_exists)
+a -> b::Exports(is_implicit_reexport)
 a -> b::Exports(get_deprecated)
 a -> b::KeyExport(Name("light"))
   b -> c::Exports(get_wildcard)

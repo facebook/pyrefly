@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::SymbolKind;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 
@@ -30,7 +31,7 @@ fn get_hierarchical_symbol_report(state: &State, handle: &Handle) -> String {
 
 fn get_flat_symbol_report(state: &State, handle: &Handle) -> String {
     let transactions = state.transaction();
-    let uri = lsp_types::Url::parse("file:///main.py").unwrap();
+    let uri = lsp_types::Uri::parse("file:///main.py").unwrap();
     if let Some(symbols) = transactions.symbols(handle, None) {
         let flat = flatten_to_symbol_information(symbols, &uri);
         serde_json::to_string_pretty(&flat).unwrap()
@@ -173,8 +174,6 @@ def function2(param1, param2):
 ## Flat
 [
   {
-    "name": "function1",
-    "kind": 12,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -187,11 +186,11 @@ def function2(param1, param2):
           "character": 12
         }
       }
-    }
+    },
+    "name": "function1",
+    "kind": 12
   },
   {
-    "name": "x",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -205,11 +204,11 @@ def function2(param1, param2):
         }
       }
     },
+    "name": "x",
+    "kind": 13,
     "containerName": "function1"
   },
   {
-    "name": "function2",
-    "kind": 12,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -222,11 +221,11 @@ def function2(param1, param2):
           "character": 12
         }
       }
-    }
+    },
+    "name": "function2",
+    "kind": 12
   },
   {
-    "name": "y",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -240,6 +239,8 @@ def function2(param1, param2):
         }
       }
     },
+    "name": "y",
+    "kind": 13,
     "containerName": "function2"
   }
 ]"#
@@ -375,8 +376,6 @@ class MyClass:
 ## Flat
 [
   {
-    "name": "MyClass",
-    "kind": 5,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -389,11 +388,11 @@ class MyClass:
           "character": 25
         }
       }
-    }
+    },
+    "name": "MyClass",
+    "kind": 5
   },
   {
-    "name": "__init__",
-    "kind": 6,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -407,11 +406,11 @@ class MyClass:
         }
       }
     },
+    "name": "__init__",
+    "kind": 6,
     "containerName": "MyClass"
   },
   {
-    "name": "method1",
-    "kind": 6,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -425,11 +424,11 @@ class MyClass:
         }
       }
     },
+    "name": "method1",
+    "kind": 6,
     "containerName": "MyClass"
   },
   {
-    "name": "method2",
-    "kind": 6,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -443,6 +442,8 @@ class MyClass:
         }
       }
     },
+    "name": "method2",
+    "kind": 6,
     "containerName": "MyClass"
   }
 ]"#
@@ -495,8 +496,6 @@ while True:
 ## Flat
 [
   {
-    "name": "Foo",
-    "kind": 5,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -509,7 +508,9 @@ while True:
           "character": 19
         }
       }
-    }
+    },
+    "name": "Foo",
+    "kind": 5
   }
 ]"#
         .trim(),
@@ -550,10 +551,13 @@ def foo():
     let flat_symbols: Vec<lsp_types::SymbolInformation> = serde_json::from_str(flat_json).unwrap();
 
     assert_eq!(flat_symbols.len(), 2);
-    assert_eq!(flat_symbols[0].name, "foo");
-    assert_eq!(flat_symbols[0].container_name, None);
-    assert_eq!(flat_symbols[1].name, "x");
-    assert_eq!(flat_symbols[1].container_name, Some("foo".to_owned()));
+    assert_eq!(flat_symbols[0].base_symbol_information.name, "foo");
+    assert_eq!(flat_symbols[0].base_symbol_information.container_name, None);
+    assert_eq!(flat_symbols[1].base_symbol_information.name, "x");
+    assert_eq!(
+        flat_symbols[1].base_symbol_information.container_name,
+        Some("foo".to_owned())
+    );
 }
 
 // TODO(kylei): list comprehension document symbol
@@ -682,7 +686,7 @@ result = y.method()
     "children": [
       {
         "name": "class_var",
-        "kind": 13,
+        "kind": 8,
         "range": {
           "start": {
             "line": 10,
@@ -808,8 +812,6 @@ result = y.method()
 ## Flat
 [
   {
-    "name": "x",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -822,11 +824,11 @@ result = y.method()
           "character": 5
         }
       }
-    }
+    },
+    "name": "x",
+    "kind": 13
   },
   {
-    "name": "helper_function",
-    "kind": 12,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -839,11 +841,11 @@ result = y.method()
           "character": 13
         }
       }
-    }
+    },
+    "name": "helper_function",
+    "kind": 12
   },
   {
-    "name": "MyClass",
-    "kind": 5,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -856,11 +858,11 @@ result = y.method()
           "character": 24
         }
       }
-    }
+    },
+    "name": "MyClass",
+    "kind": 5
   },
   {
-    "name": "class_var",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -874,11 +876,11 @@ result = y.method()
         }
       }
     },
+    "name": "class_var",
+    "kind": 8,
     "containerName": "MyClass"
   },
   {
-    "name": "method",
-    "kind": 6,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -892,11 +894,11 @@ result = y.method()
         }
       }
     },
+    "name": "method",
+    "kind": 6,
     "containerName": "MyClass"
   },
   {
-    "name": "local_var",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -910,11 +912,11 @@ result = y.method()
         }
       }
     },
+    "name": "local_var",
+    "kind": 13,
     "containerName": "MyClass.method"
   },
   {
-    "name": "y",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -927,11 +929,11 @@ result = y.method()
           "character": 13
         }
       }
-    }
+    },
+    "name": "y",
+    "kind": 13
   },
   {
-    "name": "result",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -944,7 +946,9 @@ result = y.method()
           "character": 19
         }
       }
-    }
+    },
+    "name": "result",
+    "kind": 13
   }
 ]"#
         .trim(),
@@ -1087,7 +1091,7 @@ items: List[str] = ["a", "b", "c"]
       {
         "name": "class_var",
         "detail": "str",
-        "kind": 13,
+        "kind": 8,
         "range": {
           "start": {
             "line": 11,
@@ -1112,7 +1116,7 @@ items: List[str] = ["a", "b", "c"]
       {
         "name": "counter",
         "detail": "int",
-        "kind": 13,
+        "kind": 8,
         "range": {
           "start": {
             "line": 12,
@@ -1291,8 +1295,6 @@ items: List[str] = ["a", "b", "c"]
 ## Flat
 [
   {
-    "name": "x",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1305,11 +1307,11 @@ items: List[str] = ["a", "b", "c"]
           "character": 10
         }
       }
-    }
+    },
+    "name": "x",
+    "kind": 13
   },
   {
-    "name": "name",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1322,11 +1324,11 @@ items: List[str] = ["a", "b", "c"]
           "character": 18
         }
       }
-    }
+    },
+    "name": "name",
+    "kind": 13
   },
   {
-    "name": "helper_function",
-    "kind": 12,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1339,11 +1341,11 @@ items: List[str] = ["a", "b", "c"]
           "character": 13
         }
       }
-    }
+    },
+    "name": "helper_function",
+    "kind": 12
   },
   {
-    "name": "MyClass",
-    "kind": 5,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1356,11 +1358,11 @@ items: List[str] = ["a", "b", "c"]
           "character": 24
         }
       }
-    }
+    },
+    "name": "MyClass",
+    "kind": 5
   },
   {
-    "name": "class_var",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1374,11 +1376,11 @@ items: List[str] = ["a", "b", "c"]
         }
       }
     },
+    "name": "class_var",
+    "kind": 8,
     "containerName": "MyClass"
   },
   {
-    "name": "counter",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1392,11 +1394,11 @@ items: List[str] = ["a", "b", "c"]
         }
       }
     },
+    "name": "counter",
+    "kind": 8,
     "containerName": "MyClass"
   },
   {
-    "name": "method",
-    "kind": 6,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1410,11 +1412,11 @@ items: List[str] = ["a", "b", "c"]
         }
       }
     },
+    "name": "method",
+    "kind": 6,
     "containerName": "MyClass"
   },
   {
-    "name": "local_var",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1428,11 +1430,11 @@ items: List[str] = ["a", "b", "c"]
         }
       }
     },
+    "name": "local_var",
+    "kind": 13,
     "containerName": "MyClass.method"
   },
   {
-    "name": "message",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1446,11 +1448,11 @@ items: List[str] = ["a", "b", "c"]
         }
       }
     },
+    "name": "message",
+    "kind": 13,
     "containerName": "MyClass.method"
   },
   {
-    "name": "y",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1463,11 +1465,11 @@ items: List[str] = ["a", "b", "c"]
           "character": 22
         }
       }
-    }
+    },
+    "name": "y",
+    "kind": 13
   },
   {
-    "name": "result",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1480,11 +1482,11 @@ items: List[str] = ["a", "b", "c"]
           "character": 24
         }
       }
-    }
+    },
+    "name": "result",
+    "kind": 13
   },
   {
-    "name": "items",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1497,7 +1499,9 @@ items: List[str] = ["a", "b", "c"]
           "character": 34
         }
       }
-    }
+    },
+    "name": "items",
+    "kind": 13
   }
 ]"#
         .trim(),
@@ -1686,8 +1690,6 @@ class MyClass:
 ## Flat
 [
   {
-    "name": "Section 1",
-    "kind": 15,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1700,11 +1702,11 @@ class MyClass:
           "character": 16
         }
       }
-    }
+    },
+    "name": "Section 1",
+    "kind": 15
   },
   {
-    "name": "x",
-    "kind": 13,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1718,11 +1720,11 @@ class MyClass:
         }
       }
     },
+    "name": "x",
+    "kind": 13,
     "containerName": "Section 1"
   },
   {
-    "name": "Section 1.1",
-    "kind": 15,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1736,11 +1738,11 @@ class MyClass:
         }
       }
     },
+    "name": "Section 1.1",
+    "kind": 15,
     "containerName": "Section 1"
   },
   {
-    "name": "foo",
-    "kind": 12,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1754,11 +1756,11 @@ class MyClass:
         }
       }
     },
+    "name": "foo",
+    "kind": 12,
     "containerName": "Section 1.Section 1.1"
   },
   {
-    "name": "Section 2",
-    "kind": 15,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1771,11 +1773,11 @@ class MyClass:
           "character": 16
         }
       }
-    }
+    },
+    "name": "Section 2",
+    "kind": 15
   },
   {
-    "name": "MyClass",
-    "kind": 5,
     "location": {
       "uri": "file:///main.py",
       "range": {
@@ -1789,6 +1791,8 @@ class MyClass:
         }
       }
     },
+    "name": "MyClass",
+    "kind": 5,
     "containerName": "Section 2"
   }
 ]"#
@@ -1862,39 +1866,223 @@ b = 2
     let flat_symbols: Vec<lsp_types::SymbolInformation> = serde_json::from_str(flat_json).unwrap();
 
     assert_eq!(flat_symbols.len(), 8);
-    assert_eq!(flat_symbols[0].name, "Imports");
-    assert_eq!(flat_symbols[0].container_name, None);
+    assert_eq!(flat_symbols[0].base_symbol_information.name, "Imports");
+    assert_eq!(flat_symbols[0].base_symbol_information.container_name, None);
 
-    assert_eq!(flat_symbols[1].name, "Standard Library");
-    assert_eq!(flat_symbols[1].container_name, Some("Imports".to_owned()));
-
-    assert_eq!(flat_symbols[2].name, "a");
     assert_eq!(
-        flat_symbols[2].container_name,
+        flat_symbols[1].base_symbol_information.name,
+        "Standard Library"
+    );
+    assert_eq!(
+        flat_symbols[1].base_symbol_information.container_name,
+        Some("Imports".to_owned())
+    );
+
+    assert_eq!(flat_symbols[2].base_symbol_information.name, "a");
+    assert_eq!(
+        flat_symbols[2].base_symbol_information.container_name,
         Some("Imports.Standard Library".to_owned())
     );
 
-    assert_eq!(flat_symbols[3].name, "greeting");
+    assert_eq!(flat_symbols[3].base_symbol_information.name, "greeting");
     assert_eq!(
-        flat_symbols[3].container_name,
+        flat_symbols[3].base_symbol_information.container_name,
         Some("Imports.Standard Library".to_owned())
     );
 
-    assert_eq!(flat_symbols[4].name, "Another second level");
-    assert_eq!(flat_symbols[4].container_name, Some("Imports".to_owned()));
-
-    assert_eq!(flat_symbols[5].name, "Configuration");
-    assert_eq!(flat_symbols[5].container_name, None);
-
-    assert_eq!(flat_symbols[6].name, "DEBUG");
     assert_eq!(
-        flat_symbols[6].container_name,
+        flat_symbols[4].base_symbol_information.name,
+        "Another second level"
+    );
+    assert_eq!(
+        flat_symbols[4].base_symbol_information.container_name,
+        Some("Imports".to_owned())
+    );
+
+    assert_eq!(
+        flat_symbols[5].base_symbol_information.name,
+        "Configuration"
+    );
+    assert_eq!(flat_symbols[5].base_symbol_information.container_name, None);
+
+    assert_eq!(flat_symbols[6].base_symbol_information.name, "DEBUG");
+    assert_eq!(
+        flat_symbols[6].base_symbol_information.container_name,
         Some("Configuration".to_owned())
     );
 
-    assert_eq!(flat_symbols[7].name, "b");
+    assert_eq!(flat_symbols[7].base_symbol_information.name, "b");
     assert_eq!(
-        flat_symbols[7].container_name,
+        flat_symbols[7].base_symbol_information.container_name,
         Some("Configuration".to_owned())
+    );
+}
+
+/// Document symbols preserve source order, canonical names, nesting, and source kinds.
+#[test]
+fn test_assignment_symbols() {
+    let code = r#"
+MAX_SIZE = 1
+Kelvin = 2
+chain_a = chain_b = 3
+type Alias = int
+class Container:
+    FIELD = 3
+    field: int
+    left, [right, *rest] = (1, [2, 3, 4])
+    def method(self):
+        def nested():
+            local = 4
+"#;
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
+
+    let hierarchical: Vec<lsp_types::DocumentSymbol> =
+        serde_json::from_str(extract_section(&report, "Hierarchical")).unwrap();
+    assert_eq!(
+        hierarchical
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("MAX_SIZE", SymbolKind::Constant),
+            ("Kelvin", SymbolKind::Variable),
+            ("chain_a", SymbolKind::Variable),
+            ("chain_b", SymbolKind::Variable),
+            ("Alias", SymbolKind::Interface),
+            ("Container", SymbolKind::Class),
+        ]
+    );
+    let class_children = hierarchical[5].children.as_ref().unwrap();
+    assert_eq!(
+        class_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("FIELD", SymbolKind::Constant),
+            ("field", SymbolKind::Field),
+            ("left", SymbolKind::Field),
+            ("right", SymbolKind::Field),
+            ("rest", SymbolKind::Field),
+            ("method", SymbolKind::Method),
+        ]
+    );
+    let method_children = class_children[5].children.as_ref().unwrap();
+    assert_eq!(
+        method_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![("nested", SymbolKind::Function)]
+    );
+    let nested_children = method_children[0].children.as_ref().unwrap();
+    assert_eq!(
+        nested_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![("local", SymbolKind::Variable)]
+    );
+
+    let flat: Vec<lsp_types::SymbolInformation> =
+        serde_json::from_str(extract_section(&report, "Flat")).unwrap();
+    assert_eq!(
+        flat.iter()
+            .map(|symbol| (
+                symbol.base_symbol_information.name.as_str(),
+                symbol.base_symbol_information.kind,
+                symbol.base_symbol_information.container_name.as_deref(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("MAX_SIZE", SymbolKind::Constant, None),
+            ("Kelvin", SymbolKind::Variable, None),
+            ("chain_a", SymbolKind::Variable, None),
+            ("chain_b", SymbolKind::Variable, None),
+            ("Alias", SymbolKind::Interface, None),
+            ("Container", SymbolKind::Class, None),
+            ("FIELD", SymbolKind::Constant, Some("Container")),
+            ("field", SymbolKind::Field, Some("Container")),
+            ("left", SymbolKind::Field, Some("Container")),
+            ("right", SymbolKind::Field, Some("Container")),
+            ("rest", SymbolKind::Field, Some("Container")),
+            ("method", SymbolKind::Method, Some("Container")),
+            ("nested", SymbolKind::Function, Some("Container.method")),
+            (
+                "local",
+                SymbolKind::Variable,
+                Some("Container.method.nested"),
+            ),
+        ]
+    );
+}
+
+/// A field or method guarded by `if`/`try` control flow still attaches
+/// directly to the enclosing class, since control flow does not change scope.
+///
+/// The `else` branch is statically dead and reported as unreachable, so this allows errors.
+/// That branch is load-bearing: document symbols come from the AST, so `alternative` is listed
+/// even though the binder abandons the branch that defines it.
+#[test]
+fn test_class_members_under_control_flow() {
+    let code = r#"
+class Container:
+    if True:
+        guarded = 1
+        def method(self):
+            pass
+    else:
+        alternative = 2
+    try:
+        risky = 3
+    except Exception:
+        pass
+"#;
+    let report = get_batched_lsp_operations_report_no_cursor_allow_error(
+        &[("main", code)],
+        get_combined_report,
+    );
+
+    let hierarchical: Vec<lsp_types::DocumentSymbol> =
+        serde_json::from_str(extract_section(&report, "Hierarchical")).unwrap();
+    let class_children = hierarchical[0].children.as_ref().unwrap();
+    assert_eq!(
+        class_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("guarded", SymbolKind::Field),
+            ("method", SymbolKind::Method),
+            ("alternative", SymbolKind::Field),
+            ("risky", SymbolKind::Field),
+        ]
+    );
+}
+
+/// Parser recovery gives `def ():` an empty name. Document symbols show the
+/// function as `unknown` and keep valid body symbols inside it.
+#[test]
+fn test_parser_recovery_keeps_body_symbols_under_unknown_function() {
+    let report = get_batched_lsp_operations_report_no_cursor_allow_error(
+        &[("main", "def ():\n    recovered = 1\n")],
+        get_combined_report,
+    );
+
+    let flat: Vec<lsp_types::SymbolInformation> =
+        serde_json::from_str(extract_section(&report, "Flat")).unwrap();
+    assert_eq!(
+        flat.iter()
+            .map(|symbol| (
+                symbol.base_symbol_information.name.as_str(),
+                symbol.base_symbol_information.kind,
+                symbol.base_symbol_information.container_name.as_deref(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("unknown", SymbolKind::Function, None),
+            ("recovered", SymbolKind::Variable, Some("unknown")),
+        ]
     );
 }

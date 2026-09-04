@@ -18,15 +18,15 @@ use pyrefly_config::config::ConfigFile;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::arc_id::ArcId;
-use starlark_map::small_map::SmallMap;
 
+use crate::module::bundled::Bundle;
+use crate::module::bundled::BundleFile;
 use crate::module::bundled::BundledStub;
 use crate::module::bundled::create_bundled_stub_config;
 
 #[derive(Debug, Clone)]
 pub struct BundledThirdParty {
-    pub find: SmallMap<ModuleName, PathBuf>,
-    pub load: SmallMap<PathBuf, Arc<String>>,
+    bundle: Bundle,
 }
 
 /// Unlike typeshed stubs, other third-party stubs have -stubs suffixes
@@ -53,31 +53,30 @@ fn strip_stubs_suffix_from_path(path: &Path) -> PathBuf {
 impl BundledStub for BundledThirdParty {
     fn new() -> anyhow::Result<Self> {
         let contents = bundled_third_party()?;
-        let mut res = Self {
-            find: SmallMap::new(),
-            load: SmallMap::new(),
-        };
-        for (relative_path, contents) in contents {
-            let adjusted_path = strip_stubs_suffix_from_path(&relative_path);
-            let module_name = ModuleName::from_relative_path(&adjusted_path)?;
-            res.find.insert(module_name, relative_path.clone());
-            res.load.insert(relative_path, Arc::new(contents));
-        }
-        Ok(res)
+        let files = contents
+            .into_iter()
+            .map(|(relative_path, contents)| BundleFile {
+                import_path: strip_stubs_suffix_from_path(&relative_path),
+                storage_path: relative_path,
+                contents,
+            });
+        Ok(Self {
+            bundle: Bundle::new(files)?,
+        })
     }
 
     fn find(&self, module: ModuleName) -> Option<ModulePath> {
-        self.find
-            .get(&module)
+        self.bundle
+            .find(module)
             .map(|path| ModulePath::bundled_third_party(path.clone()))
     }
 
     fn load(&self, path: &Path) -> Option<Arc<String>> {
-        self.load.get(path).cloned()
+        self.bundle.load(path)
     }
 
     fn modules(&self) -> impl Iterator<Item = ModuleName> {
-        self.find.keys().copied()
+        self.bundle.modules()
     }
 
     fn config() -> ArcId<ConfigFile> {
@@ -96,7 +95,7 @@ impl BundledStub for BundledThirdParty {
     }
 
     fn load_map(&self) -> impl Iterator<Item = (&PathBuf, &Arc<String>)> {
-        self.load.iter()
+        self.bundle.load_map()
     }
 }
 
@@ -115,6 +114,7 @@ mod tests {
     use pyrefly_python::module_path::ModulePathDetails;
 
     use super::*;
+    use crate::module::bundled::assert_bundle_order_independent;
 
     #[test]
     fn test_bundled_third_party_materialize() {
@@ -171,5 +171,15 @@ mod tests {
             "third_party path should exist: {:?}",
             third_party_path
         );
+    }
+
+    #[test]
+    fn test_bundled_third_party_lookup_is_file_order_independent() {
+        let stub = get_bundled_third_party().unwrap();
+        assert_bundle_order_independent(stub.load_map().map(|(path, contents)| BundleFile {
+            import_path: strip_stubs_suffix_from_path(path),
+            storage_path: path.clone(),
+            contents: contents.as_str().to_owned(),
+        }));
     }
 }

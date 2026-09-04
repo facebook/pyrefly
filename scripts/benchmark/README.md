@@ -151,6 +151,85 @@ Prints a summary table to stdout. With `--json` (single-repo) or `-o`
 (multi-package), writes a detailed JSON report including per-run results,
 latency percentiles (p50, p95), and per-server ok/found/valid rates.
 
+## LSP Memory Benchmark (steady state)
+
+Measures the steady-state memory of pyrefly and basedpyright while a scripted
+client opens files, finds references, and edits files, as an IDE would. Memory
+is the summed physical footprint (macOS, as shown by Activity Monitor) or PSS
+(Linux) of the server's process tree, sampled every second.
+
+`lsp_memory_projects.json` pins everything needed to reproduce a run: project
+commits, server versions, the Python version, a dependency resolution cutoff
+(`uv --exclude-newer`), and each project's workload.
+
+### Prerequisites
+
+`git` and [`uv`](https://docs.astral.sh/uv/) on PATH. The script installs the
+servers itself.
+
+### Usage
+
+```bash
+# Clone projects, create venvs, install the pinned servers (default workdir:
+# ~/pyrefly-lsp-memory)
+python3 lsp_memory_benchmark.py setup
+
+# One warmup run and 3 measured runs per project and configuration
+python3 lsp_memory_benchmark.py run --out results/lsp-memory-macbook
+
+# Median (min-max) per checkpoint, as Markdown tables
+python3 lsp_memory_benchmark.py summarize results/lsp-memory-macbook
+
+# Also save the summary and environment to one file, to commit or share
+python3 lsp_memory_benchmark.py summarize results/lsp-memory-macbook \
+    --json results/2026-10-07-lsp-memory-macbook.json
+```
+
+The `--json` file contains no memory timelines, logs or local paths, so commit
+it rather than the raw results directory.
+
+Close other heavy applications first, and keep the machine plugged in. A full
+run takes several hours.
+
+### Configurations
+
+| Config | Server settings |
+|--------|-----------------|
+| `pyrefly` | Defaults (background indexing of the project) |
+| `basedpyright` | Defaults (`diagnosticMode: openFilesOnly`) |
+| `basedpyright-workspace` | `diagnosticMode: workspace`, closest to pyrefly's indexing scope |
+
+`setup` writes an empty `pyrefly.toml` and `pyrightconfig.json` into each
+project, so settings the project ships for either tool do not apply.
+
+### Checkpoints
+
+Each checkpoint waits until memory varies by at most 2% over 60 seconds, then
+records the steady value and the peak since the previous checkpoint.
+
+1. `initialized`: after `initialize`, before any file is open. Pyrefly indexes
+   workspace files as soon as it receives the client's configuration, so this
+   includes most of its indexing cost.
+2. `files_open`: after opening the workload's files. Pyrefly also indexes the
+   files covered by the opened files' config, starting on the first `didOpen`.
+3. `find_references`: after one find-references request on the workload's
+   symbol.
+4. `edits_round_1`, `edits_round_2`: after applying the workload's edits, twice.
+   A `body` edit leaves the module's interface unchanged; an `interface` edit
+   adds an exported function. Edits are never written to disk.
+
+### Output
+
+`<out>/environment.json` records the machine, server versions, and every
+project's installed packages. `<out>/<project>/<config>-<n>.json` holds the
+checkpoints and full memory timeline for each run, next to the server's log.
+
+`summarize` prints two tables per project: the steady value at each checkpoint
+and the peak during the step. It also counts how often basedpyright emptied its
+type cache because its heap was nearly full. A non-zero count means that run's
+memory was capped by cache eviction, which costs basedpyright time rather than
+memory.
+
 ## Package List (`install_envs.json`)
 
 The `install_envs.json` file defines which packages to benchmark in the

@@ -1,4 +1,4 @@
-name: Publish to PyPI
+name: "Publish: PyPI package"
 
 on:
   push:
@@ -9,18 +9,18 @@ on:
 
 jobs:
   check_publish:
-    uses: ./.github/workflows/check_publish.yml
+    uses: ./.github/workflows/publish_check_eligibility.yml
 
   build-binaries:
     name: Build binaries
     needs: check_publish
     if: needs.check_publish.outputs.should_publish == 'true'
-    uses: ./.github/workflows/build_binaries.yml
+    uses: ./.github/workflows/publish_build_packages.yml
   test:
     name: Test
     needs: check_publish
     if: needs.check_publish.outputs.should_publish == 'true'
-    uses: ./.github/workflows/pyrefly.yml
+    uses: ./.github/workflows/ci_pyrefly.yml
   pypi-publish:
     name: Upload to PyPI
     runs-on: ubuntu-latest
@@ -40,7 +40,7 @@ jobs:
           path: dist
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # release/v1.13
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1.14
   push-tag:
     name: Push version tag
     runs-on: ubuntu-latest
@@ -66,7 +66,7 @@ jobs:
   create-release:
     name: Create release
     needs: push-tag
-    uses: ./.github/workflows/create_release.yml
+    uses: ./.github/workflows/publish_github_release.yml
     with:
       tag_name: ${{ needs.push-tag.outputs.version }}
     secrets:
@@ -76,6 +76,6 @@ jobs:
     needs:
       - push-tag
       - create-release
-    uses: ./.github/workflows/release_binaries.yml
+    uses: ./.github/workflows/publish_upload_binaries.yml
     with:
       tag_name: ${{ needs.push-tag.outputs.version }}

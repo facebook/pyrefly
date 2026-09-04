@@ -171,7 +171,7 @@ impl TypeInfo {
         mut branches: Vec<Self>,
         union_types: &impl Fn(Vec<Type>) -> Type,
         is_subset_eq: &impl Fn(&Type, &Type) -> bool,
-        join_style: JoinStyle<Arc<TypeInfo>>,
+        join_style: JoinStyle<&TypeInfo>,
     ) -> Self {
         match branches.len() {
             0 => Self::of_ty(Type::never()),

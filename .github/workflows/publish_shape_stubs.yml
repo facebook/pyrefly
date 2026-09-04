@@ -1,4 +1,4 @@
-name: Publish shape stubs to PyPI
+name: "Publish: Shape stubs"
 
 on:
   push:
@@ -9,13 +9,13 @@ on:
 
 jobs:
   check_publish:
-    uses: ./.github/workflows/check_publish.yml
+    uses: ./.github/workflows/publish_check_eligibility.yml
 
   build-shape-stubs:
     name: Build shape stubs
     needs: check_publish
     if: needs.check_publish.outputs.should_publish == 'true'
-    uses: ./.github/workflows/build_shape_stubs.yml
+    uses: ./.github/workflows/ci_shape_stubs.yml
 
   pypi-publish-shape-stubs:
     name: Upload shape stubs to PyPI
@@ -34,7 +34,7 @@ jobs:
           path: shape-stubs-dist
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish shape stubs to PyPI
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # release/v1.13
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # release/v1.14
         with:
           packages-dir: shape-stubs-dist
           skip-existing: false

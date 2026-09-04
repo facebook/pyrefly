@@ -10,6 +10,7 @@
 import * as React from 'react';
 import BrowserOnly from '@docusaurus/BrowserOnly';
 import Layout from '@theme/Layout';
+import Head from '@docusaurus/Head';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import * as stylex from '@stylexjs/stylex';
 import { resetPersistedSandboxState } from '../sandbox/persistedSandboxState';
@@ -100,7 +101,16 @@ function SandboxCrashFallback({
 }): React.JSX.Element {
     return (
         <div role="alert" {...stylex.props(styles.crashContainer)}>
-            <h1 {...stylex.props(styles.crashTitle)}>The sandbox crashed.</h1>
+            <Head>
+                <meta name="robots" content="noindex" />
+            </Head>
+            <p
+                role="heading"
+                aria-level={1}
+                {...stylex.props(styles.crashTitle)}
+            >
+                The sandbox crashed.
+            </p>
             <p {...stylex.props(styles.crashText)}>
                 Try again keeps your files and reruns the sandbox. Reset clears
                 your saved sandbox files and starts from the default sandbox.

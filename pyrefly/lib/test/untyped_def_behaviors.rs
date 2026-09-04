@@ -191,6 +191,53 @@ assert_type(c.f(), Any)
 );
 
 testcase!(
+    test_self_attr_assignment_targets_with_mode_skip_and_infer_return_any,
+    TestEnv::new_with_untyped_def_behavior(UntypedDefBehavior::SkipAndInferReturnAny)
+        .with_run_require(Require::Errors),
+    r#"
+from typing import assert_type, Any
+
+values: Any
+manager: Any
+condition: Any
+other: Any
+
+class C:
+    def sync(self):
+        self.augmented += 1
+        self.plain, *self.starred = values
+        if condition:
+            for self.for_attr in values:
+                pass
+        with manager as self.with_attr, manager as self.with_second_attr:
+            pass
+        other.unrelated = 0
+        self.child.nested = 0
+        self.items[0] = 0
+
+    async def asynchronous(self):
+        async for self.async_for_attr in values:
+            pass
+        async with manager as self.async_with_attr, manager as self.async_with_second_attr:
+            pass
+
+c = C()
+assert_type(c.augmented, Any)
+assert_type(c.plain, Any)
+assert_type(c.starred, Any)
+assert_type(c.for_attr, Any)
+assert_type(c.with_attr, Any)
+assert_type(c.with_second_attr, Any)
+assert_type(c.async_for_attr, Any)
+assert_type(c.async_with_attr, Any)
+assert_type(c.async_with_second_attr, Any)
+assert_type(c.unrelated, Any)  # E:
+assert_type(c.nested, Any)  # E:
+assert_type(c.items, Any)  # E:
+"#,
+);
+
+testcase!(
     test_annotated_defs_with_mode_skip_and_infer_return_any,
     TestEnv::new_with_untyped_def_behavior(UntypedDefBehavior::SkipAndInferReturnAny),
     r#"

@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use lsp_types::Url;
+use lsp_types::Uri;
 use ruff_notebook::Cell;
 use ruff_notebook::Notebook;
 use starlark_map::small_map::SmallMap;
@@ -19,8 +19,8 @@ pub struct LspNotebook {
     ruff_notebook: Arc<Notebook>,
     notebook_document: NotebookDocument,
     // Notebook cells have Urls of unspecified format
-    cell_url_to_index: SmallMap<Url, usize>,
-    cell_index_to_url: Vec<Url>,
+    cell_url_to_index: SmallMap<Uri, usize>,
+    cell_index_to_url: Vec<Uri>,
 }
 
 impl LspNotebook {
@@ -51,7 +51,7 @@ impl LspNotebook {
     /// `is_valid_python_code_cell()` (which also excludes cell-magic and
     /// non-Python cells) because the latter is not public. In practice the
     /// two filters agree for typical Python notebooks.
-    pub fn get_code_cell_index(&self, cell_url: &Url) -> Option<usize> {
+    pub fn get_code_cell_index(&self, cell_url: &Uri) -> Option<usize> {
         let all_cells_idx = *self.cell_url_to_index.get(cell_url)?;
         let cells = self.ruff_notebook.cells();
         if !cells.get(all_cells_idx)?.is_code_cell() {
@@ -64,15 +64,15 @@ impl LspNotebook {
         Some(code_cell_index)
     }
 
-    pub fn get_code_cell_url(&self, cell_index: usize) -> Option<&Url> {
+    pub fn get_code_cell_url(&self, cell_index: usize) -> Option<&Uri> {
         self.cell_index_to_url.get(cell_index)
     }
 
-    pub fn code_cell_urls(&self) -> &Vec<Url> {
+    pub fn code_cell_urls(&self) -> &Vec<Uri> {
         &self.cell_index_to_url
     }
 
-    pub fn get_cell_contents(&self, cell_url: &Url) -> Option<String> {
+    pub fn get_cell_contents(&self, cell_url: &Uri) -> Option<String> {
         let idx = *self.cell_url_to_index.get(cell_url)?;
         let cell = self.ruff_notebook.cells().get(idx)?;
         if let Cell::Code(cell) = cell {
@@ -91,7 +91,7 @@ impl LspNotebook {
 mod tests {
     use std::collections::HashMap;
 
-    use lsp_types::Url;
+    use lsp_types::Uri;
 
     use super::*;
     use crate::lsp::wasm::notebook::NotebookCell;
@@ -100,12 +100,12 @@ mod tests {
 
     #[test]
     fn test_get_code_cell_index_returns_code_cell_index() {
-        let cell0_url = Url::parse("vscode-notebook-cell://notebook/cell0").unwrap();
-        let cell1_url = Url::parse("vscode-notebook-cell://notebook/cell1").unwrap();
-        let cell2_url = Url::parse("vscode-notebook-cell://notebook/cell2").unwrap();
+        let cell0_url = Uri::parse("vscode-notebook-cell://notebook/cell0").unwrap();
+        let cell1_url = Uri::parse("vscode-notebook-cell://notebook/cell1").unwrap();
+        let cell2_url = Uri::parse("vscode-notebook-cell://notebook/cell2").unwrap();
 
         let notebook_doc = NotebookDocument {
-            uri: Url::parse("file:///notebook.ipynb").unwrap(),
+            uri: Uri::parse("file:///notebook.ipynb").unwrap(),
             notebook_type: "jupyter-notebook".to_owned(),
             version: 1,
             metadata: None,

@@ -20,20 +20,20 @@ fn get_test_report(state: &State, handle: &Handle, position: TextSize) -> String
     let transaction = state.transaction();
     let module_info = transaction.get_module_info(handle).unwrap();
     let highlights = transaction
-        .find_local_references(handle, position, true)
+        .find_local_occurrences(handle, position)
         .into_iter()
         .map(|range| {
             let kind = match transaction.identifier_at(handle, range.start()) {
-                Some(id) if id.context.is_write() => DocumentHighlightKind::WRITE,
-                Some(_) => DocumentHighlightKind::READ,
-                None => DocumentHighlightKind::TEXT,
+                Some(id) if id.context.is_write() => DocumentHighlightKind::Write,
+                Some(_) => DocumentHighlightKind::Read,
+                None => DocumentHighlightKind::Text,
             };
             format!(
                 "{}:\n{}",
                 match kind {
-                    DocumentHighlightKind::WRITE => "DocumentHighlightKind::WRITE",
-                    DocumentHighlightKind::READ => "DocumentHighlightKind::READ",
-                    _ => "DocumentHighlightKind::TEXT",
+                    DocumentHighlightKind::Write => "DocumentHighlightKind::Write",
+                    DocumentHighlightKind::Read => "DocumentHighlightKind::Read",
+                    _ => "DocumentHighlightKind::Text",
                 },
                 code_frame_of_source_at_range(module_info.contents(), range)
             )
@@ -75,12 +75,73 @@ y = x
 3 | y = x
         ^
 Highlights:
-DocumentHighlightKind::WRITE:
+DocumentHighlightKind::Write:
 2 | x = 1
     ^
-DocumentHighlightKind::READ:
+DocumentHighlightKind::Read:
 3 | y = x
         ^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn document_highlight_constructor_call_uses_class_occurrences() {
+    let code = r#"
+class Foo:
+    def __init__(self) -> None: ...
+
+Foo()
+# ^
+Foo()
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+5 | Foo()
+      ^
+Highlights:
+DocumentHighlightKind::Write:
+2 | class Foo:
+          ^^^
+DocumentHighlightKind::Read:
+5 | Foo()
+    ^^^
+DocumentHighlightKind::Read:
+7 | Foo()
+    ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn document_highlight_dunder_init_excludes_constructor_calls() {
+    let code = r#"
+class Foo:
+    def __init__(self) -> None: ...
+    #   ^
+
+Foo()
+Foo().__init__()
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+3 |     def __init__(self) -> None: ...
+            ^
+Highlights:
+DocumentHighlightKind::Write:
+3 |     def __init__(self) -> None: ...
+            ^^^^^^^^
+DocumentHighlightKind::Read:
+7 | Foo().__init__()
+          ^^^^^^^^
 "#
         .trim(),
         report.trim(),

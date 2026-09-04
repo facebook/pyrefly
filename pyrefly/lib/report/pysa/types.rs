@@ -16,6 +16,7 @@ use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::type_alias::TypeAliasData;
 use pyrefly_types::type_var::Restriction;
+use pyrefly_types::type_var::ShapeExtensionRestriction;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::Type;
 use serde::Serialize;
@@ -198,6 +199,7 @@ fn strip_coroutine<'a>(type_: &'a Type, context: &ModuleContext) -> Option<&'a T
 enum TypeVariableRestriction {
     Bound(Type),
     Constraints(Vec<Type>),
+    ShapeExtension(ShapeExtensionRestriction),
 }
 
 fn strip_typevar(type_: &Type) -> Option<TypeVariableRestriction> {
@@ -207,6 +209,9 @@ fn strip_typevar(type_: &Type) -> Option<TypeVariableRestriction> {
                 Restriction::Bound(type_) => Some(TypeVariableRestriction::Bound(type_.clone())),
                 Restriction::Constraints(constraints) => {
                     Some(TypeVariableRestriction::Constraints(constraints.clone()))
+                }
+                Restriction::ShapeExtension(extension) => {
+                    Some(TypeVariableRestriction::ShapeExtension(extension.clone()))
                 }
                 Restriction::Unrestricted => None,
             }
@@ -240,6 +245,10 @@ fn is_scalar_type(get: &Type, want: &Class, context: &ModuleContext) -> bool {
             TypeVariableRestriction::Constraints(inners) => inners
                 .iter()
                 .any(|inner| is_scalar_type(inner, want, context)),
+            TypeVariableRestriction::ShapeExtension(extension) => extension
+                .upper_bound_members(&context.answers_context.stdlib)
+                .iter()
+                .any(|inner| is_scalar_type(inner, want, context)),
         };
     }
     match get {
@@ -271,6 +280,13 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
                 .map(|inner| get_classes_of_type(inner, context).prepend_typevar_constraint())
                 .reduce(|acc, next| acc.join_with(next))
                 .unwrap()
+                .sort_and_dedup(),
+            TypeVariableRestriction::ShapeExtension(extension) => extension
+                .upper_bound_members(&context.answers_context.stdlib)
+                .iter()
+                .map(|inner| get_classes_of_type(inner, context).prepend_typevar_bound())
+                .reduce(|acc, next| acc.join_with(next))
+                .expect("a shape-extension restriction always has at least one upper-bound type")
                 .sort_and_dedup(),
         };
     }
@@ -329,9 +345,7 @@ fn get_classes_of_type(type_: &Type, context: &ModuleContext) -> ClassNamesFromT
 
 /// Apply normalization to a type before exporting it to Pysa.
 pub fn preprocess_type(type_: &Type, context: &ModuleAnswersContext) -> Type {
-    // Pysa is an export boundary: force/flatten away solver-internal placeholders
-    // (including callable residuals) before report conversion.
-    let type_ = context.answers.solver().for_export_boundary(type_.clone());
+    let type_ = type_.clone();
     // Promote `Literal[..]` into `str` or `int`.
     let type_ = type_.promote_implicit_literals(&context.stdlib);
     strip_self_type(context.answers.heap(), type_)

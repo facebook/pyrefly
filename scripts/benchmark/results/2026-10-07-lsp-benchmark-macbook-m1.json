@@ -1,0 +1,979 @@
+{
+  "environment": {
+    "date": "2026-10-07T02:08:03.828695+00:00",
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "cpu_count": 10,
+    "memory_metric": "phys_footprint",
+    "servers": {
+      "pyrefly": "1.3.2",
+      "basedpyright": "1.40.2"
+    },
+    "machdep.cpu.brand_string": "Apple M1 Pro",
+    "hw.memsize": "34359738368",
+    "freezes": {
+      "accelerate": [
+        "anyio==4.15.1",
+        "click==8.5.0",
+        "filelock==4.0.10",
+        "fsspec==2026.9.0",
+        "h11==0.16.0",
+        "hf-xet==1.6.0",
+        "httpcore2==2.13.1",
+        "httpx2==2.13.1",
+        "huggingface-hub==2.1.1",
+        "idna==3.20",
+        "jinja2==3.1.6",
+        "markupsafe==3.0.4",
+        "mpmath==1.3.0",
+        "networkx==3.7",
+        "numpy==2.5.3",
+        "packaging==26.3",
+        "psutil==7.2.2",
+        "pyyaml==6.0.3",
+        "safetensors==0.8.0",
+        "setuptools==84.0.0",
+        "sympy==1.14.0",
+        "torch==2.14.1",
+        "tqdm==4.70.1",
+        "truststore==0.10.4",
+        "typing-extensions==4.16.0"
+      ],
+      "pandas": [
+        "hypothesis==6.168.3",
+        "iniconfig==2.3.0",
+        "numpy==2.5.3",
+        "packaging==26.3",
+        "pluggy==1.6.0",
+        "pygments==2.21.0",
+        "pytest==9.1.1",
+        "python-dateutil==2.9.0.post0",
+        "six==1.17.0",
+        "sortedcontainers==2.4.0",
+        "tzdata==2026.5"
+      ],
+      "rich": [
+        "attrs==26.1.0",
+        "markdown-it-py==4.2.0",
+        "mdurl==0.1.2",
+        "pygments==2.21.0"
+      ],
+      "sqlalchemy": [
+        "typing-extensions==4.16.0"
+      ]
+    }
+  },
+  "memory_metric": "phys_footprint",
+  "unit": "KiB",
+  "parameters": {
+    "repetitions": 3,
+    "interval": 1.0,
+    "steady_window": 60.0,
+    "steady_tolerance": 0.02,
+    "steady_timeout": 1800.0,
+    "edit_delay": 2.0,
+    "request_timeout": 600.0
+  },
+  "projects": {
+    "accelerate": {
+      "commit": "7d8824f10f8be1ea405d611c98d51ebfbf4821cd",
+      "configs": {
+        "basedpyright": {
+          "repetitions": 3,
+          "cache_clears": [
+            0,
+            0,
+            0
+          ],
+          "checkpoints": {
+            "initialized": {
+              "steady": {
+                "median": 99063,
+                "min": 98823,
+                "max": 99223
+              },
+              "peak": {
+                "median": 99223,
+                "min": 99063,
+                "max": 103671
+              },
+              "all_steady": true
+            },
+            "files_open": {
+              "steady": {
+                "median": 949259,
+                "min": 917993,
+                "max": 981742
+              },
+              "peak": {
+                "median": 949259,
+                "min": 917993,
+                "max": 986911
+              },
+              "all_steady": true
+            },
+            "find_references": {
+              "steady": {
+                "median": 933930,
+                "min": 588383,
+                "max": 952427
+              },
+              "peak": {
+                "median": 953387,
+                "min": 933930,
+                "max": 982414
+              },
+              "all_steady": true
+            },
+            "edits_round_1": {
+              "steady": {
+                "median": 2095916,
+                "min": 2073113,
+                "max": 2235239
+              },
+              "peak": {
+                "median": 2095916,
+                "min": 2073113,
+                "max": 2235239
+              },
+              "all_steady": true
+            },
+            "edits_round_2": {
+              "steady": {
+                "median": 2171415,
+                "min": 2139854,
+                "max": 2205524
+              },
+              "peak": {
+                "median": 2205524,
+                "min": 2139854,
+                "max": 2237431
+              },
+              "all_steady": true
+            }
+          }
+        },
+        "basedpyright-workspace": {
+          "repetitions": 3,
+          "cache_clears": [
+            0,
+            0,
+            0
+          ],
+          "checkpoints": {
+            "initialized": {
+              "steady": {
+                "median": 1379437,
+                "min": 1373005,
+                "max": 1379533
+              },
+              "peak": {
+                "median": 1379437,
+                "min": 1373005,
+                "max": 1379533
+              },
+              "all_steady": true
+            },
+            "files_open": {
+              "steady": {
+                "median": 1203605,
+                "min": 1198373,
+                "max": 1205092
+              },
+              "peak": {
+                "median": 1681206,
+                "min": 1673766,
+                "max": 1681814
+              },
+              "all_steady": true
+            },
+            "find_references": {
+              "steady": {
+                "median": 1133915,
+                "min": 1131612,
+                "max": 1135227
+              },
+              "peak": {
+                "median": 1205989,
+                "min": 1200261,
+                "max": 1206964
+              },
+              "all_steady": true
+            },
+            "edits_round_1": {
+              "steady": {
+                "median": 1409907,
+                "min": 1408546,
+                "max": 1413971
+              },
+              "peak": {
+                "median": 1409907,
+                "min": 1408546,
+                "max": 1413971
+              },
+              "all_steady": true
+            },
+            "edits_round_2": {
+              "steady": {
+                "median": 1416596,
+                "min": 1415363,
+                "max": 1439253
+              },
+              "peak": {
+                "median": 1416596,
+                "min": 1415363,
+                "max": 1439253
+              },
+              "all_steady": true
+            }
+          }
+        },
+        "pyrefly": {
+          "repetitions": 3,
+          "checkpoints": {
+            "initialized": {
+              "steady": {
+                "median": 1002177,
+                "min": 996625,
+                "max": 1002545
+              },
+              "peak": {
+                "median": 1002177,
+                "min": 996625,
+                "max": 1002545
+              },
+              "all_steady": true
+            },
+            "files_open": {
+              "steady": {
+                "median": 1064033,
+                "min": 1054545,
+                "max": 1068705
+              },
+              "peak": {
+                "median": 1064033,
+                "min": 1054545,
+                "max": 1068705
+              },
+              "all_steady": true
+            },
+            "find_references": {
+              "steady": {
+                "median": 1068321,
+                "min": 1059521,
+                "max": 1074081
+              },
+              "peak": {
+                "median": 1068321,
+                "min": 1059521,
+                "max": 1074081
+              },
+              "all_steady": true
+            },
+            "edits_round_1": {
+              "steady": {
+                "median": 1051201,
+                "min": 1030145,
+                "max": 1051585
+              },
+              "peak": {
+                "median": 1071153,
+                "min": 1060529,
+                "max": 1072449
+              },
+              "all_steady": true
+            },
+            "edits_round_2": {
+              "steady": {
+                "median": 1060737,
+                "min": 1049217,
+                "max": 1069681
+              },
+              "peak": {
+                "median": 1061537,
+                "min": 1049217,
+                "max": 1069681
+              },
+              "all_steady": true
+            }
+          }
+        }
+      }
+    },
+    "pandas": {
+      "commit": "255c2ac652912dc8177b18dff8728e8eee147481",
+      "configs": {
+        "basedpyright": {
+          "repetitions": 3,
+          "cache_clears": [
+            0,
+            0,
+            0
+          ],
+          "checkpoints": {
+            "initialized": {
+              "steady": {
+                "median": 127627,
+                "min": 127547,
+                "max": 136577
+              },
+              "peak": {
+                "median": 127627,
+                "min": 127547,
+                "max": 136577
+              },
+              "all_steady": true
+            },
+            "files_open": {
+              "steady": {
+                "median": 1222816,
+                "min": 1135370,
+                "max": 1264420
+              },
+              "peak": {
+                "median": 1222816,
+                "min": 1135370,
+                "max": 1264420
+              },
+              "all_steady": true
+            },
+            "find_references": {
+              "steady": {
+                "median": 2194051,
+                "min": 2136153,
+                "max": 2450695
+              },
+              "peak": {
+                "median": 2450695,
+                "min": 2194051,
+                "max": 2526653
+              },
+              "all_steady": true
+            },
+            "edits_round_1": {
+              "steady": {
+                "median": 3303130,
+                "min": 3258155,
+                "max": 3352562
+              },
+              "peak": {
+                "median": 3321709,
+                "min": 3303306,
+                "max": 3352562
+              },
+              "all_steady": true
+            },
+            "edits_round_2": {
+              "steady": {
+                "median": 3308954,
+                "min": 3276204,
+                "max": 3553025
+              },
+              "peak": {
+                "median": 3383308,
+                "min": 3327102,
+                "max": 3553025
+              },
+              "all_steady": true
+            }
+          }
+        },
+        "basedpyright-workspace": {
+          "repetitions": 3,
+          "cache_clears": [
+            0,
+            0,
+            0
+          ],
+          "checkpoints": {
+            "initialized": {
+              "steady": {
+                "median": 3608407,
+                "min": 3444457,
+                "max": 3714351
+              },
+              "peak": {
+                "median": 3608951,
+                "min": 3444457,
+                "max": 3714351
+              },
+              "all_steady": true
+            },
+            "files_open": {
+              "steady": {
+                "median": 3607943,
+                "min": 3563139,
+                "max": 3714943
+              },
+              "peak": {
+                "median": 3609399,
+                "min": 3565443,
+                "max": 3714943
+              },
+              "all_steady": true
+            },
+            "find_references": {
+              "steady": {
+                "median": 3636331,
+                "min": 3634763,
+                "max": 3764564
+              },
+              "peak": {
+                "median": 3672732,
+                "min": 3636203,
+                "max": 3784709
+              },
+              "all_steady": true
+            },
+            "edits_round_1": {
+              "steady": {
+                "median": 3852224,
+                "min": 3620636,
+                "max": 4039184
+              },
+              "peak": {
+                "median": 3944114,
+                "min": 3659484,
+                "max": 4039184
+              },
+              "all_steady": true
+            },
+            "edits_round_2": {
+              "steady": {
+                "median": 4055904,
+                "min": 3609436,
+                "max": 4135590
+              },
+              "peak": {
+                "median": 4107298,
+                "min": 3663901,
+                "max": 4135590
+              },
+              "all_steady": true
+            }
+          }
+        },
+        "pyrefly": {
+          "repetitions": 3,
+          "checkpoints": {
+            "initialized": {
+              "steady": {
+                "median": 529425,
+                "min": 527585,
+                "max": 532641
+              },
+              "peak": {
+                "median": 529425,
+                "min": 527585,
+                "max": 532641
+              },
+              "all_steady": true
+            },
+            "files_open": {
+              "steady": {
+                "median": 755777,
+                "min": 749393,
+                "max": 763665
+              },
+              "peak": {
+                "median": 755777,
+                "min": 749393,
+                "max": 763665
+              },
+              "all_steady": true
+            },
+            "find_references": {
+              "steady": {
+                "median": 803281,
+                "min": 796817,
+                "max": 811377
+              },
+              "peak": {
+                "median": 803281,
+                "min": 796817,
+                "max": 811377
+              },
+              "all_steady": true
+            },
+            "edits_round_1": {
+              "steady": {
+                "median": 914337,
+                "min": 867105,
+                "max": 918257
+              },
+              "peak": {
+                "median": 914337,
+                "min": 901137,
+                "max": 918257
+              },
+              "all_steady": true
+            },
+            "edits_round_2": {
+              "steady": {
+                "median": 939185,
+                "min": 896609,
+                "max": 996369
+              },
+              "peak": {
+                "median": 978177,
+                "min": 905393,
+                "max": 996689
+              },
+              "all_steady": true
+            }
+          }
+        }
+      }
+    },
+    "rich": {
+      "commit": "9d8f9a372cc5916fd4781fec207ced7ddac2f08f",
+      "configs": {
+        "basedpyright": {
+          "repetitions": 3,
+          "cache_clears": [
+            0,
+            0,
+            0
+          ],
+          "checkpoints": {
+            "initialized": {
+              "steady": {
+                "median": 99335,
+                "min": 91223,
+                "max": 99511
+              },
+              "peak": {
+                "median": 99511,
+                "min": 99447,
+                "max": 104775
+              },
+              "all_steady": true
+            },
+            "files_open": {
+              "steady": {
+                "median": 444573,
+                "min": 443470,
+                "max": 445694
+              },
+              "peak": {
+                "median": 444573,
+                "min": 443470,
+                "max": 445694
+              },
+              "all_steady": true
+            },
+            "find_references": {
+              "steady": {
+                "median": 326052,
+                "min": 322404,
+                "max": 467104
+              },
+              "peak": {
+                "median": 467104,
+                "min": 465408,
+                "max": 469199
+              },
+              "all_steady": true
+            },
+            "edits_round_1": {
+              "steady": {
+                "median": 994432,
+                "min": 993983,
+                "max": 995104
+              },
+              "peak": {
+                "median": 994432,
+                "min": 993983,
+                "max": 995104
+              },
+              "all_steady": true
+            },
+            "edits_round_2": {
+              "steady": {
+                "median": 1064454,
+                "min": 1040612,
+                "max": 1084471
+              },
+              "peak": {
+                "median": 1064454,
+                "min": 1040612,
+                "max": 1084471
+              },
+              "all_steady": true
+            }
+          }
+        },
+        "basedpyright-workspace": {
+          "repetitions": 3,
+          "cache_clears": [
+            0,
+            0,
+            0
+          ],
+          "checkpoints": {
+            "initialized": {
+              "steady": {
+                "median": 713573,
+                "min": 702260,
+                "max": 717173
+              },
+              "peak": {
+                "median": 713573,
+                "min": 702260,
+                "max": 717173
+              },
+              "all_steady": true
+            },
+            "files_open": {
+              "steady": {
+                "median": 625583,
+                "min": 624320,
+                "max": 698244
+              },
+              "peak": {
+                "median": 790875,
+                "min": 698244,
+                "max": 792635
+              },
+              "all_steady": true
+            },
+            "find_references": {
+              "steady": {
+                "median": 567259,
+                "min": 531111,
+                "max": 570027
+              },
+              "peak": {
+                "median": 632480,
+                "min": 631264,
+                "max": 698340
+              },
+              "all_steady": true
+            },
+            "edits_round_1": {
+              "steady": {
+                "median": 719496,
+                "min": 711815,
+                "max": 1474439
+              },
+              "peak": {
+                "median": 719496,
+                "min": 711815,
+                "max": 1499734
+              },
+              "all_steady": true
+            },
+            "edits_round_2": {
+              "steady": {
+                "median": 721272,
+                "min": 713816,
+                "max": 1501656
+              },
+              "peak": {
+                "median": 721368,
+                "min": 713816,
+                "max": 1501656
+              },
+              "all_steady": true
+            }
+          }
+        },
+        "pyrefly": {
+          "repetitions": 3,
+          "checkpoints": {
+            "initialized": {
+              "steady": {
+                "median": 118624,
+                "min": 118240,
+                "max": 119184
+              },
+              "peak": {
+                "median": 118624,
+                "min": 118240,
+                "max": 119184
+              },
+              "all_steady": true
+            },
+            "files_open": {
+              "steady": {
+                "median": 171088,
+                "min": 170848,
+                "max": 172784
+              },
+              "peak": {
+                "median": 171088,
+                "min": 170848,
+                "max": 172784
+              },
+              "all_steady": true
+            },
+            "find_references": {
+              "steady": {
+                "median": 175472,
+                "min": 175344,
+                "max": 177296
+              },
+              "peak": {
+                "median": 175472,
+                "min": 175344,
+                "max": 177296
+              },
+              "all_steady": true
+            },
+            "edits_round_1": {
+              "steady": {
+                "median": 208784,
+                "min": 206944,
+                "max": 218176
+              },
+              "peak": {
+                "median": 208784,
+                "min": 206944,
+                "max": 218176
+              },
+              "all_steady": true
+            },
+            "edits_round_2": {
+              "steady": {
+                "median": 221904,
+                "min": 221504,
+                "max": 227328
+              },
+              "peak": {
+                "median": 227328,
+                "min": 227072,
+                "max": 233808
+              },
+              "all_steady": true
+            }
+          }
+        }
+      }
+    },
+    "sqlalchemy": {
+      "commit": "ae11d43079207e159f3ba00f3c0e5188e2ccfe45",
+      "configs": {
+        "basedpyright": {
+          "repetitions": 3,
+          "cache_clears": [
+            0,
+            0,
+            0
+          ],
+          "checkpoints": {
+            "initialized": {
+              "steady": {
+                "median": 115531,
+                "min": 111290,
+                "max": 115627
+              },
+              "peak": {
+                "median": 115531,
+                "min": 111290,
+                "max": 115627
+              },
+              "all_steady": true
+            },
+            "files_open": {
+              "steady": {
+                "median": 803149,
+                "min": 798045,
+                "max": 804094
+              },
+              "peak": {
+                "median": 803149,
+                "min": 798045,
+                "max": 804094
+              },
+              "all_steady": true
+            },
+            "find_references": {
+              "steady": {
+                "median": 852145,
+                "min": 847665,
+                "max": 856898
+              },
+              "peak": {
+                "median": 852145,
+                "min": 847665,
+                "max": 856898
+              },
+              "all_steady": true
+            },
+            "edits_round_1": {
+              "steady": {
+                "median": 1925996,
+                "min": 1779790,
+                "max": 2019089
+              },
+              "peak": {
+                "median": 1952075,
+                "min": 1779790,
+                "max": 2019089
+              },
+              "all_steady": true
+            },
+            "edits_round_2": {
+              "steady": {
+                "median": 2241831,
+                "min": 1922699,
+                "max": 2394977
+              },
+              "peak": {
+                "median": 2263524,
+                "min": 1964573,
+                "max": 2394977
+              },
+              "all_steady": true
+            }
+          }
+        },
+        "basedpyright-workspace": {
+          "repetitions": 3,
+          "cache_clears": [
+            0,
+            0,
+            0
+          ],
+          "checkpoints": {
+            "initialized": {
+              "steady": {
+                "median": 3696620,
+                "min": 3665946,
+                "max": 3733546
+              },
+              "peak": {
+                "median": 3703868,
+                "min": 3675258,
+                "max": 3748362
+              },
+              "all_steady": true
+            },
+            "files_open": {
+              "steady": {
+                "median": 3809018,
+                "min": 3740299,
+                "max": 3827084
+              },
+              "peak": {
+                "median": 3810539,
+                "min": 3740299,
+                "max": 3827084
+              },
+              "all_steady": true
+            },
+            "find_references": {
+              "steady": {
+                "median": 3512376,
+                "min": 3482904,
+                "max": 3765084
+              },
+              "peak": {
+                "median": 3812363,
+                "min": 3742059,
+                "max": 3830493
+              },
+              "all_steady": true
+            },
+            "edits_round_1": {
+              "steady": {
+                "median": 3755793,
+                "min": 3716590,
+                "max": 3895068
+              },
+              "peak": {
+                "median": 3755793,
+                "min": 3716590,
+                "max": 4001566
+              },
+              "all_steady": true
+            },
+            "edits_round_2": {
+              "steady": {
+                "median": 3904268,
+                "min": 3781842,
+                "max": 3944545
+              },
+              "peak": {
+                "median": 3927388,
+                "min": 3822146,
+                "max": 3981361
+              },
+              "all_steady": true
+            }
+          }
+        },
+        "pyrefly": {
+          "repetitions": 3,
+          "checkpoints": {
+            "initialized": {
+              "steady": {
+                "median": 429536,
+                "min": 428528,
+                "max": 431040
+              },
+              "peak": {
+                "median": 429536,
+                "min": 428528,
+                "max": 431040
+              },
+              "all_steady": true
+            },
+            "files_open": {
+              "steady": {
+                "median": 566705,
+                "min": 563729,
+                "max": 571297
+              },
+              "peak": {
+                "median": 566705,
+                "min": 563729,
+                "max": 571297
+              },
+              "all_steady": true
+            },
+            "find_references": {
+              "steady": {
+                "median": 583185,
+                "min": 580609,
+                "max": 588161
+              },
+              "peak": {
+                "median": 583185,
+                "min": 580609,
+                "max": 588161
+              },
+              "all_steady": true
+            },
+            "edits_round_1": {
+              "steady": {
+                "median": 627537,
+                "min": 613329,
+                "max": 644161
+              },
+              "peak": {
+                "median": 629329,
+                "min": 627537,
+                "max": 644161
+              },
+              "all_steady": true
+            },
+            "edits_round_2": {
+              "steady": {
+                "median": 656577,
+                "min": 653985,
+                "max": 682673
+              },
+              "peak": {
+                "median": 656641,
+                "min": 656577,
+                "max": 693393
+              },
+              "all_steady": true
+            }
+          }
+        }
+      }
+    }
+  }
+}

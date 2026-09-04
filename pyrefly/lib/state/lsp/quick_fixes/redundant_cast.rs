@@ -28,7 +28,11 @@ fn find_enclosing_call(ast: &ModModule, selection: TextRange) -> Option<ExprCall
     None
 }
 
-fn redundant_cast_replacement(module_info: &ModuleInfo, call: &ExprCall) -> Option<String> {
+fn redundant_cast_replacement(
+    module_info: &ModuleInfo,
+    call: &ExprCall,
+    parent: Option<AnyNodeRef>,
+) -> Option<String> {
     if call.arguments.args.iter().any(|arg| arg.is_starred_expr())
         || call.arguments.keywords.iter().any(|kw| kw.arg.is_none())
     {
@@ -74,7 +78,7 @@ fn redundant_cast_replacement(module_info: &ModuleInfo, call: &ExprCall) -> Opti
         return None;
     }
     let val_text = module_info.code_at(val_expr.range());
-    Some(wrap_if_needed(val_expr, val_text))
+    Some(wrap_if_needed(parent, val_expr, val_text))
 }
 
 pub(crate) fn redundant_cast_code_action(
@@ -83,7 +87,8 @@ pub(crate) fn redundant_cast_code_action(
     error_range: TextRange,
 ) -> Option<(String, Module, TextRange, String)> {
     let call = find_enclosing_call(ast, error_range)?;
-    let replacement = redundant_cast_replacement(module_info, &call)?;
+    let parent = Ast::parent_node(ast, call.range());
+    let replacement = redundant_cast_replacement(module_info, &call, parent)?;
     Some((
         "Remove redundant cast".to_owned(),
         module_info.dupe(),

@@ -16,5 +16,7 @@ pub trait Includes {
 
     fn covers(&self, path: &Path) -> bool;
 
+    fn covers_ignoring_excludes(&self, path: &Path) -> bool;
+
     fn errors(&mut self) -> Vec<anyhow::Error>;
 }

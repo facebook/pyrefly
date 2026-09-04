@@ -212,8 +212,7 @@ class C:
 );
 
 testcase!(
-    bug =
-        "Function annotations routed through legacy tparam lookup still miss unquoted forward refs",
+    bug = "Function annotations routed through legacy tparam lookup miss unquoted forward refs",
     test_unquoted_function_annotation_forward_reference_before_py314,
     TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
     r#"
@@ -265,6 +264,47 @@ type Tree = Union[Leaf, Node]
 "#,
 );
 
+testcase!(
+    test_nested_class_forward_reference_in_enclosing_class_annotation,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from __future__ import annotations
+from typing import assert_type
+
+class Formatter:
+    a: _Section
+    class _Section: ...
+    b: _Section
+
+def check(formatter: Formatter) -> None:
+    assert_type(formatter.a, Formatter._Section)
+    assert_type(formatter.b, Formatter._Section)
+"#,
+);
+
+testcase!(
+    test_nested_class_runtime_reference_before_declaration_is_error,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+class Formatter:
+    a = _Section  # E: Could not find name `_Section`
+    class _Section: ...
+"#,
+);
+
+testcase!(
+    test_annotation_only_class_field_is_not_a_forward_reference,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from __future__ import annotations
+
+class C:
+    x: x  # E: Could not find name `x`
+    A: B  # E: Could not find name `B`
+    B: A  # E: Could not find name `A`
+"#,
+);
+
 fn env_3_13_with_stub() -> TestEnv {
     let mut env = TestEnv::new_with_version(PythonVersion::new(3, 13, 0));
     env.add_with_path("foo", "foo.pyi", "x: int | 'str'");
@@ -275,4 +315,67 @@ testcase!(
     test_union_forward_ref_ok_in_stub,
     env_3_13_with_stub(),
     "import foo",
+);
+testcase!(
+    test_call_expressions_in_type_forms,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+from typing import TypeVar, Union, assert_type, cast
+
+class Base: ...
+def make_type() -> type[Base]: ...
+
+base = Base()
+class DynamicBase(type(base)): ...
+
+LegacyBound = TypeVar("LegacyBound", bound=make_type())  # E: Function call cannot be used in annotations
+LegacyConstraints = TypeVar("LegacyConstraints", make_type(), Base)  # E: Function call cannot be used in annotations
+LegacyDefault = TypeVar("LegacyDefault", default=make_type())  # E: Function call cannot be used in annotations
+
+def pep_bound[T: make_type()](x: T) -> T: ...  # E: Function call cannot be used in annotations
+def pep_default[T = make_type()](x: T) -> T: ...  # E: Function call cannot be used in annotations
+
+def return_union() -> Union[bool, make_type()]: ...  # E: Function call cannot be used in annotations
+def return_bitor() -> bool | make_type(): ...  # E: Function call cannot be used in annotations
+def return_tuple() -> tuple[int, make_type()]: ...  # E: Function call cannot be used in annotations
+def return_generic() -> list[make_type()]: ...  # E: Function call cannot be used in annotations
+
+def use(value: Base) -> None:
+    cast(make_type(), object())  # E: Function call cannot be used in annotations
+    cast(list[make_type()], object())  # E: Function call cannot be used in annotations
+    assert_type(value, make_type())  # E: Function call cannot be used in annotations
+"#,
+);
+
+testcase!(
+    test_type_call_in_annotations,
+    TestEnv::new_with_version(PythonVersion::new(3, 13, 0)),
+    r#"
+import types
+from typing import TypeVar, Union, cast
+
+class MyClass: ...
+instance = MyClass()
+
+def not_impl_param(x: type(NotImplemented)) -> None: ...  # E: Function call cannot be used in annotations. Did you mean `types.NotImplementedType`?
+def not_impl_union_param(x: Union[bool, type(NotImplemented)]) -> None: ...  # E: Function call cannot be used in annotations. Did you mean `types.NotImplementedType`?
+def not_impl_return() -> type(NotImplemented): ...  # E: Function call cannot be used in annotations. Did you mean `types.NotImplementedType`?
+def not_impl_union_return() -> Union[bool, type(NotImplemented)]: ...  # E: Function call cannot be used in annotations. Did you mean `types.NotImplementedType`?
+def not_impl_bitor_return() -> bool | type(NotImplemented): ...  # E: Function call cannot be used in annotations. Did you mean `types.NotImplementedType`?
+var_not_impl: type(NotImplemented)  # E: Function call cannot be used in annotations. Did you mean `types.NotImplementedType`?
+
+T = TypeVar("T", int, type(None))  # E: Function call cannot be used in annotations. Did you mean `None`?
+var_none: type(None)  # E: Function call cannot be used in annotations. Did you mean `None`?
+var_ellipsis: type(Ellipsis)  # E: Function call cannot be used in annotations. Did you mean `types.EllipsisType`?
+var_dots: type(...)  # E: Function call cannot be used in annotations. Did you mean `types.EllipsisType`?
+var_module: type(types)  # E: Function call cannot be used in annotations. Did you mean `types.ModuleType`?
+
+var_cls: type(MyClass)  # E: Function call cannot be used in annotations. Did you mean `type[MyClass]`?
+def cls_return() -> list[type(MyClass)]: ...  # E: Function call cannot be used in annotations. Did you mean `type[MyClass]`?
+def cls_cast(x: object) -> None:
+    cast(type(MyClass), x)  # E: Function call cannot be used in annotations. Did you mean `type[MyClass]`?
+
+var_instance: type(instance)  # E: Function call cannot be used in annotations
+self_ref: type(self_ref) = 1  # E: Function call cannot be used in annotations
+"#,
 );

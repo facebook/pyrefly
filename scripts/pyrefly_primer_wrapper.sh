@@ -75,11 +75,20 @@ for p in site.getsitepackages():
 fi
 
 # Forward all original arguments to the real pyrefly binary.
+# For `check`, enable every error kind (--preset=all) so primer surfaces
+# off-by-default error deltas, matching the internal continuous mypy_primer job.
+# This applies to both the old and new binaries, since both run through this
+# wrapper, keeping the diff a like-for-like comparison.
+CHECK_ARGS=()
+if [ "$1" = "check" ]; then
+    CHECK_ARGS+=(--preset=all)
+fi
+
 # Normalize the per-binary config filename in output so that old and new
 # binaries produce identical warnings and primer doesn't report spurious diffs.
 if [ "$1" = "check" ] && [ -f "$CONFIG_PATH" ]; then
-    "$REAL_PYREFLY" "$@" "${SITE_PATH_ARGS[@]}" --config "$CONFIG_PATH" 2>&1 \
+    "$REAL_PYREFLY" "$@" "${SITE_PATH_ARGS[@]}" "${CHECK_ARGS[@]}" --config "$CONFIG_PATH" 2>&1 \
         | sed "s|$CONFIG_PATH|pyrefly.toml|g"
     exit "${PIPESTATUS[0]}"
 fi
-exec "$REAL_PYREFLY" "$@" "${SITE_PATH_ARGS[@]}"
+exec "$REAL_PYREFLY" "$@" "${SITE_PATH_ARGS[@]}" "${CHECK_ARGS[@]}"

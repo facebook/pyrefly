@@ -8,18 +8,18 @@
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::fmt::Result as FmtResult;
-use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
-use pyrefly_types::dimension::SizeExpr;
+use pyrefly_types::dimension::Int;
+use pyrefly_types::dimension::gradual_size;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::shaped_array::IntTupleView;
 use ruff_python_ast::name::Name;
-use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
-use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 
 use crate::alt::answers::LookupAnswer;
@@ -27,12 +27,10 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::class::class_field::ClassField;
 use crate::alt::class::class_field::ClassFieldVariance;
 use crate::alt::types::class_bases::ClassBases;
-use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncMetadata;
-use crate::types::callable::FunctionKind;
 use crate::types::callable::Params;
 use crate::types::class::Class;
+use crate::types::function::FuncMetadata;
 use crate::types::quantified::Quantified;
 use crate::types::tuple::Tuple;
 use crate::types::type_var::PreInferenceVariance;
@@ -61,8 +59,10 @@ use crate::types::types::Type;
 // We need to visit the types that we know are required to be visited for variance inference, and appear in the context of a class with type variables.
 // For example, SelfType is intentionally skipped and should not be visited because it should not be included in the variance calculation.
 
-#[derive(Debug, Clone, PartialEq, Eq, TypeEq, Default, VisitMut)]
+#[derive(Debug, Clone, PartialEq, Eq, TypeEq, Default, Visit, VisitMut)]
 pub struct VarianceMap(SmallMap<Name, Variance>);
+
+static EMPTY_VARIANCE_MAP: VarianceMap = VarianceMap(SmallMap::new());
 
 impl Display for VarianceMap {
     fn fmt(&self, f: &mut Formatter) -> FmtResult {
@@ -75,6 +75,10 @@ impl Display for VarianceMap {
 }
 
 impl VarianceMap {
+    pub fn empty() -> &'static Self {
+        &EMPTY_VARIANCE_MAP
+    }
+
     pub fn get(&self, parameter: &Name) -> Variance {
         self.0
             .get(parameter)
@@ -100,14 +104,213 @@ impl VarianceViolation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct InferenceStatus {
-    inferred_variance: Variance,
-    has_variance_inferred: bool,
-    specified_variance: Option<Variance>,
+/// A concrete direction discovered by structural inference.
+///
+/// Unlike [`Variance`], this type deliberately has no bivariant case: the inference
+/// algorithm represents "no evidence yet" as [`InferenceState::Unresolved`] rather than
+/// conflating it with a variance direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectionalVariance {
+    Covariant,
+    Contravariant,
+    Invariant,
 }
 
-type InferenceMap = SmallMap<Name, InferenceStatus>;
+impl DirectionalVariance {
+    fn union(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Covariant, Self::Covariant) => Self::Covariant,
+            (Self::Contravariant, Self::Contravariant) => Self::Contravariant,
+            _ => Self::Invariant,
+        }
+    }
+
+    fn compose(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Invariant, _) | (_, Self::Invariant) => Self::Invariant,
+            (Self::Covariant, Self::Covariant) | (Self::Contravariant, Self::Contravariant) => {
+                Self::Covariant
+            }
+            _ => Self::Contravariant,
+        }
+    }
+}
+
+impl From<DirectionalVariance> for Variance {
+    fn from(variance: DirectionalVariance) -> Self {
+        match variance {
+            DirectionalVariance::Covariant => Self::Covariant,
+            DirectionalVariance::Contravariant => Self::Contravariant,
+            DirectionalVariance::Invariant => Self::Invariant,
+        }
+    }
+}
+
+/// Structural variance inference is a fixpoint that starts with no evidence for
+/// each inferred parameter. An unresolved recursive generic edge can still
+/// produce directionally useful evidence because the legacy composition treats
+/// bivariant/no evidence as identity, but that evidence is provisional: a later
+/// iteration may resolve the edge to the opposite direction. Grounded evidence
+/// therefore takes precedence over provisional evidence, while evidence within
+/// either category can strengthen from co- or contravariant to invariant.
+///
+/// An alternative is to model true bivariance with absorbing composition. That
+/// could simplify the fixpoint and leave recursive-only or phantom parameters
+/// genuinely bivariant. TODO(stroxler): adopting that model requires changing
+/// downstream generic comparison, which currently interprets the legacy
+/// `Variance::Bivariant` result as invariant/consistency rather than true
+/// bivariance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InferenceState {
+    /// No structural occurrence has contributed a direction yet.
+    Unresolved,
+    /// Evidence whose path crossed an inferred generic parameter that was not yet grounded.
+    /// A later fixpoint iteration may therefore change its direction.
+    Provisional(DirectionalVariance),
+    /// Evidence whose entire path crossed only specified or grounded generic parameters.
+    /// It can strengthen to invariant, but never needs to be retracted.
+    Grounded(DirectionalVariance),
+}
+
+impl InferenceState {
+    fn merge(self, incoming: Self) -> Self {
+        match (self, incoming) {
+            (state, Self::Unresolved) | (Self::Unresolved, state) => state,
+            (Self::Provisional(left), Self::Provisional(right)) => {
+                Self::Provisional(left.union(right))
+            }
+            (Self::Provisional(_), Self::Grounded(grounded)) => Self::Grounded(grounded),
+            (Self::Grounded(grounded), Self::Provisional(_)) => Self::Grounded(grounded),
+            (Self::Grounded(left), Self::Grounded(right)) => Self::Grounded(left.union(right)),
+        }
+    }
+
+    fn direction(self) -> Option<DirectionalVariance> {
+        match self {
+            Self::Unresolved => None,
+            Self::Provisional(variance) | Self::Grounded(variance) => Some(variance),
+        }
+    }
+}
+
+/// The variance associated with a generic parameter while walking another type.
+///
+/// Explicitly specified variance does not participate in the fixpoint. Inferred variance
+/// retains whether its evidence is unresolved, provisional, or grounded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParameterVariance {
+    Inferred(InferenceState),
+    Specified(DirectionalVariance),
+}
+
+impl ParameterVariance {
+    fn from_quantified(param: &Quantified) -> Self {
+        match param.variance() {
+            PreInferenceVariance::Covariant => Self::Specified(DirectionalVariance::Covariant),
+            PreInferenceVariance::Contravariant => {
+                Self::Specified(DirectionalVariance::Contravariant)
+            }
+            PreInferenceVariance::Invariant => Self::Specified(DirectionalVariance::Invariant),
+            PreInferenceVariance::Undefined => Self::Inferred(InferenceState::Unresolved),
+        }
+    }
+
+    fn effective(self) -> Variance {
+        match self {
+            Self::Specified(variance) => variance.into(),
+            Self::Inferred(state) => state.direction().map_or(Variance::Bivariant, Into::into),
+        }
+    }
+
+    fn needs_inference(self) -> bool {
+        matches!(self, Self::Inferred(_))
+    }
+
+    fn merge(&mut self, incoming: InferenceState) {
+        if let Self::Inferred(state) = self {
+            *state = state.merge(incoming);
+        }
+    }
+}
+
+/// Direction and provenance accumulated along a path from a class member or base to a type
+/// parameter occurrence.
+///
+/// An absent direction lets base-class traversal defer choosing one until it crosses a generic
+/// parameter. Provisional provenance is sticky: composing with a grounded nested parameter
+/// cannot make an earlier unresolved edge grounded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VariancePath {
+    direction: Option<DirectionalVariance>,
+    grounded: bool,
+}
+
+impl VariancePath {
+    fn identity() -> Self {
+        Self {
+            direction: None,
+            grounded: true,
+        }
+    }
+
+    fn grounded(variance: DirectionalVariance) -> Self {
+        Self {
+            direction: Some(variance),
+            grounded: true,
+        }
+    }
+
+    fn compose(self, parameter: ParameterVariance) -> Self {
+        match parameter {
+            ParameterVariance::Specified(variance)
+            | ParameterVariance::Inferred(InferenceState::Grounded(variance)) => {
+                self.compose_direction(variance)
+            }
+            ParameterVariance::Inferred(InferenceState::Provisional(variance)) => {
+                self.compose_direction(variance).provisional()
+            }
+            ParameterVariance::Inferred(InferenceState::Unresolved) => self.provisional(),
+        }
+    }
+
+    fn compose_direction(self, variance: DirectionalVariance) -> Self {
+        Self {
+            direction: Some(match self.direction {
+                None => variance,
+                Some(outer) => outer.compose(variance),
+            }),
+            ..self
+        }
+    }
+
+    fn with_direction(self, variance: DirectionalVariance) -> Self {
+        Self {
+            direction: Some(variance),
+            ..self
+        }
+    }
+
+    fn invert(self) -> Self {
+        self.compose_direction(DirectionalVariance::Contravariant)
+    }
+
+    fn provisional(self) -> Self {
+        Self {
+            grounded: false,
+            ..self
+        }
+    }
+
+    fn into_state(self) -> InferenceState {
+        match (self.direction, self.grounded) {
+            (None, _) => InferenceState::Unresolved,
+            (Some(variance), true) => InferenceState::Grounded(variance),
+            (Some(variance), false) => InferenceState::Provisional(variance),
+        }
+    }
+}
+
+type InferenceMap = SmallMap<Name, ParameterVariance>;
 
 // A map from class name to tparam environment
 // Why is this not Class or ClassObject
@@ -115,51 +318,77 @@ type VarianceEnv = SmallMap<Class, InferenceMap>;
 
 fn handle_tuple_type(
     tuple: &Tuple,
-    variance: Variance,
-    inj: bool,
+    path: VariancePath,
     on_edge: &mut impl FnMut(&Class) -> InferenceMap,
-    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+    on_var: &mut impl FnMut(&Name, InferenceState, PreInferenceVariance),
 ) {
     match tuple {
         Tuple::Concrete(concrete_types) => {
             for ty in concrete_types {
-                on_type(variance, inj, ty, on_edge, on_var);
+                on_type(path, ty, on_edge, on_var);
             }
         }
         Tuple::Unbounded(unbounded_ty) => {
-            on_type(variance, inj, unbounded_ty, on_edge, on_var);
+            on_type(path, unbounded_ty, on_edge, on_var);
         }
         Tuple::Unpacked(boxed_parts) => {
-            let (before, middle, after) = &**boxed_parts;
+            let (before, middle, after) = boxed_parts.parts();
             for ty in before {
-                on_type(variance, inj, ty, on_edge, on_var);
+                on_type(path, ty, on_edge, on_var);
             }
-            on_type(variance, inj, middle, on_edge, on_var);
+            on_type(path, middle, on_edge, on_var);
             for ty in after {
-                on_type(variance, inj, ty, on_edge, on_var);
+                on_type(path, ty, on_edge, on_var);
             }
         }
     }
 }
 
+fn on_int(
+    dim: &Int,
+    path: VariancePath,
+    on_edge: &mut impl FnMut(&Class) -> InferenceMap,
+    on_var: &mut impl FnMut(&Name, InferenceState, PreInferenceVariance),
+) {
+    match dim {
+        Int::Literal(_) | Int::Int => {}
+        Int::Symbolic(ty) => {
+            on_type(
+                path.with_direction(DirectionalVariance::Invariant),
+                ty,
+                on_edge,
+                on_var,
+            );
+        }
+        Int::Add(left, right)
+        | Int::Sub(left, right)
+        | Int::Mul(left, right)
+        | Int::FloorDiv(left, right)
+        | Int::Pow(left, right) => {
+            on_int(left, path, on_edge, on_var);
+            on_int(right, path, on_edge, on_var);
+        }
+    }
+}
+
 fn on_type(
-    variance: Variance,
-    inj: bool,
+    path: VariancePath,
     typ: &Type,
     on_edge: &mut impl FnMut(&Class) -> InferenceMap,
-    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+    on_var: &mut impl FnMut(&Name, InferenceState, PreInferenceVariance),
 ) {
-    let sigs = typ.callable_signatures();
-    if !sigs.is_empty() {
-        for callable in sigs {
-            on_callable(variance, inj, callable, false, on_edge, on_var);
-        }
+    let mut is_callable = false;
+    for (callable, _) in typ.toplevel_callable_signatures() {
+        on_callable(path, callable, false, on_edge, on_var);
+        is_callable = true;
+    }
+    if is_callable {
         return;
     }
 
     match typ {
         Type::Type(t) => {
-            on_type(variance, inj, t, on_edge, on_var);
+            on_type(path, t, on_edge, on_var);
         }
         Type::ClassType(class) => {
             let targs = class.targs().as_slice();
@@ -174,51 +403,49 @@ fn on_type(
 
             // Zip params (from on_edge) with targs
             // Note: if params.len() != targs.len(), zip will stop at the shorter one
-            for (status, ty) in params.values().zip(targs) {
-                // Use specified_variance if available (for externally defined TypeVars
-                // with explicit variance like covariant=True), otherwise use inferred.
-                let effective_variance = status
-                    .specified_variance
-                    .unwrap_or(status.inferred_variance);
-                on_type(
-                    variance.compose(effective_variance),
-                    status.has_variance_inferred,
-                    ty,
-                    on_edge,
-                    on_var,
-                );
+            for (parameter, ty) in params.values().zip(targs) {
+                on_type(path.compose(*parameter), ty, on_edge, on_var);
             }
         }
         Type::Quantified(q) => {
-            on_var(q.name(), variance, inj, q.variance());
+            on_var(q.name(), path.into_state(), q.variance());
         }
         Type::Union(f) => {
             for ty in &f.members {
-                on_type(variance, inj, ty, on_edge, on_var);
+                on_type(path, ty, on_edge, on_var);
             }
         }
         Type::ShapedArray(tensor) => {
             // Tensor dimensions are invariant - Tensor[2, 3] is not a subtype of Tensor[3, 2]
             let mut visit_dim = |ty: &Type| {
-                on_type(Variance::Invariant, inj, ty, on_edge, on_var);
+                on_type(
+                    path.with_direction(DirectionalVariance::Invariant),
+                    ty,
+                    on_edge,
+                    on_var,
+                );
             };
-            match tensor.shape.as_tuple() {
-                Tuple::Concrete(dims) => {
+            match tensor.shape().view() {
+                IntTupleView::Concrete(dims) => {
                     for dim in dims {
-                        visit_dim(dim);
+                        visit_dim(&Type::Int(dim.clone()));
                     }
                 }
-                Tuple::Unbounded(middle) => {
-                    visit_dim(middle);
+                IntTupleView::Gradual => {
+                    let middle = gradual_size();
+                    visit_dim(&middle);
                 }
-                Tuple::Unpacked(f) => {
-                    let (prefix, middle, suffix) = &**f;
+                IntTupleView::Unpacked {
+                    prefix,
+                    middle,
+                    suffix,
+                } => {
                     for dim in prefix {
-                        visit_dim(dim);
+                        visit_dim(&Type::Int(dim.clone()));
                     }
                     visit_dim(middle);
                     for dim in suffix {
-                        visit_dim(dim);
+                        visit_dim(&Type::Int(dim.clone()));
                     }
                 }
             }
@@ -226,51 +453,47 @@ fn on_type(
         Type::NNModule(module) => {
             // NNModule fields are invariant
             for (_, ty) in module.fields.iter() {
-                on_type(Variance::Invariant, inj, ty, on_edge, on_var);
+                on_type(
+                    path.with_direction(DirectionalVariance::Invariant),
+                    ty,
+                    on_edge,
+                    on_var,
+                );
             }
+        }
+        Type::DataFrame(schema) => {
+            on_type(path, &schema.underlying_type(), on_edge, on_var);
+        }
+        Type::Series(schema) => {
+            on_type(path, &schema.underlying_type(), on_edge, on_var);
         }
         Type::Tuple(t) => {
-            handle_tuple_type(t, variance, inj, on_edge, on_var);
+            handle_tuple_type(t, path, on_edge, on_var);
         }
-        Type::Dim(inner) => {
-            // Dim wraps a dimension type - invariant
-            on_type(Variance::Invariant, inj, inner, on_edge, on_var);
-        }
-        Type::Size(dim) => {
-            // SizeExpr expressions contain types - all invariant
-            match dim {
-                SizeExpr::Literal(_) => {}
-                SizeExpr::Add(l, r)
-                | SizeExpr::Sub(l, r)
-                | SizeExpr::Mul(l, r)
-                | SizeExpr::FloorDiv(l, r)
-                | SizeExpr::Pow(l, r) => {
-                    on_type(Variance::Invariant, inj, l, on_edge, on_var);
-                    on_type(Variance::Invariant, inj, r, on_edge, on_var);
-                }
-            }
+        Type::Int(dim) => {
+            // Symbolic integer expressions contain types, all invariant.
+            on_int(dim, path, on_edge, on_var);
         }
         _ => {}
     }
 }
 
 fn on_callable(
-    variance: Variance,
-    inj: bool,
+    path: VariancePath,
     callable: &Callable,
     skip_receiver: bool,
     on_edge: &mut impl FnMut(&Class) -> InferenceMap,
-    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+    on_var: &mut impl FnMut(&Name, InferenceState, PreInferenceVariance),
 ) {
     // Walk return type covariantly.
-    on_type(variance, inj, &callable.ret, on_edge, on_var);
+    on_type(path, &callable.ret, on_edge, on_var);
 
     // Walk parameters contravariantly. Receiver-bound methods skip their first parameter
     // because lookup either binds it from dynamic dispatch or requantifies it for class access.
     match &callable.params {
-        Params::List(param_list) => {
+        Params::List(param_list) | Params::Partial(param_list) => {
             for param in param_list.items().iter().skip(usize::from(skip_receiver)) {
-                on_type(variance.inv(), inj, param.as_type(), on_edge, on_var);
+                on_type(path.invert(), param.as_type(), on_edge, on_var);
             }
         }
         Params::Ellipsis | Params::Materialization => {
@@ -278,40 +501,37 @@ fn on_callable(
         }
         Params::ParamSpec(prefix, param_spec) => {
             for p in prefix.iter().skip(usize::from(skip_receiver)) {
-                on_type(variance.inv(), inj, p.ty(), on_edge, on_var);
+                on_type(path.invert(), p.ty(), on_edge, on_var);
             }
-            on_type(variance.inv(), inj, param_spec, on_edge, on_var);
+            on_type(path.invert(), param_spec, on_edge, on_var);
         }
     }
 }
 
 fn on_method(
-    variance: Variance,
-    inj: bool,
+    path: VariancePath,
     typ: &Type,
     on_edge: &mut impl FnMut(&Class) -> InferenceMap,
-    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+    on_var: &mut impl FnMut(&Name, InferenceState, PreInferenceVariance),
 ) {
-    on_method_impl(variance, inj, typ, true, on_edge, on_var);
+    on_method_impl(path, typ, true, on_edge, on_var);
 }
 
 fn on_method_impl(
-    variance: Variance,
-    inj: bool,
+    path: VariancePath,
     typ: &Type,
     metadata_free_callable_is_method: bool,
     on_edge: &mut impl FnMut(&Class) -> InferenceMap,
-    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
+    on_var: &mut impl FnMut(&Name, InferenceState, PreInferenceVariance),
 ) {
     let skip_receiver = |metadata: &FuncMetadata| !metadata.flags.is_staticmethod;
     match typ {
         Type::Callable(callable) if metadata_free_callable_is_method => {
-            on_callable(variance, inj, callable, true, on_edge, on_var)
+            on_callable(path, callable, true, on_edge, on_var)
         }
-        Type::Callable(_) => on_type(variance, inj, typ, on_edge, on_var),
+        Type::Callable(_) => on_type(path, typ, on_edge, on_var),
         Type::Function(func) => on_callable(
-            variance,
-            inj,
+            path,
             &func.signature,
             skip_receiver(&func.metadata),
             on_edge,
@@ -319,33 +539,30 @@ fn on_method_impl(
         ),
         Type::Forall(forall) => match &forall.body {
             Forallable::Callable(callable) if metadata_free_callable_is_method => {
-                on_callable(variance, inj, callable, true, on_edge, on_var)
+                on_callable(path, callable, true, on_edge, on_var)
             }
-            Forallable::Callable(_) => on_type(variance, inj, typ, on_edge, on_var),
+            Forallable::Callable(_) => on_type(path, typ, on_edge, on_var),
             Forallable::Function(func) => on_callable(
-                variance,
-                inj,
+                path,
                 &func.signature,
                 skip_receiver(&func.metadata),
                 on_edge,
                 on_var,
             ),
-            Forallable::TypeAlias(_) => on_type(variance, inj, typ, on_edge, on_var),
+            Forallable::TypeAlias(_) => on_type(path, typ, on_edge, on_var),
         },
         Type::Overload(overload) => {
             for signature in overload.signatures.iter() {
                 match signature {
                     OverloadType::Function(func) => on_callable(
-                        variance,
-                        inj,
+                        path,
                         &func.signature,
                         skip_receiver(&func.metadata),
                         on_edge,
                         on_var,
                     ),
                     OverloadType::Forall(forall) => on_callable(
-                        variance,
-                        inj,
+                        path,
                         &forall.body.signature,
                         skip_receiver(&forall.body.metadata),
                         on_edge,
@@ -356,20 +573,20 @@ fn on_method_impl(
         }
         Type::Union(union) => {
             for ty in &union.members {
-                on_method_impl(variance, inj, ty, false, on_edge, on_var);
+                on_method_impl(path, ty, false, on_edge, on_var);
             }
         }
-        _ => on_type(variance, inj, typ, on_edge, on_var),
+        _ => on_type(path, typ, on_edge, on_var),
     }
 }
 
-fn on_class(
+fn on_class<'s>(
     class: &Class,
     heap: &TypeHeap,
     on_edge: &mut impl FnMut(&Class) -> InferenceMap,
-    on_var: &mut impl FnMut(&Name, Variance, bool, PreInferenceVariance),
-    get_class_bases: &impl Fn(&Class) -> Arc<ClassBases>,
-    get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
+    on_var: &mut impl FnMut(&Name, InferenceState, PreInferenceVariance),
+    get_class_bases: &impl Fn(&Class) -> &'s ClassBases,
+    get_fields: &impl Fn(&Class) -> SmallMap<Name, &'s ClassField>,
 ) {
     fn is_private_field(name: &Name) -> bool {
         let starts_with_underscore = name.starts_with('_');
@@ -379,15 +596,10 @@ fn on_class(
     }
 
     for base_type in get_class_bases(class).iter() {
-        // Base classes are walked at Bivariant position because Bivariant is
-        // the identity for compose: compose(Bi, x) = x. This directly
-        // propagates the base class's type parameter variance without adding
-        // any positional contribution. Using Covariant here would be wrong
-        // because compose(Co, Bi) = Co, which introduces a spurious Covariant
-        // constraint when the base class's variance is still unresolved (Bi).
+        // A base contributes only the variance of its own parameters, so start
+        // with the composition identity rather than adding a positional direction.
         on_type(
-            Variance::Bivariant,
-            true,
+            VariancePath::identity(),
             &heap.mk_class_type(base_type.clone()),
             on_edge,
             on_var,
@@ -399,36 +611,45 @@ fn on_class(
     // todo zeina: check if we need to check for things like __init_subclass__
     // in pyre 1, we didn't need to.
     for (name, field) in fields.iter() {
-        if name == &dunder::INIT {
+        if name == &dunder::INIT || name == &dunder::NEW {
             continue;
         }
 
         match field.variance_inference() {
             ClassFieldVariance::Method(ty) => {
-                on_method(Variance::Covariant, true, ty, on_edge, on_var);
+                on_method(
+                    VariancePath::grounded(DirectionalVariance::Covariant),
+                    ty,
+                    on_edge,
+                    on_var,
+                );
             }
             ClassFieldVariance::Property(ty) => {
-                on_method(Variance::Covariant, true, ty, on_edge, on_var);
+                on_method(
+                    VariancePath::grounded(DirectionalVariance::Covariant),
+                    ty,
+                    on_edge,
+                    on_var,
+                );
                 // For properties with both a getter and setter, the stored type is the setter
                 // function, but the getter is stored separately. Walk it so its covariant
                 // contribution is counted.
                 if let Some(getter) = ty.is_property_setter_with_getter() {
-                    on_method(Variance::Covariant, true, &getter, on_edge, on_var);
+                    on_method(
+                        VariancePath::grounded(DirectionalVariance::Covariant),
+                        &getter,
+                        on_edge,
+                        on_var,
+                    );
                 }
             }
             ClassFieldVariance::Field { ty, read_only } => {
-                // TODO: We still need a better distinction between callable-valued fields and
-                // descriptors, but receiver skipping only applies to fields modeled as methods.
-                let variance = if ty.is_toplevel_callable()
-                    || is_private_field(name)
-                    || read_only
-                    || field.is_final()
-                {
-                    Variance::Covariant
+                let variance = if is_private_field(name) || read_only || field.is_final() {
+                    DirectionalVariance::Covariant
                 } else {
-                    Variance::Invariant
+                    DirectionalVariance::Invariant
                 };
-                on_type(variance, true, ty, on_edge, on_var);
+                on_type(VariancePath::grounded(variance), ty, on_edge, on_var);
             }
         }
     }
@@ -476,7 +697,7 @@ fn check_callable_variance(
             violations,
         );
     }
-    if let Params::List(param_list) = &callable.params {
+    if let Params::List(param_list) | Params::Partial(param_list) = &callable.params {
         for param in param_list.items().iter() {
             if let Type::Quantified(q) = param.as_type() {
                 check_typevar(
@@ -491,112 +712,72 @@ fn check_callable_variance(
     }
 }
 
-fn initial_inference_status(gp: &Quantified) -> InferenceStatus {
-    let variance = pre_to_post_variance(gp.variance());
-    let (specified_variance, has_variance_inferred) = match variance {
-        Variance::Bivariant => (None, false),
-        _ => (Some(variance), true),
-    };
-    InferenceStatus {
-        inferred_variance: variance,
-        has_variance_inferred,
-        specified_variance,
-    }
-}
-
-fn initial_inference_map(tparams: &[Quantified]) -> InferenceMap {
+fn initial_inference_map(tparams: Option<&TParams>) -> InferenceMap {
     tparams
         .iter()
-        .map(|p| (p.name().clone(), initial_inference_status(p)))
+        .flat_map(|tparams| tparams.iter())
+        .map(|param| {
+            (
+                param.name().clone(),
+                ParameterVariance::from_quantified(param),
+            )
+        })
         .collect::<InferenceMap>()
 }
 
-fn pre_to_post_variance(pre_variance: PreInferenceVariance) -> Variance {
-    match pre_variance {
-        PreInferenceVariance::Covariant => Variance::Covariant,
-        PreInferenceVariance::Contravariant => Variance::Contravariant,
-        PreInferenceVariance::Invariant => Variance::Invariant,
-        PreInferenceVariance::Undefined => Variance::Bivariant,
-    }
-}
-
-fn initialize_environment_impl<'a>(
-    class: &'a Class,
-    heap: &TypeHeap,
+fn initialize_environment_impl<Ans: LookupAnswer>(
+    class: &Class,
+    solver: &AnswersSolver<'_, '_, Ans>,
     environment: &mut VarianceEnv,
-    get_class_bases: &impl Fn(&Class) -> Arc<ClassBases>,
-    get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
-    get_tparams: &impl Fn(&Class) -> Arc<TParams>,
 ) -> InferenceMap {
     if let Some(params) = environment.get(class) {
         return params.clone();
     }
 
-    let params = initial_inference_map(get_tparams(class).as_vec());
+    let params = initial_inference_map(solver.get_class_tparams(class).map(|t| &**t));
 
     environment.insert(class.dupe(), params.clone());
-    let mut on_var = |_name: &Name, _variance: Variance, _inj: bool, _: PreInferenceVariance| {};
+    let mut on_var = |_name: &Name, _state: InferenceState, _: PreInferenceVariance| {};
 
     // get the variance results of a given class c
-    let mut on_edge = |c: &Class| {
-        initialize_environment_impl(
-            c,
-            heap,
-            environment,
-            get_class_bases,
-            get_fields,
-            get_tparams,
-        )
-    };
+    let mut on_edge = |c: &Class| initialize_environment_impl(c, solver, environment);
 
     on_class(
         class,
-        heap,
+        solver.heap,
         &mut on_edge,
         &mut on_var,
-        get_class_bases,
-        get_fields,
+        &|c| solver.get_base_types_for_class(c),
+        &|c| solver.get_class_field_map(c),
     );
 
     params
 }
 
-fn initialize_environment<'a>(
-    class: &'a Class,
-    heap: &TypeHeap,
+fn initialize_environment<Ans: LookupAnswer>(
+    class: &Class,
+    solver: &AnswersSolver<'_, '_, Ans>,
     environment: &mut VarianceEnv,
-    get_class_bases: &impl Fn(&Class) -> Arc<ClassBases>,
-    get_fields: &impl Fn(&Class) -> SmallMap<Name, Arc<ClassField>>,
-    get_tparams: &impl Fn(&Class) -> Arc<TParams>,
 ) {
-    let mut on_var = |_name: &Name, _variance: Variance, _inj: bool, _: PreInferenceVariance| {};
-    let mut on_edge = |c: &Class| {
-        initialize_environment_impl(
-            c,
-            heap,
-            environment,
-            get_class_bases,
-            get_fields,
-            get_tparams,
-        )
-    };
+    let mut on_var = |_name: &Name, _state: InferenceState, _: PreInferenceVariance| {};
+    let mut on_edge = |c: &Class| initialize_environment_impl(c, solver, environment);
     on_class(
         class,
-        heap,
+        solver.heap,
         &mut on_edge,
         &mut on_var,
-        get_class_bases,
-        get_fields,
+        &|c| solver.get_base_types_for_class(c),
+        &|c| solver.get_class_field_map(c),
     );
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn compute_variance_env(&self, class: &Class) -> VarianceEnv {
         let initial_inference_map_for_class =
-            initial_inference_map(self.get_class_tparams(class).as_vec());
+            initial_inference_map(self.get_class_tparams(class).map(|t| &**t));
         let need_inference = initial_inference_map_for_class
-            .iter()
-            .any(|(_, status)| status.specified_variance.is_none());
+            .values()
+            .any(|parameter| parameter.needs_inference());
         if !need_inference {
             let mut environment = VarianceEnv::new();
             environment.insert(class.dupe(), initial_inference_map_for_class);
@@ -611,23 +792,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn infer_variance_env(&self, class: &Class, inference_map: InferenceMap) -> VarianceEnv {
         let mut environment = VarianceEnv::new();
         environment.insert(class.dupe(), inference_map);
-        initialize_environment(
-            class,
-            self.heap,
-            &mut environment,
-            &|c| self.get_base_types_for_class(c),
-            &|c| self.get_class_field_map(c),
-            &|c| self.get_class_tparams(c),
-        );
+        initialize_environment(class, self, &mut environment);
         self.fixpoint(environment)
     }
 
-    /// Run the fixpoint to convergence. Each iteration clones the previous
-    /// inferred variances and unions new constraints on top, which is
-    /// monotonic (variance can only increase in the lattice) and therefore
-    /// guaranteed to converge. The lattice has height 3
-    /// (Bivariant < {Covariant, Contravariant} < Invariant), so convergence
-    /// is fast.
+    /// Run the fixpoint to convergence. Evidence within each state is unioned
+    /// monotonically, while grounded evidence replaces provisional evidence
+    /// instead of unioning with a direction that may have changed across the
+    /// unresolved recursive edge.
     fn fixpoint(&self, mut env: VarianceEnv) -> VarianceEnv {
         let mut changed = true;
 
@@ -636,19 +808,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let mut new_environment: VarianceEnv = SmallMap::new();
 
             for (my_class, params) in env.iter() {
-                let mut new_params: InferenceMap = params.clone();
+                let mut new_params = params.clone();
 
-                let mut on_var = |name: &Name,
-                                  variance: Variance,
-                                  has_inferred: bool,
-                                  _: PreInferenceVariance| {
-                    if let Some(old_status) = new_params.get_mut(name) {
-                        let new_inferred_variance = variance.union(old_status.inferred_variance);
-                        let new_has_variance_inferred = old_status.has_variance_inferred
-                            || has_inferred
-                            || new_inferred_variance != Variance::Bivariant;
-                        old_status.inferred_variance = new_inferred_variance;
-                        old_status.has_variance_inferred = new_has_variance_inferred;
+                let mut on_var = |name: &Name, state: InferenceState, _: PreInferenceVariance| {
+                    if let Some(parameter) = new_params.get_mut(name) {
+                        parameter.merge(state);
                     }
                 };
                 let mut on_edge = |c: &Class| env.get(c).cloned().unwrap_or_default();
@@ -676,16 +840,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn infer_variance_ignoring_declared(&self, class: &Class) -> VarianceMap {
         let tparams = self.get_class_tparams(class);
         let inference_map = tparams
-            .as_vec()
             .iter()
-            .map(|p| {
+            .flat_map(|tparams| tparams.iter())
+            .map(|param| {
                 (
-                    p.name().clone(),
-                    InferenceStatus {
-                        inferred_variance: Variance::Bivariant,
-                        has_variance_inferred: false,
-                        specified_variance: None,
-                    },
+                    param.name().clone(),
+                    ParameterVariance::Inferred(InferenceState::Unresolved),
                 )
             })
             .collect::<InferenceMap>();
@@ -694,7 +854,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .get(class)
             .expect("class must be present in environment")
             .iter()
-            .map(|(name, status)| (name.clone(), status.inferred_variance))
+            .map(|(name, parameter)| (name.clone(), parameter.effective()))
             .collect::<SmallMap<_, _>>();
         VarianceMap(class_variances)
     }
@@ -706,18 +866,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .get(class)
             .expect("class name must be present in environment")
             .iter()
-            .map(|(name, status)| {
-                (
-                    name.clone(),
-                    if let Some(specified_variance) = status.specified_variance {
-                        specified_variance
-                    } else if status.has_variance_inferred {
-                        status.inferred_variance
-                    } else {
-                        Variance::Bivariant
-                    },
-                )
-            })
+            .map(|(name, parameter)| (name.clone(), parameter.effective()))
             .collect::<SmallMap<_, _>>();
         VarianceMap(class_variances)
     }
@@ -732,20 +881,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         &self,
         class: &Class,
         class_bases: &ClassBases,
-        field_map: &SmallMap<Name, Arc<ClassField>>,
+        field_map: &SmallMap<Name, &ClassField>,
     ) -> Vec<VarianceViolation> {
         let mut violations = Vec::new();
 
         // Check base classes deeply using on_type for traversal
         for (base_type, range) in class_bases.iter_with_ranges() {
             let mut on_var =
-                |name: &Name, variance: Variance, _inj: bool, declared: PreInferenceVariance| {
-                    check_typevar(name, variance, declared, range, &mut violations);
+                |name: &Name, state: InferenceState, declared: PreInferenceVariance| {
+                    // An unresolved path establishes no position to validate. Treating it as
+                    // bivariant here would conflate missing evidence with a variance direction.
+                    if let Some(variance) = state.direction() {
+                        check_typevar(name, variance.into(), declared, range, &mut violations);
+                    }
                 };
-            let mut on_edge = |c: &Class| initial_inference_map(self.get_class_tparams(c).as_vec());
+            let mut on_edge =
+                |c: &Class| initial_inference_map(self.get_class_tparams(c).map(|t| &**t));
             on_type(
-                Variance::Covariant,
-                true,
+                VariancePath::grounded(DirectionalVariance::Covariant),
                 &base_type.clone().to_type(),
                 &mut on_edge,
                 &mut on_var,
@@ -770,19 +923,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         violations
     }
 
-    /// The `def`-name range of `metadata`'s function, via `KeyUndecoratedFunctionRange`.
-    /// `None` when there's no `def_index` (synthesized/metadata-only); the caller then
-    /// falls back to the field range. Current-module only: variance checks a class's own
-    /// fields, so `def_index` is always local — we don't resolve cross-module `FuncId`s.
+    /// The `def`-name range of `metadata`'s function.
+    /// Current-module only: variance checks a class's own fields, so `def_index` is always
+    /// local — we don't resolve cross-module `FuncDefId`s.
     fn func_def_range(&self, metadata: &FuncMetadata) -> Option<TextRange> {
-        let def_index = match &metadata.kind {
-            FunctionKind::Def(func_id) | FunctionKind::ShapeDsl(func_id, ..) => func_id.def_index?,
-            _ => return None,
-        };
-        let idx = self
-            .bindings()
-            .key_to_idx_hashed_opt(Hashed::new(&KeyUndecoratedFunctionRange(def_index)))?;
-        Some(self.get_idx(idx).0.range())
+        let func_id = metadata.kind.as_func_def_id()?;
+        self.bindings().function_def_range(func_id.def_index)
     }
 
     /// Check a method's signatures for variance violations (shallow: direct
@@ -809,8 +955,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             }
             return;
         }
-        ty.visit_toplevel_callable(|callable| {
+        for (callable, _) in ty.toplevel_callable_signatures() {
             check_callable_variance(callable, field_range, violations);
-        });
+        }
     }
 }

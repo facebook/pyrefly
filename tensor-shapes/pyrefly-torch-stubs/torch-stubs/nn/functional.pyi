@@ -8,21 +8,97 @@ Type stubs for torch.nn.functional module.
 Functional neural network operations including convolution, pooling, activation, and normalization.
 """
 
-from typing import Literal, overload
-
-from shape_extensions import uses_shape_dsl
-from torch._shapes import (
-    adaptive_pool_ir,
-    conv_ir,
-    conv_transpose_ir,
-    cosine_similarity_ir,
-    interpolate_ir,
-    loss_ir,
-    pad_ir,
-    pool_ir,
+import builtins
+import importlib as importlib
+import math as math
+import warnings as warnings
+from collections.abc import Callable as Callable
+from typing import (
+    Any,
+    Literal,
+    Optional as Optional,
+    overload,
+    TYPE_CHECKING as TYPE_CHECKING,
 )
 
-from .. import Tensor
+import numpy as np
+import shape_extensions
+import torch as torch
+from shape_extensions import (
+    Flag,
+    gufunc_broadcast,
+    Int as _Int,
+    IntListLiteral,
+    IntTuple,
+    IntTupleOrList,
+    IntVar,
+)
+from torch import (
+    bilinear as bilinear,
+    celu_ as celu_,
+    channel_shuffle as channel_shuffle,
+    conv_tbc as conv_tbc,
+    native_channel_shuffle as native_channel_shuffle,
+    pairwise_distance as pairwise_distance,
+    pdist as pdist,
+    pixel_shuffle as pixel_shuffle,
+    pixel_unshuffle as pixel_unshuffle,
+    relu_ as relu_,
+    rrelu_ as rrelu_,
+    selu_ as selu_,
+    threshold_ as threshold_,
+)
+from torch._C import _ScalingType as ScalingType, _SwizzleType as SwizzleType
+from torch._C._nn import (
+    elu_ as elu_,
+    hardtanh_ as hardtanh_,
+    leaky_relu_ as leaky_relu_,
+    one_hot as one_hot,
+)
+from torch._jit_internal import (
+    boolean_dispatch as boolean_dispatch,
+    BroadcastingList1 as BroadcastingList1,
+    BroadcastingList2 as BroadcastingList2,
+    BroadcastingList3 as BroadcastingList3,
+)
+from torch._shapes import (
+    adaptive_pool1d_shape,
+    adaptive_pool2d_shape,
+    adaptive_pool3d_shape,
+    adaptive_pool_gradual_shape,
+    affine_grid_shape,
+    classification_loss_shape,
+    conv_shape,
+    conv_transpose_shape,
+    cosine_embedding_score_shape,
+    cosine_similarity_shape,
+    fold_list_shape,
+    fold_shape,
+    fractional_pool_extent,
+    interpolate_scalar_shape,
+    interpolate_scale_shape,
+    interpolate_size_shape,
+    kl_div_loss_shape,
+    loss_shape,
+    pad_shape,
+    pairwise_distance_shape,
+    pool_shape,
+)
+from torch._torch_docs import (
+    reproducibility_notes as reproducibility_notes,
+    sparse_support_notes as sparse_support_notes,
+    tf32_notes as tf32_notes,
+)
+from torch.nn import grad as grad
+from torch.overrides import (
+    handle_torch_function as handle_torch_function,
+    has_torch_function as has_torch_function,
+    has_torch_function_unary as has_torch_function_unary,
+    has_torch_function_variadic as has_torch_function_variadic,
+)
+from torch.types import _dtype as DType
+
+from .. import Tensor as Tensor
 
 __all__ = [
     # Convolution
@@ -105,349 +181,1173 @@ __all__ = [
 # ====================================================================
 
 # Convolution operations
-@uses_shape_dsl(conv_ir)
-def conv1d(
-    self: Tensor,
-    weight: Tensor,
+def conv1d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int]],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int] = 1,
-    padding: int | tuple[int] = 0,
-    dilation: int | tuple[int] = 1,
+    stride: Stride = 1,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
     groups: int = 1,
-) -> Tensor:
+) -> Tensor[conv_shape(InputShape, WeightShape, Stride, Padding, Dilation)]:
     """1D convolution. Shape inference via meta-shape: torch.nn.functional.conv1d"""
     ...
 
-@uses_shape_dsl(conv_ir)
-def conv2d(
-    self: Tensor,
-    weight: Tensor,
+def conv2d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int, int] = 1,
-    padding: int | tuple[int, int] = 0,
-    dilation: int | tuple[int, int] = 1,
+    stride: Stride = 1,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
     groups: int = 1,
-) -> Tensor:
+) -> Tensor[conv_shape(InputShape, WeightShape, Stride, Padding, Dilation)]:
     """2D convolution. Shape inference via meta-shape: torch.nn.functional.conv2d"""
     ...
 
-@uses_shape_dsl(conv_ir)
+@overload
+def conv3d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
+    bias: Tensor | None = None,
+    stride: Stride = 1,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    groups: int = 1,
+) -> Tensor[conv_shape(InputShape, WeightShape, Stride, Padding, Dilation)]:
+    """3D convolution. Shape inference via meta-shape: torch.nn.functional.conv3d"""
+    ...
+
+@overload
 def conv3d(
     self: Tensor,
     weight: Tensor,
     bias: Tensor | None = None,
-    stride: int | tuple[int, int, int] = 1,
-    padding: int | tuple[int, int, int] = 0,
-    dilation: int | tuple[int, int, int] = 1,
+    stride: builtins.int | tuple[builtins.int, builtins.int, builtins.int] = 1,
+    padding: str = "valid",
+    dilation: builtins.int | tuple[builtins.int, builtins.int, builtins.int] = 1,
     groups: int = 1,
-) -> Tensor:
-    """3D convolution. Shape inference via meta-shape: torch.nn.functional.conv3d"""
-    ...
+) -> Tensor: ...
 
 # Transposed convolution operations
-@uses_shape_dsl(conv_transpose_ir)
-def conv_transpose1d(
-    self: Tensor,
-    weight: Tensor,
+def conv_transpose1d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    OutputPadding: Flag[builtins.int | tuple[builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int]],
+    Groups: Flag[builtins.int],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int] = 1,
-    padding: int | tuple[int] = 0,
-    output_padding: int | tuple[int] = 0,
-    dilation: int | tuple[int] = 1,
-    groups: int = 1,
-) -> Tensor:
+    stride: Stride = 1,
+    padding: Padding = 0,
+    output_padding: OutputPadding = 0,
+    dilation: Dilation = 1,
+    groups: Groups = 1,
+) -> Tensor[
+    conv_transpose_shape(
+        InputShape, WeightShape, Stride, Padding, OutputPadding, Dilation, Groups
+    )
+]:
     """1D transposed convolution. Shape inference via meta-shape: torch.nn.functional.conv_transpose1d"""
     ...
 
-@uses_shape_dsl(conv_transpose_ir)
-def conv_transpose2d(
-    self: Tensor,
-    weight: Tensor,
+def conv_transpose2d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    OutputPadding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Groups: Flag[builtins.int],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int, int] = 1,
-    padding: int | tuple[int, int] = 0,
-    output_padding: int | tuple[int, int] = 0,
-    dilation: int | tuple[int, int] = 1,
-    groups: int = 1,
-) -> Tensor:
+    stride: Stride = 1,
+    padding: Padding = 0,
+    output_padding: OutputPadding = 0,
+    dilation: Dilation = 1,
+    groups: Groups = 1,
+) -> Tensor[
+    conv_transpose_shape(
+        InputShape, WeightShape, Stride, Padding, OutputPadding, Dilation, Groups
+    )
+]:
     """2D transposed convolution. Shape inference via meta-shape: torch.nn.functional.conv_transpose2d"""
     ...
 
-@uses_shape_dsl(conv_transpose_ir)
-def conv_transpose3d(
-    self: Tensor,
-    weight: Tensor,
+def conv_transpose3d[
+    InputShape: IntTuple,
+    WeightShape: IntTuple,
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    OutputPadding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Groups: Flag[builtins.int],
+](
+    self: Tensor[InputShape],
+    weight: Tensor[WeightShape],
     bias: Tensor | None = None,
-    stride: int | tuple[int, int, int] = 1,
-    padding: int | tuple[int, int, int] = 0,
-    output_padding: int | tuple[int, int, int] = 0,
-    dilation: int | tuple[int, int, int] = 1,
-    groups: int = 1,
-) -> Tensor:
+    stride: Stride = 1,
+    padding: Padding = 0,
+    output_padding: OutputPadding = 0,
+    dilation: Dilation = 1,
+    groups: Groups = 1,
+) -> Tensor[
+    conv_transpose_shape(
+        InputShape, WeightShape, Stride, Padding, OutputPadding, Dilation, Groups
+    )
+]:
     """3D transposed convolution. Shape inference via meta-shape: torch.nn.functional.conv_transpose3d"""
     ...
 
 # Max pooling operations
-@uses_shape_dsl(pool_ir)
+def max_pool1d_with_indices[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    input: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
+    return_indices: bool = False,
+) -> tuple[
+    Tensor[pool_shape(Shape, 1, Kernel, Stride, Padding, Dilation, CeilMode)],
+    Tensor[pool_shape(Shape, 1, Kernel, Stride, Padding, Dilation, CeilMode)],
+]: ...
+def max_pool2d_with_indices[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    input: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
+    return_indices: bool = False,
+) -> tuple[
+    Tensor[pool_shape(Shape, 2, Kernel, Stride, Padding, Dilation, CeilMode)],
+    Tensor[pool_shape(Shape, 2, Kernel, Stride, Padding, Dilation, CeilMode)],
+]: ...
+def max_pool3d_with_indices[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    input: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
+    return_indices: bool = False,
+) -> tuple[
+    Tensor[pool_shape(Shape, 3, Kernel, Stride, Padding, Dilation, CeilMode)],
+    Tensor[pool_shape(Shape, 3, Kernel, Stride, Padding, Dilation, CeilMode)],
+]: ...
+
+# Fractional output ratios yield gradual spatial dimensions; explicit sizes are exact.
+# Torch's 2D implementation requires a pair for output_ratio.
 @overload
-def max_pool1d(
-    self: Tensor,
+def fractional_max_pool2d[
+    Batch: IntTuple,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int] | None],
+](
+    input: Tensor[[*Batch, H, W]],
+    kernel_size: int | tuple[int, int],
+    output_size: Output = None,
+    output_ratio: tuple[float, float] | None = None,
+    return_indices: Literal[False] = False,
+    _random_samples: Tensor | None = None,
+) -> Tensor[
+    [*Batch, fractional_pool_extent(Output, 0), fractional_pool_extent(Output, 1)]
+]: ...
+@overload
+def fractional_max_pool2d[
+    Batch: IntTuple,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int] | None],
+](
+    input: Tensor[[*Batch, H, W]],
+    kernel_size: int | tuple[int, int],
+    output_size: Output = None,
+    output_ratio: tuple[float, float] | None = None,
+    return_indices: Literal[True] = True,
+    _random_samples: Tensor | None = None,
+) -> tuple[
+    Tensor[
+        [*Batch, fractional_pool_extent(Output, 0), fractional_pool_extent(Output, 1)]
+    ],
+    Tensor[
+        [*Batch, fractional_pool_extent(Output, 0), fractional_pool_extent(Output, 1)]
+    ],
+]: ...
+@overload
+def fractional_max_pool2d[
+    Batch: IntTuple,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int] | None],
+](
+    input: Tensor[[*Batch, H, W]],
+    kernel_size: int | tuple[int, int],
+    output_size: Output = None,
+    output_ratio: tuple[float, float] | None = None,
+    return_indices: bool = ...,
+    _random_samples: Tensor | None = None,
+) -> (
+    Tensor[
+        [*Batch, fractional_pool_extent(Output, 0), fractional_pool_extent(Output, 1)]
+    ]
+    | tuple[
+        Tensor[
+            [
+                *Batch,
+                fractional_pool_extent(Output, 0),
+                fractional_pool_extent(Output, 1),
+            ]
+        ],
+        Tensor[
+            [
+                *Batch,
+                fractional_pool_extent(Output, 0),
+                fractional_pool_extent(Output, 1),
+            ]
+        ],
+    ]
+): ...
+def fractional_max_pool2d_with_indices[
+    Batch: IntTuple,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int] | None],
+](
+    input: Tensor[[*Batch, H, W]],
+    kernel_size: int | tuple[int, int],
+    output_size: Output = None,
+    output_ratio: tuple[float, float] | None = None,
+    return_indices: bool = False,
+    _random_samples: Tensor | None = None,
+) -> tuple[
+    Tensor[
+        [*Batch, fractional_pool_extent(Output, 0), fractional_pool_extent(Output, 1)]
+    ],
+    Tensor[
+        [*Batch, fractional_pool_extent(Output, 0), fractional_pool_extent(Output, 1)]
+    ],
+]: ...
+@overload
+def fractional_max_pool3d[
+    Batch: IntTuple,
+    D: IntVar,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int, int] | None],
+](
+    input: Tensor[[*Batch, D, H, W]],
+    kernel_size: int | tuple[int, int, int],
+    output_size: Output = None,
+    output_ratio: float | tuple[float, float, float] | None = None,
+    return_indices: Literal[False] = False,
+    _random_samples: Tensor | None = None,
+) -> Tensor[
+    [
+        *Batch,
+        fractional_pool_extent(Output, 0),
+        fractional_pool_extent(Output, 1),
+        fractional_pool_extent(Output, 2),
+    ]
+]: ...
+@overload
+def fractional_max_pool3d[
+    Batch: IntTuple,
+    D: IntVar,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int, int] | None],
+](
+    input: Tensor[[*Batch, D, H, W]],
+    kernel_size: int | tuple[int, int, int],
+    output_size: Output = None,
+    output_ratio: float | tuple[float, float, float] | None = None,
+    return_indices: Literal[True] = True,
+    _random_samples: Tensor | None = None,
+) -> tuple[
+    Tensor[
+        [
+            *Batch,
+            fractional_pool_extent(Output, 0),
+            fractional_pool_extent(Output, 1),
+            fractional_pool_extent(Output, 2),
+        ]
+    ],
+    Tensor[
+        [
+            *Batch,
+            fractional_pool_extent(Output, 0),
+            fractional_pool_extent(Output, 1),
+            fractional_pool_extent(Output, 2),
+        ]
+    ],
+]: ...
+@overload
+def fractional_max_pool3d[
+    Batch: IntTuple,
+    D: IntVar,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int, int] | None],
+](
+    input: Tensor[[*Batch, D, H, W]],
+    kernel_size: int | tuple[int, int, int],
+    output_size: Output = None,
+    output_ratio: float | tuple[float, float, float] | None = None,
+    return_indices: bool = ...,
+    _random_samples: Tensor | None = None,
+) -> (
+    Tensor[
+        [
+            *Batch,
+            fractional_pool_extent(Output, 0),
+            fractional_pool_extent(Output, 1),
+            fractional_pool_extent(Output, 2),
+        ]
+    ]
+    | tuple[
+        Tensor[
+            [
+                *Batch,
+                fractional_pool_extent(Output, 0),
+                fractional_pool_extent(Output, 1),
+                fractional_pool_extent(Output, 2),
+            ]
+        ],
+        Tensor[
+            [
+                *Batch,
+                fractional_pool_extent(Output, 0),
+                fractional_pool_extent(Output, 1),
+                fractional_pool_extent(Output, 2),
+            ]
+        ],
+    ]
+): ...
+def fractional_max_pool3d_with_indices[
+    Batch: IntTuple,
+    D: IntVar,
+    H: IntVar,
+    W: IntVar,
+    Output: Flag[int | tuple[int, int, int] | None],
+](
+    input: Tensor[[*Batch, D, H, W]],
+    kernel_size: int | tuple[int, int, int],
+    output_size: Output = None,
+    output_ratio: float | tuple[float, float, float] | None = None,
+    return_indices: bool = False,
+    _random_samples: Tensor | None = None,
+) -> tuple[
+    Tensor[
+        [
+            *Batch,
+            fractional_pool_extent(Output, 0),
+            fractional_pool_extent(Output, 1),
+            fractional_pool_extent(Output, 2),
+        ]
+    ],
+    Tensor[
+        [
+            *Batch,
+            fractional_pool_extent(Output, 0),
+            fractional_pool_extent(Output, 1),
+            fractional_pool_extent(Output, 2),
+        ]
+    ],
+]: ...
+@overload
+def max_unpool1d[Batch: IntTuple, Input: IntVar](
+    input: Tensor[[*Batch, Input]],
+    indices: Tensor[[*Batch, Input]],
     kernel_size: int | tuple[int],
     stride: int | tuple[int] | None = None,
     padding: int | tuple[int] = 0,
-    dilation: int | tuple[int] = 1,
-    ceil_mode: bool = False,
+    output_size: None = None,
+) -> Tensor[[*Batch, int]]: ...
+@overload
+def max_unpool1d[Batch: IntTuple, Input: IntVar, Output: IntVar](
+    input: Tensor[[*Batch, Input]],
+    indices: Tensor[[*Batch, Input]],
+    kernel_size: int | tuple[int],
+    stride: int | tuple[int] | None = None,
+    padding: int | tuple[int] = 0,
+    output_size: tuple[_Int[Output]] = ...,
+) -> Tensor[[*Batch, Output]]: ...
+@overload
+def max_unpool1d[Batch: IntTuple, Input: IntVar, Output: IntVar](
+    input: Tensor[[*Batch, Input]],
+    indices: Tensor[[*Batch, Input]],
+    kernel_size: int | tuple[int],
+    stride: int | tuple[int] | None = None,
+    padding: int | tuple[int] = 0,
+    output_size: tuple[object, object, _Int[Output]] = ...,
+) -> Tensor[[*Batch, Output]]: ...
+
+# TODO(stroxler): Reject incorrectly sized fixed tuples in the 1D/2D/3D
+# output_size fallbacks while retaining support for dynamically sized tuples.
+# A direct DSL rank check currently loses the known batch/channel dimensions
+# for a dynamic tuple, and IntTuple/Flag binding does not reject wrong literals.
+@overload
+def max_unpool1d[Batch: IntTuple, Input: IntVar](
+    input: Tensor[[*Batch, Input]],
+    indices: Tensor[[*Batch, Input]],
+    kernel_size: int | tuple[int],
+    stride: int | tuple[int] | None = None,
+    padding: int | tuple[int] = 0,
+    output_size: tuple[int, ...] = ...,
+) -> Tensor[[*Batch, int]]: ...
+@overload
+def max_unpool2d[Batch: IntTuple, Height: IntVar, Width: IntVar](
+    input: Tensor[[*Batch, Height, Width]],
+    indices: Tensor[[*Batch, Height, Width]],
+    kernel_size: int | tuple[int, int],
+    stride: int | tuple[int, int] | None = None,
+    padding: int | tuple[int, int] = 0,
+    output_size: None = None,
+) -> Tensor[[*Batch, int, int]]: ...
+@overload
+def max_unpool2d[
+    Batch: IntTuple,
+    Height: IntVar,
+    Width: IntVar,
+    OutH: IntVar,
+    OutW: IntVar,
+](
+    input: Tensor[[*Batch, Height, Width]],
+    indices: Tensor[[*Batch, Height, Width]],
+    kernel_size: int | tuple[int, int],
+    stride: int | tuple[int, int] | None = None,
+    padding: int | tuple[int, int] = 0,
+    output_size: tuple[_Int[OutH], _Int[OutW]] = ...,
+) -> Tensor[[*Batch, OutH, OutW]]: ...
+@overload
+def max_unpool2d[
+    Batch: IntTuple,
+    Height: IntVar,
+    Width: IntVar,
+    OutH: IntVar,
+    OutW: IntVar,
+](
+    input: Tensor[[*Batch, Height, Width]],
+    indices: Tensor[[*Batch, Height, Width]],
+    kernel_size: int | tuple[int, int],
+    stride: int | tuple[int, int] | None = None,
+    padding: int | tuple[int, int] = 0,
+    output_size: tuple[object, object, _Int[OutH], _Int[OutW]] = ...,
+) -> Tensor[[*Batch, OutH, OutW]]: ...
+@overload
+def max_unpool2d[Batch: IntTuple, Height: IntVar, Width: IntVar](
+    input: Tensor[[*Batch, Height, Width]],
+    indices: Tensor[[*Batch, Height, Width]],
+    kernel_size: int | tuple[int, int],
+    stride: int | tuple[int, int] | None = None,
+    padding: int | tuple[int, int] = 0,
+    output_size: tuple[int, ...] = ...,
+) -> Tensor[[*Batch, int, int]]: ...
+@overload
+def max_unpool3d[Batch: IntTuple, Depth: IntVar, Height: IntVar, Width: IntVar](
+    input: Tensor[[*Batch, Depth, Height, Width]],
+    indices: Tensor[[*Batch, Depth, Height, Width]],
+    kernel_size: int | tuple[int, int, int],
+    stride: int | tuple[int, int, int] | None = None,
+    padding: int | tuple[int, int, int] = 0,
+    output_size: None = None,
+) -> Tensor[[*Batch, int, int, int]]: ...
+@overload
+def max_unpool3d[
+    Batch: IntTuple,
+    Depth: IntVar,
+    Height: IntVar,
+    Width: IntVar,
+    OutD: IntVar,
+    OutH: IntVar,
+    OutW: IntVar,
+](
+    input: Tensor[[*Batch, Depth, Height, Width]],
+    indices: Tensor[[*Batch, Depth, Height, Width]],
+    kernel_size: int | tuple[int, int, int],
+    stride: int | tuple[int, int, int] | None = None,
+    padding: int | tuple[int, int, int] = 0,
+    output_size: tuple[_Int[OutD], _Int[OutH], _Int[OutW]] = ...,
+) -> Tensor[[*Batch, OutD, OutH, OutW]]: ...
+@overload
+def max_unpool3d[
+    Batch: IntTuple,
+    Depth: IntVar,
+    Height: IntVar,
+    Width: IntVar,
+    OutD: IntVar,
+    OutH: IntVar,
+    OutW: IntVar,
+](
+    input: Tensor[[*Batch, Depth, Height, Width]],
+    indices: Tensor[[*Batch, Depth, Height, Width]],
+    kernel_size: int | tuple[int, int, int],
+    stride: int | tuple[int, int, int] | None = None,
+    padding: int | tuple[int, int, int] = 0,
+    output_size: tuple[object, object, _Int[OutD], _Int[OutH], _Int[OutW]] = ...,
+) -> Tensor[[*Batch, OutD, OutH, OutW]]: ...
+@overload
+def max_unpool3d[Batch: IntTuple, Depth: IntVar, Height: IntVar, Width: IntVar](
+    input: Tensor[[*Batch, Depth, Height, Width]],
+    indices: Tensor[[*Batch, Depth, Height, Width]],
+    kernel_size: int | tuple[int, int, int],
+    stride: int | tuple[int, int, int] | None = None,
+    padding: int | tuple[int, int, int] = 0,
+    output_size: tuple[int, ...] = ...,
+) -> Tensor[[*Batch, int, int, int]]: ...
+@overload
+def max_pool1d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
     return_indices: Literal[False] = False,
-) -> Tensor:
+) -> Tensor[pool_shape(Shape, 1, Kernel, Stride, Padding, Dilation, CeilMode)]:
     """1D max pooling. Shape inference via meta-shape: torch.nn.functional.max_pool1d"""
     ...
 
 @overload
-def max_pool1d(
-    self: Tensor,
-    kernel_size: int | tuple[int],
-    stride: int | tuple[int] | None = None,
-    padding: int | tuple[int] = 0,
-    dilation: int | tuple[int] = 1,
-    ceil_mode: bool = False,
+def max_pool1d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
     return_indices: Literal[True] = True,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[
+    Tensor[pool_shape(Shape, 1, Kernel, Stride, Padding, Dilation, CeilMode)],
+    Tensor[pool_shape(Shape, 1, Kernel, Stride, Padding, Dilation, CeilMode)],
+]:
     """1D max pooling with indices. Shape inference via meta-shape: torch.nn.functional.max_pool1d"""
     ...
 
-@uses_shape_dsl(pool_ir)
 @overload
-def max_pool2d(
-    self: Tensor,
-    kernel_size: int | tuple[int, int],
-    stride: int | tuple[int, int] | None = None,
-    padding: int | tuple[int, int] = 0,
-    dilation: int | tuple[int, int] = 1,
-    ceil_mode: bool = False,
+def max_pool2d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
     return_indices: Literal[False] = False,
-) -> Tensor:
+) -> Tensor[pool_shape(Shape, 2, Kernel, Stride, Padding, Dilation, CeilMode)]:
     """2D max pooling. Shape inference via meta-shape: torch.nn.functional.max_pool2d"""
     ...
 
 @overload
-def max_pool2d(
-    self: Tensor,
-    kernel_size: int | tuple[int, int],
-    stride: int | tuple[int, int] | None = None,
-    padding: int | tuple[int, int] = 0,
-    dilation: int | tuple[int, int] = 1,
-    ceil_mode: bool = False,
+def max_pool2d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
     return_indices: Literal[True] = True,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[
+    Tensor[pool_shape(Shape, 2, Kernel, Stride, Padding, Dilation, CeilMode)],
+    Tensor[pool_shape(Shape, 2, Kernel, Stride, Padding, Dilation, CeilMode)],
+]:
     """2D max pooling with indices. Shape inference via meta-shape: torch.nn.functional.max_pool2d"""
     ...
 
-@uses_shape_dsl(pool_ir)
 @overload
-def max_pool3d(
-    self: Tensor,
-    kernel_size: int | tuple[int, int, int],
-    stride: int | tuple[int, int, int] | None = None,
-    padding: int | tuple[int, int, int] = 0,
-    dilation: int | tuple[int, int, int] = 1,
-    ceil_mode: bool = False,
+def max_pool3d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
     return_indices: Literal[False] = False,
-) -> Tensor:
+) -> Tensor[pool_shape(Shape, 3, Kernel, Stride, Padding, Dilation, CeilMode)]:
     """3D max pooling. Shape inference via meta-shape: torch.nn.functional.max_pool3d"""
     ...
 
 @overload
-def max_pool3d(
-    self: Tensor,
-    kernel_size: int | tuple[int, int, int],
-    stride: int | tuple[int, int, int] | None = None,
-    padding: int | tuple[int, int, int] = 0,
-    dilation: int | tuple[int, int, int] = 1,
-    ceil_mode: bool = False,
+def max_pool3d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Dilation: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    dilation: Dilation = 1,
+    ceil_mode: CeilMode = False,
     return_indices: Literal[True] = True,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[
+    Tensor[pool_shape(Shape, 3, Kernel, Stride, Padding, Dilation, CeilMode)],
+    Tensor[pool_shape(Shape, 3, Kernel, Stride, Padding, Dilation, CeilMode)],
+]:
     """3D max pooling with indices. Shape inference via meta-shape: torch.nn.functional.max_pool3d"""
     ...
 
 # Average pooling operations
-@uses_shape_dsl(pool_ir)
-def avg_pool1d(
-    self: Tensor,
-    kernel_size: int | tuple[int],
-    stride: int | tuple[int] | None = None,
-    padding: int | tuple[int] = 0,
-    ceil_mode: bool = False,
+#
+# Average pooling has no dilation, so the shared helper receives the neutral rate
+# `1`; `count_include_pad` and `divisor_override` only weight the averaged values.
+def avg_pool1d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    ceil_mode: CeilMode = False,
     count_include_pad: bool = True,
-) -> Tensor:
+) -> Tensor[pool_shape(Shape, 1, Kernel, Stride, Padding, 1, CeilMode)]:
     """1D average pooling. Shape inference via meta-shape: torch.nn.functional.avg_pool1d"""
     ...
 
-@uses_shape_dsl(pool_ir)
-def avg_pool2d(
-    self: Tensor,
-    kernel_size: int | tuple[int, int],
-    stride: int | tuple[int, int] | None = None,
-    padding: int | tuple[int, int] = 0,
-    ceil_mode: bool = False,
+def avg_pool2d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    ceil_mode: CeilMode = False,
     count_include_pad: bool = True,
     divisor_override: int | None = None,
-) -> Tensor:
+) -> Tensor[pool_shape(Shape, 2, Kernel, Stride, Padding, 1, CeilMode)]:
     """2D average pooling. Shape inference via meta-shape: torch.nn.functional.avg_pool2d"""
     ...
 
-@uses_shape_dsl(pool_ir)
-def avg_pool3d(
-    self: Tensor,
-    kernel_size: int | tuple[int, int, int],
-    stride: int | tuple[int, int, int] | None = None,
-    padding: int | tuple[int, int, int] = 0,
-    ceil_mode: bool = False,
+def avg_pool3d[
+    Shape: IntTuple,
+    Kernel: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    Stride: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int] | None],
+    Padding: Flag[builtins.int | tuple[builtins.int, builtins.int, builtins.int]],
+    CeilMode: Flag[builtins.bool],
+](
+    self: Tensor[Shape],
+    kernel_size: Kernel,
+    stride: Stride = None,
+    padding: Padding = 0,
+    ceil_mode: CeilMode = False,
     count_include_pad: bool = True,
     divisor_override: int | None = None,
-) -> Tensor:
+) -> Tensor[pool_shape(Shape, 3, Kernel, Stride, Padding, 1, CeilMode)]:
     """3D average pooling. Shape inference via meta-shape: torch.nn.functional.avg_pool3d"""
     ...
 
+# Lp pooling has the same output geometry as average pooling.
+def lp_pool1d[
+    Shape: IntTuple,
+    Kernel: Flag[int],
+    Stride: Flag[int | tuple[int] | None],
+    CeilMode: Flag[bool],
+](
+    input: Tensor[Shape],
+    norm_type: int | float,
+    kernel_size: Kernel,
+    stride: Stride = None,
+    ceil_mode: CeilMode = False,
+) -> Tensor[pool_shape(Shape, 1, Kernel, Stride, 0, 1, CeilMode)]: ...
+def lp_pool2d[
+    Shape: IntTuple,
+    Kernel: Flag[int | tuple[int, int]],
+    Stride: Flag[int | tuple[int, int] | None],
+    CeilMode: Flag[bool],
+](
+    input: Tensor[Shape],
+    norm_type: int | float,
+    kernel_size: Kernel,
+    stride: Stride = None,
+    ceil_mode: CeilMode = False,
+) -> Tensor[pool_shape(Shape, 2, Kernel, Stride, 0, 1, CeilMode)]: ...
+def lp_pool3d[
+    Shape: IntTuple,
+    Kernel: Flag[int | tuple[int, int, int]],
+    Stride: Flag[int | tuple[int, int, int] | None],
+    CeilMode: Flag[bool],
+](
+    input: Tensor[Shape],
+    norm_type: int | float,
+    kernel_size: Kernel,
+    stride: Stride = None,
+    ceil_mode: CeilMode = False,
+) -> Tensor[pool_shape(Shape, 3, Kernel, Stride, 0, 1, CeilMode)]: ...
+
 # Adaptive max pooling operations
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_max_pool1d(
-    self: Tensor, output_size: int | tuple[int], return_indices: bool = False
-) -> Tensor:
-    """1D adaptive max pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_max_pool1d"""
+@overload
+def adaptive_max_pool1d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape],
+    output_size: O,
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool1d_shape(Shape, O)]:
+    """1D adaptive max pooling. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_max_pool2d(
-    self: Tensor,
-    output_size: int | tuple[int, int] | None,
-    return_indices: bool = False,
-) -> Tensor:
-    """2D adaptive max pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_max_pool2d"""
+@overload
+def adaptive_max_pool1d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape],
+    output_size: tuple[O],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool1d_shape(Shape, O)]: ...
+@overload
+def adaptive_max_pool1d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O, return_indices: Literal[True]
+) -> tuple[
+    Tensor[adaptive_pool1d_shape(Shape, O)],
+    Tensor[adaptive_pool1d_shape(Shape, O)],
+]: ...
+@overload
+def adaptive_max_pool1d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: tuple[O], return_indices: Literal[True]
+) -> tuple[
+    Tensor[adaptive_pool1d_shape(Shape, O)],
+    Tensor[adaptive_pool1d_shape(Shape, O)],
+]: ...
+@overload
+def adaptive_max_pool1d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int],
+    return_indices: Literal[True],
+) -> tuple[
+    Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+    Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+]: ...
+@overload
+def adaptive_max_pool1d[Shape: IntTuple](
+    input: Tensor[Shape], output_size: int | tuple[int], return_indices: bool
+) -> (
+    Tensor[adaptive_pool_gradual_shape(Shape, 1)]
+    | tuple[
+        Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+        Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+    ]
+): ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape],
+    output_size: O,
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool2d_shape(Shape, O, O)]:
+    """2D adaptive max pooling. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_max_pool3d(
-    self: Tensor,
-    output_size: int | tuple[int, int, int] | None,
-    return_indices: bool = False,
-) -> Tensor:
-    """3D adaptive max pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_max_pool3d"""
+@overload
+def adaptive_max_pool2d[Shape: IntTuple, OH: _Int, OW: _Int](
+    input: Tensor[Shape],
+    output_size: tuple[OH, OW],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool2d_shape(Shape, OH, OW)]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: tuple[int | None, int | None],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool_gradual_shape(Shape, 2)]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O, return_indices: Literal[True]
+) -> tuple[
+    Tensor[adaptive_pool2d_shape(Shape, O, O)],
+    Tensor[adaptive_pool2d_shape(Shape, O, O)],
+]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple, OH: _Int, OW: _Int](
+    input: Tensor[Shape], output_size: tuple[OH, OW], return_indices: Literal[True]
+) -> tuple[
+    Tensor[adaptive_pool2d_shape(Shape, OH, OW)],
+    Tensor[adaptive_pool2d_shape(Shape, OH, OW)],
+]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None],
+    return_indices: Literal[True],
+) -> tuple[
+    Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+    Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+]: ...
+@overload
+def adaptive_max_pool2d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None],
+    return_indices: bool,
+) -> (
+    Tensor[adaptive_pool_gradual_shape(Shape, 2)]
+    | tuple[
+        Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+        Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+    ]
+): ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape],
+    output_size: O,
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool3d_shape(Shape, O, O, O)]:
+    """3D adaptive max pooling. Shape inference via type-level DSL."""
     ...
+
+@overload
+def adaptive_max_pool3d[Shape: IntTuple, OD: _Int, OH: _Int, OW: _Int](
+    input: Tensor[Shape],
+    output_size: tuple[OD, OH, OW],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: tuple[int | None, int | None, int | None],
+    return_indices: Literal[False] = False,
+) -> Tensor[adaptive_pool_gradual_shape(Shape, 3)]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O, return_indices: Literal[True]
+) -> tuple[
+    Tensor[adaptive_pool3d_shape(Shape, O, O, O)],
+    Tensor[adaptive_pool3d_shape(Shape, O, O, O)],
+]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple, OD: _Int, OH: _Int, OW: _Int](
+    input: Tensor[Shape],
+    output_size: tuple[OD, OH, OW],
+    return_indices: Literal[True],
+) -> tuple[
+    Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)],
+    Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)],
+]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None, int | None],
+    return_indices: Literal[True],
+) -> tuple[
+    Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+    Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+]: ...
+@overload
+def adaptive_max_pool3d[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None, int | None],
+    return_indices: bool,
+) -> (
+    Tensor[adaptive_pool_gradual_shape(Shape, 3)]
+    | tuple[
+        Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+        Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+    ]
+): ...
 
 # Adaptive average pooling operations
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_avg_pool1d(self: Tensor, output_size: int | tuple[int]) -> Tensor:
-    """1D adaptive average pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_avg_pool1d"""
+@overload
+def adaptive_avg_pool1d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O
+) -> Tensor[adaptive_pool1d_shape(Shape, O)]:
+    """1D adaptive average pooling. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_avg_pool2d(
-    self: Tensor, output_size: int | tuple[int, int] | None
-) -> Tensor:
-    """2D adaptive average pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_avg_pool2d"""
+@overload
+def adaptive_avg_pool1d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: tuple[O]
+) -> Tensor[adaptive_pool1d_shape(Shape, O)]: ...
+@overload
+def adaptive_avg_pool2d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O
+) -> Tensor[adaptive_pool2d_shape(Shape, O, O)]:
+    """2D adaptive average pooling. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(adaptive_pool_ir)
-def adaptive_avg_pool3d(
-    self: Tensor, output_size: int | tuple[int, int, int] | None
-) -> Tensor:
-    """3D adaptive average pooling. Shape inference via meta-shape: torch.nn.functional.adaptive_avg_pool3d"""
+@overload
+def adaptive_avg_pool2d[Shape: IntTuple, OH: _Int, OW: _Int](
+    input: Tensor[Shape], output_size: tuple[OH, OW]
+) -> Tensor[adaptive_pool2d_shape(Shape, OH, OW)]: ...
+@overload
+def adaptive_avg_pool2d[Shape: IntTuple](
+    input: Tensor[Shape], output_size: tuple[int | None, int | None]
+) -> Tensor[adaptive_pool_gradual_shape(Shape, 2)]: ...
+@overload
+def adaptive_avg_pool3d[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O
+) -> Tensor[adaptive_pool3d_shape(Shape, O, O, O)]:
+    """3D adaptive average pooling. Shape inference via type-level DSL."""
     ...
+
+@overload
+def adaptive_avg_pool3d[Shape: IntTuple, OD: _Int, OH: _Int, OW: _Int](
+    input: Tensor[Shape], output_size: tuple[OD, OH, OW]
+) -> Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)]: ...
+@overload
+def adaptive_avg_pool3d[Shape: IntTuple](
+    input: Tensor[Shape], output_size: tuple[int | None, int | None, int | None]
+) -> Tensor[adaptive_pool_gradual_shape(Shape, 3)]: ...
 
 # Interpolation/upsampling operations
-@uses_shape_dsl(interpolate_ir)
-def interpolate(
-    self: Tensor,
-    size: int | tuple[int, ...] | None = None,
-    scale_factor: float | tuple[float, ...] | None = None,
+# Integer overloads precede float fallbacks because int is compatible with float.
+@overload
+def interpolate[
+    Shape: IntTuple,
+    Size: _Int | None = None,
+    Scale: _Int | None = None,
+](
+    self: Tensor[Shape],
+    size: Size = None,
+    scale_factor: Scale = None,
     mode: str = "nearest",
     align_corners: bool | None = None,
     recompute_scale_factor: bool | None = None,
     antialias: bool = False,
-) -> Tensor:
-    """Interpolate/upsample tensor. Shape inference via meta-shape: torch.nn.functional.interpolate"""
-    ...
-
-@uses_shape_dsl(interpolate_ir)
-def upsample(
-    self: Tensor,
-    size: int | tuple[int, ...] | None = None,
-    scale_factor: float | tuple[float, ...] | None = None,
+) -> Tensor[interpolate_scalar_shape(Shape, Size, Scale)]: ...
+@overload
+def interpolate[Shape: IntTuple, Size: IntTuple](
+    self: Tensor[Shape],
+    size: Size,
+    scale_factor: None = None,
     mode: str = "nearest",
     align_corners: bool | None = None,
-) -> Tensor:
-    """Upsample tensor (deprecated, use interpolate). Shape inference via meta-shape: torch.nn.functional.upsample"""
-    ...
+    recompute_scale_factor: bool | None = None,
+    antialias: bool = False,
+) -> Tensor[interpolate_size_shape(Shape, Size)]: ...
+@overload
+def interpolate[Shape: IntTuple, Scale: IntTuple](
+    self: Tensor[Shape],
+    size: None = None,
+    scale_factor: Scale = ...,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+    recompute_scale_factor: bool | None = None,
+    antialias: bool = False,
+) -> Tensor[interpolate_scale_shape(Shape, Scale)]: ...
+
+# TODO(stroxler): Preserve shapes once the V2 DSL supports float arithmetic.
+@overload
+def interpolate(
+    self: Tensor,
+    size: None = None,
+    scale_factor: float | tuple[float, ...] = ...,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+    recompute_scale_factor: bool | None = None,
+    antialias: bool = False,
+) -> Tensor: ...
+@overload
+def interpolate(
+    self: Tensor,
+    size: int | tuple[int, ...] | None = None,
+    scale_factor: int | float | tuple[int | float, ...] | None = None,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+    recompute_scale_factor: bool | None = None,
+    antialias: bool = False,
+) -> Tensor: ...
+@overload
+def upsample[
+    Shape: IntTuple,
+    Size: _Int | None = None,
+    Scale: _Int | None = None,
+](
+    self: Tensor[Shape],
+    size: Size = None,
+    scale_factor: Scale = None,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+) -> Tensor[interpolate_scalar_shape(Shape, Size, Scale)]: ...
+@overload
+def upsample[Shape: IntTuple, Size: IntTuple](
+    self: Tensor[Shape],
+    size: Size,
+    scale_factor: None = None,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+) -> Tensor[interpolate_size_shape(Shape, Size)]: ...
+@overload
+def upsample[Shape: IntTuple, Scale: IntTuple](
+    self: Tensor[Shape],
+    size: None = None,
+    scale_factor: Scale = ...,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+) -> Tensor[interpolate_scale_shape(Shape, Scale)]: ...
+
+# TODO(stroxler): Preserve shapes once the V2 DSL supports float arithmetic.
+@overload
+def upsample(
+    self: Tensor,
+    size: None = None,
+    scale_factor: float | tuple[float, ...] = ...,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+) -> Tensor: ...
 
 # Phase 2: Activation functions
-def relu[*Shape](input: Tensor[*Shape], inplace: bool = False) -> Tensor[*Shape]:
+def relu[Shape: IntTuple](input: Tensor[Shape], inplace: bool = False) -> Tensor[Shape]:
     """ReLU activation. Shape inference via generic fixture signature."""
     ...
 
-def gelu[*Shape](input: Tensor[*Shape], approximate: str = "none") -> Tensor[*Shape]:
+def gelu[Shape: IntTuple](
+    input: Tensor[Shape], approximate: str = "none"
+) -> Tensor[Shape]:
     """GELU activation. Shape inference via generic fixture signature."""
     ...
 
-def silu[*Shape](input: Tensor[*Shape], inplace: bool = False) -> Tensor[*Shape]:
+def silu[Shape: IntTuple](input: Tensor[Shape], inplace: bool = False) -> Tensor[Shape]:
     """SiLU (Swish) activation. Shape inference via generic fixture signature."""
     ...
 
-def selu[*Shape](input: Tensor[*Shape], inplace: bool = False) -> Tensor[*Shape]:
+def selu[Shape: IntTuple](input: Tensor[Shape], inplace: bool = False) -> Tensor[Shape]:
     """SELU activation. Shape inference via generic fixture signature."""
     ...
 
-def elu[*Shape](
-    input: Tensor[*Shape], alpha: float = 1.0, inplace: bool = False
-) -> Tensor[*Shape]:
+def elu[Shape: IntTuple](
+    input: Tensor[Shape], alpha: float = 1.0, inplace: bool = False
+) -> Tensor[Shape]:
     """ELU activation. Shape inference via generic fixture signature."""
     ...
 
-def leaky_relu[*Shape](
-    input: Tensor[*Shape], negative_slope: float = 0.01, inplace: bool = False
-) -> Tensor[*Shape]:
+def leaky_relu[Shape: IntTuple](
+    input: Tensor[Shape], negative_slope: float = 0.01, inplace: bool = False
+) -> Tensor[Shape]:
     """Leaky ReLU activation. Shape inference via generic fixture signature."""
     ...
 
-def relu6[*Shape](input: Tensor[*Shape], inplace: bool = False) -> Tensor[*Shape]:
+def relu6[Shape: IntTuple](
+    input: Tensor[Shape], inplace: bool = False
+) -> Tensor[Shape]:
     """ReLU6 activation. Shape inference via generic fixture signature."""
     ...
 
-def softplus[*Shape](
-    input: Tensor[*Shape], beta: float = 1, threshold: float = 20
-) -> Tensor[*Shape]:
+def softplus[Shape: IntTuple](
+    input: Tensor[Shape], beta: float = 1, threshold: float = 20
+) -> Tensor[Shape]:
     """Softplus activation. Shape inference via generic fixture signature."""
     ...
 
-def softsign[*Shape](input: Tensor[*Shape]) -> Tensor[*Shape]:
+def softsign[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Softsign activation. Shape inference via generic fixture signature."""
     ...
 
-def hardtanh[*Shape](
-    input: Tensor[*Shape],
+def hardtanh[Shape: IntTuple](
+    input: Tensor[Shape],
     min_val: float = -1.0,
     max_val: float = 1.0,
     inplace: bool = False,
-) -> Tensor[*Shape]:
+) -> Tensor[Shape]:
     """Hardtanh activation. Shape inference via generic fixture signature."""
     ...
 
-def hardsigmoid[*Shape](input: Tensor[*Shape], inplace: bool = False) -> Tensor[*Shape]:
+def hardsigmoid[Shape: IntTuple](
+    input: Tensor[Shape], inplace: bool = False
+) -> Tensor[Shape]:
     """Hardsigmoid activation. Shape inference via generic fixture signature."""
     ...
 
-def hardswish[*Shape](input: Tensor[*Shape], inplace: bool = False) -> Tensor[*Shape]:
+def hardswish[Shape: IntTuple](
+    input: Tensor[Shape], inplace: bool = False
+) -> Tensor[Shape]:
     """Hardswish activation. Shape inference via generic fixture signature."""
     ...
 
-def sigmoid[*Shape](input: Tensor[*Shape]) -> Tensor[*Shape]:
+def sigmoid[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Sigmoid activation. Shape inference via generic fixture signature."""
     ...
 
-def tanh[*Shape](input: Tensor[*Shape]) -> Tensor[*Shape]:
+def tanh[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Tanh activation. Shape inference via generic fixture signature."""
     ...
 
-def mish[*Shape](input: Tensor[*Shape], inplace: bool = False) -> Tensor[*Shape]:
+def mish[Shape: IntTuple](input: Tensor[Shape], inplace: bool = False) -> Tensor[Shape]:
     """Mish activation. Shape inference via generic fixture signature."""
     ...
 
@@ -455,29 +1355,29 @@ def glu(input: Tensor, dim: int = -1) -> Tensor:
     """GLU activation. Shape inference via meta-shape: torch.nn.functional.glu"""
     ...
 
-def prelu[*Shape](input: Tensor[*Shape], weight: Tensor) -> Tensor[*Shape]:
+def prelu[Shape: IntTuple](input: Tensor[Shape], weight: Tensor) -> Tensor[Shape]:
     """PReLU activation. Shape inference via generic fixture signature."""
     ...
 
-def rrelu[*Shape](
-    input: Tensor[*Shape],
+def rrelu[Shape: IntTuple](
+    input: Tensor[Shape],
     lower: float = 0.125,
     upper: float = 0.333,
     training: bool = False,
     inplace: bool = False,
-) -> Tensor[*Shape]:
+) -> Tensor[Shape]:
     """RReLU activation. Shape inference via generic fixture signature."""
     ...
 
-def celu[*Shape](
-    input: Tensor[*Shape], alpha: float = 1.0, inplace: bool = False
-) -> Tensor[*Shape]:
+def celu[Shape: IntTuple](
+    input: Tensor[Shape], alpha: float = 1.0, inplace: bool = False
+) -> Tensor[Shape]:
     """CELU activation. Shape inference via generic fixture signature."""
     ...
 
 # Normalization operations
-def batch_norm[*Shape](
-    input: Tensor[*Shape],
+def batch_norm[Shape: IntTuple](
+    input: Tensor[Shape],
     running_mean: Tensor | None,
     running_var: Tensor | None,
     weight: Tensor | None = None,
@@ -485,12 +1385,12 @@ def batch_norm[*Shape](
     training: bool = False,
     momentum: float = 0.1,
     eps: float = 1e-5,
-) -> Tensor[*Shape]:
+) -> Tensor[Shape]:
     """Batch normalization. Shape inference via generic fixture signature."""
     ...
 
-def instance_norm[*Shape](
-    input: Tensor[*Shape],
+def instance_norm[Shape: IntTuple](
+    input: Tensor[Shape],
     running_mean: Tensor | None = None,
     running_var: Tensor | None = None,
     weight: Tensor | None = None,
@@ -498,85 +1398,89 @@ def instance_norm[*Shape](
     use_input_stats: bool = True,
     momentum: float = 0.1,
     eps: float = 1e-5,
-) -> Tensor[*Shape]:
+) -> Tensor[Shape]:
     """Instance normalization. Shape inference via generic fixture signature."""
     ...
 
-def layer_norm[*Shape](
-    input: Tensor[*Shape],
+def layer_norm[Shape: IntTuple](
+    input: Tensor[Shape],
     normalized_shape: tuple[int, ...],
     weight: Tensor | None = None,
     bias: Tensor | None = None,
     eps: float = 1e-5,
-) -> Tensor[*Shape]:
+) -> Tensor[Shape]:
     """Layer normalization. Shape inference via generic fixture signature."""
     ...
 
-def group_norm[*Shape](
-    input: Tensor[*Shape],
+def group_norm[Shape: IntTuple](
+    input: Tensor[Shape],
     num_groups: int,
     weight: Tensor | None = None,
     bias: Tensor | None = None,
     eps: float = 1e-5,
-) -> Tensor[*Shape]:
+) -> Tensor[Shape]:
     """Group normalization. Shape inference via generic fixture signature."""
     ...
 
-def normalize[*Shape](
-    input: Tensor[*Shape], p: float = 2.0, dim: int = 1, eps: float = 1e-12
-) -> Tensor[*Shape]:
+def normalize[Shape: IntTuple](
+    input: Tensor[Shape], p: float = 2.0, dim: int = 1, eps: float = 1e-12
+) -> Tensor[Shape]:
     """Normalize tensor. Shape inference via generic fixture signature."""
     ...
 
-def local_response_norm[*Shape](
-    input: Tensor[*Shape],
+def local_response_norm[Shape: IntTuple](
+    input: Tensor[Shape],
     size: int,
     alpha: float = 0.0001,
     beta: float = 0.75,
     k: float = 1.0,
-) -> Tensor[*Shape]:
+) -> Tensor[Shape]:
     """Local response normalization. Shape inference via generic fixture signature."""
     ...
 
 # Dropout operations
-def dropout[*Shape](
-    input: Tensor[*Shape], p: float = 0.5, training: bool = True, inplace: bool = False
-) -> Tensor[*Shape]:
+def dropout[Shape: IntTuple](
+    input: Tensor[Shape], p: float = 0.5, training: bool = True, inplace: bool = False
+) -> Tensor[Shape]:
     """Dropout. Shape inference via generic fixture signature."""
     ...
 
-def alpha_dropout[*Shape](
-    input: Tensor[*Shape], p: float = 0.5, training: bool = False, inplace: bool = False
-) -> Tensor[*Shape]:
+def alpha_dropout[Shape: IntTuple](
+    input: Tensor[Shape], p: float = 0.5, training: bool = False, inplace: bool = False
+) -> Tensor[Shape]:
     """Alpha dropout. Shape inference via generic fixture signature."""
     ...
 
-def feature_alpha_dropout[*Shape](
-    input: Tensor[*Shape], p: float = 0.5, training: bool = False, inplace: bool = False
-) -> Tensor[*Shape]:
+def feature_alpha_dropout[Shape: IntTuple](
+    input: Tensor[Shape], p: float = 0.5, training: bool = False, inplace: bool = False
+) -> Tensor[Shape]:
     """Feature alpha dropout. Shape inference via generic fixture signature."""
     ...
 
 # Additional activation functions
-def threshold[*Shape](
-    input: Tensor[*Shape], threshold: float, value: float, inplace: bool = False
-) -> Tensor[*Shape]:
+def threshold[Shape: IntTuple](
+    input: Tensor[Shape], threshold: float, value: float, inplace: bool = False
+) -> Tensor[Shape]:
     """Threshold activation. Shape inference via generic fixture signature."""
     ...
 
-def tanhshrink[*Shape](input: Tensor[*Shape]) -> Tensor[*Shape]:
+def tanhshrink[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Tanhshrink activation. Shape inference via generic fixture signature."""
     ...
 
-def softshrink[*Shape](input: Tensor[*Shape], lambd: float = 0.5) -> Tensor[*Shape]:
+def softshrink[Shape: IntTuple](
+    input: Tensor[Shape], lambd: float = 0.5
+) -> Tensor[Shape]:
     """Softshrink activation. Shape inference via generic fixture signature."""
     ...
 
-def hardshrink[*Shape](input: Tensor[*Shape], lambd: float = 0.5) -> Tensor[*Shape]:
+def hardshrink[Shape: IntTuple](
+    input: Tensor[Shape], lambd: float = 0.5
+) -> Tensor[Shape]:
     """Hardshrink activation. Shape inference via generic fixture signature."""
     ...
 
-def logsigmoid[*Shape](input: Tensor[*Shape]) -> Tensor[*Shape]:
+def logsigmoid[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     """Log-sigmoid activation. Shape inference via generic fixture signature."""
     ...
 
@@ -584,216 +1488,432 @@ def logsigmoid[*Shape](input: Tensor[*Shape]) -> Tensor[*Shape]:
 # Phase 6: Loss Functions
 # ==============================================================================
 
-@uses_shape_dsl(loss_ir)
-@overload
-def mse_loss(
-    self: Tensor,
-    target: Tensor,
-    size_average: bool | None = None,
-    reduce: bool | None = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Mean squared error loss. Shape inference via meta-shape: torch.nn.functional.mse_loss"""
+def mse_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Mean squared error loss. Shape inference via type-level DSL."""
     ...
 
-@overload
-def mse_loss(
-    *,
-    input: Tensor,
-    target: Tensor,
-    size_average: bool | None = None,
-    reduce: bool | None = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Mean squared error loss. Keyword form is accepted but not shape-refined."""
+def l1_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """L1 loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def l1_loss(
-    self: Tensor,
+def nll_loss[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
     target: Tensor,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """L1 loss. Shape inference via meta-shape: torch.nn.functional.l1_loss"""
-    ...
-
-@uses_shape_dsl(loss_ir)
-def nll_loss(
-    self: Tensor,
-    target: Tensor,
-    weight: Tensor = None,
-    size_average: bool = None,
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
     ignore_index: int = -100,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Negative log likelihood loss. Shape inference via meta-shape: torch.nn.functional.nll_loss"""
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[classification_loss_shape(InputShape, Reduction, SizeAverage, Reduce)]:
+    """Negative log likelihood loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def cross_entropy(
-    self: Tensor,
+def cross_entropy[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
     target: Tensor,
-    weight: Tensor = None,
-    size_average: bool = None,
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
     ignore_index: int = -100,
-    reduce: bool = None,
-    reduction: str = "mean",
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
     label_smoothing: float = 0.0,
-) -> Tensor:
-    """Cross entropy loss. Shape inference via meta-shape: torch.nn.functional.cross_entropy"""
+) -> Tensor[classification_loss_shape(InputShape, Reduction, SizeAverage, Reduce)]:
+    """Cross entropy loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def binary_cross_entropy(
-    self: Tensor,
-    target: Tensor,
-    weight: Tensor = None,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Binary cross entropy loss. Shape inference via meta-shape: torch.nn.functional.binary_cross_entropy"""
+def binary_cross_entropy[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[InputShape],
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[loss_shape(InputShape, Reduction, SizeAverage, Reduce)]:
+    """Binary cross entropy loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def binary_cross_entropy_with_logits(
-    self: Tensor,
-    target: Tensor,
-    weight: Tensor = None,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-    pos_weight: Tensor = None,
-) -> Tensor:
-    """Binary cross entropy with logits. Shape inference via meta-shape: torch.nn.functional.binary_cross_entropy_with_logits"""
+def binary_cross_entropy_with_logits[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[InputShape],
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+    pos_weight: Tensor | None = None,
+) -> Tensor[loss_shape(InputShape, Reduction, SizeAverage, Reduce)]:
+    """Binary cross entropy with logits. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def kl_div(
-    self: Tensor,
-    target: Tensor,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
+def kl_div[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
     log_target: bool = False,
-) -> Tensor:
-    """KL divergence loss. Shape inference via meta-shape: torch.nn.functional.kl_div"""
+) -> Tensor[
+    kl_div_loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """KL divergence loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def smooth_l1_loss(
-    self: Tensor,
-    target: Tensor,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
+def smooth_l1_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
     beta: float = 1.0,
-) -> Tensor:
-    """Smooth L1 loss. Shape inference via meta-shape: torch.nn.functional.smooth_l1_loss"""
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Smooth L1 loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def huber_loss(
-    self: Tensor, target: Tensor, reduction: str = "mean", delta: float = 1.0
-) -> Tensor:
-    """Huber loss. Shape inference via meta-shape: torch.nn.functional.huber_loss"""
+def huber_loss[InputShape: IntTuple, TargetShape: IntTuple, Reduction: Flag[str]](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
+    reduction: Reduction = "mean",
+    delta: float = 1.0,
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape), Reduction, None, None
+    )
+]:
+    """Huber loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def poisson_nll_loss(
-    self: Tensor,
-    target: Tensor,
+def poisson_nll_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
     log_input: bool = True,
     full: bool = False,
-    size_average: bool = None,
+    size_average: SizeAverage = None,
     eps: float = 1e-8,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Poisson NLL loss. Shape inference via meta-shape: torch.nn.functional.poisson_nll_loss"""
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Poisson NLL loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def cosine_embedding_loss(
-    self: Tensor,
-    input2: Tensor,
-    target: Tensor,
+def cosine_embedding_loss[
+    Input1Shape: IntTuple,
+    Input2Shape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input1: Tensor[Input1Shape],
+    input2: Tensor[Input2Shape],
+    target: Tensor[TargetShape],
     margin: float = 0.0,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Cosine embedding loss. Shape inference via meta-shape: torch.nn.functional.cosine_embedding_loss"""
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(
+            cosine_embedding_score_shape(
+                Input1Shape,
+                Input2Shape,
+                shape_extensions.broadcast(Input1Shape, Input2Shape),
+                TargetShape,
+            ),
+            TargetShape,
+        ),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Cosine embedding loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def margin_ranking_loss(
-    self: Tensor,
-    input2: Tensor,
-    target: Tensor,
+def margin_ranking_loss[
+    Input1Shape: IntTuple,
+    Input2Shape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input1: Tensor[Input1Shape],
+    input2: Tensor[Input2Shape],
+    target: Tensor[TargetShape],
     margin: float = 0.0,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Margin ranking loss. Shape inference via meta-shape: torch.nn.functional.margin_ranking_loss"""
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(
+            shape_extensions.broadcast(Input1Shape, Input2Shape), TargetShape
+        ),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Margin ranking loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def triplet_margin_loss(
-    self: Tensor,
-    positive: Tensor,
-    negative: Tensor,
+def triplet_margin_loss[
+    AnchorShape: IntTuple,
+    PositiveShape: IntTuple,
+    NegativeShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    anchor: Tensor[AnchorShape],
+    positive: Tensor[PositiveShape],
+    negative: Tensor[NegativeShape],
     margin: float = 1.0,
     p: float = 2.0,
     eps: float = 1e-6,
     swap: bool = False,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Triplet margin loss. Shape inference via meta-shape: torch.nn.functional.triplet_margin_loss"""
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(
+            pairwise_distance_shape(
+                AnchorShape,
+                PositiveShape,
+                shape_extensions.broadcast(AnchorShape, PositiveShape),
+            ),
+            pairwise_distance_shape(
+                AnchorShape,
+                NegativeShape,
+                shape_extensions.broadcast(AnchorShape, NegativeShape),
+            ),
+        ),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Triplet margin loss. Shape inference via type-level DSL."""
     ...
 
-@uses_shape_dsl(loss_ir)
-def hinge_embedding_loss(
-    self: Tensor,
-    target: Tensor,
+def hinge_embedding_loss[
+    InputShape: IntTuple,
+    TargetShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[TargetShape],
     margin: float = 1.0,
-    size_average: bool = None,
-    reduce: bool = None,
-    reduction: str = "mean",
-) -> Tensor:
-    """Hinge embedding loss. Shape inference via meta-shape: torch.nn.functional.hinge_embedding_loss"""
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[
+    loss_shape(
+        shape_extensions.broadcast(InputShape, TargetShape),
+        Reduction,
+        SizeAverage,
+        Reduce,
+    )
+]:
+    """Hinge embedding loss. Shape inference via type-level DSL."""
     ...
+
+def multi_margin_loss[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor,
+    p: int = 1,
+    margin: float = 1.0,
+    weight: Tensor | None = None,
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[classification_loss_shape(InputShape, Reduction, SizeAverage, Reduce)]: ...
+def multilabel_margin_loss[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[InputShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[classification_loss_shape(InputShape, Reduction, SizeAverage, Reduce)]: ...
+def soft_margin_loss[
+    InputShape: IntTuple,
+    SizeAverage: Flag[bool | None],
+    Reduce: Flag[bool | None],
+    Reduction: Flag[str],
+](
+    input: Tensor[InputShape],
+    target: Tensor[InputShape],
+    size_average: SizeAverage = None,
+    reduce: Reduce = None,
+    reduction: Reduction = "mean",
+) -> Tensor[loss_shape(InputShape, Reduction, SizeAverage, Reduce)]: ...
 
 # Padding operation
-@uses_shape_dsl(pad_ir)
+@overload
+def pad[Shape: IntTuple, Pad: Flag[tuple[builtins.int, ...]]](
+    input: Tensor[Shape],
+    pad: Pad,
+    mode: str = "constant",
+    value: float = 0.0,
+) -> Tensor[pad_shape(Shape, Pad)]:
+    """Pad tensor. Shape inference via type-level DSL."""
+    ...
+
+@overload
 def pad(
-    self: Tensor, pad: tuple[int, ...], mode: str = "constant", value: float = 0.0
-) -> Tensor:
-    """Pad tensor. Shape inference via meta-shape: torch.nn.functional.pad"""
+    input: Tensor,
+    pad: tuple[builtins.int, ...],
+    mode: str = "constant",
+    value: float = 0.0,
+) -> Tensor[IntTuple]:
+    """Pad a tensor when the tuple does not carry integer literals."""
+    ...
+
+@overload
+def pad(
+    input: Tensor,
+    pad: list[builtins.int],
+    mode: str = "constant",
+    value: float = 0.0,
+) -> Tensor[IntTuple]:
+    """Pad tensor by a list of amounts. A list carries no element literals, so the
+    padded shape stays gradual.
+
+    TODO(stroxler): Preserve list element literals when mutable sequence arguments can carry
+    shape values into the type-level DSL.
+    """
     ...
 
 # Softmax activation
-def softmax[*Shape](
-    input: Tensor[*Shape], dim: int | None = None, dtype: int | None = None
-) -> Tensor[*Shape]:
+def gumbel_softmax[Shape: IntTuple](
+    logits: Tensor[Shape],
+    tau: float = 1,
+    hard: bool = False,
+    eps: float = 1e-10,
+    dim: int = -1,
+) -> Tensor[Shape]: ...
+def softmax[Shape: IntTuple](
+    input: Tensor[Shape], dim: int | None = None, dtype: int | None = None
+) -> Tensor[Shape]:
     """Softmax activation. Shape inference via generic fixture signature."""
     ...
 
-def log_softmax[*Shape](
-    input: Tensor[*Shape], dim: int | None = None, dtype: int | None = None
-) -> Tensor[*Shape]:
+def log_softmax[Shape: IntTuple](
+    input: Tensor[Shape], dim: int | None = None, dtype: int | None = None
+) -> Tensor[Shape]:
     """Log-softmax activation. Shape inference via generic fixture signature."""
     ...
 
-def softmin[*Shape](
-    input: Tensor[*Shape], dim: int | None = None, dtype: int | None = None
-) -> Tensor[*Shape]:
+def softmin[Shape: IntTuple](
+    input: Tensor[Shape], dim: int | None = None, dtype: int | None = None
+) -> Tensor[Shape]:
     """Softmin activation. Shape inference via generic fixture signature."""
     ...
 
@@ -801,11 +1921,11 @@ def softmin[*Shape](
 # Linear
 # ==============================================================================
 
-def linear[*Bs, IN, OUT](
-    input: Tensor[*Bs, IN],
-    weight: Tensor[OUT, IN],
-    bias: Tensor[OUT] | None = None,
-) -> Tensor[*Bs, OUT]:
+def linear[Bs: IntTuple, IN: IntVar, OUT: IntVar](
+    input: Tensor[[*Bs, IN]],
+    weight: Tensor[[OUT, IN]],
+    bias: Tensor[[OUT]] | None = None,
+) -> Tensor[[*Bs, OUT]]:
     """Linear transformation: y = xA^T + b. Shape inference via generic fixture signature."""
     ...
 
@@ -814,36 +1934,92 @@ def linear[*Bs, IN, OUT](
 # ==============================================================================
 
 @overload
-def embedding[T, V, D](
-    input: Tensor[T],
-    weight: Tensor[V, D],
+def embedding[T: IntVar, V: IntVar, D: IntVar](
+    input: Tensor[[T]],
+    weight: Tensor[[V, D]],
     padding_idx: int | None = None,
     max_norm: float | None = None,
     norm_type: float = 2.0,
     scale_grad_by_freq: bool = False,
     sparse: bool = False,
-) -> Tensor[T, D]: ...
+) -> Tensor[[T, D]]: ...
 @overload
-def embedding[B, T, V, D](
-    input: Tensor[B, T],
-    weight: Tensor[V, D],
+def embedding[B: IntVar, T: IntVar, V: IntVar, D: IntVar](
+    input: Tensor[[B, T]],
+    weight: Tensor[[V, D]],
     padding_idx: int | None = None,
     max_norm: float | None = None,
     norm_type: float = 2.0,
     scale_grad_by_freq: bool = False,
     sparse: bool = False,
-) -> Tensor[B, T, D]: ...
+) -> Tensor[[B, T, D]]: ...
+@overload
+def embedding_bag[B: IntVar, N: IntVar, V: IntVar, D: IntVar](
+    input: Tensor[[B, N]],
+    weight: Tensor[[V, D]],
+    offsets: None = None,
+    max_norm: float | None = None,
+    norm_type: float = 2,
+    scale_grad_by_freq: bool = False,
+    mode: str = "mean",
+    sparse: bool = False,
+    per_sample_weights: Tensor[[B, N]] | None = None,
+    include_last_offset: bool = False,
+    padding_idx: int | None = None,
+) -> Tensor[[B, D]]: ...
+@overload
+def embedding_bag[N: IntVar, B: IntVar, V: IntVar, D: IntVar](
+    input: Tensor[[N]],
+    weight: Tensor[[V, D]],
+    offsets: Tensor[[B]],
+    max_norm: float | None = None,
+    norm_type: float = 2,
+    scale_grad_by_freq: bool = False,
+    mode: str = "mean",
+    sparse: bool = False,
+    per_sample_weights: Tensor[[N]] | None = None,
+    include_last_offset: Literal[False] = False,
+    padding_idx: int | None = None,
+) -> Tensor[[B, D]]: ...
+@overload
+def embedding_bag[N: IntVar, B: IntVar, V: IntVar, D: IntVar](
+    input: Tensor[[N]],
+    weight: Tensor[[V, D]],
+    offsets: Tensor[[B]],
+    max_norm: float | None = None,
+    norm_type: float = 2,
+    scale_grad_by_freq: bool = False,
+    mode: str = "mean",
+    sparse: bool = False,
+    per_sample_weights: Tensor[[N]] | None = None,
+    include_last_offset: Literal[True] = True,
+    padding_idx: int | None = None,
+) -> Tensor[[B - 1, D]]: ...
+@overload
+def embedding_bag[N: IntVar, B: IntVar, V: IntVar, D: IntVar](
+    input: Tensor[[N]],
+    weight: Tensor[[V, D]],
+    offsets: Tensor[[B]],
+    max_norm: float | None = None,
+    norm_type: float = 2,
+    scale_grad_by_freq: bool = False,
+    mode: str = "mean",
+    sparse: bool = False,
+    per_sample_weights: Tensor[[N]] | None = None,
+    include_last_offset: bool = ...,
+    padding_idx: int | None = None,
+) -> Tensor[[int, D]]: ...
 
 # ==============================================================================
 # Normalization (additional)
 # ==============================================================================
 
-def rms_norm[*S](
-    input: Tensor[*S],
+def rms_norm[S: IntTuple](
+    input: Tensor[S],
     normalized_shape: list[int] | tuple[int, ...],
     weight: Tensor | None = None,
     eps: float = 1e-5,
-) -> Tensor[*S]:
+) -> Tensor[S]:
     """RMS normalization. Shape inference via generic fixture signature."""
     ...
 
@@ -851,61 +2027,270 @@ def rms_norm[*S](
 # Dropout (additional)
 # ==============================================================================
 
-def dropout1d[*S](
-    input: Tensor[*S], p: float = 0.5, training: bool = True, inplace: bool = False
-) -> Tensor[*S]:
+def dropout1d[S: IntTuple](
+    input: Tensor[S], p: float = 0.5, training: bool = True, inplace: bool = False
+) -> Tensor[S]:
     """1D channel-wise dropout. Shape inference via generic fixture signature."""
     ...
 
-def dropout2d[*S](
-    input: Tensor[*S], p: float = 0.5, training: bool = True, inplace: bool = False
-) -> Tensor[*S]:
+def dropout2d[S: IntTuple](
+    input: Tensor[S], p: float = 0.5, training: bool = True, inplace: bool = False
+) -> Tensor[S]:
     """2D channel-wise dropout. Shape inference via generic fixture signature."""
     ...
 
-def dropout3d[*S](
-    input: Tensor[*S], p: float = 0.5, training: bool = True, inplace: bool = False
-) -> Tensor[*S]:
+def dropout3d[S: IntTuple](
+    input: Tensor[S], p: float = 0.5, training: bool = True, inplace: bool = False
+) -> Tensor[S]:
     """3D channel-wise dropout. Shape inference via generic fixture signature."""
     ...
 
 # Attention operations
 def scaled_dot_product_attention[
-    B,
-    H,
-    Tq,
-    Tkv,
-    D,
-    Dv,
+    QueryShape: IntTuple,
+    KeyShape: IntTuple,
+    ValueShape: IntTuple,
 ](
-    query: Tensor[B, H, Tq, D],
-    key: Tensor[B, H, Tkv, D],
-    value: Tensor[B, H, Tkv, Dv],
+    query: Tensor[QueryShape],
+    key: Tensor[KeyShape],
+    value: Tensor[ValueShape],
     attn_mask: Tensor | None = None,
     dropout_p: float = 0.0,
     is_causal: bool = False,
     scale: float | None = None,
-) -> Tensor[B, H, Tq, Dv]:
+) -> Tensor[
+    gufunc_broadcast(
+        "(l,e),(s,e),(s,v)->(l,v)", tuple[QueryShape, KeyShape, ValueShape]
+    )
+]:
     """Scaled dot product attention. Shape inference via meta-shape: torch.nn.functional.scaled_dot_product_attention"""
     ...
 
-@uses_shape_dsl(cosine_similarity_ir)
-def cosine_similarity(
-    x1: Tensor, x2: Tensor, dim: int = 1, eps: float = 1e-8
-) -> Tensor:
-    """Cosine similarity: dot product along dim, normalized.
-
-    Shape inference via DSL (cosine_similarity_ir):
-    Output = broadcast(x1, x2) with dimension `dim` removed.
-    """
+def cosine_similarity[S1: IntTuple, S2: IntTuple, Dim: Flag[builtins.int]](
+    x1: Tensor[S1], x2: Tensor[S2], dim: Dim = 1, eps: float = 1e-8
+) -> Tensor[cosine_similarity_shape(shape_extensions.broadcast(S1, S2), Dim)]:
+    """Cosine similarity: dot product along dim, normalized."""
     ...
 
-def grid_sample[B, C, Hout, Wout](
-    input: Tensor[B, C, ...],
-    grid: Tensor[B, Hout, Wout, 2],
+GRID_SAMPLE_INTERPOLATION_MODES: dict[str, int]
+GRID_SAMPLE_PADDING_MODES: dict[str, int]
+
+@overload
+def affine_grid[Theta: IntTuple, Size: IntTuple](
+    theta: Tensor[Theta],
+    size: Size | IntListLiteral[Size],
+    align_corners: bool | None = None,
+) -> Tensor[affine_grid_shape(Theta, Size)]: ...
+@overload
+def affine_grid[B: IntVar](
+    theta: Tensor[[B, 2, 3]],
+    size: list[int],
+    align_corners: bool | None = None,
+) -> Tensor[[B, int, int, 2]]: ...
+@overload
+def affine_grid[B: IntVar](
+    theta: Tensor[[B, 3, 4]],
+    size: list[int],
+    align_corners: bool | None = None,
+) -> Tensor[[B, int, int, int, 3]]: ...
+def grid_sample[B: IntVar, C: IntVar, Hout: IntVar, Wout: IntVar](
+    input: Tensor[[B, C, *IntTuple]],
+    grid: Tensor[[B, Hout, Wout, 2]],
     mode: str = "bilinear",
     padding_mode: str = "zeros",
     align_corners: bool | None = None,
-) -> Tensor[B, C, Hout, Wout]:
+) -> Tensor[[B, C, Hout, Wout]]:
     """Sample input using grid of coordinates. Output spatial dims match grid."""
     ...
+
+def assert_int_or_pair(
+    arg: int | list[int] | tuple[int, int], arg_name: str, message: str
+) -> None: ...
+@overload
+def adaptive_max_pool1d_with_indices[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O, return_indices: bool = False
+) -> tuple[
+    Tensor[adaptive_pool1d_shape(Shape, O)],
+    Tensor[adaptive_pool1d_shape(Shape, O)],
+]: ...
+@overload
+def adaptive_max_pool1d_with_indices[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: tuple[O], return_indices: bool = False
+) -> tuple[
+    Tensor[adaptive_pool1d_shape(Shape, O)],
+    Tensor[adaptive_pool1d_shape(Shape, O)],
+]: ...
+@overload
+def adaptive_max_pool1d_with_indices[Shape: IntTuple](
+    input: Tensor[Shape], output_size: int | tuple[int], return_indices: bool = False
+) -> tuple[
+    Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+    Tensor[adaptive_pool_gradual_shape(Shape, 1)],
+]: ...
+@overload
+def adaptive_max_pool2d_with_indices[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O, return_indices: bool = False
+) -> tuple[
+    Tensor[adaptive_pool2d_shape(Shape, O, O)],
+    Tensor[adaptive_pool2d_shape(Shape, O, O)],
+]: ...
+@overload
+def adaptive_max_pool2d_with_indices[Shape: IntTuple, OH: _Int, OW: _Int](
+    input: Tensor[Shape], output_size: tuple[OH, OW], return_indices: bool = False
+) -> tuple[
+    Tensor[adaptive_pool2d_shape(Shape, OH, OW)],
+    Tensor[adaptive_pool2d_shape(Shape, OH, OW)],
+]: ...
+@overload
+def adaptive_max_pool2d_with_indices[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None],
+    return_indices: bool = False,
+) -> tuple[
+    Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+    Tensor[adaptive_pool_gradual_shape(Shape, 2)],
+]: ...
+@overload
+def adaptive_max_pool3d_with_indices[Shape: IntTuple, O: _Int](
+    input: Tensor[Shape], output_size: O, return_indices: bool = False
+) -> tuple[
+    Tensor[adaptive_pool3d_shape(Shape, O, O, O)],
+    Tensor[adaptive_pool3d_shape(Shape, O, O, O)],
+]: ...
+@overload
+def adaptive_max_pool3d_with_indices[Shape: IntTuple, OD: _Int, OH: _Int, OW: _Int](
+    input: Tensor[Shape],
+    output_size: tuple[OD, OH, OW],
+    return_indices: bool = False,
+) -> tuple[
+    Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)],
+    Tensor[adaptive_pool3d_shape(Shape, OD, OH, OW)],
+]: ...
+@overload
+def adaptive_max_pool3d_with_indices[Shape: IntTuple](
+    input: Tensor[Shape],
+    output_size: int | tuple[int | None, int | None, int | None],
+    return_indices: bool = False,
+) -> tuple[
+    Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+    Tensor[adaptive_pool_gradual_shape(Shape, 3)],
+]: ...
+
+# Fold takes its spatial dimensions from output_size and divides channels by the kernel area.
+@overload
+def fold[Shape: IntTuple, Output: Flag[int | tuple[int, int]], Kernel: IntVar](
+    input: Tensor[Shape],
+    output_size: Output,
+    kernel_size: _Int[Kernel],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[fold_shape(Shape, Output, _Int[Kernel] * _Int[Kernel])]: ...
+@overload
+def fold[
+    Shape: IntTuple,
+    Output: Flag[int | tuple[int, int]],
+    KernelH: IntVar,
+    KernelW: IntVar,
+](
+    input: Tensor[Shape],
+    output_size: Output,
+    kernel_size: IntTupleOrList[IntTuple[KernelH, KernelW]],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[fold_shape(Shape, Output, _Int[KernelH] * _Int[KernelW])]: ...
+@overload
+def fold[Shape: IntTuple, Output: IntTuple, Kernel: IntVar](
+    input: Tensor[Shape],
+    output_size: Output | IntListLiteral[Output],
+    kernel_size: _Int[Kernel],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[fold_list_shape(Shape, Output, _Int[Kernel] * _Int[Kernel])]: ...
+@overload
+def fold[Shape: IntTuple, Output: IntTuple, KernelH: IntVar, KernelW: IntVar](
+    input: Tensor[Shape],
+    output_size: Output | IntListLiteral[Output],
+    kernel_size: IntTupleOrList[IntTuple[KernelH, KernelW]],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[fold_list_shape(Shape, Output, _Int[KernelH] * _Int[KernelW])]: ...
+@overload
+def fold[Batch: IntTuple](
+    input: Tensor[[*Batch, int, int]],
+    output_size: list[int],
+    kernel_size: int | tuple[int, int] | list[int],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[[*Batch, int, int, int]]: ...
+
+# Torch accepts unbatched 3D input as well as batched 4D input.
+@overload
+def unfold[B: IntVar, C: IntVar, H: IntVar, W: IntVar, K: IntVar](
+    input: Tensor[[B, C, H, W]],
+    kernel_size: _Int[K],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[[B, C * K * K, int]]: ...
+@overload
+def unfold[B: IntVar, C: IntVar, H: IntVar, W: IntVar, KH: IntVar, KW: IntVar](
+    input: Tensor[[B, C, H, W]],
+    kernel_size: tuple[_Int[KH], _Int[KW]],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[[B, C * KH * KW, int]]: ...
+@overload
+def unfold[C: IntVar, H: IntVar, W: IntVar, K: IntVar](
+    input: Tensor[[C, H, W]],
+    kernel_size: _Int[K],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[[C * K * K, int]]: ...
+@overload
+def unfold[C: IntVar, H: IntVar, W: IntVar, KH: IntVar, KW: IntVar](
+    input: Tensor[[C, H, W]],
+    kernel_size: tuple[_Int[KH], _Int[KW]],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[[C * KH * KW, int]]: ...
+
+# TODO(stroxler): Replace the dynamic-kernel overloads with a shape rule that
+# rejects invalid kernel/stride/dilation/padding geometry while preserving the
+# precise channel products above. A Flag-based scalar/tuple DSL dispatch currently
+# loses those products and lets this gradual branch accept invalid literal calls.
+@overload
+def unfold[B: IntVar, C: IntVar, H: IntVar, W: IntVar](
+    input: Tensor[[B, C, H, W]],
+    kernel_size: int | tuple[int, int],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[[B, int, int]]: ...
+@overload
+def unfold[C: IntVar, H: IntVar, W: IntVar](
+    input: Tensor[[C, H, W]],
+    kernel_size: int | tuple[int, int],
+    dilation: int | tuple[int, int] = 1,
+    padding: int | tuple[int, int] = 0,
+    stride: int | tuple[int, int] = 1,
+) -> Tensor[[int, int]]: ...
+
+# TODO: Add precise types and signatures for the remaining public API.
+ctc_loss: Any
+gaussian_nll_loss: Any
+grouped_mm: Any
+multi_head_attention_forward: Any
+multilabel_soft_margin_loss: Any
+scaled_grouped_mm: Any
+scaled_mm: Any
+triplet_margin_with_distance_loss: Any
+upsample_bilinear: Any
+upsample_nearest: Any

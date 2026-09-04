@@ -42,7 +42,13 @@ if sys.platform != "win32":
         The default filename is ~/.history.
         """
         ...
-    def append_history_file(nelements: int, filename: StrOrBytesPath | None = None, /) -> None: ...
+    def append_history_file(nelements: int, filename: StrOrBytesPath | None = None, /) -> None:
+        """
+        Append the last nelements items of the history list to file.
+
+        The default filename is ~/.history.
+        """
+        ...
     def get_history_length() -> int:
         """Return the maximum number of lines that will be written to the history file."""
         ...
