@@ -5,6 +5,7 @@ on:
     types: [opened]
 
 permissions:
+  contents: read
   issues: write
   pull-requests: write
 
@@ -16,21 +17,16 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const OWNERS = [
-              'yangdanny',
-              'grievejia',
-              'jvansch1',
-              'samwgoldman',
-              'lolpack',
-              'stroxler',
-              'javabster',
-              'ndmitchell',
-              'rchen152',
-              'kinto0',
-              'connernilsen',
-              'maggiemoss',
-              'migeed-z',
-            ];
+            // Pyrefly team GitHub handles — single source of truth in
+            // .github/owners.json.
+            const ownersFile = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: '.github/owners.json',
+            });
+            const OWNERS = JSON.parse(
+              Buffer.from(ownersFile.data.content, 'base64').toString('utf8'),
+            );
 
             const author = context.payload.pull_request.user.login;
 

@@ -14,19 +14,19 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 # Test 1: Parameter with known shape
-x: Tensor[10, 20] = torch.randn(10, 20)
+x: Tensor[[10, 20]] = torch.randn(10, 20)
 p1 = nn.Parameter(x)
-assert_type(p1, Tensor[10, 20])
+assert_type(p1, Tensor[[10, 20]])
 
 
 # Test 2: Parameter with unknown shape (from runtime value)
 def create_param(ndim: int):
-    # torch.ones returns Tensor (unknown shape)
+    # The rank is known, but the runtime dimension remains gradual.
     t = torch.ones(ndim)
-    assert_type(t, Tensor)
+    assert_type(t, Tensor[[int]])
 
     p = nn.Parameter(t)
-    assert_type(p, Tensor)
+    assert_type(p, Tensor[[int]])
 
     return p
 

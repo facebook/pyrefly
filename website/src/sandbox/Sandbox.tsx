@@ -23,7 +23,6 @@ import MonacoEditorButton, {
 import RunPythonButton from './RunPythonButton';
 import { PyodideStatus } from './PyodideStatus';
 import Editor from '@monaco-editor/react';
-import * as LZString from 'lz-string';
 import * as stylex from '@stylexjs/stylex';
 import SandboxResults from './SandboxResults';
 import {
@@ -43,6 +42,11 @@ import {
     resetPersistedSandboxState,
     SANDBOX_LOCAL_STORAGE_KEY,
 } from './persistedSandboxState';
+import {
+    decodeSandboxUrl,
+    encodeSandboxProject,
+    SandboxProject,
+} from './generateSandboxUrl';
 
 // Import type for Pyrefly State
 export interface PyreflyState {
@@ -56,7 +60,7 @@ export interface PyreflyState {
     autoComplete: (line: number, column: number) => any;
     gotoDefinition: (line: number, column: number) => monaco.IRange[] | null;
     hover: (line: number, column: number) => any;
-    inlayHint: () => any;
+    inlayHint: (callArgumentNames: boolean) => any;
     semanticTokens: (range: any) => any;
     semanticTokensLegend: () => any;
 }
@@ -123,6 +127,7 @@ export default function Sandbox({
     const [activeTab, setActiveTab] = useState<string>('errors');
     const [isHovered, setIsHovered] = useState(false);
     const [pythonVersion, setPythonVersion] = useState('3.12');
+    const [showParameterHints, setShowParameterHints] = useState(false);
     // Absolute pixel height for the editor pane (null = not yet initialized)
     const [editorHeight, setEditorHeight] = useState<number | null>(null);
     const [isResizing, setIsResizing] = useState(false);
@@ -548,6 +553,17 @@ export default function Sandbox({
                     </button>
                 )}
             </div>
+            <label {...stylex.props(styles.parameterHintToggle)}>
+                <input
+                    id="parameter-hints-toggle"
+                    type="checkbox"
+                    checked={showParameterHints}
+                    onChange={(event) =>
+                        setShowParameterHints(event.target.checked)
+                    }
+                />
+                Parameter hints
+            </label>
         </div>
     );
 
@@ -691,7 +707,7 @@ export default function Sandbox({
     // Recheck when pyre service or model changes
     useEffect(() => {
         forceRecheck();
-    }, [pyreService, model]);
+    }, [pyreService, model, showParameterHints]);
 
     function updateAllFiles(forceUpdate: boolean): boolean {
         if (models.size > 0 && pyreService && model) {
@@ -736,7 +752,7 @@ export default function Sandbox({
         );
         setInlayHintFunctionForMonaco(
             model,
-            () => pyreService?.inlayHint() || []
+            () => pyreService?.inlayHint(showParameterHints) || []
         );
         setSemanticTokensFunctionForMonaco(model, (range) =>
             pyreService?.semanticTokens(range)
@@ -1010,19 +1026,14 @@ export default function Sandbox({
     );
 }
 
-interface ProjectState {
-    files: Record<string, string>;
-    activeFile: string;
-}
+type ProjectState = SandboxProject;
 
 function updateURL(allFiles: Record<string, string>, activeFile: string): void {
     const projectState: ProjectState = {
         files: allFiles,
         activeFile: activeFile,
     };
-    const compressed = LZString.compressToEncodedURIComponent(
-        JSON.stringify(projectState)
-    );
+    const compressed = encodeSandboxProject(projectState);
     const params = new URLSearchParams();
     params.set('project', compressed);
     const newURL = `${window.location.pathname}?${params.toString()}`;
@@ -1031,31 +1042,7 @@ function updateURL(allFiles: Record<string, string>, activeFile: string): void {
 
 function getProjectFromURL(): ProjectState | null {
     if (typeof window === 'undefined') return null;
-    const params = new URLSearchParams(window.location.search);
-
-    const project = params.get('project');
-    if (project) {
-        try {
-            const decompressed =
-                LZString.decompressFromEncodedURIComponent(project);
-            return decompressed ? JSON.parse(decompressed) : null;
-        } catch (e) {
-            console.error('Failed to parse project from URL:', e);
-        }
-    }
-
-    const code = params.get('code');
-    if (code) {
-        const decompressed = LZString.decompressFromEncodedURIComponent(code);
-        if (decompressed) {
-            return {
-                files: { 'sandbox.py': decompressed },
-                activeFile: 'sandbox.py',
-            };
-        }
-    }
-
-    return null;
+    return decodeSandboxUrl(window.location.href);
 }
 
 function saveToLocalStorage(
@@ -1399,10 +1386,11 @@ function OpenSandboxButton({
             onClick={async () => {
                 if (model) {
                     const currentCode = model.getValue();
-                    const compressed =
-                        LZString.compressToEncodedURIComponent(currentCode);
-                    // Navigate to the sandbox URL with the compressed code as a query parameter
-                    const sandboxURL = sandboxBaseUrl + `?code=${compressed}`;
+                    const project = encodeSandboxProject({
+                        files: { 'sandbox.py': currentCode },
+                        activeFile: 'sandbox.py',
+                    });
+                    const sandboxURL = sandboxBaseUrl + `?project=${project}`;
                     window.location.href = sandboxURL;
                 }
 
@@ -1676,6 +1664,17 @@ const styles = stylex.create({
         alignItems: 'center',
         gap: '4px',
         marginLeft: '8px', // Small gap from last tab
+    },
+    parameterHintToggle: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        marginLeft: 'auto',
+        padding: '0 12px',
+        color: 'var(--color-text)',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        userSelect: 'none',
     },
     actionButton: {
         border: 'none',

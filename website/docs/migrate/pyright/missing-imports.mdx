@@ -1,0 +1,88 @@
+---
+title: Pyright reportMissingImports in Pyrefly
+slug: /migrate/pyright/missing-imports
+description:
+    Map Pyright reportMissingImports to Pyrefly missing-import and fix
+    interpreter, search-path, stub, and optional dependency issues.
+keywords:
+    - reportMissingImports
+    - pyright missing imports
+    - pyright import could not be resolved
+    - pyrefly missing import
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+Pyright's `reportMissingImports` fires when no source file or stub can be
+resolved for an import. The direct Pyrefly equivalent is the
+[`missing-import`](../../error-kinds.mdx#missing-import) error kind:
+
+```toml
+[errors]
+missing-import = "error"
+```
+
+`pyrefly init` converts the Pyright severity automatically, so an existing
+`reportMissingImports` policy carries over.
+
+## Fix the environment before suppressing the error
+
+An unresolved import usually means the environment, not the code, is wrong.
+Check these in order:
+
+1. **Interpreter:** is Pyrefly querying the environment where the package is
+   installed?
+2. **Project roots:** should the source directory be in `search-path`?
+3. **Custom stubs:** should a stub directory be in `site-package-path`?
+4. **Generated code:** has the module been generated before type checking runs?
+5. **Optional dependency:** is the import intentionally unavailable in some
+   installations?
+
+If the module resolves from the command line but not in the IDE, or the other
+way round, the two are using different configs or different interpreters. Check
+which `pyrefly.toml` governs the file and what `python-interpreter-path` it
+resolves to.
+
+## Equivalent import settings
+
+| Pyright                     | Pyrefly                                       |
+| --------------------------- | --------------------------------------------- |
+| `extraPaths`                | `search-path`                                 |
+| `stubPath`                  | `site-package-path`                           |
+| `pythonVersion`             | `python-version`                              |
+| `pythonPlatform`            | `python-platform`                             |
+| `reportMissingImports`      | `missing-import`                              |
+| `reportMissingModuleSource` | `missing-source` + `missing-source-for-stubs` |
+| `reportMissingTypeStubs`    | `untyped-import`                              |
+
+## Optional dependencies
+
+For selected modules that may legitimately be absent:
+
+```toml
+ignore-missing-imports = ["optional_vendor.*"]
+```
+
+This substitutes `Any` only when the matched module cannot be found; if it is
+found, its real types are used. Prefer it to disabling `missing-import`
+globally, which also hides genuinely broken imports.
+
+## Source versus stubs
+
+Pyright distinguishes three situations: the module is missing entirely, stubs
+are found but the runtime source is missing, and source is found but type stubs
+are missing. Pyrefly keeps the same distinction across `missing-import`,
+`missing-source`, `missing-source-for-stubs`, and `untyped-import`. Preserve
+those separate severities rather than collapsing them into a single ignore.
+
+## Related guides
+
+- [Migrate from Pyright](index.mdx)
+- [Pyright config reference](config-reference.mdx)
+- [Pyright diagnostics](diagnostics-reference.mdx)
+- [Import resolution](../../import-resolution.mdx)

@@ -56,7 +56,7 @@ def test_subtraction_rejects_incompatible_broadcast() -> None:
 
     assert_shape(a - np.ones((3, 4)), (3, 4))
     try:
-        # E: Cannot broadcast tensor shapes
+        # E: Cannot evaluate type-level shape DSL call
         a - b
     except ValueError:
         pass

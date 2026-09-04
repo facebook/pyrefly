@@ -22,13 +22,13 @@ use crate::testcase;
 testcase!(
     test_unsolved_typevar_unbounded,
     r#"
-from typing import reveal_type
+from typing import assert_type, reveal_type
 def f[T]() -> T: ...
 reveal_type(f())  # E: revealed type: @_
 out_a = f()
 reveal_type(out_a)  # E: revealed type: Unknown
 out_b: int = f()
-reveal_type(out_b)  # E: revealed type: int
+assert_type(out_b, int)
 "#,
 );
 
@@ -37,13 +37,13 @@ reveal_type(out_b)  # E: revealed type: int
 testcase!(
     test_unsolved_typevar_bounded,
     r#"
-from typing import reveal_type
+from typing import assert_type, reveal_type
 def f[T: int]() -> T: ...
 reveal_type(f())  # E: revealed type: @_
 out_a = f()
 reveal_type(out_a)  # E: revealed type: Unknown
 out_b: int = f()
-reveal_type(out_b)  # E: revealed type: int
+assert_type(out_b, int)
 "#,
 );
 
@@ -51,13 +51,13 @@ reveal_type(out_b)  # E: revealed type: int
 testcase!(
     test_unsolved_typevar_with_default,
     r#"
-from typing import reveal_type
+from typing import assert_type
 def f[T = int]() -> T: ...
-reveal_type(f())  # E: revealed type: int
+assert_type(f(), int)
 out_a = f()
-reveal_type(out_a)  # E: revealed type: int
+assert_type(out_a, int)
 out_b: int = f()
-reveal_type(out_b)  # E: revealed type: int
+assert_type(out_b, int)
 "#,
 );
 
@@ -66,14 +66,14 @@ reveal_type(out_b)  # E: revealed type: int
 testcase!(
     test_unsolved_typevar_in_container,
     r#"
-from typing import reveal_type
+from typing import assert_type, reveal_type
 def f[T]() -> list[T]: ...
 reveal_type(f())  # E: revealed type: list[@_]
 out_a = f()
 reveal_type(out_a)  # E: revealed type: list[Unknown]
 out_b = f()
 out_b.append(42)
-reveal_type(out_b)  # E: revealed type: list[int]
+assert_type(out_b, list[int])
 "#,
 );
 
@@ -81,13 +81,13 @@ reveal_type(out_b)  # E: revealed type: list[int]
 testcase!(
     test_unsolved_typevar_not_in_params,
     r#"
-from typing import reveal_type
+from typing import assert_type, reveal_type
 def f[T](x: int) -> T: ...
 reveal_type(f(42))  # E: revealed type: @_
 out_a = f(42)
 reveal_type(out_a)  # E: revealed type: Unknown
 out_b: str = f(42)
-reveal_type(out_b)  # E: revealed type: str
+assert_type(out_b, str)
 "#,
 );
 
@@ -97,7 +97,7 @@ reveal_type(out_b)  # E: revealed type: str
 testcase!(
     test_concatenate_strips_generic_param,
     r#"
-from typing import Callable, Concatenate, Any, reveal_type
+from typing import Any, Callable, Concatenate, assert_type, reveal_type
 
 def strip_first[**P, T](f: Callable[Concatenate[Any, P], T]) -> Callable[P, T]: ...
 def identity[X](x: X) -> X: ...
@@ -114,7 +114,7 @@ reveal_type(out_a)  # E: revealed type: () -> Any
 out_b = strip_first(identity)
 called_b = out_b()
 reveal_type(out_b)  # E: revealed type: () -> Any
-reveal_type(called_b)  # E: revealed type: Any
+assert_type(called_b, Any)
 
 # out_c: calling it produces Any — no partial type to pin.
 out_c = strip_first(identity)

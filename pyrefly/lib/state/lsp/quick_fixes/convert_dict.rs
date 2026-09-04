@@ -11,6 +11,7 @@ use dupe::Dupe;
 use lsp_types::CodeActionKind;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
+use pyrefly_python::keywords::is_valid_identifier;
 use pyrefly_python::module::Module;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
@@ -131,16 +132,6 @@ fn find_dict_expression<'a>(
     None
 }
 
-/// Check if a string is a valid Python identifier (equivalent to `str.isidentifier()`).
-fn is_python_identifier(s: &str) -> bool {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(c) if c == '_' || c.is_alphabetic() => {}
-        _ => return false,
-    }
-    chars.all(|c| c == '_' || c.is_alphanumeric())
-}
-
 fn collect_dict_fields(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -152,7 +143,7 @@ fn collect_dict_fields(
     for item in &dict_expr.items {
         let key_expr = item.key.as_ref()?;
         let key = string_literal_key(key_expr)?;
-        if !is_python_identifier(&key) {
+        if !is_valid_identifier(&key) {
             return None;
         }
         let annotation = infer_field_annotation(transaction, handle, stdlib, item.value.range());

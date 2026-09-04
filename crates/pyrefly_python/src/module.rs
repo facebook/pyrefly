@@ -27,6 +27,17 @@ use crate::module_path::ModulePath;
 
 pub static GENERATED_TOKEN: &str = concat!("@", "generated");
 
+/// Some `.py` files are run by a notebook runtime that permits top-level
+/// `await`, `async for`, and `async with`. They are identified by a shebang
+/// with a `--kernel <name>` flag on the first line, even though they are stored
+/// as plain Python source.
+fn is_notebook_shebang(contents: &str) -> bool {
+    contents
+        .lines()
+        .next()
+        .is_some_and(|line| line.starts_with("#!") && line.contains("--kernel "))
+}
+
 /// Information about a module, notably its name, path, and contents.
 #[derive(Clone, Dupe, PartialEq, Eq, Hash)]
 pub struct Module(ArcId<ModuleInner>);
@@ -165,6 +176,14 @@ impl Module {
         self.0.notebook.is_some()
     }
 
+    /// Whether top-level `await`, `async for`, and `async with` are permitted in
+    /// this module. True for Jupyter notebooks (`.ipynb`) and for shebang-based
+    /// `.py` notebooks (files with a `--kernel <name>` shebang), since both
+    /// runtimes evaluate top-level code in an implicit async context.
+    pub fn allows_top_level_await(&self) -> bool {
+        self.is_notebook() || is_notebook_shebang(self.0.contents.contents())
+    }
+
     pub fn is_generated(&self) -> bool {
         self.0.is_generated
     }
@@ -216,5 +235,69 @@ pub struct TextRangeWithModule {
 impl TextRangeWithModule {
     pub fn new(module: Module, range: TextRange) -> Self {
         Self { module, range }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn py_module(contents: &str) -> Module {
+        Module::new(
+            ModuleName::from_str("foo"),
+            ModulePath::filesystem(PathBuf::from("foo.py")),
+            Arc::new(contents.to_owned()),
+        )
+    }
+
+    const NOTEBOOK_SHEBANG: &str = "#!/usr/bin/env -S notebookrunner --kernel default";
+
+    #[test]
+    fn test_notebook_shebang_detection() {
+        assert!(is_notebook_shebang(NOTEBOOK_SHEBANG));
+        assert!(is_notebook_shebang(&format!(
+            "{NOTEBOOK_SHEBANG}\nimport asyncio\nawait asyncio.sleep(1)\n"
+        )));
+    }
+
+    #[test]
+    fn test_non_notebook_shebang_not_detected() {
+        assert!(!is_notebook_shebang(""));
+        assert!(!is_notebook_shebang(
+            "import asyncio\nawait asyncio.sleep(1)\n"
+        ));
+        assert!(!is_notebook_shebang("#!/usr/bin/env python3\n"));
+        // A mention of `--kernel` outside a shebang must not count.
+        assert!(!is_notebook_shebang("# --kernel foo\n"));
+        // A shebang that only appears after the first line must not count.
+        assert!(!is_notebook_shebang(&format!(
+            "x = 1\n{NOTEBOOK_SHEBANG}\n"
+        )));
+    }
+
+    #[test]
+    fn test_notebook_py_allows_top_level_await() {
+        let module = py_module(&format!("{NOTEBOOK_SHEBANG}\nx: int = 1\n"));
+        assert!(
+            module.allows_top_level_await(),
+            "shebang-based notebook .py should allow top-level await"
+        );
+        // A shebang-based `.py` notebook is not backed by a notebook object, so it
+        // must still parse as Python rather than as an Ipynb notebook.
+        assert!(
+            !module.is_notebook(),
+            "shebang-based .py notebook is not an .ipynb notebook"
+        );
+        assert_eq!(module.source_type(), PySourceType::Python);
+    }
+
+    #[test]
+    fn test_plain_py_disallows_top_level_await() {
+        let module = py_module("x: int = 1\n");
+        assert!(!module.allows_top_level_await());
+        assert!(!module.is_notebook());
+        assert_eq!(module.source_type(), PySourceType::Python);
     }
 }

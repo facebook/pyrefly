@@ -12,6 +12,7 @@ use pyrefly_types::simplify::unions_with_literals;
 use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDictInner;
+use pyrefly_util::suggest::Candidate;
 use pyrefly_util::suggest::best_suggestion;
 use ruff_python_ast::DictItem;
 use ruff_python_ast::name::Name;
@@ -39,12 +40,12 @@ use crate::error::context::TypeCheckKind;
 use crate::solver::solver::SubsetError;
 use crate::types::annotation::Qualifier;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncMetadata;
-use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::callable::Required;
 use crate::types::class::Class;
+use crate::types::function::FuncMetadata;
+use crate::types::function::Function;
 use crate::types::literal::Lit;
 use crate::types::quantified::AnchorIndex;
 use crate::types::quantified::Quantified;
@@ -71,8 +72,10 @@ const DEFAULT_PARAM: Name = Name::new_static("default");
 const UPDATE_METHOD: Name = Name::new_static("update");
 const ITEMS_METHOD: Name = Name::new_static("items");
 const VALUES_METHOD: Name = Name::new_static("values");
+pub(crate) const REQUIRED_KEYS: Name = Name::new_static("__required_keys__");
+pub(crate) const OPTIONAL_KEYS: Name = Name::new_static("__optional_keys__");
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn check_dict_items_against_typed_dict(
         &self,
         dict_items: &Vec<&DictItem>,
@@ -148,7 +151,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             );
                             if let Some(suggestion) = best_suggestion(
                                 &key_name,
-                                fields.keys().map(|candidate| (candidate, 0usize)),
+                                fields
+                                    .keys()
+                                    .map(|candidate| Candidate::measured(candidate, 0)),
                             ) {
                                 builder =
                                     builder.with_detail(format!("Did you mean `{suggestion}`?"));
@@ -247,9 +252,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         is_total: bool,
     ) -> Option<TypedDictField> {
         let member = self.get_non_synthesized_class_member(typed_dict.class_object(), name)?;
-        let instantiated_ty = self.instantiate_typed_dict_field_type(typed_dict, name, &member)?;
-        let mut typed_dict_field =
-            Arc::unwrap_or_clone(member).as_typed_dict_field_info(is_total)?;
+        let instantiated_ty =
+            self.instantiate_typed_dict_field_type(typed_dict, name, member.as_ref())?;
+        let mut typed_dict_field = member.as_typed_dict_field_info(is_total)?;
         typed_dict_field.ty = instantiated_ty;
         Some(typed_dict_field)
     }
@@ -312,7 +317,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         fields.iter().filter_map(|(name, is_total)| {
             self.get_non_synthesized_class_member(cls, name)
                 .and_then(|member| {
-                    Arc::unwrap_or_clone(member)
+                    member
                         .as_typed_dict_field_info(*is_total)
                         .map(|field| (name, field))
                 })
@@ -497,11 +502,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         ty: Type,
     ) -> OverloadType {
         // Synthetic `_T` quantified used internally for the default parameter type.
-        // Anchored to the TypedDict class definition range with SyntheticCallableResidual origin.
+        // Anchored to the TypedDict class definition range with Synthetic origin.
         let identity = QuantifiedIdentity::new(
             self.module().name(),
             AnchorIndex::first(cls.range()),
-            QuantifiedOrigin::SyntheticCallableResidual,
+            QuantifiedOrigin::synthetic(),
         );
         let q = Quantified::type_var(
             Name::new("_T"),
@@ -923,12 +928,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn get_typed_dict_synthesized_fields(&self, cls: &Class) -> Option<ClassSynthesizedFields> {
         let metadata = self.get_metadata_for_class(cls);
         let td = metadata.typed_dict_metadata()?;
+        let keys_type = self.heap.mk_class_type(
+            self.stdlib
+                .frozenset(self.heap.mk_class_type(self.stdlib.str().clone())),
+        );
         let mut fields = smallmap! {
             dunder::INIT => self.get_typed_dict_init(cls, &td.fields),
             ITEMS_METHOD => self.get_typed_dict_items(cls, &td.fields),
             GET_METHOD => self.get_typed_dict_get(cls, &td.fields),
             UPDATE_METHOD => self.get_typed_dict_update(cls, &td.fields),
             VALUES_METHOD => self.get_typed_dict_values(cls, &td.fields),
+            REQUIRED_KEYS => ClassSynthesizedField::new_classvar(keys_type.clone()),
+            OPTIONAL_KEYS => ClassSynthesizedField::new_classvar(keys_type),
         };
         if let Some(m) = self.get_typed_dict_clear(cls, &td.fields) {
             fields.insert(CLEAR_METHOD, m);

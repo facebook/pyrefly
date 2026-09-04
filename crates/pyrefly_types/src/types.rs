@@ -11,6 +11,7 @@ use std::fmt;
 use std::fmt::Display;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::mem;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -32,26 +33,26 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
-use crate::callable::Deprecation;
-use crate::callable::FuncMetadata;
-use crate::callable::Function;
-use crate::callable::FunctionKind;
 use crate::callable::Param;
 use crate::callable::ParamList;
 use crate::callable::Params;
 use crate::callable::PrefixParam;
-use crate::callable::PropertyMetadata;
-use crate::callable::PropertyRole;
 use crate::callable_residual::CallableResidual;
 use crate::class::Class;
 use crate::class::ClassKind;
 use crate::class::ClassType;
+use crate::data_frame::DataFrameSchema;
 use crate::dimension;
-use crate::dimension::SizeExpr;
+use crate::dimension::Int;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
+use crate::function::Deprecation;
+use crate::function::FuncMetadata;
+use crate::function::Function;
+use crate::function::FunctionKind;
+use crate::function::PropertyMetadata;
+use crate::function::PropertyRole;
 use crate::heap::TypeHeap;
-use crate::keywords::DataclassTransformMetadata;
 use crate::keywords::KwCall;
 use crate::literal::Lit;
 use crate::literal::LitStyle;
@@ -60,12 +61,15 @@ use crate::module::ModuleType;
 use crate::param_spec::ParamSpec;
 use crate::quantified::Quantified;
 use crate::sentinel::Sentinel;
+use crate::series::SeriesSchema;
+use crate::shaped_array::IntTuple;
 use crate::shaped_array::ShapedArrayType;
 use crate::simplify::unions;
 use crate::special_form::SpecialForm;
 use crate::stdlib::Stdlib;
 use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
+use crate::type_level_dsl::TypeLevelDslCall;
 use crate::type_var::Restriction;
 use crate::type_var::TypeVar;
 use crate::type_var_tuple::TypeVarTuple;
@@ -115,6 +119,14 @@ impl Display for TParamsSource {
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct TParams(Vec<Quantified>);
+
+static EMPTY_TPARAMS: TParams = TParams(Vec::new());
+
+impl TParams {
+    pub fn empty_ref() -> &'static Self {
+        &EMPTY_TPARAMS
+    }
+}
 
 /// Implement `VisitMut` for `Arc<TParams>` as a no-op.
 ///
@@ -200,6 +212,9 @@ impl TParams {
                             .map(|ty| Self::strip_recursive_class_targs(ty.clone()))
                             .collect(),
                     ),
+                    Restriction::ShapeExtension(extension) => {
+                        Restriction::ShapeExtension(extension.clone())
+                    }
                     Restriction::Unrestricted => Restriction::Unrestricted,
                 };
                 q.with_restriction(new_restriction)
@@ -234,7 +249,7 @@ pub struct TArgs(Arc<(Arc<TParams>, Box<[Type]>)>);
 
 impl Visit<Type> for TArgs {
     fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
-        self.0.0.visit(f);
+        // TParams describe the declaration; only applied arguments are contained types.
         self.0.1.visit(f);
     }
 }
@@ -278,6 +293,11 @@ impl TArgs {
 
     pub fn as_mut(&mut self) -> &mut [Type] {
         &mut Arc::make_mut(&mut self.0).1
+    }
+
+    pub fn split_mut(&mut self) -> (&TParams, &mut [Type]) {
+        let inner = Arc::make_mut(&mut self.0);
+        (&inner.0, &mut inner.1)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -350,6 +370,13 @@ impl TArgs {
 pub struct Substitution<'a>(SmallMap<&'a Quantified, &'a Type>);
 
 impl<'a> Substitution<'a> {
+    /// Builds a substitution for a prefix of `tparams` by pairing `args` with the first
+    /// `args.len()` parameters.
+    pub fn for_prefix(tparams: &'a TParams, args: &'a [Type]) -> Self {
+        assert!(args.len() <= tparams.len());
+        Self(tparams.iter().zip(args).collect())
+    }
+
     pub fn substitute_into_mut(&self, ty: &mut Type) {
         ty.subst_mut(&self.0)
     }
@@ -399,6 +426,29 @@ pub enum CalleeKind {
     Class(ClassKind),
 }
 
+/// Small helper for `transform_toplevel_callable_signatures`
+enum FunctionTransform {
+    Function(Function),
+    Forall(Forall<Function>),
+}
+
+impl FunctionTransform {
+    fn transform(self, f: &mut impl FnMut(&mut Callable, &mut Option<Arc<TParams>>)) -> Self {
+        let (mut function, mut tparams) = match self {
+            Self::Function(function) => (function, None),
+            Self::Forall(forall) => (forall.body, Some(forall.tparams)),
+        };
+        f(&mut function.signature, &mut tparams);
+        match tparams {
+            Some(tparams) => Self::Forall(Forall {
+                tparams,
+                body: function,
+            }),
+            None => Self::Function(function),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct BoundMethod {
@@ -438,6 +488,67 @@ impl BoundMethodType {
         }
     }
 
+    /// The signature callers see, with the receiver parameter that binding already
+    /// consumed removed. Returns `None` when no parameter can be stripped, which
+    /// happens for signatures like `(...) -> T` that have no leading positional param.
+    ///
+    /// This is a display-only view: `bind_bound_method_type` in the solver performs the
+    /// same strip, and additionally instantiates type parameters against the receiver.
+    pub fn strip_receiver(&self) -> Option<Self> {
+        match self {
+            Self::Function(func) => func.signature.strip_first_param().map(|signature| {
+                Self::Function(Function {
+                    signature,
+                    metadata: func.metadata.clone(),
+                })
+            }),
+            Self::Forall(forall) => forall.body.signature.strip_first_param().map(|signature| {
+                Self::Forall(Forall {
+                    tparams: forall.tparams.clone(),
+                    body: Function {
+                        signature,
+                        metadata: forall.body.metadata.clone(),
+                    },
+                })
+            }),
+            Self::Overload(overload) => overload
+                .signatures
+                .try_mapped_ref(|x| match x {
+                    OverloadType::Function(f) => f
+                        .signature
+                        .strip_first_param()
+                        .map(|signature| {
+                            OverloadType::Function(Function {
+                                signature,
+                                metadata: f.metadata.clone(),
+                            })
+                        })
+                        .ok_or(()),
+                    OverloadType::Forall(forall) => forall
+                        .body
+                        .signature
+                        .strip_first_param()
+                        .map(|signature| {
+                            OverloadType::Forall(Forall {
+                                tparams: forall.tparams.clone(),
+                                body: Function {
+                                    signature,
+                                    metadata: forall.body.metadata.clone(),
+                                },
+                            })
+                        })
+                        .ok_or(()),
+                })
+                .ok()
+                .map(|signatures| {
+                    Self::Overload(Overload {
+                        signatures,
+                        metadata: overload.metadata.clone(),
+                    })
+                }),
+        }
+    }
+
     pub fn subst_self_type_mut(&mut self, replacement: &Type) {
         match self {
             Self::Function(func) => func.signature.subst_self_type_mut(replacement),
@@ -471,6 +582,29 @@ impl BoundMethodType {
             Self::Function(func) => func.signature.is_typeis(),
             Self::Forall(forall) => forall.body.signature.is_typeis(),
             Self::Overload(overload) => overload.is_typeis(),
+        }
+    }
+
+    fn transform(self, f: &mut impl FnMut(&mut Callable, &mut Option<Arc<TParams>>)) -> Self {
+        match self {
+            BoundMethodType::Function(function) => {
+                match FunctionTransform::Function(function).transform(f) {
+                    FunctionTransform::Function(function) => BoundMethodType::Function(function),
+                    FunctionTransform::Forall(forall) => BoundMethodType::Forall(forall),
+                }
+            }
+            BoundMethodType::Forall(forall) => {
+                match FunctionTransform::Forall(forall).transform(f) {
+                    FunctionTransform::Function(function) => BoundMethodType::Function(function),
+                    FunctionTransform::Forall(forall) => BoundMethodType::Forall(forall),
+                }
+            }
+            BoundMethodType::Overload(mut overload) => {
+                overload.signatures = overload
+                    .signatures
+                    .mapped(|signature| signature.transform(f));
+                BoundMethodType::Overload(overload)
+            }
         }
     }
 }
@@ -527,6 +661,17 @@ impl OverloadType {
         match self {
             Self::Function(f) => f.signature.is_typeis(),
             Self::Forall(forall) => forall.body.signature.is_typeis(),
+        }
+    }
+
+    fn transform(self, f: &mut impl FnMut(&mut Callable, &mut Option<Arc<TParams>>)) -> Self {
+        let transform = match self {
+            Self::Function(function) => FunctionTransform::Function(function),
+            Self::Forall(forall) => FunctionTransform::Forall(forall),
+        };
+        match transform.transform(f) {
+            FunctionTransform::Function(function) => Self::Function(function),
+            FunctionTransform::Forall(forall) => Self::Forall(forall),
         }
     }
 }
@@ -596,6 +741,28 @@ impl Forallable {
             Self::TypeAlias(_) => false,
         }
     }
+
+    fn transform(
+        self,
+        mut tparams: Option<Arc<TParams>>,
+        f: &mut impl FnMut(&mut Callable, &mut Option<Arc<TParams>>),
+    ) -> Type {
+        let body = match self {
+            Self::Function(mut function) => {
+                f(&mut function.signature, &mut tparams);
+                Self::Function(function)
+            }
+            Self::Callable(mut callable) => {
+                f(&mut callable, &mut tparams);
+                Self::Callable(callable)
+            }
+            body @ Self::TypeAlias(_) => body,
+        };
+        match tparams {
+            Some(tparams) => body.forall(tparams),
+            None => body.as_type(),
+        }
+    }
 }
 
 /// The second argument (implicit or explicit) to a super() call.
@@ -608,7 +775,7 @@ pub enum SuperObj {
     Class(ClassType),
 }
 
-#[derive(Debug, Clone, Eq, TypeEq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Eq)]
 pub struct Union {
     pub members: Vec<Type>,
     pub display_name: Option<(ModuleName, Name)>,
@@ -623,6 +790,24 @@ impl PartialEq for Union {
 impl Hash for Union {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.members.hash(state)
+    }
+}
+
+impl PartialOrd for Union {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Union {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.members.cmp(&other.members)
+    }
+}
+
+impl TypeEq for Union {
+    fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
+        self.members.type_eq(&other.members, ctx)
     }
 }
 
@@ -657,7 +842,7 @@ impl VisitMut<Type> for Union {
 pub struct NNModuleType {
     /// The underlying nn.Module subclass (e.g., MaxPool2d).
     pub class: ClassType,
-    /// Captured init args (e.g., kernel_size → Size(3), stride → None).
+    /// Captured init args (e.g., kernel_size → Int(3), stride → None).
     /// Ordered by constructor parameter order.
     pub fields: SmallMap<Name, Type>,
 }
@@ -749,6 +934,10 @@ pub enum Type {
     /// of the argument, so that we can resonstruct the same generic/overload structure if it
     /// appears in a callable type later. Otherwise, we should *flatten* to a fallback type.
     CallableResidual(Box<CallableResidual>),
+    /// A deferred type-level shape DSL application. Calls are normally forced at callable return
+    /// boundaries; experimental `MapIntTuples` parameter patterns instead expose the ordinary
+    /// collection view appropriate to regular or unpacked variadic parameters.
+    TypeLevelDslCall(Box<TypeLevelDslCall>),
     /// A function declared using the `def` keyword.
     /// Note that the FunctionKind metadata doesn't participate in subtyping, and thus two types with distinct metadata are still subtypes.
     Function(Box<Function>),
@@ -787,27 +976,24 @@ pub enum Type {
     /// Shaped-array type with shape information.
     /// Example: Tensor[2, 3] represents a 2x3 tensor
     ShapedArray(Box<ShapedArrayType>),
+    /// First-class tensor shape tuple.
+    IntTuple(Box<IntTuple>),
     /// nn.Module instance with captured constructor arguments.
     /// Wraps a ClassType + field map of init args, enabling DSL forward
     /// functions to access shape-relevant constructor parameters directly.
     NNModule(Box<NNModuleType>),
+    /// DataFrame instance with an ordered column schema.
+    DataFrame(Box<DataFrameSchema>),
+    /// Series instance carrying its element dtype.
+    Series(Box<SeriesSchema>),
     /// Dimension value type - represents values that satisfy Dim bound
     /// Examples:
-    ///   - Type::Size(SizeExpr::Literal(6)) for concrete dimension 6
-    ///   - Type::Size(SizeExpr::Var(v)) for dimension variables
+    ///   - `Type::Int(Int::Literal(6))` for concrete dimension 6
+    ///   - `Type::Int(Int::Symbolic(v))` for dimension variables
     ///
     /// This is the type-level representation of dimension values, used when
     /// type variables with Dim bound unify with concrete dimension values.
-    Size(SizeExpr),
-    /// Symbolic integer type - wraps dimension expressions for use in type annotations
-    /// Examples:
-    ///   - Type::Dim(SizeExpr(Literal(3))) for Dim[3]
-    ///   - Type::Dim(Quantified) for Dim[N]
-    ///   - Type::Dim(SizeExpr(Add(...))) for Dim[N+1]
-    ///
-    /// This is the type annotation form of symbolic integers, distinct from
-    /// concrete integer literals which use Type::Literal(Lit::Int(...)).
-    Dim(Box<Type>),
+    Int(Int),
     Tuple(Tuple),
     Module(ModuleType),
     Forall(Box<Forall<Forallable>>),
@@ -850,6 +1036,7 @@ pub enum Type {
     Type(Box<Type>),
     /// TypeForm[T] — a type form object (PEP 747).
     TypeForm(Box<Type>),
+    /// A literal `...` in a type annotation (e.g., `Concatenate[int, ...]`)
     Ellipsis,
     Any(AnyStyle),
     Never(NeverStyle),
@@ -898,6 +1085,7 @@ impl Visit for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit(f),
             Type::CallableResidual(x) => x.visit(f),
+            Type::TypeLevelDslCall(x) => x.visit(f),
             Type::Function(x) => x.visit(f),
             Type::BoundMethod(x) => x.visit(f),
             Type::Overload(x) => x.visit(f),
@@ -908,9 +1096,11 @@ impl Visit for Type {
             Type::TypedDict(x) => x.visit(f),
             Type::PartialTypedDict(x) => x.visit(f),
             Type::ShapedArray(x) => x.visit(f),
+            Type::IntTuple(x) => x.visit(f),
             Type::NNModule(x) => x.visit(f),
-            Type::Size(x) => x.visit(f),
-            Type::Dim(x) => x.visit(f),
+            Type::DataFrame(x) => x.visit(f),
+            Type::Series(x) => x.visit(f),
+            Type::Int(x) => x.visit(f),
             Type::Tuple(x) => x.visit(f),
             Type::Module(x) => x.visit(f),
             Type::Forall(x) => x.visit(f),
@@ -927,7 +1117,10 @@ impl Visit for Type {
             Type::ParamSpec(x) => x.visit(f),
             Type::TypeVarTuple(x) => x.visit(f),
             Type::SpecialForm(x) => x.visit(f),
-            Type::Concatenate(x, _) => x.visit(f),
+            Type::Concatenate(prefix, pspec) => {
+                prefix.visit(f);
+                pspec.visit(f);
+            }
             Type::ParamSpecValue(x) => x.visit(f),
             Type::Args(x) => x.visit(f),
             Type::Kwargs(x) => x.visit(f),
@@ -955,6 +1148,7 @@ impl VisitMut for Type {
             Type::LiteralString(_) => {}
             Type::Callable(x) => x.visit_mut(f),
             Type::CallableResidual(x) => x.visit_mut(f),
+            Type::TypeLevelDslCall(x) => x.visit_mut(f),
             Type::Function(x) => x.visit_mut(f),
             Type::BoundMethod(x) => x.visit_mut(f),
             Type::Overload(x) => x.visit_mut(f),
@@ -965,9 +1159,11 @@ impl VisitMut for Type {
             Type::TypedDict(x) => x.visit_mut(f),
             Type::PartialTypedDict(x) => x.visit_mut(f),
             Type::ShapedArray(x) => x.visit_mut(f),
+            Type::IntTuple(x) => x.visit_mut(f),
             Type::NNModule(x) => x.visit_mut(f),
-            Type::Size(x) => x.visit_mut(f),
-            Type::Dim(x) => x.visit_mut(f),
+            Type::DataFrame(x) => x.visit_mut(f),
+            Type::Series(x) => x.visit_mut(f),
+            Type::Int(x) => x.visit_mut(f),
             Type::Tuple(x) => x.visit_mut(f),
             Type::Module(x) => x.visit_mut(f),
             Type::Forall(x) => x.visit_mut(f),
@@ -984,7 +1180,10 @@ impl VisitMut for Type {
             Type::ParamSpec(x) => x.visit_mut(f),
             Type::TypeVarTuple(x) => x.visit_mut(f),
             Type::SpecialForm(x) => x.visit_mut(f),
-            Type::Concatenate(x, _) => x.visit_mut(f),
+            Type::Concatenate(prefix, pspec) => {
+                prefix.visit_mut(f);
+                pspec.visit_mut(f);
+            }
             Type::ParamSpecValue(x) => x.visit_mut(f),
             Type::Args(x) => x.visit_mut(f),
             Type::Kwargs(x) => x.visit_mut(f),
@@ -1161,6 +1360,16 @@ impl Type {
         matches!(self, Type::Unpack(_))
     }
 
+    /// The `TypedDict` of an `Unpack[TypedDict]`, the annotation form a `**kwargs`
+    /// parameter uses to accept each field as a keyword argument. `None` for any
+    /// other type, including `Unpack` of a non-`TypedDict` such as a `TypeVarTuple`.
+    pub fn unpacked_typed_dict(&self) -> Option<&TypedDict> {
+        match self {
+            Type::Unpack(inner) if let Type::TypedDict(typed_dict) = &**inner => Some(typed_dict),
+            _ => None,
+        }
+    }
+
     pub fn callable_concatenate(args: Box<[PrefixParam]>, param_spec: Type, ret: Type) -> Self {
         Type::Callable(Box::new(Callable::concatenate(args, param_spec, ret)))
     }
@@ -1186,7 +1395,7 @@ impl Type {
     }
 
     pub fn any_tuple() -> Self {
-        Self::unbounded_tuple(Type::Any(AnyStyle::Implicit))
+        Self::unbounded_tuple(Type::any_implicit())
     }
 
     pub fn is_any(&self) -> bool {
@@ -1223,35 +1432,55 @@ impl Type {
         )
     }
 
+    fn recurse_type_variable_positions<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        let mut recurse_targs = |targs: &'a TArgs| {
+            for targ in targs.as_slice().iter() {
+                f(targ);
+            }
+        };
+        // IMPORTANT: keep this match in sync with `recurse_type_variable_positions_mut`
+        match self {
+            // In `A[X]`, we only check `X` for a couple reasons:
+            // * If we were to blindly visit the entire ClassType, we would find Quantifieds in
+            //   the definition of the class, which is almost never what we want: we want to
+            //   know if `X` contains any references to Quantifieds, not whether `A` is generic.
+            //   See https://github.com/facebook/pyrefly/issues/1962.
+            // * Not checking the rest of the ClassType is a critical performance optimization
+            //   when visiting Vars. See https://github.com/facebook/pyrefly/issues/2016.
+            Type::ClassType(cls) => recurse_targs(cls.targs()),
+            Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs()),
+            // `Self` is a keyword, not a user-written type variable reference, so we don't
+            // recurse into it when looking for type variable references.
+            Type::SelfType(_) => {}
+            // Enum literals contain `ClassType`s that we shouldn't visit.
+            Type::Literal(_) => {}
+            _ => self.recurse(f),
+        }
+    }
+
+    /// The mutable form of [`Type::recurse_type_variable_positions`], visiting the same positions.
+    fn recurse_type_variable_positions_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        let mut recurse_targs = |targs: &mut TArgs| {
+            for targ in targs.as_mut().iter_mut() {
+                f(targ);
+            }
+        };
+        // IMPORTANT: keep this match in sync with `recurse_type_variable_positions`
+        match self {
+            Type::ClassType(cls) => recurse_targs(cls.targs_mut()),
+            Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs_mut()),
+            Type::SelfType(_) | Type::Literal(_) => {}
+            _ => self.recurse_mut(f),
+        }
+    }
+
     fn visit_type_variables<'a>(&'a self, f: &mut dyn FnMut(TypeVariable<'a>)) {
         fn visit<'a>(ty: &'a Type, f: &mut dyn FnMut(TypeVariable<'a>)) {
             if let Some(tv) = TypeVariable::new(ty) {
                 f(tv);
                 return;
             }
-            let mut recurse_targs = |targs: &'a TArgs| {
-                for targ in targs.as_slice().iter() {
-                    visit(targ, f);
-                }
-            };
-            // IMPORTANT: keep this match in sync with `transform_types_in_type_variable_positions`
-            match ty {
-                // In `A[X]`, we only check `X` for a couple reasons:
-                // * If we were to blindly visit the entire ClassType, we would find Quantifieds in
-                //   the definition of the class, which is almost never what we want: we want to
-                //   know if `X` contains any references to Quantifieds, not whether `A` is generic.
-                //   See https://github.com/facebook/pyrefly/issues/1962.
-                // * Not checking the rest of the ClassType is a critical performance optimization
-                //   when visiting Vars. See https://github.com/facebook/pyrefly/issues/2016.
-                Type::ClassType(cls) => recurse_targs(cls.targs()),
-                Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs()),
-                // `Self` is a keyword, not a user-written type variable reference, so we don't
-                // recurse into it when looking for type variable references.
-                Type::SelfType(_) => {}
-                // Enum literals contain `ClassType`s that we shouldn't visit.
-                Type::Literal(_) => {}
-                _ => ty.recurse(&mut |ty| visit(ty, f)),
-            }
+            ty.recurse_type_variable_positions(&mut |inside| visit(inside, f));
         }
         visit(self, f)
     }
@@ -1262,6 +1491,72 @@ impl Type {
                 f(x);
             }
         })
+    }
+
+    /// Visits quantified variables that are not bound by a containing callable or type-level map.
+    pub fn for_each_free_quantified<'a>(&'a self, f: &mut impl FnMut(&'a Quantified)) {
+        fn visit_forall<'a, T: Visit<Type>>(
+            forall: &'a Forall<T>,
+            f: &mut dyn FnMut(&'a Quantified),
+            shadowed: &mut Vec<&'a Quantified>,
+        ) {
+            let old_len = shadowed.len();
+            shadowed.extend(forall.tparams.iter());
+            forall.tparams.visit(&mut |ty| visit(ty, f, shadowed));
+            forall.body.visit(&mut |ty| visit(ty, f, shadowed));
+            shadowed.truncate(old_len);
+        }
+
+        fn visit_overload<'a>(
+            overload: &'a Overload,
+            f: &mut dyn FnMut(&'a Quantified),
+            shadowed: &mut Vec<&'a Quantified>,
+        ) {
+            for signature in &overload.signatures {
+                match signature {
+                    OverloadType::Function(function) => {
+                        function.visit(&mut |ty| visit(ty, f, shadowed));
+                    }
+                    OverloadType::Forall(forall) => visit_forall(forall, f, shadowed),
+                }
+            }
+            overload.metadata.visit(&mut |ty| visit(ty, f, shadowed));
+        }
+
+        fn visit<'a>(
+            ty: &'a Type,
+            f: &mut dyn FnMut(&'a Quantified),
+            shadowed: &mut Vec<&'a Quantified>,
+        ) {
+            if let Type::Quantified(q) = ty {
+                if !shadowed.contains(&q.as_ref()) {
+                    f(q);
+                }
+                return;
+            }
+            match ty {
+                Type::Forall(forall) => visit_forall(forall, f, shadowed),
+                Type::Overload(overload) => visit_overload(overload, f, shadowed),
+                Type::BoundMethod(method) => {
+                    visit(&method.obj, f, shadowed);
+                    match &method.func {
+                        BoundMethodType::Function(function) => {
+                            function.visit(&mut |ty| visit(ty, f, shadowed));
+                        }
+                        BoundMethodType::Forall(forall) => visit_forall(forall, f, shadowed),
+                        BoundMethodType::Overload(overload) => {
+                            visit_overload(overload, f, shadowed)
+                        }
+                    }
+                }
+                Type::TypeLevelDslCall(call) => {
+                    call.visit_parts(shadowed, &mut |ty, shadowed| visit(ty, f, shadowed));
+                }
+                _ => ty.recurse_type_variable_positions(&mut |inside| visit(inside, f, shadowed)),
+            }
+        }
+
+        visit(self, f, &mut Vec::new());
     }
 
     pub fn collect_quantifieds<'a>(&'a self, acc: &mut SmallSet<&'a Quantified>) {
@@ -1304,37 +1599,12 @@ impl Type {
         self.visit_type_variables(&mut f)
     }
 
-    fn transform_types_in_type_variable_positions(&mut self, f: &mut dyn FnMut(&mut Type)) {
+    pub fn transform_types_in_type_variable_positions(&mut self, f: &mut dyn FnMut(&mut Type)) {
         fn visit(ty: &mut Type, f: &mut dyn FnMut(&mut Type)) {
             f(ty);
-            let mut recurse_targs = |targs: &mut TArgs| {
-                for targ in targs.as_mut().iter_mut() {
-                    visit(targ, f);
-                }
-            };
-            // IMPORTANT: keep this match in sync with `visit_type_variables`
-            match ty {
-                Type::ClassType(cls) => recurse_targs(cls.targs_mut()),
-                Type::TypedDict(TypedDict::TypedDict(td)) => recurse_targs(td.targs_mut()),
-                // `Self` is a keyword, not a user-written type variable reference.
-                Type::SelfType(_) => {}
-                // Enum literals contain `ClassType`s that we shouldn't visit.
-                Type::Literal(_) => {}
-                _ => ty.recurse_mut(&mut |ty| visit(ty, f)),
-            }
+            ty.recurse_type_variable_positions_mut(&mut |inside| visit(inside, f));
         }
         visit(self, f)
-    }
-
-    /// Transform unreplaced references to legacy type variables. Note that references to in-scope
-    /// legacy type variables in functions and classes are replaced with Quantified, so unreplaced
-    /// references only appear in cases like a TypeVar definition or an out-of-scope type variable.
-    pub fn transform_raw_legacy_type_variables(&mut self, f: &mut dyn FnMut(&mut Type)) {
-        self.transform_types_in_type_variable_positions(&mut |ty| {
-            if ty.is_raw_legacy_type_variable() {
-                f(ty);
-            }
-        })
     }
 
     /// Check if the type contains a placeholder var. See `collect_maybe_placeholder_vars`.
@@ -1406,12 +1676,6 @@ impl Type {
         }
     }
 
-    pub fn is_assert_shape(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| {
-            meta.flags.is_assert_shape || meta.kind == FunctionKind::AssertShape
-        })
-    }
-
     pub fn is_none(&self) -> bool {
         matches!(self, Type::None)
     }
@@ -1428,6 +1692,7 @@ impl Type {
         }
     }
 
+    /// Substitutes free quantified values while respecting `Forall` and `MapIntTuples` binders.
     pub fn subst_mut_fn(&mut self, mp: &mut dyn FnMut(&Quantified) -> Option<Type>) {
         // We are looking up Quantified in a map, and Quantified may contain a Quantified within it.
         // Therefore, to make sure we still get matches, work top-down (not using `transform`).
@@ -1447,6 +1712,8 @@ impl Type {
                 shadowed.extend(forall.tparams.iter().cloned());
                 ty.recurse_mut(&mut |x| f(x, mp, shadowed));
                 shadowed.truncate(old_len);
+            } else if let Type::TypeLevelDslCall(call) = ty {
+                call.subst_parts_mut(shadowed, &mut |x, shadowed| f(x, mp, shadowed));
             } else {
                 ty.recurse_mut(&mut |x| f(x, mp, shadowed));
             }
@@ -1463,6 +1730,83 @@ impl Type {
     pub fn subst(mut self, mp: &SmallMap<&Quantified, &Type>) -> Self {
         self.subst_mut(mp);
         self
+    }
+
+    pub fn finalize_type_level_dsl_at_boundary(&mut self) -> Vec<dimension::ShapeError> {
+        let mut errors = Vec::new();
+
+        // Nested applications are dependencies of the public application being forced here:
+        // propagate the first invalid dependency upward so fallback is applied only at that
+        // public result-schema boundary.
+        fn force_nested(ty: &mut Type) -> Result<(), dimension::ShapeError> {
+            let Type::TypeLevelDslCall(call) = ty else {
+                match ty {
+                    Type::Callable(_)
+                    | Type::Function(_)
+                    | Type::BoundMethod(_)
+                    | Type::Overload(_)
+                    | Type::Forall(_) => return Ok(()),
+                    _ => {
+                        let mut error = None;
+                        ty.recurse_mut(&mut |ty| {
+                            if error.is_none() {
+                                error = force_nested(ty).err();
+                            }
+                        });
+                        return match error {
+                            Some(error) => Err(error),
+                            None => Ok(()),
+                        };
+                    }
+                }
+            };
+            fn force_call(call: &mut TypeLevelDslCall) -> Result<Type, dimension::ShapeError> {
+                for arg in &mut call.args {
+                    force_nested(arg)?;
+                }
+                if let Some(source) = call.map_int_tuples_source_mut() {
+                    force_nested(source)?;
+                }
+                // Mapping can instantiate DSL calls from its lambda body, so the produced type
+                // must cross the same boundary as the source arguments.
+                let mut result = call.evaluate()?;
+                force_nested(&mut result)?;
+                Ok(result)
+            }
+            match force_call(call) {
+                Ok(result) => {
+                    *ty = result;
+                    Ok(())
+                }
+                Err(error) => {
+                    // Report only the original error if reducing a structured fallback also
+                    // encounters a failing nested call.
+                    let mut fallback = call.fallback();
+                    let _ = force_nested(&mut fallback);
+                    *ty = fallback;
+                    Err(error)
+                }
+            }
+        }
+
+        fn collect_errors(ty: &mut Type, errors: &mut Vec<dimension::ShapeError>) {
+            if matches!(ty, Type::TypeLevelDslCall(_)) {
+                if let Err(error) = force_nested(ty) {
+                    errors.push(error);
+                }
+                return;
+            }
+            match ty {
+                Type::Callable(_)
+                | Type::Function(_)
+                | Type::BoundMethod(_)
+                | Type::Overload(_)
+                | Type::Forall(_) => {}
+                _ => ty.recurse_mut(&mut |ty| collect_errors(ty, errors)),
+            }
+        }
+        collect_errors(self, &mut errors);
+        errors
     }
 
     pub fn subst_self_special_form_mut(&mut self, self_type: &Type) {
@@ -1494,74 +1838,66 @@ impl Type {
         seen
     }
 
-    /// Calls a `visit` function on this type's function metadata if it is a function. Note that we
+    /// Gets this type's function metadata if it is a function. Note that we
     /// do *not* recurse into the type to find nested function types.
-    pub fn visit_toplevel_func_metadata<'a, T: Default>(
-        &'a self,
-        visit: &dyn Fn(&'a FuncMetadata) -> T,
-    ) -> T {
-        let func: Option<&Function> = match self {
-            Type::Function(func) => Some(func),
+    /// Keep in sync with `Type::toplevel_func_metadata_mut`.
+    pub fn toplevel_func_metadata(&self) -> Option<&FuncMetadata> {
+        match self {
+            Type::Function(func) => Some(&func.metadata),
             Type::Forall(forall) => match &forall.body {
-                Forallable::Function(func) => Some(func),
+                Forallable::Function(func) => Some(&func.metadata),
                 _ => None,
             },
             Type::BoundMethod(bm) => match &bm.func {
-                BoundMethodType::Function(func) => Some(func),
-                BoundMethodType::Forall(forall) => Some(&forall.body),
+                BoundMethodType::Function(func) => Some(&func.metadata),
+                BoundMethodType::Forall(forall) => Some(&forall.body.metadata),
+                BoundMethodType::Overload(overload) => Some(&*overload.metadata),
+            },
+            Type::Overload(overload) => Some(&*overload.metadata),
+            _ => None,
+        }
+    }
+
+    /// Keep in sync with `Type::toplevel_func_metadata`.
+    pub fn toplevel_func_metadata_mut(&mut self) -> Option<&mut FuncMetadata> {
+        match self {
+            Type::Function(func) => Some(&mut func.metadata),
+            Type::Forall(forall) => match &mut forall.body {
+                Forallable::Function(func) => Some(&mut func.metadata),
                 _ => None,
             },
-            _ => None,
-        };
-        if let Some(func) = func {
-            return visit(&func.metadata);
-        }
-        let overload: Option<&Overload> = match self {
-            Type::Overload(overload) => Some(overload),
-            Type::BoundMethod(bm) => match &bm.func {
-                BoundMethodType::Overload(overload) => Some(overload),
-                _ => None,
+            Type::BoundMethod(bm) => match &mut bm.func {
+                BoundMethodType::Function(func) => Some(&mut func.metadata),
+                BoundMethodType::Forall(forall) => Some(&mut forall.body.metadata),
+                BoundMethodType::Overload(overload) => Some(&mut *overload.metadata),
             },
+            Type::Overload(overload) => Some(&mut *overload.metadata),
             _ => None,
-        };
-        if let Some(overload) = overload {
-            return visit(&overload.metadata);
         }
-        T::default()
     }
 
     pub fn has_toplevel_func_metadata(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|_| true)
+        self.toplevel_func_metadata().is_some()
     }
 
     pub fn is_abstract_method(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.is_abstract_method)
+        self.toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.is_abstract_method)
     }
 
     pub fn is_override(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.is_override)
-    }
-
-    pub fn has_enum_member_decoration(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.has_enum_member_decoration)
+        self.toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.is_override)
     }
 
     pub fn property_metadata(&self) -> Option<&PropertyMetadata> {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.property_metadata.as_ref())
+        self.toplevel_func_metadata()
+            .and_then(|meta| meta.flags.property_metadata.as_ref())
     }
 
     pub fn is_property_getter(&self) -> bool {
         self.property_metadata()
             .is_some_and(|meta| matches!(meta.role, PropertyRole::Getter))
-    }
-
-    pub fn is_cached_property(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.is_cached_property)
-    }
-
-    pub fn is_property_setter_decorator(&self) -> bool {
-        self.property_metadata()
-            .is_some_and(|meta| matches!(meta.role, PropertyRole::SetterDecorator))
     }
 
     pub fn is_property_setter_with_getter(&self) -> Option<Type> {
@@ -1571,167 +1907,111 @@ impl Type {
         })
     }
 
-    pub fn property_deleter_metadata(&self) -> Option<&PropertyMetadata> {
-        self.property_metadata().and_then(|meta| match meta.role {
-            PropertyRole::DeleterDecorator => Some(meta),
-            _ => None,
-        })
-    }
-
     pub fn without_property_metadata(&self) -> Type {
         let mut clone = self.clone();
-        clone.transform_toplevel_func_metadata(|meta| {
+        if let Some(meta) = clone.toplevel_func_metadata_mut() {
             meta.flags.property_metadata = None;
-        });
+        }
         clone
     }
 
     /// Returns `true` if the metadata was successfully set (i.e., the type is function-like).
     pub fn set_property_metadata(&mut self, metadata: PropertyMetadata) -> bool {
         let mut metadata = Some(metadata);
-        self.transform_toplevel_func_metadata(|meta| {
+        if let Some(meta) = self.toplevel_func_metadata_mut() {
             meta.flags.property_metadata = metadata.take();
-        });
+        }
         metadata.is_none()
     }
 
     pub fn is_overload(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.is_overload)
+        self.toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.is_overload)
     }
 
     pub fn function_deprecation(&self) -> Option<&Deprecation> {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.deprecation.as_ref())
+        self.toplevel_func_metadata()
+            .and_then(|meta| meta.flags.deprecation.as_ref())
     }
 
     pub fn has_final_decoration(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.has_final_decoration)
+        self.toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.has_final_decoration)
     }
 
-    pub fn dataclass_transform_metadata(&self) -> Option<&DataclassTransformMetadata> {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.dataclass_transform_metadata.as_ref())
-    }
-
-    /// If a Protocol method lacks an implementation and does not come from a `.pyi` file, then it cannot be called
-    pub fn is_non_callable_protocol_method(&self) -> bool {
-        self.visit_toplevel_func_metadata(&|meta| meta.flags.lacks_runtime_implementation())
-    }
-
-    /// Transforms this type's function metadata, if it is a function. Note that we do *not*
-    /// recurse into the type to find nested function types.
-    pub fn transform_toplevel_func_metadata(&mut self, mut f: impl FnMut(&mut FuncMetadata)) {
-        let func: Option<&mut Function> = match self {
-            Type::Function(func) => Some(func),
-            Type::Forall(forall) => match &mut forall.body {
-                Forallable::Function(func) => Some(func),
-                _ => None,
-            },
-            Type::BoundMethod(bm) => match &mut bm.func {
-                BoundMethodType::Function(func) => Some(func),
-                BoundMethodType::Forall(forall) => Some(&mut forall.body),
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some(func) = func {
-            f(&mut func.metadata);
-            return;
-        }
-        let overload: Option<&mut Overload> = match self {
-            Type::Overload(overload) => Some(overload),
-            Type::BoundMethod(bm) => match &mut bm.func {
-                BoundMethodType::Overload(overload) => Some(overload),
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some(overload) = overload {
-            f(&mut overload.metadata);
-        }
-    }
-
-    /// Apply `f` to this type if it is a callable. Note that we do *not* recurse into the type to
-    /// find nested callable types.
-    pub fn visit_toplevel_callable<'a>(&'a self, mut f: impl FnMut(&'a Callable)) {
-        match self {
-            Type::Callable(callable) => f(callable),
-            Type::Forall(forall) => match &forall.body {
-                Forallable::Callable(callable) => f(callable),
-                Forallable::Function(func) => f(&func.signature),
-                _ => {}
-            },
-            Type::Function(func) => f(&func.signature),
-            Type::BoundMethod(bm) => match &bm.func {
-                BoundMethodType::Function(func) => f(&func.signature),
-                BoundMethodType::Forall(forall) => f(&forall.body.signature),
-                BoundMethodType::Overload(overload) => {
-                    for x in overload.signatures.iter() {
-                        match x {
-                            OverloadType::Function(function) => f(&function.signature),
-                            OverloadType::Forall(forall) => f(&forall.body.signature),
-                        }
+    /// Get this type's signatures with type parameters if it is a callable. Note that we do *not*
+    /// recurse into the type to find nested callable types.
+    /// Keep in sync with `Type::transform_toplevel_callable_signatures`.
+    pub fn toplevel_callable_signatures(
+        &self,
+    ) -> impl Iterator<Item = (&Callable, Option<&Arc<TParams>>)> {
+        let (one, overloads): (Option<(&Callable, Option<&Arc<TParams>>)>, &[OverloadType]) =
+            match self {
+                Type::Callable(callable) => (Some((callable, None)), &[]),
+                Type::Forall(forall) => match &forall.body {
+                    Forallable::Callable(callable) => {
+                        (Some((callable, Some(&forall.tparams))), &[])
                     }
-                }
-            },
-            Type::Overload(overload) => {
-                for x in overload.signatures.iter() {
-                    match x {
-                        OverloadType::Function(function) => f(&function.signature),
-                        OverloadType::Forall(forall) => f(&forall.body.signature),
+                    Forallable::Function(func) => {
+                        (Some((&func.signature, Some(&forall.tparams))), &[])
                     }
-                }
-            }
-            _ => {}
-        }
+                    _ => (None, &[]),
+                },
+                Type::Function(func) => (Some((&func.signature, None)), &[]),
+                Type::BoundMethod(bm) => match &bm.func {
+                    BoundMethodType::Function(func) => (Some((&func.signature, None)), &[]),
+                    BoundMethodType::Forall(forall) => {
+                        (Some((&forall.body.signature, Some(&forall.tparams))), &[])
+                    }
+                    BoundMethodType::Overload(overload) => (None, overload.signatures.as_ref()),
+                },
+                Type::Overload(overload) => (None, overload.signatures.as_ref()),
+                _ => (None, &[]),
+            };
+        one.into_iter().chain(overloads.iter().map(|o| match o {
+            OverloadType::Function(func) => (&func.signature, None),
+            OverloadType::Forall(forall) => (&forall.body.signature, Some(&forall.tparams)),
+        }))
     }
 
     /// Transform this type if it is a callable. Note that we do *not* recurse into the type to
     /// find nested callable types.
-    pub fn transform_toplevel_callable<'a>(&'a mut self, mut f: impl FnMut(&'a mut Callable)) {
-        match self {
-            Type::Callable(callable) => f(callable),
-            Type::Forall(forall) => match &mut forall.body {
-                Forallable::Callable(callable) => f(callable),
-                Forallable::Function(func) => f(&mut func.signature),
-                _ => {}
-            },
-            Type::Function(func) => f(&mut func.signature),
-            Type::BoundMethod(bm) => match &mut bm.func {
-                BoundMethodType::Function(func) => f(&mut func.signature),
-                BoundMethodType::Forall(forall) => f(&mut forall.body.signature),
-                BoundMethodType::Overload(overload) => {
-                    for x in overload.signatures.iter_mut() {
-                        match x {
-                            OverloadType::Function(function) => f(&mut function.signature),
-                            OverloadType::Forall(forall) => f(&mut forall.body.signature),
-                        }
-                    }
-                }
-            },
-            Type::Overload(overload) => {
-                for x in overload.signatures.iter_mut() {
-                    match x {
-                        OverloadType::Function(function) => f(&mut function.signature),
-                        OverloadType::Forall(forall) => f(&mut forall.body.signature),
-                    }
-                }
+    /// Keep in sync with `Type::toplevel_callable_signatures`.
+    pub fn transform_toplevel_callable_signatures(
+        &mut self,
+        mut f: impl FnMut(&mut Callable, &mut Option<Arc<TParams>>),
+    ) {
+        // Temporarily swap `self` with a placeholder so we can run an owning transformation on it
+        // without cloning.
+        let transformed = match mem::replace(self, Type::None) {
+            Type::Callable(callable) => Forallable::Callable(*callable).transform(None, &mut f),
+            Type::Function(function) => Forallable::Function(*function).transform(None, &mut f),
+            Type::Forall(forall) => forall.body.transform(Some(forall.tparams), &mut f),
+            Type::BoundMethod(mut method) => {
+                method.func = method.func.transform(&mut f);
+                Type::BoundMethod(method)
             }
-            _ => {}
-        }
+            Type::Overload(mut overload) => {
+                overload.signatures = overload
+                    .signatures
+                    .mapped(|signature| signature.transform(&mut f));
+                Type::Overload(overload)
+            }
+            ty => ty,
+        };
+        *self = transformed;
     }
 
     pub fn is_toplevel_callable(&self) -> bool {
-        let mut is_callable = false;
-        self.visit_toplevel_callable(&mut |_| is_callable = true);
-        is_callable
+        self.toplevel_callable_signatures().next().is_some()
     }
 
     // This doesn't handle generics currently
     pub fn callable_return_type(&self, heap: &TypeHeap) -> Option<Type> {
-        let mut rets = Vec::new();
-        let mut get_ret = |callable: &Callable| {
-            rets.push(callable.ret.clone());
-        };
-        self.visit_toplevel_callable(&mut get_ret);
+        let rets = self
+            .toplevel_callable_signatures()
+            .map(|(callable, _)| callable.ret.clone())
+            .collect::<Vec<_>>();
         if rets.is_empty() {
             None
         } else {
@@ -1740,24 +2020,15 @@ impl Type {
     }
 
     pub fn callable_first_param(&self, heap: &TypeHeap) -> Option<Type> {
-        let mut params = Vec::new();
-        let mut get_param = |callable: &Callable| {
-            if let Some(p) = callable.get_first_param() {
-                params.push(p);
-            }
-        };
-        self.visit_toplevel_callable(&mut get_param);
+        let params = self
+            .toplevel_callable_signatures()
+            .filter_map(|(callable, _)| callable.get_first_param().cloned())
+            .collect::<Vec<_>>();
         if params.is_empty() {
             None
         } else {
             Some(unions(params, heap))
         }
-    }
-
-    pub fn callable_signatures(&self) -> Vec<&Callable> {
-        let mut sigs = Vec::new();
-        self.visit_toplevel_callable(&mut |sig| sigs.push(sig));
-        sigs
     }
 
     fn promote_one_implicit_literal(ty: &mut Type, stdlib: &Stdlib) {
@@ -1797,7 +2068,7 @@ impl Type {
     // Attempt at a function that will convert @ to Any for now.
     pub fn clean_var(self) -> Type {
         self.transform(&mut |ty| match &ty {
-            Type::Var(_) => *ty = Type::Any(AnyStyle::Implicit),
+            Type::Var(_) => *ty = Type::any_implicit(),
             _ => {}
         })
     }
@@ -1882,6 +2153,17 @@ impl Type {
         self
     }
 
+    /// Replace every DataFrame and Series schema with its plain underlying class. The schema forms
+    /// (`DataFrame[a: Int64, ...]`, `Series[Int64]`) are not valid annotation syntax, so a surface
+    /// that emits a type as source must strip them first.
+    pub fn strip_library_schemas(self) -> Type {
+        self.transform(&mut |t| match t {
+            Type::DataFrame(schema) => *t = schema.underlying_type(),
+            Type::Series(schema) => *t = schema.underlying_type(),
+            _ => {}
+        })
+    }
+
     /// If this type represents a (possibly narrowed) quantified (i.e., `Q`  or `Q & T`), returns
     /// the quantified `Q` plus the type `T` it is narrowed to.
     pub fn as_quantified(&self) -> Option<(&Quantified, Option<&Type>)> {
@@ -1899,10 +2181,10 @@ impl Type {
         }
     }
 
-    /// Extract the literal value from a `SizeExpr::Literal`, if this is one.
+    /// Extract the literal value from a `Int::Literal`, if this is one.
     pub fn as_shape_literal(&self) -> Option<i64> {
         match self {
-            Type::Size(SizeExpr::Literal(n)) => Some(*n),
+            Type::Int(Int::Literal(n)) => Some(*n),
             _ => None,
         }
     }
@@ -1994,7 +2276,7 @@ impl Type {
 
     /// Return the FunctionKind if this type corresponds to a function or method.
     pub fn to_func_kind(&self) -> Option<&FunctionKind> {
-        self.visit_toplevel_func_metadata(&|meta| Some(&meta.kind))
+        self.toplevel_func_metadata().map(|meta| &meta.kind)
     }
 
     pub fn materialize(&self) -> Self {
@@ -2002,8 +2284,20 @@ impl Type {
         ty.transform_types_in_type_variable_positions(&mut |ty| {
             if ty.is_any() {
                 *ty = Type::Materialization;
+            } else {
+                // Gradual shape dimensions are the shape analog of `Any`, but they
+                // are stored as `Int` rather than `Type`, so the traversal above
+                // never reaches them directly. Materialize them at each carrier so
+                // `is_equivalent` does not treat a gradual size as equivalent to a
+                // concrete one.
+                match ty {
+                    Type::Int(dim) => dim.materialize(),
+                    Type::IntTuple(tuple) => tuple.materialize(),
+                    Type::ShapedArray(shaped) => shaped.materialize_inline_shape(),
+                    _ => {}
+                }
             }
-            ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
+            ty.transform_toplevel_callable_signatures(|callable: &mut Callable, _| {
                 if matches!(callable.params, Params::Ellipsis) {
                     callable.params = Params::Materialization;
                 }
@@ -2028,6 +2322,13 @@ impl Type {
             Type::TypeVar(_) => true,
             _ => false,
         }
+    }
+
+    /// Returns true if this is the type of a `...` value, e.g., `x: int = ...`.
+    /// Note the difference with `Type::Ellipsis`, which represents `...` in a type annotation,
+    /// e.g., `x: Callable[Concatenate[int, ...], int]`.
+    pub fn is_ellipsis_value(&self) -> bool {
+        matches!(self, Type::ClassType(cls) if cls.has_qname("types", "EllipsisType"))
     }
 }
 
@@ -2060,9 +2361,158 @@ impl<'a> TypeVariable<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+    use std::sync::Arc;
+
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_util::visit::Visit;
+    use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
+    use vec1::vec1;
+
+    use crate::callable::Callable;
+    use crate::callable::ParamList;
+    use crate::equality::TypeEq;
+    use crate::equality::TypeEqCtx;
+    use crate::function::FuncFlags;
+    use crate::function::FuncMetadata;
+    use crate::function::Function;
+    use crate::function::FunctionKind;
     use crate::literal::Lit;
     use crate::literal::LitStyle;
+    use crate::map_int_tuples::TypeLambda;
+    use crate::quantified::AnchorIndex;
+    use crate::quantified::Quantified;
+    use crate::quantified::QuantifiedIdentity;
+    use crate::quantified::QuantifiedKind;
+    use crate::quantified::QuantifiedOrigin;
+    use crate::type_level_dsl::TypeLevelDslCall;
+    use crate::type_var::PreInferenceVariance;
+    use crate::type_var::Restriction;
+    use crate::types::BoundMethod;
+    use crate::types::BoundMethodType;
+    use crate::types::Forall;
+    use crate::types::Forallable;
+    use crate::types::Overload;
+    use crate::types::OverloadType;
+    use crate::types::TArgs;
+    use crate::types::TParams;
     use crate::types::Type;
+    use crate::types::Union;
+
+    fn test_quantified(module: &'static str, name: &'static str) -> Quantified {
+        Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str(module),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
+            Name::new_static(name),
+            QuantifiedKind::TypeVar,
+            None,
+            Restriction::Unrestricted,
+            PreInferenceVariance::Undefined,
+        )
+    }
+
+    fn test_function(ret: Type) -> Function {
+        Function {
+            signature: Callable::list(ParamList::new(Vec::new()), ret),
+            metadata: FuncMetadata {
+                kind: FunctionKind::Overload,
+                flags: FuncFlags::default(),
+            },
+        }
+    }
+
+    fn free_quantifieds(ty: &Type) -> Vec<Quantified> {
+        let mut result = Vec::new();
+        ty.for_each_free_quantified(&mut |q| result.push(q.clone()));
+        result
+    }
+
+    #[test]
+    fn test_targs_visit_only_visits_applied_arguments() {
+        let tparam = Quantified::new(
+            QuantifiedIdentity::new(
+                ModuleName::from_str("test"),
+                AnchorIndex::first(TextRange::default()),
+                QuantifiedOrigin::Pep695,
+            ),
+            Name::new_static("T"),
+            QuantifiedKind::TypeVar,
+            Some(Type::None),
+            Restriction::Bound(Type::LiteralString(LitStyle::Implicit)),
+            PreInferenceVariance::Undefined,
+        );
+        let targs = TArgs::new(Arc::new(TParams::new(vec![tparam])), vec![Type::Ellipsis]);
+        let mut visited = Vec::new();
+
+        targs.visit(&mut |ty| visited.push(ty.clone()));
+
+        assert_eq!(visited, vec![Type::Ellipsis]);
+    }
+
+    #[test]
+    fn test_for_each_free_quantified_respects_scoped_binders() {
+        let q = test_quantified("test.forall", "T");
+        let nested = Forallable::Callable(Callable::list(
+            ParamList::new(Vec::new()),
+            Type::Quantified(Box::new(q.clone())),
+        ))
+        .forall(Arc::new(TParams::new(vec![q.clone()])));
+        let mixed = Type::concrete_tuple(vec![Type::Quantified(Box::new(q.clone())), nested]);
+        assert_eq!(free_quantifieds(&mixed), vec![q.clone()]);
+
+        let overload = Type::Overload(Overload {
+            signatures: vec1![
+                OverloadType::Forall(Forall {
+                    tparams: Arc::new(TParams::new(vec![q.clone()])),
+                    body: test_function(Type::Quantified(Box::new(q.clone()))),
+                }),
+                OverloadType::Function(test_function(Type::Quantified(Box::new(q.clone())))),
+            ],
+            metadata: Box::new(FuncMetadata {
+                kind: FunctionKind::Overload,
+                flags: FuncFlags::default(),
+            }),
+        });
+        assert_eq!(free_quantifieds(&overload), vec![q.clone()]);
+
+        let bound_method = Type::BoundMethod(Box::new(BoundMethod {
+            obj: Type::Quantified(Box::new(q.clone())),
+            func: BoundMethodType::Forall(Forall {
+                tparams: Arc::new(TParams::new(vec![q.clone()])),
+                body: test_function(Type::Quantified(Box::new(q.clone()))),
+            }),
+        }));
+        assert_eq!(free_quantifieds(&bound_method), vec![q.clone()]);
+
+        let map = Type::TypeLevelDslCall(Box::new(TypeLevelDslCall::map_int_tuples(
+            TypeLambda::new(q.clone(), Type::Quantified(Box::new(q.clone()))),
+            Type::Quantified(Box::new(q.clone())),
+        )));
+        assert_eq!(free_quantifieds(&map), vec![q]);
+    }
+
+    /// `display_name` is presentation-only, so two unions with identical members
+    /// but different names must agree across `Eq`, `Ord`, and `TypeEq`.
+    #[test]
+    fn test_union_display_name_ignored_by_comparisons() {
+        let members = vec![Type::None, Type::LiteralString(LitStyle::Implicit)];
+        let named = Union {
+            members: members.clone(),
+            display_name: Some((ModuleName::builtins(), Name::new_static("TA"))),
+        };
+        let anonymous = Union {
+            members,
+            display_name: None,
+        };
+
+        assert_eq!(named, anonymous);
+        assert_eq!(named.cmp(&anonymous), Ordering::Equal);
+        assert!(named.type_eq(&anonymous, &mut TypeEqCtx::default()));
+    }
 
     #[test]
     fn test_as_bool() {

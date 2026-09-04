@@ -959,13 +959,9 @@ In the future, this property will contain the last metadata change time.""")
             # On other Unix systems (such as FreeBSD), the following attributes may be
             # available (but may be only filled out if root tries to use them):
             @property
-            def st_gen(self) -> int:
-                """generation number"""
-                ...
+            def st_gen(self) -> int: ...  # file generation number
             @property
-            def st_birthtime(self) -> float:
-                """time of creation"""
-                ...
+            def st_birthtime(self) -> float: ...  # time of file creation in seconds
     if sys.platform == "darwin":
         @property
         def st_flags(self) -> int: ...  # user defined flags for file
@@ -1249,8 +1245,12 @@ if sys.platform != "win32":
         """Set program scheduling priority."""
         ...
     if sys.platform != "darwin":
-        def getresuid() -> tuple[int, int, int]: ...
-        def getresgid() -> tuple[int, int, int]: ...
+        def getresuid() -> tuple[int, int, int]:
+            """Return a tuple of the current process's real, effective, and saved user ids."""
+            ...
+        def getresgid() -> tuple[int, int, int]:
+            """Return a tuple of the current process's real, effective, and saved group ids."""
+            ...
 
     def getuid() -> int:
         """Return the current process's user id."""
@@ -1277,8 +1277,12 @@ if sys.platform != "win32":
         """Set the current process's real and effective group ids."""
         ...
     if sys.platform != "darwin":
-        def setresgid(rgid: int, egid: int, sgid: int, /) -> None: ...
-        def setresuid(ruid: int, euid: int, suid: int, /) -> None: ...
+        def setresgid(rgid: int, egid: int, sgid: int, /) -> None:
+            """Set the current process's real, effective, and saved group ids."""
+            ...
+        def setresuid(ruid: int, euid: int, suid: int, /) -> None:
+            """Set the current process's real, effective, and saved user ids."""
+            ...
 
     def setreuid(ruid: int, euid: int, /) -> None:
         """Set the current process's real and effective user ids."""
@@ -1561,10 +1565,41 @@ if sys.platform != "win32":
         """
         ...
     if sys.platform != "darwin":
-        def fdatasync(fd: FileDescriptorLike) -> None: ...
-        def pipe2(flags: int, /) -> tuple[int, int]: ...  # some flavors of Unix
-        def posix_fallocate(fd: int, offset: int, length: int, /) -> None: ...
-        def posix_fadvise(fd: int, offset: int, length: int, advice: int, /) -> None: ...
+        def fdatasync(fd: FileDescriptorLike) -> None:
+            """Force write of fd to disk without forcing update of metadata."""
+            ...
+        def pipe2(flags: int, /) -> tuple[int, int]:
+            """
+            Create a pipe with flags set atomically.
+
+            Returns a tuple of two file descriptors:
+              (read_fd, write_fd)
+
+            flags can be constructed by ORing together one or more of these values:
+            O_NONBLOCK, O_CLOEXEC.
+            """
+            ...
+        def posix_fallocate(fd: int, offset: int, length: int, /) -> None:
+            """
+            Ensure a file has allocated at least a particular number of bytes on disk.
+
+            Ensure that the file specified by fd encompasses a range of bytes
+            starting at offset bytes from the beginning and continuing for length bytes.
+            """
+            ...
+        def posix_fadvise(fd: int, offset: int, length: int, advice: int, /) -> None:
+            """
+            Announce an intention to access data in a specific pattern.
+
+            Announce an intention to access data in a specific pattern, thus allowing
+            the kernel to make optimizations.
+            The advice applies to the region of the file specified by fd starting at
+            offset and continuing for length bytes.
+            advice is one of POSIX_FADV_NORMAL, POSIX_FADV_SEQUENTIAL,
+            POSIX_FADV_RANDOM, POSIX_FADV_NOREUSE, POSIX_FADV_WILLNEED, or
+            POSIX_FADV_DONTNEED.
+            """
+            ...
 
     def pread(fd: int, length: int, offset: int, /) -> bytes:
         """
@@ -1819,25 +1854,8 @@ def chmod(path: FileDescriptorOrPath, mode: int, *, dir_fd: int | None = None, f
     ...
 
 if sys.platform != "win32" and sys.platform != "linux":
-    def chflags(path: StrOrBytesPath, flags: int, follow_symlinks: bool = True) -> None:
-        """
-        Set file flags.
-
-        If follow_symlinks is False, and the last element of the path is a symbolic
-          link, chflags will change flags on the symbolic link itself instead of the
-          file the link points to.
-        follow_symlinks may not be implemented on your platform.  If it is
-        unavailable, using it will raise a NotImplementedError.
-        """
-        ...
-    def lchflags(path: StrOrBytesPath, flags: int) -> None:
-        """
-        Set file flags.
-
-        This function will not follow symbolic links.
-        Equivalent to chflags(path, flags, follow_symlinks=False).
-        """
-        ...
+    def chflags(path: StrOrBytesPath, flags: int, follow_symlinks: bool = True) -> None: ...  # some flavors of Unix
+    def lchflags(path: StrOrBytesPath, flags: int) -> None: ...
 
 if sys.platform != "win32":
     def chroot(path: StrOrBytesPath) -> None:
@@ -1939,7 +1957,11 @@ if sys.platform != "win32":
         """
         ...
 
-def makedirs(name: StrOrBytesPath, mode: int = 0o777, exist_ok: bool = False) -> None: ...
+if sys.version_info >= (3, 15):
+    def makedirs(name: StrOrBytesPath, mode: int = 0o777, exist_ok: bool = False, *, parent_mode: int | None = None) -> None: ...
+
+else:
+    def makedirs(name: StrOrBytesPath, mode: int = 0o777, exist_ok: bool = False) -> None: ...
 
 if sys.platform != "win32":
     def mknod(path: StrOrBytesPath, mode: int = 0o600, device: int = 0, *, dir_fd: int | None = None) -> None:
@@ -2483,7 +2505,7 @@ def times() -> times_result:
 
     The object returned behaves like a named tuple with these fields:
       (utime, stime, cutime, cstime, elapsed_time)
-    All fields are floating point numbers.
+    All fields are floating-point numbers.
     """
     ...
 def waitpid(pid: int, options: int, /) -> tuple[int, int]:
@@ -2523,6 +2545,15 @@ else:
     if sys.platform != "darwin" or sys.version_info >= (3, 13):
         @final
         class waitid_result(structseq[int], tuple[int, int, int, int, int]):
+            """
+            waitid_result: Result from waitid.
+
+            This object may be accessed either as a tuple of
+              (si_pid, si_uid, si_signo, si_status, si_code),
+            or via the attributes si_pid, si_uid, and so on.
+
+            See os.waitid for more information.
+            """
             __match_args__: Final = ("si_pid", "si_uid", "si_signo", "si_status", "si_code")
 
             @property
@@ -2536,7 +2567,22 @@ else:
             @property
             def si_code(self) -> int: ...
 
-        def waitid(idtype: int, ident: int, options: int, /) -> waitid_result | None: ...
+        def waitid(idtype: int, ident: int, options: int, /) -> waitid_result | None:
+            """
+            Returns the result of waiting for a process or processes.
+
+              idtype
+                Must be one of be P_PID, P_PGID or P_ALL.
+              id
+                The id to wait on.
+              options
+                Constructed from the ORing of one or more of WEXITED, WSTOPPED
+                or WCONTINUED and additionally may be ORed with WNOHANG or WNOWAIT.
+
+            Returns either waitid_result or None if WNOHANG is specified and there are
+            no children in a waitable state.
+            """
+            ...
 
     from resource import struct_rusage
 
@@ -2731,11 +2777,19 @@ else:
 if sys.platform != "win32":
     @final
     class sched_param(structseq[int], tuple[int]):
+        """
+        Currently has only one field: sched_priority
+
+        sched_priority
+          A scheduling parameter.
+        """
         __match_args__: Final = ("sched_priority",)
 
         def __new__(cls, sched_priority: int) -> Self: ...
         @property
-        def sched_priority(self) -> int: ...
+        def sched_priority(self) -> int:
+            """the scheduling priority"""
+            ...
 
     def sched_get_priority_min(policy: int) -> int:
         """Get the minimum scheduling priority for policy."""
@@ -2747,13 +2801,58 @@ if sys.platform != "win32":
         """Voluntarily relinquish the CPU."""
         ...
     if sys.platform != "darwin":
-        def sched_setscheduler(pid: int, policy: int, param: sched_param, /) -> None: ...  # some flavors of Unix
-        def sched_getscheduler(pid: int, /) -> int: ...  # some flavors of Unix
-        def sched_rr_get_interval(pid: int, /) -> float: ...  # some flavors of Unix
-        def sched_setparam(pid: int, param: sched_param, /) -> None: ...  # some flavors of Unix
-        def sched_getparam(pid: int, /) -> sched_param: ...  # some flavors of Unix
-        def sched_setaffinity(pid: int, mask: Iterable[int], /) -> None: ...  # some flavors of Unix
-        def sched_getaffinity(pid: int, /) -> set[int]: ...  # some flavors of Unix
+        def sched_setscheduler(pid: int, policy: int, param: sched_param, /) -> None:
+            """
+            Set the scheduling policy for the process identified by pid.
+
+            If pid is 0, the calling process is changed.
+            param is an instance of sched_param.
+            """
+            ...
+        def sched_getscheduler(pid: int, /) -> int:
+            """
+            Get the scheduling policy for the process identified by pid.
+
+            Passing 0 for pid returns the scheduling policy for the calling process.
+            """
+            ...
+        def sched_rr_get_interval(pid: int, /) -> float:
+            """
+            Return the round-robin quantum for the process identified by pid, in seconds.
+
+            Value returned is a float.
+            """
+            ...
+        def sched_setparam(pid: int, param: sched_param, /) -> None:
+            """
+            Set scheduling parameters for the process identified by pid.
+
+            If pid is 0, sets parameters for the calling process.
+            param should be an instance of sched_param.
+            """
+            ...
+        def sched_getparam(pid: int, /) -> sched_param:
+            """
+            Returns scheduling parameters for the process identified by pid.
+
+            If pid is 0, returns parameters for the calling process.
+            Return value is an instance of sched_param.
+            """
+            ...
+        def sched_setaffinity(pid: int, mask: Iterable[int], /) -> None:
+            """
+            Set the CPU affinity of the process identified by pid to mask.
+
+            mask should be an iterable of integers identifying CPUs.
+            """
+            ...
+        def sched_getaffinity(pid: int, /) -> set[int]:
+            """
+            Return the affinity of the process identified by pid (or the current process if zero).
+
+            The affinity is returned as a set of CPU identifiers.
+            """
+            ...
 
 def cpu_count() -> int | None:
     """
@@ -2959,11 +3058,4 @@ if sys.version_info >= (3, 13) or sys.platform != "win32":
 if sys.platform != "linux":
     if sys.version_info >= (3, 13) or sys.platform != "win32":
         # Added to Windows in 3.13.
-        def lchmod(path: StrOrBytesPath, mode: int) -> None:
-            """
-            Change the access permissions of a file, without following symbolic links.
-
-            If path is a symlink, this affects the link itself rather than the target.
-            Equivalent to chmod(path, mode, follow_symlinks=False)."
-            """
-            ...
+        def lchmod(path: StrOrBytesPath, mode: int) -> None: ...
