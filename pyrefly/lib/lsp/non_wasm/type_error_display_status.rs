@@ -183,108 +183,95 @@ pub fn derive_v2_response(
     workspace_type_checking_mode: Option<TypeCheckingMode>,
     pyrefly_version: Option<String>,
 ) -> TypeErrorDisplayStatusV2 {
-    if workspace_disable_type_errors {
-        return TypeErrorDisplayStatusV2 {
-            version: "v2".to_owned(),
-            label: Some("Errors Off".to_owned()),
-            tooltip:
-                "Pyrefly diagnostics are suppressed by [`python.pyrefly.disableTypeErrors`](command:workbench.action.openSettings?[\"python.pyrefly.disableTypeErrors\"]).\n\nUnset this setting to re-enable diagnostics."
-                    .to_owned(),
-            docs_url: STATUS_BAR_DOCS_URL.to_owned(),
-            pyrefly_version,
-        };
-    }
-    match reason {
-        Some(SynthesizedPresetReason::UserOverride) => {
-            // In the LSP this is produced by the unconfigured resolver
-            // when the user chose a non-`Auto` `typeCheckingMode`. On the
-            // CLI it comes from `--preset`. Either way the user made a
-            // deliberate choice, so we just surface the current value.
-            let value = workspace_type_checking_mode
-                .map(type_checking_mode_kebab)
-                .unwrap_or("<unknown>");
-            TypeErrorDisplayStatusV2 {
-                version: "v2".to_owned(),
-                label: None,
-                tooltip: format!(
-                    "Pyrefly is using the [`python.pyrefly.typeCheckingMode`](command:workbench.action.openSettings?[\"python.pyrefly.typeCheckingMode\"]) setting (currently: `{value}`) because no `pyrefly.toml` was found.\n\nRun `pyrefly init` to continue setting up Pyrefly.",
-                ),
-                docs_url: STATUS_BAR_DOCS_URL.to_owned(),
-                pyrefly_version,
+    let (label, tooltip) = if workspace_disable_type_errors {
+        (
+            Some("Errors Off".to_owned()),
+            "Pyrefly diagnostics are suppressed by [`python.pyrefly.disableTypeErrors`](command:workbench.action.openSettings?[\"python.pyrefly.disableTypeErrors\"]).\n\nUnset this setting to re-enable diagnostics."
+                .to_owned(),
+        )
+    } else {
+        match reason {
+            Some(SynthesizedPresetReason::UserOverride) => {
+                // In the LSP this is produced by the unconfigured resolver
+                // when the user chose a non-`Auto` `typeCheckingMode`. On the
+                // CLI it comes from `--preset`. Either way the user made a
+                // deliberate choice, so we just surface the current value.
+                let value = workspace_type_checking_mode
+                    .map(type_checking_mode_kebab)
+                    .unwrap_or("<unknown>");
+                (
+                    None,
+                    format!(
+                        "Pyrefly is using the [`python.pyrefly.typeCheckingMode`](command:workbench.action.openSettings?[\"python.pyrefly.typeCheckingMode\"]) setting (currently: `{value}`) because no `pyrefly.toml` was found.\n\nRun `pyrefly init` to continue setting up Pyrefly.",
+                    ),
+                )
             }
-        }
-        Some(SynthesizedPresetReason::Migrated(kind)) => {
-            let (location, label, preset) = match kind {
-                MigratedFromKind::Mypy(MigratedConfigSource::DedicatedFile) => {
-                    ("your `mypy.ini`", "Legacy", "legacy")
-                }
-                MigratedFromKind::Mypy(MigratedConfigSource::PyprojectToml) => (
-                    "`[tool.mypy]` in your `pyproject.toml`",
-                    "Legacy",
-                    "legacy",
-                ),
-                MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile) => {
-                    ("your `pyrightconfig.json`", "Default", "default")
-                }
-                MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml) => (
-                    "`[tool.pyright]` in your `pyproject.toml`",
-                    "Default",
-                    "default",
-                ),
-            };
-            TypeErrorDisplayStatusV2 {
-                version: "v2".to_owned(),
-                label: Some(label.to_owned()),
-                tooltip: format!(
-                    "Pyrefly is using settings imported from {location} (preset: {preset}).\n\nRun `pyrefly init` to continue setting up Pyrefly.",
-                ),
-                docs_url: STATUS_BAR_DOCS_URL.to_owned(),
-                pyrefly_version,
+            Some(SynthesizedPresetReason::Migrated(kind)) => {
+                let (location, preset_label, preset) = match kind {
+                    MigratedFromKind::Mypy(MigratedConfigSource::DedicatedFile) => {
+                        ("your `mypy.ini`", "Legacy", "legacy")
+                    }
+                    MigratedFromKind::Mypy(MigratedConfigSource::PyprojectToml) => (
+                        "`[tool.mypy]` in your `pyproject.toml`",
+                        "Legacy",
+                        "legacy",
+                    ),
+                    MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile) => {
+                        ("your `pyrightconfig.json`", "Default", "default")
+                    }
+                    MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml) => (
+                        "`[tool.pyright]` in your `pyproject.toml`",
+                        "Default",
+                        "default",
+                    ),
+                };
+                (
+                    Some(preset_label.to_owned()),
+                    format!(
+                        "Pyrefly is using settings imported from {location} (preset: {preset}).\n\nRun `pyrefly init` to continue setting up Pyrefly.",
+                    ),
+                )
             }
-        }
-        Some(SynthesizedPresetReason::NoNearbyConfig) => TypeErrorDisplayStatusV2 {
-            version: "v2".to_owned(),
-            label: Some("Basic".to_owned()),
-            tooltip:
+            Some(SynthesizedPresetReason::NoNearbyConfig) => (
+                Some("Basic".to_owned()),
                 "Pyrefly is running with the `basic` preset because no `pyrefly.toml` was found.\n\nRun `pyrefly init` to continue setting up Pyrefly."
                     .to_owned(),
-            docs_url: STATUS_BAR_DOCS_URL.to_owned(),
-            pyrefly_version,
-        },
-        None => match source {
-            ConfigSource::File(path) if disable_type_errors_in_ide => {
-                // The in-config disable lives at one of two paths: a
-                // dedicated `pyrefly.toml` (the `disable-type-errors-in-ide`
-                // key sits at the top level), or `[tool.pyrefly]` inside
-                // a `pyproject.toml` (the key sits inside that section).
-                // Tooltip distinguishes so users know what file to open.
-                let location = if path
-                    .file_name()
-                    .is_some_and(|n| n == ConfigFile::PYPROJECT_FILE_NAME)
-                {
-                    "`[tool.pyrefly]` in this project's `pyproject.toml`"
-                } else {
-                    "this project's `pyrefly.toml`"
-                };
-                TypeErrorDisplayStatusV2 {
-                    version: "v2".to_owned(),
-                    label: Some("Errors Off".to_owned()),
-                    tooltip: format!(
-                        "Pyrefly diagnostics are suppressed by `disable-type-errors-in-ide` in {location}.\n\nRemove this config to re-enable diagnostics.",
-                    ),
-                    docs_url: STATUS_BAR_DOCS_URL.to_owned(),
-                    pyrefly_version,
+            ),
+            // No synthesized preset means the project resolved a real config
+            // and is already set up, so the only thing worth surfacing is an
+            // explicit in-config disable. Everything else stays silent.
+            None => match source {
+                ConfigSource::File(path) if disable_type_errors_in_ide => {
+                    // The in-config disable lives at one of two paths: a
+                    // dedicated `pyrefly.toml` (the `disable-type-errors-in-ide`
+                    // key sits at the top level), or `[tool.pyrefly]` inside
+                    // a `pyproject.toml` (the key sits inside that section).
+                    // Tooltip distinguishes so users know what file to open.
+                    let location = if path
+                        .file_name()
+                        .is_some_and(|n| n == ConfigFile::PYPROJECT_FILE_NAME)
+                    {
+                        "`[tool.pyrefly]` in this project's `pyproject.toml`"
+                    } else {
+                        "this project's `pyrefly.toml`"
+                    };
+                    (
+                        Some("Errors Off".to_owned()),
+                        format!(
+                            "Pyrefly diagnostics are suppressed by `disable-type-errors-in-ide` in {location}.\n\nRemove this config to re-enable diagnostics.",
+                        ),
+                    )
                 }
-            }
-            ConfigSource::File(_) => TypeErrorDisplayStatusV2 {
-                version: "v2".to_owned(),
-                label: None,
-                tooltip: String::new(),
-                docs_url: STATUS_BAR_DOCS_URL.to_owned(),
-                pyrefly_version,
+                _ => (None, String::new()),
             },
-            _ => default_v2_response(pyrefly_version),
-        },
+        }
+    };
+    TypeErrorDisplayStatusV2 {
+        version: "v2".to_owned(),
+        label,
+        tooltip,
+        docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+        pyrefly_version,
     }
 }
 
