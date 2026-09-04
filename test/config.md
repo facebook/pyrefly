@@ -50,6 +50,58 @@ Default configuration
 [0]
 ```
 
+## Dump config with --full
+
+<!-- The `Type checking:` settings are matched with a glob so that adding a new
+`ConfigBase` setting does not break this test. -->
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/full/src && touch $TMPDIR/full/src/a.py && \
+> printf 'project-includes = ["src/**/*.py"]\npython-version = "3.12.0"\nuse-ignore-files = false\nnot-a-real-key = 1\n\n[errors]\nmissing-import = "warn"\nbad-assignment = "error"\n\n[[sub-config]]\nmatches = "src/**"\ncheck-unannotated-defs = false\n' > $TMPDIR/full/pyrefly.toml && \
+> $PYREFLY dump-config --full $TMPDIR/full/src/a.py
+Configuration at `*/full/pyrefly.toml` (glob)
+  Using interpreter: * (glob)
+  Required version: (unset)
+  Project files:
+    Includes: [*/full/src/**/*.py] (glob)
+    Excludes: * (glob)
+    Excludes heuristics disabled: false
+    Respecting ignore files: false
+    Extra file extensions: []
+  Python environment:
+    Version: 3.12.0
+    Platform: * (glob)
+  Import settings:
+    Search path heuristics disabled: false
+    Fallback search path enabled: false
+    Typeshed path: (unset)
+  Reporting:
+    Output format: (unset)
+    Minimum severity: (unset)
+    Baseline: (unset)
+    Baseline error level: (unset)
+    Skip LSP config indexing: false
+  Type checking:
+* (glob+)
+  Error severity overrides:
+    bad-assignment: error
+    missing-import: warn
+  Path-scoped overrides:
+    Matching `*/full/src/**/*`: (glob)
+      check-unannotated-defs: false
+  Coverage overrides:
+    Includes: (unset)
+    Excludes: (unset)
+  Build system:
+    (none)
+  Unrecognized config keys: [not-a-real-key]
+  Covered files:
+    */full/src/a.py (glob)
+  Resolving imports from:
+* (glob+)
+[0]
+```
+
 ## Specify both files and config
 
 ```scrut {output_stream: stderr}
