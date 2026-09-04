@@ -60,7 +60,13 @@ impl<'a> TransactionManager<'a> {
     pub fn non_committable_transaction(&mut self, state: &'a State) -> Transaction<'a> {
         let previous_blocking = match self.saved_state.take() {
             Some(saved_state) => match saved_state.restore() {
-                Ok(tx) => return tx,
+                Ok(mut tx) => {
+                    // The saved cancellation belonged to the previous consumer and has
+                    // taken effect; clearing upholds the invariant that a transaction
+                    // handed out here can perform work (instead of silently doing none).
+                    tx.reset_cancellation();
+                    return tx;
+                }
                 Err(blocked) => Some(blocked),
             },
             None => None,
@@ -76,5 +82,88 @@ impl<'a> TransactionManager<'a> {
     /// This function should be called once we finished using transaction for an LSP request.
     pub fn save(&mut self, transaction: Transaction<'a>, telemetry: &mut TelemetryEvent) {
         self.saved_state = Some(transaction.save(telemetry))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use dupe::Dupe;
+    use pyrefly_build::handle::Handle;
+    use pyrefly_python::module_name::ModuleName;
+    use pyrefly_util::telemetry::QueueName;
+    use pyrefly_util::telemetry::TelemetryEventKind;
+    use pyrefly_util::telemetry::TelemetryServerState;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::module::finder::DirEntryCache;
+    use crate::module::finder::find_import;
+    use crate::test::util::TestEnv;
+
+    /// A recheck cancels the in-flight reads that block its commit. That cancellation belongs
+    /// to the request being aborted, so it should *not* survive into the saved transaction.
+    /// Clearing it must also keep the work the saved transaction already did, so the restored
+    /// transaction reuses the cached stdlib instead of recomputing it.
+    #[test]
+    fn test_restored_transaction_is_not_still_cancelled() {
+        let mut test_env = TestEnv::new();
+        test_env.add("first", "x: int = 1\n");
+        test_env.add("second", "y: int = \"not an int\"\n");
+        let config_file = test_env.config();
+        let sys_info = test_env.sys_info();
+        let state = State::new(test_env.config_finder(), TEST_THREAD_COUNT);
+        let handle = |name: &str| {
+            let name = ModuleName::from_str(name);
+            let path = find_import(&config_file, name, None, None, &DirEntryCache::new(), None)
+                .finding()
+                .unwrap();
+            Handle::new(name, path, sys_info.dupe())
+        };
+
+        let mut manager = TransactionManager::default();
+        let mut transaction = manager.non_committable_transaction(&state);
+        transaction.set_memory(test_env.get_memory());
+        transaction.run(&[handle("first")], Require::Everything, None);
+        transaction.get_cancellation_handle().cancel();
+        let mut telemetry = TelemetryEvent::new_task(
+            TelemetryEventKind::InvalidateConfig,
+            TelemetryServerState {
+                has_sourcedb: false,
+                id: Uuid::new_v4(),
+                surface: None,
+                server_start_time: Instant::now(),
+                agent_session_id: None,
+                agent_invocation_id: None,
+                active_experiments: Vec::new(),
+            },
+            QueueName::RecheckQueue,
+            0,
+            Instant::now(),
+        );
+        manager.save(transaction, &mut telemetry);
+
+        let second = handle("second");
+        let mut transaction = manager.non_committable_transaction(&state);
+        assert!(
+            !transaction.get_cancellation_handle().is_cancelled(),
+            "restored transaction should hold a fresh cancellation handle"
+        );
+        transaction.set_memory(test_env.get_memory());
+        transaction.run(&[second.dupe()], Require::Everything, None);
+        assert!(
+            transaction.compute_stdlib_cached(),
+            "restored transaction should reuse the stdlib computed before the save"
+        );
+        assert_eq!(
+            transaction
+                .get_errors([&second])
+                .collect_errors()
+                .ordinary
+                .len(),
+            1
+        );
     }
 }
