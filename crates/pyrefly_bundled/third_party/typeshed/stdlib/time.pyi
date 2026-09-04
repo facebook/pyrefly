@@ -3,9 +3,9 @@ This module provides various functions to manipulate time values.
 
 There are two standard representations of time.  One is the number
 of seconds since the Epoch, in UTC (a.k.a. GMT).  It may be an integer
-or a floating point number (to represent fractions of seconds).
-The Epoch is system-defined; on Unix, it is generally January 1st, 1970.
-The actual value can be retrieved by calling gmtime(0).
+or a floating-point number (to represent fractions of seconds).
+The epoch is the point where the time starts, the return value of time.gmtime(0).
+It is January 1, 1970, 00:00:00 (UTC) on all platforms.
 
 The other representation is a tuple of 9 integers giving local time.
 The tuple items are:
@@ -170,7 +170,7 @@ def localtime(seconds: _SupportsFloatOrIndex | None = None, /) -> struct_time:
     ...
 def mktime(time_tuple: _TimeTuple | struct_time, /) -> float:
     """
-    mktime(tuple) -> floating point number
+    mktime(tuple) -> floating-point number
 
     Convert a time tuple in local time to seconds since the Epoch.
     Note that mktime(gmtime(0)) will not generally return zero for most
@@ -183,7 +183,7 @@ def sleep(seconds: _SupportsFloatOrIndex, /) -> None:
     sleep(seconds)
 
     Delay execution for a given number of seconds.  The argument may be
-    a floating point number for subsecond precision.
+    a floating-point number for subsecond precision.
     """
     ...
 def strftime(format: str, time_tuple: _TimeTuple | struct_time = ..., /) -> str:
@@ -246,7 +246,7 @@ def strptime(data_string: str, format: str = "%a %b %d %H:%M:%S %Y", /) -> struc
     ...
 def time() -> float:
     """
-    time() -> floating point number
+    time() -> floating-point number
 
     Return the current time in seconds since the Epoch.
     Fractions of a second may be present if the system clock provides them.
@@ -309,7 +309,7 @@ def process_time() -> float:
 if sys.platform != "win32":
     def clock_getres(clk_id: int, /) -> float:
         """
-        clock_getres(clk_id) -> floating point number
+        clock_getres(clk_id) -> floating-point number
 
         Return the resolution (precision) of the specified clock clk_id.
         """

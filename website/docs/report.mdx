@@ -20,10 +20,6 @@ description: Measure and enforce type coverage in your Python codebase with Pyre
 - [`pyrefly coverage report`](#generating-a-json-report) emits a JSON report with per-module
   statistics.
 
-:::warning Experimental
-The output format and behavior may change in future releases without notice.
-:::
-
 ## How coverage is measured
 
 Coverage is counted over _typables_: function return types, function parameters, module-level
@@ -39,20 +35,37 @@ Only public symbols count: names without a leading underscore, plus anything in 
 stub is also analyzed (`--prefer-stubs=false` disables this). With `--public-only`, only symbols
 reachable from public modules via re-export chains count: the library's public API.
 
+### Cython
+
+In [Cython pure Python mode](https://cython.readthedocs.io/en/latest/src/tutorial/pure.html),
+C-level declarations don't exist at runtime, so they aren't counted as typables:
+
+- `@cython.cfunc` functions and methods.
+- Module-level names assigned from `cython.declare`, `cython.typedef`, `cython.struct`,
+  `cython.union`, or `cython.fused_type`, as in `x = cython.declare(cython.int)`.
+- `@cython.internal` classes.
+- Fields of extension types (`@cython.cclass`, or `@cython.total_ordering`, which also creates
+  one), except dynamic attributes of a type that declares or inherits `__dict__`.
+- The C-only special methods `__dealloc__`, `__richcmp__`, `__getbuffer__`, and `__releasebuffer__`.
+
+An extension type's `__cinit__` counts as its `__new__`, so a stub must declare `__new__` (not
+`__init__`) to cover it.
+
+:::note[Limitations]
+
+- `.pxd` files aren't read, so `public` and `readonly` fields aren't counted.
+- Keyword declarations such as `cython.declare(x=cython.int)` aren't recognized.
+
+:::
+
 ## Checking coverage against a threshold
 
 ```sh
 pyrefly coverage check robot/ --fail-under 60
 ```
 
-On success it prints a one-line summary and exits 0:
-
-```
- INFO type coverage 66.67% (4 of 6 typable)
-```
-
-Otherwise it exits non-zero and reports every offending symbol in the same style as
-`pyrefly check`, as `coverage-missing` (no annotations at all) or `coverage-partial` (only some):
+It reports every offending symbol in the same style as `pyrefly check`, as `coverage-missing`
+(no annotations at all) or `coverage-partial` (only some), followed by a one-line summary:
 
 ```
  WARN `walk` is not fully typed [coverage-partial]
@@ -72,8 +85,16 @@ Otherwise it exits non-zero and reports every offending symbol in the same style
 ERROR type coverage 66.67% (4 of 6 typable) is below the 100.00% threshold
 ```
 
-With `--strict`, annotations that resolve to `Any` count as untyped. The findings format is
-configurable with `--output-format`. See `pyrefly coverage check --help` for all flags.
+When coverage meets the threshold, the findings are printed but the summary is INFO and the exit
+code is 0:
+
+```
+ INFO type coverage 66.67% (4 of 6 typable)
+```
+
+Findings go to stdout, the summary to stderr. With `--strict`, annotations that resolve to `Any`
+count as untyped. `--output-format` controls the findings format.
+See `pyrefly coverage check --help` for all flags.
 
 ## Generating a JSON report
 

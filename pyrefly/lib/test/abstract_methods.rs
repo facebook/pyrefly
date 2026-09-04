@@ -43,6 +43,30 @@ circle = Circle()
 );
 
 testcase!(
+    test_direct_abc_without_abstract_methods_instantiation_error,
+    r#"
+from abc import ABC, ABCMeta
+
+class DirectABC(ABC):
+    pass
+
+class IndirectABC(DirectABC):
+    pass
+
+class DirectABCMeta(metaclass=ABCMeta):
+    pass
+
+class IndirectABCMeta(DirectABCMeta):
+    pass
+
+direct_abc = DirectABC()  # E: Cannot instantiate `DirectABC`
+indirect_abc = IndirectABC()
+direct_abc_meta = DirectABCMeta()  # E: Cannot instantiate `DirectABCMeta`
+indirect_abc_meta = IndirectABCMeta()
+"#,
+);
+
+testcase!(
     test_polymorphic_calls_ok,
     r#"
 from abc import ABC, abstractmethod
@@ -397,6 +421,164 @@ class Child(Base):
 );
 
 testcase!(
+    test_super_abstract_raise_not_implemented,
+    r#"
+from abc import ABC, abstractmethod
+
+class Foo(ABC):
+    @abstractmethod
+    def fn(self) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def fn2(self) -> None: ...
+
+class Bar(Foo):
+    def fn(self) -> None:
+        super().fn()  # E: Method `fn` inherited from class `Foo` has no implementation and cannot be accessed via `super()`
+
+    def fn2(self) -> None:
+        super().fn2()  # E: Method `fn2` inherited from class `Foo` has no implementation and cannot be accessed via `super()`
+"#,
+);
+
+testcase!(
+    test_super_abstract_raise_not_implemented_forms,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def with_msg(self) -> None:
+        raise NotImplementedError("msg")
+
+    @abstractmethod
+    def with_call(self) -> None:
+        raise NotImplementedError()
+
+    @abstractmethod
+    def with_doc(self) -> None:
+        """placeholder"""
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def processor(self) -> bool:
+        raise NotImplementedError
+
+class Child(Base):
+    def with_msg(self) -> None:
+        super().with_msg()  # E: Method `with_msg` inherited from class `Base` has no implementation and cannot be accessed via `super()`
+
+    def with_call(self) -> None:
+        super().with_call()  # E: Method `with_call` inherited from class `Base` has no implementation and cannot be accessed via `super()`
+
+    def with_doc(self) -> None:
+        super().with_doc()  # E: Method `with_doc` inherited from class `Base` has no implementation and cannot be accessed via `super()`
+
+    @property
+    def processor(self) -> bool:
+        return super().processor  # E: Method `processor` inherited from class `Base` has no implementation and cannot be accessed via `super()`
+"#,
+);
+
+testcase!(
+    test_call_abstract_classmethod_raise_not_implemented,
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @classmethod
+    @abstractmethod
+    def build(cls) -> "Base":
+        raise NotImplementedError()
+
+Base.build()  # E: Cannot call abstract method `Base.build`
+
+class Child(Base):
+    @classmethod
+    def build(cls) -> "Base":
+        return super().build()  # E: Method `build` inherited from class `Base` has no implementation and cannot be accessed via `super()`
+"#,
+);
+
+testcase!(
+    test_inherited_not_implemented_classmethod_matches_ellipsis,
+    r#"
+from abc import ABC, abstractmethod
+
+class Solver(ABC):
+    @classmethod
+    @abstractmethod
+    def command(cls) -> str:
+        raise NotImplementedError()
+
+    @classmethod
+    @abstractmethod
+    def inits(cls) -> str: ...
+
+class Z3(Solver):
+    @classmethod
+    def command(cls) -> str:
+        return "z3"
+
+    @classmethod
+    def inits(cls) -> str:
+        return "z3-init"
+
+# Inherits both placeholders, so calling either one raises at runtime.
+class Portfolio(Solver):
+    pass
+
+solver_selector = {"z3": Z3, "portfolio": Portfolio}
+
+def start(solver: str) -> None:
+    # A `raise NotImplementedError` body is reported exactly like `...`.
+    solver_selector[solver].command()  # E: Cannot call abstract method `Solver.command`
+    solver_selector[solver].inits()  # E: Cannot call abstract method `Solver.inits`
+
+Portfolio.command()  # E: Cannot call abstract method `Solver.command`
+Portfolio.inits()  # E: Cannot call abstract method `Solver.inits`
+Z3.command()
+"#,
+);
+
+testcase!(
+    test_super_abstract_not_implemented_still_allowed,
+    r#"
+from abc import ABC, abstractmethod
+
+class Plain:
+    def method(self) -> int:
+        raise NotImplementedError
+
+class PlainChild(Plain):
+    def method(self) -> int:
+        return super().method()
+
+Plain().method()
+PlainChild().method()
+
+class Base(ABC):
+    @abstractmethod
+    def deferred(self, other: object) -> bool:
+        return NotImplemented
+
+    @abstractmethod
+    def method(self) -> int:
+        print(1)
+        raise NotImplementedError
+
+class Child(Base):
+    def deferred(self, other: object) -> bool:
+        return super().deferred(other)
+
+    def method(self) -> int:
+        return super().method()
+"#,
+);
+
+testcase!(
     test_abstract_property,
     TestEnv::new().enable_implicit_abstract_class_error(),
     r#"
@@ -474,6 +656,31 @@ class D(C):  # E: Class `D` has unimplemented abstract members: `bar`
 );
 
 testcase!(
+    test_inherited_metaclass_and_explicit_abstractness,
+    TestEnv::new().enable_implicit_abstract_class_error(),
+    r#"
+from abc import ABCMeta, abstractmethod
+class M(ABCMeta): ...
+class A(metaclass=M): ...
+class B(A, metaclass=ABCMeta):
+    @abstractmethod
+    def f(self) -> None: ...
+    "#,
+);
+
+testcase!(
+    test_inherited_abcmeta_is_implicitly_abstract,
+    TestEnv::new().enable_implicit_abstract_class_error(),
+    r#"
+from abc import ABCMeta, abstractmethod
+class M(ABCMeta): ...
+class A(metaclass=M):  # E: has unimplemented abstract members: `f`
+    @abstractmethod
+    def f(self) -> None: ...
+    "#,
+);
+
+testcase!(
     test_uninit_classvar_abc,
     r#"
 # To align with mypy and pyright, we do not consider uninitialized class vars on abstract classes to be abstract
@@ -482,7 +689,7 @@ from typing import ClassVar, final
 @final
 class A(ABC):
     x: ClassVar[int]
-a = A()
+a = A()  # E: Cannot instantiate `A`
 "#,
 );
 
@@ -570,4 +777,201 @@ class A(metaclass=Meta2):
         pass
 A()  # E: Cannot instantiate `A`
     "#,
+);
+
+testcase!(
+    test_final_class_with_unimplemented_sequence_methods,
+    r#"
+from typing import final
+from collections.abc import Sequence
+@final
+class A[T](Sequence[T]): # E: cannot have unimplemented abstract members: `__len__`, `__getitem__`
+    ...
+    "#,
+);
+
+testcase!(
+    test_final_class_with_unimplemented_collection_and_reversible_methods,
+    r#"
+from typing import final
+from collections.abc import Collection, Reversible
+@final
+class B[T](Collection[T], Reversible[T]): # E: cannot have unimplemented abstract members: `__iter__`, `__contains__`, `__len__`, `__reversed__`
+    ...
+    "#,
+);
+
+testcase!(
+    test_final_class_with_unimplemented_abstract_methods,
+    r#"
+from typing import final
+from abc import ABC, abstractmethod
+
+class A1(ABC):
+    @abstractmethod
+    def a(): ...
+
+class B1(ABC):
+    @abstractmethod
+    def b(): ...
+
+class C(A1, B1): ...
+
+@final
+class D(C): ... # E: cannot have unimplemented abstract members: `a`, `b`
+    "#,
+);
+
+// Even though a TypedDict's fake TypedDictFallback base inherits from Mapping, which has abstract
+// methods, we must never consider a TypedDict to have unimplemented abstract methods.
+testcase!(
+    test_typed_dict_is_not_abstract,
+    r#"
+from typing import TypedDict, final
+@final
+class FinalTD(TypedDict):
+    year: int
+"#,
+);
+
+// Tests for invalid-abstract-method: @abstractmethod in a non-abstract class.
+
+testcase!(
+    test_invalid_abstract_method_basic,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod
+    def fn(self) -> int:  # E: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_multiple,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod
+    def fn(self) -> int:  # E: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+        ...
+
+    @abstractmethod
+    def gn(self) -> str:  # E: `Foo.gn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_abc_base_exempt,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import ABC, abstractmethod
+
+class Foo(ABC):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_abcmeta_exempt,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import ABCMeta, abstractmethod
+
+class Foo(metaclass=ABCMeta):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_transitive_abc_exempt,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    pass
+
+class Child(Base):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_protocol_exempt,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+from typing import Protocol
+
+class Foo(Protocol):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_abstract_property,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+
+class Foo:
+    @property
+    @abstractmethod
+    def fn(self) -> int:  # E: `Foo.fn` is decorated with `@abstractmethod` but `Foo` is not an abstract class
+        ...
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_inherited_only_no_error,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import ABC, abstractmethod
+
+class Base(ABC):
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+
+class Child(Base):
+    # Child only inherits the abstract method, does not define its own @abstractmethod
+    pass
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_tuple_child_is_not_abstract,
+    TestEnv::new().enable_invalid_abstract_method_error(),
+    r#"
+from abc import abstractmethod
+class A(tuple):
+    @abstractmethod
+    def f(self): ...  # E: `A` is not an abstract class
+"#,
+);
+
+testcase!(
+    test_invalid_abstract_method_off_by_default,
+    r#"
+from abc import abstractmethod
+
+class Foo:
+    @abstractmethod
+    def fn(self) -> int:
+        ...
+"#,
 );

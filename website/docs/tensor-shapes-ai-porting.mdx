@@ -1,6 +1,6 @@
 ---
 title: Agent Skill for Tensor Shape Porting
-description: How to use Pyrefly's agent skill to automatically add tensor shape annotations to PyTorch models.
+description: How to use Pyrefly's agent skill to add tensor shape annotations to PyTorch models.
 ---
 
 {/*
@@ -12,99 +12,111 @@ description: How to use Pyrefly's agent skill to automatically add tensor shape 
 
 # Agent Skill for Tensor Shape Porting
 
-Pyrefly includes a skill for [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview)
-that can automatically port PyTorch models to use tensor shape annotations. The
-skill runs a structured, multi-step workflow — auditing ops, inventorying
-parameters, probing shapes with `reveal_type`, restructuring for tracking, and
-verifying the result — that produces a fully annotated port file.
+Pyrefly includes a skill that guides coding agents through adding shape
+annotations to a PyTorch model. It validates the environment, maps the model's
+shape evidence, ports one module at a time, probes Pyrefly's inference, and
+reports any boundaries that remain untracked.
 
-## Where the skill lives
+## Use the skill
 
-The skill is a directory in the Pyrefly source tree:
+The skill and its supporting files live in the Pyrefly source tree:
 
 ```
 tensor-shapes/skills/add-shape-types-to-torch-model/
 ```
 
-You can either copy the skill into your configuration and use a
-slash command like `/add-shape-types-to-torch-model` to invoke it, or you
-can just point your agent at the skill file and ask it to follow the steps.
+Copy that directory into your agent's skill configuration, or point the agent at
+`SKILL.md` and ask it to follow the workflow. If you install it as a local skill,
+start a new agent session so the agent discovers it.
 
+A useful initial request is:
 
-## What should the agent do?
+```text
+Read and follow add-shape-types-to-torch-model/SKILL.md. Add shape annotations
+to <model path>, preserve runtime behavior and public APIs, use the project
+Pyrefly command below, and report any operations whose shapes remain untracked.
+```
 
-The skill will:
+## Point the agent at your environment
 
-1. **Audit ops** — check every `nn.Module` and `torch`/`F.` function against
-   fixture stubs and the DSL registry, adding missing stubs before proceeding.
-2. **Inventory the original** — list every class, method, and function, noting
-   which constructor parameters are `Dim` vs `int`.
-3. **Port each module in dependency order** — for each module, inventory
-   parameters, type the constructor, probe the forward with `reveal_type`,
-   restructure bare results for tracking, write the forward with `assert_type`,
-   and fill a post-module checklist.
-4. **Verify** — run `verify_port.sh`, audit bare `assert_type` calls, compare
-   against the style guide, and produce a completion report.
+Give the agent the exact environment and check command instead of letting it
+guess or use a globally installed Pyrefly. For a typical project-local virtual
+environment:
 
-## The iterate-and-reflect loop
+```text
+Python: .venv/bin/python
+Pyrefly: .venv/bin/pyrefly
+Check: .venv/bin/pyrefly check
+```
 
-A single pass usually gets 80-90% of the way there. The remaining gaps —
-bridge dims, optional dims, parameterized configs — benefit from a second pass
-where the AI reflects on what it missed.
+Before editing, the agent should:
 
-The workflow:
+1. run `.venv/bin/pyrefly dump-config <representative model file>`;
+2. run the check command on a known-good file and on the target to establish a
+   baseline; and
+3. confirm that the selected environment contains the real PyTorch package,
+   `pyrefly-torch-stubs`, and `shape_extensions`.
 
-1. **First pass.** Invoke the skill. Review the completion report, paying
-   attention to the bare `assert_type` fraction and any `type: ignore` counts.
-2. **Reflect.** Ask the AI to re-read the skill file and compare what it did
-   against what the skill prescribes. A prompt like:
+Use the repository's own command when it differs. A project may need
+`--config`, a package search path, or a focused file list; include those in the
+command you give the agent. This explicit handoff is especially important when
+an editor extension bundles a different Pyrefly version from the one in the
+project virtual environment.
 
-   ```
-   Re-read the add-shape-types-to-torch-model skill and reflect on the port you
-   just produced. What did you miss? What could be improved?
-   ```
+## What the skill does
 
-   This typically surfaces missed restructuring opportunities — cases where the
-   AI used a bare `assert_type` or annotation fallback without attempting all
-   the restructuring steps in Step 4.
+The workflow has five phases:
 
-3. **Second pass.** Ask it to fix the issues it identified. This usually
-   converges: the bare fraction drops and shaped coverage improves.
+1. **Validate setup.** Resolve the check command and baseline, then decide
+   whether shared stub changes are in scope. For application code, the default
+   is to leave shared stubs unchanged and report gaps.
+2. **Collect shape evidence.** Read existing annotations, comments, runtime
+   assertions, reshape operations, layer dimensions, and tests before inventing
+   symbolic names.
+3. **Audit operations.** Check whether each shape-changing operation is covered
+   by a stub signature, shape-transform rule, special handler, or a gradual
+   boundary.
+4. **Port module by module.** Add boundary annotations, probe intermediate types
+   with temporary `reveal_type` calls, and contain genuinely dynamic regions
+   without restructuring runtime code.
+5. **Verify and report.** Run Pyrefly, review suppressions and gradual tensors,
+   and report remaining stub or shape-logic gaps.
 
-Most models converge in 2-3 iterations. Complex models with many dynamic
-patterns (e.g., `nn.Sequential(*list)`, conditional branching, late-initialized
-buffers) may need one more round.
+The skill preserves runtime behavior. Rewriting loops, containers, factories,
+or public APIs to improve inference is separate work that requires your
+approval.
 
-## Reading the output
+## Verification
 
-The skill produces a `verify_port.sh` report with these key metrics:
+`pyrefly check` and the project's tests are the source of truth. The maintained
+skill still uses `verify_port.sh`, but only as an advisory scan for common
+quality issues:
 
-| Metric | What it means |
-|--------|--------------|
-| **`ig` (ignore)** | `type: ignore` comments. Lower is better. Each should have a category (algebraic gap, conditional equality, stub gap). |
-| **`bs` (bare sig)** | Bare `Tensor` in function signatures. Should be 0 for well-typed modules. |
-| **`bv` (bare var)** | Bare `Tensor` in local variable annotations. Lower is better. |
-| **`sh` (shaped)** | `assert_type` calls with full shapes (e.g., `Tensor[B, D]`). Higher is better. |
-| **`ba` (bare assert)** | `assert_type(x, Tensor)` — tracking gaps. Lower is better. Each should have a root-cause comment. |
-| **`sm` (smoke)** | Smoke test functions. At least 1-2 per model. |
+```bash
+tensor-shapes/skills/add-shape-types-to-torch-model/verify_port.sh path/to/model.py
+```
 
-A good port has high `sh`, low `ba`, and every bare assert documented with a
-root cause tracing back to a restructuring receipt.
+The script reports `type: ignore` comments, bare `Tensor` annotations,
+constructor parameters that may need `Int`, shaped versus bare `assert_type`
+checks, and in-file smoke tests. It is most useful for standalone model files
+and reference-corpus contributions. It does not type-check the code, multiline
+constructs can confuse its counts, and production repositories may skip it when
+its corpus-oriented checks do not fit their conventions.
 
-## When to intervene
+A completed port should include the exact check command and result, the files or
+modules covered, remaining gradual or cast boundaries with their reasons, and
+any improvements needed in the shared stubs or shape logic.
 
-The AI workflow handles most patterns automatically, but some decisions require
-domain knowledge:
+## When your input is needed
 
-- **Bridge dims.** When an untracked section (e.g., a feature extractor built
-  with `nn.Sequential(*list)`) connects to a tracked downstream module, you may
-  need to decide which dimension to promote to a class type parameter.
-- **Missing stubs.** If the model uses a library without fixture stubs, you'll
-  need to add minimal stubs for the specific ops used.
-- **Architectural choices.** When a model has multiple valid ways to restructure
-  for tracking (e.g., separating the first iteration of a loop vs. using a typed
-  interface), domain knowledge about the model's invariants can guide the better
-  choice.
-- **Config parameterization.** Deciding which config fields should become `Dim`
-  type parameters (and which modules extract which parameters) is often a design
-  decision about the model's API.
+The agent should pause or ask for guidance when the work would:
+
+- narrow an existing public API from `int` to `Int[X]`;
+- change runtime structure to improve shape inference;
+- modify shared stubs rather than contain and report a local gap; or
+- choose which runtime dimension should become a shared symbolic parameter
+  across otherwise dynamic components.
+
+If a first pass leaves unexplained gaps, ask the agent to re-read the skill,
+compare the result with the workflow, and make one focused follow-up pass. Keep
+only intentional, documented boundaries in the final port.

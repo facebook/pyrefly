@@ -6,6 +6,9 @@
  */
 
 use crate::pydantic_testcase;
+use crate::test::pydantic::util::pydantic_env;
+use crate::test::util::TestEnv;
+use crate::testcase;
 
 pydantic_testcase!(
     test_root_model_basic,
@@ -18,6 +21,22 @@ m2 = IntRootModel("abc")
 m3 = IntRootModel(root=123)
 m4 = IntRootModel()  # E: Missing argument `root`
 m5 = IntRootModel(123, 456)  # E: Expected 1 positional argument, got 2
+"#,
+);
+
+pydantic_testcase!(
+    test_root_model_field_default,
+    r#"
+from pydantic import Field, RootModel
+
+class DefaultRootModel(RootModel[int]):
+    root: int = Field(default=0)
+
+class DefaultFactoryRootModel(RootModel[int]):
+    root: int = Field(default_factory=int)
+
+DefaultRootModel()
+DefaultFactoryRootModel()
 "#,
 );
 
@@ -102,8 +121,7 @@ m3 = B(3)
 );
 
 pydantic_testcase!(
-    bug =
-        "we should not error on the call with a str argument because it could be coercible to int ",
+    bug = "we should not error on the call with a str argument since it is coercible to int",
     test_directly_use_root_model,
     r#"
 from typing import Any, assert_type
@@ -171,6 +189,30 @@ class B(A):
 m1 = B(3)
 m2 = B("1") # E: Argument `Literal['1']` is not assignable to parameter `root` with type `int` in function `B.__init__`
 m3 = A("1") # E: Argument `Literal['1']` is not assignable to parameter `root` with type `int` in function `A.__init__
+"#,
+);
+
+fn pydantic_env_with_pyre_extensions() -> TestEnv {
+    let mut env = pydantic_env();
+    env.add("pyre_extensions", "class PyreReadOnly[T]: pass");
+    env
+}
+
+testcase!(
+    bug = "Strict aliases nested inside a special form in a base class type argument are not detected",
+    test_strict_nested_in_special_form,
+    pydantic_env_with_pyre_extensions(),
+    r#"
+from pydantic import RootModel, StrictInt
+from pyre_extensions import PyreReadOnly
+
+class StrictList(RootModel[list[StrictInt]]): ...
+class ReadOnlyStrict(RootModel[PyreReadOnly[StrictInt]]): ...
+class ReadOnlyStrictList(RootModel[PyreReadOnly[list[StrictInt]]]): ...
+
+StrictList(["1"])  # E: Argument `list[str]` is not assignable to parameter `root` with type `list[int]`
+ReadOnlyStrict("1")  # E: Argument `Literal['1']` is not assignable to parameter `root` with type `int`
+ReadOnlyStrictList(["1"])  # should error: `StrictInt` makes the root model strict
 "#,
 );
 

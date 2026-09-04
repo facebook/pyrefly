@@ -14,10 +14,9 @@ import WhyPyrefly from '../components/landing-page/whyPyrefly';
 import PyreflyVideo from '../components/landing-page/PyreflyVideo';
 import LandingPageSection from '../components/landing-page/landingPageSection';
 import LandingPageHeader from '../components/landing-page/landingPageHeader';
-import IDECarousel from '../components/landing-page/IDECarousel';
 import Banner from '../components/Banner';
-import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import { log, LoggingEvent } from '../utils/LoggingUtils';
+import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 
 export default function LandingPage(): React.ReactElement {
     const { siteConfig } = useDocusaurusContext();
@@ -29,17 +28,15 @@ export default function LandingPage(): React.ReactElement {
             description={siteConfig.description}
         >
             <Banner
-                text="🎉 Pyrefly v1.1 is now available!"
+                text="📝 Help shape Pyrefly by taking our user survey!"
                 dismissible={true}
                 cta={{
-                    text: 'Read the blog',
-                    href: '/blog/v1.1',
+                    text: 'Take the survey',
+                    href: 'https://forms.gle/dx6GrzHX83sMjT6L9',
+                    external: true,
                     onClick: () =>
                         log(LoggingEvent.CLICK, {
-                            button_id: 'banner_v1.1_blog',
-                            // Use the beacon transport so the event survives the
-                            // synchronous navigation that follows this click.
-                            transport_type: 'beacon',
+                            button_id: 'banner_user_survey',
                         }),
                 }}
             />
@@ -51,10 +48,6 @@ export default function LandingPage(): React.ReactElement {
             <LandingPageSection
                 id="why-pyrefly-section"
                 child={<WhyPyrefly />}
-            />
-            <LandingPageSection
-                id="ide-carousel-section"
-                child={<IDECarousel />}
             />
             <LandingPageSection
                 id="performance-comparison-section"

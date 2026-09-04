@@ -16,6 +16,17 @@ Invalid --search-path: `*/does_not_exist` does not exist (glob)
 [1]
 ```
 
+## We do not report errors from imported modules by default
+
+```scrut
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 12" > $TMPDIR/shown1.py && \
+> echo "import shown1; y: int = shown1.x" > $TMPDIR/shown2.py && \
+> $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --output-format=min-text --min-severity=warn
+ERROR */shown2.py:1:* (glob)
+[1]
+```
+
 ## We do report from nested with --check-all
 
 ```scrut
@@ -23,10 +34,22 @@ $ touch $TMPDIR/pyrefly.toml && \
 > echo "x: str = 12" > $TMPDIR/shown1.py && \
 > echo "import shown1; y: int = shown1.x" > $TMPDIR/shown2.py && \
 > $PYREFLY check --python-version 3.13.0 $TMPDIR/shown2.py --check-all --output-format=min-text --min-severity=warn
+ WARN ast.pyi:1230:16-21: `slice` is deprecated [deprecated]
+ WARN ast.pyi:1234:13-18: `slice` is deprecated [deprecated]
+ WARN ast.pyi:2176:36-44: `ExtSlice` is deprecated [deprecated]
+ WARN ast.pyi:2177:33-38: `Index` is deprecated [deprecated]
+ WARN ast.pyi:2178:33-38: `Suite` is deprecated [deprecated]
+ WARN ast.pyi:2179:35-42: `AugLoad` is deprecated [deprecated]
+ WARN ast.pyi:2180:36-44: `AugStore` is deprecated [deprecated]
+ WARN ast.pyi:2181:33-38: `Param` is deprecated [deprecated]
+ WARN importlib/abc.pyi:83:50-64: `ResourceLoader` is deprecated [deprecated]
  WARN importlib/abc.pyi:147:9-41: `ResourceReader` is deprecated [deprecated]
+ WARN importlib/machinery.pyi:14:5-51: `WindowsRegistryFinder` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:49:9-29: `contents` is deprecated [deprecated]
  WARN importlib/resources/__init__.pyi:79:41-73: `ResourceReader` is deprecated [deprecated]
  WARN importlib/resources/_common.pyi:8:41-55: `ResourceReader` is deprecated [deprecated]
+ WARN importlib/resources/_common.pyi:31:59-73: `importlib.resources.abc.ResourceReader` is deprecated [deprecated]
+ WARN importlib/resources/abc.pyi:58:32-46: `ResourceReader` is deprecated [deprecated]
 */shown*.py:1:* (glob)
 */shown*.py:1:* (glob)
 [1]
@@ -56,7 +79,6 @@ ERROR `+` is not supported * (glob)
   | |   |
   | |   has type `Literal['2']`
   | has type `Literal[1]`
-  |
   Argument * is not assignable * (glob)
 [1]
 ```
@@ -66,6 +88,43 @@ $ touch $TMPDIR/pyrefly.toml && \
 > echo "1 + '2'" > $TMPDIR/bad.py && \
 > $PYREFLY check $TMPDIR/bad.py --output-format=min-text
 ERROR */bad.py:1:1-8: `+` is not supported * (glob)
+[1]
+```
+
+## `--output` emits multiple formats from one check
+
+An output without a format prefix uses `--output-format`; an explicit prefix
+overrides it for that destination.
+
+```scrut
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 0" > $TMPDIR/bad_multi.py && \
+> $PYREFLY check $TMPDIR/bad_multi.py --summary=none --relative-to "$TMPDIR" \
+>     --output-format=json --output=min-text:- \
+>     --output="$TMPDIR/diagnostics.json" \
+>     --output="sarif:$TMPDIR/diagnostics.sarif"; rc=$?; \
+> $JQ -r '.errors[0].name' $TMPDIR/diagnostics.json; \
+> $JQ -r '.runs[0].results[0].ruleId' $TMPDIR/diagnostics.sarif; \
+> exit $rc
+ERROR bad_multi.py:1:10-11: `Literal[0]` is not assignable to `str` [bad-assignment]
+bad-assignment
+bad-assignment
+[1]
+```
+
+## `full-text-with-github` preserves diagnostics in GitHub Actions logs
+
+```scrut
+$ echo "x: str = 0" > $TMPDIR/bad_combined.py && \
+> $PYREFLY check $TMPDIR/bad_combined.py --preset strict --output-format=full-text-with-github --summary=none
+ERROR `Literal[0]` is not assignable to `str` [bad-assignment]
+ --> */bad_combined.py:1:10 (glob)
+  |
+1 | x: str = 0
+  |    ---   ^
+  |    |
+  |    declared type
+::error file=*/bad_combined.py,line=1,col=10,endLine=1,endColumn=11,title=Pyrefly bad-assignment::`Literal[0]` is not assignable to `str` (glob)
 [1]
 ```
 
@@ -80,7 +139,6 @@ ERROR Argument `float` is not assignable * (glob)
   |
 2 | f(0.0)
   |   ^^^
-  |
 [1]
 ```
 
@@ -95,7 +153,6 @@ ERROR Argument `Literal[0]` is not assignable * (glob)
   |
 3 | f(λ)
   |   ^
-  |
 [1]
 ```
 
@@ -120,6 +177,16 @@ $ touch $TMPDIR/pyrefly.toml && \
 $ echo "x: str = 0" > $TMPDIR/test.py && \
 > $PYREFLY check $TMPDIR/test.py --warn=bad-assignment --min-severity=warn --output-format=min-text
  WARN */test.py:1:10-11: `Literal[0]` is not assignable to `str` [bad-assignment] (glob)
+[1]
+```
+
+## `--min-severity info` causes nonzero exit on directives
+
+```scrut
+$ touch $TMPDIR/pyrefly.toml && \
+> printf "from typing import reveal_type\nreveal_type(1)\n" > $TMPDIR/test.py && \
+> $PYREFLY check $TMPDIR/test.py --min-severity=info --output-format=min-text
+ INFO */test.py:2:12-15: revealed type: Literal[1] [reveal-type] (glob)
 [1]
 ```
 
@@ -172,4 +239,16 @@ $ touch $TMPDIR/pyrefly.toml && \
   </testsuite>
 </testsuites>
 [1]
+```
+
+## `--output-format sarif` emits a complete SARIF report
+
+```scrut
+$ SARIF_TEST=$(dirname $TEST_PY)/test/sarif && \
+> ($PYREFLY check --python-version 3.13.0 --output-format sarif --relative-to "$SARIF_TEST" \
+>     "$SARIF_TEST/diagnostics.py" > $TMPDIR/diagnostics.raw.sarif 2>/dev/null; test $? -eq 1) && \
+> $JQ '.runs[0].tool.driver.version = "0.0.0"' $TMPDIR/diagnostics.raw.sarif > $TMPDIR/actual.sarif && \
+> $JQ . "$SARIF_TEST/diagnostics.expected.sarif" > $TMPDIR/expected.sarif && \
+> diff -u $TMPDIR/expected.sarif $TMPDIR/actual.sarif
+[0]
 ```

@@ -106,6 +106,47 @@ impl LitInt {
         }
     }
 
+    fn to_bigint(&self) -> BigInt {
+        match &self.0 {
+            LitIntInner::Small(x) => BigInt::from(*x),
+            LitIntInner::Big(x) => (**x).clone(),
+        }
+    }
+
+    /// Adds two literal integers using Python's unbounded integer semantics.
+    pub fn add(&self, rhs: &Self) -> Self {
+        Self::new_big(self.to_bigint() + rhs.to_bigint())
+    }
+
+    /// Subtracts two literal integers using Python's unbounded integer semantics.
+    pub fn sub(&self, rhs: &Self) -> Self {
+        Self::new_big(self.to_bigint() - rhs.to_bigint())
+    }
+
+    /// Multiplies two literal integers using Python's unbounded integer semantics.
+    pub fn mul(&self, rhs: &Self) -> Self {
+        Self::new_big(self.to_bigint() * rhs.to_bigint())
+    }
+
+    /// Floor-divides two literal integers, returning `None` for a zero divisor.
+    pub fn floor_div(&self, rhs: &Self) -> Option<Self> {
+        let rhs = rhs.to_bigint();
+        let zero = BigInt::from(0);
+        if rhs == zero {
+            return None;
+        }
+
+        let lhs = self.to_bigint();
+        let quotient = &lhs / &rhs;
+        let remainder = lhs % &rhs;
+        let quotient = if remainder != zero && remainder.sign() != rhs.sign() {
+            quotient - 1
+        } else {
+            quotient
+        };
+        Some(Self::new_big(quotient))
+    }
+
     pub fn negate(&self) -> Self {
         match &self.0 {
             LitIntInner::Small(x) => match x.checked_neg() {

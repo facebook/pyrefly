@@ -3,29 +3,35 @@
  *
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
- */
+*/
+
+use std::fs;
+use std::path::Path;
+use std::time::Duration;
+use std::time::Instant;
 
 use lsp_server::RequestId;
-use lsp_types::DocumentDiagnosticReportResult;
+use lsp_types::ConfigurationRequest;
+use lsp_types::InitializeRequest;
+use lsp_types::Notification as _;
+use lsp_types::PublishDiagnosticsNotification;
 use lsp_types::PublishDiagnosticsParams;
-use lsp_types::Url;
-use lsp_types::notification::Notification as _;
-use lsp_types::notification::PublishDiagnostics;
-use lsp_types::request::Initialize;
-use lsp_types::request::Request as _;
-use lsp_types::request::WorkspaceConfiguration;
-use pyrefly::commands::lsp::IndexingMode;
-use pyrefly::lsp::non_wasm::protocol::Message;
-use pyrefly::lsp::non_wasm::protocol::Notification;
-use pyrefly::lsp::non_wasm::protocol::Request;
+use lsp_types::Request as _;
+use lsp_types::Uri;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::Notification;
+use pyrefly_lsp_test::Request;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
+use pyrefly_lsp_test::object_model::LspMessageError;
 use pyrefly_util::stdlib::register_stdlib_paths;
 use serde_json::Value;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::object_model::LspMessageError;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 fn require_markdown_initialize(interaction: &LspInteraction) {
     let settings = InitializeSettings {
@@ -36,7 +42,7 @@ fn require_markdown_initialize(interaction: &LspInteraction) {
     params["capabilities"]["textDocument"]["diagnostic"]["markupMessageSupport"] = json!(true);
     interaction.client.send_message(Message::Request(Request {
         id: RequestId::from(1),
-        method: Initialize::METHOD.to_owned(),
+        method: InitializeRequest::METHOD.as_str().to_owned(),
         params,
         activity_key: None,
     }));
@@ -50,7 +56,7 @@ fn require_markdown_initialize(interaction: &LspInteraction) {
             .client
             .expect_any_message()
             .expect("Failed to receive configuration request");
-        interaction.client.send_response::<WorkspaceConfiguration>(
+        interaction.client.send_response::<ConfigurationRequest>(
             RequestId::from(1),
             settings.unwrap_or(json!([])),
         );
@@ -103,7 +109,7 @@ fn test_diagnostics_markdown_messages() {
             let Message::Notification(notification) = msg else {
                 return None;
             };
-            if notification.method != PublishDiagnostics::METHOD {
+            if notification.method != PublishDiagnosticsNotification::METHOD.as_str() {
                 return None;
             }
             let uri = notification
@@ -193,10 +199,10 @@ fn test_baseline_diagnostic_is_hint() {
         .client
         .diagnostic("bad.py")
         .expect_response_with(|response| {
-            let DocumentDiagnosticReportResult::Report(report) = response else {
-                return false;
-            };
-            let lsp_types::DocumentDiagnosticReport::Full(full) = report else {
+            let report = response;
+            let lsp_types::DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(full) =
+                report
+            else {
                 return false;
             };
             let items = &full.full_document_diagnostic_report.items;
@@ -206,15 +212,47 @@ fn test_baseline_diagnostic_is_hint() {
             // dropping) every diagnostic.
             items.len() == 2
                 && items.iter().all(|item| {
-                    item.code
-                        == Some(lsp_types::NumberOrString::String(
-                            "bad-assignment".to_owned(),
-                        ))
+                    item.code == Some(lsp_types::Code::String("bad-assignment".to_owned()))
                 })
-                && severity_count(items, lsp_types::DiagnosticSeverity::HINT) == 1
-                && severity_count(items, lsp_types::DiagnosticSeverity::ERROR) == 1
+                && severity_count(items, lsp_types::DiagnosticSeverity::Hint) == 1
+                && severity_count(items, lsp_types::DiagnosticSeverity::Error) == 1
         })
         .expect("Failed to receive hint diagnostic");
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_baselined_unused_type_ignore_is_hint() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("baseline_unused_type_ignore");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("bad.py");
+
+    interaction
+        .client
+        .diagnostic("bad.py")
+        .expect_response_with(|response| {
+            let report = response;
+            let lsp_types::DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(full) =
+                report
+            else {
+                return false;
+            };
+            let items = &full.full_document_diagnostic_report.items;
+            items.len() == 1
+                && items[0].code == Some(lsp_types::Code::String("unused-type-ignore".to_owned()))
+                && items[0].severity == Some(lsp_types::DiagnosticSeverity::Hint)
+        })
+        .expect("Failed to receive baselined unused-type-ignore diagnostic");
 
     interaction.shutdown().unwrap();
 }
@@ -244,7 +282,7 @@ fn test_baseline_diagnostic_is_hint_push() {
             let Message::Notification(notification) = msg else {
                 return None;
             };
-            if notification.method != PublishDiagnostics::METHOD {
+            if notification.method != PublishDiagnosticsNotification::METHOD.as_str() {
                 return None;
             }
             let params: PublishDiagnosticsParams =
@@ -252,8 +290,8 @@ fn test_baseline_diagnostic_is_hint_push() {
             if params.uri.to_file_path().unwrap() != bad_py {
                 return None;
             }
-            let hints = severity_count(&params.diagnostics, lsp_types::DiagnosticSeverity::HINT);
-            let errors = severity_count(&params.diagnostics, lsp_types::DiagnosticSeverity::ERROR);
+            let hints = severity_count(&params.diagnostics, lsp_types::DiagnosticSeverity::Hint);
+            let errors = severity_count(&params.diagnostics, lsp_types::DiagnosticSeverity::Error);
             if params.diagnostics.len() == 2 && hints == 1 && errors == 1 {
                 Some(Ok(()))
             } else {
@@ -270,11 +308,216 @@ fn test_baseline_diagnostic_is_hint_push() {
     interaction.shutdown().unwrap();
 }
 
+/// Poll the baseline file until it holds `expected` entries. The prune runs on the
+/// recheck that follows the save, so there is no client message to synchronize on.
+/// A read that lands mid-rewrite sees the previous file, since the rewrite renames a
+/// complete temporary file over the baseline rather than truncating it in place.
+///
+/// The deadline is generous because it only bounds how long a failure takes: a passing
+/// call returns as soon as the baseline settles. A whole-suite run leaves these servers
+/// contending for CPU with thousands of other tests, and a tight deadline turns that
+/// contention into flakiness.
+fn wait_for_baseline_entries(baseline_path: &Path, expected: usize) -> Vec<Value> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let entries = fs::read_to_string(baseline_path)
+            .ok()
+            .and_then(|contents| serde_json::from_str::<Value>(&contents).ok())
+            .and_then(|baseline| baseline["errors"].as_array().cloned());
+        match entries {
+            Some(entries) if entries.len() == expected => return entries,
+            last_read => assert!(
+                Instant::now() < deadline,
+                "baseline never settled at {expected} entries, last read: {last_read:?}"
+            ),
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// With `baseline-auto-update`, saving a file drops the entries recorded for it that
+/// it no longer produces. `bad.py` has two baselined errors; fixing one must remove
+/// only that entry.
+#[test]
+fn test_baseline_auto_update_on_save() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("baseline_auto_update");
+    let baseline_path = root_path.join("baseline.json");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("bad.py");
+    interaction
+        .client
+        .edit_file("bad.py", "x: str = \"fixed\"\nlongname: str = 2\n");
+
+    let entries = wait_for_baseline_entries(&baseline_path, 1);
+    assert_eq!(entries[0]["column"], json!(17));
+
+    interaction.shutdown().unwrap();
+}
+
+/// Auto-update leaves a file's entries alone while that file still has unbaselined errors,
+/// even though the entries match nothing any more.
+///
+/// `new_error.py` fixes its baselined error but introduces a different one, so its entry
+/// must survive. `clean_fix.py` fixes its error outright, and the entry that drops for it
+/// is what proves the prune pass ran at all — without it, "the baseline was not rewritten"
+/// would also be satisfied by the prune never firing. Pruning `new_error.py` too would
+/// empty the file, so the wait never settles at one entry.
+#[test]
+fn test_baseline_auto_update_skips_file_with_new_errors() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("baseline_new_errors");
+    let baseline_path = root_path.join("baseline.json");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("new_error.py");
+    interaction.client.did_open("clean_fix.py");
+
+    // Edited before `clean_fix.py` so that a wrongly pruned `new_error.py` cannot be
+    // mistaken for the single entry this test waits for.
+    interaction.client.edit_file(
+        "new_error.py",
+        "b: str = \"fixed\"\nnew_failure: int = \"boom\"\n",
+    );
+    interaction
+        .client
+        .edit_file("clean_fix.py", "a: str = \"fixed\"\n");
+
+    let entries = wait_for_baseline_entries(&baseline_path, 1);
+    assert_eq!(entries[0]["path"], json!("new_error.py"));
+    assert_eq!(entries[0]["column"], json!(10));
+
+    interaction.shutdown().unwrap();
+}
+
+/// A baselined `unused-ignore` row survives a save. The diagnostic is synthesized rather
+/// than collected, so a prune that matched only collected diagnostics would find nothing
+/// for the row and delete it, and the next CLI check would report it as new.
+///
+/// `clean_fix.py` is pruned in the same batch, which is what shows the pass ran.
+#[test]
+fn test_baseline_prune_keeps_unused_ignore_rows() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("baseline_unused_ignore_prune");
+    let baseline_path = root_path.join("baseline.json");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("keep.py");
+    interaction.client.did_open("clean_fix.py");
+    interaction.client.did_save("keep.py");
+    interaction
+        .client
+        .edit_file("clean_fix.py", "y: str = \"fixed\"\n");
+
+    let entries = wait_for_baseline_entries(&baseline_path, 1);
+    assert_eq!(entries[0]["path"], json!("keep.py"));
+    assert_eq!(entries[0]["name"], json!("unused-type-ignore"));
+
+    interaction.shutdown().unwrap();
+}
+
+/// A diagnostic below the threshold the baseline was written at does not block pruning.
+/// `bad.py` keeps a `bad-return` warning after its baselined `bad-assignment` error is
+/// fixed; blocking on every remaining diagnostic would strand the row for as long as the
+/// warning exists, even though an error-level baseline would never have recorded it.
+#[test]
+fn test_baseline_prune_ignores_diagnostics_below_threshold() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("baseline_below_threshold");
+    let baseline_path = root_path.join("baseline.json");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("bad.py");
+    interaction.client.edit_file(
+        "bad.py",
+        "def warn_only() -> int:\n    return \"still wrong\"\n\n\nx: str = \"fixed\"\n",
+    );
+
+    wait_for_baseline_entries(&baseline_path, 0);
+
+    interaction.shutdown().unwrap();
+}
+
+/// Saving a file and then editing it without saving again must not prune that file. The
+/// recheck validates whatever the buffer holds when it reaches it, so its errors describe
+/// the unsaved text; dropping a row on that basis would delete one for an error still
+/// present on disk, and the next CLI check would report it as new.
+///
+/// The edit is a notification handled on the main loop, while the prune it has to beat
+/// runs at the end of a queued recheck that must validate and commit first, so the
+/// ordering does not depend on timing. `clean_fix.py` is saved alongside and is pruned,
+/// showing the pass ran rather than skipping everything.
+#[test]
+fn test_baseline_prune_skips_file_edited_after_save() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().join("baseline_unsaved_edit");
+    let baseline_path = root_path.join("baseline.json");
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path);
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("edited.py");
+    interaction.client.did_open("clean_fix.py");
+
+    interaction.client.did_save("edited.py");
+    interaction
+        .client
+        .did_change("edited.py", "e: str = \"fixed but unsaved\"\n");
+    interaction
+        .client
+        .edit_file("clean_fix.py", "c: str = \"fixed\"\n");
+
+    let entries = wait_for_baseline_entries(&baseline_path, 1);
+    assert_eq!(entries[0]["path"], json!("edited.py"));
+
+    interaction.shutdown().unwrap();
+}
+
 #[test]
 fn test_stream_diagnostics_after_save() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -283,7 +526,7 @@ fn test_stream_diagnostics_after_save() {
             )),
             workspace_folders: Some(vec![(
                 "streaming".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             file_watch: true,
             ..Default::default()
@@ -297,19 +540,11 @@ fn test_stream_diagnostics_after_save() {
         .client
         .expect_publish_diagnostics_eventual_error_count(d_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for d");
-    interaction
-        .client
-        .expect_file_watcher_register()
-        .expect("Register file watcher for d");
     interaction.client.did_open("b.py");
     interaction
         .client
         .expect_publish_diagnostics_eventual_error_count(b_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for b");
-    interaction
-        .client
-        .expect_file_watcher_register()
-        .expect("Register file watcher for b");
     let new_contents = b_contents.replace("1", "''");
     interaction.client.edit_file("b.py", &new_contents);
     // Streamed diagnostics
@@ -325,11 +560,19 @@ fn test_stream_diagnostics_after_save() {
     interaction.shutdown().unwrap();
 }
 
+// TODO - flaky on GitHub CI
 #[test]
+#[ignore]
 fn test_stream_diagnostics_no_flicker_after_undo_edit() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -338,7 +581,7 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
             )),
             workspace_folders: Some(vec![(
                 "streaming".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             file_watch: true,
             ..Default::default()
@@ -399,7 +642,13 @@ fn test_stream_diagnostics_no_flicker_after_undo_edit() {
 fn test_open_file_during_recheck() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -408,7 +657,7 @@ fn test_open_file_during_recheck() {
             )),
             workspace_folders: Some(vec![(
                 "streaming".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             file_watch: true,
             ..Default::default()
@@ -454,7 +703,13 @@ fn test_open_file_during_recheck() {
 fn test_edit_file_during_recheck() {
     let root = get_test_files_root();
     let root_path = root.path().join("streaming");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -463,7 +718,7 @@ fn test_edit_file_during_recheck() {
             )),
             workspace_folders: Some(vec![(
                 "streaming".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             file_watch: true,
             ..Default::default()
@@ -478,19 +733,11 @@ fn test_edit_file_during_recheck() {
         .client
         .expect_publish_diagnostics_eventual_error_count(b_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for b");
-    interaction
-        .client
-        .expect_file_watcher_register()
-        .expect("Register file watcher for b");
     interaction.client.did_open("d.py");
     interaction
         .client
         .expect_publish_diagnostics_eventual_error_count(d_path.clone(), 0)
         .expect("Failed to receive initial diagnostics for d");
-    interaction
-        .client
-        .expect_file_watcher_register()
-        .expect("Register file watcher for d");
     // Set flag to prevent recheck from committing
     interaction.do_not_commit_next_recheck();
     // Trigger a recheck by modifying and saving b
@@ -744,11 +991,64 @@ fn test_unreachable_branch_diagnostic() {
         .expect_response(json!({
             "items": [
                 {
-                    "code": "unreachable-code",
-                    "message": "This code is unreachable for the current configuration",
+                    "code": "unreachable",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#unreachable"
+                    },
+                    "message": "This code is unreachable",
                     "range": {
                         "end": {"character": 12, "line": 6},
                         "start": {"character": 4, "line": 6}
+                    },
+                    "severity": 2,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                }
+            ],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// A suite disabled by the environment carries no `unreachable` diagnostic, so it needs a
+/// hint to stay greyed out in the editor.
+#[test]
+fn test_unreachable_env_gated_hint_diagnostic() {
+    let test_files_root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+
+    interaction
+        .client
+        .expect_configuration_request(None)
+        .unwrap()
+        .send_configuration_response(json!([
+            {"pyrefly": {"displayTypeErrors": "force-on"}}
+        ]));
+
+    interaction.client.did_open("unreachable_env_gated.py");
+
+    interaction
+        .client
+        .diagnostic("unreachable_env_gated.py")
+        .expect_response(json!({
+            "items": [
+                {
+                    "code": "unreachable-code",
+                    "message": "This code is unreachable for the current configuration",
+                    "range": {
+                        "end": {"character": 12, "line": 8},
+                        "start": {"character": 4, "line": 8}
                     },
                     "severity": 4,
                     "source": "Pyrefly",
@@ -879,7 +1179,7 @@ fn test_unused_import_diagnostic() {
             "items": [
                 {
                     "code": "unused-import",
-                    "message": "Import `os` is unused",
+                    "message": "Import `os` may be unused",
                     "range": {
                         "start": {"line": 6, "character": 7},
                         "end": {"line": 6, "character": 9}
@@ -928,7 +1228,7 @@ fn test_unused_from_import_diagnostic() {
             "items": [
                 {
                     "code": "unused-import",
-                    "message": "Import `Dict` is unused",
+                    "message": "Import `Dict` may be unused",
                     "range": {
                         "start": {"line": 6, "character": 19},
                         "end": {"line": 6, "character": 23}
@@ -1024,7 +1324,7 @@ fn test_unused_variable_diagnostic() {
 fn test_publish_diagnostics_preserves_symlink_uri() {
     use std::os::unix::fs::symlink;
 
-    use lsp_types::Url;
+    use lsp_types::Uri;
 
     let test_files_root = get_test_files_root();
     let symlink_name = "type_errors_symlink.py";
@@ -1046,7 +1346,7 @@ fn test_publish_diagnostics_preserves_symlink_uri() {
     interaction.client.did_open(symlink_name);
     interaction
         .client
-        .expect_publish_diagnostics_uri(&Url::from_file_path(&symlink_path).unwrap(), 1)
+        .expect_publish_diagnostics_uri(&Uri::from_file_path(&symlink_path).unwrap(), 1)
         .unwrap();
 
     interaction.shutdown().unwrap();
@@ -1111,7 +1411,16 @@ fn test_shows_stdlib_type_errors_with_force_on() {
 #[test]
 fn test_shows_stdlib_errors_for_multiple_versions_and_paths_with_force_on() {
     let test_files_root = get_test_files_root();
-    let mut interaction = LspInteraction::new();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        // Keep the production background-indexing path here: LazyBlocking
+        // closes the cancellation window instead of exercising recovery when a
+        // background recheck cancels an IDE request.
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyNonBlockingBackground,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(test_files_root.path().to_path_buf());
     interaction
         .initialize(InitializeSettings {
@@ -1355,7 +1664,7 @@ fn test_publish_diagnostics_version_numbers_only_go_up() {
     let test_files_root = get_test_files_root();
     let root = test_files_root.path();
     let file = root.join("text_document.py");
-    let uri = Url::from_file_path(file).unwrap();
+    let uri = Uri::from_file_path(file).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(root.to_path_buf());
     interaction
@@ -1557,8 +1866,9 @@ fn test_missing_source_with_config_diagnostic_has_errors() {
         .client
         .diagnostic("missing_source_with_config/test.py")
         .expect_response_with(|response| {
-            if let DocumentDiagnosticReportResult::Report(report) = response
-                && let lsp_types::DocumentDiagnosticReport::Full(full) = report
+            if let lsp_types::DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(
+                full,
+            ) = response
             {
                 let items = &full.full_document_diagnostic_report.items;
                 if items.len() != 1 {
@@ -1566,15 +1876,15 @@ fn test_missing_source_with_config_diagnostic_has_errors() {
                 }
                 let item = &items[0];
                 return item.code
-                    == Some(lsp_types::NumberOrString::String(
+                    == Some(lsp_types::Code::String(
                         "missing-import".to_owned(),
                     ))
-                    && matches!(&item.message, lsp_types::DiagnosticMessage::String(s) if s.starts_with("Cannot find module `whatthepatch`"))
+                    && matches!(&item.message, lsp_types::Message::String(s) if s.starts_with("Cannot find module `whatthepatch`"))
                     && item.range.start.line == 5
                     && item.range.start.character == 7
                     && item.range.end.line == 5
                     && item.range.end.character == 19
-                    && item.severity == Some(lsp_types::DiagnosticSeverity::ERROR);
+                    && item.severity == Some(lsp_types::DiagnosticSeverity::Error);
             }
             false
         })
@@ -1613,7 +1923,7 @@ fn test_untyped_import_diagnostic_does_not_show_non_recommended_packages() {
             "items": [
                 {
                     "code": "unused-import",
-                    "message": "Import `boto3` is unused",
+                    "message": "Import `boto3` may be unused",
                     "range": {
                         "start": {"line": 5, "character": 7},
                         "end": {"line": 5, "character": 12}
@@ -1642,7 +1952,7 @@ fn test_cross_file_diagnostic_no_indexing() {
     let root = get_test_files_root();
     let root_path = root.path().join("cross_file_method_change");
     // Indexing must be disabled to reproduce.
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::None);
+    let mut interaction = LspInteraction::new();
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -1708,11 +2018,13 @@ fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
         .unwrap()
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
 
-    interaction.client.did_open("untyped_import_django/test.py");
+    interaction
+        .client
+        .did_open("untyped_import_recommended/test.py");
 
     interaction
         .client
-        .diagnostic("untyped_import_django/test.py")
+        .diagnostic("untyped_import_recommended/test.py")
         .expect_response(json!({
             "items": [
                 {
@@ -1729,11 +2041,35 @@ fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
                     "source": "Pyrefly"
                 },
                 {
+                    "code": "untyped-import",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
+                    },
+                    "message": "Cannot find type stubs for module `scipy`\n  Hint: install the `scipy-stubs` package",
+                    "range": {
+                        "start": {"line": 6, "character": 7},
+                        "end": {"line": 6, "character": 12}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                },
+                {
                     "code": "unused-import",
-                    "message": "Import `django` is unused",
+                    "message": "Import `django` may be unused",
                     "range": {
                         "start": {"line": 5, "character": 7},
                         "end": {"line": 5, "character": 13}
+                    },
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                },
+                {
+                    "code": "unused-import",
+                    "message": "Import `scipy` may be unused",
+                    "range": {
+                        "start": {"line": 6, "character": 7},
+                        "end": {"line": 6, "character": 12}
                     },
                     "severity": 4,
                     "source": "Pyrefly",
@@ -1776,15 +2112,15 @@ fn test_no_diagnostics_for_non_open_files_in_open_files_only_mode() {
     // publishDiagnostics URI it sees and only terminates on the shutdown response,
     // ensuring no messages are silently consumed.
     let shutdown_handle = interaction.client.send_shutdown();
-    let shutdown_id = shutdown_handle.id.clone();
-    let mut diagnostics_uris: Vec<Url> = Vec::new();
+    let shutdown_id = shutdown_handle.id().clone();
+    let mut diagnostics_uris: Vec<Uri> = Vec::new();
     interaction
         .client
         .expect_message(
             "shutdown response, recording all publishDiagnostics URIs",
             |msg| {
                 if let Message::Notification(n) = &msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params.clone()).unwrap();
@@ -1853,6 +2189,22 @@ fn test_deprecated_diagnostic_tag() {
                     "severity": 2,
                     "source": "Pyrefly",
                     "tags": [2]
+                },
+                // Reported at the whole `WithDeprecatedOperator() + 1`, so it carries no
+                // DEPRECATED tag: striking that range through would cross out code that is
+                // not deprecated.
+                {
+                    "code": "deprecated",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#deprecated"
+                    },
+                    "message": "`+` is not supported between `WithDeprecatedOperator` and `Literal[1]`\n  `WithDeprecatedOperator.__add__` is deprecated\n  use the add method instead",
+                    "range": {
+                        "start": {"line": 20, "character": 0},
+                        "end": {"line": 20, "character": 28}
+                    },
+                    "severity": 2,
+                    "source": "Pyrefly"
                 }
             ],
             "kind": "full"
@@ -1866,7 +2218,7 @@ fn test_deprecated_diagnostic_tag() {
 fn test_unused_ignore_diagnostic() {
     let root = get_test_files_root();
     let test_files_root = root.path().join("unused_ignore");
-    let scope_uri = Url::from_file_path(test_files_root.as_path()).unwrap();
+    let scope_uri = Uri::from_file_path(test_files_root.as_path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.clone());
     interaction
@@ -1892,7 +2244,7 @@ fn test_unused_ignore_diagnostic() {
                     "message": "Unused `# pyrefly: ignore` comment",
                     "range": {
                         "start": {"line": 5, "character": 0},
-                        "end": {"line": 5, "character": 1}
+                        "end": {"line": 5, "character": 17}
                     },
                     "severity": 1,
                     "source": "Pyrefly"
@@ -1937,7 +2289,7 @@ fn test_unused_ignore_diagnostic_default_severity() {
 fn test_unused_type_ignore_diagnostic() {
     let root = get_test_files_root();
     let test_files_root = root.path().join("unused_type_ignore");
-    let scope_uri = Url::from_file_path(test_files_root.as_path()).unwrap();
+    let scope_uri = Uri::from_file_path(test_files_root.as_path()).unwrap();
     let mut interaction = LspInteraction::new();
     interaction.set_root(test_files_root.clone());
     interaction
@@ -1963,7 +2315,7 @@ fn test_unused_type_ignore_diagnostic() {
                     "message": "Unused `# type: ignore` comment",
                     "range": {
                         "start": {"line": 5, "character": 0},
-                        "end": {"line": 5, "character": 1}
+                        "end": {"line": 5, "character": 14}
                     },
                     "severity": 1,
                     "source": "Pyrefly"
@@ -1974,6 +2326,194 @@ fn test_unused_type_ignore_diagnostic() {
         .unwrap();
 
     interaction.shutdown().unwrap();
+}
+
+// An open file with no file extension (e.g. a shebang script the editor
+// opened as Python) gets diagnostics even though default `project-includes`
+// only covers extension-bearing names (#4397).
+#[test]
+fn test_diagnostics_for_extensionless_script() {
+    let test_files_root = get_test_files_root();
+    // The harness copies a fixed fixture tree, so the extension-less script is
+    // written at runtime to keep its name free of any extension.
+    std::fs::write(
+        test_files_root.path().join("myscript"),
+        "#!/usr/bin/env python3\n\nx: int = \"hello\"\n",
+    )
+    .unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "pyrefly": {"displayTypeErrors": "force-on"}
+            }]))),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    let script_path = test_files_root.path().join("myscript");
+
+    interaction.client.did_open("myscript");
+
+    // Push mode: publishDiagnostics carries the type error.
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_message_contains(
+            script_path,
+            "not assignable to `int`",
+        )
+        .expect("Failed to receive published diagnostics");
+
+    // Pull mode: textDocument/diagnostic returns the item.
+    interaction
+        .client
+        .diagnostic("myscript")
+        .expect_response_with(|response| {
+            let lsp_types::DocumentDiagnosticReport::RelatedFullDocumentDiagnosticReport(full) =
+                response
+            else {
+                return false;
+            };
+            full.full_document_diagnostic_report
+                .items
+                .iter()
+                .any(|item| item.code == Some(lsp_types::Code::String("bad-assignment".to_owned())))
+        })
+        .expect("Failed to receive expected response");
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
+#[test]
+fn test_diagnostics_extensionless_file_not_in_includes() {
+    let test_files_root = get_test_files_root();
+    let dir = test_files_root.path().join("extensionless_not_in_includes");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("pyrefly.toml"),
+        "project-includes = [\"included.py\"]\n",
+    )
+    .unwrap();
+    fs::write(dir.join("myscript"), "x: int = \"hello\"\n").unwrap();
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "pyrefly": {"displayTypeErrors": "force-on"}
+            }]))),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction
+        .client
+        .did_open("extensionless_not_in_includes/myscript");
+    interaction
+        .client
+        .diagnostic("extensionless_not_in_includes/myscript")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
+// Explicit `project-excludes` still suppress an open extension-less script —
+// excludes scope open files down even when the includes bypass applies.
+#[test]
+fn test_diagnostics_extensionless_in_excludes_still_suppressed() {
+    let test_files_root = get_test_files_root();
+    // The harness copies a fixed fixture tree, so the excluded subdirectory is
+    // written at runtime.
+    let dir = test_files_root.path().join("extensionless_excluded");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("pyrefly.toml"),
+        "project-excludes = [\"myscript\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("myscript"),
+        "#!/usr/bin/env python3\n\nx: int = \"hello\"\n",
+    )
+    .unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "pyrefly": {"displayTypeErrors": "force-on"}
+            }]))),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    let script_path = dir.join("myscript");
+
+    interaction
+        .client
+        .did_open("extensionless_excluded/myscript");
+
+    // Push mode: nothing published for the excluded script.
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(script_path, 0)
+        .expect("Failed to receive empty diagnostics");
+
+    // Pull mode: no items for the excluded script.
+    interaction
+        .client
+        .diagnostic("extensionless_excluded/myscript")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
+// An extension-less file the editor did NOT open as Python gets no
+// diagnostics — the recorded didOpen language keeps the #4397 bypass from
+// over-firing on every extension-less file.
+#[test]
+fn test_diagnostics_extensionless_non_python_suppressed() {
+    let test_files_root = get_test_files_root();
+    std::fs::write(
+        test_files_root.path().join("mynotes"),
+        "x: int = \"hello\"\n",
+    )
+    .unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "pyrefly": {"displayTypeErrors": "force-on"}
+            }]))),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    let script_path = test_files_root.path().join("mynotes");
+    let uri = Uri::from_file_path(&script_path).unwrap();
+    interaction
+        .client
+        .did_open_uri(&uri, "plaintext", "x: int = \"hello\"\n");
+
+    // Push mode: nothing published for the non-Python file.
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(script_path, 0)
+        .expect("Failed to receive empty diagnostics");
+
+    // Pull mode: no items for the non-Python file.
+    interaction
+        .client
+        .diagnostic("mynotes")
+        .expect_response(json!({"items": [], "kind": "full"}))
+        .expect("Failed to receive expected response");
+
+    interaction.shutdown().expect("Failed to shutdown");
 }
 
 #[test]

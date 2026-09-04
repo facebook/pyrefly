@@ -35,8 +35,8 @@ pub struct ClassMetadata {
 
 /// Metadata collected during the binding phase for all classes in a module.
 ///
-/// Stored in an `Arc` so it can be shared between `Bindings`/`Answers` and
-/// `Solutions` without copying. During access, callers hold a `Guard` or
+/// Stored in an `Arc` so it can be shared between `Answers` and `Solutions`
+/// without copying. During access, callers hold a `Guard` or
 /// borrow through the `Arc` rather than cloning it, avoiding contended
 /// atomic reference count operations.
 #[derive(Debug, Clone)]

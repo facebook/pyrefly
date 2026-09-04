@@ -5,13 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use lsp_types::Url;
-use lsp_types::request::CodeActionRequest;
+use lsp_types::CodeActionRequest;
+use lsp_types::Uri;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 /// A `textDocument/codeAction` request whose `context.diagnostics` contain a diagnostic
 /// with a markdown message (added in LSP 3.18) must deserialize successfully.
@@ -29,7 +29,7 @@ fn test_code_action_with_markdown_diagnostic_parses() {
 
     interaction.client.did_open("syntax_errors.py");
 
-    let uri = Url::from_file_path(test_files_root.path().join("syntax_errors.py")).unwrap();
+    let uri = Uri::from_file_path(test_files_root.path().join("syntax_errors.py")).unwrap();
 
     interaction
         .client
