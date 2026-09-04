@@ -74,7 +74,7 @@ impl ConfigOptionMigrater for SubConfigs {
             })
             .map(|(matches, errors)| -> anyhow::Result<SubConfig> {
                 Ok(SubConfig {
-                    matches: matches?,
+                    matches: matches?.into(),
                     settings: ConfigBase {
                         errors,
                         ..Default::default()
