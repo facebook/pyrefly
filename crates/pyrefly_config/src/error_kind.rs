@@ -628,11 +628,18 @@ impl ErrorKind {
         matches!(self, ErrorKind::RevealType)
     }
 
+    /// Returns true if this error kind reports a suppression comment that
+    /// suppresses nothing, covering both Pyrefly/Pyre ignores and
+    /// `# type: ignore`.
+    pub fn is_unused_ignore(self) -> bool {
+        matches!(self, ErrorKind::UnusedIgnore | ErrorKind::UnusedTypeIgnore)
+    }
+
     /// Returns whether `--suppress-errors` may write a suppression comment for
     /// this kind. Unused-ignore diagnostics are excluded because suppressing one
     /// would only leave behind another unused ignore.
     pub fn is_suppressable(self) -> bool {
-        !matches!(self, ErrorKind::UnusedIgnore | ErrorKind::UnusedTypeIgnore)
+        !self.is_unused_ignore()
     }
 
     /// A soft error is a diagnostic that should not influence overload selection
