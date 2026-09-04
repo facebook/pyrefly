@@ -566,6 +566,13 @@ impl SubsetWithSnapshotResult {
     pub fn is_ok(&self) -> bool {
         matches!(self, SubsetWithSnapshotResult::Ok)
     }
+
+    pub fn into_result(self) -> Result<(), SubsetError> {
+        match self {
+            SubsetWithSnapshotResult::Ok => Ok(()),
+            SubsetWithSnapshotResult::Err(e) => Err(e),
+        }
+    }
 }
 
 impl Solver {
