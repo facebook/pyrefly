@@ -1982,7 +1982,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 value_tys.push(field.ty.clone());
                             }
                         }
-                    } else if let Some((key_t, value_t)) = self.unwrap_mapping(&ty) {
+                    } else if let Some((key_t, value_t)) = self.unwrap_mapping_for_unpacking(&ty) {
                         // Non-anonymous-typed-dict unpacking disables anonymous typed dict creation
                         can_create_anonymous_typed_dict = false;
                         if !key_t.is_error() {
