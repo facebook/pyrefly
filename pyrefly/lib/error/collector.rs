@@ -489,6 +489,7 @@ impl ErrorBuilder<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::collections::HashMap;
     use std::path::Path;
     use std::path::PathBuf;
@@ -551,7 +552,7 @@ mod tests {
         assert_eq!(
             errors
                 .collect(&ErrorConfig::new(
-                    &ErrorDisplayConfig::default(),
+                    Cow::Owned(ErrorDisplayConfig::default()),
                     false,
                     Tool::default_enabled(),
                 ))
@@ -605,7 +606,7 @@ mod tests {
             (ErrorKind::BadAssignment, Severity::Ignore),
             (ErrorKind::NotIterable, Severity::Ignore),
         ]));
-        let config = ErrorConfig::new(&display_config, false, Tool::default_enabled());
+        let config = ErrorConfig::new(Cow::Owned(display_config), false, Tool::default_enabled());
 
         assert_eq!(
             errors.collect(&config).ordinary.map(|x| x.msg()),
@@ -629,13 +630,17 @@ mod tests {
         );
 
         let display_config = ErrorDisplayConfig::default();
-        let config0 = ErrorConfig::new(&display_config, false, Tool::default_enabled());
+        let config0 = ErrorConfig::new(
+            Cow::Borrowed(&display_config),
+            false,
+            Tool::default_enabled(),
+        );
         assert_eq!(
             errors.collect(&config0).ordinary.map(|x| x.msg()),
             vec!["a"]
         );
 
-        let config1 = ErrorConfig::new(&display_config, true, Tool::default_enabled());
+        let config1 = ErrorConfig::new(Cow::Owned(display_config), true, Tool::default_enabled());
         assert!(
             errors
                 .collect(&config1)
@@ -668,7 +673,7 @@ mod tests {
         assert_eq!(
             errors
                 .collect(&ErrorConfig::new(
-                    &ErrorDisplayConfig::default(),
+                    Cow::Owned(ErrorDisplayConfig::default()),
                     false,
                     Tool::default_enabled(),
                 ))

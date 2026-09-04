@@ -1156,7 +1156,7 @@ impl ConfigFile {
 
     pub fn get_error_config(&self, path: &Path) -> ErrorConfig<'_> {
         ErrorConfig::new(
-            self.errors(path),
+            Cow::Borrowed(self.errors(path)),
             self.ignore_errors_in_generated_code(path),
             self.enabled_ignores(path).clone(),
         )

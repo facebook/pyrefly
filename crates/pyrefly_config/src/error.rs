@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use pyrefly_python::ignore::Tool;
@@ -157,14 +158,14 @@ impl<'de> Deserialize<'de> for ErrorDisplayConfig {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct ErrorConfig<'a> {
-    pub display_config: &'a ErrorDisplayConfig,
+    pub display_config: Cow<'a, ErrorDisplayConfig>,
     pub ignore_errors_in_generated_code: bool,
     pub enabled_ignores: SmallSet<Tool>,
 }
 
 impl<'a> ErrorConfig<'a> {
     pub fn new(
-        display_config: &'a ErrorDisplayConfig,
+        display_config: Cow<'a, ErrorDisplayConfig>,
         ignore_errors_in_generated_code: bool,
         enabled_ignores: SmallSet<Tool>,
     ) -> Self {
