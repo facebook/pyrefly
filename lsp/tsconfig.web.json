@@ -2,20 +2,19 @@
     "compilerOptions": {
         "module": "commonjs",
         "target": "es2019",
-        "lib": ["ES2019"],
+        "lib": ["ES2019", "WebWorker"],
         "outDir": "out",
         "rootDir": "src",
         "sourceMap": true,
         "strict": true
     },
     "include": [
-        "src"
+        "src/extension-web.ts",
+        "src/pyrefly-web-worker.ts"
     ],
     "exclude": [
         "node_modules",
-        ".vscode-test",
-        "src/extension-web.ts",
-        "src/pyrefly-web-worker.ts",
-        "src/worker-globals.d.ts"
-    ],
+        ".vscode-test"
+    ]
 }
+
