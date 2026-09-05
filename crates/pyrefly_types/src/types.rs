@@ -1901,8 +1901,16 @@ impl Type {
     pub fn toplevel_callable_signatures(
         &self,
     ) -> impl Iterator<Item = (&Callable, Option<&Arc<TParams>>)> {
+        let mut ty = self;
+        loop {
+            match ty {
+                Type::Intersect(intersect) => ty = &intersect.1,
+                Type::KwCall(call) => ty = &call.return_ty,
+                _ => break,
+            }
+        }
         let (one, overloads): (Option<(&Callable, Option<&Arc<TParams>>)>, &[OverloadType]) =
-            match self {
+            match ty {
                 Type::Callable(callable) => (Some((callable, None)), &[]),
                 Type::Forall(forall) => match &forall.body {
                     Forallable::Callable(callable) => {
@@ -1952,6 +1960,14 @@ impl Type {
                     .signatures
                     .mapped(|signature| signature.transform(&mut f));
                 Type::Overload(overload)
+            }
+            Type::Intersect(mut intersect) => {
+                intersect.1.transform_toplevel_callable_signatures(f);
+                Type::Intersect(intersect)
+            }
+            Type::KwCall(mut call) => {
+                call.return_ty.transform_toplevel_callable_signatures(f);
+                Type::KwCall(call)
             }
             ty => ty,
         };
