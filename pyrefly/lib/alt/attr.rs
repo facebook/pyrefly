@@ -2694,9 +2694,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::Annotated(_, _) => acc.push(AttributeBase1::ClassInstance(
                 self.stdlib.generic_alias().clone(),
             )),
+            Type::TypeForm(_) => {
+                acc.push(AttributeBase1::ClassInstance(self.stdlib.object().clone()))
+            }
             // TODO: check to see which ones should have class representations
             Type::SpecialForm(_)
-            | Type::TypeForm(_)
             | Type::TypeLevelDslCall(_)
             | Type::Unpack(_)
             | Type::Concatenate(_, _)
