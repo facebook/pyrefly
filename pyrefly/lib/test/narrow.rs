@@ -2111,7 +2111,6 @@ def lookup_resource(registry: dict[str, str]) -> str | None:
 );
 
 testcase!(
-    bug = "Named builtin containers do not narrow membership by element type",
     test_in_named_builtin_container_narrows_element_type,
     r#"
 from collections import deque
@@ -2119,19 +2118,19 @@ from typing import assert_type
 
 def test_set(x: str | None, values: set[str]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, str)
 
 def test_frozenset(x: str | None, values: frozenset[str]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, str)
 
 def test_list(x: str | None, values: list[str]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, str)
 
 def test_deque(x: str | None, values: deque[str]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, str)
 "#,
 );
 
@@ -2196,21 +2195,21 @@ def test_tuple_control(x: str | None, values: tuple[str, ...]) -> None:
 );
 
 testcase!(
-    bug = "Named container membership does not narrow control flow",
     test_in_named_container_control_flow,
     r#"
 from collections.abc import Container
 from typing import assert_type
 
 def test_not_in(x: str | None, values: set[str]) -> None:
+    # not in does not narrow because x could simply be absent from values.
     if x not in values:
         assert_type(x, str | None)
     else:
-        assert_type(x, str | None)
+        assert_type(x, str)
 
 def test_union_element(x: str | int | None, values: set[str | int]) -> None:
     if x in values:
-        assert_type(x, str | int | None)
+        assert_type(x, int | str)
 
 def test_nullable_element(x: str | None, values: Container[str | None]) -> None:
     if x in values:
@@ -2242,8 +2241,9 @@ def test_nested_any(event_task: Task[Any], bool_task: Task[bool]) -> None:
 "#,
 );
 
+// Equality can hold across disjoint numeric or bytes-like types, so narrowing
+// keeps the wider operand instead of the element type.
 testcase!(
-    bug = "Named container narrowing does not account for equality",
     test_in_named_container_respects_equality,
     r#"
 from typing import Generic, Literal, LiteralString, NewType, TypeVar, assert_type
@@ -2259,27 +2259,27 @@ class User:
 
 def test_newtype(x: bytes | None, values: set[ObjectId]) -> None:
     if x in values:
-        assert_type(x, bytes | None)
+        assert_type(x, bytes)
 
 def test_builtin_subclass(x: int | None, values: set[GenericId[User]]) -> None:
     if x in values:
-        assert_type(x, int | None)
+        assert_type(x, int)
 
 def test_numeric(x: float | None, values: set[int]) -> None:
     if x in values:
-        assert_type(x, float | None)
+        assert_type(x, float)
 
 def test_bool(x: bool | None, values: set[int]) -> None:
     if x in values:
-        assert_type(x, bool | None)
+        assert_type(x, bool)
 
 def test_literal(x: str | None, values: set[Literal["x"]]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, Literal["x"])
 
 def test_literal_string(x: str | None, values: set[LiteralString]) -> None:
     if x in values:
-        assert_type(x, str | None)
+        assert_type(x, LiteralString)
 "#,
 );
 
@@ -2638,8 +2638,8 @@ def qualified_builtins_frozenset(x: int | str) -> None:
 def non_literal_arg(x: int | str) -> None:
     y = [1, 2]
     if x in frozenset(y):
-        # Can't statically enumerate elements, no narrowing.
-        assert_type(x, int | str)
+        # frozenset(y) still has type frozenset[int], so x narrows to int.
+        assert_type(x, int)
 "#,
 );
 

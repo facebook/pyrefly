@@ -337,6 +337,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.unions(matches)
     }
 
+    /// Element type of a `list`, `set`, `frozenset`, or `deque`.
+    fn concrete_container_element_type(&self, ty: &Type) -> Option<Type> {
+        let Type::ClassType(cls) = ty else {
+            return None;
+        };
+        let obj = cls.class_object();
+        let is_concrete = obj == self.stdlib.list_object()
+            || obj == self.stdlib.set_object()
+            || obj == self.stdlib.frozenset_object()
+            || cls.has_qname("collections", "deque");
+        if !is_concrete {
+            return None;
+        }
+        self.unwrap_iterable(ty)
+    }
+
     /// Calculate the intersection of a number of types
     pub fn intersects(&self, ts: &[Type]) -> Type {
         match ts {
@@ -1530,10 +1546,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if !self.behaves_like_any(&right_ty)
                     && let Some((key_ty, _)) = self.unwrap_mapping(&right_ty)
                 {
-                    self.intersect(ty, &key_ty)
-                } else {
-                    ty.clone()
+                    return self.intersect(ty, &key_ty);
                 }
+
+                // Membership against a named container narrows like a positive equality check.
+                if !self.behaves_like_any(&right_ty)
+                    && let Some(elem_ty) = self.concrete_container_element_type(&right_ty)
+                    && !self.behaves_like_any(&elem_ty)
+                    // This avoids widening a gradual operand into a union.
+                    && !self.is_subset_eq(ty, &elem_ty)
+                {
+                    return self.narrow_after_equality_match(ty, &elem_ty);
+                }
+
+                ty.clone()
             }
             AtomicNarrowOp::NotIn(v) => {
                 // First, check for literal containers. We also unwrap builtin
