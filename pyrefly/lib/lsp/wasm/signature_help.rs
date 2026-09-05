@@ -210,8 +210,81 @@ impl Transaction<'_> {
         let pos = position.to_usize().clamp(start, end);
         contents
             .get(start..pos)
-            .map(|slice| slice.bytes().filter(|&b| b == b',').count())
+            .map(Self::count_top_level_argument_separators)
             .or(Some(0))
+    }
+
+    fn count_top_level_argument_separators(slice: &str) -> usize {
+        let bytes = slice.as_bytes();
+        let first_token = bytes.iter().position(|b| !b.is_ascii_whitespace());
+        let top_level_depth = first_token
+            .and_then(|i| bytes.get(i))
+            .is_some_and(|b| matches!(b, b'(' | b'[' | b'{'))
+            as usize;
+
+        let mut count = 0;
+        let mut depth = 0usize;
+        let mut i = 0;
+        while i < bytes.len() {
+            if let Some(end) = Self::skip_python_string(bytes, i) {
+                i = end;
+                continue;
+            }
+            match bytes[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+                b',' if depth == top_level_depth => count += 1,
+                b'#' => {
+                    i += bytes[i..]
+                        .iter()
+                        .position(|b| *b == b'\n')
+                        .unwrap_or(bytes.len() - i);
+                    continue;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        count
+    }
+
+    fn skip_python_string(bytes: &[u8], start: usize) -> Option<usize> {
+        let mut quote_start = start;
+        if !matches!(bytes.get(quote_start), Some(b'\'' | b'"')) {
+            let mut prefix_end = start;
+            while prefix_end < bytes.len()
+                && prefix_end - start < 3
+                && matches!(
+                    bytes[prefix_end],
+                    b'b' | b'B' | b'f' | b'F' | b'r' | b'R' | b't' | b'T' | b'u' | b'U'
+                )
+            {
+                prefix_end += 1;
+            }
+            if prefix_end == start || !matches!(bytes.get(prefix_end), Some(b'\'' | b'"')) {
+                return None;
+            }
+            quote_start = prefix_end;
+        }
+
+        let quote = bytes[quote_start];
+        let is_triple = bytes.get(quote_start..quote_start + 3) == Some(&[quote, quote, quote]);
+        let mut i = quote_start + if is_triple { 3 } else { 1 };
+        while i < bytes.len() {
+            if bytes[i] == b'\\' {
+                i += 2;
+            } else if is_triple {
+                if bytes.get(i..i + 3) == Some(&[quote, quote, quote]) {
+                    return Some(i + 3);
+                }
+                i += 1;
+            } else if bytes[i] == quote {
+                return Some(i + 1);
+            } else {
+                i += 1;
+            }
+        }
+        Some(bytes.len())
     }
 
     /// Finds the callable(s) (multiple if overloads exist) at position in document.

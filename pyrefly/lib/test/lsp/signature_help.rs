@@ -117,6 +117,33 @@ Signature Help Result: active=0
 }
 
 #[test]
+fn nested_commas_do_not_affect_active_parameter_test() {
+    let code = r#"
+def foo(a: str, b: int, c: bool) -> None: ...
+def max(x: str, y: str) -> str: ...
+
+foo(max("a", "b"), )
+#                  ^
+foo(("a", "b"), )
+#              ^
+foo("a,b", )
+#         ^
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let handle = handles.get("main").unwrap();
+
+    for position in extract_cursors_for_test(code) {
+        let signature = state
+            .transaction()
+            .get_signature_help_at(handle, position)
+            .expect("signature help available");
+        assert_eq!(signature.active_parameter, Some(1));
+        assert_eq!(signature.signatures[0].active_parameter, Some(1));
+    }
+}
+
+#[test]
 fn positional_arguments_test() {
     let code = r#"
 def f(x: int, y: int, z: int) -> None: ...
