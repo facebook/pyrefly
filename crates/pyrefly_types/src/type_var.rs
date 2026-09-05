@@ -77,6 +77,18 @@ impl Restriction {
         )
     }
 
+    /// Indicate whether this restriction can reject any type. A bound of `Any` or `object`
+    /// restricts nothing (despite being syntactically a `Bound`) because *every* type
+    /// satisfies it. Constraints always restrict, admitting only their own members, as does
+    /// a `Flag` domain, which admits only its own builtin categories.
+    pub fn can_reject(&self) -> bool {
+        match self {
+            Self::Bound(b) => !b.is_any() && !b.is_object(),
+            Self::Constraints(_) | Self::Flag(_) => true,
+            Self::Unrestricted => false,
+        }
+    }
+
     fn as_type(&self, stdlib: &Stdlib, heap: &TypeHeap, kind: QuantifiedKind) -> Type {
         match self {
             Self::Bound(t) => t.clone(),

@@ -4160,8 +4160,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) {
         let Some(declared_ty) = hint else { return };
-        let is_object = |t: &Type| matches!(t, Type::ClassType(cls) if cls.is_builtin("object"));
-        if declared_ty.is_any() || is_object(declared_ty) {
+        if declared_ty.is_any() || declared_ty.is_object() {
             return;
         }
         match return_ty {
