@@ -1091,7 +1091,7 @@ impl<'a> Transaction<'a> {
         self.get_load(handle).map(|x| x.module_info.dupe())
     }
 
-    /// Whether any other module depends on this one.
+    /// Return the modules that directly depend on this one.
     ///
     /// A dependency edge means the depending module's result was computed from
     /// this file's contents, which is exactly the question safe deletion asks,
@@ -1106,13 +1106,15 @@ impl<'a> Transaction<'a> {
     /// filesystem handle: as with `get_transitive_rdeps`, the rdeps of an
     /// in-memory handle contain only itself, which would make any file an IDE
     /// has open look unused.
-    pub fn is_depended_on_by_anything(&self, handle: &Handle) -> bool {
+    pub fn get_rdeps(&self, handle: &Handle) -> HashSet<Handle> {
         let path = handle.path().as_path();
         self.get_module(handle)
             .rdeps
             .lock()
             .iter()
-            .any(|rdep| rdep.path().as_path() != path)
+            .filter(|rdep| rdep.path().as_path() != path)
+            .cloned()
+            .collect()
     }
 
     /// Compute transitive dependency closure for the given handle.
