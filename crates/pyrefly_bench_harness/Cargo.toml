@@ -12,3 +12,6 @@ license = "MIT"
 pyrefly = { path = "../../pyrefly" }
 pyrefly_config = { path = "../pyrefly_config" }
 pyrefly_util = { path = "../pyrefly_util" }
+
+[lints]
+workspace = true

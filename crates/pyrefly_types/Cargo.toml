@@ -23,3 +23,6 @@ ruff_text_size = "0.0.11"
 starlark_map = "0.14.2"
 static_assertions = "1.1.0"
 vec1 = { version = "1.12.1", features = ["serde"] }
+
+[lints]
+workspace = true
