@@ -157,6 +157,7 @@ pub struct TestEnv {
     implicit_bool_error: bool,
     unknown_attribute_type_error: bool,
     implicit_abstract_class_error: bool,
+    helpful_string_error: bool,
     open_unpacking_error: bool,
     missing_override_decorator_error: bool,
     missing_super_call_error: bool,
@@ -213,6 +214,7 @@ impl TestEnv {
             implicit_bool_error: false,
             unknown_attribute_type_error: false,
             implicit_abstract_class_error: false,
+            helpful_string_error: false,
             open_unpacking_error: false,
             missing_override_decorator_error: false,
             missing_super_call_error: false,
@@ -378,6 +380,11 @@ impl TestEnv {
 
     pub fn enable_implicit_abstract_class_error(mut self) -> Self {
         self.implicit_abstract_class_error = true;
+        self
+    }
+
+    pub fn enable_helpful_string_error(mut self) -> Self {
+        self.helpful_string_error = true;
         self
     }
 
@@ -641,6 +648,9 @@ impl TestEnv {
         }
         if self.implicit_abstract_class_error {
             errors.set_error_severity(ErrorKind::ImplicitAbstractClass, Severity::Error);
+        }
+        if self.helpful_string_error {
+            errors.set_error_severity(ErrorKind::HelpfulString, Severity::Error);
         }
         if self.open_unpacking_error {
             errors.set_error_severity(ErrorKind::OpenUnpacking, Severity::Error);
