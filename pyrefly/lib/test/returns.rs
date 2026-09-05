@@ -282,6 +282,42 @@ def f() -> int:
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/1132
+testcase!(
+    test_return_infinite_loop_without_return,
+    r#"
+from typing import Never, TypeAlias
+
+NeverAlias: TypeAlias = Never
+
+def f() -> int:  # E: Function declared to return `int` but can never return
+    while True:
+        pass
+
+def returns_never() -> Never:
+    while True:
+        pass
+
+def returns_never_alias() -> NeverAlias:
+    while True:
+        pass
+
+def event_loop() -> None:
+    while True:
+        pass
+
+def unreachable_return() -> int:  # E: Function declared to return `int` but can never return
+    while True:
+        continue
+        return 1  # E: This `return` statement is unreachable
+
+def falls_through(b: bool) -> int:  # E: Function declared to return `int` but is missing an explicit `return`
+    if b:
+        while True:
+            pass
+"#,
+);
+
 testcase!(
     test_return_while_false_break_else,
     r#"
