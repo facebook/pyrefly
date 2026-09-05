@@ -865,6 +865,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     );
                 }
                 let mut ann = self.expr_annotation(&unpacked_slice[0], type_form_context, errors);
+                if qualifier == Qualifier::Annotated {
+                    for metadata in &unpacked_slice[1..] {
+                        self.expr_infer(metadata, errors);
+                    }
+                }
                 if qualifier == Qualifier::ClassVar && ann.get_type().contains_type_variable() {
                     self.error(
                         errors,
