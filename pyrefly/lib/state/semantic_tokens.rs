@@ -263,24 +263,28 @@ fn range_overlaps(limit_range: Option<TextRange>, range: TextRange) -> bool {
 /// Classify an attribute's resolved type into a semantic token kind. For a union,
 /// every member must agree on the same kind; any disagreement (or a member that is
 /// a plain attribute) falls back to `PROPERTY`.
-fn attribute_semantic_token_type(ty: Type) -> SemanticTokenType {
+fn attribute_semantic_token_type(ty: Type, accessed_on_class: bool) -> SemanticTokenType {
     match ty {
         Type::Union(union) => {
             let mut members = union.members.into_iter();
             let Some(first) = members.next() else {
                 return SemanticTokenType::PROPERTY;
             };
-            let kind = attribute_semantic_token_type(first);
+            let kind = attribute_semantic_token_type(first, accessed_on_class);
             if kind == SemanticTokenType::PROPERTY {
                 return SemanticTokenType::PROPERTY;
             }
-            if members.all(|member| attribute_semantic_token_type(member) == kind) {
+            if members
+                .all(|member| attribute_semantic_token_type(member, accessed_on_class) == kind)
+            {
                 kind
             } else {
                 SemanticTokenType::PROPERTY
             }
         }
-        Type::Literal(lit) if matches!(lit.value, Lit::Enum(_)) => SemanticTokenType::ENUM_MEMBER,
+        Type::Literal(lit) if accessed_on_class && matches!(lit.value, Lit::Enum(_)) => {
+            SemanticTokenType::ENUM_MEMBER
+        }
         _ => {
             attribute_symbol_kind_from_type(&ty)
                 .to_lsp_semantic_token_type_with_modifiers()
@@ -421,8 +425,10 @@ impl SemanticTokenBuilder {
         get_type_of_attribute: &dyn Fn(TextRange) -> Option<Type>,
         get_symbol_kind: &dyn Fn(&Key) -> Option<(ModuleName, SymbolKind)>,
     ) {
+        let accessed_on_class = get_type_of_attribute(attr.value.range())
+            .is_some_and(|ty| matches!(ty, Type::ClassDef(_) | Type::Type(_)));
         let kind = get_type_of_attribute(attr.range())
-            .map(attribute_semantic_token_type)
+            .map(|ty| attribute_semantic_token_type(ty, accessed_on_class))
             .unwrap_or(SemanticTokenType::PROPERTY);
         self.push_if_in_range(attr.attr.range(), kind, Vec::new());
         attr.value
