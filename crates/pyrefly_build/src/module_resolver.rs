@@ -233,6 +233,10 @@ pub enum FindResult {
     /// Found a regular package. The first field is its `__init__` file, and the
     /// second is the package directory used as the sole root for submodule lookup.
     RegularPackage(PathBuf, PathBuf),
+    /// Found a regular package after one or more typed namespace directories.
+    /// The namespace directories contain `py.typed` and provide overlays for
+    /// generated extension stubs in editable installs.
+    RegularPackageWithTypedOverlay(PathBuf, Vec1<PathBuf>),
     /// Found a legacy namespace package: a package whose `__init__` calls
     /// `pkgutil.extend_path`. The first field is the winning `__init__`; the
     /// roots accumulate same-named directories across the search path.
@@ -264,7 +268,9 @@ impl FindResult {
     pub fn is_stub(&self) -> bool {
         match self {
             Self::SingleFilePyiModule(_) => true,
-            Self::RegularPackage(init, _) | Self::LegacyNamespacePackage(init, _) => {
+            Self::RegularPackage(init, _)
+            | Self::RegularPackageWithTypedOverlay(init, _)
+            | Self::LegacyNamespacePackage(init, _) => {
                 ModuleStyle::of_path(init) == ModuleStyle::Interface
             }
             Self::SingleFilePyModule(_)
@@ -278,8 +284,18 @@ impl FindResult {
             // RegularPackage and LegacyNamespacePackage share the top tier: both
             // resolve to a concrete `__init__`. Tying them lets the prefer-`a`
             // rule preserve sys.path order when fallback roots are folded in.
-            (FindResult::RegularPackage(..), _) | (FindResult::LegacyNamespacePackage(..), _) => a,
-            (_, FindResult::RegularPackage(..)) | (_, FindResult::LegacyNamespacePackage(..)) => b,
+            (
+                FindResult::RegularPackage(..)
+                | FindResult::RegularPackageWithTypedOverlay(..)
+                | FindResult::LegacyNamespacePackage(..),
+                _,
+            ) => a,
+            (
+                _,
+                FindResult::RegularPackage(..)
+                | FindResult::RegularPackageWithTypedOverlay(..)
+                | FindResult::LegacyNamespacePackage(..),
+            ) => b,
             (FindResult::SingleFilePyiModule(_), _) => a,
             (_, FindResult::SingleFilePyiModule(_)) => b,
             (FindResult::SingleFilePyModule(_), _) => a,
@@ -299,6 +315,9 @@ impl FindResult {
             FindResult::RegularPackage(_, package_dir) => {
                 dir_cache.is_partial_py_typed(&package_dir.join("py.typed"), observer)
             }
+            FindResult::RegularPackageWithTypedOverlay(_, package_dirs) => package_dirs
+                .iter()
+                .any(|dir| dir_cache.is_partial_py_typed(&dir.join("py.typed"), observer)),
             FindResult::LegacyNamespacePackage(init_path, _) => {
                 init_path.parent().is_some_and(|package_dir| {
                     dir_cache.is_partial_py_typed(&package_dir.join("py.typed"), observer)
@@ -320,6 +339,7 @@ impl FindResult {
             FindResult::SingleFilePyiModule(path)
             | FindResult::SingleFilePyModule(path)
             | FindResult::RegularPackage(path, _)
+            | FindResult::RegularPackageWithTypedOverlay(path, _)
             | FindResult::LegacyNamespacePackage(path, _) => Some(ModulePath::filesystem(path)),
             FindResult::ImplicitNamespacePackage(roots) => {
                 Some(ModulePath::namespace(roots.first().clone()))
@@ -343,6 +363,13 @@ pub fn package_has_py_typed(
     let depth = module.components().len().saturating_sub(1);
     let (dir, levels_up) = match result {
         FindResult::RegularPackage(_, dir) => (dir.as_path(), depth),
+        FindResult::RegularPackageWithTypedOverlay(_, dirs) => {
+            return dirs.iter().any(|dir| {
+                iter::successors(Some(dir.as_path()), |dir| dir.parent())
+                    .take(depth + 1)
+                    .any(|dir| dir_cache.file_exists(&dir.join("py.typed")))
+            });
+        }
         FindResult::LegacyNamespacePackage(init_path, _) => {
             let Some(dir) = init_path.parent() else {
                 return false;
@@ -514,7 +541,27 @@ fn find_one_part<'a>(
                 }
             }
             Some(FindResult::RegularPackage(init_path, init_dir)) => match &mut acc {
-                None | Some(NamespaceAccumulator::Implicit(_)) => {
+                Some(NamespaceAccumulator::Implicit(namespace_roots)) => {
+                    let typed_overlays = namespace_roots
+                        .iter()
+                        .filter(|root| {
+                            timed_stat(observer, || dir_cache.file_exists(&root.join("py.typed")))
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if let Ok(mut package_roots) = Vec1::try_from_vec(typed_overlays) {
+                        package_roots.push(init_dir);
+                        return Some((
+                            FindResult::RegularPackageWithTypedOverlay(init_path, package_roots),
+                            roots.cloned().collect(),
+                        ));
+                    }
+                    return Some((
+                        FindResult::RegularPackage(init_path, init_dir),
+                        roots.cloned().collect(),
+                    ));
+                }
+                None => {
                     return Some((
                         FindResult::RegularPackage(init_path, init_dir),
                         roots.cloned().collect(),
@@ -557,6 +604,17 @@ fn continue_find_module(
                 current_result = find_one_part(
                     part,
                     iter::once(&next_root),
+                    style_filter,
+                    phantom_paths,
+                    dir_cache,
+                    observer,
+                )
+                .map(|x| x.0);
+            }
+            Some(FindResult::RegularPackageWithTypedOverlay(_, next_roots)) => {
+                current_result = find_one_part(
+                    part,
+                    next_roots.iter(),
                     style_filter,
                     phantom_paths,
                     dir_cache,
@@ -614,6 +672,7 @@ where
     match current_result {
         FindResult::SingleFilePyiModule(_)
         | FindResult::RegularPackage(..)
+        | FindResult::RegularPackageWithTypedOverlay(..)
         | FindResult::LegacyNamespacePackage(..) => Some(current_result),
         _ => Some(
             fallback_search
@@ -813,6 +872,9 @@ fn find_one_part_prefix<'a>(
 
                         if !results.iter().any(|r| match r {
                             (FindResult::RegularPackage(_, p), _) => *p == path,
+                            (FindResult::RegularPackageWithTypedOverlay(_, ps), _) => {
+                                ps.iter().any(|p| *p == path)
+                            }
                             (FindResult::LegacyNamespacePackage(_, ps), _) => ps.first() == &path,
                             _ => false,
                         }) {
@@ -888,6 +950,22 @@ pub fn find_module_prefixes<'a>(
                         current_result = find_one_part(
                             part,
                             iter::once(&next_root),
+                            None,
+                            &mut None,
+                            &dir_cache,
+                            None,
+                        )
+                        .map(|x| x.0);
+                    }
+                }
+                Some(FindResult::RegularPackageWithTypedOverlay(_, next_roots)) => {
+                    if is_last {
+                        results = find_one_part_prefix(part, next_roots.iter());
+                        break;
+                    } else {
+                        current_result = find_one_part(
+                            part,
+                            next_roots.iter(),
                             None,
                             &mut None,
                             &dir_cache,
