@@ -6112,35 +6112,37 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             );
                         }
                     }
-                    // TODO: analyze the class decorators beyond the `Any` check above. We don't
-                    // support general type-level analysis of class decorators (the ones we do
-                    // support, like dataclass-related ones, are handled via custom bindings).
-                    //
-                    // Note that all decorators have their own binding so they are still type checked for errors
-                    // *inside* the decorator. The only application-level effect we honor is an
-                    // explicit `type[Any]` return, which intentionally erases the class interface.
-                    //
-                    // We use `.any()` across the chain because if *any* decorator is annotated
-                    // with `-> type[Any]`, all *later* decorators receive whatever class that
-                    // dynamic decorator produces (an `Any`-ish class), so the final output must
-                    // also be treated as dynamic. This is by intent: the escape hatch lets library
-                    // authors signal that the class flows through a decorator a type checker cannot
-                    // model accurately, so the end result is not modelable either.
-                    let erases_class = decorators.iter().any(|idx| {
-                        let decorator_ty = &self.get_idx(*idx).ty;
-                        // Only an explicit `-> type[Any]` return annotation counts; a return
-                        // type inferred from the body (e.g. `return cls` where `cls: type[Any]`)
-                        // does not, since the user did not opt in to erasing the class.
-                        !decorator_ty.toplevel_func_metadata().is_some_and(|meta| meta.flags.is_return_inferred)
-                            && decorator_ty
-                                .toplevel_callable_signatures()
-                                .any(|(c, _)| matches!(&c.ret, Type::Type(inner) if matches!(&**inner, Type::Any(AnyStyle::Explicit))))
-                    });
-                    if erases_class {
-                        self.heap.mk_type_of(self.heap.mk_any_explicit())
-                    } else {
-                        self.heap.mk_class_def(cls.dupe())
+                    let mut ty = self.heap.mk_class_def(cls.dupe());
+                    for decorator_key in decorators.iter().rev() {
+                        if self.bindings().get(*decorator_key).is_class_metadata {
+                            continue;
+                        }
+                        let decorator = self.get_idx(*decorator_key);
+                        let preserves_class = matches!(
+                            &decorator.ty,
+                            Type::Any(AnyStyle::Implicit | AnyStyle::Explicit)
+                        ) || decorator.ty.toplevel_callable_signatures().any(
+                            |(callable, _)| {
+                                matches!(&callable.ret, Type::Any(_))
+                                    || decorator.ty.toplevel_func_metadata().is_some_and(|meta| {
+                                        meta.flags.is_return_inferred
+                                            && matches!(
+                                                &callable.ret,
+                                                Type::Type(inner) if matches!(
+                                                    &**inner,
+                                                    Type::Any(AnyStyle::Explicit)
+                                                )
+                                            )
+                                    })
+                            },
+                        );
+                        if preserves_class {
+                            continue;
+                        }
+                        let range = self.bindings().idx_to_key(*decorator_key).range();
+                        ty = self.apply_class_decorator(decorator.ty.clone(), ty, range, errors);
                     }
+                    ty
                 }
             },
             Binding::AnnotatedType(ann, val) => {
