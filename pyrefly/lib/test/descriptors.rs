@@ -898,6 +898,14 @@ assert_type(A().a, MyDescriptor)
 fn sqlalchemy_mapped_env() -> TestEnv {
     let mut env = TestEnv::new();
     env.add(
+        "sqlalchemy.orm._orm_constructors",
+        r#"
+from typing import Any
+
+def mapped_column(*args: Any, **kw: Any) -> Any: ...
+    "#,
+    );
+    env.add(
         "sqlalchemy.orm.base",
         r#"
 class Mapped[T]:
@@ -923,7 +931,18 @@ class Update:
     env.add_with_path(
         "sqlalchemy.orm.decl_api",
         "sqlalchemy/orm/decl_api.py",
-        "class DeclarativeBase: ...",
+        r#"
+from typing import dataclass_transform
+
+from ._orm_constructors import mapped_column
+
+class DeclarativeBase: ...
+
+@dataclass_transform(field_specifiers=(mapped_column,))
+class DCTransformDeclarative(type): ...
+
+class MappedAsDataclass(metaclass=DCTransformDeclarative): ...
+        "#,
     );
     env.add_with_path(
         "sqlalchemy.orm",
@@ -931,6 +950,8 @@ class Update:
         r#"
 from .base import Mapped as Mapped
 from .decl_api import DeclarativeBase as DeclarativeBase
+from .decl_api import MappedAsDataclass as MappedAsDataclass
+from ._orm_constructors import mapped_column as mapped_column
     "#,
     );
     env.add_with_path(
@@ -983,6 +1004,22 @@ class User(Base):
     name: Mapped[str]
     def __init__(self, name: str):
         self.name = name
+    "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1610
+testcase!(
+    test_sqlalchemy_mapped_dataclass_mutable_default,
+    sqlalchemy_mapped_env(),
+    r#"
+from sqlalchemy.orm import DeclarativeBase, Mapped, MappedAsDataclass, mapped_column
+
+class Base(MappedAsDataclass, DeclarativeBase):
+    pass
+
+class Model(Base):
+    client_params: Mapped[dict] = mapped_column(default={})  # E: Mutable default for field `client_params` is not allowed; use `default_factory`
+    labels: Mapped[list[str]] = mapped_column(default_factory=list)
     "#,
 );
 
