@@ -12,3 +12,6 @@ license = "MIT"
 dupe = "0.9.1"
 pyrefly_util = { path = "../pyrefly_util" }
 starlark_map = "0.14.2"
+
+[lints]
+workspace = true

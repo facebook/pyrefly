@@ -42,3 +42,6 @@ tempfile = "3.27.0"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 uv-pep440 = "0.0.76"
 which = "8.0.5"
+
+[lints]
+workspace = true

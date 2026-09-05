@@ -19,3 +19,6 @@ zstd = "0.13.3"
 sha2 = "0.10.6"
 tar = "0.4.46"
 zstd = { version = "0.13.3", features = ["experimental", "zstdmt"] }
+
+[lints]
+workspace = true

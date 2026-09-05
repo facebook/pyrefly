@@ -41,3 +41,9 @@ resolver = "2"
 [workspace.package]
 license = "MIT"
 repository = "https://github.com/facebook/pyrefly"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fbcode_build)"]}

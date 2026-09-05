@@ -13,3 +13,6 @@ lsp-server = "0.10.0"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = { version = "1.0.151", features = ["alloc", "float_roundtrip", "raw_value", "unbounded_depth"] }
 serde_repr = "0.1.21"
+
+[lints]
+workspace = true

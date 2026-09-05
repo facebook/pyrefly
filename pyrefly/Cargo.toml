@@ -106,5 +106,5 @@ mimalloc = { version = "0.1.52", default-features = false }
 debug-stack-overflow = ["dep:backtrace-on-stack-overflow"]
 default = []
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fbcode_build)"]}
+[lints]
+workspace = true
