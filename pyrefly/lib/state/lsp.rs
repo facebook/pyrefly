@@ -2906,6 +2906,7 @@ impl<'a> Transaction<'a> {
                     handle,
                     &identifier,
                     &covering_nodes,
+                    preference,
                 ) {
                     Ok(pytest_definitions)
                 } else {
