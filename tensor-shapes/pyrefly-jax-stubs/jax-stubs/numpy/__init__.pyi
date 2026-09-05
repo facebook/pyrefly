@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Callable, Literal, overload, Sequence, Unpack
+from typing import Any, Callable, Literal, NamedTuple, overload, Sequence, Unpack
 
 from jax._array import Array as Array, Array as ndarray
 from jax._shapes import (
@@ -35,10 +35,12 @@ from jax._shapes import (
     reverse_shape,
     roll_shape,
     rollaxis_shape,
+    sort_shape,
     squeeze_shape,
     stack_shape,
     swapaxes_shape,
     tensordot_shape,
+    top_k_shape,
     trace_shape,
     vecmat_shape,
     vstack_shape,
@@ -2353,8 +2355,600 @@ def cov(
     dtype: Any = None,
 ) -> Array[IntTuple]: ...
 
+# Sorting and Partitioning
+@overload
+def sort[Shape: _Shape, Axis: Flag[int | None] = -1](
+    a: Array[Shape],
+    axis: Axis = -1,
+    *,
+    kind: None = None,
+    order: None = None,
+    stable: bool = True,
+    descending: bool = False,
+) -> Array[sort_shape(Shape, Axis)]: ...
+@overload
+def sort(
+    a: Any,
+    axis: int | None = -1,
+    *,
+    kind: None = None,
+    order: None = None,
+    stable: bool = True,
+    descending: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def argsort[Shape: _Shape, Axis: Flag[int | None] = -1](
+    a: Array[Shape],
+    axis: Axis = -1,
+    *,
+    kind: None = None,
+    order: None = None,
+    stable: bool = True,
+    descending: bool = False,
+    dtype: Any = None,
+) -> Array[sort_shape(Shape, Axis)]: ...
+@overload
+def argsort(
+    a: Any,
+    axis: int | None = -1,
+    *,
+    kind: None = None,
+    order: None = None,
+    stable: bool = True,
+    descending: bool = False,
+    dtype: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def sort_complex[Shape: _Shape](a: Array[Shape]) -> Array[Shape]: ...
+@overload
+def sort_complex(a: Any) -> Array[IntTuple]: ...
+@overload
+def partition[Shape: _Shape, Axis: Flag[int] = -1](
+    a: Array[Shape],
+    kth: int | Sequence[int],
+    axis: Axis = -1,
+) -> Array[sort_shape(Shape, Axis)]: ...
+@overload
+def partition(
+    a: Any,
+    kth: int | Sequence[int],
+    axis: int = -1,
+) -> Array[IntTuple]: ...
+@overload
+def argpartition[Shape: _Shape, Axis: Flag[int] = -1](
+    a: Array[Shape],
+    kth: int | Sequence[int],
+    axis: Axis = -1,
+) -> Array[sort_shape(Shape, Axis)]: ...
+@overload
+def argpartition(
+    a: Any,
+    kth: int | Sequence[int],
+    axis: int = -1,
+) -> Array[IntTuple]: ...
+@overload
+def lexsort[Shape: _Shape](
+    keys: Sequence[Array[Shape]],
+    axis: int = -1,
+) -> Array[Shape]: ...
+@overload
+def lexsort(
+    keys: Any,
+    axis: int = -1,
+) -> Array[IntTuple]: ...
+@overload
+def top_k[Shape: _Shape, K: Flag[int], Axis: Flag[int] = -1](
+    a: Array[Shape],
+    k: K,
+    /,
+    *,
+    axis: Axis = -1,
+    mode: str = "largest",
+    sorted: bool = True,
+) -> tuple[
+    Array[top_k_shape(Shape, K, Axis)],
+    Array[top_k_shape(Shape, K, Axis)],
+]: ...
+@overload
+def top_k(
+    a: Any,
+    k: int,
+    /,
+    *,
+    axis: int = -1,
+    mode: str = "largest",
+    sorted: bool = True,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+
+# Searching
+@overload
+def searchsorted(
+    a: Any,
+    v: _Scalar,
+    side: str = "left",
+    sorter: Any = None,
+    *,
+    method: str = "scan",
+) -> Array[[]]: ...
+@overload
+def searchsorted[Shape: _Shape](
+    a: Any,
+    v: Array[Shape],
+    side: str = "left",
+    sorter: Any = None,
+    *,
+    method: str = "scan",
+) -> Array[Shape]: ...
+@overload
+def searchsorted(
+    a: Any,
+    v: Any,
+    side: str = "left",
+    sorter: Any = None,
+    *,
+    method: str = "scan",
+) -> Array[IntTuple]: ...
+@overload
+def nonzero[Size: IntVar](
+    a: Any,
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> tuple[Array[[Size]], ...]: ...
+@overload
+def nonzero(
+    a: Any,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> tuple[Array[IntTuple], ...]: ...
+@overload
+def flatnonzero[Size: IntVar](
+    a: Any,
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> Array[[Size]]: ...
+@overload
+def flatnonzero(
+    a: Any,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def argwhere[N: IntVar, Size: IntVar](
+    a: Array[[N]],
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> Array[[Size, 1]]: ...
+@overload
+def argwhere[M: IntVar, N: IntVar, Size: IntVar](
+    a: Array[[M, N]],
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> Array[[Size, 2]]: ...
+@overload
+def argwhere[L: IntVar, M: IntVar, N: IntVar, Size: IntVar](
+    a: Array[[L, M, N]],
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> Array[[Size, 3]]: ...
+@overload
+def argwhere[K: IntVar, L: IntVar, M: IntVar, N: IntVar, Size: IntVar](
+    a: Array[[K, L, M, N]],
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> Array[[Size, 4]]: ...
+@overload
+def argwhere[Size: IntVar](
+    a: Any,
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> Array[[Size, int]]: ...
+@overload
+def argwhere(
+    a: Any,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def nan_to_num[Shape: _Shape](
+    x: Array[Shape],
+    copy: bool = True,
+    nan: _Scalar = 0.0,
+    posinf: _Scalar | None = None,
+    neginf: _Scalar | None = None,
+) -> Array[Shape]: ...
+@overload
+def nan_to_num(
+    x: Any,
+    copy: bool = True,
+    nan: _Scalar = 0.0,
+    posinf: _Scalar | None = None,
+    neginf: _Scalar | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def digitize[Shape: _Shape](
+    x: Array[Shape],
+    bins: Any,
+    right: bool = False,
+    *,
+    method: str | None = None,
+) -> Array[Shape]: ...
+@overload
+def digitize(
+    x: Any,
+    bins: Any,
+    right: bool = False,
+    *,
+    method: str | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def where[Size: IntVar](
+    condition: Any,
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> tuple[Array[[Size]], ...]: ...
+@overload
+def where(
+    condition: Any,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> tuple[Array[IntTuple], ...]: ...
+@overload
+def where[Shape: _Shape](
+    condition: Array[Shape],
+    x: _Scalar,
+    y: _Scalar,
+    /,
+) -> Array[Shape]: ...
+@overload
+def where[CondShape: _Shape, XShape: _Shape](
+    condition: Array[CondShape],
+    x: Array[XShape],
+    y: _Scalar,
+    /,
+) -> Array[broadcast(CondShape, XShape)]: ...
+@overload
+def where[CondShape: _Shape, YShape: _Shape](
+    condition: Array[CondShape],
+    x: _Scalar,
+    y: Array[YShape],
+    /,
+) -> Array[broadcast(CondShape, YShape)]: ...
+@overload
+def where[CondShape: _Shape, XShape: _Shape, YShape: _Shape](
+    condition: Array[CondShape],
+    x: Array[XShape],
+    y: Array[YShape],
+    /,
+) -> Array[broadcast(broadcast(CondShape, XShape), YShape)]: ...
+@overload
+def where(
+    condition: Any,
+    x: Any = None,
+    y: Any = None,
+    /,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> Any: ...
+
+# Selection & Clipping
+@overload
+def bincount[Length: IntVar](
+    x: Any,
+    weights: Any = None,
+    minlength: int = 0,
+    *,
+    length: Int[Length],
+    out_sharding: Any = None,
+) -> Array[[Length]]: ...
+@overload
+def bincount(
+    x: Any,
+    weights: Any = None,
+    minlength: int = 0,
+    *,
+    length: int | None = None,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def choose[Shape: _Shape](
+    a: Array[Shape],
+    choices: Sequence[Array[Shape] | _Scalar],
+    out: Any = None,
+    mode: str = "raise",
+) -> Array[Shape]: ...
+@overload
+def choose(
+    a: Any,
+    choices: Any,
+    out: Any = None,
+    mode: str = "raise",
+) -> Array[IntTuple]: ...
+@overload
+def clip[Shape: _Shape](
+    a: Array[Shape],
+    min: _Scalar | None = None,
+    max: _Scalar | None = None,
+) -> Array[Shape]: ...
+@overload
+def clip[Shape1: _Shape, Shape2: _Shape](
+    a: Array[Shape1],
+    min: Array[Shape2],
+    max: _Scalar | None = None,
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def clip[Shape1: _Shape, Shape3: _Shape](
+    a: Array[Shape1],
+    min: _Scalar | None,
+    max: Array[Shape3],
+) -> Array[broadcast(Shape1, Shape3)]: ...
+@overload
+def clip[Shape1: _Shape, Shape2: _Shape, Shape3: _Shape](
+    a: Array[Shape1],
+    min: Array[Shape2],
+    max: Array[Shape3],
+) -> Array[broadcast(broadcast(Shape1, Shape2), Shape3)]: ...
+@overload
+def clip(
+    a: Any,
+    min: Any = None,
+    max: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def fmax[Shape: _Shape](x1: Array[Shape], x2: _Scalar, /) -> Array[Shape]: ...
+@overload
+def fmax[Shape: _Shape](x1: _Scalar, x2: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def fmax[Shape1: _Shape, Shape2: _Shape](
+    x1: Array[Shape1], x2: Array[Shape2], /
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def fmax(x1: Any, x2: Any, /) -> Array[IntTuple]: ...
+@overload
+def fmin[Shape: _Shape](x1: Array[Shape], x2: _Scalar, /) -> Array[Shape]: ...
+@overload
+def fmin[Shape: _Shape](x1: _Scalar, x2: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def fmin[Shape1: _Shape, Shape2: _Shape](
+    x1: Array[Shape1], x2: Array[Shape2], /
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def fmin(x1: Any, x2: Any, /) -> Array[IntTuple]: ...
+@overload
+def piecewise[Shape: _Shape](
+    x: Array[Shape],
+    condlist: Array[Any] | Sequence[Array[Any] | bool],
+    funclist: Sequence[Any],
+    *args: Any,
+    **kw: Any,
+) -> Array[Shape]: ...
+@overload
+def piecewise(
+    x: Any,
+    condlist: Any,
+    funclist: Any,
+    *args: Any,
+    **kw: Any,
+) -> Array[IntTuple]: ...
+@overload
+def select[Shape: _Shape](
+    condlist: Sequence[Any],
+    choicelist: Sequence[Array[Shape]],
+    default: _Scalar | Array[Shape] = 0,
+) -> Array[Shape]: ...
+@overload
+def select(
+    condlist: Any,
+    choicelist: Any,
+    default: Any = 0,
+) -> Array[IntTuple]: ...
+
+# Set-like operations
+@overload
+def intersect1d[Size: IntVar](
+    ar1: Any,
+    ar2: Any,
+    assume_unique: bool = False,
+    return_indices: Literal[False] = False,
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> Array[[Size]]: ...
+@overload
+def intersect1d[Size: IntVar](
+    ar1: Any,
+    ar2: Any,
+    assume_unique: bool = False,
+    return_indices: Literal[True] = ...,
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> tuple[Array[[Size]], Array[[Size]], Array[[Size]]]: ...
+@overload
+def intersect1d(
+    ar1: Any,
+    ar2: Any,
+    assume_unique: bool = False,
+    return_indices: Literal[True] = ...,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> tuple[Array[IntTuple], Array[IntTuple], Array[IntTuple]]: ...
+@overload
+def intersect1d(
+    ar1: Any,
+    ar2: Any,
+    assume_unique: bool = False,
+    return_indices: bool = False,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> Array[IntTuple] | tuple[Array[IntTuple], Array[IntTuple], Array[IntTuple]]: ...
+@overload
+def isin[Shape: _Shape](
+    element: Array[Shape],
+    test_elements: Any,
+    assume_unique: bool = False,
+    invert: bool = False,
+    *,
+    method: str = "auto",
+) -> Array[Shape]: ...
+@overload
+def isin(
+    element: Any,
+    test_elements: Any,
+    assume_unique: bool = False,
+    invert: bool = False,
+    *,
+    method: str = "auto",
+) -> Array[IntTuple]: ...
+@overload
+def setdiff1d[Size: IntVar](
+    ar1: Any,
+    ar2: Any,
+    assume_unique: bool = False,
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> Array[[Size]]: ...
+@overload
+def setdiff1d(
+    ar1: Any,
+    ar2: Any,
+    assume_unique: bool = False,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def setxor1d[Size: IntVar](
+    ar1: Any,
+    ar2: Any,
+    assume_unique: bool = False,
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> Array[[Size]]: ...
+@overload
+def setxor1d(
+    ar1: Any,
+    ar2: Any,
+    assume_unique: bool = False,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def union1d[Size: IntVar](
+    ar1: Any,
+    ar2: Any,
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> Array[[Size]]: ...
+@overload
+def union1d(
+    ar1: Any,
+    ar2: Any,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def unique[Size: IntVar](
+    ar: Any,
+    return_index: Literal[False] = False,
+    return_inverse: Literal[False] = False,
+    return_counts: Literal[False] = False,
+    axis: int | None = None,
+    *,
+    equal_nan: bool = True,
+    size: Int[Size],
+    fill_value: Any = None,
+    sorted: bool = True,
+) -> Array[[Size]]: ...
+@overload
+def unique(
+    ar: Any,
+    return_index: bool = False,
+    return_inverse: bool = False,
+    return_counts: bool = False,
+    axis: int | None = None,
+    *,
+    equal_nan: bool = True,
+    size: int | None = None,
+    fill_value: Any = None,
+    sorted: bool = True,
+) -> Any: ...
+
+class _UniqueAllResult(NamedTuple):
+    values: Array[IntTuple]
+    indices: Array[IntTuple]
+    inverse_indices: Array[IntTuple]
+    counts: Array[IntTuple]
+
+class _UniqueCountsResult(NamedTuple):
+    values: Array[IntTuple]
+    counts: Array[IntTuple]
+
+class _UniqueInverseResult(NamedTuple):
+    values: Array[IntTuple]
+    inverse_indices: Array[IntTuple]
+
+def unique_all(
+    x: Any,
+    /,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> _UniqueAllResult: ...
+def unique_counts(
+    x: Any,
+    /,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> _UniqueCountsResult: ...
+def unique_inverse(
+    x: Any,
+    /,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> _UniqueInverseResult: ...
+@overload
+def unique_values[Size: IntVar](
+    x: Any,
+    /,
+    *,
+    size: Int[Size],
+    fill_value: Any = None,
+) -> Array[[Size]]: ...
+@overload
+def unique_values(
+    x: Any,
+    /,
+    *,
+    size: int | None = None,
+    fill_value: Any = None,
+) -> Array[IntTuple]: ...
+
 float32: Any
 float64: Any
 int32: Any
 int64: Any
+complex64: Any
+complex128: Any
 bool_: Any

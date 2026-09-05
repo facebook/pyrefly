@@ -992,3 +992,34 @@ def lax_squeeze_shape(shape: IntTuple, dimensions: tuple[int, ...]) -> IntTuple:
             "cannot select an axis to squeeze out which has size not equal to one"
         )
     return dsl.IntTuple((shape[i] for i in range(rank) if i not in dimensions))
+
+@type_shape_dsl_function
+def sort_shape(shape: IntTuple, axis: int | None) -> IntTuple:
+    if axis is None:
+        return dsl.IntTuple((dsl.prod(shape),))
+    if dsl.is_int_value(axis):
+        if len(shape) == 0:
+            return dsl.Invalid("axis out of bounds")
+        if axis < 0 - len(shape) or axis >= len(shape):
+            return dsl.Invalid("axis out of bounds")
+        return shape
+    return dsl.Invalid("axis must be an integer or None")
+
+@type_shape_dsl_function
+def top_k_shape(shape: IntTuple, k: int, axis: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + rank
+    else:
+        norm_axis = axis + 0
+    if norm_axis < 0 or norm_axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    if k < 0:
+        return dsl.Invalid("k must be non-negative")
+    extent = k + 0
+    return dsl.concat(
+        dsl.concat(shape[:norm_axis], dsl.IntTuple((extent,))),
+        shape[norm_axis + 1 :],
+    )
