@@ -243,39 +243,40 @@ def defines_assert_shape(fn: typing.Callable) -> typing.Callable:
     """
     Decorator that marks a function as an assert_shape helper.
 
-    Used in order to allow custom assert_shape functions if necessary for
-    different shape libraries; a default version that works for libraries
-    like torch and numpy where `.shape` is a tuple field is defined in
-    the `assert_shape` function of this library.
+    Used in order to allow custom assert_shape functions if necessary. A default
+    version that works for tuple-like shapes is defined in the `assert_shape`
+    function of this library.
     """
     return fn
 
 
 @defines_assert_shape
-def assert_shape(x, shape):
+def assert_shape(actual, shape):
     """
-    At runtime, assert that x has the expected runtime shape, assuming that `x` is
-    some type like `torch.Tensor` or `np.ndarray` that has a tuple-valued
-    field `shape` indicating the shape.
+    At runtime, assert that a tuple-like shape has the expected value.
 
-    Pyrefly will validate that the shape modeled in Pyrefly's shaped array
-    static analysis matches (similar to `assert_type`).
+    Pyrefly will validate that the statically modeled shape matches, similar to
+    `assert_type`.
 
     TODO(stroxler): for now, symbolic dimensions are skipped at runtime,
     so in the case of a symbolic `shape` the runtime validation is only checking
     the rank for those axes. But the static analysis will fully validate.
     """
 
-    actual = tuple(x.shape)
+    # Preserve legacy calls that pass an array object rather than its shape.
+    if not isinstance(actual, tuple) and hasattr(actual, "shape"):
+        actual_tuple = tuple(actual.shape)
+    else:
+        actual_tuple = tuple(actual)
     expected = tuple(shape)
     if any(isinstance(dim, SymbolicArithExpr) for dim in expected):
-        if len(actual) != len(expected):
+        if len(actual_tuple) != len(expected):
             raise AssertionError(
-                f"expected rank {len(expected)} for shape {expected}, got shape {actual}"
+                f"expected rank {len(expected)} for shape {expected}, got shape {actual_tuple}"
             )
-    elif actual != expected:
-        raise AssertionError(f"expected shape {expected}, got {actual}")
-    return x
+    elif actual_tuple != expected:
+        raise AssertionError(f"expected shape {expected}, got {actual_tuple}")
+    return actual
 
 
 def shaped_array(

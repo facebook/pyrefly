@@ -10,12 +10,12 @@ from shape_extensions import assert_shape
 
 
 def test_randn_1d_shape() -> None:
-    assert_shape(np.random.randn(5), (5,))
+    assert_shape(np.random.randn(5).shape, (5,))
 
 
 def test_randn_2d_shape() -> None:
-    assert_shape(np.random.randn(5, 3), (5, 3))
+    assert_shape(np.random.randn(5, 3).shape, (5, 3))
 
 
 def test_randn_2d_singleton_dimension_shape() -> None:
-    assert_shape(np.random.randn(5, 1), (5, 1))
+    assert_shape(np.random.randn(5, 1).shape, (5, 1))

@@ -27,18 +27,18 @@ def test_1d_fft_and_ifft() -> None:
     mat48 = jnp.ones((4, 8))
     tensor248 = jnp.ones((2, 4, 8))
 
-    assert_shape(jnp.fft.fft(vec8), (8,))
-    assert_shape(jnp.fft.ifft(vec8), (8,))
-    assert_shape(jnp.fft.fft(mat48), (4, 8))
-    assert_shape(jnp.fft.ifft(mat48), (4, 8))
-    assert_shape(jnp.fft.fft(tensor248), (2, 4, 8))
-    assert_shape(jnp.fft.ifft(tensor248), (2, 4, 8))
+    assert_shape(jnp.fft.fft(vec8).shape, (8,))
+    assert_shape(jnp.fft.ifft(vec8).shape, (8,))
+    assert_shape(jnp.fft.fft(mat48).shape, (4, 8))
+    assert_shape(jnp.fft.ifft(mat48).shape, (4, 8))
+    assert_shape(jnp.fft.fft(tensor248).shape, (2, 4, 8))
+    assert_shape(jnp.fft.ifft(tensor248).shape, (2, 4, 8))
 
     # Specifying n
-    assert_shape(jnp.fft.fft(vec8, n=16), (16,))
-    assert_shape(jnp.fft.ifft(vec8, n=16), (16,))
-    assert_shape(jnp.fft.fft(mat48, n=16), (4, 16))
-    assert_shape(jnp.fft.fft(mat48, n=16, axis=0), (16, 8))
+    assert_shape(jnp.fft.fft(vec8, n=16).shape, (16,))
+    assert_shape(jnp.fft.ifft(vec8, n=16).shape, (16,))
+    assert_shape(jnp.fft.fft(mat48, n=16).shape, (4, 16))
+    assert_shape(jnp.fft.fft(mat48, n=16, axis=0).shape, (16, 8))
 
 
 def test_rfft_and_irfft() -> None:
@@ -46,78 +46,78 @@ def test_rfft_and_irfft() -> None:
     mat48 = jnp.ones((4, 8))
 
     # rfft output length is N // 2 + 1
-    assert_shape(jnp.fft.rfft(vec8), (5,))
-    assert_shape(jnp.fft.rfft(mat48), (4, 5))
-    assert_shape(jnp.fft.rfft(mat48, axis=0), (3, 8))
-    assert_shape(jnp.fft.rfft(vec8, n=16), (9,))
+    assert_shape(jnp.fft.rfft(vec8).shape, (5,))
+    assert_shape(jnp.fft.rfft(mat48).shape, (4, 5))
+    assert_shape(jnp.fft.rfft(mat48, axis=0).shape, (3, 8))
+    assert_shape(jnp.fft.rfft(vec8, n=16).shape, (9,))
 
     # irfft default output length is 2 * (N - 1)
-    assert_shape(jnp.fft.irfft(vec8), (14,))
-    assert_shape(jnp.fft.irfft(mat48), (4, 14))
-    assert_shape(jnp.fft.irfft(mat48, axis=0), (6, 8))
-    assert_shape(jnp.fft.irfft(vec8, n=16), (16,))
+    assert_shape(jnp.fft.irfft(vec8).shape, (14,))
+    assert_shape(jnp.fft.irfft(mat48).shape, (4, 14))
+    assert_shape(jnp.fft.irfft(mat48, axis=0).shape, (6, 8))
+    assert_shape(jnp.fft.irfft(vec8, n=16).shape, (16,))
 
 
 def test_hfft_and_ihfft() -> None:
     vec8 = jnp.ones(8)
     mat48 = jnp.ones((4, 8))
 
-    assert_shape(jnp.fft.hfft(vec8), (14,))
-    assert_shape(jnp.fft.hfft(mat48), (4, 14))
-    assert_shape(jnp.fft.hfft(vec8, n=16), (16,))
+    assert_shape(jnp.fft.hfft(vec8).shape, (14,))
+    assert_shape(jnp.fft.hfft(mat48).shape, (4, 14))
+    assert_shape(jnp.fft.hfft(vec8, n=16).shape, (16,))
 
-    assert_shape(jnp.fft.ihfft(vec8), (5,))
-    assert_shape(jnp.fft.ihfft(mat48), (4, 5))
-    assert_shape(jnp.fft.ihfft(vec8, n=16), (9,))
+    assert_shape(jnp.fft.ihfft(vec8).shape, (5,))
+    assert_shape(jnp.fft.ihfft(mat48).shape, (4, 5))
+    assert_shape(jnp.fft.ihfft(vec8, n=16).shape, (9,))
 
 
 def test_2d_fft_operations() -> None:
     mat48 = jnp.ones((4, 8))
     tensor248 = jnp.ones((2, 4, 8))
 
-    assert_shape(jnp.fft.fft2(mat48), (4, 8))
-    assert_shape(jnp.fft.ifft2(mat48), (4, 8))
-    assert_shape(jnp.fft.fft2(tensor248), (2, 4, 8))
-    assert_shape(jnp.fft.ifft2(tensor248), (2, 4, 8))
+    assert_shape(jnp.fft.fft2(mat48).shape, (4, 8))
+    assert_shape(jnp.fft.ifft2(mat48).shape, (4, 8))
+    assert_shape(jnp.fft.fft2(tensor248).shape, (2, 4, 8))
+    assert_shape(jnp.fft.ifft2(tensor248).shape, (2, 4, 8))
 
-    assert_shape(jnp.fft.rfft2(mat48), (4, 5))
-    assert_shape(jnp.fft.rfft2(tensor248), (2, 4, 5))
+    assert_shape(jnp.fft.rfft2(mat48).shape, (4, 5))
+    assert_shape(jnp.fft.rfft2(tensor248).shape, (2, 4, 5))
 
-    assert_shape(jnp.fft.irfft2(mat48), (4, 14))
-    assert_shape(jnp.fft.irfft2(tensor248), (2, 4, 14))
+    assert_shape(jnp.fft.irfft2(mat48).shape, (4, 14))
+    assert_shape(jnp.fft.irfft2(tensor248).shape, (2, 4, 14))
 
 
 def test_nd_fft_operations() -> None:
     tensor248 = jnp.ones((2, 4, 8))
 
-    assert_shape(jnp.fft.fftn(tensor248), (2, 4, 8))
-    assert_shape(jnp.fft.ifftn(tensor248), (2, 4, 8))
-    assert_shape(jnp.fft.rfftn(tensor248), (2, 4, 5))
-    assert_shape(jnp.fft.irfftn(tensor248), (2, 4, 14))
+    assert_shape(jnp.fft.fftn(tensor248).shape, (2, 4, 8))
+    assert_shape(jnp.fft.ifftn(tensor248).shape, (2, 4, 8))
+    assert_shape(jnp.fft.rfftn(tensor248).shape, (2, 4, 5))
+    assert_shape(jnp.fft.irfftn(tensor248).shape, (2, 4, 14))
 
 
 def test_fftfreq_and_rfftfreq() -> None:
-    assert_shape(jnp.fft.fftfreq(8), (8,))
-    assert_shape(jnp.fft.fftfreq(10, d=0.5), (10,))
-    assert_shape(jnp.fft.rfftfreq(8), (5,))
-    assert_shape(jnp.fft.rfftfreq(9), (5,))
-    assert_shape(jnp.fft.rfftfreq(10), (6,))
+    assert_shape(jnp.fft.fftfreq(8).shape, (8,))
+    assert_shape(jnp.fft.fftfreq(10, d=0.5).shape, (10,))
+    assert_shape(jnp.fft.rfftfreq(8).shape, (5,))
+    assert_shape(jnp.fft.rfftfreq(9).shape, (5,))
+    assert_shape(jnp.fft.rfftfreq(10).shape, (6,))
 
 
 def test_fftshift_and_ifftshift() -> None:
     mat48 = jnp.ones((4, 8))
     tensor248 = jnp.ones((2, 4, 8))
 
-    assert_shape(jnp.fft.fftshift(mat48), (4, 8))
-    assert_shape(jnp.fft.ifftshift(mat48), (4, 8))
-    assert_shape(jnp.fft.fftshift(tensor248), (2, 4, 8))
-    assert_shape(jnp.fft.ifftshift(tensor248), (2, 4, 8))
+    assert_shape(jnp.fft.fftshift(mat48).shape, (4, 8))
+    assert_shape(jnp.fft.ifftshift(mat48).shape, (4, 8))
+    assert_shape(jnp.fft.fftshift(tensor248).shape, (2, 4, 8))
+    assert_shape(jnp.fft.ifftshift(tensor248).shape, (2, 4, 8))
 
 
 def test_fft_rejects_out_of_bounds_axis() -> None:
     mat48 = jnp.ones((4, 8))
 
-    assert_shape(jnp.fft.rfft(mat48, axis=1), (4, 5))
+    assert_shape(jnp.fft.rfft(mat48, axis=1).shape, (4, 5))
     try:
         # E: Cannot evaluate type-level shape DSL call: FFT axis out of bounds
         jnp.fft.rfft(mat48, axis=3)

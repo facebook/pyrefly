@@ -33,17 +33,17 @@ def reject_negative_size(x: jax.Array[[N, M]]) -> None:
 def test_reshape_to_explicit_shape() -> None:
     a = jnp.ones((3, 4))
 
-    assert_shape(jnp.reshape(a, (2, 6)), (2, 6))
-    assert_shape(jnp.reshape(a, (12,)), (12,))
-    assert_shape(jnp.reshape(a, 12), (12,))
-    assert_shape(jnp.reshape(a, (2, 3, 2)), (2, 3, 2))
+    assert_shape(jnp.reshape(a, (2, 6)).shape, (2, 6))
+    assert_shape(jnp.reshape(a, (12,)).shape, (12,))
+    assert_shape(jnp.reshape(a, 12).shape, (12,))
+    assert_shape(jnp.reshape(a, (2, 3, 2)).shape, (2, 3, 2))
 
 
 def test_reshape_method() -> None:
     a = jnp.ones((2, 3, 4))
 
-    assert_shape(a.reshape((6, 4)), (6, 4))
-    assert_shape(a.reshape(24), (24,))
+    assert_shape(a.reshape((6, 4)).shape, (6, 4))
+    assert_shape(a.reshape(24).shape, (24,))
 
 
 def test_reshape_infers_placeholder_dimension() -> None:
@@ -69,11 +69,11 @@ def test_reshape_accepts_keywords_where_jax_does() -> None:
 
     # The free function names both parameters and takes `order`; the method
     # takes only `order`, since its shape arguments are variadic.
-    assert_shape(jnp.reshape(a=a, shape=(6, 2)), (6, 2))
-    assert_shape(jnp.reshape(a, (6, 2), order="F"), (6, 2))
-    assert_shape(a.reshape((6, 2), order="C"), (6, 2))
-    assert_shape(jnp.reshape(a, (6, 2), copy=True), (6, 2))
-    assert_shape(a.reshape((6, 2), out_sharding=None), (6, 2))
+    assert_shape(jnp.reshape(a=a, shape=(6, 2)).shape, (6, 2))
+    assert_shape(jnp.reshape(a, (6, 2), order="F").shape, (6, 2))
+    assert_shape(a.reshape((6, 2), order="C").shape, (6, 2))
+    assert_shape(jnp.reshape(a, (6, 2), copy=True).shape, (6, 2))
+    assert_shape(a.reshape((6, 2), out_sharding=None).shape, (6, 2))
 
 
 def test_reshape_accepts_a_sequence_shape() -> None:
@@ -88,7 +88,7 @@ def test_reshape_accepts_a_sequence_shape() -> None:
 def test_reshape_method_is_positional_only() -> None:
     a = jnp.ones((3, 4))
 
-    assert_shape(a.reshape((2, 6)), (2, 6))
+    assert_shape(a.reshape((2, 6)).shape, (2, 6))
     try:
         a.reshape(shape=(2, 6))  # E: Unexpected keyword argument `shape`
     except TypeError:
@@ -100,7 +100,7 @@ def test_reshape_method_is_positional_only() -> None:
 def test_reshape_rejects_multiple_placeholders() -> None:
     a = jnp.ones((3, 4))
 
-    assert_shape(jnp.reshape(a, (2, 6)), (2, 6))
+    assert_shape(jnp.reshape(a, (2, 6)).shape, (2, 6))
     try:
         # E: Cannot evaluate type-level shape DSL call: reshape accepts at most one -1
         jnp.reshape(a, (2, -1, -1))
@@ -113,7 +113,7 @@ def test_reshape_rejects_multiple_placeholders() -> None:
 def test_reshape_rejects_incompatible_element_count() -> None:
     a = jnp.ones((3, 4))
 
-    assert_shape(jnp.reshape(a, (4, 3)), (4, 3))
+    assert_shape(jnp.reshape(a, (4, 3)).shape, (4, 3))
     try:
         # E: reshape target element count does not match the input
         jnp.reshape(a, (5, 5))

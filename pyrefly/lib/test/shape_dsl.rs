@@ -71,7 +71,8 @@ fn shaped_array_env_with_shaped_torch() -> TestEnv {
 from shape_extensions import Elements, IntTuple, shaped_array
 
 @shaped_array(shape="Shape")
-class Tensor[Shape: IntTuple]: ...
+class Tensor[Shape: IntTuple]:
+    shape: Shape
 "#,
     );
     env
@@ -1148,7 +1149,7 @@ def concrete_elements_middle(
     reveal_type(result)  # E: revealed type: Array[[1, 2, 3, 4], int]
 
 def assert_single_dim(x: Array[[3], int]) -> None:
-    reveal_type(assert_shape(x, (3,)))  # E: revealed type: Array[[3], int]
+    reveal_type(assert_shape(x.shape, (3,)))  # E: revealed type: IntTuple[3]
 "#,
 );
 
@@ -7142,30 +7143,95 @@ testcase!(
     test_assert_shape_builtin,
     shaped_array_env_with_shaped_torch(),
     r#"
-from shape_extensions import D, IntVar, assert_shape
+from shape_extensions import D, IntTuple, IntVar, assert_shape
 from typing import assert_type
 from torch import Tensor
 
 def f[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> None:
+    assert_type(assert_shape(x.shape, (D[N], D(M))), IntTuple[N, M])
     assert_type(assert_shape(x, (D[N], D(M))), Tensor[[N, M]])
     assert_shape(x, (D[M], D[N]))  # E: assert_shape((N, M), (M, N)) failed
-    assert_shape(x, [D[N], D(M)])  # E: Second argument to `assert_shape` must be a tuple of tensor dimensions
+    assert_shape(x.shape, (D[M], D[N]))  # E: assert_shape((N, M), (M, N)) failed
+    assert_shape(x.shape, (D[N],))  # E: assert_shape((N, M), (N,)) failed
+    assert_shape(x.shape, [D[N], D(M)])  # E: Second argument to `assert_shape` must be a tuple of tensor dimensions
+
+def make[T]() -> T: ...
+
+inferred_from_assignment: Tensor[[2, 3]] = assert_shape(make(), (2, 3))
 "#,
 );
 
 testcase!(
-    test_assert_shape_preserves_registered_shape_arg,
+    test_assert_shape_refines_gradual_shape,
+    shaped_array_env_with_shaped_torch(),
+    r#"
+from shape_extensions import IntTuple, assert_shape
+from typing import assert_type
+from torch import Tensor
+
+def f(x: Tensor[IntTuple]) -> None:
+    assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
+"#,
+);
+
+testcase!(
+    test_assert_shape_undecorated_int_tuple_class,
     shaped_array_env(),
     r#"
-from shape_extensions import D, IntTuple, IntVar, assert_shape, shaped_array
-from typing import assert_type
+from shape_extensions import Elements, IntTuple, assert_shape
+from typing import Any, assert_type
 
-@shaped_array(shape="Shape")
-class Array[Shape: IntTuple, DType]: ...
+class Array[Shape: IntTuple = tuple[Any, ...]]:
+    shape: Shape
 
-def f[N: IntVar, M: IntVar](x: Array[[N, M], str]) -> None:
-    assert_type(assert_shape(x, (D[N], D[M])), Array[[N, M], str])
-    assert_shape(x, (D[M], D[N]))  # E: assert_shape((N, M), (M, N)) failed
+def concrete(x: Array[IntTuple[2, 3]]) -> None:
+    assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
+    assert_shape(x.shape, (3, 2))  # E: assert_shape((2, 3), (3, 2)) failed
+
+def default(x: Array) -> None:
+    assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
+
+def gradual(shape: tuple[Any, ...]) -> None:
+    assert_type(assert_shape(shape, (2, 3)), IntTuple[2, 3])
+
+def any_shape(shape: Any) -> None:
+    assert_type(assert_shape(shape, (2, 3)), IntTuple[2, 3])
+
+def any_array(x: Array[Any]) -> None:
+    assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
+
+def generic[Shape: IntTuple](x: Array[Shape]) -> None:
+    assert_type(assert_shape(x.shape, (2, 3)), IntTuple[2, 3])
+
+def generic_shape[Shape: IntTuple](shape: Shape) -> None:
+    assert_type(assert_shape(shape, (2, 3)), IntTuple[2, 3])
+
+def precise_bound[Shape: IntTuple[2, 3]](shape: Shape) -> None:
+    assert_type(assert_shape(shape, (2, 3)), IntTuple[2, 3])
+    assert_shape(shape, (9, 9))  # E: assert_shape((2, 3), (9, 9)) failed
+
+def partial_bound[Shape: IntTuple[2, *Elements[IntTuple], 4]](shape: Shape) -> None:
+    assert_type(assert_shape(shape, (2, 3, 4)), IntTuple[2, 3, 4])
+    assert_shape(shape, (9, 3, 4))  # E: assert_shape((2, *tuple[int, ...], 4), (9, 3, 4)) failed
+
+def unrestricted[T](value: T) -> None:
+    assert_shape(value, (2, 3))  # E: First argument to `assert_shape` must be an `IntTuple`, got `T`
+
+def wrong_bound[T: str](value: T) -> None:
+    assert_shape(value, (2, 3))  # E: First argument to `assert_shape` must be an `IntTuple`, got `T`
+
+def unpacked[Shape: IntTuple](
+    prefix: IntTuple[2, *Elements[Shape]],
+    suffix: IntTuple[*Elements[Shape], 4],
+    both: IntTuple[2, *Elements[Shape], 4],
+) -> None:
+    assert_shape(prefix, (3, 4))  # E: assert_shape((2, *Elements[Shape]), (3, 4)) failed
+    assert_shape(suffix, (2, 3))  # E: assert_shape((*Elements[Shape], 4), (2, 3)) failed
+    assert_shape(both, (2,))  # E: assert_shape((2, *Elements[Shape], 4), (2,)) failed
+    assert_type(assert_shape(both, (2, 3, 4)), IntTuple[2, 3, 4])
+
+def invalid(shape: tuple[str, ...]) -> None:
+    assert_shape(shape, (2, 3))  # E: First argument to `assert_shape` must be an `IntTuple`, got `tuple[str, ...]`
 "#,
 );
 
@@ -7173,26 +7239,28 @@ testcase!(
     test_assert_shape_user_defined_helper,
     shaped_array_env_with_shaped_torch(),
     r#"
-from shape_extensions import defines_assert_shape
+from shape_extensions import IntTuple, defines_assert_shape
 from typing import Any, assert_type
 from torch import Tensor
 
 @defines_assert_shape
-def check_shape(x: object, shape: tuple[Any, ...]) -> object: ...
+def check_shape(x: IntTuple, shape: tuple[Any, ...]) -> IntTuple: ...
 
 def f(x: Tensor[[2, 3]]) -> None:
-    assert_type(check_shape(x, (2, 3)), Tensor[[2, 3]])
-    check_shape(x, (2, 4))  # E: assert_shape((2, 3), (2, 4)) failed
+    assert_type(check_shape(x.shape, (2, 3)), IntTuple[2, 3])
+    check_shape(x.shape, (2, 4))  # E: assert_shape((2, 3), (2, 4)) failed
 "#,
 );
 
 testcase!(
-    test_assert_shape_rejects_non_shaped_array,
+    test_assert_shape_rejects_non_int_tuple,
     shaped_array_env_with_shaped_torch(),
     r#"
-from shape_extensions import assert_shape
+from shape_extensions import IntTuple, assert_shape
+from typing import assert_type
 
-assert_shape(0, (2, 3))  # E: First argument to `assert_shape` must be a shaped array, got `Literal[0]`
+assert_shape(0, (2, 3))  # E: First argument to `assert_shape` must be an `IntTuple`, got `Literal[0]`
+assert_type(assert_shape((2, 3), (2, 3)), IntTuple[2, 3])
 "#,
 );
 

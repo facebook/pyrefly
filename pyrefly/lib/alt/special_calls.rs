@@ -13,6 +13,8 @@
 
 use pyrefly_python::dunder;
 use pyrefly_types::shaped_array::IntTuple;
+use pyrefly_types::shaped_array::IntTupleView;
+use pyrefly_types::shaped_array::is_tuple_carrier_shape_middle;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
@@ -26,6 +28,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::expr::ExprOptions;
+use crate::alt::shape_extension::is_int_tuple_bound;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::unwrap::HintRef;
@@ -40,6 +43,24 @@ use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    /// Interpret an arbitrary expression as a shape without trusting unvalidated type variables.
+    /// A valid type variable contributes the shape constraints from its normalized upper bound.
+    fn assert_shape_input_to_int_tuple(&self, ty: &Type) -> Option<IntTuple> {
+        let upper_bound = match ty {
+            Type::Quantified(q) if q.is_type_var() => Some(q.upper_bound(self.stdlib, self.heap)),
+            Type::TypeVar(tv) => Some(tv.upper_bound(self.stdlib, self.heap)),
+            _ => None,
+        };
+        if let Some(upper_bound) = upper_bound {
+            let int_type = self.stdlib.int().clone().to_type();
+            if !is_int_tuple_bound(&upper_bound, &int_type) {
+                return None;
+            }
+            return self.shape_arg_to_int_tuple(&upper_bound);
+        }
+        self.shape_arg_to_int_tuple(ty)
+    }
+
     pub fn call_assert_type(
         &self,
         args: &[Expr],
@@ -209,23 +230,45 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let actual = self
                 .solver()
                 .force(self.expr_infer_with_hint(&args[0], hint, errors));
-            if let Type::ShapedArray(shaped_array) = &actual {
+            let (actual_shape, return_actual) = match &actual {
+                Type::ShapedArray(array) => (Some(array.shape()), true),
+                _ if actual.is_any() => (Some(IntTuple::shapeless()), false),
+                _ => (self.assert_shape_input_to_int_tuple(&actual), false),
+            };
+            if let Some(actual_shape) = actual_shape {
                 if let Some(shape) = self.parse_assert_shape_expr(&args[1], errors) {
-                    let expected = self
-                        .shaped_array_with_shape(shaped_array, shape.clone())
-                        .to_type();
-                    if !self.is_equivalent(&actual, &expected) {
+                    let expected = self.heap.mk_int_tuple(shape.clone());
+                    let constraint = match actual_shape.view() {
+                        IntTupleView::Unpacked {
+                            prefix,
+                            middle,
+                            suffix,
+                        } if is_tuple_carrier_shape_middle(middle) => IntTuple::unpacked(
+                            prefix.to_vec(),
+                            IntTuple::shapeless().to_shape_arg_type(),
+                            suffix.to_vec(),
+                        ),
+                        IntTupleView::Concrete(_)
+                        | IntTupleView::Gradual
+                        | IntTupleView::Unpacked { .. } => actual_shape.clone(),
+                    };
+                    // Do not solve a generic shape parameter from an assertion, but preserve its
+                    // known prefix, suffix, and minimum-rank constraints.
+                    if !self.is_subset_eq(&expected, &self.heap.mk_int_tuple(constraint)) {
                         self.error(
                             errors,
                             range,
                             ErrorKind::AssertType,
                             format!(
                                 "assert_shape({}, {}) failed",
-                                format_assert_shape_shape(&shaped_array.shape()),
+                                format_assert_shape_shape(&actual_shape),
                                 format_assert_shape_shape(&shape)
                             ),
                         );
                     }
+                    if return_actual { actual } else { expected }
+                } else {
+                    self.heap.mk_any_error()
                 }
             } else {
                 self.error(
@@ -233,12 +276,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     args[0].range(),
                     ErrorKind::BadArgumentType,
                     format!(
-                        "First argument to `assert_shape` must be a shaped array, got `{}`",
+                        "First argument to `assert_shape` must be an `IntTuple`, got `{}`",
                         self.for_display(actual.clone())
                     ),
                 );
+                self.heap.mk_any_error()
             }
-            actual
         } else {
             self.error(
                 errors,

@@ -30,21 +30,21 @@ class ArrayLikeIndex:
 def test_basic_indexing() -> None:
     x = jnp.ones((2, 3, 4))
 
-    assert_shape(x[0], (3, 4))
-    assert_shape(x[:, 1:], (2, 2, 4))
-    assert_shape(x[..., 0], (2, 3))
-    assert_shape(x[None, ...], (1, 2, 3, 4))
+    assert_shape(x[0].shape, (3, 4))
+    assert_shape(x[:, 1:].shape, (2, 2, 4))
+    assert_shape(x[..., 0].shape, (2, 3))
+    assert_shape(x[None, ...].shape, (1, 2, 3, 4))
 
 
 def test_integer_tuple_indexing() -> None:
     x = jnp.ones((2, 4, 5))
 
-    assert_shape(x[:, (0, 2, 3), :], (2, 3, 5))
+    assert_shape(x[:, (0, 2, 3), :].shape, (2, 3, 5))
 
 
 def test_indexing_scalar_is_rejected() -> None:
     x = jnp.ones(())
-    assert_shape(x, ())
+    assert_shape(x.shape, ())
     try:
         x[0]  # E: Cannot index scalar tensor (rank 0)
     except IndexError:
@@ -55,7 +55,7 @@ def test_indexing_scalar_is_rejected() -> None:
 
 def test_list_indexing_is_statically_accepted_for_compatibility() -> None:
     x = jnp.ones((2, 3, 4))
-    assert_shape(x, (2, 3, 4))
+    assert_shape(x.shape, (2, 3, 4))
 
     if TYPE_CHECKING:
         # TODO(stroxler): Preserve the length of list-literal indices in annotations.
@@ -82,10 +82,10 @@ def test_gradual_and_fallback_indexing() -> None:
         assert_type(x[ArrayLikeIndex()], Array[IntTuple])
         assert_type(x[[[0, 1], [1, 0]]], Array[IntTuple])
     else:
-        assert_shape(x[array_index], (2, 3, 4))
-        assert_shape(x[:, array_index], (2, 2, 4))
-        assert_shape(x[True], (1, 2, 3, 4))
-        assert_shape(x[:, array_index, (0, 1)], (2, 2))
+        assert_shape(x[array_index].shape, (2, 3, 4))
+        assert_shape(x[:, array_index].shape, (2, 2, 4))
+        assert_shape(x[True].shape, (1, 2, 3, 4))
+        assert_shape(x[:, array_index, (0, 1)].shape, (2, 2))
         for index in (IndexScalar(), ArrayLikeIndex(), [[0, 1], [1, 0]]):
             try:
                 x[index]
@@ -97,7 +97,7 @@ def test_gradual_and_fallback_indexing() -> None:
 
 def test_invalid_index() -> None:
     x = jnp.ones((2, 3, 4))
-    assert_shape(x, (2, 3, 4))
+    assert_shape(x.shape, (2, 3, 4))
 
     try:
         x[0, 0, 0, 0]  # E: Too many indices

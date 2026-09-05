@@ -170,14 +170,14 @@ def test_matmul_function_2d() -> None:
     a = np.ones((3, 4))
     b = np.ones((4, 5))
 
-    assert_shape(np.matmul(a, b), (3, 5))
+    assert_shape(np.matmul(a, b).shape, (3, 5))
 
 
 def test_matmul_operator_2d() -> None:
     a = np.ones((3, 4))
     b = np.ones((4, 5))
 
-    assert_shape(a @ b, (3, 5))
+    assert_shape((a @ b).shape, (3, 5))
 
 
 def test_matmul_vector_operands() -> None:
@@ -208,39 +208,39 @@ def test_transpose_property_2d() -> None:
     x = np.ones((3, 4))
     y = np.ones((3, 1))
 
-    assert_shape(x.T, (4, 3))
-    assert_shape(x.T.T, (3, 4))
-    assert_shape(x.T @ x, (4, 4))
-    assert_shape(x.T @ y, (4, 1))
+    assert_shape(x.T.shape, (4, 3))
+    assert_shape(x.T.T.shape, (3, 4))
+    assert_shape((x.T @ x).shape, (4, 4))
+    assert_shape((x.T @ y).shape, (4, 1))
 
 
 def test_solve_vector_rhs() -> None:
     a = np.eye(3)
     b = np.ones(3)
 
-    assert_shape(np.linalg.solve(a, b), (3,))
+    assert_shape(np.linalg.solve(a, b).shape, (3,))
 
 
 def test_solve_matrix_rhs() -> None:
     a = np.eye(3)
     b = np.ones((3, 2))
 
-    assert_shape(np.linalg.solve(a, b), (3, 2))
+    assert_shape(np.linalg.solve(a, b).shape, (3, 2))
 
 
 def test_solve_column_rhs_regression_composition() -> None:
     x = np.random.randn(5, 3)
     y = np.random.randn(5, 1)
 
-    assert_shape(np.linalg.solve(x.T @ x, x.T @ y), (3, 1))
+    assert_shape(np.linalg.solve(x.T @ x, x.T @ y).shape, (3, 1))
 
 
 def test_eigh_square_matrix() -> None:
     hamiltonian = np.eye(5)
     eigenvalues, eigenvectors = np.linalg.eigh(hamiltonian)
 
-    assert_shape(eigenvalues, (5,))
-    assert_shape(eigenvectors, (5, 5))
+    assert_shape(eigenvalues.shape, (5,))
+    assert_shape(eigenvectors.shape, (5, 5))
 
 
 def particle_in_box_shape_path(
@@ -258,15 +258,17 @@ def particle_in_box_shape_path(
 def test_particle_in_box_shape_path() -> None:
     energies, wavefunctions = particle_in_box_shape_path(5)
 
-    assert_shape(energies, (5,))
-    assert_shape(wavefunctions, (5, 5))
+    assert_shape(energies.shape, (5,))
+    assert_shape(wavefunctions.shape, (5, 5))
 
 
 def test_norm_3d_axis_keepdims_for_nbody() -> None:
     positions = np.ones((5, 3))
     pairwise_deltas = positions[:, None, :] - positions[None, :, :]
 
-    assert_shape(np.linalg.norm(pairwise_deltas, axis=-1, keepdims=True), (5, 5, 1))
+    assert_shape(
+        np.linalg.norm(pairwise_deltas, axis=-1, keepdims=True).shape, (5, 5, 1)
+    )
 
 
 def gravitational_force_shape_path(
@@ -284,7 +286,7 @@ def test_nbody_force_shape_path() -> None:
     pos = np.ones((5, 3))
     mass = np.ones(5)
 
-    assert_shape(gravitational_force_shape_path(pos, mass), (5, 3))
+    assert_shape(gravitational_force_shape_path(pos, mass).shape, (5, 3))
 
 
 def test_svd_reduced_wide_matrix() -> None:
@@ -292,9 +294,9 @@ def test_svd_reduced_wide_matrix() -> None:
 
     u, s, vt = np.linalg.svd(x, full_matrices=False)
 
-    assert_shape(u, (3, 3))
-    assert_shape(s, (3,))
-    assert_shape(vt, (3, 5))
+    assert_shape(u.shape, (3, 3))
+    assert_shape(s.shape, (3,))
+    assert_shape(vt.shape, (3, 5))
 
 
 def test_svd_reduced_tall_matrix() -> None:
@@ -302,9 +304,9 @@ def test_svd_reduced_tall_matrix() -> None:
 
     u, s, vt = np.linalg.svd(x, full_matrices=False)
 
-    assert_shape(u, (5, 3))
-    assert_shape(s, (3,))
-    assert_shape(vt, (3, 3))
+    assert_shape(u.shape, (5, 3))
+    assert_shape(s.shape, (3,))
+    assert_shape(vt.shape, (3, 3))
 
 
 def test_svd_reduced_square_matrix() -> None:
@@ -312,10 +314,10 @@ def test_svd_reduced_square_matrix() -> None:
 
     u, s, vt = np.linalg.svd(x, full_matrices=False)
 
-    assert_shape(u, (4, 4))
-    assert_shape(s, (4,))
-    assert_shape(vt, (4, 4))
-    assert_shape(square_svd_components(x), (4, 4))
+    assert_shape(u.shape, (4, 4))
+    assert_shape(s.shape, (4,))
+    assert_shape(vt.shape, (4, 4))
+    assert_shape(square_svd_components(x).shape, (4, 4))
 
 
 def test_svd_reduced_dtype_preserved() -> None:
@@ -323,9 +325,9 @@ def test_svd_reduced_dtype_preserved() -> None:
 
     u, s, vt = np.linalg.svd(x, full_matrices=False)
 
-    assert_shape(u, (5, 3))
-    assert_shape(s, (3,))
-    assert_shape(vt, (3, 3))
+    assert_shape(u.shape, (5, 3))
+    assert_shape(s.shape, (3,))
+    assert_shape(vt.shape, (3, 3))
     assert_type(u.dtype, np.dtype[np.float32])
     assert_type(s.dtype, np.dtype[np.float32])
     assert_type(vt.dtype, np.dtype[np.float32])
@@ -337,10 +339,10 @@ def test_svd_all_component_pca_projection() -> None:
     u, s, vt = np.linalg.svd(x_centered, full_matrices=False)
     projection = x_centered @ vt.T
 
-    assert_shape(u, (5, 3))
-    assert_shape(s, (3,))
-    assert_shape(vt, (3, 3))
-    assert_shape(projection, (5, 3))
+    assert_shape(u.shape, (5, 3))
+    assert_shape(s.shape, (3,))
+    assert_shape(vt.shape, (3, 3))
+    assert_shape(projection.shape, (5, 3))
 
 
 def test_matmul_operator_rejects_mismatched_inner_dimension() -> None:
@@ -350,7 +352,7 @@ def test_matmul_operator_rejects_mismatched_inner_dimension() -> None:
     # The mismatched matmul below raises before assert_shape runs, so anchor the
     # well-formed shape here to satisfy run_runtime_tests' "every test asserts a
     # shape" invariant.
-    assert_shape(np.ones((3, 4)) @ np.ones((4, 5)), (3, 5))
+    assert_shape((np.ones((3, 4)) @ np.ones((4, 5))).shape, (3, 5))
     try:
         # `a @ b` is rejected statically (mismatched inner dims) and raises at
         # runtime; the well-formed anchor above satisfies the shape-assertion
@@ -369,7 +371,7 @@ def test_matmul_rejects_mismatched_inner_dimension() -> None:
     # The mismatched matmul below raises before assert_shape runs, so anchor the
     # well-formed shape here to satisfy run_runtime_tests' "every test asserts a
     # shape" invariant.
-    assert_shape(np.matmul(np.ones((3, 4)), np.ones((4, 5))), (3, 5))
+    assert_shape(np.matmul(np.ones((3, 4)), np.ones((4, 5))).shape, (3, 5))
     try:
         # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 4 and 6
         np.matmul(a, b)

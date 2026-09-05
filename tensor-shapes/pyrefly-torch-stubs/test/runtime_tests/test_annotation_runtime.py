@@ -246,25 +246,33 @@ class TestAssertShapeRuntime(unittest.TestCase):
 
     def test_concrete_shape_matches(self):
         x = self.Array((2, 3))
+        self.assertIs(assert_shape(x.shape, (2, 3)), x.shape)
+
+    def test_tuple_subclass_identity_is_preserved(self):
+        shape = torch.Size((2, 3))
+        self.assertIs(assert_shape(shape, (2, 3)), shape)
+
+    def test_array_argument_uses_shape(self):
+        x = self.Array([2, 3])
         self.assertIs(assert_shape(x, (2, 3)), x)
 
     def test_concrete_shape_mismatch(self):
         with self.assertRaisesRegex(
             AssertionError, r"expected shape \(2, 3\), got \(2, 4\)"
         ):
-            assert_shape(self.Array((2, 4)), (2, 3))
+            assert_shape(self.Array((2, 4)).shape, (2, 3))
 
     def test_symbolic_shape_checks_rank_only(self):
         def f[N]() -> None:
             x = self.Array((2, 4))
-            self.assertIs(assert_shape(x, (2, D[N] + 1)), x)
+            self.assertIs(assert_shape(x.shape, (2, D[N] + 1)), x.shape)
 
         f()
 
     def test_symbolic_shape_rank_mismatch(self):
         def f[N]() -> None:
             with self.assertRaisesRegex(AssertionError, r"expected rank 2"):
-                assert_shape(self.Array((2, 4, 5)), (2, D[N] + 1))
+                assert_shape(self.Array((2, 4, 5)).shape, (2, D[N] + 1))
 
         f()
 

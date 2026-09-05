@@ -88,16 +88,16 @@ def test_operator_matmul() -> None:
     left = jnp.ones((3, 4))
     right = jnp.ones((4, 5))
 
-    assert_shape(left @ right, (3, 5))
+    assert_shape((left @ right).shape, (3, 5))
 
 
 def test_function_matmul() -> None:
     left = jnp.ones((2, 3))
     right = jnp.ones((3, 7))
 
-    assert_shape(jnp.matmul(left, right), (2, 7))
+    assert_shape(jnp.matmul(left, right).shape, (2, 7))
     # JAX names both operands, unlike the ufuncs, which are positional-only.
-    assert_shape(jnp.matmul(a=left, b=right), (2, 7))
+    assert_shape(jnp.matmul(a=left, b=right).shape, (2, 7))
 
 
 def test_batched_matmul() -> None:
@@ -108,21 +108,21 @@ def test_batched_matmul() -> None:
     batch_245 = jnp.ones((2, 4, 5))
 
     # 1D @ 1D -> ()
-    assert_shape(jnp.matmul(vec4, vec4), ())
+    assert_shape(jnp.matmul(vec4, vec4).shape, ())
 
     # 1D @ ND -> (*batch, m)
-    assert_shape(jnp.matmul(vec4, mat45), (5,))
-    assert_shape(jnp.matmul(vec4, batch_245), (2, 5))
+    assert_shape(jnp.matmul(vec4, mat45).shape, (5,))
+    assert_shape(jnp.matmul(vec4, batch_245).shape, (2, 5))
 
     # ND @ 1D -> (*batch, n)
-    assert_shape(jnp.matmul(mat34, vec4), (3,))
-    assert_shape(jnp.matmul(batch_234, vec4), (2, 3))
+    assert_shape(jnp.matmul(mat34, vec4).shape, (3,))
+    assert_shape(jnp.matmul(batch_234, vec4).shape, (2, 3))
     assert_shape(batch_234 @ vec4, (2, 3))
 
     # ND @ ND -> (*broadcast(batch_left, batch_right), n, m)
-    assert_shape(jnp.matmul(mat34, mat45), (3, 5))
-    assert_shape(jnp.matmul(batch_234, mat45), (2, 3, 5))
-    assert_shape(jnp.matmul(batch_234, batch_245), (2, 3, 5))
+    assert_shape(jnp.matmul(mat34, mat45).shape, (3, 5))
+    assert_shape(jnp.matmul(batch_234, mat45).shape, (2, 3, 5))
+    assert_shape(jnp.matmul(batch_234, batch_245).shape, (2, 3, 5))
     assert_shape(batch_234 @ mat45, (2, 3, 5))
     assert_shape(batch_234 @ batch_245, (2, 3, 5))
 
@@ -132,16 +132,16 @@ def test_matmul_contracts_vector_operands() -> None:
     v = jnp.ones(4)
 
     # A 1-D operand contributes no axis to the result.
-    assert_shape(a @ v, (3,))
-    assert_shape(jnp.matmul(a, v), (3,))
-    assert_shape(v @ a.T, (3,))
-    assert_shape(v @ v, ())
+    assert_shape((a @ v).shape, (3,))
+    assert_shape(jnp.matmul(a, v).shape, (3,))
+    assert_shape((v @ a.T).shape, (3,))
+    assert_shape((v @ v).shape, ())
 
 
 def test_function_matmul_rejects_mismatched_inner_dimension() -> None:
     a = jnp.ones((3, 4))
 
-    assert_shape(jnp.matmul(a, jnp.ones((4, 5))), (3, 5))
+    assert_shape(jnp.matmul(a, jnp.ones((4, 5))).shape, (3, 5))
     try:
         # E: Cannot evaluate type-level shape DSL call: gufunc: core dimension 'n' has conflicting extents 4 and 7
         jnp.matmul(a, jnp.ones((7, 5)))
@@ -155,9 +155,9 @@ def test_transpose_method() -> None:
     a = jnp.ones((3, 4))
     c = jnp.ones((2, 3, 4))
 
-    assert_shape(a.transpose(), (4, 3))
-    assert_shape(a.transpose((1, 0)), (4, 3))
-    assert_shape(c.transpose((0, 2, 1)), (2, 4, 3))
+    assert_shape(a.transpose().shape, (4, 3))
+    assert_shape(a.transpose((1, 0)).shape, (4, 3))
+    assert_shape(c.transpose((0, 2, 1)).shape, (2, 4, 3))
 
 
 def test_transpose_method_variadic_and_sequence_forms() -> None:
@@ -173,7 +173,7 @@ def test_transpose_rejects_non_sequence_and_wrong_length_axes() -> None:
     a = jnp.ones((3, 4))
     c = jnp.ones((2, 3, 4))
 
-    assert_shape(jnp.transpose(a, (1, 0)), (4, 3))
+    assert_shape(jnp.transpose(a, (1, 0)).shape, (4, 3))
     try:
         # E: Cannot evaluate type-level shape DSL call: transpose axes must be a sequence
         jnp.transpose(c, 1)
@@ -193,25 +193,25 @@ def test_transpose_rejects_non_sequence_and_wrong_length_axes() -> None:
 def test_transpose() -> None:
     a = jnp.ones((3, 4))
 
-    assert_shape(a.T, (4, 3))
-    assert_shape(jnp.transpose(a), (4, 3))
-    assert_shape(a.T @ a, (4, 4))
+    assert_shape(a.T.shape, (4, 3))
+    assert_shape(jnp.transpose(a).shape, (4, 3))
+    assert_shape((a.T @ a).shape, (4, 4))
 
 
 def test_transpose_reverses_every_axis() -> None:
     c = jnp.ones((2, 3, 4))
 
-    assert_shape(c.T, (4, 3, 2))
-    assert_shape(jnp.transpose(c), (4, 3, 2))
+    assert_shape(c.T.shape, (4, 3, 2))
+    assert_shape(jnp.transpose(c).shape, (4, 3, 2))
 
 
 def test_transpose_with_explicit_axes() -> None:
     c = jnp.ones((2, 3, 4))
 
-    assert_shape(jnp.transpose(c, (0, 2, 1)), (2, 4, 3))
-    assert_shape(jnp.transpose(c, (2, 0, 1)), (4, 2, 3))
-    assert_shape(jnp.transpose(jnp.ones((3, 4)), axes=(1, 0)), (4, 3))
-    assert_shape(jnp.transpose(c, (0, -1, 1)), (2, 4, 3))
+    assert_shape(jnp.transpose(c, (0, 2, 1)).shape, (2, 4, 3))
+    assert_shape(jnp.transpose(c, (2, 0, 1)).shape, (4, 2, 3))
+    assert_shape(jnp.transpose(jnp.ones((3, 4)), axes=(1, 0)).shape, (4, 3))
+    assert_shape(jnp.transpose(c, (0, -1, 1)).shape, (2, 4, 3))
 
 
 def test_transpose_accepts_any_axis_sequence() -> None:
@@ -224,7 +224,7 @@ def test_transpose_accepts_any_axis_sequence() -> None:
 def test_transpose_rejects_bad_axes() -> None:
     c = jnp.ones((2, 3, 4))
 
-    assert_shape(jnp.transpose(c, (1, 0, 2)), (3, 2, 4))
+    assert_shape(jnp.transpose(c, (1, 0, 2)).shape, (3, 2, 4))
     try:
         # E: Cannot evaluate type-level shape DSL call: duplicate axis
         jnp.transpose(c, (0, 0, 1))
@@ -245,7 +245,7 @@ def test_matmul_rejects_mismatched_inner_dimension() -> None:
     left = jnp.ones((3, 4))
     right = jnp.ones((7, 5))
 
-    assert_shape(left @ jnp.ones((4, 5)), (3, 5))
+    assert_shape((left @ jnp.ones((4, 5))).shape, (3, 5))
     try:
         # E: gufunc: core dimension 'n' has conflicting extents 4 and 7
         left @ right

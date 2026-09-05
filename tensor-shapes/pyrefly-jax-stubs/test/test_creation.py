@@ -18,48 +18,48 @@ GRADUAL_SHAPE_RUNTIME_TESTS = {
 
 
 def test_zeros_ones_and_empty() -> None:
-    assert_shape(jnp.zeros(4), (4,))
-    assert_shape(jnp.zeros((3, 4)), (3, 4))
-    assert_shape(jnp.zeros((2, 3, 4)), (2, 3, 4))
-    assert_shape(jnp.ones(4), (4,))
-    assert_shape(jnp.ones((3, 4)), (3, 4))
-    assert_shape(jnp.ones((2, 3, 4)), (2, 3, 4))
-    assert_shape(jnp.empty(4), (4,))
-    assert_shape(jnp.empty((3, 4)), (3, 4))
-    assert_shape(jnp.empty((2, 3, 4)), (2, 3, 4))
+    assert_shape(jnp.zeros(4).shape, (4,))
+    assert_shape(jnp.zeros((3, 4)).shape, (3, 4))
+    assert_shape(jnp.zeros((2, 3, 4)).shape, (2, 3, 4))
+    assert_shape(jnp.ones(4).shape, (4,))
+    assert_shape(jnp.ones((3, 4)).shape, (3, 4))
+    assert_shape(jnp.ones((2, 3, 4)).shape, (2, 3, 4))
+    assert_shape(jnp.empty(4).shape, (4,))
+    assert_shape(jnp.empty((3, 4)).shape, (3, 4))
+    assert_shape(jnp.empty((2, 3, 4)).shape, (2, 3, 4))
 
 
 def test_like_constructors() -> None:
     x23 = jnp.ones((2, 3))
     x234 = jnp.ones((2, 3, 4))
 
-    assert_shape(jnp.empty_like(x23), (2, 3))
-    assert_shape(jnp.empty_like(x234), (2, 3, 4))
-    assert_shape(jnp.empty_like(x23, shape=()), ())
-    assert_shape(jnp.empty_like(x23, shape=4), (4,))
-    assert_shape(jnp.empty_like(x23, shape=(4, 5)), (4, 5))
-    assert_shape(jnp.empty_like(x23, shape=(2, 3, 4, 5)), (2, 3, 4, 5))
+    assert_shape(jnp.empty_like(x23).shape, (2, 3))
+    assert_shape(jnp.empty_like(x234).shape, (2, 3, 4))
+    assert_shape(jnp.empty_like(x23, shape=()).shape, ())
+    assert_shape(jnp.empty_like(x23, shape=4).shape, (4,))
+    assert_shape(jnp.empty_like(x23, shape=(4, 5)).shape, (4, 5))
+    assert_shape(jnp.empty_like(x23, shape=(2, 3, 4, 5)).shape, (2, 3, 4, 5))
 
-    assert_shape(jnp.zeros_like(x23), (2, 3))
-    assert_shape(jnp.zeros_like(x234), (2, 3, 4))
-    assert_shape(jnp.zeros_like(x23, shape=()), ())
-    assert_shape(jnp.zeros_like(x23, shape=4), (4,))
-    assert_shape(jnp.zeros_like(x23, shape=(4, 5)), (4, 5))
-    assert_shape(jnp.zeros_like(x23, shape=(2, 3, 4, 5)), (2, 3, 4, 5))
+    assert_shape(jnp.zeros_like(x23).shape, (2, 3))
+    assert_shape(jnp.zeros_like(x234).shape, (2, 3, 4))
+    assert_shape(jnp.zeros_like(x23, shape=()).shape, ())
+    assert_shape(jnp.zeros_like(x23, shape=4).shape, (4,))
+    assert_shape(jnp.zeros_like(x23, shape=(4, 5)).shape, (4, 5))
+    assert_shape(jnp.zeros_like(x23, shape=(2, 3, 4, 5)).shape, (2, 3, 4, 5))
 
-    assert_shape(jnp.ones_like(x23), (2, 3))
-    assert_shape(jnp.ones_like(x234), (2, 3, 4))
-    assert_shape(jnp.ones_like(x23, shape=()), ())
-    assert_shape(jnp.ones_like(x23, shape=4), (4,))
-    assert_shape(jnp.ones_like(x23, shape=(4, 5)), (4, 5))
-    assert_shape(jnp.ones_like(x23, shape=(2, 3, 4, 5)), (2, 3, 4, 5))
+    assert_shape(jnp.ones_like(x23).shape, (2, 3))
+    assert_shape(jnp.ones_like(x234).shape, (2, 3, 4))
+    assert_shape(jnp.ones_like(x23, shape=()).shape, ())
+    assert_shape(jnp.ones_like(x23, shape=4).shape, (4,))
+    assert_shape(jnp.ones_like(x23, shape=(4, 5)).shape, (4, 5))
+    assert_shape(jnp.ones_like(x23, shape=(2, 3, 4, 5)).shape, (2, 3, 4, 5))
 
-    assert_shape(jnp.full_like(x23, 7.0), (2, 3))
-    assert_shape(jnp.full_like(x234, 7.0), (2, 3, 4))
-    assert_shape(jnp.full_like(x23, 7.0, shape=()), ())
-    assert_shape(jnp.full_like(x23, 7.0, shape=4), (4,))
-    assert_shape(jnp.full_like(x23, 7.0, shape=(4, 5)), (4, 5))
-    assert_shape(jnp.full_like(x23, 7.0, shape=(2, 3, 4, 5)), (2, 3, 4, 5))
+    assert_shape(jnp.full_like(x23, 7.0).shape, (2, 3))
+    assert_shape(jnp.full_like(x234, 7.0).shape, (2, 3, 4))
+    assert_shape(jnp.full_like(x23, 7.0, shape=()).shape, ())
+    assert_shape(jnp.full_like(x23, 7.0, shape=4).shape, (4,))
+    assert_shape(jnp.full_like(x23, 7.0, shape=(4, 5)).shape, (4, 5))
+    assert_shape(jnp.full_like(x23, 7.0, shape=(2, 3, 4, 5)).shape, (2, 3, 4, 5))
 
 
 def test_shapes_outside_the_exact_ranks_are_gradual() -> None:
@@ -73,24 +73,24 @@ def test_shapes_outside_the_exact_ranks_are_gradual() -> None:
 
 
 def test_full() -> None:
-    assert_shape(jnp.full(4, 2.0), (4,))
-    assert_shape(jnp.full((3, 4), 2.0), (3, 4))
-    assert_shape(jnp.full((2, 3, 4), 2.0), (2, 3, 4))
+    assert_shape(jnp.full(4, 2.0).shape, (4,))
+    assert_shape(jnp.full((3, 4), 2.0).shape, (3, 4))
+    assert_shape(jnp.full((2, 3, 4), 2.0).shape, (2, 3, 4))
 
 
 def test_arange_and_eye() -> None:
-    assert_shape(jnp.arange(5), (5,))
+    assert_shape(jnp.arange(5).shape, (5,))
     # JAX names the sole argument `start`, so the keyword form is valid.
-    assert_shape(jnp.arange(start=5), (5,))
-    assert_shape(jnp.eye(3), (3, 3))
-    assert_shape(jnp.eye(2, 3), (2, 3))
-    assert_shape(jnp.identity(4), (4, 4))
+    assert_shape(jnp.arange(start=5).shape, (5,))
+    assert_shape(jnp.eye(3).shape, (3, 3))
+    assert_shape(jnp.eye(2, 3).shape, (2, 3))
+    assert_shape(jnp.identity(4).shape, (4, 4))
 
 
 def test_linspace_logspace_geomspace() -> None:
-    assert_shape(jnp.linspace(0.0, 1.0, 10), (10,))
-    assert_shape(jnp.logspace(0.0, 2.0, 20), (20,))
-    assert_shape(jnp.geomspace(1.0, 100.0, 15), (15,))
+    assert_shape(jnp.linspace(0.0, 1.0, 10).shape, (10,))
+    assert_shape(jnp.logspace(0.0, 2.0, 20).shape, (20,))
+    assert_shape(jnp.geomspace(1.0, 100.0, 15).shape, (15,))
 
 
 def test_diag_and_triangular() -> None:
@@ -98,49 +98,49 @@ def test_diag_and_triangular() -> None:
     m34 = jnp.ones((3, 4))
 
     # diag
-    assert_shape(jnp.diag(v4), (4, 4))
-    assert_shape(jnp.diag(m34), (3,))
-    assert_shape(jnp.diagflat(v4), (4, 4))
+    assert_shape(jnp.diag(v4).shape, (4, 4))
+    assert_shape(jnp.diag(m34).shape, (3,))
+    assert_shape(jnp.diagflat(v4).shape, (4, 4))
 
     # tri, tril, triu
-    assert_shape(jnp.tri(4), (4, 4))
-    assert_shape(jnp.tri(3, 5), (3, 5))
-    assert_shape(jnp.tril(m34), (3, 4))
-    assert_shape(jnp.triu(m34), (3, 4))
+    assert_shape(jnp.tri(4).shape, (4, 4))
+    assert_shape(jnp.tri(3, 5).shape, (3, 5))
+    assert_shape(jnp.tril(m34).shape, (3, 4))
+    assert_shape(jnp.triu(m34).shape, (3, 4))
 
 
 def test_vander_indices_meshgrid() -> None:
     v4 = jnp.ones(4)
-    assert_shape(jnp.vander(v4), (4, 4))
-    assert_shape(jnp.vander(v4, 6), (4, 6))
+    assert_shape(jnp.vander(v4).shape, (4, 4))
+    assert_shape(jnp.vander(v4, 6).shape, (4, 6))
 
     # indices
-    assert_shape(jnp.indices((3, 5)), (2, 3, 5))
-    assert_shape(jnp.indices((2, 3, 4)), (3, 2, 3, 4))
+    assert_shape(jnp.indices((3, 5)).shape, (2, 3, 5))
+    assert_shape(jnp.indices((2, 3, 4)).shape, (3, 2, 3, 4))
 
     # meshgrid
     x = jnp.ones(3)
     y = jnp.ones(5)
     gx, gy = jnp.meshgrid(x, y)
-    assert_shape(gx, (5, 3))
-    assert_shape(gy, (5, 3))
+    assert_shape(gx.shape, (5, 3))
+    assert_shape(gy.shape, (5, 3))
 
     gx_ij, gy_ij = jnp.meshgrid(x, y, indexing="ij")
-    assert_shape(gx_ij, (3, 5))
-    assert_shape(gy_ij, (3, 5))
+    assert_shape(gx_ij.shape, (3, 5))
+    assert_shape(gy_ij.shape, (3, 5))
 
 
 def test_fromfunction() -> None:
-    assert_shape(jnp.fromfunction(lambda i: i, (4,)), (4,))
-    assert_shape(jnp.fromfunction(lambda i, j: i + j, (2, 3)), (2, 3))
+    assert_shape(jnp.fromfunction(lambda i: i, (4,)).shape, (4,))
+    assert_shape(jnp.fromfunction(lambda i, j: i + j, (2, 3)).shape, (2, 3))
 
 
 def test_window_functions() -> None:
-    assert_shape(jnp.bartlett(10), (10,))
-    assert_shape(jnp.blackman(12), (12,))
-    assert_shape(jnp.hamming(14), (14,))
-    assert_shape(jnp.hanning(16), (16,))
-    assert_shape(jnp.kaiser(18, 5.0), (18,))
+    assert_shape(jnp.bartlett(10).shape, (10,))
+    assert_shape(jnp.blackman(12).shape, (12,))
+    assert_shape(jnp.hamming(14).shape, (14,))
+    assert_shape(jnp.hanning(16).shape, (16,))
+    assert_shape(jnp.kaiser(18, 5.0).shape, (18,))
 
 
 def test_multi_argument_arange_length_is_gradual() -> None:
@@ -156,8 +156,8 @@ def test_multi_argument_arange_length_is_gradual() -> None:
 
 
 def test_dtype_argument_preserves_shape() -> None:
-    assert_shape(jnp.zeros(4, jnp.int32), (4,))
-    assert_shape(jnp.ones((3, 4), jnp.float32), (3, 4))
+    assert_shape(jnp.zeros(4, jnp.int32).shape, (4,))
+    assert_shape(jnp.ones((3, 4), jnp.float32).shape, (3, 4))
 
 
 def test_array_and_asarray() -> None:
