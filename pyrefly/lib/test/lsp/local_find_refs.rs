@@ -102,6 +102,102 @@ References:
 }
 
 #[test]
+fn dunder_all_entries_are_symbol_references() {
+    let code = r#"
+foo = 1
+# ^
+__all__ = ["foo"]
+#            ^
+__all__.remove("foo")
+#                ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
+    assert_eq!(
+        r#"
+# main.py
+2 | foo = 1
+      ^
+References:
+2 | foo = 1
+    ^^^
+4 | __all__ = ["foo"]
+                ^^^
+6 | __all__.remove("foo")
+                    ^^^
+
+4 | __all__ = ["foo"]
+                 ^
+References:
+2 | foo = 1
+    ^^^
+4 | __all__ = ["foo"]
+                ^^^
+6 | __all__.remove("foo")
+                    ^^^
+
+6 | __all__.remove("foo")
+                     ^
+References:
+2 | foo = 1
+    ^^^
+4 | __all__ = ["foo"]
+                ^^^
+6 | __all__.remove("foo")
+                    ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
+fn dunder_slots_entries_are_attribute_references() {
+    let code = r#"
+class C:
+    __slots__ = ("foo",)
+#                  ^
+
+    def __init__(self) -> None:
+        self.foo = 1
+#            ^
+
+    def get(self) -> int:
+        return self.foo
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], |state, handle, position| {
+        get_test_report(state, handle, position, true)
+    });
+    assert_eq!(
+        r#"
+# main.py
+3 |     __slots__ = ("foo",)
+                       ^
+References:
+3 |     __slots__ = ("foo",)
+                      ^^^
+7 |         self.foo = 1
+                 ^^^
+11 |         return self.foo
+                         ^^^
+
+7 |         self.foo = 1
+                 ^
+References:
+3 |     __slots__ = ("foo",)
+                      ^^^
+7 |         self.foo = 1
+                 ^^^
+11 |         return self.foo
+                         ^^^
+"#
+        .trim(),
+        report.trim(),
+    );
+}
+
+#[test]
 fn references_to_aliased_submodule_stop_at_import() {
     let main = r#"
 from xxx import yyy as zzz

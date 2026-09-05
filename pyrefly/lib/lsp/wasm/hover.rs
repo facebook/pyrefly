@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use dupe::Dupe;
 use lsp_types::Hover;
 use lsp_types::HoverContents;
 use lsp_types::MarkupContent;
@@ -947,7 +948,7 @@ pub fn get_hover_with_verbosity(
         return Some(result);
     }
 
-    let type_ = resolve_hovered_type(transaction, handle, ast.as_deref(), position)?;
+    let mut type_ = resolve_hovered_type(transaction, handle, ast.as_deref(), position)?;
 
     // `a and b and c` is a single flat BoolOp, so hovering any operator in the
     // chain highlights the whole expression. `not` highlights its unary expression.
@@ -969,7 +970,6 @@ pub fn get_hover_with_verbosity(
                 })
         });
 
-    let fallback_name_from_type = fallback_hover_name_from_type(&type_);
     let keyword_argument_identifier = keyword_argument_identifier(transaction, handle, position);
     let definition = transaction
         .find_definition(
@@ -991,6 +991,27 @@ pub fn get_hover_with_verbosity(
                     item.module.code_at(item.definition_range) == identifier.id.as_str()
                 })
         });
+    if ast.as_deref().is_some_and(|ast| {
+        Ast::locate_node(ast, position)
+            .iter()
+            .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+    }) && let Some(definition) = &definition
+    {
+        let definition_handle = Handle::new(
+            definition.module.name(),
+            definition.module.path().dupe(),
+            handle.sys_info().dupe(),
+        );
+        if let Some(definition_type) = transaction
+            .get_type_at_for_display(&definition_handle, definition.definition_range.start())
+        {
+            type_ = definition_type;
+        }
+    }
+    if let Some(symbol_type) = transaction.symbol_literal_type(handle, position) {
+        type_ = symbol_type;
+    }
+    let fallback_name_from_type = fallback_hover_name_from_type(&type_);
     let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
         definition_range: definition_location,

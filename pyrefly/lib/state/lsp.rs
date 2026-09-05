@@ -51,14 +51,18 @@ use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ExprName;
+use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtAssign;
 use ruff_python_ast::StmtClassDef;
 use ruff_python_ast::StmtImportFrom;
 use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::visitor::Visitor;
+use ruff_python_ast::visitor::walk_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
@@ -122,6 +126,120 @@ struct OperatorDunder {
     base_type: Type,
     dunder_name: Name,
     range: TextRange,
+}
+
+#[derive(Clone)]
+enum SymbolLiteralContext {
+    DunderAll,
+    DunderSlots { class_name: Identifier },
+}
+
+#[derive(Clone)]
+struct SymbolLiteral {
+    range: TextRange,
+    content_range: Option<TextRange>,
+    name: Name,
+    context: SymbolLiteralContext,
+}
+
+fn string_literal_content_range(expr: &ExprStringLiteral) -> Option<TextRange> {
+    Some(expr.as_single_part_string()?.content_range())
+}
+
+fn slot_literals(value: &Expr) -> Option<Vec<&ExprStringLiteral>> {
+    match value {
+        Expr::StringLiteral(literal) => Some(vec![literal]),
+        Expr::Tuple(tuple) => tuple
+            .elts
+            .iter()
+            .map(|expr| match expr {
+                Expr::StringLiteral(literal) => Some(literal),
+                _ => None,
+            })
+            .collect(),
+        Expr::List(list) => list
+            .elts
+            .iter()
+            .map(|expr| match expr {
+                Expr::StringLiteral(literal) => Some(literal),
+                _ => None,
+            })
+            .collect(),
+        Expr::Dict(dict) => dict
+            .items
+            .iter()
+            .map(|item| match item.key.as_ref() {
+                Some(Expr::StringLiteral(literal)) => Some(literal),
+                _ => None,
+            })
+            .collect(),
+        _ => None,
+    }
+}
+
+fn slots_from_assignment(assign: &StmtAssign, class_name: &Identifier) -> Vec<SymbolLiteral> {
+    if !assign
+        .targets
+        .iter()
+        .any(|target| matches!(target, Expr::Name(name) if name.id == *dunder::SLOTS))
+    {
+        return Vec::new();
+    }
+    slot_literals(&assign.value)
+        .into_iter()
+        .flatten()
+        .map(|literal| SymbolLiteral {
+            range: literal.range(),
+            content_range: string_literal_content_range(literal),
+            name: Name::new(literal.value.to_str()),
+            context: SymbolLiteralContext::DunderSlots {
+                class_name: class_name.clone(),
+            },
+        })
+        .collect()
+}
+
+fn collect_slot_literals(module: &ModModule) -> Vec<SymbolLiteral> {
+    struct Collector {
+        class_name: Option<Identifier>,
+        literals: Vec<SymbolLiteral>,
+    }
+
+    impl<'a> Visitor<'a> for Collector {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            match stmt {
+                Stmt::ClassDef(class) => {
+                    let enclosing_class = self.class_name.replace(class.name.clone());
+                    for stmt in &class.body {
+                        self.visit_stmt(stmt);
+                    }
+                    self.class_name = enclosing_class;
+                }
+                Stmt::FunctionDef(_) => {
+                    let enclosing_class = self.class_name.take();
+                    walk_stmt(self, stmt);
+                    self.class_name = enclosing_class;
+                }
+                Stmt::Assign(assign) => {
+                    if let Some(class_name) = &self.class_name {
+                        self.literals
+                            .extend(slots_from_assignment(assign, class_name));
+                    }
+                    walk_stmt(self, stmt);
+                }
+                _ => walk_stmt(self, stmt),
+            }
+        }
+    }
+
+    let mut collector = Collector {
+        class_name: None,
+        literals: Vec::new(),
+    };
+    for stmt in &module.body {
+        collector.visit_stmt(stmt);
+    }
+    collector.literals
 }
 
 fn callee_kind_from_call(call: &ExprCall) -> CalleeKind {
@@ -2556,6 +2674,90 @@ impl<'a> Transaction<'a> {
         None
     }
 
+    fn symbol_literals(&self, handle: &Handle) -> Vec<SymbolLiteral> {
+        let Some(ast) = self.get_ast(handle) else {
+            return Vec::new();
+        };
+        let mut literals =
+            self.get_exports_data(handle)
+                .dunder_all_names()
+                .into_iter()
+                .flatten()
+                .map(|(range, name)| {
+                    let content_range = Ast::locate_node(&ast, range.start()).into_iter().find_map(
+                        |node| match node {
+                            AnyNodeRef::ExprStringLiteral(literal) if literal.range() == range => {
+                                string_literal_content_range(literal)
+                            }
+                            _ => None,
+                        },
+                    );
+                    SymbolLiteral {
+                        range,
+                        content_range,
+                        name: name.clone(),
+                        context: SymbolLiteralContext::DunderAll,
+                    }
+                })
+                .collect::<Vec<_>>();
+        literals.extend(collect_slot_literals(&ast));
+        literals
+    }
+
+    fn symbol_literal_at(&self, handle: &Handle, position: TextSize) -> Option<SymbolLiteral> {
+        self.symbol_literals(handle)
+            .into_iter()
+            .find(|literal| literal.range.contains_inclusive(position))
+    }
+
+    /// Return the referenced attribute type for a `__slots__` string entry.
+    pub(crate) fn symbol_literal_type(&self, handle: &Handle, position: TextSize) -> Option<Type> {
+        let literal = self.symbol_literal_at(handle, position)?;
+        let SymbolLiteralContext::DunderSlots { class_name } = literal.context else {
+            return None;
+        };
+        let class_type =
+            self.get_type(handle, &Key::Definition(ShortIdentifier::new(&class_name)))?;
+        self.ad_hoc_solve(handle, "slot_literal_type", |solver| {
+            let Type::ClassDef(class) = class_type else {
+                return None;
+            };
+            let instance_type =
+                Type::ClassType(solver.promote_nontypeddict_silently_to_classtype(&class));
+            solver
+                .completions(instance_type, Some(&literal.name), true)
+                .into_iter()
+                .find_map(|attribute| attribute.ty)
+        })?
+    }
+
+    fn find_definition_for_symbol_literal(
+        &self,
+        handle: &Handle,
+        literal: &SymbolLiteral,
+        preference: FindPreference,
+    ) -> Option<FindDefinitionItemWithDocstring> {
+        match &literal.context {
+            SymbolLiteralContext::DunderAll => {
+                self.find_definition_for_dunder_all_entry(handle, literal.range.start(), preference)
+            }
+            SymbolLiteralContext::DunderSlots { class_name } => {
+                let class_type =
+                    self.get_type(handle, &Key::Definition(ShortIdentifier::new(class_name)))?;
+                self.find_attribute_definition_for_base_type(
+                    handle,
+                    preference,
+                    class_type,
+                    &literal.name,
+                )
+                .ok()?
+                .into_vec()
+                .into_iter()
+                .next()
+            }
+        }
+    }
+
     fn find_definition_for_keyword_argument(
         &self,
         handle: &Handle,
@@ -2661,8 +2863,9 @@ impl<'a> Transaction<'a> {
         if covering_nodes
             .iter()
             .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+            && let Some(literal) = self.symbol_literal_at(handle, position)
             && let Some(definition) =
-                self.find_definition_for_dunder_all_entry(handle, position, preference)
+                self.find_definition_for_symbol_literal(handle, &literal, preference)
         {
             return Ok(vec1![definition]);
         }
@@ -4026,6 +4229,7 @@ impl<'a> Transaction<'a> {
 
     pub fn prepare_rename(&self, handle: &Handle, position: TextSize) -> Option<TextRange> {
         let identifier_context = self.identifier_at(handle, position);
+        let symbol_literal = self.symbol_literal_at(handle, position);
 
         let definitions = self
             .find_definition(
@@ -4048,7 +4252,9 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        Some(identifier_context?.identifier.range)
+        identifier_context
+            .map(|context| context.identifier.range)
+            .or_else(|| symbol_literal?.content_range)
     }
 
     pub fn find_local_references(
@@ -4271,6 +4477,12 @@ impl<'a> Transaction<'a> {
                 &definition_name,
             ));
         }
+        references.extend(self.symbol_literal_references_from_definition(
+            handle,
+            &definition_name,
+            definition_range,
+            module,
+        ));
         references.sort_by_key(|range| range.start());
         references.dedup();
         Some(references)
@@ -4303,6 +4515,35 @@ impl<'a> Transaction<'a> {
             module,
             definition_range,
         )
+    }
+    fn symbol_literal_references_from_definition(
+        &self,
+        handle: &Handle,
+        definition_name: &Name,
+        definition_range: TextRange,
+        definition_module: &Module,
+    ) -> Vec<TextRange> {
+        self.symbol_literals(handle)
+            .into_iter()
+            .filter(|literal| &literal.name == definition_name)
+            .filter_map(|literal| {
+                let definition = self.find_definition_for_symbol_literal(
+                    handle,
+                    &literal,
+                    FindPreference {
+                        import_behavior: ImportBehavior::StopAtRenamedImports,
+                        ..Default::default()
+                    },
+                )?;
+                if definition.module.path() == definition_module.path()
+                    && definition.definition_range == definition_range
+                {
+                    literal.content_range
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     fn local_attribute_references_from_local_definition(
