@@ -2518,7 +2518,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if iterable_ty.ty().is_never() {
                     return EmptyAnswer;
                 }
-                // String and bytes literals have known length, so generate a fixed-length iterable
                 let iterables = match iterable_ty.ty() {
                     Type::Literal(lit) if let Lit::Str(s) = &lit.value => {
                         let char_ty = self.heap.mk_literal_string(LitStyle::Implicit);
@@ -2527,6 +2526,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     Type::Literal(lit) if let Lit::Bytes(b) = &lit.value => {
                         let elem_ty = self.heap.mk_class_type(self.stdlib.int().clone());
                         vec![Iterable::FixedLen(vec![elem_ty; b.len()])]
+                    }
+                    Type::ClassType(cls) if cls == self.stdlib.str() => {
+                        self.error(
+                            errors,
+                            *range,
+                            ErrorKind::BadUnpacking,
+                            format!("Cannot unpack {} into {}", iterable_ty, expect.message()),
+                        );
+                        return Arc::new(EmptyAnswer);
+                    }
+                    Type::LiteralString(_) => {
+                        self.error(
+                            errors,
+                            *range,
+                            ErrorKind::BadUnpacking,
+                            format!("Cannot unpack {} into {}", iterable_ty, expect.message()),
+                        );
+                        return Arc::new(EmptyAnswer);
                     }
                     _ => self.iterate(iterable_ty.ty(), *range, errors, None),
                 };

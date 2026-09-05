@@ -3355,8 +3355,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             match base {
                 Type::Forall(forall) => {
                     if matches!(forall.body, Forallable::TypeAlias(_)) {
-                        let tys = self.parse_type_args_for_tparams(
-                            xs,
+                        let tys = self.parse_type_args_for_tparams_from_slice(
+                            slice,
                             forall.tparams.as_vec(),
                             type_form_context,
                             errors,
@@ -3476,14 +3476,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Type::ClassDef(cls) => self.class_subscript_infer(
                     &cls,
                     slice,
-                    xs,
                     range,
                     type_form_context,
                     errors,
                 ),
                 Type::Type(f) if matches!(&*f, Type::Quantified(q) if q.is_type_var()) => {
                     // Repeated match because pattern guards cannot move out of bindings.
-                    let Type::Quantified(quantified) = *f else { unreachable!("guarded by matches! above") };
+                    let Type::Quantified(quantified) = *f else {
+                        unreachable!("guarded by matches! above")
+                    };
                     let quantified = *quantified;
                     let base_display_ty =
                         self.heap.mk_type_of(self.heap.mk_quantified(quantified.clone()));
@@ -4694,7 +4695,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         &self,
         cls: &Class,
         slice: &Expr,
-        xs: &[Expr],
         range: TextRange,
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
@@ -4743,7 +4743,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if let Some(result) = class_getitem_result.or(metaclass_getitem_result) {
             result
         } else {
-            let targs = self.parse_class_type_args(cls, xs, type_form_context, errors);
+            let targs = self.parse_class_type_args(cls, slice, type_form_context, errors);
             self.heap
                 .mk_type_of(self.specialize(cls, targs, range, errors))
         }
@@ -4752,13 +4752,38 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn parse_class_type_args(
         &self,
         cls: &Class,
-        args: &[Expr],
+        slice: &Expr,
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Vec<Type> {
         let tparams = self.get_class_tparams(cls);
         let tparams: &[Quantified] = tparams.map_or(&[], |tparams| tparams.as_vec());
-        self.parse_type_args_for_tparams(args, tparams, type_form_context, errors)
+        self.parse_type_args_for_tparams_from_slice(slice, tparams, type_form_context, errors)
+    }
+
+    fn parse_type_args_for_tparams_from_slice(
+        &self,
+        slice: &Expr,
+        tparams_vec: &[Quantified],
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+    ) -> Vec<Type> {
+        if matches!(slice, Expr::Tuple(tuple) if tuple.parenthesized && !tuple.elts.is_empty()) {
+            let ty = self.apply_special_form(
+                SpecialForm::Tuple,
+                slice,
+                slice.range(),
+                type_form_context,
+                errors,
+            );
+            return vec![self.untype(ty, slice.range(), errors)];
+        }
+        self.parse_type_args_for_tparams(
+            Ast::unpack_slice(slice),
+            tparams_vec,
+            type_form_context,
+            errors,
+        )
     }
 
     fn parse_type_args_for_tparams(
