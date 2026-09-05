@@ -13,6 +13,7 @@ use starlark_map::small_map::SmallMap;
 use crate::binding::binding::ClassFieldDefinition;
 use crate::binding::binding::ExprOrBinding;
 use crate::binding::bindings::BindingsBuilder;
+use crate::binding::bindings::InitializedInFlow;
 
 const PRIMARY_KEY: Name = Name::new_static("primary_key");
 const FOREIGN_KEY: Name = Name::new_static("ForeignKey");
@@ -39,13 +40,13 @@ impl<'a> BindingsBuilder<'a> {
     /// (primary_key, ForeignKey, choices).
     pub fn extract_django_fields_from_class_body(
         &self,
-        field_definitions: &SmallMap<Name, (ClassFieldDefinition, TextRange)>,
+        field_definitions: &SmallMap<Name, (ClassFieldDefinition, TextRange, InitializedInFlow)>,
     ) -> DjangoFieldInfo {
         let mut primary_key_field = None;
         let mut foreign_key_like_fields = Vec::new();
         let mut relation_fields = Vec::new();
         let mut fields_with_choices = Vec::new();
-        for (name, (definition, _range)) in field_definitions.iter() {
+        for (name, (definition, _range, _initialized)) in field_definitions.iter() {
             if let ClassFieldDefinition::AssignedInBody { value, .. } = definition
                 && let ExprOrBinding::Expr(e) = value.as_ref()
                 && let Some(call) = e.as_call_expr()

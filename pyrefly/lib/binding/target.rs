@@ -186,7 +186,7 @@ impl<'a> BindingsBuilder<'a> {
         mut assigned: Option<&mut Expr>,
         make_assigned_value: impl FnOnce(Option<&Expr>, Option<Idx<KeyAnnotation>>) -> ExprOrBinding,
         ensure_assigned: bool,
-    ) -> ExprOrBinding {
+    ) -> (ExprOrBinding, Idx<Key>) {
         let narrowing_identifier =
             identifier_and_chain_prefix_for_expr(&Expr::Attribute(attr.clone()))
                 .map(|(identifier, _)| identifier);
@@ -218,7 +218,7 @@ impl<'a> BindingsBuilder<'a> {
         if let Some(identifier) = narrowing_identifier {
             self.narrow_if_name_is_defined(identifier, idx);
         }
-        value
+        (value, idx)
     }
 
     pub fn bind_attr_assign(
@@ -226,7 +226,7 @@ impl<'a> BindingsBuilder<'a> {
         attr: ExprAttribute,
         assigned: &mut Expr,
         make_assigned_value: impl FnOnce(&Expr, Option<Idx<KeyAnnotation>>) -> ExprOrBinding,
-    ) -> ExprOrBinding {
+    ) -> (ExprOrBinding, Idx<Key>) {
         self.bind_attr_assign_impl(
             attr,
             Some(assigned),
@@ -318,7 +318,7 @@ impl<'a> BindingsBuilder<'a> {
                 );
             }
             Expr::Attribute(x) => {
-                let attr_value = self.bind_attr_assign_impl(
+                let (attr_value, attr_idx) = self.bind_attr_assign_impl(
                     x.clone(),
                     assigned,
                     make_assigned_value,
@@ -326,7 +326,8 @@ impl<'a> BindingsBuilder<'a> {
                 );
                 // If this is a self-assignment, record it because we may use it to infer
                 // the existence of an instance-only attribute.
-                self.scopes.record_self_attr_assign(x, attr_value, None);
+                self.scopes
+                    .record_self_attr_assign(x, attr_value, None, Some(attr_idx));
             }
             Expr::Subscript(x) => {
                 self.bind_subscript_assign_impl(
