@@ -8,7 +8,7 @@ codegen-units = 1
 strip = "debuginfo"
 
 [profile.dev]
-debug = 1
+debug = 2
 
 [profile.bench]
 lto = false
