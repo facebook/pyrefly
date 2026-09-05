@@ -30,7 +30,10 @@ pub enum InstanceKind {
     TypedDict,
     TypeVar(Quantified),
     SelfType,
-    Protocol(Type),
+    Protocol {
+        receiver: Type,
+        self_substitution: Type,
+    },
     Metaclass(ClassBase),
     LiteralString,
     /// Shaped-array instance: Self is substituted with the full shaped-array type.
@@ -86,9 +89,21 @@ impl<'a> Instance<'a> {
         }
     }
 
-    pub fn of_protocol(cls: &'a ClassType, self_type: Type) -> Self {
+    pub fn of_protocol(cls: &'a ClassType, receiver: Type) -> Self {
+        // Protocol compatibility with a different implementing class substitutes `Self`
+        // with that class. Method binding and a protocol's compatibility with itself keep
+        // the original receiver.
+        let self_substitution = match &receiver {
+            Type::SelfType(receiver_cls) if receiver_cls.class_object() != cls.class_object() => {
+                Type::ClassType(receiver_cls.clone())
+            }
+            _ => receiver.clone(),
+        };
         Self {
-            kind: InstanceKind::Protocol(self_type),
+            kind: InstanceKind::Protocol {
+                receiver,
+                self_substitution,
+            },
             class: cls.class_object(),
             targs: cls.targs(),
         }
@@ -145,7 +160,7 @@ impl<'a> Instance<'a> {
             InstanceKind::SelfType => {
                 heap.mk_self_type(ClassType::new(self.class.dupe(), self.targs.clone()))
             }
-            InstanceKind::Protocol(self_type) => self_type.clone(),
+            InstanceKind::Protocol { receiver, .. } => receiver.clone(),
             InstanceKind::Metaclass(cls) => cls.clone().to_type(heap),
             InstanceKind::LiteralString => heap.mk_literal_string(LitStyle::Implicit),
             InstanceKind::ShapedArray(shaped_array) => shaped_array.clone().to_type(),
@@ -159,9 +174,9 @@ impl<'a> Instance<'a> {
             InstanceKind::SelfType => {
                 ClassBase::SelfType(ClassType::new(self.class.dupe(), self.targs.clone()))
             }
-            InstanceKind::Protocol(self_type) => ClassBase::Protocol(
+            InstanceKind::Protocol { receiver, .. } => ClassBase::Protocol(
                 ClassType::new(self.class.dupe(), self.targs.clone()),
-                self_type.clone(),
+                receiver.clone(),
             ),
             InstanceKind::TypeVar(q) => ClassBase::Quantified(
                 q.clone(),
@@ -181,7 +196,7 @@ impl<'a> Instance<'a> {
                 self.targs.clone(),
             ))),
             InstanceKind::ClassType
-            | InstanceKind::Protocol(..)
+            | InstanceKind::Protocol { .. }
             | InstanceKind::Metaclass(..)
             | InstanceKind::TypeVar(..)
             | InstanceKind::LiteralString

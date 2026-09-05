@@ -1200,6 +1200,25 @@ f(C())
 );
 
 testcase!(
+    test_protocol_nested_self,
+    r#"
+from typing import Protocol, Self
+
+class CompliantExpr(Protocol):
+    def method(self) -> list[Self]: ...
+
+def helper(expr: CompliantExpr) -> None: ...
+
+class ArrowExpr(CompliantExpr):
+    def method(self) -> list[ArrowExpr]:
+        return []
+
+    def foo(self) -> None:
+        helper(self)
+    "#,
+);
+
+testcase!(
     test_call_protocol_with_other_attr,
     r#"
 from typing import Protocol, assert_type
