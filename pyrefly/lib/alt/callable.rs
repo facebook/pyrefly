@@ -2144,16 +2144,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // By invariant, hint will be None if we are calling a constructor.
             if let Some(hint) = hint {
                 let (qs, callable_, extension_vars) = instantiate(callable.clone());
-                let matches_hint = if let Some(extension_vars) = &extension_vars {
+                let contains_dsl_call = self.solver().tensor_shapes
+                    && callable_
+                        .ret
+                        .any(|ty| matches!(ty, Type::TypeLevelDslCall(_)));
+                let matches_hint = if extension_vars.is_none() && !contains_dsl_call {
+                    self.is_subset_eq(&callable_.ret, hint)
+                } else {
                     let mut ret_for_hint = callable_.ret.clone();
+                    // DSL calls are not invertible, so contextual return matching cannot infer
+                    // through them. Preserve the surrounding type but treat each call result as
+                    // gradual while matching the hint.
                     ret_for_hint.transform_mut(&mut |ty| {
-                        if matches!(ty, Type::Var(var) if extension_vars.contains(var)) {
+                        if matches!(ty, Type::TypeLevelDslCall(_))
+                            || matches!(ty, Type::Var(var) if extension_vars.as_ref().is_some_and(|vars| vars.contains(var)))
+                        {
                             *ty = self.heap.mk_any_implicit();
                         }
                     });
                     self.is_subset_eq(&ret_for_hint, hint)
-                } else {
-                    self.is_subset_eq(&callable_.ret, hint)
                 };
                 if matches_hint && !self.solver().has_instantiation_errors(&qs) {
                     (qs, callable_, extension_vars)

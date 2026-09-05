@@ -14086,3 +14086,48 @@ def check_unknown_flag[Spec: Flag[str]](spec: Spec) -> None:
     assert_type(forwarded_flag(spec), ShapeBox[IntTuple])
 "#,
 );
+
+testcase!(
+    test_type_shape_dsl_return_does_not_infer_from_context,
+    shape_dsl_base_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+class Array[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def identity(shape: IntTuple) -> IntTuple:
+    return shape
+
+def transform[Shape: IntTuple](value: Array[Shape]) -> Array[identity(Shape)]: ...
+def consume[Shape: IntTuple](value: Array[Shape]) -> Shape: ...
+
+def check(value: Array[IntTuple[2, 3]]) -> None:
+    assert_type(consume(transform(value)), IntTuple[2, 3])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_return_preserves_surrounding_contextual_inference,
+    shape_dsl_base_env().enable_implicit_any_lambda_error(),
+    r#"
+from collections.abc import Callable
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+class Array[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def identity(shape: IntTuple) -> IntTuple:
+    return shape
+
+def transform[T, Shape: IntTuple](
+    value: Array[Shape], callback: Callable[[T], None]
+) -> tuple[T, Array[identity(Shape)]]: ...
+
+def check(value: Array[IntTuple[2, 3]]) -> None:
+    result: tuple[str, Array[IntTuple[2, 3]]] = transform(
+        value, lambda item: print(item.upper())
+    )
+"#,
+);
