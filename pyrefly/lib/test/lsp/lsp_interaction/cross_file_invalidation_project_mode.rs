@@ -5,16 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::DocumentDiagnosticReport;
+use lsp_types::DocumentDiagnosticReportResult;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
-/// Pins pyrefly's design that in-editor `didChange` edits do NOT propagate
-/// cross-file. The dependent file `foo.py` keeps its diagnostics until the
-/// dependency `bar.py` is committed via save/watcher events (covered by the
-/// companion tests below).
+/// In-editor `didChange` edits propagate cross-file. After `bar.py` defines
+/// `FizzBuzz`, the dependent `foo.py` retains only its unused-import diagnostic.
 ///
 /// Tracking: https://github.com/zed-extensions/pyrefly/issues/19
 #[test]
@@ -41,23 +41,27 @@ fn test_cross_file_invalidation_in_project_mode() {
     interaction.client.did_open("foo.py");
     interaction
         .client
-        .expect_publish_diagnostics_eventual_error_count(foo_path.clone(), 2)
+        .expect_publish_diagnostics_eventual_error_count(foo_path, 2)
         .expect("foo.py should publish 2 diagnostics (missing FizzBuzz + unused import)");
 
     interaction.client.did_open("bar.py");
 
-    // In-memory edit only — no did_save, no disk write, no
-    // workspace/didChangeWatchedFiles. This is the path that triggers the
-    // project-mode invalidation gap.
+    // In-memory edit only: no disk write, didSave, or didChangeWatchedFiles.
     let new_bar_contents = format!("{}\nclass FizzBuzz: pass\n", bar_contents.trim_end());
     interaction.client.did_change("bar.py", &new_bar_contents);
 
     interaction
         .client
-        .expect_publish_diagnostics_eventual_error_count(foo_path.clone(), 2)
-        .expect(
-            "foo.py stays at 2 because in-editor didChange does not propagate cross-file by design",
-        );
+        .diagnostic("foo.py")
+        .expect_response_with(|response| {
+            let DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Full(report)) =
+                response
+            else {
+                return false;
+            };
+            report.full_document_diagnostic_report.items.len() == 1
+        })
+        .expect("foo.py should drop to 1 diagnostic after an in-editor didChange");
 
     interaction.shutdown().unwrap();
 }
