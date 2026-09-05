@@ -91,6 +91,7 @@ use crate::types::function::FunctionKind;
 use crate::types::function::PropertyMetadata;
 use crate::types::function::PropertyRole;
 use crate::types::keywords::DataclassTransformMetadata;
+use crate::types::keywords::KwCall;
 use crate::types::types::CalleeKind;
 use crate::types::types::Forall;
 use crate::types::types::Forallable;
@@ -1790,9 +1791,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             Type::ClassType(cls)
-                if cls.has_qname("functools", "_Wrapped")
-                    || (original_decoratee.property_metadata().is_some()
-                        && cls.has_qname("functools", "_lru_cache_wrapper")) =>
+                if original_decoratee.property_metadata().is_some()
+                    && cls.has_qname("functools", "_lru_cache_wrapper") =>
             {
                 original_decoratee.clone()
             }
@@ -1810,6 +1810,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     Type::Function(f) => f.signature.is_args_kwargs_wrapper(),
                     Type::Callable(c) => c.is_args_kwargs_wrapper(),
                     Type::ClassType(cls) => cls.has_qname("functools", "_Wrapped"),
+                    Type::KwCall(call) => matches!(
+                        &call.return_ty,
+                        Type::ClassType(cls) if cls.has_qname("functools", "_Wrapped")
+                    ),
                     _ => false,
                 }) =>
             {
@@ -1904,6 +1908,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         {
             return decoratee;
         }
+        let functools_wraps = if let Type::KwCall(call) = &decorator
+            && call.has_function_kind(FunctionKind::FunctoolsWraps)
+            && call
+                .keywords
+                .0
+                .contains_key(&Name::new_static("__wrapped__"))
+        {
+            Some((call.func_metadata.clone(), call.keywords.clone()))
+        } else {
+            None
+        };
         let application = self.prepare_decorator_application(decorator, decoratee, range, errors);
         // Run a decorator call, buffering errors so we can decide between the primary
         // and Self-rewritten fallback without double-reporting.
@@ -1935,6 +1950,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             errors.extend(primary_errors);
             primary_return
+        };
+        let raw_return = if let Some((func_metadata, kws)) = functools_wraps {
+            self.heap.mk_kw_call(KwCall {
+                func_metadata,
+                keywords: kws,
+                return_ty: raw_return,
+            })
+        } else {
+            raw_return
         };
         let decorated_value =
             self.decorate_returned_callable(raw_return, metadata, &application.original_decoratee);
