@@ -160,6 +160,27 @@ def f2(x: E | int):
 );
 
 testcase!(
+    test_is_final_enum_literal,
+    r#"
+from typing import Final, Literal, assert_type, final
+import enum
+
+@final
+class UnsetType(enum.Enum):
+    UNSET = "UNSET"
+    def __bool__(self) -> Literal[False]: ...
+
+UNSET: Final = UnsetType.UNSET
+
+assert_type(UNSET, Literal[UnsetType.UNSET])
+
+def f(x: int | UnsetType) -> None:
+    if x is UNSET:
+        assert_type(x, Literal[UnsetType.UNSET])
+    "#,
+);
+
+testcase!(
     test_is_not_final_enum,
     r#"
 from enum import Enum
