@@ -273,6 +273,37 @@ g(
 }
 
 #[test]
+fn signature_help_separates_overloaded_callable_instance_signatures() {
+    let code = r#"
+from typing import Any, overload
+
+class Ufunc:
+    @overload
+    def __call__(self, x: int) -> int: ...
+    @overload
+    def __call__(self, x: str, y: str) -> str: ...
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+
+power = Ufunc()
+power()
+#     ^
+"#;
+    let files = [("main", code)];
+    let (handles, state) = mk_multi_file_state(&files, Require::Exports, false);
+    let signature = state
+        .transaction()
+        .get_signature_help_at(
+            handles.get("main").unwrap(),
+            extract_cursors_for_test(code)[0],
+        )
+        .expect("signature help available");
+
+    assert_eq!(signature.signatures.len(), 2);
+    assert!(signature.signatures[0].label.contains("x: int"));
+    assert!(signature.signatures[1].label.contains("x: str, y: str"));
+}
+
+#[test]
 fn simple_function_nested_test() {
     let code = r#"
 def f(a: str) -> None: ...
