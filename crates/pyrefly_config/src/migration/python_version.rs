@@ -37,6 +37,7 @@ impl ConfigOptionMigrater for PythonVersionConfig {
         &self,
         pyright_cfg: &PyrightConfig,
         pyrefly_cfg: &mut ConfigFile,
+        _basedpyright: bool,
     ) -> anyhow::Result<()> {
         // In pyright, python version is specified in the "pythonVersion" field
         let version = match &pyright_cfg.python_version {
@@ -93,7 +94,8 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let python_version_config = PythonVersionConfig;
-        let result = python_version_config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result =
+            python_version_config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         assert_eq!(
@@ -110,7 +112,8 @@ mod tests {
         let default_version = pyrefly_cfg.python_environment.python_version;
 
         let python_version_config = PythonVersionConfig;
-        let result = python_version_config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result =
+            python_version_config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_err());
         assert_eq!(
