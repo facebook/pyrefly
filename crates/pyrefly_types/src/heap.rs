@@ -31,6 +31,7 @@ use crate::class::Class;
 use crate::class::ClassType;
 use crate::dimension::Int;
 use crate::function::Function;
+use crate::identity::IdentityIgnored;
 use crate::keywords::KwCall;
 use crate::literal::LitStyle;
 use crate::literal::Literal;
@@ -148,7 +149,7 @@ impl TypeHeap {
     pub fn mk_union(&self, members: Vec<Type>) -> Type {
         Type::Union(Box::new(Union {
             members,
-            display_name: None,
+            display_name: IdentityIgnored(None),
         }))
     }
 
@@ -156,7 +157,7 @@ impl TypeHeap {
     pub fn mk_union_with_name(&self, members: Vec<Type>, display_name: (ModuleName, Name)) -> Type {
         Type::Union(Box::new(Union {
             members,
-            display_name: Some(display_name),
+            display_name: IdentityIgnored(Some(display_name)),
         }))
     }
 

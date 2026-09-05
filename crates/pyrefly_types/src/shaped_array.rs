@@ -5,11 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
-use std::hash::Hash;
-use std::hash::Hasher;
 
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
@@ -23,6 +20,7 @@ use crate::dimension::canonicalize;
 use crate::dimension::gradual_size;
 use crate::dimension::is_gradual_size;
 use crate::dimension::is_gradual_size_bound_type_var;
+use crate::identity::IdentityIgnored;
 use crate::lit_int::LitInt;
 use crate::literal::Lit;
 use crate::quantified::QuantifiedKind;
@@ -37,49 +35,12 @@ use crate::types::Type;
 /// Whether a shaped-array type was constructed using native (`Tensor[N, M]`) or
 /// jaxtyping (`Float[Tensor, "N M"]`) syntax. Controls display rendering and
 /// enables diagnostic checks (e.g., mixing both syntaxes in one function).
-///
-/// Transparent to equality, hashing, and ordering — syntax does not affect
-/// type identity. Two shaped-array types with different syntax but identical base
-/// class and shape are considered equal.
-#[derive(Debug, Clone, Copy, Default)]
-#[derive(Visit, VisitMut)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
 pub enum ShapedArraySyntax {
     #[default]
     Native,
     Jaxtyping,
-}
-
-// Syntax is a display/diagnostic concern, not a type identity concern.
-// All trait impls treat every ShapedArraySyntax value as equal.
-
-impl PartialEq for ShapedArraySyntax {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-impl Eq for ShapedArraySyntax {}
-
-impl Hash for ShapedArraySyntax {
-    fn hash<H: Hasher>(&self, _state: &mut H) {}
-}
-
-impl PartialOrd for ShapedArraySyntax {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ShapedArraySyntax {
-    fn cmp(&self, _other: &Self) -> Ordering {
-        Ordering::Equal
-    }
-}
-
-impl crate::equality::TypeEq for ShapedArraySyntax {
-    fn type_eq(&self, _other: &Self, _ctx: &mut crate::equality::TypeEqCtx) -> bool {
-        true
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -98,8 +59,8 @@ pub struct ShapedArrayType {
     /// Base shaped-array class (e.g., torch.Tensor)
     pub base_class: ClassType,
     shape: ShapedArrayShapeStorage,
-    /// Whether this type was constructed from native or jaxtyping syntax.
-    pub syntax: ShapedArraySyntax,
+    /// Presentation-only metadata recording the syntax used to construct this type.
+    pub syntax: IdentityIgnored<ShapedArraySyntax>,
 }
 
 impl ShapedArrayType {
@@ -108,7 +69,7 @@ impl ShapedArrayType {
         Self {
             base_class,
             shape: ShapedArrayShapeStorage::Inline(shape),
-            syntax: ShapedArraySyntax::Native,
+            syntax: IdentityIgnored(ShapedArraySyntax::Native),
         }
     }
 
@@ -117,13 +78,13 @@ impl ShapedArrayType {
         Self {
             base_class,
             shape: ShapedArrayShapeStorage::Inline(IntTuple::shapeless()),
-            syntax: ShapedArraySyntax::Native,
+            syntax: IdentityIgnored(ShapedArraySyntax::Native),
         }
     }
 
     /// Set the syntax for this shaped-array type.
     pub fn with_syntax(mut self, syntax: ShapedArraySyntax) -> Self {
-        self.syntax = syntax;
+        self.syntax = IdentityIgnored(syntax);
         self
     }
 
@@ -205,7 +166,7 @@ impl ShapedArrayType {
 
 impl Display for ShapedArrayType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.syntax {
+        match *self.syntax {
             ShapedArraySyntax::Native => {
                 let shape = self.shape();
                 if is_shapeless(&shape) {

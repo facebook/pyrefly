@@ -1094,6 +1094,7 @@ mod tests {
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
     use crate::class::PrecomputedTParams;
+    use crate::identity::IdentityIgnored;
     use crate::lit_int::LitInt;
     use crate::quantified::AnchorIndex;
     use crate::quantified::Quantified;
@@ -1189,7 +1190,7 @@ mod tests {
     fn empty_integer_union_is_invalid() {
         let empty_union = Type::Union(Box::new(Union {
             members: Vec::new(),
-            display_name: None,
+            display_name: IdentityIgnored(None),
         }));
         assert_eq!(lower_index_type(&empty_union), IndexTypeLowering::Invalid);
     }

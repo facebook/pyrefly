@@ -40,7 +40,6 @@ use ruff_python_ast::UnaryOp as RuffUnaryOp;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 
-use crate::callable::IdentityIgnored;
 use crate::dimension::Int;
 use crate::dimension::ShapeError;
 use crate::dimension::canonicalize;
@@ -49,6 +48,7 @@ use crate::einsum::EinsumLocation;
 use crate::einsum::parse_einsum_equation;
 use crate::equality::TypeEq;
 use crate::equality::TypeEqCtx;
+use crate::identity::IdentityIgnored;
 use crate::lit_int::LitInt;
 use crate::literal::Lit;
 use crate::shaped_array::IntTuple;
@@ -4071,14 +4071,14 @@ mod tests {
                 ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
                 ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
             ],
-            display_name: None,
+            display_name: IdentityIgnored(None),
         }));
         let mismatched_union = Type::Union(Box::new(Union {
             members: vec![
                 ShapedArrayType::new(array.clone(), shape.clone()).to_type(),
                 ShapedArrayType::new(array, other_shape).to_type(),
             ],
-            display_name: None,
+            display_name: IdentityIgnored(None),
         }));
 
         assert_eq!(extract::shaped_array_shape(&union), Some(shape));

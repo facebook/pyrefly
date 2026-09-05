@@ -253,6 +253,7 @@ pub(crate) fn simplify_shape_type(ty: &mut Type) {
 
 #[cfg(test)]
 mod tests {
+    use pyrefly_types::identity::IdentityIgnored;
     use pyrefly_types::lit_int::LitInt;
     use pyrefly_types::shaped_array::IntTuple;
     use pyrefly_types::tuple::Tuple;
@@ -304,7 +305,7 @@ mod tests {
                 Type::Tuple(Tuple::Concrete(vec![raw_shape(2)])),
                 Type::Tuple(Tuple::Concrete(vec![raw_shape(3)])),
             ],
-            display_name: None,
+            display_name: IdentityIgnored(None),
         }));
         assert_eq!(
             canonicalize_int_tuples_sequence(&candidate, &TypeHeap::new()),
@@ -317,7 +318,7 @@ mod tests {
                         IntTuple::new(vec![Int::Literal(3)]).to_shape_arg_type(),
                     ])),
                 ],
-                display_name: None,
+                display_name: IdentityIgnored(None),
             }))
         );
     }

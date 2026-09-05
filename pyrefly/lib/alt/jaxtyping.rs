@@ -598,7 +598,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if let Type::ShapedArray(shaped_array_type) = ty
                 && !shaped_array_type.is_shapeless()
             {
-                match shaped_array_type.syntax {
+                match *shaped_array_type.syntax {
                     ShapedArraySyntax::Native => *has_native = true,
                     ShapedArraySyntax::Jaxtyping => *has_jaxtyping = true,
                 }

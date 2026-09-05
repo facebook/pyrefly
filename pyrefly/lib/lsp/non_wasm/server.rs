@@ -3643,12 +3643,12 @@ impl Server {
                     .insert(handle.path().dupe());
             }
             let task_telemetry = SubTaskTelemetry::new(telemetry, telemetry_event);
-            let (new_invalidated_source_dbs, rebuild_stats) =
+            let outcome =
                 ConfigFile::query_source_db(&configs_to_paths, force, Some(task_telemetry));
-            telemetry_event.set_sourcedb_rebuild_stats(rebuild_stats);
-            if !new_invalidated_source_dbs.is_empty() {
+            telemetry_event.set_sourcedb_rebuild_stats(outcome.stats);
+            if !outcome.reloaded.is_empty() {
                 let mut lock = server.invalidated_source_dbs.lock();
-                for db in new_invalidated_source_dbs {
+                for db in outcome.reloaded {
                     lock.insert(db);
                 }
                 let _ = server.lsp_queue.send(LspEvent::InvalidateConfigFind);

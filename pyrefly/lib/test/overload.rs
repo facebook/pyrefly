@@ -2492,3 +2492,41 @@ if TYPE_CHECKING:
     def f(a: str): ...
     "#,
 );
+
+testcase!(
+    test_union_with_any_ambiguity,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f(x: int) -> float | Any: ...
+@overload
+def f(x: str) -> Any: ...
+def f(x) -> Any: ...
+
+def g(x: Any):
+    assert_type(f(x), Any)
+    "#,
+);
+
+testcase!(
+    bug = "`int` should not be considered a subtype of `float`",
+    test_int_float_ambiguity,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f(x: int) -> int | Any: ...
+@overload
+def f(x: str) -> float: ...
+def f(x) -> Any: ...
+
+def g(x: Any):
+    # This is technically wrong: pyrefly permits operations like `.hex()` on values typed as
+    # `float`, which `int` does not permit. This is weirdness related to how we implement
+    # the `int`/`float`/`complex` special case in the spec and not specific to overloads. One way
+    # to make it correct would be to implement https://github.com/python/typing-council/issues/46
+    # and treat `float` as meaning `int | float` in type expressions.
+    assert_type(f(x), int | Any)
+    "#,
+);

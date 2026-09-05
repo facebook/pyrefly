@@ -53,6 +53,7 @@ use crate::function::FunctionKind;
 use crate::function::PropertyMetadata;
 use crate::function::PropertyRole;
 use crate::heap::TypeHeap;
+use crate::identity::IdentityIgnored;
 use crate::keywords::KwCall;
 use crate::literal::Lit;
 use crate::literal::LitStyle;
@@ -775,56 +776,11 @@ pub enum SuperObj {
     Class(ClassType),
 }
 
-#[derive(Debug, Clone, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
 pub struct Union {
     pub members: Vec<Type>,
-    pub display_name: Option<(ModuleName, Name)>,
-}
-
-impl PartialEq for Union {
-    fn eq(&self, other: &Self) -> bool {
-        self.members == other.members
-    }
-}
-
-impl Hash for Union {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.members.hash(state)
-    }
-}
-
-impl PartialOrd for Union {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Union {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.members.cmp(&other.members)
-    }
-}
-
-impl TypeEq for Union {
-    fn type_eq(&self, other: &Self, ctx: &mut TypeEqCtx) -> bool {
-        self.members.type_eq(&other.members, ctx)
-    }
-}
-
-impl Visit<Type> for Union {
-    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
-        for member in &self.members {
-            member.visit(f);
-        }
-    }
-}
-
-impl VisitMut<Type> for Union {
-    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
-        for member in &mut self.members {
-            member.visit_mut(f);
-        }
-    }
+    pub display_name: IdentityIgnored<Option<(ModuleName, Name)>>,
 }
 
 /// An nn.Module instance with captured constructor arguments.
@@ -2310,7 +2266,7 @@ impl Type {
     pub fn union(members: Vec<Type>) -> Self {
         Type::Union(Box::new(Union {
             members,
-            display_name: None,
+            display_name: IdentityIgnored(None),
         }))
     }
 
@@ -2378,6 +2334,7 @@ mod tests {
     use crate::function::FuncMetadata;
     use crate::function::Function;
     use crate::function::FunctionKind;
+    use crate::identity::IdentityIgnored;
     use crate::literal::Lit;
     use crate::literal::LitStyle;
     use crate::map_int_tuples::TypeLambda;
@@ -2502,11 +2459,11 @@ mod tests {
         let members = vec![Type::None, Type::LiteralString(LitStyle::Implicit)];
         let named = Union {
             members: members.clone(),
-            display_name: Some((ModuleName::builtins(), Name::new_static("TA"))),
+            display_name: IdentityIgnored(Some((ModuleName::builtins(), Name::new_static("TA")))),
         };
         let anonymous = Union {
             members,
-            display_name: None,
+            display_name: IdentityIgnored(None),
         };
 
         assert_eq!(named, anonymous);

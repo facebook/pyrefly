@@ -34,6 +34,7 @@ pub mod function;
 pub mod globals;
 mod gufunc;
 pub mod heap;
+pub mod identity;
 pub mod keywords;
 pub mod lit_int;
 pub mod literal;
