@@ -2478,6 +2478,23 @@ def test(foo: Foo | Bar) -> None:
 );
 
 testcase!(
+    test_typed_dict_union_key_contains_does_not_narrow,
+    r#"
+from typing import TypedDict, assert_type
+
+class Foo(TypedDict, closed=True):
+    a: int
+
+class Bar(TypedDict, closed=True):
+    b: int
+
+def test(schema: Foo | Bar, key: str) -> None:
+    if key in schema:
+        assert_type(key, str)
+"#,
+);
+
+testcase!(
     test_typed_dict_open_contains_narrowing,
     r#"
 from typing import TypedDict, assert_type
