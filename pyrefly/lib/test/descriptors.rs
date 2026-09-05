@@ -1280,6 +1280,36 @@ def f(foo: Foo) -> None:
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4592
+testcase!(
+    test_callable_descriptor_self_concatenate_with_sibling_type_var,
+    r#"
+from typing import Callable, Concatenate, Protocol, Self, assert_type, overload
+
+class JitDeco[**P, R](Protocol):
+    def __call__(self, /, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+    @overload
+    def __get__(self, obj: None, owner: type, /) -> Self: ...
+    @overload
+    def __get__[ObjT, **P1, R1](
+        self: JitDeco[Concatenate[ObjT, P1], R1],
+        obj: ObjT,
+        owner: type | None = None,
+        /,
+    ) -> Callable[P1, R1]: ...
+
+def jit[**P, R](fn: Callable[P, R], /) -> JitDeco[P, R]: ...
+
+class Foo:
+    @jit
+    def bar(self, x: int) -> int:
+        return x * 2
+
+assert_type(Foo().bar(2), int)
+"#,
+);
+
 // Assignment resolves a descriptor through its getter too, so the same guard keeps
 // the write path from overflowing the stack.
 testcase!(
