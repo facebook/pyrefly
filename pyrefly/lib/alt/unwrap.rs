@@ -447,9 +447,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let send_ty = self
                 .resolve_var_opt(ty, send_ty)
                 .unwrap_or_else(|| self.heap.mk_none());
+            // Iterator and Iterable annotations do not constrain the generator's return value.
             let return_ty = self
                 .resolve_var_opt(ty, return_ty)
-                .unwrap_or_else(|| self.heap.mk_none());
+                .unwrap_or_else(|| self.heap.mk_any_implicit());
             Some((yield_ty, send_ty, return_ty))
         } else {
             None
