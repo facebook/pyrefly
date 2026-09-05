@@ -6281,6 +6281,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             x.body_kind,
             x.is_return_inferred,
             x.calls_super_method,
+            x.def.is_reassigned_classmethod,
             x.class_key.as_ref(),
             &x.decorators,
             &x.legacy_tparams,
