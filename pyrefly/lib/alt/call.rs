@@ -112,6 +112,8 @@ fn nests_calls(x: &Expr, depth: u32) -> bool {
 pub enum ConstructorKind {
     // `MyClass`
     BareClassName,
+    // `MyClass[int]`
+    SpecializedClass,
     // `type[MyClass]`
     TypeOfClass,
     // `type[Self]`
@@ -381,6 +383,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
                 _ => unreachable!(),
             },
+            Type::SpecializedClass(cls) => CallTargetLookup::Ok(Box::new(CallTarget::Class(
+                cls,
+                ConstructorKind::SpecializedClass,
+                None,
+            ))),
             Type::Type(f) if matches!(&*f, Type::ClassType(_)) => {
                 let Type::ClassType(cls) = *f else {
                     unreachable!("guarded by matches! above")
@@ -1671,7 +1678,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     );
                 }
                 let metadata = self.get_metadata_for_class(cls.class_object());
-                if metadata.is_protocol() && constructor_kind == ConstructorKind::BareClassName {
+                let is_direct_class = matches!(
+                    &constructor_kind,
+                    ConstructorKind::BareClassName | ConstructorKind::SpecializedClass
+                );
+                if metadata.is_protocol() && is_direct_class {
                     self.error_with_context(
                         errors,
                         arguments_range,
@@ -1686,9 +1697,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let abstract_members = self.get_abstract_members_for_class(cls.class_object());
                     let unimplemented_abstract_methods =
                         abstract_members.unimplemented_abstract_methods();
-                    if constructor_kind == ConstructorKind::BareClassName
-                        && !unimplemented_abstract_methods.is_empty()
-                    {
+                    if is_direct_class && !unimplemented_abstract_methods.is_empty() {
                         self.error_with_context(
                             errors,
                             arguments_range,

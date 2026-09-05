@@ -1097,7 +1097,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     ) -> Type {
         let mut callee_ty = match prepared {
             PreparedExprCall::Resolved(ty) => return ty,
-            PreparedExprCall::Callee(callee_ty) => callee_ty,
+            PreparedExprCall::Callee(ty) => ty,
         };
 
         // Instantiating a subscripted generic whose type argument is an out-of-scope legacy
@@ -2620,6 +2620,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     // All other classes (including Tensor) get promoted and wrapped in type_form
                     *ty = self.heap.mk_type_of(self.promote(cls, range, errors));
                 }
+            }
+            Type::SpecializedClass(cls) => {
+                *ty = self.heap.mk_type_of(Type::ClassType(cls.clone()));
             }
             Type::ClassType(cls) if cls.is_builtin("type") => {
                 *ty = self.heap.mk_type_of(self.heap.mk_any_implicit());
@@ -4744,8 +4747,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             result
         } else {
             let targs = self.parse_class_type_args(cls, xs, type_form_context, errors);
-            self.heap
-                .mk_type_of(self.specialize(cls, targs, range, errors))
+            match self.specialize(cls, targs, range, errors) {
+                Type::ClassType(class_type) => Type::SpecializedClass(class_type),
+                Type::TypedDict(typed_dict) => self.heap.mk_type_of(Type::TypedDict(typed_dict)),
+                _ => unreachable!("specializing a class produces a class or TypedDict instance"),
+            }
         }
     }
 

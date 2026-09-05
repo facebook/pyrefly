@@ -572,7 +572,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                 }
             } else if contains_subscript
-                && matches!(&class_info_ty, Type::Type(f) if matches!(&**f, Type::ClassType(cls) if !cls.targs().is_empty()))
+                && (matches!(&class_info_ty, Type::SpecializedClass(_))
+                    || matches!(&class_info_ty, Type::Type(f) if matches!(&**f, Type::ClassType(cls) if !cls.targs().is_empty())))
             {
                 // If the raw expression contains something that structurally looks like `A[T]` and
                 // part of the expression resolves to a parameterized class type, then we likely have a
