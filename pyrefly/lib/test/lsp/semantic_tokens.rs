@@ -392,6 +392,168 @@ token-type: string, token-modifiers: [rawStringtemplateString]
 }
 
 #[test]
+fn string_content_syntax_tokens_test() {
+    let code = r#""\N{HANGUL JUNGSEONG O-E}\n"
+b"\x41\u1234\n"
+r"\n"
+"progress is 100% done"
+"%(user-name)-08.2f" % {"user-name": 1.5}
+f"""{1!r:
+>{2}.2f
+}"""
+t"{1!s:>{2}}"
+"#;
+    assert_full_semantic_tokens_with_syntax_and_env(
+        &[("main", code)],
+        true,
+        TestEnv::new_with_version(PythonVersion::new(3, 14, 0)),
+        r#"
+# main.py
+line: 0, column: 0, length: 1, text: "
+token-type: string
+
+line: 0, column: 1, length: 24, text: \N{HANGUL JUNGSEONG O-E}
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 0, column: 25, length: 2, text: \n
+token-type: string, token-modifiers: [escapeSequence]
+
+line: 0, column: 27, length: 1, text: "
+token-type: string
+
+line: 1, column: 0, length: 1, text: b
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 1, column: 1, length: 1, text: "
+token-type: string, token-modifiers: [byteString]
+
+line: 1, column: 2, length: 4, text: \x41
+token-type: string, token-modifiers: [byteStringescapeSequence]
+
+line: 1, column: 6, length: 6, text: \u1234
+token-type: string, token-modifiers: [byteString]
+
+line: 1, column: 12, length: 2, text: \n
+token-type: string, token-modifiers: [byteStringescapeSequence]
+
+line: 1, column: 14, length: 1, text: "
+token-type: string, token-modifiers: [byteString]
+
+line: 2, column: 0, length: 1, text: r
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 2, column: 1, length: 4, text: "\n"
+token-type: string, token-modifiers: [rawString]
+
+line: 3, column: 0, length: 23, text: "progress is 100% done"
+token-type: string
+
+line: 4, column: 0, length: 1, text: "
+token-type: string
+
+line: 4, column: 1, length: 18, text: %(user-name)-08.2f
+token-type: string, token-modifiers: [formatPlaceholder]
+
+line: 4, column: 19, length: 1, text: "
+token-type: string
+
+line: 4, column: 21, length: 1, text: %
+token-type: operator
+
+line: 4, column: 23, length: 1, text: {
+token-type: operator
+
+line: 4, column: 24, length: 11, text: "user-name"
+token-type: string
+
+line: 4, column: 35, length: 1, text: :
+token-type: operator
+
+line: 4, column: 37, length: 3, text: 1.5
+token-type: number
+
+line: 4, column: 40, length: 1, text: }
+token-type: operator
+
+line: 5, column: 0, length: 1, text: f
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 5, column: 1, length: 3, text: """
+token-type: string, token-modifiers: [formatString]
+
+line: 5, column: 4, length: 1, text: {
+token-type: operator
+
+line: 5, column: 5, length: 1, text: 1
+token-type: number
+
+line: 5, column: 6, length: 2, text: !r
+token-type: string, token-modifiers: [formatSpecifierformatString]
+
+line: 5, column: 8, length: 1, text: :
+token-type: string, token-modifiers: [formatSpecifierformatString]
+
+line: 6, column: 0, length: 1, text: >
+token-type: string, token-modifiers: [formatSpecifierformatString]
+
+line: 6, column: 1, length: 1, text: {
+token-type: operator
+
+line: 6, column: 2, length: 1, text: 2
+token-type: number
+
+line: 6, column: 3, length: 1, text: }
+token-type: operator
+
+line: 6, column: 4, length: 3, text: .2f
+token-type: string, token-modifiers: [formatSpecifierformatString]
+
+line: 7, column: 0, length: 1, text: }
+token-type: operator
+
+line: 7, column: 1, length: 3, text: """
+token-type: string, token-modifiers: [formatString]
+
+line: 8, column: 0, length: 1, text: t
+token-type: string, token-modifiers: [stringPrefix]
+
+line: 8, column: 1, length: 1, text: "
+token-type: string, token-modifiers: [templateString]
+
+line: 8, column: 2, length: 1, text: {
+token-type: operator
+
+line: 8, column: 3, length: 1, text: 1
+token-type: number
+
+line: 8, column: 4, length: 2, text: !s
+token-type: string, token-modifiers: [formatSpecifiertemplateString]
+
+line: 8, column: 6, length: 1, text: :
+token-type: string, token-modifiers: [formatSpecifiertemplateString]
+
+line: 8, column: 7, length: 1, text: >
+token-type: string, token-modifiers: [formatSpecifiertemplateString]
+
+line: 8, column: 8, length: 1, text: {
+token-type: operator
+
+line: 8, column: 9, length: 1, text: 2
+token-type: number
+
+line: 8, column: 10, length: 1, text: }
+token-type: operator
+
+line: 8, column: 11, length: 1, text: }
+token-type: operator
+
+line: 8, column: 12, length: 1, text: "
+token-type: string, token-modifiers: [templateString]
+"#,
+    );
+}
+
+#[test]
 fn soft_keyword_syntax_tokens_test() {
     let code = r#"match = 1
 case = match
