@@ -8,6 +8,28 @@
 use crate::django_testcase;
 
 django_testcase!(
+    test_field_access_on_class_and_instance,
+    r#"
+from typing import assert_type
+
+from django.db import models
+from django.db.models.expressions import Combinable
+from django.db.models.fields import _FieldDescriptor
+
+class Contact(models.Model):
+    address = models.CharField(max_length=200)
+
+contact = Contact(address="123 Fake St")
+assert_type(contact.address, str)
+assert_type(
+    Contact.address,
+    _FieldDescriptor[models.CharField[str | int | Combinable, str]],
+)
+assert_type(Contact.address.field.max_length, int | None)
+"#,
+);
+
+django_testcase!(
     test_textfield_nullable,
     r#"
 from django.db import models
