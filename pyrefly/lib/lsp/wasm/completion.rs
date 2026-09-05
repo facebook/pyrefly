@@ -42,6 +42,7 @@ use starlark_map::small_set::SmallSet;
 use crate::alt::attr::AttrInfo;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
+use crate::error::suppress::detect_line_ending;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
 use crate::lsp::wasm::signature_help::CallInfo;
@@ -53,9 +54,22 @@ use crate::state::lsp::IdentifierContext;
 use crate::state::lsp::IdentifierWithContext;
 use crate::state::lsp::ImportFormat;
 use crate::state::lsp::MIN_CHARACTERS_TYPED_AUTOIMPORT;
+use crate::state::lsp::override_in_scope;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
+use crate::types::callable::Params;
+use crate::types::types::AnyStyle;
 use crate::types::types::Type;
+
+/// Source edits and formatting needed to turn a method-name completion into an override stub.
+struct MethodOverrideContext {
+    indent: String,
+    line_ending: &'static str,
+    is_async: bool,
+    is_staticmethod: bool,
+    is_classmethod: bool,
+    additional_text_edits: Vec<TextEdit>,
+}
 
 /// Classification of a completion item's source, used for ranking.
 #[derive(Clone, Copy, Default)]
@@ -985,6 +999,7 @@ impl Transaction<'_> {
         handle: &Handle,
         base_type: Type,
         expected_type: Option<&Type>,
+        method_override: Option<&MethodOverrideContext>,
         completions: &mut Vec<RankedCompletion>,
     ) {
         self.ad_hoc_solve(handle, "completion_attributes", |solver| {
@@ -1016,12 +1031,114 @@ impl Transaction<'_> {
                     } else {
                         CompletionSource::Local
                     };
+                    let mut insert_text = None;
+                    let mut additional_text_edits = None;
+                    let mut insert_text_format = None;
+                    if let Some(context) = method_override
+                        && let Some(ty) = attr.ty.as_ref()
+                        && ty.has_toplevel_func_metadata()
+                        && ty.property_metadata().is_none()
+                        && let Some((is_async, is_staticmethod, is_classmethod, is_return_inferred)) =
+                            ty.visit_toplevel_func_metadata(&|metadata| {
+                                Some((
+                                    metadata.flags.is_async,
+                                    metadata.flags.is_staticmethod,
+                                    metadata.flags.is_classmethod,
+                                    metadata.flags.is_return_inferred,
+                                ))
+                            })
+                        && is_async == context.is_async
+                        && is_staticmethod == context.is_staticmethod
+                        && is_classmethod == context.is_classmethod
+                        && let Some(callable) = ty.callable_signatures().into_iter().next()
+                        && let Params::List(params) = &callable.params
+                    {
+                        // Anonymous positional-only parameters cannot be spelled in a `def`.
+                        if params.items().iter().all(|param| param.name().is_some()) {
+                            let mut callable = callable.clone();
+                            let await_super = if is_async {
+                                solver.unwrap_coroutine(&callable.ret).is_some_and(
+                                    |(_, _, return_type)| {
+                                        callable.ret = return_type;
+                                        true
+                                    },
+                                )
+                            } else {
+                                false
+                            };
+                            let mut signature = callable.to_string();
+                            let mut call_args = Vec::new();
+                            for (index, param) in params.items().iter().enumerate() {
+                                let name = param.name().expect("all parameters have names");
+                                let is_receiver =
+                                    index == 0 && matches!(name.as_str(), "self" | "cls" | "_cls");
+                                if is_receiver
+                                    || matches!(param.as_type(), Type::Any(AnyStyle::Implicit))
+                                {
+                                    let rendered = param.to_string();
+                                    signature = signature.replacen(
+                                        &rendered,
+                                        &rendered.replacen(
+                                            &format!(": {}", param.as_type()),
+                                            "",
+                                            1,
+                                        ),
+                                        1,
+                                    );
+                                }
+                                if !is_receiver {
+                                    call_args.push(match param {
+                                        Param::PosOnly(..) | Param::Pos(..) => name.to_string(),
+                                        Param::Varargs(..) => format!("*{name}"),
+                                        Param::KwOnly(..) => format!("{name}={name}"),
+                                        Param::Kwargs(..) => format!("**{name}"),
+                                    });
+                                }
+                            }
+                            if is_return_inferred
+                                && let Some((params, _)) = signature.rsplit_once(" -> ")
+                            {
+                                signature = params.to_owned();
+                            }
+                            let body_indent = if context.indent.contains('\t') {
+                                format!("{}\t", context.indent)
+                            } else {
+                                format!("{}    ", context.indent)
+                            };
+                            let call = format!(
+                                "{}super().{}({})",
+                                if await_super { "await " } else { "" },
+                                attr.name,
+                                call_args.join(", ")
+                            );
+                            let body = if attr.name.as_str() == "__init__" {
+                                call
+                            } else {
+                                format!("return {call}")
+                            };
+                            insert_text = Some(format!(
+                                "{}{}:{}{}{}",
+                                attr.name, signature, context.line_ending, body_indent, body,
+                            ));
+                            if !context.additional_text_edits.is_empty() {
+                                additional_text_edits = Some(context.additional_text_edits.clone());
+                            }
+                            insert_text_format = Some(InsertTextFormat::PLAIN_TEXT);
+                        }
+                    }
                     completions.push(RankedCompletion {
                         item: CompletionItem {
                             label: attr.name.as_str().to_owned(),
                             detail,
-                            kind,
+                            kind: if insert_text.is_some() {
+                                Some(CompletionItemKind::METHOD)
+                            } else {
+                                kind
+                            },
                             documentation,
+                            insert_text,
+                            insert_text_format,
+                            additional_text_edits,
                             tags: if attr.is_deprecated {
                                 Some(vec![CompletionItemTag::DEPRECATED])
                             } else {
@@ -1161,6 +1278,7 @@ impl Transaction<'_> {
                         handle,
                         base_type,
                         expected_type.as_ref(),
+                        None,
                         &mut result,
                     );
                 }
@@ -1207,10 +1325,82 @@ impl Transaction<'_> {
                     {
                         let key = Key::Definition(ShortIdentifier::new(&class_def.name));
                         if let Some(class_type) = self.get_type(handle, &key) {
+                            let method_override = if is_method_def {
+                                covering_nodes
+                                    .iter()
+                                    .find_map(|node| match node {
+                                        AnyNodeRef::StmtFunctionDef(function_def) => {
+                                            Some(*function_def)
+                                        }
+                                        _ => None,
+                                    })
+                                    .and_then(|function_def| {
+                                        let ast = ast.as_ref()?;
+                                        let module_info = self.get_module_info(handle)?;
+                                        let source = module_info.contents();
+                                        let function_start =
+                                            function_def.range().start().to_usize();
+                                        let line_start = source[..function_start]
+                                            .rfind('\n')
+                                            .map_or(0, |position| position + 1);
+                                        let indent = source[line_start..function_start].to_owned();
+                                        let line_ending = detect_line_ending(source);
+                                        let has_decorator = |name| {
+                                            function_def.decorator_list.iter().any(|decorator| {
+                                                Ast::decorator_trailing_name(&decorator.expression)
+                                                    == Some(name)
+                                            })
+                                        };
+                                        let has_override = has_decorator("override");
+                                        let mut additional_text_edits = Vec::new();
+                                        if !has_override {
+                                            if !override_in_scope(ast)
+                                                && let Some((_, range, mut new_text)) = self
+                                                    .override_import_edit(
+                                                        handle,
+                                                        &module_info,
+                                                        ast,
+                                                        import_format,
+                                                        custom_thread_pool,
+                                                    )
+                                            {
+                                                if line_ending != "\n" {
+                                                    new_text = new_text.replace('\n', line_ending);
+                                                }
+                                                additional_text_edits.push(TextEdit {
+                                                    range: module_info.to_lsp_range(range),
+                                                    new_text,
+                                                });
+                                            }
+                                            let decorator_start =
+                                                function_def.decorator_list.first().map_or_else(
+                                                    || function_def.range().start(),
+                                                    |decorator| decorator.range().start(),
+                                                );
+                                            additional_text_edits.push(TextEdit {
+                                                range: module_info.to_lsp_range(TextRange::empty(
+                                                    decorator_start,
+                                                )),
+                                                new_text: format!("@override{line_ending}{indent}"),
+                                            });
+                                        }
+                                        Some(MethodOverrideContext {
+                                            indent,
+                                            line_ending,
+                                            is_async: function_def.is_async,
+                                            is_staticmethod: has_decorator("staticmethod"),
+                                            is_classmethod: has_decorator("classmethod"),
+                                            additional_text_edits,
+                                        })
+                                    })
+                            } else {
+                                None
+                            };
                             self.add_attribute_completions_for_type(
                                 handle,
                                 class_type,
                                 None,
+                                method_override.as_ref(),
                                 &mut result,
                             );
                         }
