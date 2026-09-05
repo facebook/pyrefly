@@ -56,6 +56,9 @@ mod tsp;
 
 pub(crate) use compat::*;
 
+/// The version of this Pyrefly build.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// This interface is NOT stable and should not be relied upon.
 /// It will change during minor version increments.
 ///
