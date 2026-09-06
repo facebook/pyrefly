@@ -19,17 +19,19 @@ use crate::config::ConfigFile;
 pub enum ConfigFileKind {
     MyPy,
     Pyright,
+    BasedPyright,
     Pyrefly,
     Pyproject,
 }
 
 impl ConfigFileKind {
-    pub fn file_name(&self) -> &str {
+    pub fn file_name(&self) -> Option<&str> {
         match self {
-            Self::MyPy => "mypy.ini",
-            Self::Pyright => "pyrightconfig.json",
-            Self::Pyrefly => "pyrefly.toml",
-            Self::Pyproject => "pyproject.toml",
+            Self::MyPy => Some("mypy.ini"),
+            Self::Pyright => Some("pyrightconfig.json"),
+            Self::BasedPyright => None,
+            Self::Pyrefly => Some("pyrefly.toml"),
+            Self::Pyproject => Some("pyproject.toml"),
         }
     }
 
@@ -43,8 +45,10 @@ impl ConfigFileKind {
 
     pub fn check_for_existing_config(&self, path: &Path) -> anyhow::Result<bool> {
         let file_name = self.file_name();
-        if path.ends_with(file_name) && path.exists() {
-            return Ok(true);
+        if let Some(file_name) = file_name {
+            if path.ends_with(file_name) && path.exists() {
+                return Ok(true);
+            }
         }
         if path.ends_with(ConfigFile::PYPROJECT_FILE_NAME) && path.exists() {
             let raw_pyproject = fs_anyhow::read_to_string(path).with_context(|| {
@@ -56,10 +60,15 @@ impl ConfigFileKind {
             return Ok(raw_pyproject.contains(&self.toml_identifier()));
         }
         if path.is_dir() {
-            let custom_file = self.check_for_existing_config(&path.join(file_name));
+            if let Some(file_name) = file_name {
+                let custom_file = self.check_for_existing_config(&path.join(file_name));
+                if custom_file? {
+                    return Ok(true);
+                }
+            }
             let pyproject =
                 self.check_for_existing_config(&path.join(ConfigFile::PYPROJECT_FILE_NAME));
-            return Ok(custom_file? || pyproject?);
+            return Ok(pyproject?);
         }
         Ok(false)
     }
