@@ -15,6 +15,10 @@ starlark_map = "0.14.2"
 tar = "0.4.46"
 zstd = "0.13.3"
 
+[features]
+default = ["third-party-stubs"]
+third-party-stubs = []
+
 [build-dependencies]
 sha2 = "0.10.6"
 tar = "0.4.46"
