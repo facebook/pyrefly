@@ -14212,3 +14212,82 @@ def check(value: Array[IntTuple[2, 3]]) -> None:
     )
 "#,
 );
+testcase!(
+    test_int_tuple_bounded_generic_shape_compatibility,
+    shape_dsl_base_env(),
+    r#"
+from shape_extensions import Elements, IntTuple
+
+class Array[Shape: IntTuple]: ...
+
+def accepts_open(value: Array[IntTuple[2, *Elements[IntTuple]]]) -> None: ...
+def accepts_gradual(value: Array[IntTuple]) -> None: ...
+
+def check(good: Array[IntTuple[2, 3]], bad: Array[IntTuple[3, 3]], gradual: Array) -> None:
+    accepts_open(good)
+    accepts_open(bad)  # E: Shape dimension mismatch: expected Int[2], got Int[3]
+    accepts_gradual(gradual)
+"#,
+);
+
+testcase!(
+    test_gradual_int_tuple_argument_does_not_erase_symbolic_dimensions,
+    shape_dsl_base_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import IntTuple, IntVar
+
+class Array[Shape: IntTuple]: ...
+
+def choose[Shape: IntTuple](left: Array[Shape], right: Array[Shape]) -> Array[Shape]: ...
+
+def check[N: IntVar](symbolic: Array[IntTuple[N]], any_shape: Array, gradual: Array[IntTuple]) -> None:
+    assert_type(choose(symbolic, any_shape), Array[IntTuple[N]])
+    assert_type(choose(any_shape, symbolic), Array[IntTuple[N]])
+    assert_type(choose(symbolic, gradual), Array[IntTuple[N]])
+    assert_type(choose(gradual, symbolic), Array[IntTuple[N]])
+"#,
+);
+
+testcase!(
+    test_ordinary_tuple_bound_variance_with_tensor_shapes,
+    shape_dsl_base_env(),
+    r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T", bound=tuple[int, ...])
+T_co = TypeVar("T_co", bound=tuple[int, ...], covariant=True)
+
+class InvariantBox(Generic[T]): ...
+class CovariantBox(Generic[T_co]): ...
+
+def check(
+    invariant_concrete: InvariantBox[tuple[int, int]],
+    covariant_concrete: CovariantBox[tuple[int, int]],
+) -> None:
+    invariant_wide: InvariantBox[tuple[int, ...]] = invariant_concrete  # E: is not assignable
+    covariant_wide: CovariantBox[tuple[int, ...]] = covariant_concrete
+    covariant_narrow: CovariantBox[tuple[int, int]] = covariant_wide  # E: is not assignable
+"#,
+);
+
+testcase!(
+    test_ordinary_tuple_bound_variance_without_tensor_shapes,
+    r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T", bound=tuple[int, ...])
+T_co = TypeVar("T_co", bound=tuple[int, ...], covariant=True)
+
+class InvariantBox(Generic[T]): ...
+class CovariantBox(Generic[T_co]): ...
+
+def check(
+    invariant_concrete: InvariantBox[tuple[int, int]],
+    covariant_concrete: CovariantBox[tuple[int, int]],
+) -> None:
+    invariant_wide: InvariantBox[tuple[int, ...]] = invariant_concrete  # E: is not assignable
+    covariant_wide: CovariantBox[tuple[int, ...]] = covariant_concrete
+    covariant_narrow: CovariantBox[tuple[int, int]] = covariant_wide  # E: is not assignable
+"#,
+);
