@@ -775,6 +775,14 @@ fn assert_shaped_array_shape(shape: &Quantified, name: &str, kind: QuantifiedKin
     assert_eq!(shape.kind, kind);
 }
 
+testcase!(
+    test_shape_extensions_does_not_export_shaped_array,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import shaped_array  # E: Could not import `shaped_array` from `shape_extensions`
+"#,
+);
+
 #[test]
 fn test_shaped_array_typevar_shape_is_metadata() {
     let mut env = legacy_shaped_array_env();

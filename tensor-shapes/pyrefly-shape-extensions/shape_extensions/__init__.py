@@ -31,7 +31,6 @@ __all__ = [
     "broadcast",
     "defines_assert_shape",
     "gufunc_broadcast",
-    "shaped_array",
     "index_shape",
     "type_shape_dsl_function",
 ]
@@ -277,22 +276,6 @@ def assert_shape(actual, shape):
     elif actual_tuple != expected:
         raise AssertionError(f"expected shape {expected}, got {actual_tuple}")
     return actual
-
-
-def shaped_array(
-    *, shape: str, builtin_indexing: bool = True
-) -> typing.Callable[[type], type]:
-    """Legacy compatibility decorator for older pinned shape stubs.
-
-    Current stubs use ordinary ``IntTuple``-generic classes. Pyrefly retains this
-    no-op runtime surface so older stubs remain compatible during the migration.
-    ``builtin_indexing=False`` lets an annotated ``__getitem__`` determine the result.
-    """
-
-    def decorator(cls: type) -> type:
-        return cls
-
-    return decorator
 
 
 def index_shape(_shape: IntTuple, _index: typing.Any) -> IntTuple:
