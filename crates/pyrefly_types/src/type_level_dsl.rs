@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::fmt;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::mem;
 use std::sync::Arc;
 
 use compact_str::CompactString;
@@ -5869,6 +5870,127 @@ impl VisitMut<Type> for TypeLevelDslFunction {
 }
 
 impl TypeLevelDslCall {
+    fn normalize_int_value(ty: &mut Type) {
+        match ty {
+            Type::Var(_) => *ty = gradual_size(),
+            Type::Int(dimension) => {
+                dimension.recurse_mut(&mut Self::normalize_int_value);
+                *ty = canonicalize(mem::replace(ty, Type::None));
+            }
+            _ => {}
+        }
+    }
+
+    fn normalize_dimension(dimension: &Int) -> Int {
+        let mut ty = Type::Int(dimension.clone());
+        Self::normalize_int_value(&mut ty);
+        let Type::Int(dimension) = ty else {
+            unreachable!("normalizing an Int dimension must produce an Int")
+        };
+        dimension
+    }
+
+    fn normalize_int_tuple_value(ty: &mut Type) {
+        match ty {
+            Type::Var(_) => *ty = IntTuple::shapeless().to_shape_arg_type(),
+            Type::IntTuple(shape) => {
+                **shape = match shape.view() {
+                    IntTupleView::Concrete(dimensions) => {
+                        IntTuple::new(dimensions.iter().map(Self::normalize_dimension).collect())
+                    }
+                    IntTupleView::Gradual => IntTuple::shapeless(),
+                    IntTupleView::Unpacked {
+                        prefix,
+                        middle,
+                        suffix,
+                    } => {
+                        let mut middle = middle.clone();
+                        Self::normalize_int_tuple_value(&mut middle);
+                        IntTuple::unpacked(
+                            prefix.iter().map(Self::normalize_dimension).collect(),
+                            middle,
+                            suffix.iter().map(Self::normalize_dimension).collect(),
+                        )
+                    }
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn normalize_int_tuples_value(ty: &mut Type) {
+        match ty {
+            Type::Var(_) => {
+                *ty = Type::Tuple(Tuple::Unbounded(Box::new(
+                    IntTuple::shapeless().to_shape_arg_type(),
+                )))
+            }
+            Type::Tuple(tuple) => {
+                *tuple = match mem::replace(tuple, Tuple::Concrete(Vec::new())) {
+                    Tuple::Concrete(mut shapes) => {
+                        shapes.iter_mut().for_each(Self::normalize_int_tuple_value);
+                        Tuple::Concrete(shapes)
+                    }
+                    Tuple::Unbounded(mut shape) => {
+                        Self::normalize_int_tuple_value(&mut shape);
+                        Tuple::Unbounded(shape)
+                    }
+                    Tuple::Unpacked(parts) => {
+                        let (mut prefix, mut middle, mut suffix) = parts.into_parts();
+                        prefix.iter_mut().for_each(Self::normalize_int_tuple_value);
+                        Self::normalize_int_tuples_value(&mut middle);
+                        suffix.iter_mut().for_each(Self::normalize_int_tuple_value);
+                        Tuple::unpacked(prefix, middle, suffix)
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn normalize_value_argument(ty: &mut Type, domain: TypeShapeDslDomain) {
+        if let Type::Union(union) = ty {
+            union
+                .members
+                .iter_mut()
+                .for_each(|member| Self::normalize_value_argument(member, domain));
+            union.members.sort();
+            union.members.dedup();
+            if union.members.len() == 1 {
+                *ty = union.members.pop().expect("union contains one member");
+            }
+            return;
+        }
+        match domain {
+            TypeShapeDslDomain::Int => Self::normalize_int_value(ty),
+            TypeShapeDslDomain::IntTuple => Self::normalize_int_tuple_value(ty),
+            TypeShapeDslDomain::IntTuples => Self::normalize_int_tuples_value(ty),
+        }
+    }
+
+    /// Normalize values whose DSL parameter domain gives them shape semantics.
+    pub(crate) fn normalize_value_arguments(&mut self) {
+        match &self.function {
+            TypeLevelDslFunction::IndexShape => {
+                if let Some(shape) = self.args.first_mut() {
+                    Self::normalize_value_argument(shape, TypeShapeDslDomain::IntTuple);
+                }
+            }
+            TypeLevelDslFunction::UserDefined(function) => {
+                for (argument, domain) in self
+                    .args
+                    .iter_mut()
+                    .zip(function.parameter_domains().iter().copied())
+                {
+                    if let TypeShapeDslInputDomain::Value(domain) = domain {
+                        Self::normalize_value_argument(argument, domain);
+                    }
+                }
+            }
+            TypeLevelDslFunction::MapIntTuples(_) => {}
+        }
+    }
+
     /// Constructs a native `index_shape(shape, index)` call.
     pub fn index_shape(shape: Type, index: Type) -> Self {
         Self {
