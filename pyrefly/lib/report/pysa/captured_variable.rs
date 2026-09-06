@@ -113,7 +113,7 @@ impl<'a> DefinitionToFunctionMapVisitor<'a> {
                     .insert(idx, current_function)
                     .is_none(),
                 "Found multiple definitions for {:?}",
-                &key,
+                key,
             );
         }
     }

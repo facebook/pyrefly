@@ -6,18 +6,18 @@
 from __future__ import annotations
 
 import numpy as np
-from shape_extensions import assert_shape, Dim, TypeVar
+from shape_extensions import assert_shape, Int, IntVar
 
-N = TypeVar("N")
-D = TypeVar("D")
+N = IntVar("N")
+D = IntVar("D")
 
 
 def harmonic_oscillator_energy(
-    position: np.ndarray[tuple[Dim[N], Dim[D]]],
-    velocity: np.ndarray[tuple[Dim[N], Dim[D]]],
+    position: np.ndarray[[N, D]],
+    velocity: np.ndarray[[N, D]],
     stiffness: float,
     mass: float,
-) -> np.ndarray[tuple[Dim[N]]]:
+) -> np.ndarray[[N]]:
     """Compute the total oscillator energy for a batch of states.
 
     Each row is one independent oscillator state, and each column is a spatial
@@ -32,9 +32,9 @@ def harmonic_oscillator_energy(
 
 
 def linear_elastic_displacement(
-    stiffness: np.ndarray[tuple[Dim[N], Dim[N]]],
-    force: np.ndarray[tuple[Dim[N], Dim[1]]],
-) -> np.ndarray[tuple[Dim[N], Dim[1]]]:
+    stiffness: np.ndarray[[N, N]],
+    force: np.ndarray[[N, 1]],
+) -> np.ndarray[[N, 1]]:
     """Solve a linear elastic equilibrium system.
 
     In small-displacement linear elasticity, the discretized equilibrium
@@ -47,9 +47,9 @@ def linear_elastic_displacement(
 
 
 def gravitational_forces(
-    position: np.ndarray[tuple[Dim[N], Dim[3]]],
-    mass: np.ndarray[tuple[Dim[N]]],
-) -> np.ndarray[tuple[Dim[N], Dim[3]]]:
+    position: np.ndarray[[N, 3]],
+    mass: np.ndarray[[N]],
+) -> np.ndarray[[N, 3]]:
     """Compute Newtonian gravitational forces for an n-body system.
 
     Each row of `position` is a particle's 3-D location, and `mass` stores one
@@ -70,8 +70,8 @@ def gravitational_forces(
 
 
 def particle_in_box(
-    n_points: Dim[N],
-) -> tuple[np.ndarray[tuple[Dim[N]]], np.ndarray[tuple[Dim[N], Dim[N]]]]:
+    n_points: Int[N],
+) -> tuple[np.ndarray[[N]], np.ndarray[[N, N]]]:
     """Solve a finite-difference quantum particle-in-a-box Hamiltonian.
 
     A one-dimensional particle in a box is a standard quantum mechanics model:
@@ -101,11 +101,11 @@ def test_harmonic_oscillator_energy() -> None:
     kinetic_energy = 0.5 * 4.0 * np.sum(velocity**2, axis=-1)
     energy = harmonic_oscillator_energy(position, velocity, stiffness=2.0, mass=4.0)
 
-    assert_shape(position, (5, 3))
-    assert_shape(velocity, (5, 3))
-    assert_shape(potential_energy, (5,))
-    assert_shape(kinetic_energy, (5,))
-    assert_shape(energy, (5,))
+    assert_shape(position.shape, (5, 3))
+    assert_shape(velocity.shape, (5, 3))
+    assert_shape(potential_energy.shape, (5,))
+    assert_shape(kinetic_energy.shape, (5,))
+    assert_shape(energy.shape, (5,))
 
 
 def test_linear_elastic_displacement() -> None:
@@ -113,9 +113,9 @@ def test_linear_elastic_displacement() -> None:
     force = np.ones((4, 1))
     displacement = linear_elastic_displacement(stiffness, force)
 
-    assert_shape(stiffness, (4, 4))
-    assert_shape(force, (4, 1))
-    assert_shape(displacement, (4, 1))
+    assert_shape(stiffness.shape, (4, 4))
+    assert_shape(force.shape, (4, 1))
+    assert_shape(displacement.shape, (4, 1))
 
 
 def test_gravitational_forces() -> None:
@@ -127,19 +127,21 @@ def test_gravitational_forces() -> None:
     forces = mass[:, None, None] * diff * (mass[None, :, None] / distance**3)
     total_force = gravitational_forces(position, mass)
 
-    assert_shape(position, (5, 3))
-    assert_shape(mass, (5,))
-    assert_shape(diff, (5, 5, 3))
-    assert_shape(distance, (5, 5, 1))
-    assert_shape(distance[:, :, 0], (5, 5))
-    assert_shape(mass[:, None, None], (5, 1, 1))
-    assert_shape(mass[None, :, None], (1, 5, 1))
-    assert_shape(forces, (5, 5, 3))
-    assert_shape(total_force, (5, 3))
+    assert_shape(position.shape, (5, 3))
+    assert_shape(mass.shape, (5,))
+    assert_shape(diff.shape, (5, 5, 3))
+    assert_shape(distance.shape, (5, 5, 1))
+    assert_shape(distance[:, :, 0].shape, (5, 5))
+    assert_shape(mass[:, None, None].shape, (5, 1, 1))
+    assert_shape(mass[None, :, None].shape, (1, 5, 1))
+    assert_shape(forces.shape, (5, 5, 3))
+    assert_shape(total_force.shape, (5, 3))
 
 
 def test_particle_in_box() -> None:
-    n_points = 5
+    # TODO: Remove this annotation once literal arithmetic preserves its result
+    # or contextual typing lets `np.full` retain the off-diagonal length.
+    n_points: Int[5] = 5
     dx = 1.0 / (n_points + 1)
     diagonal = np.full(n_points, 2.0 / dx**2)
     off_diagonal = np.full(n_points - 1, -1.0 / dx**2)
@@ -148,11 +150,11 @@ def test_particle_in_box() -> None:
     )
     energies, wavefunctions = particle_in_box(n_points)
 
-    assert_shape(diagonal, (5,))
-    assert_shape(off_diagonal, (4,))
-    assert_shape(np.diag(diagonal), (5, 5))
-    assert_shape(np.diag(off_diagonal, 1), (5, 5))
-    assert_shape(np.diag(off_diagonal, -1), (5, 5))
-    assert_shape(hamiltonian, (5, 5))
-    assert_shape(energies, (5,))
-    assert_shape(wavefunctions, (5, 5))
+    assert_shape(diagonal.shape, (5,))
+    assert_shape(off_diagonal.shape, (4,))
+    assert_shape(np.diag(diagonal).shape, (5, 5))
+    assert_shape(np.diag(off_diagonal, 1).shape, (5, 5))
+    assert_shape(np.diag(off_diagonal, -1).shape, (5, 5))
+    assert_shape(hamiltonian.shape, (5, 5))
+    assert_shape(energies.shape, (5,))
+    assert_shape(wavefunctions.shape, (5, 5))

@@ -7,6 +7,7 @@
 
 // @lint-ignore-every SPELL deliberately testing bad spelling
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -200,6 +201,74 @@ class Foo:
 "#,
 );
 
+// The flow has bound nothing of a statement while its own right-hand side is
+// still being read, so the name it assigns is not a candidate for a reference
+// inside it. Pinned in all three scope kinds, because one pass now serves them
+// all and the rule has to hold uniformly.
+testcase!(
+    test_suggest_skips_name_being_assigned_at_module_scope,
+    r#"
+zzz = 1
+aby = ab + 42  # E: Could not find name `ab`  # !E: Did you mean `aby`
+"#,
+);
+
+testcase!(
+    test_suggest_skips_name_being_assigned_in_function,
+    r#"
+def f() -> int:
+    zzz = 1
+    aby = ab + 42  # E: Could not find name `ab`  # !E: Did you mean `aby`
+    return aby
+"#,
+);
+
+testcase!(
+    test_suggest_skips_name_being_assigned_in_class_body,
+    r#"
+class Foo:
+    zzz = 1
+    aby = ab + 42  # E: Could not find name `ab`  # !E: Did you mean `aby`
+"#,
+);
+
+// Reassignment is the other side of it: an earlier statement already bound the
+// name, so the flow has it and it is a real candidate even though this
+// statement assigns it too.
+testcase!(
+    test_suggest_offers_name_bound_by_an_earlier_statement,
+    r#"
+counter = 0
+counter = countr + 1  # E: Did you mean `counter`?
+"#,
+);
+
+// A walrus binds partway through a statement, so the rest of that statement can
+// see it -- including a comprehension's element expression, which runs after
+// the `if` clause that bound it.
+testcase!(
+    test_suggest_offers_name_bound_by_a_walrus,
+    r#"
+def slow(x: int) -> int:
+    return x
+if (qqa := slow(1)) > 0 and qqb > 0:  # E: Did you mean `qqa`?
+    pass
+"#,
+);
+
+// A helper defined further down the file is reachable from inside a function,
+// because the order the two run in is not known at the point of the reference.
+testcase!(
+    test_suggest_offers_name_defined_later_in_the_file,
+    r#"
+def caller() -> int:
+    return hepler()  # E: Did you mean `helper`?
+
+def helper() -> int:
+    return 1
+"#,
+);
+
 testcase!(
     test_unknown_name_no_suggest_single_letter_names,
     r#"
@@ -261,6 +330,35 @@ class C:
     # Inside of a method, x refers to the global x: int
     def m(self) -> str:
         return x # E: Returned type `int` is not assignable to declared return type `str`
+"#,
+);
+
+// In an executable module the annotation-only statement `x: int` does not bind `x`
+// at runtime, so reading it later in the same class body is a runtime `NameError`.
+testcase!(
+    test_annotation_only_class_attr_not_readable_in_module,
+    r#"
+class C:
+    x: int
+    y = x  # E: Could not find name `x`
+"#,
+);
+
+// A stub (`.pyi`) is never executed, so an annotation-only class attribute is a
+// declaration that is in scope for the rest of the class body.
+testcase!(
+    test_annotation_only_class_attr_readable_in_stub,
+    TestEnv::one_with_path(
+        "foo",
+        "foo.pyi",
+        r#"
+class C:
+    x: int
+    y = x
+"#,
+    ),
+    r#"
+from foo import C
 "#,
 );
 
@@ -1208,8 +1306,8 @@ def test(y: object):
 "#,
 );
 
+// #1804: is not None guard, not reassigned
 testcase!(
-    // #1804: is not None guard, not reassigned
     test_narrow_capture_is_not_none,
     r#"
 from typing_extensions import assert_type
@@ -1223,8 +1321,8 @@ def f(x: int | None) -> None:
 "#,
 );
 
+// #1804: x is reassigned so the narrow does NOT propagate
 testcase!(
-    // #1804: x is reassigned so the narrow does NOT propagate
     test_narrow_capture_reassigned_after,
     r#"
 def f_reassigned(x: int | None) -> None:
@@ -1236,8 +1334,8 @@ def f_reassigned(x: int | None) -> None:
 "#,
 );
 
+// #2394: Callable | None narrowing in nested scope
 testcase!(
-    // #2394: Callable | None narrowing in nested scope
     test_narrow_capture_callable,
     r#"
 from typing import Callable
@@ -1252,8 +1350,8 @@ def process(key: Callable[[str], str] | None) -> None:
 "#,
 );
 
+// #2513: Early-return guard
 testcase!(
-    // #2513: Early-return guard
     test_narrow_capture_early_return,
     r#"
 from typing_extensions import assert_type
@@ -1270,8 +1368,8 @@ def handle_request(name: str | None, use_callback: bool) -> None:
 "#,
 );
 
+// #919: isinstance narrowing in nested function
 testcase!(
-    // #919: isinstance narrowing in nested function
     test_narrow_capture_isinstance,
     r#"
 from typing_extensions import assert_type
@@ -1290,8 +1388,8 @@ def bar() -> None:
 "#,
 );
 
+// #768: assert is not None after loop (needs last_range check)
 testcase!(
-    // #768: assert is not None after loop (needs last_range check)
     test_narrow_capture_assert_after_loop,
     r#"
 from typing_extensions import assert_type
@@ -1309,8 +1407,8 @@ def f(rows: list[int]) -> int:
 "#,
 );
 
+// #2739: reassignment before nested function definition should preserve the reassigned type
 testcase!(
-    // #2739: reassignment before nested function definition should preserve the reassigned type
     test_narrow_capture_reassigned_before_nested_def,
     r#"
 from typing import Callable
@@ -1340,8 +1438,8 @@ def make_query_func() -> Callable[[], str]:
 "#,
 );
 
+// #2408: isinstance narrowing with derived variable
 testcase!(
-    // #2408: isinstance narrowing with derived variable
     test_narrow_capture_isinstance_derived,
     r#"
 import copy
@@ -1360,8 +1458,8 @@ def run(code: str | bytes) -> None:
 "#,
 );
 
+// #765: Lambda captures already see outer narrows
 testcase!(
-    // #765: Lambda captures already see outer narrows
     test_narrow_capture_lambda,
     r#"
 from typing import Callable
@@ -1374,8 +1472,8 @@ def foo(obj: str | None) -> Callable[[], str]:
 "#,
 );
 
+// #1800: Final variable narrowing at module level
 testcase!(
-    // #1800: Final variable narrowing at module level
     test_narrow_capture_final_module_level,
     r#"
 from typing import Final
@@ -1389,8 +1487,8 @@ def foo() -> None:
 "#,
 );
 
+// #40: Walrus operator narrowing in nested function
 testcase!(
-    // #40: Walrus operator narrowing in nested function
     test_narrow_capture_walrus,
     r#"
 from typing import Callable

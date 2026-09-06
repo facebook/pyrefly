@@ -15,15 +15,15 @@ if TYPE_CHECKING:
 
 def test_various_view_syntaxes():
     """Test different ways to call .view()"""
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
 
     # Single argument - flatten
     y1 = x.view(-1)
-    assert_type(y1, Tensor[200])
+    assert_type(y1, Tensor[[200]])
 
     # Multiple arguments
     y2 = x.view(2, -1)
-    assert_type(y2, Tensor[2, 100])
+    assert_type(y2, Tensor[[2, 100]])
 
     # Tuple argument (if supported)
     # y3 = x.view((-1,))
@@ -31,7 +31,7 @@ def test_various_view_syntaxes():
 
     # Explicit dimensions
     y4 = x.view(200)
-    assert_type(y4, Tensor[200])
+    assert_type(y4, Tensor[[200]])
 
     y5 = x.view(10, 20)
-    assert_type(y5, Tensor[10, 20])
+    assert_type(y5, Tensor[[10, 20]])

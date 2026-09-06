@@ -15,6 +15,27 @@ don't crash when evaluated by Python.
 import typing
 from dataclasses import dataclass
 
+__all__ = [
+    "D",
+    "Elements",
+    "Int",
+    "IntTuple",
+    "IntTuples",
+    "IntVar",
+    "Index",
+    "MapIntTuples",
+    "ProxyMethod",
+    "SymbolicArithExpr",
+    "TypeVarTuple",
+    "assert_shape",
+    "broadcast",
+    "defines_assert_shape",
+    "gufunc_broadcast",
+    "shaped_array",
+    "index_shape",
+    "type_shape_dsl_function",
+]
+
 
 def _return_class(cls, params):
     return cls
@@ -68,18 +89,56 @@ def _patch_torch_if_available() -> None:
 _patch_torch_if_available()
 
 
-class SizeTuple:
-    """Integer tuple carrier for shape-like type parameters.
+class IntTuple:
+    """Tuple-valued shape annotation surface.
 
-    At runtime this is a no-op marker class. Pyrefly treats `SizeTuple` in type
-    positions as the shape carrier corresponding to `tuple[int, ...]`.
+    In type positions, Pyrefly treats `IntTuple` as the shape carrier for
+    `tuple[int, ...]`. At runtime, calling it coerces any iterable to a plain
+    tuple.
     """
+
+    def __new__(cls, iterable=()):
+        return tuple(iterable)
 
     def __class_getitem__(cls, params):
         return cls
 
 
-class Dim[T]:
+class IntTuples:
+    """A tuple whose elements are `IntTuple` values."""
+
+    def __new__(cls, iterable=()):
+        return tuple(iterable)
+
+
+class Elements:
+    """Inverse of ``tuple[Unpack[S]]``: extracts the element sequence from a IntTuple carrier.
+
+    In the Python typing spec, ``tuple[Unpack[Ts]]`` wraps a ``TypeVarTuple`` into a
+    concrete tuple type. ``Elements[S]`` is the conceptual inverse: given a ``IntTuple``
+    carrier ``S``, ``*Elements[S]`` splices its element sequence into a shape position,
+    e.g. ``Array[[*Elements[S], OUT], DType]``.
+
+    This fills a gap in the current typing spec — there is no standard mechanism to
+    decompose a variadic carrier without a ``TypeVarTuple``. Pyrefly uses the ``.pyi``
+    stub for type inference; this class exists so annotations evaluate without crashing
+    at runtime.
+    """
+
+    def __init__(self, carrier):
+        self.carrier = carrier
+
+    def __class_getitem__(cls, carrier):
+        return cls(carrier)
+
+    def __iter__(self):
+        yield self
+
+    def __repr__(self):
+        return f"Elements[{self.carrier!r}]"
+
+
+class Int[T]:
     """Symbolic integer type for dimension values.
 
     At runtime this is a no-op generic class. The type checker uses the
@@ -89,20 +148,22 @@ class Dim[T]:
     pass
 
 
-class ProxyMethod[T]:
-    """Type-checker marker for method forwarding annotations."""
+class Flag[T]:
+    """Marker for a literal-preserving value that controls type-level evaluation."""
 
     pass
 
 
-def enable_torchscript_runtime_compat() -> None:
-    """Erase shape-only runtime annotations to types TorchScript understands.
+class Index:
+    """Marker for an index value retained for type-level shape evaluation."""
 
-    This is a one-way, process-global compatibility mode for legacy TorchScript
-    paths. It intentionally has no disable API for production callers.
-    """
+    pass
 
-    Dim.__class_getitem__ = classmethod(_return_int)
+
+class ProxyMethod[T]:
+    """Type-checker marker for method forwarding annotations."""
+
+    pass
 
 
 @dataclass(frozen=True)
@@ -182,43 +243,49 @@ def defines_assert_shape(fn: typing.Callable) -> typing.Callable:
     """
     Decorator that marks a function as an assert_shape helper.
 
-    Used in order to allow custom assert_shape functions if necessary for
-    different shape libraries; a default version that works for libraries
-    like torch and numpy where `.shape` is a tuple field is defined in
-    the `assert_shape` function of this library.
+    Used in order to allow custom assert_shape functions if necessary. A default
+    version that works for tuple-like shapes is defined in the `assert_shape`
+    function of this library.
     """
     return fn
 
 
 @defines_assert_shape
-def assert_shape(x, shape):
+def assert_shape(actual, shape):
     """
-    At runtime, assert that x has the expected runtime shape, assuming that `x` is
-    some type like `torch.Tensor` or `np.ndarray` that has a tuple-valued
-    field `shape` indicating the shape.
+    At runtime, assert that a tuple-like shape has the expected value.
 
-    Pyrefly will validate that the shape modeled in Pyrefly's shaped array
-    static analysis matches (similar to `assert_type`).
+    Pyrefly will validate that the statically modeled shape matches, similar to
+    `assert_type`.
 
     TODO(stroxler): for now, symbolic dimensions are skipped at runtime,
     so in the case of a symbolic `shape` the runtime validation is only checking
     the rank for those axes. But the static analysis will fully validate.
     """
 
-    actual = tuple(x.shape)
+    # Preserve legacy calls that pass an array object rather than its shape.
+    if not isinstance(actual, tuple) and hasattr(actual, "shape"):
+        actual_tuple = tuple(actual.shape)
+    else:
+        actual_tuple = tuple(actual)
     expected = tuple(shape)
     if any(isinstance(dim, SymbolicArithExpr) for dim in expected):
-        if len(actual) != len(expected):
+        if len(actual_tuple) != len(expected):
             raise AssertionError(
-                f"expected rank {len(expected)} for shape {expected}, got shape {actual}"
+                f"expected rank {len(expected)} for shape {expected}, got shape {actual_tuple}"
             )
-    elif actual != expected:
-        raise AssertionError(f"expected shape {expected}, got {actual}")
-    return x
+    elif actual_tuple != expected:
+        raise AssertionError(f"expected shape {expected}, got {actual_tuple}")
+    return actual
 
 
-def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
-    """Decorator that marks a class as carrying a shape TypeVarTuple."""
+def shaped_array(
+    *, shape: str, builtin_indexing: bool = True
+) -> typing.Callable[[type], type]:
+    """Mark a class as carrying a shape parameter.
+
+    ``builtin_indexing=False`` lets its annotated ``__getitem__`` determine the result.
+    """
 
     def decorator(cls: type) -> type:
         return cls
@@ -226,23 +293,74 @@ def shaped_array(*, shape: str) -> typing.Callable[[type], type]:
     return decorator
 
 
-class TypeVar:
-    """TypeVar with arithmetic support for tensor shape dimensions.
+def index_shape(_shape: IntTuple, _index: typing.Any) -> IntTuple:
+    """Runtime placeholder for Pyrefly's native shape-indexing intrinsic."""
+
+    return IntTuple()
+
+
+class MapIntTuples:
+    """Map a unary type lambda over an ``IntTuples`` value.
+
+    A forward map preserves each source shape::
+
+        MapIntTuples[lambda S: Tensor[S], tuple[IntTuple[2], IntTuple[3, 4]]]
+
+    A map used directly as a parameter annotation reverses that relationship, so
+    passing ``(Tensor[IntTuple[2]], Tensor[IntTuple[3, 4]])`` infers the source
+    as ``tuple[IntTuple[2], IntTuple[3, 4]]``. Each symbolic source may occur in
+    only one parameter pattern, keeping inference unambiguous.
+
+    At runtime this is a placeholder that does not inspect its arguments,
+    because valid static sources such as ``Any`` and ``Never`` cannot be mapped
+    as Python values.
+    """
+
+    def __class_getitem__(cls, params):
+        return tuple
+
+
+def type_shape_dsl_function[F: typing.Callable](fn: F) -> F:
+    """Runtime no-op for a user-defined type-level shape DSL function."""
+
+    return fn
+
+
+# `dsl` imports the public schema classes above, so defer this import until they exist.
+from . import dsl as _dsl
+
+
+@type_shape_dsl_function
+def gufunc_broadcast(spec: str, shapes: IntTuples) -> IntTuple:
+    """Compute the output shape described by a generalized ufunc signature."""
+
+    return _dsl._gufunc_broadcast(spec, shapes)
+
+
+@type_shape_dsl_function
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    spec = "(),()->()"
+    shapes = _dsl.IntTuples((left, right))
+    return gufunc_broadcast(spec, shapes)
+
+
+class IntVar:
+    """Symbolic variable with arithmetic support for tensor shape dimensions.
 
     Like typing.TypeVar but arithmetic operations (N + 1, N * 2, etc.)
     return self instead of raising TypeError. Setting
     __class__ = typing.TypeVar makes isinstance(x, typing.TypeVar)
     return True, so Generic[N] and TypedDict + Generic[N] both work.
 
-    In pyrefly, shape_extensions.TypeVar is treated identically to
-    typing.TypeVar.
+    In pyrefly, shape_extensions.IntVar marks symbolic integer dimensions.
     """
 
     __class__ = typing.TypeVar
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, *, bound=None):
         self.__name__ = name
         self.name = name
+        self.__bound__ = bound
 
     def __repr__(self):
         return self.name
@@ -314,22 +432,3 @@ class TypeVarTuple:
     @property
     def __typing_is_unpacked_typevartuple__(self):
         return True
-
-
-def uses_shape_dsl(
-    ir_fn: typing.Callable,
-    *,
-    capture_init: list[str] | None = None,
-) -> typing.Callable[[typing.Callable], typing.Callable]:
-    """Decorator that associates a shape DSL function with an API function.
-
-    At runtime this is a no-op: the decorator arguments are ignored and the
-    decorated function is returned unchanged. Pyrefly uses this decorator
-    at type-checking time to route bound arguments through the shape DSL
-    for return-type refinement.
-    """
-
-    def decorator(fn: typing.Callable) -> typing.Callable:
-        return fn
-
-    return decorator

@@ -1,0 +1,97 @@
+name: CodSpeed
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  # A daily run keeps a recent walltime measurement of main on file.
+  schedule:
+    - cron: '0 6 * * *'
+  # workflow_dispatch lets CodSpeed trigger backtest runs to seed baseline data.
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write # OpenID Connect auth with CodSpeed (no token secret required)
+
+# GitHub sets `head_ref` only for a pull request. A new push to a pull request
+# cancels the previous run. All other events use the unique `run_id`. Each of
+# these runs gets its own group, and no run cancels a different run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # Instruction-count (Valgrind) measurement of the small, deterministic
+  # microbenchmarks. They are single-threaded and fast, so callgrind's overhead
+  # is bounded and the instruction counts are stable run-to-run.
+  simulation:
+    name: Microbenchmarks (simulation)
+    # The trigger includes `edited` only to let `#bench` in the description
+    # start the walltime job below. The microbenchmark results do not change
+    # when the description changes.
+    if: ${{ github.event.action != 'edited' }}
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+    - name: set up rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: pyrefly-codspeed
+    - name: install cargo-codspeed
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-codspeed
+    - name: build benchmarks
+      run: cargo codspeed build -p pyrefly --bench micro
+    - name: run benchmarks
+      uses: CodSpeedHQ/action@v5.0.1
+      with:
+        mode: simulation
+        run: cargo codspeed run -p pyrefly --bench micro
+  # Wall-clock measurement of the heavy, real-world PyTorch benchmarks. They drive
+  # the full LSP server over all cores against the pinned PyTorch checkout, so they
+  # must not run under Valgrind (which serializes threads and inflates the ~GB cold
+  # start past any reasonable timeout). Walltime mode tolerates threads, I/O, and
+  # long cold starts.
+  #
+  # Opt-in only: put `#bench` in the PR description, or run the workflow by hand.
+  # They are far too expensive to run on every PR, so the default is off. The daily
+  # schedule is the exception, and it is what makes the opt-in useful: nothing else
+  # measures walltime on main, so without it CodSpeed would have no base run to
+  # compare an opted-in PR against.
+  walltime:
+    name: PyTorch benchmarks (walltime)
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event_name == 'schedule'
+      || contains(github.event.pull_request.body, '#bench')
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    # No submodule checkout: in OSS the benchmark clones the pinned PyTorch itself
+    # (rev from benches/pytorch_pin.bzl) on first run. The runner has github egress.
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+    - name: set up rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: pyrefly-codspeed-walltime
+    - name: install cargo-codspeed
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-codspeed
+    - name: build benchmarks
+      run: cargo codspeed build -m walltime -p pyrefly --bench pytorch
+    - name: run benchmarks
+      uses: CodSpeedHQ/action@v5.0.1
+      env:
+        # Flame graphs fail to generate on nearly every walltime run, leaving an
+        # "Unable to generate the flame graphs" comment behind.
+        CODSPEED_PERF_ENABLED: "false"
+      with:
+        mode: walltime
+        run: cargo codspeed run -p pyrefly --bench pytorch

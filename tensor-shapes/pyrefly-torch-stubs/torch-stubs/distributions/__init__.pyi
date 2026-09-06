@@ -15,6 +15,7 @@ Submodules re-exported to support original import patterns:
 
 from typing import Any
 
+from shape_extensions import IntTuple
 from torch import Tensor
 
 # Re-export submodules for pyd.transforms.X, pyd.constraints.X,
@@ -27,24 +28,22 @@ from . import (
     transforms as transforms,
 )
 
-class Distribution[*EventShape]:
+class Distribution[EventShape: IntTuple]:
     """Base class for probability distributions."""
-    def sample(self, sample_shape: Any = ...) -> Tensor[*EventShape]: ...
-    def rsample(self, sample_shape: Any = ...) -> Tensor[*EventShape]: ...
-    def log_prob(self, value: Tensor) -> Tensor[*EventShape]: ...
+    def sample(self, sample_shape: Any = ...) -> Tensor[EventShape]: ...
+    def rsample(self, sample_shape: Any = ...) -> Tensor[EventShape]: ...
+    def log_prob(self, value: Tensor) -> Tensor[EventShape]: ...
     @property
-    def mean(self) -> Tensor[*EventShape]: ...
+    def mean(self) -> Tensor[EventShape]: ...
     @property
-    def variance(self) -> Tensor[*EventShape]: ...
+    def variance(self) -> Tensor[EventShape]: ...
 
-class Normal[*EventShape](Distribution[*EventShape]):
+class Normal[EventShape: IntTuple](Distribution[EventShape]):
     """Normal (Gaussian) distribution."""
 
-    loc: Tensor[*EventShape]
-    scale: Tensor[*EventShape]
-    def __init__(
-        self, loc: Tensor[*EventShape], scale: Tensor[*EventShape]
-    ) -> None: ...
+    loc: Tensor[EventShape]
+    scale: Tensor[EventShape]
+    def __init__(self, loc: Tensor[EventShape], scale: Tensor[EventShape]) -> None: ...
 
 class Categorical(Distribution):
     """Categorical distribution."""
@@ -58,12 +57,12 @@ class Beta(Distribution):
     mean: Tensor
     def __init__(self, concentration1: Tensor, concentration0: Tensor) -> None: ...
 
-class TransformedDistribution[*EventShape](Distribution[*EventShape]):
+class TransformedDistribution[EventShape: IntTuple](Distribution[EventShape]):
     """Distribution transformed by a sequence of transforms."""
 
     transforms: list[transforms.Transform]
     def __init__(
         self,
-        base_distribution: Distribution[*EventShape],
+        base_distribution: Distribution[EventShape],
         transforms: list[transforms.Transform],
     ) -> None: ...

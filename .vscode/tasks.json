@@ -76,18 +76,10 @@
     },
     {
       "type": "shell",
-      "command": "cargo",
+      "command": "node ../lsp/build-pyrefly.js release",
       "group": "build",
       "isBackground": true,
       "label": "cargo: build pyrefly for extension",
-      "args": [
-        "build",
-        "--release",
-        "--artifact-dir",
-        "../lsp/bin",
-        "-Z",
-        "unstable-options"
-      ],
       "options": {
         "cwd": "${workspaceFolder}/pyrefly",
         "shell": {
@@ -113,7 +105,7 @@
     },
     {
       "type": "shell",
-      "command": "cargo watch -x 'build --all-features --artifact-dir ../lsp/bin -Z unstable-options'",
+      "command": "cargo watch -s \"node ../lsp/build-pyrefly.js debug\"",
       "group": "build",
       "isBackground": true,
       "label": "cargo: watch debug pyrefly for extension",

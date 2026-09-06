@@ -1,7 +1,7 @@
 # @generated
 from typing import TypeAlias
 
-Vector: TypeAlias
+Vector: TypeAlias = list[float]
 MAX: int = 42
 
 

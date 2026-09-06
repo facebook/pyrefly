@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Test item() shape validation."""
+"""Test item() rank validation."""
 
 from typing import TYPE_CHECKING
 
@@ -13,15 +13,19 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 
-def test_item_on_1d_tensor():
-    """item() rejects 1D tensors."""
-    x: Tensor[10] = torch.randn(10)
-    # E: item() only works on 0-dimensional tensors, got 1D tensor
-    x.item()
+def test_item_on_1d_tensor() -> None:
+    x: Tensor[[10]] = torch.randn(10)
+    x.item()  # E: not assignable
 
 
-def test_item_on_2d_tensor():
-    """item() rejects 2D tensors."""
-    x: Tensor[5, 7] = torch.randn(5, 7)
-    # E: item() only works on 0-dimensional tensors, got 2D tensor
-    x.item()
+def test_item_on_2d_tensor() -> None:
+    x: Tensor[[5, 7]] = torch.randn(5, 7)
+    x.item()  # E: not assignable
+
+
+def test_item_on_one_element_vector() -> None:
+    # Known limitation: at runtime item() accepts any tensor holding exactly one
+    # element, but the rank-zero `Tensor[[]]` receiver only recognizes scalars, so
+    # this valid call is rejected.
+    x: Tensor[[1]] = torch.randn(1)
+    x.item()  # E: not assignable

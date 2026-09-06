@@ -1,0 +1,81 @@
+name: Close PRs linked to closed issues
+
+on:
+  issues:
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  close-linked-prs:
+    # issues events can include PRs; only act on non-PR issues.
+    if: ${{ github.event.issue.pull_request == null }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Close linked pull requests
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            const { owner, repo } = context.repo;
+            const issue_number = issue.number;
+
+            // A cross-reference only means the PR mentioned the issue, not that it
+            // closes it. Require a GitHub closing keyword (close/fix/resolve, etc.)
+            // targeting this issue in the PR body before treating it as linked.
+            const closingKeyword = '(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)';
+            const issueRef = `(?:(?:${owner}\\/${repo})?#|https?:\\/\\/github\\.com\\/${owner}\\/${repo}\\/issues\\/)${issue_number}(?![0-9])`;
+            const closesIssue = new RegExp(`${closingKeyword}\\s*:?\\s+${issueRef}`, 'i');
+
+            const linkedPullRequests = new Map();
+            for await (const { data: events } of github.paginate.iterator(
+              github.rest.issues.listEventsForTimeline,
+              { owner, repo, issue_number, per_page: 100 }
+            )) {
+              for (const event of events) {
+                if (event.event !== 'cross-referenced') {
+                  continue;
+                }
+
+                const sourceIssue = event.source?.issue;
+                if (!sourceIssue?.pull_request || sourceIssue.state !== 'open') {
+                  continue;
+                }
+
+                const { data: pullRequest } = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: sourceIssue.number
+                });
+                if (!closesIssue.test(pullRequest.body ?? '')) {
+                  continue;
+                }
+
+                linkedPullRequests.set(pullRequest.number, pullRequest);
+              }
+            }
+
+            if (linkedPullRequests.size === 0) {
+              console.log(`No open linked PRs found for closed issue #${issue_number}`);
+              return;
+            }
+
+            for (const [pull_number, pullRequest] of linkedPullRequests) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pull_number,
+                body: `Closing this PR because linked issue #${issue_number} was closed.`
+              });
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number,
+                state: 'closed'
+              });
+              console.log(`Closed linked PR #${pull_number}: ${pullRequest.title}`);
+            }

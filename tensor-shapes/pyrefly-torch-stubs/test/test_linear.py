@@ -8,10 +8,11 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import IntVar
 from torch.nn import Linear
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
@@ -20,13 +21,13 @@ def test_linear():
     assert_type(linear, Linear[3, 4])
 
 
-def test_linear_symbolic[N](n: Dim[N]):
+def test_linear_symbolic[N: IntVar](n: Int[N]):
     linear = Linear(n, n)
     assert_type(linear, Linear[N, N])
 
 
-def test_linear_arith[N](n: Dim[N]):
+def test_linear_arith[N: IntVar](n: Int[N]):
     linear = Linear(n, n * 2)
     t = torch.randn(4, 3, n)
     d = linear(t)
-    assert_type(d, Tensor[4, 3, N * 2])
+    assert_type(d, Tensor[[4, 3, N * 2]])

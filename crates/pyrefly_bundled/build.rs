@@ -53,6 +53,7 @@ fn get_output_path() -> Result<PathBuf, std::env::VarError> {
 /// Also computes and writes a SHA256 digest of the archive.
 fn create_archive(
     input_path: &Path,
+    archive_root: &str,
     output_path: &Path,
     digest_name: &str,
 ) -> Result<(), std::io::Error> {
@@ -69,7 +70,7 @@ fn create_archive(
             format!("Input path does not exist: {}", input_path.display()),
         ));
     }
-    tar.append_dir_all("", input_path)?;
+    tar.append_dir_all(archive_root, input_path)?;
 
     let encoder = tar.into_inner()?;
     encoder.finish()?;
@@ -89,15 +90,25 @@ fn main() -> Result<(), std::io::Error> {
 
     let output_dir = get_output_path().unwrap();
 
-    // Create typeshed archive
+    // Create separate archives so each runtime bundle only decodes its own files.
     let typeshed_input = get_typeshed_input_path();
-    let typeshed_output = output_dir.join("typeshed.tar.zst");
-    create_archive(&typeshed_input, &typeshed_output, "typeshed.sha256")?;
+    create_archive(
+        &typeshed_input.join("stdlib"),
+        "stdlib",
+        &output_dir.join("stdlib.tar.zst"),
+        "stdlib.sha256",
+    )?;
+    create_archive(
+        &typeshed_input.join("stubs"),
+        "stubs",
+        &output_dir.join("typeshed_stubs.tar.zst"),
+        "typeshed_stubs.sha256",
+    )?;
 
     // Create third-party stubs archive (non-typeshed stubs)
     let stubs_input = get_stubs_input_path();
     let stubs_output = output_dir.join("stubs.tar.zst");
-    create_archive(&stubs_input, &stubs_output, "stubs.sha256")?;
+    create_archive(&stubs_input, "", &stubs_output, "stubs.sha256")?;
 
     Ok(())
 }

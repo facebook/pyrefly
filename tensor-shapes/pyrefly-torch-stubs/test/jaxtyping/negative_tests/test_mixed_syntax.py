@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 # E: Cannot mix native tensor syntax
 def mixed_syntax(
     x: Float[Tensor, "batch 3"],
-) -> Tensor[3]:
+) -> Tensor[[3]]:
     # E: Returned type `Shaped[Tensor, "batch 3"]` is not assignable
-    #    to declared return type `Tensor[3]`
+    #    to declared return type `Tensor[[3]]`
     return x

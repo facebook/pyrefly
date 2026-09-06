@@ -13,12 +13,14 @@ use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_python::dunder;
-use pyrefly_types::callable::Deprecation;
+use pyrefly_types::function::Deprecation;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_util::display::commas_iter;
+use pyrefly_util::visit::Visit as VisitTrait;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -28,6 +30,8 @@ use vec1::Vec1;
 
 use crate::alt::class::class_field::ClassField;
 use crate::alt::types::pydantic::PydanticModelKind;
+use crate::alt::types::pydantic::PydanticValidationFlags;
+use crate::binding::pydantic::PydanticAliasGenerator;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::types::class::Class;
@@ -44,6 +48,30 @@ use crate::types::types::Type;
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct SlotsInfo {
     pub names: SmallSet<Name>,
+}
+
+/// Metadata for a class registered with `@shaped_array`.
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+pub struct ShapedArrayMetadata {
+    shape: Quantified,
+    builtin_indexing: bool,
+}
+
+impl ShapedArrayMetadata {
+    pub fn new(shape: Quantified, builtin_indexing: bool) -> Self {
+        Self {
+            shape,
+            builtin_indexing,
+        }
+    }
+
+    pub fn shape(&self) -> &Quantified {
+        &self.shape
+    }
+
+    pub fn uses_builtin_indexing(&self) -> bool {
+        self.builtin_indexing
+    }
 }
 
 impl SlotsInfo {
@@ -63,6 +91,12 @@ pub enum ExplicitSlots {
     Known(SlotsInfo),
 }
 
+#[derive(Clone, Copy, Debug, TypeEq, PartialEq, Eq)]
+pub enum DjangoRestFrameworkSerializerKind {
+    Serializer,
+    ModelSerializer,
+}
+
 impl ExplicitSlots {
     pub fn has_explicit_slots(&self) -> bool {
         !matches!(self, Self::Absent)
@@ -78,7 +112,7 @@ impl ExplicitSlots {
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct ClassMetadata {
-    metaclass: Metaclass,
+    metaclass: Option<Metaclass>,
     keywords: Keywords,
     typed_dict_metadata: Option<TypedDictMetadata>,
     named_tuple_metadata: Option<NamedTupleMetadata>,
@@ -107,6 +141,7 @@ pub struct ClassMetadata {
     pydantic_model_kind: Option<PydanticModelKind>,
     is_attrs_class: bool,
     django_model_metadata: Option<DjangoModelMetadata>,
+    django_rest_framework_serializer_kind: Option<DjangoRestFrameworkSerializerKind>,
     is_marshmallow_schema: bool,
     is_factory_boy_factory: bool,
     /// Whether this class is a metaclass (i.e., a subclass of `type`).
@@ -115,15 +150,15 @@ pub struct ClassMetadata {
     /// `__init__` parameter names to capture for shape inference, extracted from
     /// `@uses_shape_dsl(..., capture_init=[...])` on a `forward` method.
     capture_init: Option<Vec<Name>>,
-    shaped_array_shape: Option<Quantified>,
+    shaped_array: Option<ShapedArrayMetadata>,
 }
 
 impl VisitMut<Type> for ClassMetadata {
     fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
         // Class metadata is exported cross-module, so every embedded type position must
         // be traversed to allow export-time forcing/sanitization.
-        if let Some(metaclass) = self.metaclass.get_mut() {
-            metaclass.visit_mut(f);
+        if let Some(metaclass) = &mut self.metaclass {
+            metaclass.get_mut().visit_mut(f);
         }
         for (_name, ty) in &mut self.keywords.0 {
             ty.visit_mut(f);
@@ -139,22 +174,82 @@ impl VisitMut<Type> for ClassMetadata {
         if let Some(dataclass_transform_metadata) = &mut self.dataclass_transform_metadata {
             dataclass_transform_metadata.visit_mut(f);
         }
-        if let Some(shaped_array_shape) = &mut self.shaped_array_shape {
-            shaped_array_shape.visit_mut(f);
+        if let Some(shaped_array) = &mut self.shaped_array {
+            shaped_array.shape.visit_mut(f);
+        }
+    }
+}
+
+impl VisitTrait<Type> for ClassMetadata {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        if let Some(metaclass) = &self.metaclass {
+            metaclass.get().visit(f);
+        }
+        for (_name, ty) in &self.keywords.0 {
+            ty.visit(f);
+        }
+        if let Some(typed_dict_metadata) = &self.typed_dict_metadata
+            && let ExtraItems::Extra(extra_item) = &typed_dict_metadata.extra_items
+        {
+            extra_item.ty.visit(f);
+        }
+        if let Some(enum_metadata) = &self.enum_metadata {
+            enum_metadata.cls.visit(f);
+        }
+        if let Some(dataclass_transform_metadata) = &self.dataclass_transform_metadata {
+            dataclass_transform_metadata.visit(f);
+        }
+        if let Some(shaped_array) = &self.shaped_array {
+            shaped_array.shape.visit(f);
         }
     }
 }
 
 impl Display for ClassMetadata {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "ClassMetadata(metaclass={})", self.metaclass)
+        let metaclass = self
+            .metaclass
+            .as_ref()
+            .map_or("type".to_owned(), |m| format!("{m}"));
+        write!(f, "ClassMetadata(metaclass={metaclass})")
     }
 }
+
+static RECURSIVE_CLASS_METADATA: ClassMetadata = ClassMetadata {
+    metaclass: None,
+    keywords: Keywords(Vec::new()),
+    typed_dict_metadata: None,
+    named_tuple_metadata: None,
+    enum_metadata: None,
+    protocol_metadata: None,
+    dataclass_metadata: None,
+    extends_abc: false,
+    bases: Vec::new(),
+    has_generic_base_class: false,
+    has_base_any: false,
+    is_new_type: false,
+    is_final: false,
+    deprecation: None,
+    is_local_disjoint_base: false,
+    has_local_dataclass_slots_request: false,
+    total_ordering_metadata: None,
+    dataclass_transform_metadata: None,
+    pydantic_model_kind: None,
+    is_attrs_class: false,
+    django_model_metadata: None,
+    is_marshmallow_schema: false,
+    is_factory_boy_factory: false,
+    django_rest_framework_serializer_kind: None,
+    is_metaclass: false,
+    explicit_slots: ExplicitSlots::Absent,
+    capture_init: None,
+    shaped_array: None,
+};
 
 impl ClassMetadata {
     pub fn new(
         bases: Vec<Class>,
-        metaclass: Metaclass,
+        metaclass: Option<Metaclass>,
         keywords: Vec<(Name, Type)>,
         typed_dict_metadata: Option<TypedDictMetadata>,
         named_tuple_metadata: Option<NamedTupleMetadata>,
@@ -174,12 +269,13 @@ impl ClassMetadata {
         pydantic_model_kind: Option<PydanticModelKind>,
         is_attrs_class: bool,
         django_model_metadata: Option<DjangoModelMetadata>,
+        django_rest_framework_serializer_kind: Option<DjangoRestFrameworkSerializerKind>,
         is_marshmallow_schema: bool,
         is_factory_boy_factory: bool,
         is_metaclass: bool,
         explicit_slots: ExplicitSlots,
         capture_init: Option<Vec<Name>>,
-        shaped_array_shape: Option<Quantified>,
+        shaped_array: Option<ShapedArrayMetadata>,
     ) -> ClassMetadata {
         ClassMetadata {
             metaclass,
@@ -203,54 +299,23 @@ impl ClassMetadata {
             pydantic_model_kind,
             is_attrs_class,
             django_model_metadata,
+            django_rest_framework_serializer_kind,
             is_marshmallow_schema,
             is_factory_boy_factory,
             is_metaclass,
             explicit_slots,
             capture_init,
-            shaped_array_shape,
+            shaped_array,
         }
     }
 
-    pub fn recursive() -> Self {
-        ClassMetadata {
-            metaclass: Metaclass::default(),
-            keywords: Keywords::default(),
-            typed_dict_metadata: None,
-            named_tuple_metadata: None,
-            enum_metadata: None,
-            protocol_metadata: None,
-            dataclass_metadata: None,
-            extends_abc: false,
-            bases: Vec::new(),
-            has_generic_base_class: false,
-            has_base_any: false,
-            is_new_type: false,
-            is_final: false,
-            deprecation: None,
-            is_local_disjoint_base: false,
-            has_local_dataclass_slots_request: false,
-            total_ordering_metadata: None,
-            dataclass_transform_metadata: None,
-            pydantic_model_kind: None,
-            is_attrs_class: false,
-            django_model_metadata: None,
-            is_marshmallow_schema: false,
-            is_factory_boy_factory: false,
-            is_metaclass: false,
-            explicit_slots: ExplicitSlots::Absent,
-            capture_init: None,
-            shaped_array_shape: None,
-        }
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_CLASS_METADATA
     }
 
     /// The class's custom (non-`type`) metaclass, if it has one.
     pub fn custom_metaclass(&self) -> Option<&ClassType> {
-        self.metaclass.get()
-    }
-
-    pub fn custom_metaclass_raw(&self) -> &Metaclass {
-        &self.metaclass
+        self.metaclass.as_ref().map(|m| m.get())
     }
 
     /// The class's metaclass.
@@ -277,12 +342,21 @@ impl ClassMetadata {
         self.django_model_metadata.is_some()
     }
 
+    pub fn is_django_rest_framework_serializer(&self) -> bool {
+        self.django_rest_framework_serializer_kind.is_some()
+    }
+
     pub fn is_marshmallow_schema(&self) -> bool {
         self.is_marshmallow_schema
     }
 
     pub fn is_factory_boy_factory(&self) -> bool {
         self.is_factory_boy_factory
+    }
+
+    pub fn is_django_rest_framework_model_serializer(&self) -> bool {
+        self.django_rest_framework_serializer_kind
+            == Some(DjangoRestFrameworkSerializerKind::ModelSerializer)
     }
 
     /// Whether this class is a metaclass (i.e., a subclass of `type`).
@@ -312,15 +386,9 @@ impl ClassMetadata {
                 return true;
             }
         }
-        // Only check the metaclass if it's directly specified on this class
-        if let Metaclass::Direct(metaclass) = self.custom_metaclass_raw()
-            && metaclass
-                .class_object()
-                .has_toplevel_qname("abc", "ABCMeta")
-        {
-            return true;
-        }
-        false
+        self.metaclass
+            .as_ref()
+            .is_some_and(|metaclass| metaclass.is_explicitly_abstract)
     }
 
     pub fn deprecation(&self) -> Option<&Deprecation> {
@@ -414,11 +482,17 @@ impl ClassMetadata {
     }
 
     pub fn is_shaped_array(&self) -> bool {
-        self.shaped_array_shape.is_some()
+        self.shaped_array.is_some()
     }
 
     pub fn shaped_array_shape(&self) -> Option<&Quantified> {
-        self.shaped_array_shape.as_ref()
+        self.shaped_array.as_ref().map(ShapedArrayMetadata::shape)
+    }
+
+    pub fn uses_builtin_shaped_array_indexing(&self) -> bool {
+        self.shaped_array
+            .as_ref()
+            .is_some_and(ShapedArrayMetadata::uses_builtin_indexing)
     }
 }
 
@@ -436,6 +510,12 @@ impl VisitMut<Type> for ClassSynthesizedField {
         let mut v = (*self.inner).clone();
         v.recurse_mut(f);
         self.inner = Arc::new(v);
+    }
+}
+
+impl VisitTrait<Type> for ClassSynthesizedField {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        self.inner.recurse(f);
     }
 }
 
@@ -457,10 +537,16 @@ impl ClassSynthesizedField {
             inner: Arc::new(ClassField::new_synthesized_classvar(ty)),
         }
     }
+
+    pub fn new_instance_attribute(ty: Type) -> Self {
+        Self {
+            inner: Arc::new(ClassField::new_synthesized_instance_attribute(ty)),
+        }
+    }
 }
 
 /// A class's synthesized fields, such as a dataclass's `__init__` method.
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default, VisitMut)]
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default, Visit, VisitMut)]
 pub struct ClassSynthesizedFields(SmallMap<Name, ClassSynthesizedField>);
 
 impl ClassSynthesizedFields {
@@ -504,42 +590,37 @@ impl Display for ClassSynthesizedFields {
     }
 }
 
-/// A struct representing a class's metaclass. A value of `None` indicates
-/// no explicit metaclass, in which case the default metaclass is `type`.
-#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
-pub enum Metaclass {
-    Direct(ClassType),
-    Inherited(ClassType),
-    #[default]
-    None,
+/// A struct representing a class's metaclass.
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
+pub struct Metaclass {
+    // The class's metaclass.
+    metaclass: ClassType,
+    /// Whether the class has a `metaclass=...` declaration that marks the class as explicitly
+    /// abstract. Note that regardless of whether the declared metaclass ends up being the
+    /// class's resolved metaclass, we use the declaration to determine intended abstract-ness.
+    is_explicitly_abstract: bool,
 }
 
 impl Display for Metaclass {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        match &self {
-            Self::Direct(metaclass) => write!(f, "{metaclass}"),
-            Self::Inherited(metaclass) => write!(f, "inherited({metaclass})"),
-            Self::None => write!(f, "type"),
-        }
+        write!(f, "{}", self.metaclass)
     }
 }
 
 impl Metaclass {
-    /// Convenience function to get the metaclass as a ClassType, regardless of its origin
-    pub fn get(&self) -> Option<&ClassType> {
-        match self {
-            Self::Direct(metaclass) => Some(metaclass),
-            Self::Inherited(metaclass) => Some(metaclass),
-            Self::None => None,
+    pub fn new(metaclass: ClassType, is_explicitly_abstract: bool) -> Self {
+        Self {
+            metaclass,
+            is_explicitly_abstract,
         }
     }
 
-    pub fn get_mut(&mut self) -> Option<&mut ClassType> {
-        match self {
-            Self::Direct(metaclass) => Some(metaclass),
-            Self::Inherited(metaclass) => Some(metaclass),
-            Self::None => None,
-        }
+    pub fn get(&self) -> &ClassType {
+        &self.metaclass
+    }
+
+    pub fn get_mut(&mut self) -> &mut ClassType {
+        &mut self.metaclass
     }
 }
 
@@ -571,8 +652,6 @@ pub struct TypedDictMetadata {
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct EnumMetadata {
     pub cls: ClassType,
-    /// Whether this enum inherits from enum.Flag.
-    pub is_flag: bool,
     /// Is there any `_value_` field present.
     pub has_value: bool,
     /// Whether this is a special Django enum.
@@ -588,12 +667,15 @@ pub struct NamedTupleMetadata {
     pub directly_extends_named_tuple: bool,
 }
 
-/// Defaults for `init_by_name` and `init_by_default`, per-field flags that control the name of
-/// a field's corresponding `__init__` parameter. See DataclassFieldKeywords for more information.
+/// Defaults for per-field flags that control `__init__` parameter names.
+/// Pydantic validation options retain `None` so subclasses can distinguish defaults from
+/// inherited configuration.
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct InitDefaults {
     pub init_by_name: bool,
     pub init_by_alias: bool,
+    pub alias_generator: Option<PydanticAliasGenerator>,
+    pub pydantic_validation_flags: PydanticValidationFlags,
 }
 
 impl Default for InitDefaults {
@@ -601,6 +683,8 @@ impl Default for InitDefaults {
         Self {
             init_by_name: false,
             init_by_alias: true,
+            alias_generator: None,
+            pydantic_validation_flags: PydanticValidationFlags::default(),
         }
     }
 }
@@ -676,6 +760,45 @@ pub struct DjangoModelMetadata {
     pub fields_with_choices: Vec<Name>,
 }
 
+#[derive(Clone, Debug, TypeEq, PartialEq, Eq, Default)]
+pub struct DjangoReverseRelationIndex(SmallMap<Class, ClassSynthesizedFields>);
+
+impl DjangoReverseRelationIndex {
+    pub fn new(map: SmallMap<Class, ClassSynthesizedFields>) -> Self {
+        Self(map)
+    }
+
+    pub fn get(&self, cls: &Class) -> Option<&ClassSynthesizedFields> {
+        self.0.get(cls)
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Class, &ClassSynthesizedFields)> {
+        self.0.iter()
+    }
+}
+
+impl Display for DjangoReverseRelationIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "DjangoReverseRelationIndex(len={})", self.0.len())
+    }
+}
+
+impl VisitMut<Type> for DjangoReverseRelationIndex {
+    fn recurse_mut(&mut self, f: &mut dyn FnMut(&mut Type)) {
+        for (_, fields) in self.0.iter_mut() {
+            fields.recurse_mut(f);
+        }
+    }
+}
+
+impl VisitTrait<Type> for DjangoReverseRelationIndex {
+    fn recurse<'a>(&'a self, f: &mut dyn FnMut(&'a Type)) {
+        for (_, fields) in self.0.iter() {
+            fields.recurse(f);
+        }
+    }
+}
+
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]
 pub struct ProtocolMetadata {
     /// All members of the protocol, excluding ones defined on `object` and not overridden in a subclass.
@@ -711,7 +834,7 @@ pub struct TotalOrderingMetadata {
 /// `linearization_complete` is false when `ancestors` is only a recovery prefix
 /// after nonlinearizable inheritance. Callers that need an exact ancestor list
 /// must check it.
-#[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub enum ClassMro {
     Resolved {
         ancestors: Vec<ClassType>,
@@ -719,6 +842,8 @@ pub enum ClassMro {
     },
     Cyclic,
 }
+
+static RECURSIVE_CLASS_MRO: ClassMro = ClassMro::Cyclic;
 
 impl Display for ClassMro {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -747,7 +872,7 @@ impl ClassMro {
     /// `Generic`, `Protocol`, and `object`.
     pub fn new(
         cls: &Class,
-        bases_with_mro: Vec<(&ClassType, Arc<ClassMro>)>,
+        bases_with_mro: Vec<(&ClassType, &ClassMro)>,
         errors: &ErrorCollector,
     ) -> Self {
         match Linearization::new(cls, bases_with_mro, errors) {
@@ -793,8 +918,8 @@ impl ClassMro {
         )
     }
 
-    pub fn recursive() -> Self {
-        Self::Cyclic
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_CLASS_MRO
     }
 }
 
@@ -807,10 +932,14 @@ impl ClassMro {
 /// the inherited representative from a direct base. `None` means no
 /// disjoint-base information, in which case narrowing falls back to
 /// `object`.
-#[derive(Clone, Debug, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Clone, Debug, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub struct ClassDisjointBase {
     representative: Option<Class>,
 }
+
+static RECURSIVE_CLASS_DISJOINT_BASE: ClassDisjointBase = ClassDisjointBase {
+    representative: None,
+};
 
 impl Display for ClassDisjointBase {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
@@ -826,10 +955,8 @@ impl ClassDisjointBase {
         Self { representative }
     }
 
-    pub fn recursive() -> Self {
-        Self {
-            representative: None,
-        }
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_CLASS_DISJOINT_BASE
     }
 
     pub fn representative(&self) -> Option<&Class> {
@@ -880,7 +1007,7 @@ impl Linearization {
     /// - One consisting of the base classes themselves in the order defined.
     fn new(
         cls: &Class,
-        bases_with_mro: Vec<(&ClassType, Arc<ClassMro>)>,
+        bases_with_mro: Vec<(&ClassType, &ClassMro)>,
         errors: &ErrorCollector,
     ) -> Linearization {
         let bases = match Vec1::try_from_vec(
@@ -897,7 +1024,7 @@ impl Linearization {
         let mut all_bases_complete = true;
         let mut seen_ancestors: SmallMap<Class, ClassType> = SmallMap::new();
         for (base, mro) in bases_with_mro {
-            match &*mro {
+            match mro {
                 ClassMro::Resolved {
                     ancestors,
                     linearization_complete,

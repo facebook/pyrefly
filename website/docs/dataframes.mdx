@@ -1,0 +1,596 @@
+---
+title: DataFrames
+description: Pyrefly support for Polars and pandas DataFrames, including column and dtype inference.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# DataFrames
+
+:::warning Experimental
+
+DataFrame support is experimental and a work in progress. In particular,
+user-written `DataFrame[Schema]` annotations are a Pyrefly-specific extension
+that other type checkers reject. This feature may change and will not be
+considered stable until Pyrefly 1.3.
+
+:::
+
+Pyrefly knows which columns your DataFrame has and what type each one holds.
+
+```python
+sales = pl.DataFrame({"region": ["East", "West"], "units": [12, 8]})
+report = sales.select("region", pl.col("units").alias("items_sold"))
+
+reveal_type(report)  # DataFrame[region: String, items_sold: Int64]
+reveal_type(report["items_sold"])  # Series[Int64]
+report["units"]  # Error unknown-column, the column was renamed to items_sold
+```
+
+Inline comments show how Pyrefly can infer additional information for DataFrames
+and Series.
+
+Pyrefly includes **built-in support** for DataFrames from
+[Polars](https://docs.pola.rs/) and
+[pandas](https://pandas.pydata.org/docs/), two popular Python libraries for
+working with tabular data. Pyrefly tracks column names and data types (dtypes),
+reports accesses to columns that cannot exist, and follows schema changes
+through common operations.
+
+---
+
+## How to Use
+
+DataFrame inference works automatically in Pyrefly, without any special
+configuration.
+
+1. Install `polars` or `pandas` in your Python environment.
+2. Install `pyrefly`.
+3. Write DataFrame code as usual.
+4. Run Pyrefly or use the Pyrefly language server in your editor.
+
+---
+
+## What is a DataFrame?
+
+A DataFrame stores tabular data in named columns. Each column has a logical
+data type (dtype) such as integer, string, or date. Together, the ordered
+column names and their dtypes form the DataFrame **schema**. The
+[Polars](https://docs.pola.rs/user-guide/concepts/data-types/overview/) and
+[pandas](https://pandas.pydata.org/docs/user_guide/dsintro.html#dataframe)
+user guides describe the underlying data model in more detail.
+
+Your own code decides what the schema is. Every time you select, rename, drop,
+or join columns, you change which columns exist further down the file, and a
+typo or a stale column name only shows up when the program runs. Library stubs
+describe the `DataFrame` class but say nothing about the columns any particular
+value holds, so a type checker reading only those stubs cannot catch the
+mistake.
+
+```python
+sales = pl.DataFrame({"region": ["East", "West"], "units": [12, 8]})
+# An ordinary type checker accepts this. Polars raises ColumnNotFoundError.
+sales["unit"]
+```
+
+Pyrefly reads the same source you wrote and reconstructs the schema from it, so
+those mistakes surface in your editor instead of in a traceback. It also carries
+the schema through the operations it supports, which means a column you renamed
+twenty lines earlier is still tracked correctly at the point where you use it.
+
+---
+
+## Column and Dtype Inference
+
+Pyrefly only records a schema when it can prove one from the source. Anything it
+cannot prove degrades to a less precise result rather than to a guess.
+
+### Schema Precision
+
+Pyrefly keeps the most precise representation that static analysis supports.
+The three levels below are Pyrefly's own terms, not Polars or pandas concepts.
+
+- A **complete schema** lists every column in the DataFrame. Because the list is
+  known to be exhaustive, accessing a column that is not in it produces an
+  `unknown-column` error.
+- A **partial schema** lists a set of known columns while allowing the DataFrame
+  to hold others as well. Pyrefly displays the open end as `...`. Since a
+  partial schema cannot prove a column is missing, Pyrefly reports no error for
+  an unrecognized name.
+- An **opaque frame** carries no schema at all and behaves exactly like the
+  ordinary Polars or pandas stub type.
+
+```python
+complete = pl.DataFrame({"name": ["Alice"], "age": [30]})
+reveal_type(complete)  # DataFrame[name: String, age: Int64]
+complete["nickname"]  # Error unknown-column
+
+partial = pd.DataFrame(data={"name": ["Alice"], "age": [30]})
+reveal_type(partial)  # DataFrame[name: String, age: Int64, ...]
+partial["nickname"]  # No error, a partial schema cannot prove the column is absent
+
+opaque = pl.read_csv("data.csv")
+reveal_type(opaque)  # DataFrame
+opaque["nickname"]  # No error, there is no schema to check against
+```
+
+Pyrefly infers a dtype for every known column by following the library's
+widening and coercion rules. When no dtype can be determined, the column keeps
+its name and takes the `Unknown` dtype, so an access returns `Series[Unknown]`.
+
+### How Polars and pandas Are Treated Differently
+
+The two libraries get different levels of precision because they offer different
+mutation guarantees.
+
+In Polars, the common transformations such as `select`, `drop`, `rename`, and
+`with_columns` are immutable and return a new DataFrame with a transformed
+schema. That makes the result predictable, so Polars frames usually keep a
+complete schema. Polars also offers explicit in-place APIs such as
+`insert_column`, `replace_column`, and `hstack` with `in_place=True`. For those,
+Pyrefly updates the schema when the mutation is statically known, downgrades to
+a partial schema when extra columns may have appeared, and downgrades to an
+opaque frame when no reliable schema remains.
+
+In contrast, pandas permits direct column assignment and other open-ended
+mutation on an existing DataFrame. A column can be added through
+`df[name] = values`, including when `name` is only known at runtime. Pyrefly
+therefore treats every inferred pandas schema as partial, keeping columns
+defined at construction while allowing untracked columns to exist. This is why
+an unrecognized column name is an error on a Polars frame but not on a pandas
+one.
+
+---
+
+## Supported Features
+
+For brevity, the examples below omit the imports for `polars`, `pandas`, and the
+`typing` names they use, such as `reveal_type` and `Literal`. Unless a section
+says otherwise, these features are Polars only. pandas support is described in
+[pandas Support](#pandas-support).
+
+### DataFrame Construction
+
+Pyrefly infers a Polars schema from a dictionary of columns, passed either
+positionally or through `data=`.
+
+```python
+reveal_type(pl.DataFrame({"name": ["Alice"], "age": [30]}))  # DataFrame[name: String, age: Int64]
+```
+
+A list of dictionary records works the same way. Column names are taken in
+first appearance order.
+
+```python
+rows = [
+    {"name": "Alice", "age": 30},
+    {"name": "Bob", "age": 25},
+]
+reveal_type(pl.DataFrame(rows))  # DataFrame[name: String, age: Int64]
+```
+
+A `TypedDict` whose fields hold supported primitive `Sequence` values also
+produces a schema. Optional fields make the schema partial, because they may be
+absent at runtime.
+
+```python
+class Columns(TypedDict):
+    name: Sequence[str]
+    age: Sequence[int]
+
+columns: Columns = {"name": ["Alice"], "age": [30]}
+reveal_type(pl.DataFrame(data=columns))  # DataFrame[name: String, age: Int64]
+```
+
+Pyrefly inspects the first 100 records, matching the
+[Polars default](https://docs.pola.rs/api/python/stable/reference/dataframe/index.html)
+of `infer_schema_length=100`. Polars documents that parameter as the maximum
+number of rows to scan for schema inference, and notes that it applies only when
+the input is a sequence or generator of rows. A call that sets
+`infer_schema_length` explicitly is not modeled and produces an opaque
+DataFrame.
+
+### Dtype Inference
+
+Polars stores each column under a Polars dtype rather than a Python type, so
+Pyrefly has to map the Python values you wrote onto the dtype Polars will
+actually choose.
+
+| Python value | Polars dtype |
+| --- | --- |
+| `int` | `Int64` |
+| `float` | `Float64` |
+| `bool` | `Boolean` |
+| `str` | `String` |
+| `bytes` | `Binary` |
+| `None` | `Null` when no non-null value establishes another dtype |
+| `date(...)` | `Date` |
+| `datetime(...)` | `Datetime` |
+| `time(...)` | `Time` |
+| `timedelta(...)` | `Duration` |
+
+The four temporal rows apply to a constructor call written in place. Variables
+and call results that resolve to a supported primitive type contribute their
+types in the same way.
+
+> **Note:** A Python `int` carries no signedness or width, so Polars infers
+> `Int64`. Use an explicit schema or a schema override to select a different
+> integer dtype. Pyrefly preserves signed and unsigned integer widths, floating
+> point widths, `Boolean`, `String` or `Utf8`, `Binary`, and unparameterized
+> temporal types whenever they are declared explicitly.
+
+Nested `List` and `Struct` dtypes, custom time units, time zones, and integers
+outside reliable `i64` inference are not modeled precisely. An unsupported
+explicit dtype uses the ordinary stub type.
+
+For a dictionary of columns, strict construction takes the dtype from the first
+non-null value, and later values must fit it without widening it. Passing
+`strict=False` instead looks for a supported common supertype. Record input
+folds supported supertypes across rows even with the default strict setting,
+because Polars itself scans the rows before choosing a dtype.
+
+```python
+reveal_type(pl.DataFrame({"value": [None, 1, True]}))  # DataFrame[value: Int64]
+pl.DataFrame({"value": [1, "wrong"]})  # Error column-type-mismatch
+reveal_type(pl.DataFrame({"value": [1, 2.5]}, strict=False))  # DataFrame[value: Float64]
+# Polars coerces this to String at runtime, but that supertype is outside
+# Pyrefly's static model, so the column stays Unknown.
+reveal_type(pl.DataFrame({"value": [1, "text"]}, strict=False))  # DataFrame[value: Unknown]
+```
+
+### Schema Declaration
+
+`schema=` or the second positional argument supplies authoritative column names,
+order, and dtypes. Pyrefly accepts a dictionary, an inline `pl.Schema({...})`,
+or a schema class. `schema_overrides=` replaces inferred dtypes for selected
+columns.
+
+Declared dtypes are authoritative to Pyrefly. Polars remains responsible for
+runtime coercion and can still raise when a value does not fit the declared
+dtype. Pyrefly reports `column-schema-mismatch` when statically known data names
+do not match the declared names.
+
+A `pl.Schema` value bound to a name or imported from another module is not
+modeled. Record input combined with `schema=` is accepted by Polars at runtime
+but is not modeled statically.
+
+```python
+reveal_type(
+    pl.DataFrame(
+        {"delta": [-2], "count": [3]},
+        schema=pl.Schema({"delta": pl.Int32, "count": pl.UInt32}),
+    )
+)  # DataFrame[delta: Int32, count: UInt32]
+
+pl.DataFrame(
+    {"name": ["Alice"]},
+    schema={"score": pl.Float64},
+)  # Error column-schema-mismatch
+```
+
+#### Schema Propagation Across Functions
+
+A schema class gives you a reusable contract for function parameters and return
+values, so a schema survives a function boundary instead of being erased there.
+
+```python
+from __future__ import annotations
+
+class Reading:
+    station: pl.String
+    temperature_c: pl.Float64
+
+def load_readings() -> pl.DataFrame[Reading]:
+    return pl.DataFrame(
+        {"station": ["North"], "temperature_c": [21.5]},
+        schema={"station": pl.String, "temperature_c": pl.Float64},
+    )
+
+def temperatures(frame: pl.DataFrame[Reading]) -> pl.Series:
+    return frame["temperature_c"]
+
+reveal_type(load_readings())  # DataFrame[station: String, temperature_c: Float64]
+```
+
+> **Note:** `DataFrame[Schema]` is a Pyrefly extension, not a standard Polars
+> annotation. Polars does not currently define `DataFrame` as generic over its
+> schema ([pola-rs/polars#22119](https://github.com/pola-rs/polars/issues/22119)),
+> so other type checkers reject the subscript. mypy reports that `DataFrame`
+> expects no type arguments and Pyright reports `Expected no type arguments for
+> class DataFrame`. `pl.DataFrame` is also not generic at runtime, so executable
+> code must quote the annotation or use `from __future__ import annotations`.
+> Runtime construction still takes a schema mapping or a `pl.Schema`.
+
+A plain `pl.DataFrame` annotation deliberately erases inferred schema
+information at that boundary. Rich schemas appear in hovers and `reveal_type`
+output, while infer output, stub generation, inlay hints, and quick fixes emit
+the plain `DataFrame` annotation that other tools accept.
+
+### CSV Reading
+
+The previous section declares a schema for data you already hold in memory.
+This section covers the same idea for data read from a file. Pyrefly never
+inspects file contents, so a CSV reader gets a schema only when you declare one
+inline at the call site.
+
+Pyrefly infers complete schemas for `pl.read_csv` and `pl.scan_csv` when
+`schema=` is an inline dictionary or inline `pl.Schema`. `read_csv` produces a
+typed DataFrame, and `scan_csv` produces a typed LazyFrame whose schema survives
+`collect()`.
+
+```python
+reveal_type(
+    pl.read_csv(
+        "data.csv",
+        schema={"id": pl.Int64, "name": pl.String},
+        columns=["name"],
+    )
+)  # DataFrame[name: String]
+
+lazy = pl.scan_csv(
+    "data.csv",
+    schema={"id": pl.Int64, "name": pl.String},
+    row_index_name="row",
+    include_file_paths="path",
+)
+reveal_type(lazy)  # LazyFrame[row: UInt32, id: Int64, name: String, path: String]
+reveal_type(lazy.collect())  # DataFrame[row: UInt32, id: Int64, name: String, path: String]
+```
+
+Eager readers also model static name or index projections, sequence
+`schema_overrides`, `row_index_name`, and prefix renaming through `new_columns`.
+Lazy scans model `row_index_name` and `include_file_paths`.
+
+Dynamic schemas and selections, missing or colliding names, and inconsistent
+projection or override combinations use the ordinary stubs. Lazy scans do not
+model `schema_overrides` or `new_columns`.
+
+### Column Access
+
+A complete Polars schema supports typed bracket accesses, ordered multi-column
+projections, `get_column`, and positive or negative `to_series` indexes.
+
+```python
+df = pl.DataFrame({"name": ["Alice"], "age": [30], "active": [True]})
+
+reveal_type(df["name"])  # Series[String]
+reveal_type(df[["active", "name"]])  # DataFrame[active: Boolean, name: String]
+reveal_type(df.get_column("age"))  # Series[Int64]
+reveal_type(df.to_series(-1))  # Series[Boolean]
+
+NAME: Final = "name"
+INDEX: Literal[-1] = -1
+reveal_type(df[NAME])  # Series[String]
+reveal_type(df.to_series(INDEX))  # Series[Boolean]
+```
+
+`Final` and `Literal` values work for column names and indexes. A broad `str`
+name or broad `int` index uses the ordinary untyped return and reports no column
+error. Static values also resolve construction keys, schema keys, cast keys,
+expression names, join modes, and `strict` flags.
+
+### Series Construction
+
+Pyrefly infers `pl.Series(...)` from literal values. An explicit `dtype=` is
+authoritative, and `strict=False` uses the same supertype rules as DataFrame
+construction.
+
+```python
+reveal_type(pl.Series("age", [30, 25]))  # Series[Int64]
+reveal_type(pl.Series("score", [1, 2], dtype=pl.Float64))  # Series[Float64]
+reveal_type(pl.Series("value", [1, 2.5], strict=False))  # Series[Float64]
+```
+
+Typed Series accesses require a complete Polars schema. Partial Polars schemas
+and pandas schemas return the ordinary Series type.
+
+### Column Transformation
+
+Pyrefly tracks the schema produced by the main Polars column operations.
+
+- `select` narrows and orders columns.
+- `drop` removes known columns.
+- `rename` changes names while preserving dtypes and order.
+- Keyword `with_columns` adds or replaces columns from supported expressions.
+- `cast` changes every dtype or selected dtypes from a mapping.
+
+Positional `with_columns`, mapping spreads, keyword `select`, and list-wrapped
+`select` expressions use the ordinary stub return types.
+
+```python
+df = pl.DataFrame({"name": ["Alice"], "age": [30], "active": [True]})
+
+reveal_type(df.select("age", "name"))  # DataFrame[age: Int64, name: String]
+reveal_type(df.drop("active"))  # DataFrame[name: String, age: Int64]
+reveal_type(df.rename({"age": "years"}))  # DataFrame[name: String, years: Int64, active: Boolean]
+reveal_type(df.cast({"age": pl.Float64}))  # DataFrame[name: String, age: Float64, active: Boolean]
+```
+
+#### Expression Inference
+
+The expression model understands `pl.col`, `pl.lit`, casts, aliases, arithmetic,
+unary operations, comparisons, and modeled reducers. Pyrefly uses these
+expressions in keyword `with_columns` and positional `select` calls. Aliases set
+the output name of a positional `select` expression, and casts and unary
+operations preserve it. Binary operations use the left expression's name, except
+that scalar-left comparisons use the right expression's name. Scalar literals
+and `pl.lit(...)` use `literal`.
+
+```python
+df = pl.DataFrame({"name": ["Alice"], "age": [30]})
+
+reveal_type(
+    df.with_columns(
+        next_age=pl.col("age") + 1,
+        is_adult=pl.col("age") >= 18,
+    )
+)  # DataFrame[name: String, age: Int64, next_age: Int64, is_adult: Boolean]
+
+reveal_type(
+    df.select(
+        pl.col("name"),
+        pl.col("age").cast(pl.Float64).alias("score"),
+    )
+)  # DataFrame[name: String, score: Float64]
+```
+
+`select("*")` preserves the schema. Regular expression selectors and unresolved
+selectors produce an opaque frame.
+
+### Grouping and Aggregation
+
+A direct `group_by(...).agg(...)` chain produces the ordered group keys followed
+by aggregate columns. Pyrefly models `min`, `max`, `first`, `last`, `mean`,
+`median`, `std`, `var`, `count`, `n_unique`, `sum`, and `product`. `count`,
+`n_unique`, and `pl.len()` produce `UInt32`.
+
+A GroupBy value saved to a variable, dynamic or rolling grouping, and unmodeled
+aggregate expressions use the ordinary stub types.
+
+```python
+df = pl.DataFrame({"team": ["a", "a"], "score": [1, 2]})
+
+reveal_type(
+    df.group_by("team").agg(
+        pl.col("score").sum().alias("total"),
+        pl.col("score").mean().alias("average"),
+        pl.len().alias("rows"),
+    )
+)  # DataFrame[team: String, total: Int64, average: Float64, rows: UInt32]
+```
+
+### DataFrame Combination
+
+Pyrefly models common ways to combine complete Polars schemas.
+
+- `hstack` appends non-colliding columns from another schema-aware frame.
+- `vstack` and `extend` preserve the receiver schema because they add rows.
+- `pl.concat` supports `vertical` and `vertical_relaxed` for inline list or
+  tuple inputs.
+- `join` supports same-name `on=` keys and the `semi`, `anti`, `inner`, `left`,
+  `right`, `full`, and `cross` modes with default suffix and coalesce behavior.
+
+Separate `left_on` and `right_on` keys, custom suffixes, explicit coalesce
+settings, other concat modes, mismatched concat schemas, and `hstack` with a
+list of Series are not modeled.
+
+```python
+left = pl.DataFrame({"id": [1], "name": ["Alice"]})
+right = pl.DataFrame({"id": [1], "score": [4.5]})
+
+reveal_type(
+    left.join(right, on="id", how="inner")
+)  # DataFrame[id: Int64, name: String, score: Float64]
+
+extra = pl.DataFrame({"active": [True]})
+reveal_type(left.hstack(extra))  # DataFrame[id: Int64, name: String, active: Boolean]
+
+integers = pl.DataFrame({"value": [1]})
+floats = pl.DataFrame({"value": [2.5]})
+reveal_type(pl.concat([integers, floats], how="vertical_relaxed"))  # DataFrame[value: Float64]
+```
+
+### Schema Preservation and Mutation
+
+Operations that change rows without changing columns preserve the schema,
+including `filter`, `sort`, `drop_nulls`, `unique`, `head`, and `slice`. The
+`lazy()` and `collect()` pair also preserves the schema while changing the frame
+class.
+
+`fill_null` preserves column names but can change dtypes. Filling with a Python
+float widens signed and unsigned integer columns to `Float64` when
+`matches_supertype=True`, which is the default. Existing float and nonnumeric
+dtypes are unchanged, and `matches_supertype=False` preserves integer dtypes.
+
+Pyrefly models this widening only when the fill value resolves statically to a
+Python `float`. Dynamic values and Polars expressions leave the inferred schema
+unchanged.
+
+```python
+df = pl.DataFrame(
+    {"count": [1, None], "ratio": [1.0, None], "label": ["x", None]},
+    schema={"count": pl.Int64, "ratio": pl.Float32, "label": pl.String},
+)
+
+value: float = 0.0
+reveal_type(df.fill_null(value))  # DataFrame[count: Float64, ratio: Float32, label: String]
+reveal_type(df.fill_null(value, matches_supertype=False))  # DataFrame[count: Int64, ratio: Float32, label: String]
+```
+
+In-place column mutation is where precision is most often lost.
+
+| Operation | Pyrefly result |
+| --- | --- |
+| `insert_column` with a static index and Series name | The schema stays complete and the inserted name receives the `Unknown` dtype. |
+| `insert_column` with an unresolved position or value | The schema becomes partial. |
+| `hstack` with `in_place=True` | The schema becomes partial. |
+| `replace_column` | The frame becomes opaque. |
+
+```python
+df = pl.DataFrame({"name": ["Alice"], "age": [30]})
+
+reveal_type(df.filter(pl.col("age") > 18).head(1))  # DataFrame[name: String, age: Int64]
+reveal_type(df.lazy().select("age").collect())  # DataFrame[age: Int64]
+
+df.insert_column(1, pl.Series("active", [True]))
+reveal_type(df)  # DataFrame[name: String, active: Unknown, age: Int64]
+```
+
+### pandas Support
+
+Everything above this section describes Polars. pandas gets a smaller feature
+set, because its open-ended mutation model means an inferred schema is always
+partial.
+
+Pyrefly infers visible primitive columns from a pandas dictionary constructor
+passed positionally or through `data=`. A static `columns=` list projects and
+reorders known columns. Because the schema is partial, column accesses return
+the ordinary pandas Series type and an unrecognized name is not reported as an
+error.
+
+Record input, `TypedDict`, mixed or temporal column values, `None`, `dtype=`,
+subclasses, and uncertain coercions use the ordinary pandas stubs. A projected
+name missing from the input also produces an opaque frame, and pandas CSV
+readers remain opaque.
+
+```python
+df = pd.DataFrame(
+    data={"name": ["Alice"], "age": [30], "active": [True]},
+    columns=["age", "name"],
+)
+
+reveal_type(df)  # DataFrame[age: Int64, name: String, ...]
+reveal_type(df["age"])  # Series
+```
+
+---
+
+## Diagnostics
+
+DataFrame diagnostics use the normal Pyrefly suppression and severity
+configuration.
+
+- [`unknown-column`](../error-kinds/#unknown-column) reports a statically known
+  name that is absent from a complete schema.
+- [`column-type-mismatch`](../error-kinds/#column-type-mismatch) reports a
+  strict Polars construction value that does not fit the dtype established by
+  the first non-null value.
+- [`column-schema-mismatch`](../error-kinds/#column-schema-mismatch) reports
+  statically known data names that do not match declared schema names.
+- [`duplicate-column`](../error-kinds/#duplicate-column) reports a projection
+  that would produce two columns with the same name, which Polars rejects when
+  an eager projection runs or a lazy projection is collected.
+
+---
+
+## Feedback
+
+Pyrefly's DataFrame support continues to evolve. If you encounter a missing
+operation or an incorrect result, please
+[open a GitHub issue](https://github.com/facebook/pyrefly/issues) so we can
+prioritize it.
