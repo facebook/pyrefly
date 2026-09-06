@@ -34,6 +34,28 @@ PACKAGES: tuple[str, ...] = (
 )
 
 
+def shaped_array_reference_lines(source: str) -> list[int]:
+    return [
+        line_number
+        for line_number, line in enumerate(source.splitlines(), start=1)
+        if "shaped_array" in line
+    ]
+
+
+def shaped_array_references() -> list[str]:
+    uses = []
+    for package in PACKAGES:
+        package_root = TENSOR_SHAPES_ROOT / package
+        for path in package_root.rglob("*"):
+            if path.suffix not in {".py", ".pyi"}:
+                continue
+            uses.extend(
+                f"{path.relative_to(TENSOR_SHAPES_ROOT)}:{line}"
+                for line in shaped_array_reference_lines(path.read_text())
+            )
+    return uses
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -73,6 +95,12 @@ def main() -> int:
 
     if args.static_only and args.runtime_only:
         raise SystemExit("--static-only and --runtime-only are mutually exclusive")
+    if references := shaped_array_references():
+        print(
+            "Legacy shaped_array references remain:\n" + "\n".join(references),
+            file=sys.stderr,
+        )
+        return 1
 
     # Resolve both toolchains before running anything, so a missing virtualenv
     # fails immediately rather than after several minutes of type checking.

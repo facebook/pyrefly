@@ -31,7 +31,6 @@ __all__ = [
     "broadcast",
     "defines_assert_shape",
     "gufunc_broadcast",
-    "shaped_array",
     "index_shape",
     "type_shape_dsl_function",
 ]
@@ -92,9 +91,9 @@ _patch_torch_if_available()
 class IntTuple:
     """Tuple-valued shape annotation surface.
 
-    In type positions, Pyrefly treats `IntTuple` as the shape carrier for
-    `tuple[int, ...]`. At runtime, calling it coerces any iterable to a plain
-    tuple.
+    In type positions, Pyrefly treats `IntTuple` as a whole shape whose runtime
+    representation is `tuple[int, ...]`. At runtime, calling it coerces any
+    iterable to a plain tuple.
     """
 
     def __new__(cls, iterable=()):
@@ -112,30 +111,30 @@ class IntTuples:
 
 
 class Elements:
-    """Inverse of ``tuple[Unpack[S]]``: extracts the element sequence from a IntTuple carrier.
+    """Inverse of ``tuple[Unpack[S]]``: extracts the dimensions from an ``IntTuple``.
 
     In the Python typing spec, ``tuple[Unpack[Ts]]`` wraps a ``TypeVarTuple`` into a
-    concrete tuple type. ``Elements[S]`` is the conceptual inverse: given a ``IntTuple``
-    carrier ``S``, ``*Elements[S]`` splices its element sequence into a shape position,
+    concrete tuple type. ``Elements[S]`` is the conceptual inverse: given an ``IntTuple``
+    shape ``S``, ``*Elements[S]`` splices its dimensions into a shape position,
     e.g. ``Array[[*Elements[S], OUT], DType]``.
 
     This fills a gap in the current typing spec — there is no standard mechanism to
-    decompose a variadic carrier without a ``TypeVarTuple``. Pyrefly uses the ``.pyi``
+    decompose a variadic shape without a ``TypeVarTuple``. Pyrefly uses the ``.pyi``
     stub for type inference; this class exists so annotations evaluate without crashing
     at runtime.
     """
 
-    def __init__(self, carrier):
-        self.carrier = carrier
+    def __init__(self, shape):
+        self.shape = shape
 
-    def __class_getitem__(cls, carrier):
-        return cls(carrier)
+    def __class_getitem__(cls, shape):
+        return cls(shape)
 
     def __iter__(self):
         yield self
 
     def __repr__(self):
-        return f"Elements[{self.carrier!r}]"
+        return f"Elements[{self.shape!r}]"
 
 
 class Int[T]:
@@ -277,20 +276,6 @@ def assert_shape(actual, shape):
     elif actual_tuple != expected:
         raise AssertionError(f"expected shape {expected}, got {actual_tuple}")
     return actual
-
-
-def shaped_array(
-    *, shape: str, builtin_indexing: bool = True
-) -> typing.Callable[[type], type]:
-    """Mark a class as carrying a shape parameter.
-
-    ``builtin_indexing=False`` lets its annotated ``__getitem__`` determine the result.
-    """
-
-    def decorator(cls: type) -> type:
-        return cls
-
-    return decorator
 
 
 def index_shape(_shape: IntTuple, _index: typing.Any) -> IntTuple:

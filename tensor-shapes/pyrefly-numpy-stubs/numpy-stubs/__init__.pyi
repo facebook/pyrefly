@@ -7,14 +7,12 @@ from collections.abc import Sequence
 from types import EllipsisType
 from typing import Any, Literal, overload
 
-import shape_extensions
 from numpy._shapes import diag_extent, matmul_shape, reduce_shape
 from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple, IntVar
 
 from . import linalg as linalg, random as random
 
 type _Shape = IntTuple
-type _AnyShape = tuple[Any, ...]
 type _Axis = int | tuple[int, ...] | None
 type _BasicIndex = int | slice | list[int] | None | EllipsisType
 
@@ -40,8 +38,7 @@ class dtype[Scalar = Any]:
 # its body. Annotations inside the class reach the class through this alias.
 _dtype = dtype
 
-@shape_extensions.shaped_array(shape="Shape", builtin_indexing=False)
-class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
+class ndarray[Shape: _Shape = _Shape, DType = Any]:
     shape: Shape
     dtype: DType
     @overload
@@ -242,10 +239,8 @@ def diag[M: IntVar, N: IntVar, DType](
 
 # Trailing fallback for ranks the precise overloads do not model, so their dtype survives
 # instead of degrading to `Any`. The parameter shape is a type variable rather than
-# `_AnyShape`: a gradual parameter shape would also match known-rank arguments whose dtype is
+# `IntTuple`: a gradual parameter shape would also match known-rank arguments whose dtype is
 # gradual, and that ambiguity collapses their precise result to a gradual shape.
-# The result is spelled `IntTuple`, the shape bound itself, rather than `_AnyShape`:
-# an unbounded tuple is not a valid shaped-array carrier. Both infer the same shape.
 @overload
 def diag[S: _Shape, DType](
     v: ndarray[S, DType], k: int = 0
@@ -322,8 +317,8 @@ def matmul[LeftShape: _Shape, RightShape: _Shape](
 ) -> ndarray[matmul_shape(LeftShape, RightShape), Any]: ...
 
 # TODO(stroxler): Replace these finite tuple-shape constructor overloads with a
-# generic `Shape: tuple[int, ...]` overload once carrier shapes flow through
-# downstream shaped-array operations without degrading to unknown.
+# generic `Shape: tuple[int, ...]` overload once whole-shape parameters flow
+# through downstream array operations without degrading to unknown.
 @overload
 def zeros[N: IntVar, ScalarT: generic](
     shape: Int[N], dtype: type[ScalarT], order: str = ...

@@ -86,20 +86,20 @@ def add_not_equal_mul[N: IntVar, M: IntVar](
     x: Tensor[[N + M]],
 ) -> Tensor[[N * M]]:
     """N + M != N * M in general."""
-    # E: Returned type `Tensor[[(N + M)]]` is not assignable
-    #    to declared return type `Tensor[[(N * M)]]`
+    # E: Returned type `Tensor[IntTuple[(N + M)]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[(N * M)]]`
     return x
 
 
 def different_constants[N: IntVar](x: Tensor[[N + 1]]) -> Tensor[[N + 2]]:
     """N + 1 != N + 2."""
-    # E: Returned type `Tensor[[(1 + N)]]` is not assignable
-    #    to declared return type `Tensor[[(2 + N)]]`
+    # E: Returned type `Tensor[IntTuple[(1 + N)]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[(2 + N)]]`
     return x
 
 
 def wrong_literal_simplification(x: Tensor[[2 + 3, 4]]) -> Tensor[[6, 4]]:
     """2 + 3 = 5, not 6."""
-    # E: Returned type `Tensor[[5, 4]]` is not assignable
-    #    to declared return type `Tensor[[6, 4]]`
+    # E: Returned type `Tensor[IntTuple[5, 4]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[6, 4]]`
     return x

@@ -49,6 +49,7 @@ use starlark_map::small_map::SmallMap;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
+use crate::solver::shape::has_int_tuple_bound;
 use crate::solver::shape::type_as_intvar_solution;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::OpenTypedDictSubsetError;
@@ -2913,27 +2914,54 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             } else if param.kind() == QuantifiedKind::IntVar {
                 let got_arg = Self::intvar_targ_for_compare(got_arg)?;
                 let want_arg = Self::intvar_targ_for_compare(want_arg)?;
-                match variances.get(param.name()) {
-                    Variance::Covariant => self.is_subset_eq(&got_arg, &want_arg)?,
-                    Variance::Contravariant => self.is_subset_eq(&want_arg, &got_arg)?,
-                    Variance::Invariant | Variance::Bivariant => {
-                        self.is_consistent(&got_arg, &want_arg)?
+                self.check_targ_variance(variances.get(param.name()), &got_arg, &want_arg)?;
+            } else if self.solver.tensor_shapes && has_int_tuple_bound(param) {
+                match (
+                    IntTuple::from_shape_arg_or_tuple_carrier(got_arg),
+                    IntTuple::from_shape_arg_or_tuple_carrier(want_arg),
+                ) {
+                    (Some(got_shape), Some(want_shape))
+                        if (got_shape.is_shapeless() || want_shape.is_shapeless())
+                            && (matches!(got_arg, Type::Var(_))
+                                || matches!(want_arg, Type::Var(_))) =>
+                    {
+                        // A bare inference variable is a valid tuple carrier, so it projects to an
+                        // unpacked shape above. Do not let a gradual peer constrain that variable.
+                    }
+                    (Some(got_shape), Some(want_shape)) => {
+                        // A direct `IntTuple` bound gives this parameter shape semantics. Compare
+                        // its projected dimensions rather than its internal representation. Shape
+                        // arguments are matched as values against the expected shape pattern, so
+                        // generic parameter variance does not reverse this comparison.
+                        self.bind_tensor_dimensions(&got_shape, &want_shape)?;
+                    }
+                    _ if got_arg.is_any() || want_arg.is_any() => {
+                        // A gradual peer is compatible but provides no shape information.
+                    }
+                    _ => {
+                        self.check_targ_variance(variances.get(param.name()), got_arg, want_arg)?
                     }
                 }
             } else {
-                match variances.get(param.name()) {
-                    Variance::Covariant => self.is_subset_eq(got_arg, want_arg)?,
-                    Variance::Contravariant => self.is_subset_eq(want_arg, got_arg)?,
-                    // Technically, the right thing to do for bivariance would be to skip the
-                    // subset check. However, this leads to confusing and unintuitive behavior,
-                    // so we treat bivariant type parameters as invariant instead.
-                    Variance::Invariant | Variance::Bivariant => {
-                        self.is_consistent(got_arg, want_arg)?
-                    }
-                }
+                self.check_targ_variance(variances.get(param.name()), got_arg, want_arg)?;
             }
         }
         Ok(())
+    }
+
+    fn check_targ_variance(
+        &mut self,
+        variance: Variance,
+        got: &Type,
+        want: &Type,
+    ) -> Result<(), SubsetError> {
+        match variance {
+            Variance::Covariant => self.is_subset_eq(got, want),
+            Variance::Contravariant => self.is_subset_eq(want, got),
+            // Treating bivariant parameters as invariant avoids confusing assignments that skip
+            // type-argument compatibility entirely.
+            Variance::Invariant | Variance::Bivariant => self.is_consistent(got, want),
+        }
     }
 
     fn intvar_targ_for_compare(arg: &Type) -> Result<Type, SubsetError> {

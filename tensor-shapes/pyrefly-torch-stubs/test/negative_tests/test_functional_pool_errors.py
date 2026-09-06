@@ -30,10 +30,10 @@ F.avg_pool2d(rank_five, 2)  # E: pooling requires spatial rank + 1 or + 2 input
 F.avg_pool3d(rank_three, 2)  # E: pooling requires spatial rank + 1 or + 2 input
 F.avg_pool3d(rank_six, 2)  # E: pooling requires spatial rank + 1 or + 2 input
 
-reveal_type(  # E: revealed type: Tensor[[2, 3, 0]]
+reveal_type(  # E: revealed type: Tensor[IntTuple[2, 3, 0]]
     F.max_pool1d(short_one_dimensional, 3)
 )
-reveal_type(  # E: revealed type: Tensor[[2, 3, 0, 4]]
+reveal_type(  # E: revealed type: Tensor[IntTuple[2, 3, 0, 4]]
     F.avg_pool2d(short_first_axis, (3, 2))
 )
 

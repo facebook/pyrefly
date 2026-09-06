@@ -68,6 +68,18 @@ pub(crate) fn has_int_tuple_bound(q: &Quantified) -> bool {
         && matches!(q.restriction(), Restriction::Bound(Type::IntTuple(_)))
 }
 
+/// Preserve the shape domain when an `IntTuple`-bounded variable has no precise solution.
+pub(crate) fn quantified_gradual_type(q: &Quantified) -> Type {
+    if q.default().is_none()
+        && q.kind() == QuantifiedKind::TypeVar
+        && let Restriction::Bound(bound @ Type::IntTuple(_)) = q.restriction()
+    {
+        bound.clone()
+    } else {
+        q.as_gradual_type()
+    }
+}
+
 fn int_tuples_member(ty: &Type) -> Option<Type> {
     IntTuple::from_shape_arg_type(ty)
         .or_else(|| tuple_carrier_to_shape(ty))
