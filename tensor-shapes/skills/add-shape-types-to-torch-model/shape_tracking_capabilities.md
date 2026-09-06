@@ -2,13 +2,16 @@
 
 ## Core concepts
 
-**`Tensor[[B, C, H, W]]`** — a tensor with typed dimensions. `Tensor` takes a
-single shape parameter (`class Tensor[Shape: _Shape = _AnyShape]`), so a
+**`Tensor[[B, C, H, W]]`** — a tensor with typed dimensions. `Tensor` is an
+ordinary generic class with one shape parameter
+(`class Tensor[Shape: IntTuple = IntTuple]`), so a
 multi-dim shape goes in DOUBLE brackets. Each dimension can be a literal
 (`3`, `64`), a type variable (`B`, `C`), or an arithmetic expression
 (`D // NHead`, `2 * H - 1`, `H * W`). Single-bracket multi-dim
 (`Tensor[B, C, H, W]`) is obsolete and does not type-check. Single brackets are
-for a whole-shape carrier: `Tensor[S]` where `S: IntTuple`.
+for a whole shape: `Tensor[S]` where `S: IntTuple`. NumPy and JAX arrays use the
+same ordinary-class pattern; the legacy `@shaped_array` decorator is not used by
+the current stubs.
 
 **`Int[X]`** — bridges a runtime integer to a type-level symbol. When a
 function takes `dim: Int[D]` and receives `64`, the checker binds `D = 64`.
@@ -37,15 +40,16 @@ it lives elsewhere. `pyrefly dump-config` reports the resolved location.
 `.pyi` files with type signatures for PyTorch classes and functions. Common
 patterns:
 - `Self` return — preserves exact shape (e.g., `.float()`, `.contiguous()`)
-- `Tensor[S] → Tensor[S]` with `S: IntTuple` — shape-preserving whole-shape
-  carrier (e.g., `F.relu`, `nn.LayerNorm`). For a *trailing* dim after any batch
+- `Tensor[S] → Tensor[S]` with `S: IntTuple` — preserves the whole shape
+  (e.g., `F.relu`, `nn.LayerNorm`). For a *trailing* dim after any batch
   shape, use `Tensor[[*Elements[Bs], D]]` with `Bs: IntTuple`.
 - Generic params — capture constructor args, compute output shape in `forward`
   (e.g., `nn.Linear[In, Out]`, `nn.Conv2d[InC, OutC, K, S, P, D]`)
 - `Int[N]` capture — binds a runtime int arg to a type-level dim
 
 **How to check if an op is supported:** Open the `.pyi` file and search for the
-class or function. If the return type is bare `Tensor`, shapes aren't tracked. If
+class or function. A bare `Tensor` is shorthand for the gradual
+`Tensor[IntTuple]`, so its rank and dimensions are not tracked. If
 it uses `Self`, a whole-shape `Tensor[S]` (`S: IntTuple`), generics, or a call to
 a shape function (`Tensor[reshape_shape(Shape, NewShape)]`), it's tracked.
 
@@ -53,8 +57,8 @@ a shape function (`Tensor[reshape_shape(Shape, NewShape)]`), it's tracked.
 Change the stub's return type. Use `Self` for identity ops, `Tensor[S]`
 (`S: IntTuple`) for shape-preserving ops, generic params for transforms, or a
 shape function call for argument-dependent computation. If stubs are
-off-limits, leave the op untracked — it degrades to a bare `Tensor`, which you
-record as a gap rather than fixing.
+off-limits, leave the op untracked — it degrades to `Tensor[IntTuple]`, which
+you record as a gap rather than fixing.
 
 ### 2. Type-level shape functions
 
@@ -104,9 +108,12 @@ conditionals (`x if cond else y`), comprehensions, calls to other
 
 Hard-coded Rust logic for patterns that don't fit stubs or shape functions:
 - `nn.Sequential` chaining (`nn_module_specials.rs`)
-- `.shape` attribute returning typed tuple (`attr.rs`)
-- Tensor indexing — integer, slice, tensor, multi-axis (`expr.rs`)
+- Legacy `@shaped_array` attribute and indexing behavior for pinned older stubs
 - Tuple slicing, star unpacking (`expr.rs`)
+
+Current array stubs declare the `.shape` attribute normally. Their `__getitem__`
+overloads call the `index_shape` DSL operation for integer, slice, tensor, and
+multi-axis indexing; they do not use the legacy hard-coded indexing behavior.
 
 **How to check:** These are less discoverable — search the Rust source or ask.
 
@@ -131,7 +138,7 @@ not the problem. Trace back:
    decorate it with `@type_shape_dsl_function`, and call it from the stub's
    return annotation.
 
-## What IS genuinely shapeless
+## What genuinely remains gradual
 
 Very few patterns truly can't be tracked:
 - **Data-dependent result counts**: `torch.nonzero`, `t[bool_mask]` (output
@@ -141,8 +148,9 @@ Very few patterns truly can't be tracked:
 - **A1 algebraic gap**: `N * (X // N) = X` — unsound for floor division.
   Note: `(a * b) // b → a` IS simplified (sound).
 
-Everything else should be trackable. If you think something is shapeless, check
-the three mechanisms first — stubs, shape functions, special handlers.
+Everything else should be trackable. If a result falls back to
+`Tensor[IntTuple]`, check the three mechanisms first — stubs, shape functions,
+special handlers.
 
 ## Current API surface
 
@@ -165,8 +173,6 @@ The `shape_extensions` package is what your port imports. Its public exports:
   compatibility mode. It must be an import rather than a call because
   TorchScript reads class attribute annotations out of `__annotations__`, so
   the mode has to be on before an annotated class body is evaluated.
-- **`shaped_array`** — `@shaped_array(shape=...)` class decorator for non-torch
-  array types (numpy-style).
 - **`IntTuples`**, **`MapIntTuples`**, **`Flag`**, **`ProxyMethod`** —
   stub-authoring primitives; you rarely write these in a port.
   `MapIntTuples[lambda S: Tensor[S], Shapes]` is how a stub accepts a

@@ -23,19 +23,12 @@ def test_xor[N: IntVar, M: IntVar](x: Tensor[[N, M]], y: Tensor[[N, M]]):
     assert_type(x ^ y, Tensor[[N, M]])
 
 
-def test_or_between_two_tensors_is_read_as_a_union[N: IntVar, M: IntVar](
+def test_or_between_two_tensors[N: IntVar, M: IntVar](
     x: Tensor[[N, M]], y: Tensor[[N, M]]
 ):
-    """`|` between two tensors resolves to a union type instead of calling `__or__`.
-
-    This is a checker bug rather than a gap in the stub: `x.__or__(y)` and
-    `x | True` both give `Tensor[[N, M]]`, and `&` and `^` are unaffected. The
-    PEP 604 union reading only wins when both operands are tensors. The
-    assertion below records the wrong answer so the test suite stays green and
-    the day this is fixed is visible.
-    """
+    """`|` behaves like the other bitwise operations."""
     assert_type(x.__or__(y), Tensor[[N, M]])
-    assert_type(x | y, type[Tensor[[N, M]]])
+    assert_type(x | y, Tensor[[N, M]])
 
 
 def test_invert[N: IntVar, M: IntVar](x: Tensor[[N, M]]):

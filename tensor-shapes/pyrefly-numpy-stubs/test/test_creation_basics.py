@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, assert_type
 
 import numpy as np
-from shape_extensions import assert_shape, IntVar
+from shape_extensions import assert_shape, IntTuple, IntVar
 
 GRADUAL_SHAPE_RUNTIME_TESTS = {
     "test_diag_dtype_and_broad_offset",
@@ -92,19 +92,19 @@ def check_diag_general_rank[DType](matrix: np.ndarray[[2, 3], DType]) -> None:
 
 
 def check_diag_unknown_rank[DType](array: np.ndarray[Any, DType]) -> None:
-    assert_type(np.diag(array), np.ndarray[Any, DType])
+    assert_type(np.diag(array), np.ndarray[IntTuple, DType])
 
 
 # The gradual fallback also admits ranks NumPy itself rejects; that is the price of keeping
 # the dtype for unknown-rank inputs.
 def check_diag_rank_zero_falls_back[DType](array: np.ndarray[[], DType]) -> None:
-    assert_type(np.diag(array), np.ndarray[Any, DType])
+    assert_type(np.diag(array), np.ndarray[IntTuple, DType])
 
 
 def check_diag_rank_three_falls_back[DType](
     array: np.ndarray[[2, 3, 4], DType],
 ) -> None:
-    assert_type(np.diag(array), np.ndarray[Any, DType])
+    assert_type(np.diag(array), np.ndarray[IntTuple, DType])
 
 
 def test_diag_matrix_runtime_shape() -> None:

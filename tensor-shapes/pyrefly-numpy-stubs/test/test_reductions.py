@@ -99,12 +99,12 @@ def test_method_reductions_share_free_function_shapes() -> None:
         make_array((2, 3, 4)),
     )
 
-    assert_shape(a.sum(), ())
-    assert_shape(a.mean(axis=-1), (2, 3))
-    assert_shape(a.min(axis=1), (2, 4))
-    assert_shape(a.max(axis=(0, 2)), (3,))
-    assert_shape(a.sum(axis=(1, 2), keepdims=True), (2, 1, 1))
-    assert_shape(a.mean(keepdims=True), (1, 1, 1))
+    assert_shape(a.sum().shape, ())
+    assert_shape(a.mean(axis=-1).shape, (2, 3))
+    assert_shape(a.min(axis=1).shape, (2, 4))
+    assert_shape(a.max(axis=(0, 2)).shape, (3,))
+    assert_shape(a.sum(axis=(1, 2), keepdims=True).shape, (2, 1, 1))
+    assert_shape(a.mean(keepdims=True).shape, (1, 1, 1))
 
 
 def test_reduce_matrix_axis_one() -> None:

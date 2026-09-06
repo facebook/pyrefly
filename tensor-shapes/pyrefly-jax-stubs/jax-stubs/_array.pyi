@@ -10,7 +10,6 @@
 from types import EllipsisType
 from typing import Any, overload, Protocol, Sequence, SupportsIndex
 
-import shape_extensions
 from jax._shapes import (
     diagonal_shape,
     dot_shape,
@@ -28,7 +27,6 @@ from jax._shapes import (
 from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple, IntVar
 
 type _Shape = IntTuple
-type _AnyShape = tuple[Any, ...]
 type _Axis = int | tuple[int, ...] | None
 type _Scalar = bool | int | float | complex
 
@@ -50,8 +48,7 @@ type _BasicIndex = SupportsIndex | slice | _IntegerSequence | None | EllipsisTyp
 # after narrowing with `is_int_value` alone. See `reshape_shape`, which rejects it.
 type _NewShape = int | tuple[int, ...] | None
 
-@shape_extensions.shaped_array(shape="Shape", builtin_indexing=False)
-class Array[Shape: _Shape = _AnyShape]:
+class Array[Shape: _Shape = _Shape]:
     shape: Shape
     @overload
     def __getitem__[I: Index](self, index: I) -> Array[index_shape(Shape, I)]: ...
