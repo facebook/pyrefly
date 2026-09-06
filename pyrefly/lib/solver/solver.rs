@@ -64,6 +64,7 @@ use crate::solver::shape::canonicalize_ints_in_type;
 use crate::solver::shape::has_int_tuple_bound;
 use crate::solver::shape::normalize_shape_int_bound_solution;
 use crate::solver::shape::normalize_shape_tuple_bound_candidate;
+use crate::solver::shape::quantified_gradual_type;
 use crate::solver::shape::simplify_shape_type;
 use crate::solver::shape::type_as_intvar_solution;
 use crate::solver::type_order::TypeOrder;
@@ -670,12 +671,12 @@ impl Solver {
                 // constraints. If we see a Quantified while pinning other placeholder types, that
                 // means we forgot to finish it.
                 let result = Some(PinError::UnfinishedQuantified(q.clone()));
-                *variable = Variable::answer(q.as_gradual_type());
+                *variable = Variable::answer(quantified_gradual_type(q));
                 result
             }
             Variable::PartialQuantified(q) => {
                 if pin_partial_types {
-                    *variable = Variable::answer(q.as_gradual_type());
+                    *variable = Variable::answer(quantified_gradual_type(q));
                 }
                 None
             }
@@ -1124,8 +1125,8 @@ impl Solver {
                                 bounds,
                             } => self
                                 .solve_bounds(mem::take(bounds))
-                                .unwrap_or_else(|| q.as_gradual_type()),
-                            Variable::PartialQuantified(q) => q.as_gradual_type(),
+                                .unwrap_or_else(|| quantified_gradual_type(q)),
+                            Variable::PartialQuantified(q) => quantified_gradual_type(q),
                             Variable::Unwrap(bounds) => self
                                 .solve_bounds(mem::take(bounds))
                                 .unwrap_or_else(|| self.heap.mk_any_implicit()),
@@ -1194,8 +1195,8 @@ impl Solver {
                         bounds,
                     } => self
                         .solve_bounds(mem::take(bounds))
-                        .unwrap_or_else(|| q.as_gradual_type()),
-                    Variable::PartialQuantified(q) => q.as_gradual_type(),
+                        .unwrap_or_else(|| quantified_gradual_type(q)),
+                    Variable::PartialQuantified(q) => quantified_gradual_type(q),
                     Variable::Unwrap(bounds) => self
                         .solve_bounds(mem::take(bounds))
                         .unwrap_or_else(|| self.heap.mk_any_implicit()),
@@ -1750,9 +1751,9 @@ impl Solver {
                 if has_generic_residual {
                     return Type::callable_residual_generic(quantified.clone());
                 }
-                quantified.as_gradual_type()
+                quantified_gradual_type(quantified)
             }
-            Variable::PartialQuantified(q) => q.as_gradual_type(),
+            Variable::PartialQuantified(q) => quantified_gradual_type(q),
             Variable::PartialContained(_) | Variable::Recursive => self.heap.mk_any_implicit(),
             Variable::Unwrap(_) => {
                 unreachable!("overload residual capture should not include Unwrap vars")
@@ -2327,7 +2328,7 @@ impl Solver {
                 } else if infer_with_first_use {
                     Variable::finished(q)
                 } else {
-                    Variable::answer(q.as_gradual_type())
+                    Variable::answer(quantified_gradual_type(q))
                 };
             }
         }
@@ -2395,7 +2396,7 @@ impl Solver {
                         // If the variable has bounds, finalize its type now.
                         *e = Variable::answer(
                             self.solve_bounds(mem::take(bounds))
-                                .unwrap_or_else(|| q.as_gradual_type()),
+                                .unwrap_or_else(|| quantified_gradual_type(q)),
                         );
                     }
                     // Otherwise (residuals but no bounds): leave the var as
@@ -2425,7 +2426,7 @@ impl Solver {
                 self.variables.lock().insert_fresh(v, Variable::finished(q));
                 v.to_type(&self.heap)
             } else {
-                q.as_gradual_type()
+                quantified_gradual_type(q)
             };
             args[i] = new_targ;
         }
@@ -4607,6 +4608,33 @@ mod tests {
             restriction,
             PreInferenceVariance::Invariant,
         )
+    }
+
+    #[test]
+    fn direct_int_tuple_bound_has_shape_aware_gradual_fallback() {
+        let int_tuple = quantified_with_restriction(
+            QuantifiedKind::TypeVar,
+            0,
+            Restriction::Bound(IntTuple::shapeless().to_shape_arg_type()),
+        );
+        let precise_bound =
+            IntTuple::new(vec![Int::Literal(2), Int::Literal(3)]).to_shape_arg_type();
+        let precise_int_tuple = quantified_with_restriction(
+            QuantifiedKind::TypeVar,
+            1,
+            Restriction::Bound(precise_bound.clone()),
+        );
+        let ordinary_bound =
+            quantified_with_restriction(QuantifiedKind::TypeVar, 2, Restriction::Bound(Type::None));
+        let unrestricted = quantified(QuantifiedKind::TypeVar, 3);
+
+        assert_eq!(
+            quantified_gradual_type(&int_tuple),
+            IntTuple::shapeless().to_shape_arg_type(),
+        );
+        assert_eq!(quantified_gradual_type(&precise_int_tuple), precise_bound);
+        assert!(quantified_gradual_type(&ordinary_bound).is_any());
+        assert!(quantified_gradual_type(&unrestricted).is_any());
     }
 
     fn fake_array(targs: TArgs) -> ClassType {

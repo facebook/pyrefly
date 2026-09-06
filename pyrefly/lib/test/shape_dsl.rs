@@ -5679,7 +5679,7 @@ def shapeless_is_gradual(shapeless: Array) -> None:
 
 def values() -> None:
     value = Array()
-    reveal_type(value)  # E: revealed type: Array[Unknown, Unknown]
+    reveal_type(value)  # E: revealed type: Array[IntTuple, Unknown]
     reveal_type(value[0])  # E: revealed type: Array[tuple[Unknown, ...], Unknown]
 
 def index_preserves_dtype(concrete: Array[[2, 3], int]) -> Array[[3], int]:
@@ -6298,6 +6298,25 @@ def shaped_array_segments(
 
 def dims[N: IntVar](concrete: Int[3], symbolic: Int[N + 1]) -> None:
     pass
+"#,
+);
+
+testcase!(
+    test_gradual_int_tuple_argument_retains_shape_domain,
+    shape_dsl_base_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import IntTuple
+
+class Array[Shape: IntTuple = IntTuple]: ...
+
+def identity[Shape: IntTuple](value: Array[Shape]) -> Array[Shape]: ...
+def defaulted[Shape: IntTuple = IntTuple[2, 3]]() -> Array[Shape]: ...
+
+def check(default: Array, explicit: Array[IntTuple]) -> None:
+    assert_type(identity(default), Array[IntTuple])
+    assert_type(identity(explicit), Array[IntTuple])
+    assert_type(defaulted(), Array[IntTuple[2, 3]])
 "#,
 );
 
@@ -12991,26 +13010,23 @@ def unresolved[Shape: ShapeBound]() -> Tensor[Shape]: ...
     r#"
 from carrier_api import Tensor, make, make_args, unresolved
 from shape_extensions import IntTuple
-from typing import Any, assert_type
+from typing import assert_type
 
 assert_type(make((4, 5)), Tensor[IntTuple[4, 5]])
 assert_type(make_args(4, 5), Tensor[IntTuple[4, 5]])
 make((4, "bad"))  # E: Argument `tuple[Literal[4], Literal['bad']]` is not assignable to parameter `size`
-assert_type(unresolved(), Tensor[Any])
+assert_type(unresolved(), Tensor[IntTuple])
 "#,
 );
 
-// `Tensor()` leaves `Shape` unsolved, so the first use pins a partially quantified
-// variable instead of a call-site one. Refusing to pin an invalid shape is silent
-// because first-use pinning never reports bound violations (an ordinary `T: int`
-// parameter pins `str` just as quietly).
+// An unconstrained constructor retains the `IntTuple` domain until first use, which can either
+// specialize it to a precise shape or reject a value outside the shape domain.
 testcase!(
-    bug = "first-use pinning reports no error for invalid dimensions",
     test_inttuple_carrier_first_use_inference,
     shaped_array_env(),
     r#"
 from shape_extensions import IntTuple
-from typing import Any, assert_type
+from typing import assert_type
 
 class Tensor[Shape: IntTuple]:
     def fill(self, size: Shape) -> None: ...
@@ -13020,8 +13036,8 @@ inferred.fill((2, 3))
 assert_type(inferred, Tensor[IntTuple[2, 3]])
 
 invalid = Tensor()
-invalid.fill((2, "bad"))
-assert_type(invalid, Tensor[Any])
+invalid.fill((2, "bad"))  # E: Argument `tuple[Literal[2], Literal['bad']]` is not assignable to parameter `size`
+assert_type(invalid, Tensor[IntTuple])
 "#,
 );
 
