@@ -935,16 +935,81 @@ class Box[N: IntVar](Generic[N]): ...
     let cls = get_class("Box", &main, &reader);
     let solutions = reader.get_solutions(&main).unwrap();
     let tparams = solutions.get(&KeyTParams(cls.index()));
-    let param = tparams
-        .iter()
-        .next()
-        .expect("Box should have one type parameter");
+    let [param] = tparams.as_vec() else {
+        panic!("Box should have one type parameter");
+    };
     assert_eq!(param.name().as_str(), "N");
     assert_eq!(param.kind(), QuantifiedKind::TypeVar);
     assert!(matches!(
         param.restriction(),
         Restriction::Bound(Type::ClassType(cls)) if cls.has_qname("other", "IntVar")
     ));
+}
+
+#[test]
+fn test_int_tuple_bound_retains_shape_provenance() {
+    let mut env = shaped_array_env();
+    env.add(
+        "main",
+        r#"
+from shape_extensions import IntTuple
+from typing import Generic
+
+class Box[Shape: IntTuple](Generic[Shape]): ...
+"#,
+    );
+    let (state, handle) = env.to_state();
+    let main = handle("main");
+    let reader = state.reader();
+    let cls = get_class("Box", &main, &reader);
+    let solutions = reader.get_solutions(&main).unwrap();
+    let tparams = solutions.get(&KeyTParams(cls.index()));
+    let [param] = tparams.as_vec() else {
+        panic!("Box should have one type parameter");
+    };
+    assert_eq!(param.name().as_str(), "Shape");
+    assert_eq!(param.kind(), QuantifiedKind::TypeVar);
+    assert!(
+        matches!(
+            param.restriction(),
+            Restriction::Bound(Type::IntTuple(shape)) if shape.is_shapeless()
+        ),
+        "the shape_extensions.IntTuple bound should retain shape provenance"
+    );
+}
+
+#[test]
+fn test_lookalike_int_tuple_bound_is_ordinary() {
+    let mut env = shaped_array_env();
+    env.add("lookalike", "class IntTuple: ...\n");
+    env.add(
+        "main",
+        r#"
+from lookalike import IntTuple
+from typing import Generic
+
+class Box[Shape: IntTuple](Generic[Shape]): ...
+"#,
+    );
+    let (state, handle) = env.to_state();
+    let main = handle("main");
+    let reader = state.reader();
+    let cls = get_class("Box", &main, &reader);
+    let solutions = reader.get_solutions(&main).unwrap();
+    let ordinary_tparams = solutions.get(&KeyTParams(cls.index()));
+    let [ordinary_param] = ordinary_tparams.as_vec() else {
+        panic!("Box should have one type parameter");
+    };
+    assert_eq!(ordinary_param.name().as_str(), "Shape");
+    assert_eq!(ordinary_param.kind(), QuantifiedKind::TypeVar);
+    assert!(
+        matches!(
+            ordinary_param.restriction(),
+            Restriction::Bound(Type::ClassType(bound_cls))
+                if bound_cls.has_qname("lookalike", "IntTuple")
+        ),
+        "an unrelated IntTuple class should remain an ordinary class bound"
+    );
 }
 
 testcase!(
