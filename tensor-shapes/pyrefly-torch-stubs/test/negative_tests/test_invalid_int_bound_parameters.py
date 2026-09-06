@@ -6,7 +6,7 @@
 """Arbitrary type parameters are not dimensions.
 
 Scalar shape arguments are typed as type parameters bounded by `Int`, so their
-runtime arguments are ordinary values rather than `Int[...]` carriers. That must
+runtime arguments are ordinary values rather than `Int[...]` wrappers. That must
 not make every type parameter admissible: only an `IntVar` symbol or a variable
 bounded by exactly `Int` names a dimension. Anything else fails the bound check,
 and no shape ever comes back carrying the caller's unrelated type parameter.

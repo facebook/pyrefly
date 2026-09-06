@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import reveal_type
+from typing import assert_type, reveal_type
 
 import torch
 import torch.nn as nn
@@ -155,22 +155,19 @@ def check_invalid_permute_controls(x: Tensor[[2, 3, 4]]) -> None:
 def check_gradual_permute_controls[Shape: IntTuple, Dims: IntTuple](
     x: Tensor[Shape], dims: Dims, broad: tuple[int, int, int]
 ) -> None:
-    # E: revealed type: Tensor[tuple[Unknown, ...]]
-    reveal_type(x.permute(dims))
-    # E: revealed type: Tensor[tuple[Unknown, ...]]
-    reveal_type(torch.empty(2, 3, 4).permute(broad))
+    assert_type(x.permute(dims), Tensor[IntTuple])
+    assert_type(torch.empty(2, 3, 4).permute(broad), Tensor[IntTuple])
 
 
 def check_repeat_interleave_controls(broad_dim: int, broad_repeats: int) -> None:
     concrete: Tensor[[2, 3]] = torch.empty(2, 3)
 
-    # E: revealed type: Tensor[tuple[Unknown, ...]]
-    reveal_type(concrete.repeat_interleave(2, broad_dim))
-    # E: revealed type: Tensor[[2, int]]
+    assert_type(concrete.repeat_interleave(2, broad_dim), Tensor[IntTuple])
+    # E: revealed type: Tensor[IntTuple[2, int]]
     reveal_type(concrete.repeat_interleave(broad_repeats, dim=1))
 
     # Zero repeats is an empty but valid result at runtime; a negative count is not.
-    # E: revealed type: Tensor[[2, 0]]
+    # E: revealed type: Tensor[IntTuple[2, 0]]
     reveal_type(concrete.repeat_interleave(0, dim=1))
     # E: Cannot evaluate type-level shape DSL call: repeat_interleave repeats must be non-negative
     torch.repeat_interleave(concrete, -1, dim=-1)
@@ -223,9 +220,9 @@ def check_invalid_cosine_similarity_controls(
 def check_invalid_tile_parameters(x: Tensor[[2, 3]]) -> None:
     # PyTorch rejects negative repeats at runtime. The type-level DSL preserves
     # the corresponding arithmetic until tuple-wide validation is available.
-    # E: revealed type: Tensor[[2, -3]]
+    # E: revealed type: Tensor[IntTuple[2, -3]]
     reveal_type(torch.tile(x, (1, -1)))
-    # E: revealed type: Tensor[[2, 0]]
+    # E: revealed type: Tensor[IntTuple[2, 0]]
     reveal_type(x.tile((1, 0)))
     # E: `list[int]` is not assignable to upper bound `IntTuple` of type variable `Repeats`
     torch.tile(x, [2, 3])
@@ -239,9 +236,9 @@ def check_invalid_repeat_parameters(x: Tensor[[2, 3]]) -> None:
 
     # PyTorch rejects negative repeats at runtime. As with tile, the type-level
     # DSL preserves the corresponding arithmetic until validation is available.
-    # E: revealed type: Tensor[[2, -3]]
+    # E: revealed type: Tensor[IntTuple[2, -3]]
     reveal_type(x.repeat((1, -1)))
-    # E: revealed type: Tensor[[2, 0]]
+    # E: revealed type: Tensor[IntTuple[2, 0]]
     reveal_type(x.repeat(1, 0))
 
     # E: No matching overload found for function `torch.Tensor.repeat`
@@ -265,7 +262,7 @@ def check_invalid_expand_controls(x: Tensor[[2, 3]]) -> None:
 
     # Zero-size dimensions are preserved, although explicit zero shape
     # annotations are rejected elsewhere.
-    # E: revealed type: Tensor[[0, 4]]
+    # E: revealed type: Tensor[IntTuple[0, 4]]
     reveal_type(torch.empty(0, 1).expand(0, 4))
 
     # E: No matching overload found for function `torch.Tensor.expand`

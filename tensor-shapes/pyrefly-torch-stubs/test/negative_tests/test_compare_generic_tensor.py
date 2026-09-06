@@ -34,5 +34,5 @@ assert_type(result2, Tensor[[2, 3]])
 
 # Test what assignment works
 correct_assignment: Tensor[[2, 3]] = result2
-# E: `Tensor[[2, 3]]` is not assignable to `Tensor[[100, 3]]`
+# E: `Tensor[IntTuple[2, 3]]` is not assignable to `Tensor[IntTuple[100, 3]]`
 wrong_assignment: Tensor[[100, 3]] = result2

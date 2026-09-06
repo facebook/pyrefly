@@ -49,10 +49,10 @@ def test_reshape_method() -> None:
 def test_reshape_infers_placeholder_dimension() -> None:
     a = jnp.ones((3, 4))
 
-    assert_shape(jnp.reshape(a, (2, -1)), (2, 6))
-    assert_shape(jnp.reshape(a, -1), (12,))
-    assert_shape(a.reshape((3, -1)), (3, 4))
-    assert_shape(a.reshape(-1), (12,))
+    assert_shape(jnp.reshape(a, (2, -1)).shape, (2, 6))
+    assert_shape(jnp.reshape(a, -1).shape, (12,))
+    assert_shape(a.reshape((3, -1)).shape, (3, 4))
+    assert_shape(a.reshape(-1).shape, (12,))
 
 
 def test_reshape_accepts_the_variadic_method_spelling() -> None:
@@ -134,7 +134,7 @@ def test_reshape_rejects_incompatible_element_count() -> None:
 def test_reshape_rejects_non_integral_placeholder() -> None:
     a = jnp.ones((3, 4))
 
-    assert_shape(jnp.reshape(a, (2, -1)), (2, 6))
+    assert_shape(jnp.reshape(a, (2, -1)).shape, (2, 6))
     try:
         # E: could not infer size for dimension -1
         jnp.reshape(a, (5, -1))
@@ -161,8 +161,8 @@ def test_reshape_zero_size_placeholder() -> None:
     assert jnp.reshape(empty, (-1,)).shape == (0,)
     assert empty.reshape((-1,)).shape == (0,)
     if TYPE_CHECKING:
-        reveal_type(jnp.reshape(empty, (-1,)))  # E: revealed type: Array[[0]]
-        reveal_type(empty.reshape((-1,)))  # E: revealed type: Array[[0]]
+        reveal_type(jnp.reshape(empty, (-1,)))  # E: revealed type: Array[IntTuple[0]]
+        reveal_type(empty.reshape((-1,)))  # E: revealed type: Array[IntTuple[0]]
 
     try:
         # E: could not infer size for dimension -1
@@ -185,16 +185,16 @@ def test_reshape_zero_size_placeholder() -> None:
 
 def test_atleast_1d() -> None:
     # Python scalars
-    assert_shape(jnp.atleast_1d(5), (1,))
-    assert_shape(jnp.atleast_1d(2.5), (1,))
-    assert_shape(jnp.atleast_1d(True), (1,))
-    assert_shape(jnp.atleast_1d(1 + 2j), (1,))
+    assert_shape(jnp.atleast_1d(5).shape, (1,))
+    assert_shape(jnp.atleast_1d(2.5).shape, (1,))
+    assert_shape(jnp.atleast_1d(True).shape, (1,))
+    assert_shape(jnp.atleast_1d(1 + 2j).shape, (1,))
 
     # Arrays
-    assert_shape(jnp.atleast_1d(jnp.ones(())), (1,))
-    assert_shape(jnp.atleast_1d(jnp.ones(4)), (4,))
-    assert_shape(jnp.atleast_1d(jnp.ones((2, 3))), (2, 3))
-    assert_shape(jnp.atleast_1d(jnp.ones((2, 3, 4))), (2, 3, 4))
+    assert_shape(jnp.atleast_1d(jnp.ones(())).shape, (1,))
+    assert_shape(jnp.atleast_1d(jnp.ones(4)).shape, (4,))
+    assert_shape(jnp.atleast_1d(jnp.ones((2, 3))).shape, (2, 3))
+    assert_shape(jnp.atleast_1d(jnp.ones((2, 3, 4))).shape, (2, 3, 4))
 
     # Zero arguments: returns list of arrays
     res0 = jnp.atleast_1d()
@@ -212,16 +212,16 @@ def test_atleast_1d() -> None:
 
 def test_atleast_2d() -> None:
     # Python scalars
-    assert_shape(jnp.atleast_2d(5), (1, 1))
-    assert_shape(jnp.atleast_2d(2.5), (1, 1))
-    assert_shape(jnp.atleast_2d(True), (1, 1))
-    assert_shape(jnp.atleast_2d(1 + 2j), (1, 1))
+    assert_shape(jnp.atleast_2d(5).shape, (1, 1))
+    assert_shape(jnp.atleast_2d(2.5).shape, (1, 1))
+    assert_shape(jnp.atleast_2d(True).shape, (1, 1))
+    assert_shape(jnp.atleast_2d(1 + 2j).shape, (1, 1))
 
     # Arrays
-    assert_shape(jnp.atleast_2d(jnp.ones(())), (1, 1))
-    assert_shape(jnp.atleast_2d(jnp.ones(4)), (1, 4))
-    assert_shape(jnp.atleast_2d(jnp.ones((2, 3))), (2, 3))
-    assert_shape(jnp.atleast_2d(jnp.ones((2, 3, 4))), (2, 3, 4))
+    assert_shape(jnp.atleast_2d(jnp.ones(())).shape, (1, 1))
+    assert_shape(jnp.atleast_2d(jnp.ones(4)).shape, (1, 4))
+    assert_shape(jnp.atleast_2d(jnp.ones((2, 3))).shape, (2, 3))
+    assert_shape(jnp.atleast_2d(jnp.ones((2, 3, 4))).shape, (2, 3, 4))
 
     # Zero arguments: returns list of arrays
     res0 = jnp.atleast_2d()
@@ -239,17 +239,17 @@ def test_atleast_2d() -> None:
 
 def test_atleast_3d() -> None:
     # Python scalars
-    assert_shape(jnp.atleast_3d(5), (1, 1, 1))
-    assert_shape(jnp.atleast_3d(2.5), (1, 1, 1))
-    assert_shape(jnp.atleast_3d(True), (1, 1, 1))
-    assert_shape(jnp.atleast_3d(1 + 2j), (1, 1, 1))
+    assert_shape(jnp.atleast_3d(5).shape, (1, 1, 1))
+    assert_shape(jnp.atleast_3d(2.5).shape, (1, 1, 1))
+    assert_shape(jnp.atleast_3d(True).shape, (1, 1, 1))
+    assert_shape(jnp.atleast_3d(1 + 2j).shape, (1, 1, 1))
 
     # Arrays
-    assert_shape(jnp.atleast_3d(jnp.ones(())), (1, 1, 1))
-    assert_shape(jnp.atleast_3d(jnp.ones(4)), (1, 4, 1))
-    assert_shape(jnp.atleast_3d(jnp.ones((2, 3))), (2, 3, 1))
-    assert_shape(jnp.atleast_3d(jnp.ones((2, 3, 4))), (2, 3, 4))
-    assert_shape(jnp.atleast_3d(jnp.ones((2, 3, 4, 5))), (2, 3, 4, 5))
+    assert_shape(jnp.atleast_3d(jnp.ones(())).shape, (1, 1, 1))
+    assert_shape(jnp.atleast_3d(jnp.ones(4)).shape, (1, 4, 1))
+    assert_shape(jnp.atleast_3d(jnp.ones((2, 3))).shape, (2, 3, 1))
+    assert_shape(jnp.atleast_3d(jnp.ones((2, 3, 4))).shape, (2, 3, 4))
+    assert_shape(jnp.atleast_3d(jnp.ones((2, 3, 4, 5))).shape, (2, 3, 4, 5))
 
     # Zero arguments: returns list of arrays
     res0 = jnp.atleast_3d()

@@ -5,7 +5,7 @@
 
 """Check what size() returns for bare Tensor"""
 
-from typing import Any, assert_type, cast, TYPE_CHECKING
+from typing import assert_type, cast, TYPE_CHECKING
 
 from shape_extensions import Int, IntTuple
 
@@ -20,6 +20,6 @@ def test_size_on_bare_tensor(x: Tensor):
     n: int = 1
     sn = x.size(n)
     assert_type(sn, Int[int])
-    assert_type(x.size(), tuple[Any, ...])
+    assert_type(x.size(), IntTuple)
     assert_type(cast(Tensor[IntTuple], x).size(), IntTuple)
     assert_type(x.numel(), Int[int])

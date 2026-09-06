@@ -15,7 +15,6 @@ from collections.abc import Sequence
 from types import EllipsisType
 from typing import Any, overload, Self, TYPE_CHECKING, Unpack
 
-import shape_extensions
 from shape_extensions import (
     broadcast,
     Elements,
@@ -88,7 +87,6 @@ if TYPE_CHECKING:
 __all__ = ["Tensor"]
 
 type _Shape = IntTuple
-type _AnyShape = tuple[Any, ...]
 type _BasicIndex = builtins.int | slice | list[builtins.int] | None | EllipsisType
 
 # ============================================================================
@@ -120,8 +118,7 @@ ops: Any
 # Tensor Class
 # ============================================================================
 
-@shape_extensions.shaped_array(shape="Shape", builtin_indexing=False)
-class Tensor[Shape: _Shape = _AnyShape]:
+class Tensor[Shape: _Shape = _Shape]:
     """
     PyTorch Tensor with shape type parameter.
 

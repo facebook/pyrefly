@@ -1723,6 +1723,7 @@ impl Type {
                 if let Some(source) = call.map_int_tuples_source_mut() {
                     force_nested(source)?;
                 }
+                call.normalize_value_arguments();
                 // Mapping can instantiate DSL calls from its lambda body, so the produced type
                 // must cross the same boundary as the source arguments.
                 let mut result = call.evaluate()?;
@@ -2328,6 +2329,8 @@ mod tests {
 
     use crate::callable::Callable;
     use crate::callable::ParamList;
+    use crate::dimension::Int;
+    use crate::dimension::ShapeError;
     use crate::equality::TypeEq;
     use crate::equality::TypeEqCtx;
     use crate::function::FuncFlags;
@@ -2335,6 +2338,7 @@ mod tests {
     use crate::function::Function;
     use crate::function::FunctionKind;
     use crate::identity::IdentityIgnored;
+    use crate::lit_int::LitInt;
     use crate::literal::Lit;
     use crate::literal::LitStyle;
     use crate::map_int_tuples::TypeLambda;
@@ -2343,6 +2347,7 @@ mod tests {
     use crate::quantified::QuantifiedIdentity;
     use crate::quantified::QuantifiedKind;
     use crate::quantified::QuantifiedOrigin;
+    use crate::shaped_array::IntTuple;
     use crate::type_level_dsl::TypeLevelDslCall;
     use crate::type_var::PreInferenceVariance;
     use crate::type_var::Restriction;
@@ -2356,6 +2361,7 @@ mod tests {
     use crate::types::TParams;
     use crate::types::Type;
     use crate::types::Union;
+    use crate::types::Var;
 
     fn test_quantified(module: &'static str, name: &'static str) -> Quantified {
         Quantified::new(
@@ -2408,6 +2414,66 @@ mod tests {
         targs.visit(&mut |ty| visited.push(ty.clone()));
 
         assert_eq!(visited, vec![Type::Ellipsis]);
+    }
+
+    #[test]
+    fn type_level_dsl_boundary_normalizes_equivalent_shape_arguments() {
+        let canonical = IntTuple::from_types(vec![LitInt::new(2).to_explicit_type()]);
+        let equivalent = IntTuple::from_types(vec![Type::Int(Int::Symbolic(Box::new(Type::Int(
+            Int::Literal(2),
+        ))))]);
+        let shape = Type::union(vec![
+            canonical.to_shape_arg_type(),
+            equivalent.to_shape_arg_type(),
+        ]);
+        let index = Type::concrete_tuple(vec![
+            LitInt::new(0).to_explicit_type(),
+            LitInt::new(0).to_explicit_type(),
+        ]);
+        let mut result =
+            Type::TypeLevelDslCall(Box::new(TypeLevelDslCall::index_shape(shape, index)));
+
+        let errors = result.finalize_type_level_dsl_at_boundary();
+
+        assert!(matches!(errors.as_slice(), [ShapeError::BadIndex { .. }]));
+        assert_eq!(
+            result,
+            IntTuple::shapeless().to_shape_arg_type(),
+            "an invalid index uses the gradual shape fallback",
+        );
+    }
+
+    #[test]
+    fn type_level_dsl_boundary_makes_unsolved_shape_arguments_gradual() {
+        let unresolved = IntTuple::unpacked(Vec::new(), Type::Var(Var::ZERO), Vec::new());
+        let mut result = Type::TypeLevelDslCall(Box::new(TypeLevelDslCall::index_shape(
+            unresolved.to_shape_arg_type(),
+            LitInt::new(0).to_explicit_type(),
+        )));
+
+        let errors = result.finalize_type_level_dsl_at_boundary();
+
+        assert!(errors.is_empty(), "unexpected DSL errors: {errors:?}");
+        assert_eq!(result, IntTuple::shapeless().to_shape_arg_type());
+    }
+
+    #[test]
+    fn type_level_dsl_boundary_makes_unsolved_dimensions_gradual() {
+        let unresolved_dimension =
+            IntTuple::new(vec![Int::Symbolic(Box::new(Type::Var(Var::ZERO)))]);
+        let mut result = Type::TypeLevelDslCall(Box::new(TypeLevelDslCall::index_shape(
+            unresolved_dimension.to_shape_arg_type(),
+            Type::None,
+        )));
+
+        let errors = result.finalize_type_level_dsl_at_boundary();
+
+        assert!(errors.is_empty(), "unexpected DSL errors: {errors:?}");
+        assert_eq!(
+            result,
+            IntTuple::new(vec![Int::Literal(1), Int::Int]).to_shape_arg_type(),
+            "an unresolved dimension becomes a gradual Int, not a nested IntTuple",
+        );
     }
 
     #[test]
