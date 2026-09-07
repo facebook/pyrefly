@@ -279,11 +279,43 @@ $ grep -c '"name":' $TMPDIR/baseline_prune/baseline.json
 ```
 
 The surviving entry keeps its existing concise description rather than refreshing
-it from the current error. Re-serialization may normalize formatting and fields.
+it from the current error.
 
 ```scrut {output_stream: stdout}
 $ grep -c '"concise_description": "test"' $TMPDIR/baseline_prune/baseline.json
 1
+[0]
+```
+
+## `--prune-baseline` does not apply `baseline-format`
+
+Changing the configured format from full to minimal does not change the fields
+of retained entries while pruning.
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_prune_full && \
+> echo 'x: str = 1' > $TMPDIR/baseline_prune_full/bad.py && \
+> echo '{"errors":[{"column":10,"path":"bad.py","name":"bad-assignment","concise_description":"test","severity":"error"},{"column":1,"path":"gone.py","name":"bad-return","concise_description":"stale","severity":"error"}]}' > $TMPDIR/baseline_prune_full/baseline.json && \
+> printf 'baseline = "baseline.json"\nbaseline-format = "minimal"\n' > $TMPDIR/baseline_prune_full/pyrefly.toml && \
+> cd $TMPDIR/baseline_prune_full && \
+> $PYREFLY check bad.py --prune-baseline --summary=none --output-format=omit-errors >/dev/null 2>/dev/null && \
+> $JQ -c '.errors[0] | keys' baseline.json
+["column","concise_description","name","path","severity"]
+[0]
+```
+
+Changing the configured format from minimal to full likewise leaves the fields
+of retained entries minimal.
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_prune_minimal && \
+> echo 'x: str = 1' > $TMPDIR/baseline_prune_minimal/bad.py && \
+> echo '{"errors":[{"column":10,"path":"bad.py","name":"bad-assignment"},{"column":1,"path":"gone.py","name":"bad-return"}]}' > $TMPDIR/baseline_prune_minimal/baseline.json && \
+> printf 'baseline = "baseline.json"\nbaseline-format = "full"\n' > $TMPDIR/baseline_prune_minimal/pyrefly.toml && \
+> cd $TMPDIR/baseline_prune_minimal && \
+> $PYREFLY check bad.py --prune-baseline --summary=none --output-format=omit-errors >/dev/null 2>/dev/null && \
+> $JQ -c '.errors[0] | keys' baseline.json
+["column","name","path"]
 [0]
 ```
 

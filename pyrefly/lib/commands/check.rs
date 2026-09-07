@@ -2029,12 +2029,12 @@ impl CheckArgs {
                 .baseline
                 .as_ref()
                 .expect("a baseline action requires a baseline path");
+            // Pruning removes entries without applying the current generation format.
             write_baseline_errors_to_file(
                 baseline_path,
                 &BaselineErrors {
                     errors: retained_baseline_entries,
-                }
-                .with_format(defaults.baseline_matching_mode, defaults.baseline_format),
+                },
             )?;
         }
         if rewriting_baseline {
