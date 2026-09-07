@@ -138,14 +138,6 @@ fn is_pandas_dataframe(cls: &Class) -> bool {
     RuntimeClass::PandasDataFrame.matches(cls)
 }
 
-/// Methods whose arguments may contain column references.
-pub fn is_dataframe_column_method(method: &str) -> bool {
-    matches!(
-        method,
-        "select" | "drop" | "with_columns" | "filter" | "sort" | "group_by" | "groupby"
-    )
-}
-
 /// Apply a binding-time mutation to a tracked frame schema.
 pub fn polars_degrade_for_mutation(
     ty: &Type,
@@ -337,6 +329,15 @@ impl PolarsFunction {
             Some(CalleeKind::Function(FunctionKind::Def(id))) => Some(Self::from_id(&id)),
             _ => None,
         }
+    }
+}
+
+/// For a resolved `polars.col` or `polars.lit`, whether strings name columns rather than values.
+pub(crate) fn polars_function_treats_strings_as_columns(callee: &Type) -> Option<bool> {
+    match PolarsFunction::from_callee(callee)? {
+        PolarsFunction::Col => Some(true),
+        PolarsFunction::Lit => Some(false),
+        _ => None,
     }
 }
 
