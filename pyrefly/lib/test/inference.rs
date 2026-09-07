@@ -246,6 +246,74 @@ x: C[int]
 "#,
 );
 
+// Each annotation below denotes a type that an `Any` is reachable from, either by expanding an
+// alias body or by reading a type parameter's bound or default. The `Any` is reported once, at
+// the declaration that writes it, and not again at each use.
+testcase!(
+    test_explicit_any_reported_at_declaration_not_at_uses,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, Callable, TypeVar
+
+class DefaultedTParam[T = Any]:  # E: Explicit `Any` is not allowed
+    pass
+type AliasIsAny = Any  # E: Explicit `Any` is not allowed
+type AliasHasAny = list[Any]  # E: Explicit `Any` is not allowed
+type AliasCallable = Callable[[int], Any]  # E: Explicit `Any` is not allowed
+BoundAny = TypeVar("BoundAny", bound=Any)  # E: Explicit `Any` is not allowed
+DefaultAny = TypeVar("DefaultAny", default=Any)  # E: Explicit `Any` is not allowed
+
+def by_tparam_default(x: DefaultedTParam) -> None: ...
+def by_alias_to_any(x: AliasIsAny) -> None: ...
+def by_alias_containing_any(x: AliasHasAny) -> None: ...
+def by_alias_callable(x: AliasCallable) -> None: ...
+def by_typevar_bound(x: BoundAny) -> None: ...
+def by_typevar_default(x: DefaultAny) -> None: ...
+"#,
+);
+
+// A member's `Any` is not reachable from the type of an annotation naming the class, so these
+// use sites are silent for a different reason than the ones above: nothing reaches the `Any`.
+testcase!(
+    test_explicit_any_in_a_member_is_not_reported_at_uses_of_the_class,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, NamedTuple, Protocol, TypedDict
+
+class TD(TypedDict):
+    f: Any  # E: Explicit `Any` is not allowed
+
+class NT(NamedTuple):
+    f: Any  # E: Explicit `Any` is not allowed
+
+class Proto(Protocol):
+    def m(self) -> Any: ...  # E: Explicit `Any` is not allowed
+
+def by_typed_dict_field(x: TD) -> None: ...
+def by_named_tuple_field(x: NT) -> None: ...
+def by_protocol_member(x: Proto) -> None: ...
+"#,
+);
+
+// Writing `Any` is what gets reported, wherever it is written: nested inside a subscript, as an
+// explicit type argument to a parameter that also defaults to `Any`, and once per occurrence.
+testcase!(
+    test_explicit_any_reported_for_each_written_occurrence,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, Callable
+
+class C[T = Any]:  # E: Explicit `Any` is not allowed
+    pass
+
+def bare(x: Any) -> None: ...  # E: Explicit `Any` is not allowed
+def nested(x: list[Any]) -> None: ...  # E: Explicit `Any` is not allowed
+def deeply_nested(x: dict[str, list[Any]]) -> None: ...  # E: Explicit `Any` is not allowed
+def specialized(x: C[Any]) -> None: ...  # E: Explicit `Any` is not allowed
+def twice(x: Callable[[Any], Any]) -> None: ...  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+"#,
+);
+
 testcase!(
     test_warn_on_implicit_any_in_attribute,
     TestEnv::new().enable_implicit_any_attribute_error(),

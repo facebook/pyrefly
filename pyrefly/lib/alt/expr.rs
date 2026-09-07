@@ -2607,6 +2607,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         .heap
                         .mk_type_of(self.heap.mk_type_of(self.heap.mk_any_implicit()));
                 } else if cls.has_toplevel_qname("typing", "Any") {
+                    // This is the one place a written `Any` becomes `AnyStyle::Explicit`, so it
+                    // is where the diagnostic belongs: `range` is the expression that spells
+                    // `Any`, and an `Any` reaching some other position by flowing out of a
+                    // declaration never passes through here.
+                    errors
+                        .error_builder(
+                            range,
+                            ErrorKind::ExplicitAny,
+                            "Explicit `Any` is not allowed".to_owned(),
+                        )
+                        .emit();
                     *ty = self.heap.mk_type_of(self.heap.mk_any_explicit())
                 } else if cls.has_toplevel_qname("typing", "NamedTuple") {
                     // When `NamedTuple` is used as a type annotation (e.g. TypeVar bound),

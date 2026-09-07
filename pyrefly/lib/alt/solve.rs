@@ -287,21 +287,6 @@ impl TypeFormContext<'_> {
         }
     }
 
-    fn can_report_explicit_any(self) -> bool {
-        !matches!(
-            self,
-            TypeFormContext::GenericBase
-                | TypeFormContext::TupleOrCallableParam(_)
-                | TypeFormContext::TupleElement(_)
-                | TypeFormContext::TypeArgument(_)
-                | TypeFormContext::TypeArgumentCallableReturn(_)
-                | TypeFormContext::TypeLevelLambdaReturn(_)
-                | TypeFormContext::TypeArgumentForType(_)
-                | TypeFormContext::TypePredicateArgument(_)
-                | TypeFormContext::UnionMember(_)
-        )
-    }
-
     /// The `UntypeContext` for this type-form position: how a value used here
     /// should be validated. Only a generic base is distinguished; every other
     /// position is treated as an ordinary type.
@@ -1501,7 +1486,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let ty = if let Some(untyped) = untyped {
             let validated =
                 self.validate_type_form(untyped, range, TypeFormContext::TypeAlias, errors);
-            self.check_explicit_any(&validated, range, errors);
             if validated.is_error() {
                 return TypeAlias::error(name.clone(), style);
             }
@@ -6975,18 +6959,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         ty
     }
 
-    fn check_explicit_any(&self, ty: &Type, range: TextRange, errors: &ErrorCollector) {
-        if ty.any(|ty| matches!(ty, Type::Any(AnyStyle::Explicit))) {
-            errors
-                .error_builder(
-                    range,
-                    ErrorKind::ExplicitAny,
-                    "Explicit `Any` is not allowed".to_owned(),
-                )
-                .emit();
-        }
-    }
-
     /// Type check a delete expression, including ensuring that the target of the
     /// delete is legal.
     fn check_del_statement(&self, delete_target: &Expr, errors: &ErrorCollector) {
@@ -7099,11 +7071,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
         let result = self.validate_type_form(result, x.range(), type_form_context, errors);
-        let result = self.interpret_map_int_tuples_at_annotation_root(result, type_form_context);
-        if type_form_context.can_report_explicit_any() {
-            self.check_explicit_any(&result, x.range(), errors);
-        }
-        result
+
+        self.interpret_map_int_tuples_at_annotation_root(result, type_form_context)
     }
 
     fn untype_runtime_type(
