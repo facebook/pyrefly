@@ -2137,6 +2137,33 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     )),
                 }
             }
+            AttributeBase1::GenericAlias(origin) => {
+                let generic_alias =
+                    AttributeBase1::ClassInstance(self.stdlib.generic_alias().clone());
+                let origin = AttributeBase1::ClassObject(origin.clone());
+                let mut candidates = Vec::new();
+                let inherited_from_object = self.field_is_inherited_from(
+                    self.stdlib.generic_alias().class_object(),
+                    dunder_name,
+                    ("builtins", "object"),
+                );
+                for (b, exclude) in [(&generic_alias, inherited_from_object), (&origin, false)] {
+                    if exclude {
+                        continue;
+                    }
+                    let mut acc_candidate = LookupResult::empty();
+                    self.lookup_magic_dunder_attr1(b.clone(), dunder_name, &mut acc_candidate);
+                    if acc_candidate.not_found.is_empty() && acc_candidate.internal_error.is_empty()
+                    {
+                        candidates.push(acc_candidate.found);
+                    }
+                }
+                if candidates.len() == 1 {
+                    acc.found.extend(candidates.into_iter().next().unwrap());
+                } else {
+                    self.lookup_magic_dunder_attr1(generic_alias, dunder_name, acc);
+                }
+            }
             AttributeBase1::ClassInstance(cls)
             | AttributeBase1::SelfType(cls)
             | AttributeBase1::EnumLiteral(LitEnum { class: cls, .. })
