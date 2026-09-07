@@ -30,10 +30,6 @@ fn default_legacy_severity() -> Severity {
     Severity::Error
 }
 
-fn default_baseline_severity() -> Option<Severity> {
-    Some(default_legacy_severity())
-}
-
 /// Legacy error structure in Pyre1. Needs to be consistent with the following file:
 /// <https://www.internalfb.com/code/fbsource/fbcode/tools/pyre/facebook/arc/lib/error.rs>
 ///
@@ -136,10 +132,7 @@ pub struct BaselineError {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concise_description: Option<String>,
-    #[serde(
-        default = "default_baseline_severity",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     severity: Option<Severity>,
     /// Optional notebook cell number for errors in notebook files
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -324,5 +317,15 @@ mod tests {
                 }]
             })
         );
+
+        let without_severity = serde_json::json!({
+            "errors": [{
+                "column": 1,
+                "path": "foo.py",
+                "name": "bad-assignment"
+            }]
+        });
+        let parsed: BaselineErrors = serde_json::from_value(without_severity.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), without_severity);
     }
 }
