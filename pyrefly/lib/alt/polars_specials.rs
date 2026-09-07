@@ -102,6 +102,11 @@ pub fn is_polars_series(cls: &Class) -> bool {
     RuntimeClass::PolarsSeries.matches(cls)
 }
 
+/// Identifies the callable object that also supports `pl.col.name` access.
+pub fn is_polars_col(cls: &Class) -> bool {
+    RuntimeClass::PolarsCol.matches(cls)
+}
+
 fn is_polars_expr(cls: &Class) -> bool {
     RuntimeClass::PolarsExpr.matches(cls)
 }
@@ -328,7 +333,7 @@ impl PolarsFunction {
 
     fn from_callee(callee: &Type) -> Option<Self> {
         if let Type::ClassType(cls) = callee
-            && RuntimeClass::PolarsCol.matches(cls.class_object())
+            && is_polars_col(cls.class_object())
         {
             return Some(Self::Col);
         }
@@ -2439,7 +2444,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let Type::ClassType(base) = self.expr_infer(&attr.value, &self.error_swallower()) else {
             return None;
         };
-        (RuntimeClass::PolarsCol.matches(base.class_object()) && self.is_polars_expr_value(expr))
+        (is_polars_col(base.class_object()) && self.is_polars_expr_value(expr))
             .then(|| attr.attr.id.clone())
     }
 

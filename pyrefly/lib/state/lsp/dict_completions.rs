@@ -378,19 +378,19 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Finds the argument containing the literal, resolving inline keyword mappings.
+    /// Finds the argument containing the expression, resolving inline keyword mappings.
     fn dataframe_call_argument_slot<'b>(
         &self,
         handle: &Handle,
         call: &'b ExprCall,
-        literal_range: TextRange,
+        range: TextRange,
     ) -> Option<ArgumentSlot<'b>> {
         let mut slot = None;
         let mut axis = None;
         for keyword in &call.arguments.keywords {
             let mut unpacked_slot = None;
             self.visit_keyword_entries(handle, keyword, |name, value| {
-                if value.range().contains_range(literal_range) {
+                if value.range().contains_range(range) {
                     unpacked_slot = Some(
                         name.map(ArgumentSlot::Keyword)
                             .unwrap_or(ArgumentSlot::UnpackedKeyword),
@@ -415,7 +415,7 @@ impl<'a> Transaction<'a> {
             call.arguments
                 .args
                 .iter()
-                .any(|arg| arg.range().contains_range(literal_range))
+                .any(|arg| arg.range().contains_range(range))
                 .then_some(ArgumentSlot::Positional)
         })?;
         if matches!(call.func.as_ref(), Expr::Attribute(attr) if attr.attr.id.as_str() == "drop")
@@ -568,14 +568,24 @@ impl<'a> Transaction<'a> {
             AnyNodeRef::ExprStringLiteral(literal) => Some((*literal).clone()),
             _ => None,
         })?;
-        let literal_range = literal.range();
-        let mut inside_column_helper = false;
+        let source_expr = self.dataframe_call_source(handle, &nodes, literal.range(), false)?;
+        Some((source_expr.clone(), literal))
+    }
 
+    /// Finds the nearest enclosing column operation and returns its DataFrame receiver.
+    /// `inside_column_helper` is true when completing an explicit column reference.
+    pub(crate) fn dataframe_call_source<'b>(
+        &self,
+        handle: &Handle,
+        nodes: &[AnyNodeRef<'b>],
+        range: TextRange,
+        mut inside_column_helper: bool,
+    ) -> Option<&'b Expr> {
         for node in nodes {
             let AnyNodeRef::ExprCall(call) = node else {
                 continue;
             };
-            let Some(slot) = self.dataframe_call_argument_slot(handle, call, literal_range) else {
+            let Some(slot) = self.dataframe_call_argument_slot(handle, call, range) else {
                 continue;
             };
             if let Some(treats_strings_as_columns) = self
@@ -604,9 +614,9 @@ impl<'a> Transaction<'a> {
             else {
                 continue;
             };
-            // `locate_node` is innermost-first, so this DataFrame call owns the literal even when
+            // `locate_node` is innermost-first, so this DataFrame call owns the expression even when
             // its argument slot does not accept a column.
-            return permitted.then(|| (attr.value.as_ref().clone(), literal));
+            return permitted.then_some(attr.value.as_ref());
         }
 
         None
@@ -803,7 +813,8 @@ impl<'a> Transaction<'a> {
         Self::add_literal_completions_from_type(&field_ty, completions, true);
     }
 
-    fn collect_dataframe_columns(ty: &Type) -> Option<BTreeSet<String>> {
+    /// Collects column names that are present in every member of a DataFrame union.
+    pub(crate) fn collect_dataframe_columns(ty: &Type) -> Option<BTreeSet<String>> {
         match ty {
             Type::DataFrame(schema) => Some(
                 schema

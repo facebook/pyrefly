@@ -176,7 +176,10 @@ fn polars_column_completion_labels(code: &str) -> Vec<String> {
     env.add_with_path(
         "polars.expr.expr",
         "polars/expr/expr.pyi",
-        "class Expr: ...",
+        r#"
+class Expr:
+    def alias(self, name: str) -> "Expr": ...
+"#,
     );
     env.add_with_path(
         "polars.functions.col",
@@ -685,6 +688,105 @@ df.select(pl.col(pl.lit("")))
         polars_column_completion_labels(literal_code),
         Vec::<String>::new()
     );
+}
+
+#[test]
+fn polars_col_attribute_completion() {
+    for expression in [
+        "df.select(pl.col.|)",
+        "df.select(pl.col.|",
+        "df.select(pl.col.f|)",
+        "df.select(pl.col.f|.alias(\"renamed\"))",
+        "df.select(column.|)",
+        "df.with_columns(pl.col.|)",
+        "df.filter(pl.col.|)",
+        "df.filter(foo=pl.col.|)",
+        "df.group_by(**dict(alias=pl.col.|))",
+        "df.group_by(**{\"alias\": pl.col.|})",
+        "df.select(pl.lit(pl.col.|))",
+        "outer.select(df.select(pl.col.|))",
+    ] {
+        let cursor = expression.find('|').unwrap();
+        let expression = expression.replace('|', "");
+        let code = format!(
+            r#"
+import polars as pl
+from polars import col as column
+df = pl.DataFrame({{"foo": [1], "bar": [2]}})
+outer = pl.DataFrame({{"other": [3]}})
+{expression}
+#{:width$}^
+"#,
+            "",
+            width = cursor - 1,
+        );
+        assert_eq!(
+            polars_column_completion_labels(&code),
+            vec!["bar".to_owned(), "foo".to_owned()],
+            "{expression}",
+        );
+    }
+}
+
+#[test]
+fn polars_col_attribute_completion_valid_identifiers() {
+    let code = r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "two words": [2], "class": [3], "match": [4], "123": [5]})
+df.select(pl.col.)
+#                ^
+"#;
+    assert_eq!(
+        polars_column_completion_labels(code),
+        vec!["foo".to_owned(), "match".to_owned()]
+    );
+}
+
+#[test]
+fn polars_col_attribute_completion_requires_context() {
+    for expression in [
+        "pl.col.|",
+        "df.write_csv(pl.col.|)",
+        "df.sort(\"foo\", descending=pl.col.|)",
+        "df.group_by(**dict(maintain_order=pl.col.|))",
+        "df.group_by(**{\"maintain_order\": pl.col.|})",
+        "df.select(df.write_csv(pl.col.|))",
+        "df.select(unrelated.|)",
+        "df.select(pl.col(\"foo\").|)",
+        "unknown.select(pl.col.|)",
+    ] {
+        let cursor = expression.find('|').unwrap();
+        let expression = expression.replace('|', "");
+        let code = format!(
+            r#"
+import polars as pl
+df = pl.DataFrame({{"foo": [1], "bar": [2]}})
+class Col:
+    def __getattr__(self, name: str) -> object: ...
+unrelated = Col()
+unknown: pl.DataFrame
+{expression}
+#{:width$}^
+"#,
+            "",
+            width = cursor - 1,
+        );
+        assert_eq!(polars_column_completion_labels(&code), Vec::<String>::new());
+    }
+}
+
+#[test]
+fn polars_col_attribute_completion_intersects_union_columns() {
+    let code = r#"
+import polars as pl
+def f(cond: bool) -> None:
+    a = pl.DataFrame({"id": [1], "x": [1]})
+    b = pl.DataFrame({"id": [1], "y": [1]})
+    df = a if cond else b
+    df.select(pl.col.)
+#                    ^
+"#;
+    assert_eq!(polars_column_completion_labels(code), vec!["id".to_owned()]);
 }
 
 #[test]

@@ -40,6 +40,7 @@ use ruff_text_size::TextSize;
 use starlark_map::small_set::SmallSet;
 
 use crate::alt::attr::AttrInfo;
+use crate::alt::polars_specials::is_polars_col;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::export::exports::Export;
@@ -1157,6 +1158,29 @@ impl Transaction<'_> {
                 if let Some(answers) = self.get_answers(handle)
                     && let Some(base_type) = answers.get_type_trace(base_range)
                 {
+                    // Polars resolves `col.name` against the enclosing DataFrame operation.
+                    if let Type::ClassType(cls) = &base_type
+                        && is_polars_col(cls.class_object())
+                        && let Some(nodes) = covering_nodes.as_deref()
+                        && let Some(source) = self.dataframe_call_source(
+                            handle,
+                            nodes,
+                            TextRange::empty(position),
+                            true,
+                        )
+                        && let Some(ty) = self.get_type_trace(handle, source.range())
+                        && let Some(columns) = Self::collect_dataframe_columns(&ty)
+                    {
+                        for label in columns {
+                            if is_valid_identifier(&label) {
+                                result.push(RankedCompletion::new(CompletionItem {
+                                    label,
+                                    kind: Some(CompletionItemKind::FIELD),
+                                    ..Default::default()
+                                }));
+                            }
+                        }
+                    }
                     self.add_attribute_completions_for_type(
                         handle,
                         base_type,
