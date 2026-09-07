@@ -47,16 +47,32 @@ impl BaselineKey {
         error: &BaselineError,
         relative_to: &Path,
         matching_mode: BaselineMatchingMode,
+        entry_index: usize,
     ) -> Result<Self> {
         let matching_field = match matching_mode {
-            BaselineMatchingMode::Column => BaselineMatchingField::Column(error.column.context(
-                "missing field `column`, required by `baseline-matching-mode = \"column\"`",
-            )?),
+            BaselineMatchingMode::Column => {
+                BaselineMatchingField::Column(error.column.with_context(|| {
+                    format!(
+                        "baseline entry {} (path `{}`, error kind `{}`) is missing field \
+                         `column`, required by \
+                         `baseline-matching-mode = \"column\"`",
+                        entry_index + 1,
+                        error.path,
+                        error.name,
+                    )
+                })?)
+            }
             BaselineMatchingMode::ConciseDescription => BaselineMatchingField::ConciseDescription(
-                error.concise_description.clone().context(
-                    "missing field `concise_description`, required by \
-                         `baseline-matching-mode = \"concise_description\"`",
-                )?,
+                error.concise_description.clone().with_context(|| {
+                    format!(
+                        "baseline entry {} (path `{}`, error kind `{}`) is missing field \
+                         `concise_description`, required by \
+                         `baseline-matching-mode = \"concise-description\"`",
+                        entry_index + 1,
+                        error.path,
+                        error.name,
+                    )
+                })?,
             ),
         };
         Ok(Self {
@@ -114,7 +130,10 @@ impl BaselineProcessor {
         let baseline_keys = baseline_errors
             .errors
             .iter()
-            .map(|error| BaselineKey::from_baseline_error(error, relative_to, matching_mode))
+            .enumerate()
+            .map(|(index, error)| {
+                BaselineKey::from_baseline_error(error, relative_to, matching_mode, index)
+            })
             .collect::<Result<_>>()?;
         Ok(Self {
             baseline_keys,
@@ -178,8 +197,10 @@ impl TrackedBaselineProcessor {
         let entries = baseline_errors
             .errors
             .into_iter()
-            .map(|error| {
-                let key = BaselineKey::from_baseline_error(&error, relative_to, matching_mode)?;
+            .enumerate()
+            .map(|(index, error)| {
+                let key =
+                    BaselineKey::from_baseline_error(&error, relative_to, matching_mode, index)?;
                 Ok((error, key))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -429,7 +450,10 @@ mod tests {
     #[test]
     fn test_baseline_requires_the_configured_matching_field() {
         let column_only = r#"
-        {"errors": [{"path": "test.py", "name": "bad-return", "column": 1}]}
+        {"errors": [
+            {"path": "valid.py", "name": "bad-return", "concise_description": "valid"},
+            {"path": "test.py", "name": "bad-return", "column": 1}
+        ]}
         "#;
         let err = BaselineProcessor::from_json(
             column_only,
@@ -439,6 +463,7 @@ mod tests {
         .unwrap_err();
         let message = format!("{err:#}");
         assert!(message.contains("baseline file is invalid"));
+        assert!(message.contains("baseline entry 2 (path `test.py`, error kind `bad-return`)"));
         assert!(message.contains("missing field `concise_description`"));
         assert!(message.contains("rerun with `--update-baseline`"));
 
