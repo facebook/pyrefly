@@ -16,6 +16,7 @@ use pyrefly_types::literal::Lit;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::MetaShapeFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
+use pyrefly_types::simplify::simplify_tuples;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::types::TArgs;
@@ -1271,11 +1272,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             let unpacked_args_ty = match middle.len() {
                 0 => self.heap.mk_concrete_tuple(prefix),
-                1 => self.heap.mk_unpacked_tuple(
-                    prefix,
-                    self.heap.mk_unbounded_tuple(middle.pop().unwrap()),
-                    suffix,
-                ),
+                1 => {
+                    // A TypeVarTuple element becomes `tuple[*Ts]`. Flatten that tuple into
+                    // the surrounding prefix and suffix before checking assignability.
+                    self.heap.mk_tuple(simplify_tuples(
+                        Tuple::unpacked(
+                            prefix,
+                            self.heap.mk_unbounded_tuple(middle.pop().unwrap()),
+                            suffix,
+                        ),
+                        self.heap,
+                    ))
+                }
                 _ => {
                     let unpacked_variadic_args_count = middle
                         .iter()

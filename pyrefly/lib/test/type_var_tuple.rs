@@ -222,6 +222,45 @@ def test[*Ts, T](f: Callable[[*Ts], T], t: tuple[*Ts], *args: *Ts):
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/4609
+testcase!(
+    test_type_var_tuple_callable_gradual_fixed_params,
+    r#"
+from typing import Any, Callable
+
+class K[*Ts]:
+    func: Callable[[Any, *Ts], None]
+    suffix: Callable[[*Ts, Any], None]
+    both: Callable[[Any, *Ts, Any], None]
+
+def g[*Ts](x: int, *xs: *Ts):
+    K[*Ts]().func(x, *xs)
+    K[*Ts]().suffix(*xs, x)
+    K[*Ts]().both(x, *xs, x)
+"#,
+);
+
+testcase!(
+    test_type_var_tuple_callable_covariant_fixed_params,
+    r#"
+from typing import Callable
+
+class K[*Ts]:
+    prefix: Callable[[float, *Ts], None]
+    suffix: Callable[[*Ts, float], None]
+    both: Callable[[float, *Ts, float], None]
+
+def g[*Ts](x: int, y: str, *xs: *Ts):
+    k = K[*Ts]()
+    k.prefix(x, *xs)
+    k.suffix(*xs, x)
+    k.both(x, *xs, x)
+    k.prefix(y, *xs)  # E: Unpacked argument `tuple[str, *Ts]` is not assignable to varargs type `tuple[float, *Ts]`
+    k.suffix(*xs, y)  # E: Unpacked argument `tuple[*Ts, str]` is not assignable to varargs type `tuple[*Ts, float]`
+    k.both(x, *xs, y)  # E: Unpacked argument `tuple[int, *Ts, str]` is not assignable to varargs type `tuple[float, *Ts, float]`
+"#,
+);
+
 testcase!(
     test_type_var_tuple_callable_resolves_to_empty,
     r#"
