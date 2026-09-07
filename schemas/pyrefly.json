@@ -250,7 +250,7 @@
         "baseline-matching-mode": {
           "description": "Fields used to match diagnostics against baseline entries.",
           "type": "string",
-          "enum": ["column", "concise_description"],
+          "enum": ["column", "concise-description"],
           "default": "column"
         },
         "baseline-format": {

@@ -531,14 +531,14 @@ more details on how baseline files work.
 ### `baseline-matching-mode`
 
 Controls how diagnostics are matched against baseline entries. `"column"`
-matches the file, error kind, and starting column. `"concise_description"`
+matches the file, error kind, and starting column. `"concise-description"`
 matches the file, error kind, and concise description.
 
 ```toml
-baseline-matching-mode = "concise_description"
+baseline-matching-mode = "concise-description"
 ```
 
-- Type: `"column"` | `"concise_description"`
+- Type: `"column"` | `"concise-description"`
 - Default: `"column"`
 - Notes:
     - `baseline-matching-mode` is a **project-level setting** and cannot be

@@ -528,7 +528,7 @@ impl ImportLookupPathPart<'_> {
 
 /// Fields used to match diagnostics against baseline entries.
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum BaselineMatchingMode {
     /// Match by path, error kind, and starting column.
     #[default]
@@ -545,7 +545,7 @@ impl BaselineMatchingMode {
 
 /// Amount of diagnostic information written to a baseline file.
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "kebab-case")]
 pub enum BaselineFormat {
     /// Write all available baseline metadata.
     #[default]
@@ -2727,7 +2727,7 @@ mod tests {
         let config_str = r#"
 baseline = "baseline.json"
 baseline-error-level = "warn"
-baseline-matching-mode = "concise_description"
+baseline-matching-mode = "concise-description"
 baseline-format = "minimal"
 "#;
         let config = ConfigFile::parse_config(config_str).unwrap();

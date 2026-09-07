@@ -134,7 +134,7 @@ Note that `baseline` is a **project-level setting** and cannot be overridden in 
 `baseline-matching-mode` controls how errors are matched:
 
 - `"column"` (default) matches the file, error kind, and starting column.
-- `"concise_description"` matches the file, error kind, and concise description.
+- `"concise-description"` matches the file, error kind, and concise description.
 
 `baseline-format` controls which fields `--update-baseline` writes. `"full"`
 (default) includes all baseline metadata. `"minimal"` includes only the file,
@@ -142,7 +142,7 @@ error kind, and the field required by the configured matching mode:
 
 ```toml
 baseline = "baseline.json"
-baseline-matching-mode = "concise_description"
+baseline-matching-mode = "concise-description"
 baseline-format = "minimal"
 ```
 

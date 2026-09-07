@@ -108,7 +108,7 @@ $ $JQ -c '.errors[0] | keys' $TMPDIR/baseline_minimal/baseline.json
 Changing the matching mode makes the column-only baseline invalid.
 
 ```scrut {output_stream: stderr}
-$ printf 'baseline = "baseline.json"\nbaseline-format = "minimal"\nbaseline-matching-mode = "concise_description"\n' > $TMPDIR/baseline_minimal/pyrefly.toml && \
+$ printf 'baseline = "baseline.json"\nbaseline-format = "minimal"\nbaseline-matching-mode = "concise-description"\n' > $TMPDIR/baseline_minimal/pyrefly.toml && \
 > cd $TMPDIR/baseline_minimal && \
 > $PYREFLY check bad.py --summary=none
 *failed to read baseline file*baseline file is invalid*rerun with `--update-baseline`*missing field `concise_description`* (glob)
