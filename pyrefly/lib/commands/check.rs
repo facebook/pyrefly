@@ -844,7 +844,10 @@ fn write_error_json_to_file(
         .with_context(|| format!("while writing JSON errors to `{}`", path.display()))
 }
 
-fn write_baseline_errors_to_file(path: &Path, errors: &BaselineErrors) -> anyhow::Result<()> {
+fn write_formatted_baseline_errors_to_file(
+    path: &Path,
+    errors: &BaselineErrors,
+) -> anyhow::Result<()> {
     fn f(path: &Path, errors: &BaselineErrors) -> anyhow::Result<()> {
         let mut writer = BufWriter::new(File::create(path)?);
         serde_json::to_writer_pretty(&mut writer, errors)?;
@@ -854,14 +857,14 @@ fn write_baseline_errors_to_file(path: &Path, errors: &BaselineErrors) -> anyhow
     f(path, errors).with_context(|| format!("while writing baseline to `{}`", path.display()))
 }
 
-fn write_baseline_to_file(
+fn write_baseline_errors_to_file(
     path: &Path,
     relative_to: &Path,
     errors: &[Error],
     matching_mode: BaselineMatchingMode,
     format: BaselineFormat,
 ) -> anyhow::Result<()> {
-    write_baseline_errors_to_file(
+    write_formatted_baseline_errors_to_file(
         path,
         &BaselineErrors::from_errors(relative_to, errors).with_format(matching_mode, format),
     )
@@ -2017,7 +2020,7 @@ impl CheckArgs {
                     error.error_kind(),
                 )
             });
-            write_baseline_to_file(
+            write_baseline_errors_to_file(
                 baseline_path,
                 relative_to.as_path(),
                 &new_baseline,
@@ -2029,8 +2032,8 @@ impl CheckArgs {
                 .baseline
                 .as_ref()
                 .expect("a baseline action requires a baseline path");
-            // Pruning removes entries without applying the current generation format.
-            write_baseline_errors_to_file(
+            // Pruning removes entries and preserves the format of remaining ones.
+            write_formatted_baseline_errors_to_file(
                 baseline_path,
                 &BaselineErrors {
                     errors: retained_baseline_entries,
