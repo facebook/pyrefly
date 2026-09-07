@@ -69,10 +69,11 @@ Complete these gates before writing any code.
 ## Gate 0: Understand the system
 
 Read `shape_tracking_capabilities.md` (this skill dir). It explains the
-three shape-tracking mechanisms (shape-aware stubs, DSL functions, special
-handlers) and how to check each one, plus the current `shape_extensions` API
-surface (`Int` / `IntVar` / `IntTuple` / `Elements` / `assert_shape` / runtime
-compat) and the double-bracket `Tensor[[...]]` convention. You need this context
+three shape-tracking mechanisms (shape-aware stubs, type-level shape functions,
+special handlers) and how to check each one, plus the current `shape_extensions` API
+surface (`Int` / `IntVar` / `IntTuple` / `IntTuples` / `MapIntTuples` / `Flag` /
+`Elements` / `assert_shape` / runtime compat) and the double-bracket `Tensor[[...]]`
+convention. You need this context
 to make the Gate 1 audit meaningful — knowing whether an op exists in a stub is
 not the same as knowing whether its shapes are tracked.
 
@@ -84,22 +85,24 @@ before you have empirically probed this model's shapes.
 
 List every `nn.Module` subclass and `torch`/`F.` function called in the
 model. Check each against the shape-aware torch stubs (the `.pyi` files under the
-stub root you confirmed up front — `pyrefly dump-config` reports it) and any shape
-DSL declarations in those stubs. The stubs attach DSL shape functions with
-`@uses_shape_dsl(ir_fn)`, and the IR functions live in `_shapes.pyi` next to the
-stubs, imported from stub files as `torch._shapes` because the stub package
-provides the `torch` package for type checking. This is a **diagnostic** pass — you are recording
+stub root you confirmed up front — `pyrefly dump-config` reports it). Every stub
+computes its output shape in its own return annotation: either from the
+signature's generic parameters (`Tensor[[B, OutC, H, W]]`) or by calling a
+type-level shape function (`Tensor[reshape_shape(Shape, NewShape)]`). Those shape
+functions live in `_shapes.pyi` next to the stubs, imported from stub files as
+`torch._shapes` because the stub package provides the `torch` package for type
+checking. This is a **diagnostic** pass — you are recording
 which ops are tracked and which aren't, not fixing anything. A gap here never
 blocks the port. This step should take minutes — you are scanning the stub file
-for the op and, only when a decorator points there, the corresponding IR
-function.
+for the op and, only when its return annotation calls one, the corresponding
+shape function.
 
 **Do NOT delegate this audit to code search agents or use web search for this
-step.** The torch-stubs package and its `_shapes.pyi` DSL
+step.** The torch-stubs package and its `_shapes.pyi` shape-function
 file are exhaustive for torch shape support. For each op in your list, check
 whether it appears in the relevant stub file and whether it has a precise
-generic signature, `Self`/`Tensor[S]` (whole-shape `S: IntTuple`) return, or `@uses_shape_dsl(...)`
-decorator that refines a bare declared return. Use targeted file reads or
+generic signature, `Self`/`Tensor[S]` (whole-shape `S: IntTuple`) return, or a
+return annotation that calls a shape function. Use targeted file reads or
 repo-approved search scoped to known files/directories, not broad recursive
 shell search. You need to confirm presence and spot missing attributes
 (e.g., `bias` on `Conv2d`), not memorize every signature.
@@ -108,21 +111,21 @@ shell search. You need to confirm presence and spot missing attributes
 
 ```
 ## Gate 1: Ops audit
-| Op | Stub location | Shape DSL decorator / IR fn (or "no decorator") | Status |
+| Op | Stub location | Shape function in the return annotation (or "none") | Status |
 |----|---------------|------------------------------|--------|
-| nn.Conv2d | tensor-shapes/pyrefly-torch-stubs/torch-stubs/nn/__init__.pyi — generic [InC,OutC,K,S,P,D] | no decorator (stub generic) | tracked-stub |
-| F.adaptive_avg_pool2d | tensor-shapes/pyrefly-torch-stubs/torch-stubs/nn/functional.pyi — bare declared return | `@uses_shape_dsl(adaptive_pool_ir)`, defined in `_shapes.pyi` | tracked-DSL |
+| nn.Conv2d | tensor-shapes/pyrefly-torch-stubs/torch-stubs/nn/__init__.pyi — generic [InC,OutC,K,S,P,D] | none (generic signature) | tracked-stub |
+| F.adaptive_avg_pool2d | tensor-shapes/pyrefly-torch-stubs/torch-stubs/nn/functional.pyi — `Tensor[adaptive_pool2d_shape(Shape, OH, OW)]` | `adaptive_pool2d_shape`, defined in `_shapes.pyi` | tracked-DSL |
 | ...
 ```
 
 Status is one of `tracked-stub`, `tracked-DSL`, `tracked-handler` (a special
 handler tracks it), or `GAP` (no shape support found).
 
-Filling the "Shape DSL decorator / IR fn" column requires checking whether
-the stub declaration has a `@uses_shape_dsl(...)` decorator. If it does,
-confirm the named IR function exists in `_shapes.pyi` next to the stubs.
-Write "no decorator" only after confirming the stub declaration has no
-decorator — do not leave this column blank or write "check DSL".
+Filling the "Shape function" column requires reading the stub's return
+annotation. If it calls a shape function, confirm that function exists in
+`_shapes.pyi` next to the stubs. Write "none" only after confirming the return
+annotation computes the shape from the signature's own generics — do not leave
+this column blank or write "check DSL".
 
 A `GAP` is information, not a blocker — note it and move on. You decide what to do
 about gaps later: most degrade gracefully to a bare `Tensor`, and only if the user
@@ -445,14 +448,14 @@ before falling back to typed interface:
   `y = g(x); f(y)` preserves. Break into separate assignments.
 
 □ **Op genuinely missing from the stubs?** Confirm it's absent (check the stubs
-  and any `@uses_shape_dsl(...)` IR function they reference). A missing shape is
+  and any shape function their return annotations call). A missing shape is
   not a blocker — it degrades to a bare `Tensor` that you document below. If the
   user opted into stub changes and a refined signature would recover the shape,
   that's a fair fix. If instead Pyrefly computes a *wrong* shape, see "When an
   op's shape is wrong".
 
-□ **About to claim an op is untracked?** Check the shape-aware stubs, their
-  `@uses_shape_dsl(...)` decorators and IR functions, and special handlers
+□ **About to claim an op is untracked?** Check the shape-aware stubs, the shape
+  functions their return annotations call, and special handlers
   first. The system tracks reshape, flatten, permute, transpose, cat, stack,
   matmul, arange, zeros, outer, interpolate, einsum, and many more.
 
@@ -468,7 +471,7 @@ want typed interface, paste this filled-out receipt in your response:
 - list→tuple: [not applicable — reason]
 - Branch join: [not applicable — reason]
 - Inlined expressions: [split / not applicable — reason]
-- Missing stub/DSL: [checked stubs + `@uses_shape_dsl` IR — reason]
+- Missing stub/DSL: [checked stubs + `_shapes.pyi` shape functions — reason]
 - Int | None reclassification: [reclassified param X / not applicable — reason]
 - Bridge dim: [promoted X to class Int / not applicable — reason]
 - Config parameterization: [parameterized Config[...] / not applicable — reason]

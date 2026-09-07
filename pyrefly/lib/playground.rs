@@ -23,6 +23,7 @@ use pyrefly_build::handle::Handle;
 use pyrefly_build::source_db::LiveSourceDatabase;
 use pyrefly_build::source_db::ModuleEnumerator;
 use pyrefly_build::source_db::SourceDatabase;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
@@ -48,6 +49,8 @@ use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::lsp::wasm::hover::get_hover;
 use crate::state::load::FileContents;
+use crate::state::lsp::AllOffPartial;
+use crate::state::lsp::InlayHintConfig;
 use crate::state::require::Require;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::state::State;
@@ -560,6 +563,9 @@ impl Playground {
         if let Some(bindings) = transaction.get_bindings(handle) {
             let module_info = bindings.module();
             for unused in bindings.unused_variables() {
+                if Ast::is_intentionally_unused(unused.name.as_str()) {
+                    continue;
+                }
                 let range = module_info.display_range(unused.range);
                 items.push(Diagnostic {
                     start_line: range.start.line_within_file().get() as i32,
@@ -586,6 +592,9 @@ impl Playground {
         if let Some(bindings) = transaction.get_bindings(handle) {
             let module_info = bindings.module();
             for unused in bindings.unused_parameters() {
+                if Ast::is_intentionally_unused(unused.name.as_str()) {
+                    continue;
+                }
                 let range = module_info.display_range(unused.range);
                 items.push(Diagnostic {
                     start_line: range.start.line_within_file().get() as i32,
@@ -697,7 +706,7 @@ impl Playground {
             )
     }
 
-    pub fn inlay_hint(&self) -> Vec<InlayHint> {
+    pub fn inlay_hint(&self, call_argument_names: bool) -> Vec<InlayHint> {
         let handle = match self.handles.get(&self.active_filename) {
             Some(h) => h,
             None => return Vec::new(),
@@ -705,7 +714,18 @@ impl Playground {
         let transaction = self.state.transaction();
         transaction
             .get_module_info(handle)
-            .zip(transaction.inlay_hints(handle, Default::default(), Default::default()))
+            .zip(transaction.inlay_hints(
+                handle,
+                InlayHintConfig {
+                    call_argument_names: if call_argument_names {
+                        AllOffPartial::All
+                    } else {
+                        AllOffPartial::Off
+                    },
+                    ..Default::default()
+                },
+                Default::default(),
+            ))
             .map(|(info, hints)| {
                 hints.into_map(|hint| {
                     let position = Position::from_display_pos(info.display_pos(hint.position));
@@ -721,6 +741,31 @@ impl Playground {
 mod tests {
     use super::*;
     use crate::config::error_kind::ErrorKind;
+
+    #[test]
+    fn test_parameter_name_inlay_hints_can_be_enabled() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "sandbox.py".to_owned(),
+            "def f(value: int) -> None:\n    pass\n\nf(1)".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("sandbox.py");
+
+        assert!(
+            state
+                .inlay_hint(false)
+                .iter()
+                .all(|hint| hint.label != "value= ")
+        );
+        assert!(
+            state
+                .inlay_hint(true)
+                .iter()
+                .any(|hint| hint.label == "value= ")
+        );
+    }
 
     #[test]
     fn test_autocomplete_includes_auto_import_edit() {
@@ -1093,7 +1138,7 @@ mod tests {
         let mut files = SmallMap::new();
         files.insert(
             "main.py".to_owned(),
-            "def foo():\n    x = 42\n    y = 10\n    return y".to_owned(),
+            "def foo():\n    x = 42\n    _ignored = 0\n    y = 10\n    return y".to_owned(),
         );
         state.update_sandbox_files(files, true);
         state.set_active_file("main.py");
@@ -1110,12 +1155,28 @@ mod tests {
     }
 
     #[test]
+    fn test_pytest_tracebackhide_not_reported_as_unused() {
+        let mut state = Playground::new(None).unwrap();
+        let mut files = SmallMap::new();
+        files.insert(
+            "main.py".to_owned(),
+            "def foo():\n    __tracebackhide__ = True".to_owned(),
+        );
+        state.update_sandbox_files(files, true);
+        state.set_active_file("main.py");
+
+        let errors = state.get_errors();
+        assert!(errors.iter().all(|error| error.kind != "unused-variable"));
+    }
+
+    #[test]
     fn test_unused_parameter_diagnostics() {
         let mut state = Playground::new(None).unwrap();
         let mut files = SmallMap::new();
         files.insert(
             "main.py".to_owned(),
-            "def greet(name: str, age: int) -> str:\n    return f\"Hello {name}\"".to_owned(),
+            "def greet(name: str, age: int, _unused: bool) -> str:\n    return f\"Hello {name}\""
+                .to_owned(),
         );
         state.update_sandbox_files(files, true);
         state.set_active_file("main.py");
@@ -1129,7 +1190,7 @@ mod tests {
         assert_eq!(
             unused_parameters.len(),
             1,
-            "Should detect 1 unused parameter"
+            "Should detect 1 unused parameter and skip the underscore-prefixed parameter"
         );
         assert_eq!(
             unused_parameters[0].message_header,

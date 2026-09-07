@@ -543,9 +543,16 @@ impl Ast {
     // Examples: `_`, `_x`
     // Non-examples: `x`, `__x__`, `__x`, `_x_`
     pub fn is_intentionally_unused(name: &str) -> bool {
-        name.starts_with('_')
-            && !name.starts_with("__")
-            && (name.len() == 1 || !name.ends_with('_'))
+        Self::is_pytest_tracebackhide(name)
+            || (name.starts_with('_')
+                && !name.starts_with("__")
+                && (name.len() == 1 || !name.ends_with('_')))
+    }
+
+    /// Pytest reads `__tracebackhide__` from frame locals when formatting tracebacks, so an
+    /// assignment to it is live even though no Python expression reads it.
+    pub fn is_pytest_tracebackhide(name: &str) -> bool {
+        name == "__tracebackhide__"
     }
 
     pub fn is_list_literal_or_comprehension(expr: &Expr) -> bool {

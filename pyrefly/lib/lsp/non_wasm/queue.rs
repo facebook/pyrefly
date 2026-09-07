@@ -15,6 +15,7 @@ use crossbeam_channel::RecvError;
 use crossbeam_channel::Select;
 use crossbeam_channel::SendError;
 use crossbeam_channel::Sender;
+use crossbeam_channel::TryRecvError;
 use lsp_server::RequestId;
 use lsp_types::DidChangeConfigurationParams;
 use lsp_types::DidChangeTextDocumentParams;
@@ -30,6 +31,7 @@ use pyrefly_util::telemetry::TelemetryEventKind;
 use tracing::debug;
 use tracing::info;
 
+use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::server::Server;
@@ -64,6 +66,13 @@ pub enum LspEvent {
     InvalidateConfigFind,
     LspResponse(Response),
     LspRequest(Request),
+    /// A request from an extra TSP connection. It shares the main connection's
+    /// queue so every TSP request is served by one loop, and carries the
+    /// channel its response goes back on.
+    TspExtraRequest {
+        request: Request,
+        response_sender: Sender<Message>,
+    },
     Exit,
 }
 
@@ -89,6 +98,11 @@ impl QueuedEvent {
 
     pub fn event(&self) -> &LspEvent {
         &self.event
+    }
+
+    /// Return whether the event changes state observed by later queries.
+    pub fn is_mutation(&self) -> bool {
+        self.event.kind() == LspEventKind::Mutation
     }
 
     pub fn enqueued_at(&self) -> Instant {
@@ -123,6 +137,9 @@ impl LspEvent {
             Self::DidSaveNotebookDocument(_) => "DidSaveNotebookDocument".to_owned(),
             Self::LspResponse(_) => "LspResponse".to_owned(),
             Self::LspRequest(request) => format!("LspRequest({})", request.method,),
+            Self::TspExtraRequest { request, .. } => {
+                format!("TspExtraRequest({})", request.method)
+            }
             Self::Exit => "Exit".to_owned(),
         }
     }
@@ -167,7 +184,9 @@ impl LspEvent {
             | Self::DidChangeNotebookDocument(_)
             | Self::InvalidateConfigFind
             | Self::Exit => LspEventKind::Mutation,
-            Self::LspResponse(_) | Self::LspRequest(_) => LspEventKind::Query,
+            Self::LspResponse(_) | Self::LspRequest(_) | Self::TspExtraRequest { .. } => {
+                LspEventKind::Query
+            }
         }
     }
 }
@@ -283,6 +302,12 @@ impl LspQueue {
     pub fn has_subsequent_mutation(&self, event: &QueuedEvent) -> bool {
         let last_mutation = self.last_mutation.load(Ordering::Relaxed);
         last_mutation > event.id
+    }
+
+    /// Return the next priority event without waiting.
+    pub fn try_recv_priority(&self) -> Result<QueuedEvent, TryRecvError> {
+        let (id, event, enqueued_at) = self.priority.1.try_recv()?;
+        Ok(QueuedEvent::from_parts(id, event, enqueued_at))
     }
 
     /// Hold `event` until `ready_at`, after which `recv` delivers it. This
@@ -450,6 +475,44 @@ mod tests {
         let delivered_enqueue_time = queue.recv().unwrap().enqueued_at();
 
         assert_eq!(delivered_enqueue_time, enqueued_at);
+    }
+
+    #[test]
+    fn test_later_mutation_is_observed_until_consumed() {
+        let queue = LspQueue::new();
+        queue.send(request()).unwrap();
+        queue.send(non_edit()).unwrap();
+
+        let request = queue.recv().unwrap();
+        assert!(
+            queue.has_subsequent_mutation(&request),
+            "a later mutation in the live queue must be observed"
+        );
+
+        queue.recv().unwrap();
+        assert!(
+            !queue.has_subsequent_mutation(&request),
+            "a consumed mutation must not cancel a deferred request"
+        );
+    }
+
+    #[test]
+    fn test_priority_poll_bypasses_normal_queue() {
+        let queue = LspQueue::new();
+        queue.send(request()).unwrap();
+        queue
+            .send(LspEvent::CancelRequest(RequestId::from(1)))
+            .unwrap();
+
+        let priority = queue.try_recv_priority().unwrap();
+        assert!(
+            matches!(priority.event(), LspEvent::CancelRequest(_)),
+            "the priority poll must return cancellation before normal work"
+        );
+        assert!(
+            matches!(queue.recv().unwrap().event(), LspEvent::LspRequest(_)),
+            "priority polling must leave the normal event queued"
+        );
     }
 
     #[test]

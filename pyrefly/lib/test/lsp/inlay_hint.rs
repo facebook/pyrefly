@@ -504,6 +504,88 @@ fn parameter_name_hint_labels(code: &str, assert_zero_errors: bool) -> Vec<Strin
         .collect()
 }
 
+// Regression coverage for #4611: instance-method parameter-name hints must
+// align one-to-one with positional arguments (`self` never consumes a slot).
+#[test]
+fn test_issue_4611_instance_method_hint_alignment() {
+    // Inferred receiver.
+    let code = r#"
+class _Mini:
+    def method(self, a: int, b: str, c: float) -> None:
+        pass
+
+m = _Mini()
+m.method(1, "x", 2.0)
+"#;
+    assert_eq!(
+        parameter_name_hint_labels(code, true),
+        vec!["a= ", "b= ", "c= "]
+    );
+
+    // Annotated receiver.
+    let code = r#"
+class _Mini:
+    def method(self, a: int, b: str, c: float) -> None:
+        pass
+
+m2: _Mini = _Mini()
+m2.method(1, "x", 2.0)
+"#;
+    assert_eq!(
+        parameter_name_hint_labels(code, true),
+        vec!["a= ", "b= ", "c= "]
+    );
+
+    // Plain-function control (unchanged behavior).
+    let code = r#"
+def _func(a: int, b: str, c: float) -> None:
+    pass
+
+_func(1, "x", 2.0)
+"#;
+    assert_eq!(
+        parameter_name_hint_labels(code, true),
+        vec!["a= ", "b= ", "c= "]
+    );
+}
+
+#[test]
+fn test_issue_4611_hint_alignment_other_receivers() {
+    // self.method(...) inside another method.
+    let code = r#"
+class _Outer:
+    def helper(self, a: int, b: str) -> None:
+        pass
+
+    def caller(self) -> None:
+        self.helper(1, "x")
+"#;
+    assert_eq!(parameter_name_hint_labels(code, true), vec!["a= ", "b= "]);
+
+    // Classmethod dispatch through cls.
+    let code = r#"
+class _Factory:
+    @classmethod
+    def make(cls, a: int, b: str) -> None:
+        pass
+
+_Factory.make(1, "x")
+"#;
+    assert_eq!(parameter_name_hint_labels(code, true), vec!["a= ", "b= "]);
+
+    // Bound method stored in a variable keeps alignment.
+    let code = r#"
+class _Mini:
+    def method(self, a: int, b: str) -> None:
+        pass
+
+m = _Mini()
+f = m.method
+f(1, "x")
+"#;
+    assert_eq!(parameter_name_hint_labels(code, true), vec!["a= ", "b= "]);
+}
+
 #[test]
 fn test_parameter_name_hint_after_keyword_argument() {
     let code = r#"

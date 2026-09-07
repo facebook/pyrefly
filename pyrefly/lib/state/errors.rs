@@ -79,9 +79,11 @@ fn collect_string_ranges(expr: &Expr, module: &Module, ranges: &mut Vec<(LineNum
         _ => None,
     };
     if let Some(range) = text_range {
-        let display = module.display_range(range);
-        let start = display.start.line_within_file();
-        let end = display.end.line_within_file();
+        // Computing columns scans from the start of the line for non-ASCII source, but this pass
+        // only needs line numbers.
+        let line_index = module.lined_buffer().line_index();
+        let start = LineNumber::from_one_indexed(line_index.line_index(range.start()));
+        let end = LineNumber::from_one_indexed(line_index.line_index(range.end()));
         if start != end {
             // Multi-line string found. Record its range but skip recursing
             // into its children — for nested f-strings we want errors to
@@ -795,12 +797,15 @@ impl Errors {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
     use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
 
     use dupe::Dupe;
     use pyrefly_build::handle::Handle;
+    use pyrefly_python::ast::Ast;
+    use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::SysInfo;
@@ -869,6 +874,23 @@ mod tests {
         )]);
         transaction.run(&[handle.dupe()], Require::Everything, None);
         (transaction.get_errors([handle.clone()].iter()), tdir)
+    }
+
+    #[test]
+    fn test_many_strings_on_one_non_ascii_line() {
+        let mut contents = String::from("x = {'non_ascii_ä': 0,");
+        for i in 0..100_000 {
+            write!(contents, "'key_{i}': {i},").unwrap();
+        }
+        contents.push('}');
+        let module = Module::new(
+            ModuleName::from_str("test"),
+            ModulePath::filesystem(Path::new("test.py").to_owned()),
+            Arc::new(contents),
+        );
+        let ast = Ast::parse(module.contents(), module.source_type()).0;
+
+        assert!(super::sorted_multi_line_string_ranges(&ast, &module).is_empty());
     }
 
     #[test]

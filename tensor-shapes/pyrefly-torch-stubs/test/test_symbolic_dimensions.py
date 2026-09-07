@@ -13,7 +13,7 @@ import torch
 import torch.fft
 import torch.linalg
 import torch.nn.functional as F
-from shape_extensions import Int, IntVar
+from shape_extensions import Int, IntTuple, IntVar
 from torch import Tensor
 
 # ==== Week 2: Symbolic Dimension Tests ====
@@ -132,7 +132,7 @@ def test_repeat_multiplies_dimensions():
 
 
 def test_repeat_interleave_tensor_repeats_output_size():
-    """Tensor-valued repeats can preserve shape when output_size is supplied."""
+    """A runtime-validated total makes a data-dependent repeat extent precise."""
     x: Tensor[[2, 3]] = torch.randn(2, 3)
     repeats: Tensor[[2]] = torch.randn(2)
     y = torch.repeat_interleave(
@@ -142,6 +142,24 @@ def test_repeat_interleave_tensor_repeats_output_size():
         output_size=5,
     )
     assert_type(y, Tensor[[5, 3]])
+
+
+def repeat_interleave_symbolic[N: IntVar, M: IntVar, R: IntVar](
+    x: Tensor[[N, M]], repeats: Int[R]
+) -> Tensor[[N, M * R]]:
+    return x.repeat_interleave(repeats, dim=-1)
+
+
+def repeat_interleave_symbolic_output[N: IntVar, M: IntVar, Output: IntVar](
+    x: Tensor[[N, M]], repeats: Tensor, output_size: Int[Output]
+) -> Tensor[[N, Output]]:
+    return torch.repeat_interleave(x, repeats, dim=1, output_size=output_size)
+
+
+def repeat_interleave_symbolic_checked[N: IntVar, M: IntVar, R: IntVar, Output: IntVar](
+    x: Tensor[[N, M]], repeats: Int[R], output_size: Int[Output]
+) -> Tensor[[N, Output]]:
+    return x.repeat_interleave(repeats, dim=1, output_size=output_size)
 
 
 def process_batch[B: IntVar, D: IntVar](x: Tensor[[B, D]]) -> Tensor[[B, D]]:
@@ -188,6 +206,13 @@ def test_permute_reorders_symbolic():
     y = permute_symbolic(x)
     # Should return Tensor[[4, 2, 3]] (reordered from [2, 3, 4])
     assert_type(y, Tensor[[4, 2, 3]])
+    assert_type(x.permute((2, 0, 1)), Tensor[[4, 2, 3]])
+
+
+def permute_broad_dims(
+    x: Tensor[[2, 3, 4]], dims: tuple[int, int, int]
+) -> Tensor[[int, int, int]]:
+    return x.permute(dims)
 
 
 def reduce_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[N]]:
@@ -1121,6 +1146,27 @@ def test_diag_embed[B: IntVar, N: IntVar](x: Tensor[[B, N]]):
     y = torch.diag_embed(x)
     # Creates diagonal matrix: [B, N] → [B, N, N]
     assert_type(y, Tensor[[B, N, N]])
+
+
+def test_diag_embed_offset_symbolic[B: IntVar, N: IntVar](x: Tensor[[B, N]]):
+    assert_type(torch.diag_embed(x, offset=-2), Tensor[[B, N + 2, N + 2]])
+
+
+def test_unfold_symbolic[N: IntVar](x: Tensor[[N]]):
+    assert_type(torch.unfold(x, 0, 3, 2), Tensor[[(N - 3) // 2 + 1, 3]])
+
+
+# A symbolic argument cannot bind a `Flag` value, so it reaches the evaluator as a
+# gradual input and the result stays unresolved. These assertions keep that boundary
+# visible; a later capability diff should make them precise.
+def test_unfold_symbolic_size[N: IntVar, M: IntVar](x: Tensor[[N]], size: Int[M]):
+    assert_type(torch.unfold(x, 0, size, 2), Tensor[IntTuple])
+
+
+def test_diag_embed_symbolic_offset[B: IntVar, N: IntVar, O: IntVar](
+    x: Tensor[[B, N]], offset: Int[O]
+):
+    assert_type(torch.diag_embed(x, offset=offset), Tensor[IntTuple])
 
 
 def test_norm_symbolic[N: IntVar, M: IntVar](x: Tensor[[N, M]]):

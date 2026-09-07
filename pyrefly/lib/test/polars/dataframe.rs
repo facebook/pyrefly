@@ -151,6 +151,7 @@ class Expr:
 from polars.expr.expr import Expr
 class Col:
     def __call__(self, *names: str) -> Expr: ...
+    def __getattr__(self, name: str) -> Expr: ...
 col: Col
 "#,
     );
@@ -2487,6 +2488,21 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 reveal_type(df.select(pl.col("a")))  # E: revealed type: DataFrame[a: Int64]
+"#,
+);
+
+testcase!(
+    test_select_expr_col_attribute_keeps_name,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from polars import col as c
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select(pl.col.a))  # E: revealed type: DataFrame[a: Int64]
+reveal_type(df.select(c.b.alias("renamed")))  # E: revealed type: DataFrame[renamed: String]
+reveal_type(df.select(pl.col.a + c.b))  # E: revealed type: DataFrame[a: Unknown]
+reveal_type(df.select(pl.col.missing))  # E: Column `missing` is not in the DataFrame schema # E: revealed type: DataFrame[missing: Unknown]
 "#,
 );
 

@@ -8,7 +8,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Not;
-use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_graph::index::Idx;
@@ -412,7 +411,7 @@ pub fn get_exported_decorated_function<'a>(
 
         let undecorated_function = context
             .answers
-            .get_idx_ref(binding_decorated_function.undecorated_idx)
+            .get_idx(binding_decorated_function.undecorated_idx)
             .expect("undecorated function must be solved before building Pysa solutions");
         let is_getter_but_should_skip = skip_property_getter
             && undecorated_function
@@ -522,7 +521,7 @@ pub enum FunctionNode<'a> {
     ClassField {
         class: Class,
         name: Name,
-        field: Arc<ClassField>,
+        field: &'a ClassField,
     },
 }
 
@@ -572,7 +571,7 @@ impl<'a> FunctionNode<'a> {
             FunctionNode::DecoratedFunction(function) => {
                 let definition_binding = Key::Definition(function.undecorated.identifier);
                 let idx = context.bindings.key_to_idx(&definition_binding);
-                context.answers.get_idx(idx).unwrap().arc_clone_ty()
+                context.answers.get_idx(idx).unwrap().ty().clone()
             }
             FunctionNode::ClassField { field, .. } => field.ty(),
         }
@@ -595,7 +594,8 @@ impl<'a> FunctionNode<'a> {
                             .answers
                             .get_idx(idx)
                             .unwrap()
-                            .arc_clone_ty();
+                            .ty()
+                            .clone();
                         vec![FunctionSignature {
                             parameters: FunctionParameters::List(
                                 function
@@ -622,7 +622,7 @@ impl<'a> FunctionNode<'a> {
     pub fn exported_function_from_class_field(
         class: &Class,
         field_name: &Name,
-        class_field: Arc<ClassField>,
+        class_field: &'a ClassField,
         context: &'a ModuleAnswersContext,
     ) -> Option<Self> {
         let function_node = match get_class_field_declaration(class, field_name, context) {
@@ -647,7 +647,7 @@ impl<'a> FunctionNode<'a> {
             _ => Some(FunctionNode::ClassField {
                 class: class.dupe(),
                 name: field_name.clone(),
-                field: class_field.dupe(),
+                field: class_field,
             }),
         }?;
 

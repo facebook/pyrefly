@@ -27,10 +27,10 @@ use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 
 use crate::callable::Callable;
-use crate::callable::IdentityIgnored;
 use crate::class::Class;
 use crate::class::ClassType;
 use crate::equality::TypeEq;
+use crate::identity::IdentityIgnored;
 use crate::keywords::DataclassTransformMetadata;
 use crate::meta_shape_dsl::ShapeDslFunction;
 use crate::meta_shape_dsl::ShapeTransform;
@@ -193,6 +193,9 @@ pub struct FuncFlags {
     pub is_overload: bool,
     pub is_staticmethod: bool,
     pub is_classmethod: bool,
+    /// Parameter indices whose annotations directly name a type parameter of the defining class.
+    /// This is used when a subclass binds that parameter to a shape `Flag`.
+    pub shape_flag_constructor_sources: Option<Box<Vec<usize>>>,
     /// A function decorated with `@deprecated`
     pub deprecation: Option<Deprecation>,
     /// Metadata for `@property`, `@foo.setter`, and `@foo.deleter`.
@@ -404,6 +407,7 @@ impl FuncSymbol {
 pub enum FunctionKind {
     IsInstance,
     IsSubclass,
+    Callable,
     /// The builtin `len`. Special-cased so that when the argument's `__len__`
     /// returns a subtype of `int` (e.g. a shaped array's `Int[N]`), `len(x)`
     /// yields that type instead of typeshed's plain `int`.
@@ -458,7 +462,12 @@ pub enum FunctionKind {
         Arc<ShapeDslFunction>,
         IdentityIgnored<Arc<Vec<Arc<ShapeDslFunction>>>>,
     ),
-    /// A resolved user-defined type-level shape DSL function.
+    /// A user-defined type-level shape DSL function.
+    ///
+    /// The first field preserves ordinary function identity for generic type-system machinery.
+    /// The resolved program repeats that root identity and owns every resolved function definition
+    /// used during evaluation, so changes anywhere in the shape-specific program affect
+    /// incremental equality.
     TypeShapeDsl(Arc<FuncDefId>, Arc<ResolvedTypeShapeDslFunction>),
     /// The `shape_extensions.uses_shape_dsl` decorator function itself.
     UsesShapeDsl,
@@ -498,6 +507,7 @@ impl FunctionKind {
         match (qname.module_name().as_str(), qname.id().as_str()) {
             ("builtins", "isinstance") => Self::IsInstance,
             ("builtins", "issubclass") => Self::IsSubclass,
+            ("builtins", "callable") => Self::Callable,
             ("builtins", "len") => Self::Len,
             ("builtins", "classmethod") => Self::ClassMethod,
             ("dataclasses", "dataclass") => Self::Dataclass,
@@ -534,6 +544,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => ModuleName::builtins(),
             Self::IsSubclass => ModuleName::builtins(),
+            Self::Callable => ModuleName::builtins(),
             Self::Len => ModuleName::builtins(),
             Self::ClassMethod => ModuleName::builtins(),
             Self::Dataclass => ModuleName::dataclasses(),
@@ -574,6 +585,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => Cow::Owned(Name::new_static("isinstance")),
             Self::IsSubclass => Cow::Owned(Name::new_static("issubclass")),
+            Self::Callable => Cow::Owned(Name::new_static("callable")),
             Self::Len => Cow::Owned(Name::new_static("len")),
             Self::ClassMethod => Cow::Owned(Name::new_static("classmethod")),
             Self::Dataclass => Cow::Owned(Name::new_static("dataclass")),
@@ -614,6 +626,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => None,
             Self::IsSubclass => None,
+            Self::Callable => None,
             Self::Len => None,
             Self::ClassMethod => None,
             Self::Dataclass => None,

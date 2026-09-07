@@ -413,7 +413,7 @@ impl GleanState<'_> {
             self.facts.file.clone(),
             lens,
             ends_in_new_line,
-            !lined_buffer.is_ascii() || lined_buffer.contents().contains('\t'),
+            !lined_buffer.contents().is_ascii() || lined_buffer.contents().contains('\t'),
         )
     }
 

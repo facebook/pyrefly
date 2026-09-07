@@ -132,6 +132,22 @@ impl<T: TspInterface> TspServer<T> {
         })
     }
 
+    /// Convenience accessor for the inner LSP server.
+    pub(crate) fn inner(&self) -> &T {
+        &self.inner
+    }
+
+    /// Validate that the client-supplied snapshot matches the server's current
+    /// snapshot. Returns `Ok(())` on match or `Err(ResponseError)` on mismatch.
+    pub(crate) fn validate_snapshot(&self, client_snapshot: i32) -> Result<(), ResponseError> {
+        let current = self.get_snapshot();
+        if client_snapshot != current {
+            Err(snapshot_outdated_error(client_snapshot, current))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Send a `snapshotChanged` notification to the main connection.
     fn broadcast_snapshot_changed(
         &self,
@@ -162,84 +178,86 @@ impl<T: TspInterface> TspConnection<T> {
             response_sender,
         }
     }
+}
 
-    /// Convenience accessor for the inner LSP server.
-    pub(crate) fn inner(&self) -> &T {
-        &self.server.inner
-    }
+/// Where one request's response is written.
+///
+/// A handler is handed the reply channel of the connection that asked, so it
+/// cannot answer a different client, and the server itself owns no channel to
+/// answer through.
+pub(crate) struct Reply<'a>(pub(crate) &'a crossbeam_channel::Sender<Message>);
 
-    fn send_response(&self, response: Response) {
-        if let Err(error) = self.response_sender.send(Message::Response(response)) {
+impl Reply<'_> {
+    fn send(&self, response: Response) {
+        if let Err(error) = self.0.send(Message::Response(response)) {
             warn!("Failed to send TSP response: {error}");
         }
     }
 
     /// Send a successful JSON-RPC response for `id` with `result`.
-    pub(crate) fn send_ok<R: Serialize>(&self, id: RequestId, result: R) {
-        self.send_response(new_response(id, Ok(result)));
+    pub(crate) fn ok<R: Serialize>(&self, id: RequestId, result: R) {
+        self.send(new_response(id, Ok(result)));
     }
 
     /// Send a JSON-RPC error response for `id`.
-    pub(crate) fn send_err(&self, id: RequestId, error: ResponseError) {
-        self.send_response(Response {
+    pub(crate) fn err(&self, id: RequestId, error: ResponseError) {
+        self.send(Response {
             id,
             result: None,
             error: Some(error),
         });
     }
+}
 
-    /// Validate that the client-supplied snapshot matches the server's current
-    /// snapshot. Returns `Ok(())` on match or `Err(ResponseError)` on mismatch.
-    pub(crate) fn validate_snapshot(&self, client_snapshot: i32) -> Result<(), ResponseError> {
-        let current = self.get_snapshot();
-        if client_snapshot != current {
-            Err(snapshot_outdated_error(client_snapshot, current))
-        } else {
-            Ok(())
-        }
-    }
-
+impl<T: TspInterface> TspServer<T> {
+    /// Handle one TSP request, answering on `reply` -- the channel belonging to
+    /// the connection that sent it.
+    ///
+    /// Infallible: a request that cannot be served is reported to its own
+    /// client as an error response. Every connection shares one event loop, so
+    /// returning an error here would take down every other client with it.
     fn dispatch_tsp_request<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
+        reply: Reply,
         request: &Request,
         msg: TSPRequests,
-    ) -> anyhow::Result<bool> {
+    ) {
         match msg {
             TSPRequests::GetSupportedProtocolVersionRequest { .. } => {
-                self.send_ok(request.id.clone(), self.get_supported_protocol_version());
-                Ok(true)
+                reply.ok(request.id.clone(), self.get_supported_protocol_version());
             }
             TSPRequests::GetSnapshotRequest { .. } => {
                 // Get snapshot doesn't need a transaction since it just returns the cached value
-                self.send_ok(request.id.clone(), self.get_snapshot());
-                Ok(true)
+                reply.ok(request.id.clone(), self.get_snapshot());
             }
             TSPRequests::ResolveImportRequest { params, .. } => {
-                self.handle_resolve_import(request.id.clone(), params, ide_transaction_manager);
-                Ok(true)
+                self.handle_resolve_import(
+                    request.id.clone(),
+                    params,
+                    ide_transaction_manager,
+                    telemetry_event,
+                    reply,
+                );
             }
             TSPRequests::GetPythonSearchPathsRequest { params, .. } => {
-                self.handle_get_python_search_paths(request.id.clone(), params);
-                Ok(true)
+                self.handle_get_python_search_paths(request.id.clone(), params, reply);
             }
             TSPRequests::GetDeclaredTypeRequest { params, .. } => {
-                self.dispatch_get_type_request(request.id.clone(), params, |s, p| {
-                    s.handle_get_declared_type(p)
+                self.dispatch_get_type_request(request.id.clone(), params, reply, |p| {
+                    self.handle_get_declared_type(ide_transaction_manager, telemetry_event, p)
                 });
-                Ok(true)
             }
             TSPRequests::GetComputedTypeRequest { params, .. } => {
-                self.dispatch_get_type_request(request.id.clone(), params, |s, p| {
-                    s.handle_get_computed_type(p)
+                self.dispatch_get_type_request(request.id.clone(), params, reply, |p| {
+                    self.handle_get_computed_type(ide_transaction_manager, telemetry_event, p)
                 });
-                Ok(true)
             }
             TSPRequests::GetExpectedTypeRequest { params, .. } => {
-                self.dispatch_get_type_request(request.id.clone(), params, |s, p| {
-                    s.handle_get_expected_type(p)
+                self.dispatch_get_type_request(request.id.clone(), params, reply, |p| {
+                    self.handle_get_expected_type(ide_transaction_manager, telemetry_event, p)
                 });
-                Ok(true)
             }
             TSPRequests::ConnectionRequest { .. } => {
                 // Multi-connection management is handled at the transport layer,
@@ -256,49 +274,38 @@ impl<T: TspInterface> TspConnection<T> {
         &self,
         id: RequestId,
         raw_params: serde_json::Value,
+        reply: Reply,
         handler: impl FnOnce(
-            &Self,
             GetTypeParams,
         ) -> Result<Option<tsp_types::Type>, lsp_server::ResponseError>,
     ) {
         let params: GetTypeParams = match serde_json::from_value::<GetTypeParams>(raw_params) {
             Ok(p) => p,
             Err(e) => {
-                self.send_err(id, invalid_params_error(&e.to_string()));
+                reply.err(id, invalid_params_error(&e.to_string()));
                 return;
             }
         };
-        match handler(self, params) {
+        match handler(params) {
             Ok(result) => {
-                self.send_ok(id, result);
+                reply.ok(id, result);
             }
             Err(err) => {
-                self.send_err(id, err);
+                reply.err(id, err);
             }
         }
     }
 }
 
-/// The main (stdio) connection. Only this type can manage extra connections
-/// and trigger `snapshotChanged` notifications.
-pub struct TspMainConnection<T: TspInterface>(TspConnection<T>);
-
-impl<T: TspInterface> TspMainConnection<T> {
-    fn new(server: Arc<TspServer<T>>, response_sender: crossbeam_channel::Sender<Message>) -> Self {
-        Self(TspConnection::new(server, response_sender))
-    }
-}
-
-impl<T: TspInterface> Deref for TspMainConnection<T> {
-    type Target = TspConnection<T>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl<T: TspInterface> TspMainConnection<T> {
-    /// Process a single event on the main connection.
+impl<T: TspInterface> TspServer<T> {
+    /// Process a single event.
     fn process_event<'a>(
-        &'a self,
+        self: &'a Arc<Self>,
+        // The channel of the connection that sent this event.
+        reply: Reply,
+        // The main connection, where broadcasts and connection management go
+        // regardless of who asked.
+        main_reply: Reply,
         ide_transaction_manager: &mut TransactionManager<'a>,
         canceled_requests: &mut HashSet<RequestId>,
         telemetry: &'a impl Telemetry,
@@ -319,16 +326,27 @@ impl<T: TspInterface> TspMainConnection<T> {
         };
 
         // For TSP requests, handle them specially
-        if let LspEvent::LspRequest(request) = event.event() {
+        let tsp_request = match event.event() {
+            LspEvent::LspRequest(request) => Some(request),
+            LspEvent::TspExtraRequest { request, .. } => Some(request),
+            _ => None,
+        };
+        if let Some(request) = tsp_request {
             match parse_tsp_request(request) {
                 Some(TSPRequests::ConnectionRequest { params, .. }) => {
-                    self.handle_connection_request(request.id.clone(), params);
+                    self.handle_connection_request(request.id.clone(), params, reply);
                 }
                 Some(msg) => {
-                    self.dispatch_tsp_request(ide_transaction_manager, request, msg)?;
+                    self.dispatch_tsp_request(
+                        ide_transaction_manager,
+                        telemetry_event,
+                        reply,
+                        request,
+                        msg,
+                    );
                 }
                 None => {
-                    self.send_response(Response::new_err(
+                    reply.send(Response::new_err(
                         request.id.clone(),
                         ErrorCode::MethodNotFound as i32,
                         format!("TSP server does not support LSP method: {}", request.method),
@@ -338,7 +356,7 @@ impl<T: TspInterface> TspMainConnection<T> {
             return Ok(ProcessEvent::Continue);
         }
 
-        let result = self.inner().process_event(
+        let result = self.inner.process_event(
             ide_transaction_manager,
             canceled_requests,
             telemetry,
@@ -350,7 +368,6 @@ impl<T: TspInterface> TspMainConnection<T> {
         // Increment snapshot after the inner server has processed the event
         if should_increment_snapshot {
             let mut current = self
-                .server
                 .current_snapshot
                 .lock()
                 .expect("current_snapshot mutex poisoned");
@@ -358,17 +375,18 @@ impl<T: TspInterface> TspMainConnection<T> {
             *current += 1;
             let new_snapshot = *current;
             drop(current);
-            self.server.broadcast_snapshot_changed(
-                &self.0.response_sender,
-                old_snapshot,
-                new_snapshot,
-            );
+            self.broadcast_snapshot_changed(main_reply.0, old_snapshot, new_snapshot);
         }
 
         Ok(result)
     }
 
-    fn handle_connection_request(&self, id: RequestId, params: ConnectionRequestParams) {
+    fn handle_connection_request(
+        self: &Arc<Self>,
+        id: RequestId,
+        params: ConnectionRequestParams,
+        reply: Reply,
+    ) {
         let result = match params.type_.as_str() {
             "open" => self.open_extra_connection(params),
             "close" => self.close_extra_connection(params),
@@ -378,20 +396,19 @@ impl<T: TspInterface> TspMainConnection<T> {
         };
 
         match result {
-            Ok(connection_result) => self.send_ok(id, connection_result),
-            Err(error) => self.send_err(id, error),
+            Ok(connection_result) => reply.ok(id, connection_result),
+            Err(error) => reply.err(id, error),
         }
     }
 
     fn open_extra_connection(
-        &self,
+        self: &Arc<Self>,
         params: ConnectionRequestParams,
     ) -> Result<ConnectionRequestResult, ResponseError> {
         let transport = IpcTransportNames::from_connection_request(&params)?;
         let description = transport.description();
 
         let mut extra_connections = self
-            .server
             .extra_connections
             .lock()
             .map_err(|_| internal_error("extra connection state was poisoned"))?;
@@ -420,7 +437,7 @@ impl<T: TspInterface> TspMainConnection<T> {
         };
 
         let extra_sender = ipc_connection.sender.clone();
-        let extra_conn = TspExtraConnection::new(self.server.clone(), extra_sender.clone());
+        let extra_conn = TspExtraConnection::new(self.clone(), extra_sender.clone());
         let (close_tx, close_rx) = crossbeam_channel::bounded::<()>(1);
 
         extra_connections.insert(transport.clone(), ExtraConnectionHandle { close_tx });
@@ -443,7 +460,6 @@ impl<T: TspInterface> TspMainConnection<T> {
         let description = transport.description();
 
         let handle = self
-            .server
             .extra_connections
             .lock()
             .expect("extra_connections mutex poisoned")
@@ -486,21 +502,20 @@ impl<T: TspInterface> TspExtraConnection<T> {
         close_rx: crossbeam_channel::Receiver<()>,
         transport: IpcTransportNames,
     ) {
-        let (message_tx, message_rx) = crossbeam_channel::unbounded();
+        // The reader runs on its own thread because `recv` blocks and this loop has
+        // to stay responsive to `close_rx`. A rendezvous rather than a buffer: every
+        // message is forwarded to the unbounded main queue immediately, so buffering
+        // here would only duplicate that queue.
+        let (message_tx, message_rx) = crossbeam_channel::bounded(0);
+        std::thread::spawn(move || {
+            while let Some(message) = reader.recv() {
+                if message_tx.send(message).is_err() {
+                    break;
+                }
+            }
+        });
 
         std::thread::spawn(move || {
-            std::thread::spawn(move || {
-                while let Some(message) = reader.recv() {
-                    let (processed_tx, processed_rx) = crossbeam_channel::bounded(1);
-                    if message_tx.send((message, processed_tx)).is_err() {
-                        break;
-                    }
-                    if processed_rx.recv().is_err() {
-                        break;
-                    }
-                }
-            });
-
             let mut selector = crossbeam_channel::Select::new();
             let close_index = selector.recv(&close_rx);
             let message_index = selector.recv(&message_rx);
@@ -512,16 +527,15 @@ impl<T: TspInterface> TspExtraConnection<T> {
                         break;
                     }
                     i if i == message_index => {
-                        let Ok((message, processed_tx)) = selected.recv(&message_rx) else {
+                        let Ok(message) = selected.recv(&message_rx) else {
                             break;
                         };
 
                         match message {
                             Message::Request(request) => {
-                                let mut tm = TransactionManager::default();
                                 match parse_tsp_request(&request) {
                                     Some(TSPRequests::ConnectionRequest { .. }) => {
-                                        self.send_err(
+                                        Reply(&self.response_sender).err(
                                             request.id,
                                             ResponseError {
                                                 code: ErrorCode::InvalidRequest as i32,
@@ -533,30 +547,27 @@ impl<T: TspInterface> TspExtraConnection<T> {
                                             },
                                         );
                                     }
-                                    Some(msg) => {
-                                        if let Err(error) =
-                                            self.dispatch_tsp_request(&mut tm, &request, msg)
+                                    // Everything else joins the main queue,
+                                    // stamped with this connection's channel so
+                                    // the loop answers the right client.
+                                    _ => {
+                                        if self
+                                            .server
+                                            .inner
+                                            .lsp_queue()
+                                            .send(LspEvent::TspExtraRequest {
+                                                request,
+                                                response_sender: self.response_sender.clone(),
+                                            })
+                                            .is_err()
                                         {
-                                            warn!("Extra TSP connection error: {error}");
                                             break;
                                         }
-                                    }
-                                    None => {
-                                        self.send_response(Response::new_err(
-                                            request.id,
-                                            ErrorCode::MethodNotFound as i32,
-                                            format!(
-                                                "Extra TSP connection does not support method: {}",
-                                                request.method
-                                            ),
-                                        ));
                                     }
                                 }
                             }
                             Message::Notification(_) | Message::Response(_) => {}
                         }
-
-                        let _ = processed_tx.send(());
                     }
                     _ => unreachable!(),
                 }
@@ -610,7 +621,7 @@ pub fn tsp_loop(
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     let server = TspServer::new(lsp_server);
-    let main_conn = TspMainConnection::new(server.clone(), server.inner.sender().clone());
+    let main_sender = server.inner.sender().clone();
 
     std::thread::scope(|scope| {
         scope.spawn(|| server.inner.run_recheck_queue(telemetry));
@@ -636,7 +647,17 @@ pub fn tsp_loop(
             );
             let event_description = event.describe();
 
-            let result = main_conn.process_event(
+            // Answer on the channel of whichever connection sent this request.
+            let reply_sender = match event.event() {
+                LspEvent::TspExtraRequest {
+                    response_sender, ..
+                } => response_sender.clone(),
+                _ => main_sender.clone(),
+            };
+
+            let result = server.process_event(
+                Reply(&reply_sender),
+                Reply(&main_sender),
                 &mut ide_transaction_manager,
                 &mut canceled_requests,
                 telemetry,

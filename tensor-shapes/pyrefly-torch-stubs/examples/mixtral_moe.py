@@ -310,18 +310,21 @@ class Attention[D: IntVar, NHead: IntVar, NLocalHead: IntVar, HD: IntVar](nn.Mod
             assert input_pos is not None
             k, v = self.kv_cache.update(input_pos, k, v)
 
-        # GQA repeats each kv head NHead // NLocalHead times. The shape checker
-        # cannot know NHead is divisible by NLocalHead, so NLocalHead * (NHead //
-        # NLocalHead) does not reduce to NHead symbolically; output_size=self.n_head
-        # records the intended result shape.
-        k = k.repeat_interleave(
-            self.n_head // self.n_local_heads, dim=1, output_size=self.n_head
+        # GQA requires NHead to be divisible by NLocalHead, which the symbolic
+        # arithmetic cannot prove. The cast records that model invariant;
+        # output_size remains only a runtime consistency check.
+        k = cast(
+            Tensor[[B, NHead, SeqLen, HD]],
+            k.repeat_interleave(
+                self.n_head // self.n_local_heads, dim=1, output_size=self.n_head
+            ),
         )
-        assert_type(k, Tensor)  # type: ignore  # union from kv_cache branch join
-        v = v.repeat_interleave(
-            self.n_head // self.n_local_heads, dim=1, output_size=self.n_head
+        v = cast(
+            Tensor[[B, NHead, SeqLen, HD]],
+            v.repeat_interleave(
+                self.n_head // self.n_local_heads, dim=1, output_size=self.n_head
+            ),
         )
-        assert_type(v, Tensor)  # type: ignore  # union from kv_cache branch join
         y = cast(
             Tensor[[B, NHead, SeqLen, HD]],
             F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0),
@@ -446,6 +449,7 @@ class Transformer(nn.Module):
             raise AssertionError("Caches must be initialized first")
         mask = self.causal_mask[None, None, input_pos]
         assert_type(mask, Tensor)  # bare — indexing with None/input_pos
+        # An optional tensor index uses the gradual fallback overload.
         freqs_cis = self.freqs_cis[input_pos]
         assert_type(freqs_cis, Tensor)  # bare — indexing on bare freqs_cis
         # ModelArgs uses plain int — sub-module dims are Unknown

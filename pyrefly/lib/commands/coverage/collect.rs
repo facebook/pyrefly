@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use dupe::Dupe;
 use pyrefly_build::handle::Handle;
@@ -343,20 +342,19 @@ fn compute_public_fqns(
         let exports = transaction.get_exports(handle);
 
         // prioritize `__all__` if present, otherwise local defs + `import x as x`
-        let names: Vec<Name> =
-            if let Some(all_iter) = exports_data.get_explicit_dunder_all_names_iter() {
-                all_iter.cloned().collect()
-            } else {
-                exports
-                    .iter()
-                    .filter_map(|(name, loc)| {
-                        let is_local = matches!(loc, ExportLocation::ThisModule(_));
-                        let is_reexport = exports_data.is_explicit_reexport(name);
-                        (is_public_name(name.as_str()) && (is_local || is_reexport))
-                            .then_some(name.clone())
-                    })
-                    .collect()
-            };
+        let names: Vec<Name> = if let Some(all) = exports_data.explicit_dunder_all_names() {
+            all.iter().cloned().collect()
+        } else {
+            exports
+                .iter()
+                .filter_map(|(name, loc)| {
+                    let is_local = matches!(loc, ExportLocation::ThisModule(_));
+                    let is_reexport = exports_data.is_explicit_reexport(name);
+                    (is_public_name(name.as_str()) && (is_local || is_reexport))
+                        .then_some(name.clone())
+                })
+                .collect()
+        };
 
         // collect both the local and traced origin FQN so a file-scoped run matches the module
         for name in names {
@@ -436,6 +434,28 @@ fn is_schema_class(bindings: &Bindings, answers: &Answers, cls_binding: &ClassBi
         })
 }
 
+/// Builtin classes whose constructor names the type it yields. Iterator adapters are left out.
+const IMPLICIT_BUILTIN_CONSTRUCTORS: &[&str] = &[
+    "bool",
+    "bytearray",
+    "bytes",
+    "complex",
+    "dict",
+    "float",
+    "frozendict",
+    "frozenset",
+    "int",
+    "list",
+    "memoryview",
+    "object",
+    "range",
+    "sentinel",
+    "set",
+    "slice",
+    "str",
+    "tuple",
+];
+
 fn parse_variables(
     module: &Module,
     bindings: &Bindings,
@@ -445,11 +465,21 @@ fn parse_variables(
     functions: &[Function],
     classes: &[ReportClass],
 ) -> Vec<Variable> {
-    fn untyped_if_call(expr: &Expr) -> SlotCounts {
-        if let Expr::Call(_) = expr {
-            SlotCounts::untyped()
-        } else {
+    /// Only a call hides its type at the assignment site, unless it is a builtin constructor.
+    fn untyped_if_call(answers: &Answers, idx: Idx<Key>, expr: &Expr) -> SlotCounts {
+        let Expr::Call(call) = expr else {
+            return SlotCounts::default();
+        };
+
+        if let Expr::Name(n) = call.func.as_ref()
+            && IMPLICIT_BUILTIN_CONSTRUCTORS.contains(&n.id.as_str())
+            && answers
+                .get_idx(idx)
+                .is_some_and(|t| matches!(t.ty(), Type::ClassType(cls) if cls.is_builtin(&n.id)))
+        {
             SlotCounts::default()
+        } else {
+            SlotCounts::untyped()
         }
     }
 
@@ -529,12 +559,10 @@ fn parse_variables(
                     // Functions and classes are handled by parse_functions/parse_classes;
                     // skip them here even when excluded (e.g. @type_check_only).
                     Binding::Function { .. } | Binding::ClassDef(..) => continue,
-                    // IMPLICIT: non-call assignments have 0 slots;
-                    // call assignments are untyped (1 slot)
-                    Binding::NameAssign(na) => untyped_if_call(na.expr.as_ref()),
+                    Binding::NameAssign(na) => untyped_if_call(answers, *idx, na.expr.as_ref()),
                     Binding::MultiTargetAssign(_, rhs_idx, _, _) => match bindings.get(*rhs_idx) {
                         Binding::Function { .. } | Binding::ClassDef(..) => continue,
-                        Binding::Expr(_, expr) => untyped_if_call(expr.as_ref()),
+                        Binding::Expr(_, expr) => untyped_if_call(answers, *idx, expr.as_ref()),
                         _ => {
                             unreachable!(
                                 "MultiTargetAssign RHS should be Expr, Function, or ClassDef"
@@ -563,10 +591,10 @@ fn parse_variables(
 }
 
 /// The MRO of `class`, or `Cyclic` if unresolved.
-fn class_mro(bindings: &Bindings, answers: &Answers, class: &Class) -> Arc<ClassMro> {
+fn class_mro<'a>(bindings: &Bindings, answers: &'a Answers, class: &Class) -> &'a ClassMro {
     answers
         .get_idx(bindings.key_to_idx(&KeyClassMro(class.index())))
-        .unwrap_or_else(|| Arc::new(ClassMro::Cyclic))
+        .unwrap_or(&ClassMro::Cyclic)
 }
 
 /// Slots for `field_name` from the nearest base class annotating it in `class_idx`'s MRO (gh-3997).
@@ -1071,8 +1099,8 @@ fn has_decorator_named(decorators: &[Idx<KeyDecorator>], bindings: &Bindings, na
 fn collect_dunder_all(transaction: &Transaction, handle: &Handle) -> Option<SmallSet<Name>> {
     transaction
         .get_exports_data(handle)
-        .get_explicit_dunder_all_names_iter()
-        .map(|it| it.cloned().collect())
+        .explicit_dunder_all_names()
+        .cloned()
 }
 
 /// The `(module_prefix, __all__ FQNs)` that gate which `.py`-only symbols a stub merge keeps,

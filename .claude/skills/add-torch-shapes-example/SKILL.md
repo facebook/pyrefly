@@ -61,7 +61,7 @@ The result must be `0 errors`, with no leftover `reveal_type`.
 Then run the corpus test target so the new example is covered by CI:
 
 ```bash
-buck test fbcode//pyrefly/tensor-shapes/pyrefly-torch-stubs/examples:torch_examples_test
+python3 tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py --buck --suite torch-examples
 ```
 
 ## If you hit a wrong or missing shape

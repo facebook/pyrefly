@@ -65,8 +65,8 @@ jobs:
             // members: managers, hands-off maintainers, and anyone not
             // responsible for reviewing PRs. They stay in owners.json (still
             // team members for auto_assign.yml) but never receive sweep
-            // assignments. kinto0 is temporarily excluded while on PTO.
-            const NOT_ASSIGNABLE = new Set(['lolpack', 'ndmitchell', 'javabster', 'yangdanny97', 'kinto0']);
+            // assignments.
+            const NOT_ASSIGNABLE = new Set(['lolpack', 'ndmitchell', 'javabster', 'yangdanny97']);
             const assignable = owners.filter((o) => !NOT_ASSIGNABLE.has(o));
             if (assignable.length === 0) {
               console.log('No assignable owners after exclusions, nothing to assign');

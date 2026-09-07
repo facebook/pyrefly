@@ -7,8 +7,11 @@
 
 use lsp_types::Url;
 use lsp_types::WorkspaceSymbolResponse;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -157,6 +160,60 @@ fn test_workspace_symbol_includes_methods_of_open_files() {
             assert_eq!(
                 method.container_name.as_deref(),
                 Some("WorkspaceSymbolMethodHost")
+            );
+            true
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+// The same gap as the test above, for the case that matters most: a method in a
+// file the user never opened, which project indexing has loaded on their behalf.
+// Ignored alongside its sibling until `workspace/symbol` looks beyond the export
+// table.
+#[ignore = "workspace/symbol does not yet include class methods; see TODO above"]
+#[test]
+fn test_workspace_symbol_includes_methods_of_indexed_files() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("tests_requiring_config");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            ..Default::default()
+        })
+        .unwrap();
+
+    // Opening any file in the project triggers indexing of the whole config; the
+    // queried method lives in an unopened sibling.
+    interaction.client.did_open("autoimport_provider.py");
+
+    let uri = Url::from_file_path(root_path.join("workspace_symbol_methods_indexed.py")).unwrap();
+    interaction
+        .client
+        .send_workspace_symbol("workspace_symbol_indexed_only_method_name")
+        .expect_response_with(|result| {
+            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                panic!("Unexpected workspace symbol response: {result:?}");
+            };
+            let method = symbols
+                .iter()
+                .find(|s| s.name == "workspace_symbol_indexed_only_method_name")
+                .expect("expected the method from the indexed (unopened) file");
+            assert_eq!(method.kind, lsp_types::SymbolKind::METHOD);
+            assert_eq!(method.location.uri, uri);
+            assert_eq!(
+                method.container_name.as_deref(),
+                Some("WorkspaceSymbolIndexedHost")
             );
             true
         })

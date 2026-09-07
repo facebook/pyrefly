@@ -24,8 +24,8 @@ pub(crate) fn severity_to_str(severity: Severity) -> String {
     }
 }
 
-fn default_severity() -> String {
-    "error".to_owned()
+fn default_legacy_severity() -> Severity {
+    Severity::Error
 }
 
 /// Legacy error structure in Pyre1. Needs to be consistent with the following file:
@@ -46,8 +46,8 @@ pub struct LegacyError {
     description: String,
     concise_description: String,
     /// This field is not part of Pyre1 error format. But it's useful for Pyrefly clients
-    #[serde(default = "default_severity")]
-    severity: String,
+    #[serde(default = "default_legacy_severity")]
+    severity: Severity,
     /// Whether the error matched a configured baseline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     baselined: Option<bool>,
@@ -75,9 +75,36 @@ impl LegacyError {
             name: error.error_kind().to_name().to_owned(),
             description: error.msg(),
             concise_description: error.msg_header().to_owned(),
-            severity: severity_to_str(error.severity()),
+            severity: error.severity(),
             baselined: error.baseline_status().legacy_baselined_flag(),
         }
+    }
+
+    pub fn severity(&self) -> Severity {
+        self.severity
+    }
+
+    pub(crate) fn display_range(&self) -> String {
+        if self.line == self.stop_line {
+            if self.column == self.stop_column {
+                format!("{}:{}", self.line, self.column)
+            } else {
+                format!("{}:{}-{}", self.line, self.column, self.stop_column)
+            }
+        } else {
+            format!(
+                "{}:{}-{}:{}",
+                self.line, self.column, self.stop_line, self.stop_column
+            )
+        }
+    }
+
+    pub(crate) fn concise_description(&self) -> &str {
+        &self.concise_description
+    }
+
+    pub(crate) fn is_baselined(&self) -> bool {
+        self.baselined == Some(true)
     }
 }
 
@@ -101,8 +128,8 @@ pub struct BaselineError {
     /// The kebab-case name of the error kind.
     pub name: String,
     concise_description: String,
-    #[serde(default = "default_severity")]
-    severity: String,
+    #[serde(default = "default_legacy_severity")]
+    severity: Severity,
     /// Optional notebook cell number for errors in notebook files
     #[serde(skip_serializing_if = "Option::is_none")]
     cell: Option<usize>,
@@ -121,7 +148,7 @@ impl BaselineError {
                 .replace('\\', "/"), // Normalize Windows backslashes so baseline files are consistent across platforms
             name: error.error_kind().to_name().to_owned(),
             concise_description: error.msg_header().to_owned(),
-            severity: severity_to_str(error.severity()),
+            severity: error.severity(),
         }
     }
 }

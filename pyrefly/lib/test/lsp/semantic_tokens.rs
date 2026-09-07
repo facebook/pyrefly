@@ -162,6 +162,107 @@ token-type: variable, token-modifiers: [readonly]
 }
 
 #[test]
+fn assignment_forms_test() {
+    let code = r#"
+multi_a = multi_b = 1
+multi_a, multi_b
+if (walrus := 1):  # pyrefly: ignore[redundant-condition]
+    walrus
+declared: int
+declared  # pyrefly: ignore[unbound-name]
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 0, length: 7, text: multi_a
+token-type: variable
+
+line: 1, column: 10, length: 7, text: multi_b
+token-type: variable
+
+line: 2, column: 0, length: 7, text: multi_a
+token-type: variable
+
+line: 2, column: 9, length: 7, text: multi_b
+token-type: variable
+
+line: 3, column: 4, length: 6, text: walrus
+token-type: variable
+
+line: 4, column: 4, length: 6, text: walrus
+token-type: variable
+
+line: 5, column: 0, length: 8, text: declared
+token-type: variable
+
+line: 5, column: 10, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 6, column: 0, length: 8, text: declared
+token-type: variable
+"#,
+    );
+}
+
+#[test]
+fn type_aware_assignment_forms_test() {
+    let code = r#"
+def fun(): pass
+multi_a = multi_b = fun
+multi_a(), multi_b()
+if (walrus := fun):  # pyrefly: ignore[redundant-condition]
+    walrus()
+declared: type[int]
+declared  # pyrefly: ignore[unbound-name]
+"#;
+    assert_full_semantic_tokens(
+        &[("main", code)],
+        r#"
+# main.py
+line: 1, column: 4, length: 3, text: fun
+token-type: function
+
+line: 2, column: 0, length: 7, text: multi_a
+token-type: function
+
+line: 2, column: 10, length: 7, text: multi_b
+token-type: function
+
+line: 2, column: 20, length: 3, text: fun
+token-type: function
+
+line: 3, column: 0, length: 7, text: multi_a
+token-type: function
+
+line: 3, column: 11, length: 7, text: multi_b
+token-type: function
+
+line: 4, column: 4, length: 6, text: walrus
+token-type: function
+
+line: 4, column: 14, length: 3, text: fun
+token-type: function
+
+line: 5, column: 4, length: 6, text: walrus
+token-type: function
+
+line: 6, column: 0, length: 8, text: declared
+token-type: variable
+
+line: 6, column: 10, length: 4, text: type
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 6, column: 15, length: 3, text: int
+token-type: class, token-modifiers: [defaultLibrary]
+
+line: 7, column: 0, length: 8, text: declared
+token-type: class
+"#,
+    );
+}
+
+#[test]
 fn syntax_tokens_test() {
     let code = r#"# comment
 def foo(x):

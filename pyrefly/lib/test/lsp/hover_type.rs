@@ -688,3 +688,30 @@ Hover Result: `ValueError`
         report.trim(),
     );
 }
+
+// A placeholder from an empty container is pinned by its first use, which happens after the
+// expression itself was inferred and its type trace recorded. The trace is normalized when it is
+// published rather than when it is read, so the pinned type is what a hover sees.
+#[test]
+fn hover_on_container_pinned_by_first_use() {
+    let code = r#"
+xs = []
+# ^   ^
+xs.append(1)
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | xs = []
+      ^
+Hover Result: `list[int]`
+
+2 | xs = []
+          ^
+Hover Result: `list[int]`
+"#
+        .trim(),
+        report.trim(),
+    );
+}

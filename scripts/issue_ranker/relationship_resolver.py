@@ -12,7 +12,6 @@ import logging
 import re
 from collections import defaultdict
 
-
 # Patterns for relationship markers in issue bodies.
 _DUPLICATE_RE = re.compile(
     r"(?:duplicate\s+of|duplicates?|dupe\s+of)\s+#(\d+)", re.IGNORECASE

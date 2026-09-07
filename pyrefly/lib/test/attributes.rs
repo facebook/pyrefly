@@ -1198,6 +1198,31 @@ def test(stack: ThemeStack) -> None:
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3958
+testcase!(
+    test_property_returning_bound_method_preserves_signature,
+    r#"
+from typing import reveal_type
+
+class Foo:
+    def bar(
+        self,
+        simple_union: int | str,
+        complex_union: int | str | tuple[int, str] | None = None,
+    ) -> None: ...
+
+class FooManager:
+    def __init__(self) -> None:
+        self.foo = Foo()
+
+    @property
+    def bar(self):
+        return self.foo.bar
+
+reveal_type(FooManager().bar)  # E: revealed type: (simple_union: int | str, complex_union: int | str | tuple[int, str] | None = None) -> None
+"#,
+);
+
 testcase!(
     test_generic_function_as_closure_default_arg,
     r#"
@@ -2926,8 +2951,8 @@ class A:
     def __init__(self):
         self.val = "string"
 def f(a: A):
-    assert_type(a.val, Literal[1, 'string'])
-    assert_type(A.val, Literal['string', 1])
+    assert_type(a.val, int | str)
+    assert_type(A.val, int | str)
 
 class B:
     def __init__(self):
@@ -2936,8 +2961,8 @@ class B:
         cls.val = 1
         return super().__new__(cls)
 def g(b: B):
-    assert_type(b.val, Literal['string', 1])
-    assert_type(B.val, Literal['string', 1])
+    assert_type(b.val, int | str)
+    assert_type(B.val, int | str)
     "#,
 );
 
@@ -3121,5 +3146,155 @@ f.real_method.test = None  # E: has no attribute `test`
 del f.real_method.test  # E: has no attribute `test`
 # Known method attributes are still accessible.
 name: str = f.real_method.__name__
+"#,
+);
+
+testcase!(
+    test_getattr_self_awaitable_recursion,
+    r#"
+from collections.abc import Awaitable
+
+class C:
+    def __getattr__(self: Awaitable, name: str):
+        pass
+
+C().a  # E: Argument `C` is not assignable to parameter `self` with type `Awaitable[Unknown]` in function `C.__getattr__`
+"#,
+);
+
+testcase!(
+    test_getattr_self_protocol_generic_cache_order,
+    r#"
+from typing import Protocol, TypeVar
+
+T = TypeVar("T", covariant=True)
+
+class P(Protocol[T]):
+    @property
+    def x(self) -> T: ...
+
+class C:
+    def __getattr__(self: "P[str]", name: str) -> int:
+        return 0
+
+def f_int(x: P[int]) -> None: ...
+def f_str(x: P[str]) -> None: ...
+
+f_int(C())
+f_str(C())  # E: Argument `C` is not assignable to parameter `x` with type `P[str]` in function `f_str`
+"#,
+);
+// A field defined by assignment in several methods takes the union of the assigned types, built
+// through the solver, so complementary bool literals collapse to `bool`.
+testcase!(
+    test_deferred_field_unions_bool_literals,
+    r#"
+from typing import Literal, assert_type
+def rt() -> Literal[True]: ...
+def rf() -> Literal[False]: ...
+class K:
+    def a(self) -> None:
+        self.x = rt()
+    def b(self) -> None:
+        self.x = rf()
+def probe(k: K) -> None:
+    assert_type(k.x, bool)
+"#,
+);
+
+// A literal is absorbed by its own class when both are assigned. The two are equivalent, so
+// only the rendered form differs and `reveal_type` is what can observe it.
+testcase!(
+    test_deferred_field_unions_literal_with_class,
+    r#"
+from typing import Literal, reveal_type
+def r1() -> Literal[1]: ...
+def ri() -> int: ...
+class K:
+    def a(self) -> None:
+        self.x = r1()
+    def b(self) -> None:
+        self.x = ri()
+def probe(k: K) -> None:
+    reveal_type(k.x)  # E: revealed type: int
+"#,
+);
+
+// Assigning every member of an enum gives the enum class rather than a union of its members.
+testcase!(
+    test_deferred_field_promotes_exhaustive_enum,
+    r#"
+from enum import Enum
+from typing import Literal, assert_type
+class E(Enum):
+    A = 1
+    B = 2
+def ra() -> Literal[E.A]: ...
+def rb() -> Literal[E.B]: ...
+class K:
+    def a(self) -> None:
+        self.x = ra()
+    def b(self) -> None:
+        self.x = rb()
+def probe(k: K) -> None:
+    assert_type(k.x, E)
+"#,
+);
+
+// A promoted string literal and an explicitly annotated `LiteralString` are the same type once
+// the wider one absorbs the narrower, so the field's natural type is `str`.
+testcase!(
+    test_deferred_field_absorbs_literal_string,
+    r#"
+from typing import LiteralString, reveal_type
+def fs() -> LiteralString: ...
+class K:
+    def a(self) -> None:
+        self.x = "a"
+    def b(self) -> None:
+        self.x = fs()
+def use(k: K, s: str) -> None:
+    reveal_type(k.x)  # E: revealed type: str
+    k.x = s
+"#,
+);
+
+// Unioning the assigned values merges the submodules reachable through them, so the field's type
+// is a module value equal to neither assignment, and assigning either one back is rejected. A
+// module value carries the submodules reachable through it, and two such values are compared
+// structurally, so a merged one matches neither input. The same defect is reachable without any
+// class field, through a function that returns a module from two branches.
+testcase!(
+    bug = "A merged module value is not assignable to the field it was inferred from",
+    test_deferred_field_unions_module_values,
+    r#"
+class C:
+    def a(self) -> None:
+        import os
+        self.x = os  # E: `Module[os]` is not assignable to attribute `x` with type `Module[os]`
+    def b(self) -> None:
+        import os.path
+        self.x = os  # E: `Module[os]` is not assignable to attribute `x` with type `Module[os]`
+"#,
+);
+
+// A field assigned an explicit `Any` in one method and an un-inferable value in another unions the
+// two. The solver's union collapses a union of `Any`s to a single member, keeping the highest
+// `AnyStyle`, and `Implicit` outranks `Explicit`, so the field is `Unknown` where the heap-only
+// union left `Any | Unknown`. The difference reaches users: `Unknown` trips lints such as
+// `unknown-argument-type` that an explicit `Any` suppresses.
+testcase!(
+    test_field_unions_explicit_any_with_unknown,
+    r#"
+from typing import Any, reveal_type
+
+class C:
+    def m(self, x: Any) -> None:
+        self.f = x
+    def n(self, y) -> None:
+        self.f = y
+
+def use(c: C) -> None:
+    reveal_type(c.f)  # E: revealed type: Unknown
 "#,
 );

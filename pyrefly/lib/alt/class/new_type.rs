@@ -22,7 +22,7 @@ use crate::types::function::FuncMetadata;
 use crate::types::function::Function;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn base_type_for_newtype(&self, class: &Class, base_class: &Class) -> Type {
         if base_class.is_builtin("tuple")
             && let Some(tuple_ancestor) = self.get_base_types_for_class(class).tuple_ancestor()

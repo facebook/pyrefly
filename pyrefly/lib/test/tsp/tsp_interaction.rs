@@ -13,5 +13,7 @@ pub mod get_supported_protocol_version;
 pub mod get_type_queries;
 pub mod notebook;
 pub mod object_model;
+pub mod request_errors;
 pub mod resolve_import;
 pub mod snapshot_changed;
+pub mod unopened_files;

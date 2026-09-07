@@ -23,7 +23,7 @@ class E(enum.Enum):
     Y = 2
         "#,
     );
-    let cls = get_class("E", &handle, &state);
+    let cls = get_class("E", &handle, &state.reader());
     let bindings = state.transaction().get_bindings(&handle).unwrap();
     let class_fields = bindings.get_class_fields(cls.index()).unwrap();
     let fields = class_fields
@@ -391,6 +391,26 @@ def foo(f: MyFlag) -> None:
         pass
     else:
         assert_type(f, MyFlag)
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4657
+testcase!(
+    test_flag_union_return_self,
+    r#"
+import enum
+from typing import Self
+
+class MyFlag(enum.Flag):
+    a = enum.auto()
+    b = enum.auto()
+
+    @classmethod
+    def all_flags(cls) -> Self:
+        return cls.a | cls.b
+
+    def foo(self) -> Self:
+        return self.a | self.b
 "#,
 );
 

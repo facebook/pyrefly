@@ -18,6 +18,17 @@ jobs:
       pull-requests: write
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            scripts/primer_presets.py
+            scripts/error_presets.json
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
       - name: Download diffs
         uses: actions/github-script@v8
         with:
@@ -42,6 +53,9 @@ jobs:
       - run: unzip diff.zip
       - run: |
           cat diff_*.txt | tee fulldiff.txt
+      - name: Break the diff down by preset
+        run: |
+          python scripts/primer_presets.py fulldiff.txt | tee preset_summary.txt
 
       - name: Post comment
         id: post-comment
@@ -84,6 +98,7 @@ jobs:
               'SUMMARY',
               '='.repeat(60),
               `Total: +${totalAdded} new errors, -${totalRemoved} fixed errors`,
+              `By preset: ${fs.readFileSync('preset_summary.txt', { encoding: 'utf8' }).trim()}`,
               '',
               `Projects with changes (${projectSummaries.length}):`,
               ...projectSummaries.map(project => `  ${project.name}: +${project.added} -${project.removed}`),

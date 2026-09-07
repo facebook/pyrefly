@@ -43,6 +43,26 @@ if False is not False:  # E: Identity comparison `False is not False` is always 
 );
 
 testcase!(
+    test_exhaustive_enum_narrowing,
+    r#"
+import inspect
+
+def parameter_kind(parameter: inspect.Parameter) -> str:
+    if parameter.kind is inspect.Parameter.POSITIONAL_ONLY:
+        return "positional-only"
+    elif parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD:
+        return "positional-or-keyword"
+    elif parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+        return "args"
+    elif parameter.kind is inspect.Parameter.KEYWORD_ONLY:
+        return "keyword-only"
+    elif parameter.kind is inspect.Parameter.VAR_KEYWORD:
+        return "kwargs"
+    return "other"
+"#,
+);
+
+testcase!(
     test_non_singleton_same_value_ok,
     r#"
 # Same integer/string literals - no warning (interning varies)

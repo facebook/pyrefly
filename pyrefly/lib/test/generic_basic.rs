@@ -889,3 +889,33 @@ def test2(cls: T2) -> str:
     return cls.name  # E:
     "#,
 );
+
+testcase!(
+    test_instantiate_type_of,
+    r#"
+from typing import assert_type
+class A[T]: ...
+def f(a: A[int]):
+    assert_type(type(a)(), A[int])
+"#,
+);
+
+testcase!(
+    bug = "Ordinary generics widen index literals",
+    test_generic_index_inference_widens_literals,
+    r#"
+from typing import assert_type
+
+class TypeVarCapture:
+    def __getitem__[I](self, index: I) -> I: ...
+
+class TypeVarTupleCapture:
+    def __getitem__[*Is](self, index: tuple[*Is]) -> tuple[*Is]: ...
+
+def f(by_type: TypeVarCapture, by_elements: TypeVarTupleCapture) -> None:
+    assert_type(by_type[0], int)
+    assert_type(by_type[1:5:2], slice[int, int, int])
+    assert_type(by_type[0, :, None], tuple[int, slice[None, None, None], None])
+    assert_type(by_elements[0, :, None], tuple[int, slice[None, None, None], None])
+"#,
+);

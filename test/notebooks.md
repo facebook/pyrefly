@@ -6,9 +6,10 @@
 $ echo -e "x: int = 1" > $TMPDIR/notebook.ipynb && \
 > $PYREFLY check $TMPDIR/notebook.ipynb
 ERROR * Expected a Jupyter Notebook, which must be internally stored as JSON, but this file isn't valid JSON* (glob)
---> */notebook.ipynb:1:1 (glob)
- |
- |
+ --> */notebook.ipynb:1:1 (glob)
+  |
+1 |
+  | ^
 [1]
 ```
 
@@ -18,9 +19,10 @@ ERROR * Expected a Jupyter Notebook, which must be internally stored as JSON, bu
 $ echo -e "{}" > $TMPDIR/notebook.ipynb && \
 > $PYREFLY check $TMPDIR/notebook.ipynb
 ERROR * This file does not match the schema expected of Jupyter Notebooks: missing field `cells`* (glob)
---> */notebook.ipynb:1:1 (glob)
- |
- |
+ --> */notebook.ipynb:1:1 (glob)
+  |
+1 |
+  | ^
 [1]
 ```
 
@@ -82,7 +84,6 @@ ERROR `await` can only be used inside an async function [invalid-syntax]
   |
 * (glob)
 * (glob)
-  |
 [1]
 ```
 
@@ -107,7 +108,6 @@ ERROR `Literal[5]` is not assignable to `bool` [bad-assignment]
   |    ----   ^
   |    |
   |    declared type
-  |
 [1]
 ```
 
@@ -124,7 +124,6 @@ ERROR `Literal[5]` is not assignable to `bool` [bad-assignment]
   |    ----   ^
   |    |
   |    declared type
-  |
 [1]
 ```
 

@@ -8,6 +8,23 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+// `CallArgPreEval::advance_after_match` is shared with shape-specific call matching. Keep this
+// regression in the general callable suite so the refactor cannot change ordinary variadic
+// type-variable consumption.
+testcase!(
+    ordinary_type_var_tuple_argument_advancement_is_unchanged,
+    r#"
+from typing import assert_type
+
+def pack[*Ts](*args: *Ts) -> tuple[*Ts]: ...
+
+assert_type(pack(1, "x"), tuple[int, str])
+
+def check(xs: tuple[int, str]) -> None:
+    assert_type(pack(*xs), tuple[int, str])
+"#,
+);
+
 testcase!(
     test_lambda,
     r#"
@@ -832,6 +849,29 @@ def test(kwargs: dict[str, int]):
 );
 
 testcase!(
+    test_splat_unknown_length_with_known_kwargs_keys,
+    r#"
+from typing import Any
+
+def get_content(
+    service_instance: Any,
+    obj_type: str,
+    property_list: list[str] | None = None,
+    container_ref: Any = None,
+) -> dict[str, Any]:
+    return {}
+
+def call_get_content(instance: Any, obj_type: str) -> dict[str, Any]:
+    args: list[Any] = [instance, obj_type]
+    kwargs = {
+        "property_list": ["name"],
+        "container_ref": None,
+    }
+    return get_content(*args, **kwargs)  # OK
+"#,
+);
+
+testcase!(
     test_splat_kwargs_mixed_with_keywords,
     r#"
 def f(x: str, y: int, z: int): ...
@@ -1514,6 +1554,29 @@ def f(
         assert_type(x4, Callable[..., int | Any])
     if callable(x5):
         assert_type(x5, Callable[..., Any])
+    "#,
+);
+
+testcase!(
+    test_builtins_callable_narrow_unknown,
+    r#"
+from typing import Any, Callable, TypeIs, assert_type
+
+def f(x):
+    assert callable(x)
+    assert_type(x, Callable[..., Any])
+    assert_type(x(), Any)
+
+def g(x: object):
+    assert callable(x)
+    assert_type(x, Callable[..., Any])
+
+def is_object_callable(x: object) -> TypeIs[Callable[..., object]]:
+    return callable(x)
+
+def h(x):
+    assert is_object_callable(x)
+    assert_type(x(), object)
     "#,
 );
 

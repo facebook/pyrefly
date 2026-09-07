@@ -27,7 +27,6 @@ import argparse
 import re
 import sys
 
-
 _SEMVER_RE: re.Pattern[str] = re.compile(
     r"^(\d+)\.(\d+)\.(\d+)(?:-dev\.(\d+))?$",
 )

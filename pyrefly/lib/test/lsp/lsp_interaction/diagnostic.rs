@@ -1774,11 +1774,13 @@ fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
         .unwrap()
         .send_configuration_response(json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]));
 
-    interaction.client.did_open("untyped_import_django/test.py");
+    interaction
+        .client
+        .did_open("untyped_import_recommended/test.py");
 
     interaction
         .client
-        .diagnostic("untyped_import_django/test.py")
+        .diagnostic("untyped_import_recommended/test.py")
         .expect_response(json!({
             "items": [
                 {
@@ -1795,11 +1797,35 @@ fn test_untyped_import_diagnostic_shows_error_for_recommended_packages() {
                     "source": "Pyrefly"
                 },
                 {
+                    "code": "untyped-import",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#untyped-import"
+                    },
+                    "message": "Cannot find type stubs for module `scipy`\n  Hint: install the `scipy-stubs` package",
+                    "range": {
+                        "start": {"line": 6, "character": 7},
+                        "end": {"line": 6, "character": 12}
+                    },
+                    "severity": 1,
+                    "source": "Pyrefly"
+                },
+                {
                     "code": "unused-import",
                     "message": "Import `django` may be unused",
                     "range": {
                         "start": {"line": 5, "character": 7},
                         "end": {"line": 5, "character": 13}
+                    },
+                    "severity": 4,
+                    "source": "Pyrefly",
+                    "tags": [1]
+                },
+                {
+                    "code": "unused-import",
+                    "message": "Import `scipy` may be unused",
+                    "range": {
+                        "start": {"line": 6, "character": 7},
+                        "end": {"line": 6, "character": 12}
                     },
                     "severity": 4,
                     "source": "Pyrefly",

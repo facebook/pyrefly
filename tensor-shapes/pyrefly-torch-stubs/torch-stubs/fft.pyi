@@ -4,9 +4,14 @@
 # LICENSE file in the root directory of this source tree.
 
 # Type stubs for torch.fft module (Phase 6: FFT Operations)
-from shape_extensions import IntTuple, uses_shape_dsl
+from typing import TYPE_CHECKING
+
+from shape_extensions import Flag, IntTuple
 from torch import Tensor
-from torch._shapes import irfft_ir, rfft_ir
+from torch._shapes import irfft_shape, rfft_shape
+
+if TYPE_CHECKING:
+    from shape_extensions import Int as _Int
 
 # 1D FFT operations
 def fft[Shape: IntTuple](
@@ -15,14 +20,18 @@ def fft[Shape: IntTuple](
 def ifft[Shape: IntTuple](
     input: Tensor[Shape], n: int = None, dim: int = -1, norm: str = None
 ) -> Tensor[Shape]: ...
-@uses_shape_dsl(rfft_ir)
-def rfft(self: Tensor, n: int = None, dim: int = -1, norm: str = None) -> Tensor: ...
-@uses_shape_dsl(irfft_ir)
-def irfft(self: Tensor, n: int = None, dim: int = -1, norm: str = None) -> Tensor: ...
-@uses_shape_dsl(irfft_ir)
-def hfft(self: Tensor, n: int = None, dim: int = -1, norm: str = None) -> Tensor: ...
-@uses_shape_dsl(rfft_ir)
-def ihfft(self: Tensor, n: int = None, dim: int = -1, norm: str = None) -> Tensor: ...
+def rfft[Shape: IntTuple, N: _Int | None, Dim: Flag[int]](
+    input: Tensor[Shape], n: N = None, dim: Dim = -1, norm: str = None
+) -> Tensor[rfft_shape(Shape, N, Dim)]: ...
+def irfft[Shape: IntTuple, N: _Int | None, Dim: Flag[int]](
+    input: Tensor[Shape], n: N = None, dim: Dim = -1, norm: str = None
+) -> Tensor[irfft_shape(Shape, N, Dim)]: ...
+def hfft[Shape: IntTuple, N: _Int | None, Dim: Flag[int]](
+    input: Tensor[Shape], n: N = None, dim: Dim = -1, norm: str = None
+) -> Tensor[irfft_shape(Shape, N, Dim)]: ...
+def ihfft[Shape: IntTuple, N: _Int | None, Dim: Flag[int]](
+    input: Tensor[Shape], n: N = None, dim: Dim = -1, norm: str = None
+) -> Tensor[rfft_shape(Shape, N, Dim)]: ...
 
 # 2D FFT operations
 def fft2[Shape: IntTuple](

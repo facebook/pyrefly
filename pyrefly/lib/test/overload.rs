@@ -1913,7 +1913,7 @@ def ndim(shape: tuple[int, ...]) -> int:
     return len(shape)
 
 def demo_gradual(s: tuple[Any, ...]):
-    assert_type(ndim(s), int)
+    assert_type(ndim(s), Any)
 
 def demo_one(s: tuple[int]):
     assert_type(ndim(s), Literal[1])
@@ -1964,33 +1964,6 @@ def test(x: A[None], y: A[Any]) -> None:
     assert_type(op(x, y), A[None])
     assert_type(op(y, x), A[None])
     assert_type(op(y, y), A[Any])
-    "#,
-);
-
-testcase!(
-    test_resolve_ambiguous_spec_compliant,
-    TestEnv::new().enable_spec_compliant_overloads(),
-    r#"
-from typing import Any, overload, assert_type
-
-class A[T]:  # covariant
-    def get(self) -> T: ...
-
-@overload
-def op(l: A[None], r: A[None]) -> A[None]: ...
-@overload
-def op(l: A[None], r: A[Any]) -> A[None]: ...
-@overload
-def op(l: A[Any], r: A[None]) -> A[None]: ...
-@overload
-def op(l: A[Any], r: A[Any]) -> A[Any]: ...
-def op(l, r) -> A[None | Any]: ...
-
-def test(x: A[None], y: A[Any]) -> None:
-    assert_type(op(x, x), A[None])
-    assert_type(op(x, y), A[None])
-    assert_type(op(y, x), A[None])
-    assert_type(op(y, y), Any)
     "#,
 );
 
@@ -2517,5 +2490,43 @@ if TYPE_CHECKING:
     def f(a: int): ...
     @overload
     def f(a: str): ...
+    "#,
+);
+
+testcase!(
+    test_union_with_any_ambiguity,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f(x: int) -> float | Any: ...
+@overload
+def f(x: str) -> Any: ...
+def f(x) -> Any: ...
+
+def g(x: Any):
+    assert_type(f(x), Any)
+    "#,
+);
+
+testcase!(
+    bug = "`int` should not be considered a subtype of `float`",
+    test_int_float_ambiguity,
+    r#"
+from typing import Any, assert_type, overload
+
+@overload
+def f(x: int) -> int | Any: ...
+@overload
+def f(x: str) -> float: ...
+def f(x) -> Any: ...
+
+def g(x: Any):
+    # This is technically wrong: pyrefly permits operations like `.hex()` on values typed as
+    # `float`, which `int` does not permit. This is weirdness related to how we implement
+    # the `int`/`float`/`complex` special case in the spec and not specific to overloads. One way
+    # to make it correct would be to implement https://github.com/python/typing-council/issues/46
+    # and treat `float` as meaning `int | float` in type expressions.
+    assert_type(f(x), int | Any)
     "#,
 );

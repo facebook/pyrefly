@@ -349,6 +349,7 @@ mod tests {
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_name::ModuleNameWithKind;
     use pyrefly_python::module_path::ModulePath;
+    use pyrefly_python::module_path::ModulePathDetails;
     use pyrefly_util::includes::Includes;
     use pyrefly_util::test_path::TestPath;
 
@@ -356,6 +357,8 @@ mod tests {
     use crate::commands::check::Handles;
     use crate::config::config::ConfigSource;
     use crate::config::environment::environment::PythonEnvironment;
+    use crate::module::finder::DirEntryCache;
+    use crate::module::finder::find_import;
 
     struct TestConfigurer(
         Box<
@@ -562,6 +565,128 @@ mod tests {
         });
         let (handles, _, _) = Handles::new(vec![root.join("foo.py")]).all(&finder);
         assert_eq!(handles[0].module(), ModuleName::from_str("foo"));
+    }
+
+    #[test]
+    fn test_site_package_dependency_uses_same_bundled_stub_as_importer() {
+        // project/
+        //   |- foo.py ("import pandas")
+        // site-packages/
+        //   |- dependency.py ("import pandas")
+        //   |- pandas/
+        //        |- __init__.py (empty)
+        //
+        // The pandas imports in foo.py and dependency.py should both resolve to pyrefly's bundled
+        // pandas stubs, not site-packages/pandas/.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let project = root.join("project");
+        let site_packages = root.join("site-packages");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(site_packages.join("pandas")).unwrap();
+        let foo = project.join("foo.py");
+        let dependency = site_packages.join("dependency.py");
+        fs::write(&foo, "import pandas\n").unwrap();
+        fs::write(&dependency, "import pandas\n").unwrap();
+        fs::write(site_packages.join("pandas").join("__init__.py"), "").unwrap();
+
+        let site_packages_for_config = site_packages.clone();
+        let finder = TestConfigurer::new_standard(move |root, mut config, mut errors| {
+            config.interpreters.skip_interpreter_query = true;
+            config.python_environment.site_package_path =
+                Some(vec![site_packages_for_config.clone()]);
+            errors.extend(config.configure_at(root));
+            (ArcId::new(config), errors)
+        });
+        let foo_path = ModulePath::filesystem(foo);
+        let dependency_path = ModulePath::filesystem(dependency);
+        let foo_config = finder.python_file(
+            ModuleNameWithKind::guaranteed(ModuleName::from_str("foo")),
+            &foo_path,
+        );
+        let dependency_config = finder.python_file(
+            ModuleNameWithKind::guaranteed(ModuleName::from_str("dependency")),
+            &dependency_path,
+        );
+        let resolve_pandas = |config: &ConfigFile, origin: &ModulePath| {
+            find_import(
+                config,
+                ModuleName::from_str("pandas"),
+                Some(origin),
+                None,
+                &DirEntryCache::new(),
+                None,
+            )
+            .finding()
+            .unwrap()
+        };
+        let foo_pandas = resolve_pandas(&foo_config, &foo_path);
+        let dependency_pandas = resolve_pandas(&dependency_config, &dependency_path);
+
+        assert!(
+            matches!(
+                foo_pandas.details(),
+                ModulePathDetails::BundledThirdParty(_)
+            ),
+            "expected foo.py to use bundled pandas stubs, got {foo_pandas:?}",
+        );
+        assert_eq!(dependency_pandas, foo_pandas);
+    }
+
+    #[test]
+    fn test_nested_site_package_root_does_not_shadow_bundled_stub() {
+        // site-packages/
+        //   |- vendoring/
+        //        |- _vendor/
+        //             |- thing.py ("import pandas")
+        //             |- pandas/
+        //                  |- __init__.py (empty)
+        //
+        // The guessed import root for thing.py is `site-packages/vendoring/_vendor`, which is
+        // nested inside site-packages rather than equal to it. A vendored pandas in that root is
+        // not on `sys.path`, so it must not take priority over pyrefly's bundled pandas stubs.
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        let site_packages = root.join("site-packages");
+        let vendor = site_packages.join("vendoring").join("_vendor");
+        fs::create_dir_all(vendor.join("pandas")).unwrap();
+        let thing = vendor.join("thing.py");
+        fs::write(&thing, "import pandas\n").unwrap();
+        fs::write(vendor.join("pandas").join("__init__.py"), "").unwrap();
+
+        let site_packages_for_config = site_packages.clone();
+        let finder = TestConfigurer::new_standard(move |root, mut config, mut errors| {
+            config.interpreters.skip_interpreter_query = true;
+            config.python_environment.site_package_path =
+                Some(vec![site_packages_for_config.clone()]);
+            errors.extend(config.configure_at(root));
+            (ArcId::new(config), errors)
+        });
+        let thing_path = ModulePath::filesystem(thing);
+        let thing_config = finder.python_file(
+            ModuleNameWithKind::guaranteed(ModuleName::from_str("thing")),
+            &thing_path,
+        );
+        assert_eq!(
+            thing_config.fallback_search_path,
+            FallbackSearchPath::Explicit(Arc::new(vec![vendor])),
+            "the guessed import root should be nested inside site-packages",
+        );
+
+        let pandas = find_import(
+            &thing_config,
+            ModuleName::from_str("pandas"),
+            Some(&thing_path),
+            None,
+            &DirEntryCache::new(),
+            None,
+        )
+        .finding()
+        .unwrap();
+        assert!(
+            matches!(pandas.details(), ModulePathDetails::BundledThirdParty(_)),
+            "expected bundled pandas stubs, got {pandas:?}",
+        );
     }
 
     /// A real pyrefly.toml should always take priority over a pyproject.toml

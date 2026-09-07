@@ -343,13 +343,13 @@ mod test {
 
     use super::*;
 
-    fn test_venv_interpreter_name() -> &'static str {
-        if cfg!(windows) {
-            "python.exe"
-        } else {
-            "python3"
-        }
-    }
+    /// The interpreter location a real virtual environment provides on this platform.
+    const INTERPRETER_DIR: &str = if cfg!(windows) { "Scripts" } else { "bin" };
+    const INTERPRETER_NAME: &str = if cfg!(windows) {
+        "python.exe"
+    } else {
+        "python"
+    };
 
     fn setup_test_dir() -> TempDir {
         let tempdir = tempdir().unwrap();
@@ -359,7 +359,7 @@ mod test {
             vec![TestPath::dir(
                 "venv",
                 vec![
-                    TestPath::file(test_venv_interpreter_name()),
+                    TestPath::dir(INTERPRETER_DIR, vec![TestPath::file(INTERPRETER_NAME)]),
                     TestPath::file("pyvenv.cfg"),
                 ],
             )],
@@ -506,7 +506,8 @@ mod test {
                 tempdir
                     .path()
                     .join("venv")
-                    .join(test_venv_interpreter_name())
+                    .join(INTERPRETER_DIR)
+                    .join(INTERPRETER_NAME)
             )
         );
     }

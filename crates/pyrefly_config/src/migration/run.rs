@@ -717,6 +717,24 @@ files = ["mypy.py"]
         Ok(())
     }
 
+    #[test]
+    fn test_follow_untyped_imports_overrides_legacy_preset() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let original_config_path = tmp.path().join("mypy.ini");
+        let pyrefly_config_path = tmp.path().join("pyrefly.toml");
+        fs_anyhow::write(
+            &original_config_path,
+            b"[mypy]\nfollow_untyped_imports = True\n",
+        )?;
+        config_migration(&original_config_path, MigrationSource::Auto, false, false)?;
+        let output = fs_anyhow::read_to_string(&pyrefly_config_path)?;
+        assert_eq!(
+            output.trim(),
+            "preset = \"legacy\"\nreplace-untyped-imports-with-any = [\"!*\"]"
+        );
+        Ok(())
+    }
+
     /// Tests that a migrated mypy config with both root-level and per-module
     /// error codes produces a pyrefly config where the sub-config inherits the
     /// root's error overrides. Before the sub-config error merging fix, the

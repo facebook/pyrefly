@@ -44,7 +44,7 @@ from typing import Any, assert_type, cast, TYPE_CHECKING
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from shape_extensions import IntTuple, IntVar, shaped_array
+from shape_extensions import IntTuple, IntVar
 from torch.distributions import Normal, TransformedDistribution
 from torch.distributions.transforms import Transform
 
@@ -85,7 +85,6 @@ class TanhTransform(Transform):
         return 2.0 * (math.log(2.0) - x - F.softplus(-2.0 * x))
 
 
-@shaped_array(shape="EventShape")
 class SquashedNormal[EventShape: IntTuple](TransformedDistribution[EventShape]):
     """Normal distribution followed by tanh squashing.
 

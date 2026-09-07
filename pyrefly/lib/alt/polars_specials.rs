@@ -490,7 +490,7 @@ fn positional_elements(arg: &Expr) -> &[Expr] {
 }
 
 /// A pinned dtype or a numeric literal that can adapt to its other operand.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ExprValue {
     Dtype(PolarsDType),
     IntLit(i128),
@@ -615,14 +615,14 @@ impl ExprValue {
         }
     }
 
-    fn is_numeric(self) -> bool {
+    fn is_numeric(&self) -> bool {
         match self {
             ExprValue::IntLit(_) | ExprValue::FloatLit => true,
             ExprValue::Dtype(d) => d.is_numeric(),
         }
     }
 
-    fn is_integer(self) -> bool {
+    fn is_integer(&self) -> bool {
         match self {
             ExprValue::IntLit(_) => true,
             ExprValue::FloatLit => false,
@@ -670,7 +670,7 @@ fn resolve_column(
     errors: &ErrorCollector,
 ) -> Option<PolarsDType> {
     match schema.columns.iter().find(|(c, _)| c == name) {
-        Some((_, ty)) => Some(*ty),
+        Some((_, ty)) => Some(ty.clone()),
         None => {
             if schema.is_complete() {
                 errors
@@ -698,11 +698,13 @@ fn report_duplicate_column(name: &Name, range: TextRange, errors: &ErrorCollecto
 
 fn arith(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
     use ExprValue::*;
-    match (a, b) {
-        (Dtype(da), Dtype(db)) if da.is_numeric() && db.is_numeric() => da.supertype(db).map(Dtype),
+    match (&a, &b) {
+        (Dtype(da), Dtype(db)) if da.is_numeric() && db.is_numeric() => {
+            da.clone().supertype(db.clone()).map(Dtype)
+        }
         (Dtype(_), Dtype(_)) => None,
-        (Dtype(d), IntLit(v)) | (IntLit(v), Dtype(d)) => int_lit_with_dtype(d, v),
-        (Dtype(d), FloatLit) | (FloatLit, Dtype(d)) => float_lit_with_dtype(d),
+        (Dtype(d), IntLit(v)) | (IntLit(v), Dtype(d)) => int_lit_with_dtype(d.clone(), *v),
+        (Dtype(d), FloatLit) | (FloatLit, Dtype(d)) => float_lit_with_dtype(d.clone()),
         (IntLit(_), IntLit(_)) => a.dtype().supertype(b.dtype()).map(Dtype),
         (IntLit(_), FloatLit) | (FloatLit, IntLit(_)) | (FloatLit, FloatLit) => {
             Some(Dtype(PolarsDType::Float64))
@@ -721,11 +723,10 @@ fn int_lit_with_dtype(d: PolarsDType, v: i128) -> Option<ExprValue> {
 }
 
 fn float_lit_with_dtype(d: PolarsDType) -> Option<ExprValue> {
-    use PolarsDType::*;
     match d {
-        Float32 => Some(ExprValue::Dtype(Float32)),
-        Float64 => Some(ExprValue::Dtype(Float64)),
-        d if d.is_integer() => Some(ExprValue::Dtype(Float64)),
+        PolarsDType::Float32 => Some(ExprValue::Dtype(PolarsDType::Float32)),
+        PolarsDType::Float64 => Some(ExprValue::Dtype(PolarsDType::Float64)),
+        d if d.is_integer() => Some(ExprValue::Dtype(PolarsDType::Float64)),
         _ => None,
     }
 }
@@ -746,17 +747,16 @@ fn pow(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
 }
 
 fn integer_dtype_with_literal(dtype: PolarsDType, value: i128) -> Option<PolarsDType> {
-    use PolarsDType::*;
     let (lower, upper) = dtype.int_bounds()?;
     if (lower..=upper).contains(&value)
         || value < i64::MIN as i128
         || value > u64::MAX as i128
-        || dtype == UInt128
+        || dtype == PolarsDType::UInt128
     {
         return Some(dtype);
     }
-    if dtype == UInt64 && value < 0 {
-        return Some(Int64);
+    if dtype == PolarsDType::UInt64 && value < 0 {
+        return Some(PolarsDType::Int64);
     }
     let smallest = |candidates: [PolarsDType; 4]| {
         candidates.into_iter().find(|candidate| {
@@ -766,13 +766,29 @@ fn integer_dtype_with_literal(dtype: PolarsDType, value: i128) -> Option<PolarsD
         })
     };
     let literal = if value < 0 {
-        smallest([Int8, Int16, Int32, Int64])
-            .expect("negative literal within i64 bounds must fit Int64")
+        smallest([
+            PolarsDType::Int8,
+            PolarsDType::Int16,
+            PolarsDType::Int32,
+            PolarsDType::Int64,
+        ])
+        .expect("negative literal within i64 bounds must fit Int64")
     } else if dtype.is_signed_int() {
-        smallest([Int8, Int16, Int32, Int64]).unwrap_or(UInt64)
+        smallest([
+            PolarsDType::Int8,
+            PolarsDType::Int16,
+            PolarsDType::Int32,
+            PolarsDType::Int64,
+        ])
+        .unwrap_or(PolarsDType::UInt64)
     } else {
-        smallest([UInt8, UInt16, UInt32, UInt64])
-            .expect("nonnegative literal within u64 bounds must fit UInt64")
+        smallest([
+            PolarsDType::UInt8,
+            PolarsDType::UInt16,
+            PolarsDType::UInt32,
+            PolarsDType::UInt64,
+        ])
+        .expect("nonnegative literal within u64 bounds must fit UInt64")
     };
     dtype.supertype(literal)
 }
@@ -790,7 +806,7 @@ fn combine_binop(op: Operator, a: ExprValue, b: ExprValue) -> Option<ExprValue> 
         }
         Operator::BitAnd | Operator::BitOr | Operator::BitXor => {
             if matches!(
-                (a, b),
+                (&a, &b),
                 (Dtype(PolarsDType::Boolean), Dtype(PolarsDType::Boolean))
             ) {
                 Some(Dtype(PolarsDType::Boolean))
@@ -830,7 +846,7 @@ fn unary_value(op: UnaryOp, a: ExprValue) -> Option<ExprValue> {
 fn comparison_value(a: ExprValue, b: ExprValue) -> Option<ExprValue> {
     use ExprValue::*;
     let comparable =
-        (a.is_numeric() && b.is_numeric()) || matches!((a, b), (Dtype(x), Dtype(y)) if x == y);
+        (a.is_numeric() && b.is_numeric()) || matches!((&a, &b), (Dtype(x), Dtype(y)) if x == y);
     comparable.then_some(Dtype(PolarsDType::Boolean))
 }
 
@@ -856,25 +872,39 @@ impl Reducer {
     }
 
     fn output_dtype(self, d: PolarsDType) -> Option<PolarsDType> {
-        use PolarsDType::*;
         match self {
             Reducer::Identity => Some(d),
-            Reducer::Count => Some(UInt32),
+            Reducer::Count => Some(PolarsDType::UInt32),
             Reducer::FloatPromote => match d {
-                Float32 => Some(Float32),
-                Boolean => Some(Float64),
-                d if d.is_numeric() => Some(Float64),
+                PolarsDType::Float32 => Some(PolarsDType::Float32),
+                PolarsDType::Boolean => Some(PolarsDType::Float64),
+                d if d.is_numeric() => Some(PolarsDType::Float64),
                 _ => None,
             },
             Reducer::Sum => match d {
-                Boolean => Some(UInt32),
-                Int8 | Int16 | UInt8 | UInt16 => Some(Int64),
-                Int32 | Int64 | UInt32 | UInt64 | Float32 | Float64 => Some(d),
+                PolarsDType::Boolean => Some(PolarsDType::UInt32),
+                PolarsDType::Int8
+                | PolarsDType::Int16
+                | PolarsDType::UInt8
+                | PolarsDType::UInt16 => Some(PolarsDType::Int64),
+                PolarsDType::Int32
+                | PolarsDType::Int64
+                | PolarsDType::UInt32
+                | PolarsDType::UInt64
+                | PolarsDType::Float32
+                | PolarsDType::Float64 => Some(d),
                 _ => None,
             },
             Reducer::Product => match d {
-                UInt64 | Float32 | Float64 => Some(d),
-                Boolean | Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 => Some(Int64),
+                PolarsDType::UInt64 | PolarsDType::Float32 | PolarsDType::Float64 => Some(d),
+                PolarsDType::Boolean
+                | PolarsDType::Int8
+                | PolarsDType::Int16
+                | PolarsDType::Int32
+                | PolarsDType::Int64
+                | PolarsDType::UInt8
+                | PolarsDType::UInt16
+                | PolarsDType::UInt32 => Some(PolarsDType::Int64),
                 _ => None,
             },
         }
@@ -898,7 +928,7 @@ impl PolarsExprMethod {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn polars_method_call(
         &self,
         base: &Type,
@@ -1561,7 +1591,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .map(|(name, dtype)| {
                     (
                         name.clone(),
-                        construct.overrides.get(name).copied().unwrap_or(*dtype),
+                        construct
+                            .overrides
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| dtype.clone()),
                     )
                 })
                 .collect(),
@@ -1585,7 +1619,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .iter()
                 .map(|(name, values)| {
                     let element = match construct.overrides.get(name) {
-                        Some(dtype) => *dtype,
+                        Some(dtype) => dtype.clone(),
                         None => self
                             .dataframe_list_element_type(
                                 name,
@@ -1632,7 +1666,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             for name in names {
                 let value = data.columns.get(name).copied()?;
                 let element = if let Some(dtype) = construct.overrides.get(name) {
-                    *dtype
+                    dtype.clone()
                 } else {
                     match element_from_data(name, value) {
                         Some(dtype) => dtype,
@@ -1686,9 +1720,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             .iter()
             .map(|(name, dtype)| {
                 let element = if let Some(dtype) = construct.overrides.get(name) {
-                    *dtype
+                    dtype.clone()
                 } else if let Some(dtype) = dtype {
-                    *dtype
+                    dtype.clone()
                 } else {
                     match data.and_then(|d| d.columns.get(name).copied()) {
                         Some(value) => {
@@ -1883,9 +1917,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     .iter()
                     .enumerate()
                     .map(|(i, (name, dtype))| {
-                        let folded = rest
-                            .iter()
-                            .try_fold(*dtype, |acc, (columns, _)| acc.supertype(columns[i].1))?;
+                        let folded = rest.iter().try_fold(dtype.clone(), |acc, (columns, _)| {
+                            acc.supertype(columns[i].1.clone())
+                        })?;
                         Some((name.clone(), folded))
                     })
                     .collect::<Option<Vec<_>>>()?
@@ -1977,7 +2011,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 column = element;
                 continue;
             }
-            if element.supertype(column) != Some(column) {
+            if element.clone().supertype(column.clone()) != Some(column.clone()) {
                 if kind == DataFrameKind::Polars {
                     self.error(
                         errors,
@@ -2198,7 +2232,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let columns = schema
             .columns
             .iter()
-            .map(|(name, ty)| (target(name), *ty))
+            .map(|(name, ty)| (target(name), ty.clone()))
             .collect();
         Some(dataframe_type_with_columns(schema, columns))
     }
@@ -2282,12 +2316,27 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 let b = self.eval_polars_expr(right, schema, errors)?;
                 comparison_value(a, b)
             }
+            Expr::Attribute(_) => {
+                let name = self.polars_col_attribute_name(expr)?;
+                resolve_column(schema, &name, expr.range(), errors).map(ExprValue::Dtype)
+            }
             _ => literal_value(expr),
         }
     }
 
     fn polars_function(&self, func: &Expr) -> Option<PolarsFunction> {
         PolarsFunction::from_callee(&self.expr_infer(func, &self.error_swallower()))
+    }
+
+    fn polars_col_attribute_name(&self, expr: &Expr) -> Option<Name> {
+        let Expr::Attribute(attr) = expr else {
+            return None;
+        };
+        let Type::ClassType(base) = self.expr_infer(&attr.value, &self.error_swallower()) else {
+            return None;
+        };
+        (RuntimeClass::PolarsCol.matches(base.class_object()) && self.is_polars_expr_value(expr))
+            .then(|| attr.attr.id.clone())
     }
 
     /// Prove an expression produces one column, so its output name is well-defined.
@@ -2321,6 +2370,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Expr::StringLiteral(_)
             | Expr::BytesLiteral(_)
             | Expr::NoneLiteral(_) => true,
+            Expr::Attribute(_) if self.polars_col_attribute_name(expr).is_some() => true,
             _ => !self.is_polars_expr_value(expr),
         }
     }
@@ -2400,6 +2450,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             | Expr::NoneLiteral(_) => {
                 literal_value(expr).map(|_| Name::new_static(POLARS_LITERAL_OUTPUT_NAME))
             }
+            Expr::Attribute(_) => self.polars_col_attribute_name(expr),
             _ => None,
         }
     }
@@ -2681,7 +2732,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let columns = schema
             .columns
             .iter()
-            .map(|(name, dtype)| (name.clone(), value.widen_integer(*dtype)))
+            .map(|(name, dtype)| (name.clone(), value.widen_integer(dtype.clone())))
             .collect();
         Some(dataframe_type_with_columns(schema, columns))
     }
@@ -2815,7 +2866,14 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 schema
                     .columns
                     .iter()
-                    .map(|(name, ty)| (name.clone(), casts.get(name).map_or(*ty, |(_, d)| *d)))
+                    .map(|(name, ty)| {
+                        (
+                            name.clone(),
+                            casts
+                                .get(name)
+                                .map_or_else(|| ty.clone(), |(_, dtype)| dtype.clone()),
+                        )
+                    })
                     .collect()
             }
             _ => {
@@ -2823,7 +2881,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 schema
                     .columns
                     .iter()
-                    .map(|(name, _)| (name.clone(), dtype))
+                    .map(|(name, _)| (name.clone(), dtype.clone()))
                     .collect()
             }
         };
@@ -2898,7 +2956,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
         let key_set: SmallSet<Name> = keys.into_iter().map(|(name, _)| name).collect();
         let column_dtype = |columns: &[(Name, PolarsDType)], name: &Name| {
-            columns.iter().find(|(c, _)| c == name).map(|(_, t)| *t)
+            columns
+                .iter()
+                .find(|(column, _)| column == name)
+                .map(|(_, dtype)| dtype.clone())
         };
         // A coalesced key keeps the primary side's dtype, so paired keys with differing dtypes could
         // be cast or rejected at runtime; fall back rather than pick one side.
@@ -3061,7 +3122,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let len = schema.columns.len() as i128;
         let resolved = if index < 0 { index + len } else { index };
         let dtype = if (0..len).contains(&resolved) {
-            Some(schema.columns[resolved as usize].1)
+            Some(schema.columns[resolved as usize].1.clone())
         } else {
             errors
                 .error_builder(
@@ -3117,7 +3178,7 @@ mod tests {
 
     #[test]
     fn test_pow_dtype_matrix_matches_polars_runtime() {
-        use PolarsDType::*;
+        use pyrefly_types::polars_dtype::PolarsScalarDType::*;
 
         let dtypes = [
             Int8, Int16, Int32, Int64, Int128, UInt8, UInt16, UInt32, UInt64, UInt128, Float32,
@@ -3176,8 +3237,8 @@ mod tests {
         for (left, expected_row) in dtypes.into_iter().zip(expected) {
             for (right, expected_dtype) in dtypes.into_iter().zip(expected_row) {
                 assert_eq!(
-                    pow_dtype(left, right),
-                    Some(expected_dtype),
+                    pow_dtype(PolarsDType::Scalar(left), PolarsDType::Scalar(right)),
+                    Some(PolarsDType::Scalar(expected_dtype)),
                     "{} ** {}",
                     left.name(),
                     right.name(),
@@ -3188,14 +3249,20 @@ mod tests {
 
     #[test]
     fn test_pow_rejects_every_nonnumeric_dtype() {
-        use PolarsDType::*;
-
         let nonnumeric = [
-            Boolean, String, Binary, Date, Datetime, Duration, Time, Null, Unknown,
+            PolarsDType::Boolean,
+            PolarsDType::String,
+            PolarsDType::Binary,
+            PolarsDType::Date,
+            PolarsDType::Datetime,
+            PolarsDType::Duration,
+            PolarsDType::Time,
+            PolarsDType::Null,
+            PolarsDType::Unknown,
         ];
         for dtype in nonnumeric {
-            assert_eq!(pow_dtype(dtype, Int8), None);
-            assert_eq!(pow_dtype(Int8, dtype), None);
+            assert_eq!(pow_dtype(dtype.clone(), PolarsDType::Int8), None);
+            assert_eq!(pow_dtype(PolarsDType::Int8, dtype), None);
         }
     }
 }

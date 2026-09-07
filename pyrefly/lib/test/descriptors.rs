@@ -286,6 +286,110 @@ C().d = 42  # E:  Attribute `d` of class `C` is a read-only descriptor with no `
 );
 
 testcase!(
+    test_descriptor_get_distributes_over_union,
+    r#"
+from typing import assert_type
+
+class Field[T]:
+    def __get__(self, obj: object | None, objtype: type | None = None) -> T:
+        raise NotImplementedError
+
+type Setting[T] = Field[T] | T
+
+class Settings:
+    with_default: Field[str] | str = Field()
+    optional: Field[str] | None = Field()
+    distinct: Field[str] | int = Field()
+    aliased: Setting[str] = Field()
+
+class GenericSettings[T]:
+    value: Field[T] | None = Field()
+
+class ChildSettings(Settings):
+    with_default: Field[str] | str = Field()
+
+settings = Settings()
+
+assert_type(settings.with_default, str)
+assert_type(settings.optional, str | None)
+assert_type(settings.distinct, str | int)
+assert_type(settings.aliased, str)
+assert_type(Settings.with_default, str)
+
+def check_generic(settings: GenericSettings[int]) -> None:
+    assert_type(settings.value, int | None)
+
+def takes_str(value: str) -> None: ...
+
+takes_str(settings.with_default)
+settings.with_default = "updated"
+Settings.with_default = "updated"
+del settings.optional
+    "#,
+);
+
+testcase!(
+    test_descriptor_union_does_not_change_lookup_precedence,
+    r#"
+from typing import reveal_type
+
+class Field[T]:
+    def __get__(self, obj: object | None, objtype: type | None = None) -> T: ...
+    def __set__(self, obj: object, value: T) -> None: ...
+
+class Meta(type):
+    value: Field[int] | int = Field()
+
+class C(metaclass=Meta):
+    @property
+    def value(self) -> str: ...
+
+reveal_type(C.value)  # E: revealed type: (self: C) -> str
+    "#,
+);
+
+testcase!(
+    test_descriptor_union_preserves_read_only_reason,
+    r#"
+from typing import ClassVar
+
+class Field[T]:
+    def __get__(self, obj: object | None, objtype: type | None = None) -> T: ...
+
+class Base:
+    value: ClassVar[Field[str] | str] = Field()
+
+class Child(Base):
+    def update(self) -> None:
+        super().value = "updated"  # E: Cannot set field `value`\n  A ClassVar may not be mutated from an instance of the class
+
+class InvalidInstanceOverride(Base):
+    value: Field[str] | str = Field()  # E: Instance variable `InvalidInstanceOverride.value` overrides ClassVar of the same name in parent class `Base`
+
+class InstanceBase:
+    value: Field[str] | str = Field()
+
+class InvalidClassVarOverride(InstanceBase):
+    value: ClassVar[Field[str] | str] = Field()  # E: ClassVar `InvalidClassVarOverride.value` overrides instance variable of the same name in parent class `InstanceBase`
+    "#,
+);
+
+testcase!(
+    test_recursive_descriptor_getter_union,
+    r#"
+from typing import assert_type
+
+class Recursive:
+    __get__: "Recursive | None" = None
+
+class C:
+    value: Recursive | int = Recursive()
+
+assert_type(C().value, Recursive | int)
+    "#,
+);
+
+testcase!(
     test_descriptor_dunder_call,
     r#"
 from typing import assert_type
@@ -802,6 +906,20 @@ class Mapped[T]:
     def __delete__(self, instance) -> None: ...
     "#,
     );
+    env.add(
+        "sqlalchemy.sql.elements",
+        r#"
+class ColumnElement[T]: ...
+    "#,
+    );
+    env.add(
+        "sqlalchemy.sql.dml",
+        r#"
+class Update:
+    def where(self, *criteria: object) -> Update: ...
+    def values(self, **kwargs: object) -> Update: ...
+    "#,
+    );
     env.add_with_path(
         "sqlalchemy.orm.decl_api",
         "sqlalchemy/orm/decl_api.py",
@@ -815,7 +933,15 @@ from .base import Mapped as Mapped
 from .decl_api import DeclarativeBase as DeclarativeBase
     "#,
     );
-    env.add_with_path("sqlalchemy", "sqlalchemy/__init__.py", "");
+    env.add_with_path(
+        "sqlalchemy",
+        "sqlalchemy/__init__.py",
+        r#"
+from .sql.dml import Update as Update
+from .sql.elements import ColumnElement as ColumnElement
+def update(table: object) -> Update: ...
+    "#,
+    );
     env
 }
 
@@ -857,6 +983,38 @@ class User(Base):
     name: Mapped[str]
     def __init__(self, name: str):
         self.name = name
+    "#,
+);
+
+testcase!(
+    test_sqlalchemy_update_values_checks_mapped_fields,
+    sqlalchemy_mapped_env(),
+    r#"
+import sqlalchemy as sa
+from sqlalchemy.orm import DeclarativeBase, Mapped
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    id: Mapped[int]
+    name: Mapped[str]
+
+sa.update(User).where(User.id == 1).values(name="alice", id=1)
+sa.update(User).where(User.id == 1).values(name=0)  # E: `Literal[0]` is not assignable to field `name` with type `str`
+sa.update(User).where(User.id == 1).values(nam="alice")  # E: Unexpected SQLAlchemy update field `nam`
+
+# SQLAlchemy accepts a SQL expression wherever a column value is expected.
+def sql_expr() -> sa.ColumnElement[int]: ...
+sa.update(User).values(name=sql_expr())
+
+class CustomUpdate:
+    def values(self, **kwargs: object) -> CustomUpdate: ...
+
+def update(table: object) -> CustomUpdate: ...
+
+# A same-named function outside SQLAlchemy must not trigger the special-case check.
+update(User).values(nam="alice")
     "#,
 );
 
@@ -1184,4 +1342,26 @@ class C(metaclass=Meta):
 
 assert_type(C.value, DeleteOnlyDescriptor)
     "#,
+);
+
+// The `value` parameter of a descriptor's `__set__` is unioned across its overloads through the
+// solver, so complementary bool literals collapse to `bool` in the synthesized dataclass
+// `__init__`.
+testcase!(
+    test_descriptor_setter_value_unions_bool_literals,
+    r#"
+from dataclasses import dataclass
+from typing import Literal, overload, reveal_type
+class D:
+    def __get__(self, obj: object, cls: type) -> bool: ...
+    @overload
+    def __set__(self, obj: object, value: Literal[True]) -> None: ...
+    @overload
+    def __set__(self, obj: object, value: Literal[False]) -> None: ...
+    def __set__(self, obj: object, value: bool) -> None: ...
+@dataclass
+class K:
+    x: D = D()  # E: Cannot set field `x` to data descriptor `D` with inconsistent types
+reveal_type(K.__init__)  # E: revealed type: (self: K, x: bool = ...) -> None
+"#,
 );
