@@ -540,9 +540,12 @@ baseline-matching-mode = "concise-description"
 
 - Type: `"column"` | `"concise-description"`
 - Default: `"column"`
+- Flag equivalent: none
 - Notes:
     - `baseline-matching-mode` is a **project-level setting** and cannot be
       overridden in [`sub-config`](#sub-configs) sections.
+    - There is intentionally no CLI equivalent because the matching mode is a
+      property of the checked-in baseline and must be consistent for all users.
     - After changing modes, regenerate a baseline that does not contain the new
       mode's required field with `pyrefly check --update-baseline`.
 
@@ -558,9 +561,12 @@ baseline-format = "minimal"
 
 - Type: `"full"` | `"minimal"`
 - Default: `"full"`
+- Flag equivalent: none
 - Notes:
     - `baseline-format` is a **project-level setting** and cannot be overridden
       in [`sub-config`](#sub-configs) sections.
+    - There is intentionally no CLI equivalent so every baseline update uses
+      the same format, avoiding conflicting rewrites.
 
 ### `baseline-error-level`
 
