@@ -686,12 +686,20 @@ fn resolve_column(
     }
 }
 
+/// Returns the first repeated column name.
+fn first_duplicate_column(columns: &[(Name, PolarsDType)]) -> Option<&Name> {
+    let mut seen = SmallSet::with_capacity(columns.len());
+    columns
+        .iter()
+        .find_map(|(name, _)| (!seen.insert(name)).then_some(name))
+}
+
 fn report_duplicate_column(name: &Name, range: TextRange, errors: &ErrorCollector) {
     errors
         .error_builder(
             range,
             ErrorKind::DuplicateColumn,
-            format!("Projection produces duplicate column `{name}`"),
+            format!("Operation produces duplicate column `{name}`"),
         )
         .emit();
 }
@@ -936,6 +944,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         args: &Arguments,
         errors: &ErrorCollector,
     ) -> Option<Type> {
+        // Pandas DataFrames have methods with some of the same names, but different semantics.
         if matches!(base, Type::DataFrame(schema) if schema.kind == DataFrameKind::Pandas) {
             return None;
         }
@@ -1203,8 +1212,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         for ((name, _), replacement) in columns.iter_mut().zip(new_columns) {
             *name = replacement;
         }
-        let mut seen = SmallSet::new();
-        !columns.iter().any(|(name, _)| !seen.insert(name.clone()))
+        first_duplicate_column(columns).is_none()
     }
 
     fn infer_polars_csv_schema(
@@ -2888,20 +2896,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         Some(dataframe_type_with_columns(schema, columns))
     }
 
-    fn join_key_names(&self, on: &Expr) -> Option<Vec<(Name, TextRange)>> {
-        if let Some(name) = self.polars_column_name(on) {
-            return Some(vec![(name, on.range())]);
-        }
-        let elts = match on {
-            Expr::List(list) => &list.elts,
-            Expr::Tuple(tuple) => &tuple.elts,
-            _ => return None,
-        };
-        elts.iter()
-            .map(|elt| self.polars_column_name(elt).map(|name| (name, elt.range())))
-            .collect()
-    }
-
     /// Merge schemas for joins with same-name keys and default coalescing.
     fn polars_join(&self, base: &Type, args: &Arguments, errors: &ErrorCollector) -> Option<Type> {
         let Type::DataFrame(schema) = base else {
@@ -2930,7 +2924,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let keys = match (how, on) {
             (JoinHow::Cross, None) => Vec::new(),
             (JoinHow::Cross, Some(_)) | (_, None) => return None,
-            (_, Some(on)) => self.join_key_names(on)?,
+            // A key must name one column of each frame to be resolved against their schemas, so a
+            // selector or pattern, which names a set, is as opaque here as a dynamic string.
+            (_, Some(on)) => positional_elements(on)
+                .iter()
+                .map(|element| match self.polars_column_arg(element) {
+                    ColumnArg::Named(name) => Some((name, element.range())),
+                    ColumnArg::Opaque | ColumnArg::Expr => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
         };
         let Type::DataFrame(other) = self.expr_infer(other_expr, &self.error_swallower()) else {
             return None;
@@ -2998,10 +3000,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             };
             columns.push((out, ty));
         }
-        // A suffixed name that already exists is a runtime `DuplicateError`, so fall back rather than
-        // emit a schema with a duplicate column.
-        let mut seen = SmallSet::new();
-        if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
+        // Polars raises `DuplicateError` when suffixing creates a repeated output name.
+        if let Some(name) = first_duplicate_column(&columns) {
+            report_duplicate_column(name, other_expr.range(), errors);
             return None;
         }
         self.expr_infer(other_expr, errors);
@@ -3037,8 +3038,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         let mut columns = schema.columns.clone();
         columns.extend(other.columns.iter().cloned());
-        let mut seen = SmallSet::new();
-        if columns.iter().any(|(name, _)| !seen.insert(name.clone())) {
+        if first_duplicate_column(&columns).is_some() {
             return None;
         }
         self.expr_infer(other_expr, errors);

@@ -167,7 +167,7 @@ pub enum ErrorKind {
     DirectAbstractBaseInstantiation,
     /// Division, floor division, or modulo by a literal zero value.
     DivisionByZero,
-    /// A Polars projection produces more than one column with the same name.
+    /// A Polars operation produces more than one column with the same name.
     DuplicateColumn,
     /// A function has an empty body despite declaring a non-None return type.
     EmptyBody,
