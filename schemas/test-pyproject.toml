@@ -53,6 +53,8 @@ skip-lsp-config-indexing = false
 # Baseline
 baseline = "baseline.json"
 baseline-error-level = "warn"
+baseline-matching-mode = "concise-description"
+baseline-format = "minimal"
 
 # Error configuration
 [tool.pyrefly.errors]
