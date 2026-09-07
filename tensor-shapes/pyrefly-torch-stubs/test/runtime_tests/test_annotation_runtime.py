@@ -425,6 +425,10 @@ class TestIntVarRuntime(unittest.TestCase):
         N = IntVar("N")
         self.assertEqual(repr(N), "N")
 
+    def test_has_no_default(self):
+        N = IntVar("N")
+        self.assertFalse(N.has_default())
+
     def test_in_dim(self):
         """Int[N] with shape_extensions.IntVar."""
         N = IntVar("N")
@@ -555,6 +559,10 @@ class TestTypeVarTupleRuntime(unittest.TestCase):
         """shape_extensions.TypeVarTuple repr shows *name."""
         Ns = TypeVarTuple("Ns")
         self.assertEqual(repr(Ns), "*Ns")
+
+    def test_has_no_default(self):
+        Ns = TypeVarTuple("Ns")
+        self.assertFalse(Ns.has_default())
 
 
 if __name__ == "__main__":

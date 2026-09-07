@@ -380,6 +380,9 @@ class IntVar:
     def __typing_subst__(self, arg):
         return arg
 
+    def has_default(self):
+        return False
+
 
 class TypeVarTuple:
     """TypeVarTuple with support for integer shape dimensions.
@@ -417,3 +420,6 @@ class TypeVarTuple:
     @property
     def __typing_is_unpacked_typevartuple__(self):
         return True
+
+    def has_default(self):
+        return False
