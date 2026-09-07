@@ -2954,14 +2954,14 @@ impl Binding {
             Binding::MultiTargetAssign(_, _, _, Some(_)) => Some(SymbolKind::Class),
             Binding::UnpackedValue(value) if value.receiver.is_some() => Some(SymbolKind::Class),
             Binding::UnpackedValue(_) => Some(SymbolKind::Variable),
-            Binding::AugAssign(_, _) => Some(SymbolKind::Variable),
-            Binding::Expr(_, _)
-            | Binding::StmtExpr(_, _)
+            Binding::AugAssign(_, _)
+            | Binding::Expr(_, _)
             | Binding::MultiTargetAssign(_, _, _, None)
+            | Binding::AnnotatedType(_, _) => Some(SymbolKind::Variable),
+            Binding::StmtExpr(_, _)
             | Binding::ReturnExplicit(_)
             | Binding::ReturnImplicit(_)
             | Binding::ReturnType(_)
-            | Binding::AnnotatedType(_, _)
             | Binding::None
             | Binding::Any(_)
             | Binding::Forward(_)
