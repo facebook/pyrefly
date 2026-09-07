@@ -1237,10 +1237,10 @@ can fit under a single config option description.
 
 Unless `skip-interpreter-query` is set, we'll attempt to query a Python interpreter to
 determine your [`python-platform`](#python-platform) or
-[`python-version`](#python-version) if they're unset. We also get a
-[`site-package-path`](#site-package-path) from your interpreter to determine which
-packages you have installed and append those to the end of any `site-package-path`
-you've configured yourself, either through CLI flags or a config file.
+[`python-version`](#python-version) if they're unset. We also get the interpreter's
+import search paths for [`site-package-path`](#site-package-path) and append them to
+the end of any `site-package-path` you've configured yourself, either through CLI
+flags or a config file.
 
 We look for an interpreter with the following logic:
 
@@ -1273,7 +1273,8 @@ The config options we query the interpreter for are:
 
 - `python-platform`: `sys.platform`
 - `python-version`: `sys.version_info[:3]`
-- `site-package-path`: `site.getsitepackages() + [site.getusersitepackages()]`
+- `site-package-path`: entries from `sys.path`, excluding empty entries, zip archives,
+  the standard library path, and `lib-dynload` directories
 
 :::info
 You can run `pyrefly dump-config` and pass in your file or configuration like you would
