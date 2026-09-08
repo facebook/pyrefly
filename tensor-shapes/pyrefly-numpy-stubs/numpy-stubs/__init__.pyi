@@ -7,10 +7,384 @@ from collections.abc import Sequence
 from types import EllipsisType
 from typing import Any, Literal, overload
 
+import shape_extensions
+from numpy.__config__ import (
+    show as show_config,
+)
+from numpy._array_api_info import (
+    __array_namespace_info__ as __array_namespace_info__,
+)
+from numpy._core._asarray import (
+    require as require,
+)
+from numpy._core._type_aliases import (
+    sctypeDict as sctypeDict,
+)
+from numpy._core._ufunc_config import (
+    errstate as errstate,
+    getbufsize as getbufsize,
+    geterr as geterr,
+    geterrcall as geterrcall,
+    setbufsize as setbufsize,
+    seterr as seterr,
+    seterrcall as seterrcall,
+)
+from numpy._core.arrayprint import (
+    array2string as array2string,
+    array_repr as array_repr,
+    array_str as array_str,
+    format_float_positional as format_float_positional,
+    format_float_scientific as format_float_scientific,
+    get_printoptions as get_printoptions,
+    printoptions as printoptions,
+    set_printoptions as set_printoptions,
+)
+from numpy._core.einsumfunc import (
+    einsum as einsum,
+    einsum_path as einsum_path,
+)
+from numpy._core.fromnumeric import (
+    all as all,
+    amax as amax,
+    amin as amin,
+    any as any,
+    argmax as argmax,
+    argpartition as argpartition,
+    argsort as argsort,
+    around as around,
+    choose as choose,
+    compress as compress,
+    cumprod as cumprod,
+    cumsum as cumsum,
+    cumulative_prod as cumulative_prod,
+    cumulative_sum as cumulative_sum,
+    diagonal as diagonal,
+    matrix_transpose as matrix_transpose,
+    ndim as ndim,
+    nonzero as nonzero,
+    partition as partition,
+    prod as prod,
+    ptp as ptp,
+    put as put,
+    ravel as ravel,
+    repeat as repeat,
+    reshape as reshape,
+    resize as resize,
+    searchsorted as searchsorted,
+    shape as shape,
+    size as size,
+    sort as sort,
+    squeeze as squeeze,
+    std as std,
+    swapaxes as swapaxes,
+    take as take,
+    trace as trace,
+    transpose as transpose,
+    var as var,
+)
+from numpy._core.function_base import (
+    geomspace as geomspace,
+    linspace as linspace,
+    logspace as logspace,
+)
+from numpy._core.getlimits import (
+    finfo as finfo,
+    iinfo as iinfo,
+)
+from numpy._core.memmap import (
+    memmap as memmap,
+)
+from numpy._core.multiarray import (
+    array as array,
+    asanyarray as asanyarray,
+    asarray as asarray,
+    ascontiguousarray as ascontiguousarray,
+    asfortranarray as asfortranarray,
+    bincount as bincount,
+    busday_count as busday_count,
+    busday_offset as busday_offset,
+    busdaycalendar as busdaycalendar,
+    can_cast as can_cast,
+    concatenate as concatenate,
+    copyto as copyto,
+    datetime_as_string as datetime_as_string,
+    datetime_data as datetime_data,
+    dot as dot,
+    empty_like as empty_like,
+    flatiter as flatiter,
+    frombuffer as frombuffer,
+    fromfile as fromfile,
+    fromiter as fromiter,
+    frompyfunc as frompyfunc,
+    fromstring as fromstring,
+    inner as inner,
+    is_busday as is_busday,
+    lexsort as lexsort,
+    may_share_memory as may_share_memory,
+    min_scalar_type as min_scalar_type,
+    nditer as nditer,
+    nested_iters as nested_iters,
+    packbits as packbits,
+    promote_types as promote_types,
+    putmask as putmask,
+    result_type as result_type,
+    shares_memory as shares_memory,
+    unpackbits as unpackbits,
+    vdot as vdot,
+    where as where,
+)
+from numpy._core.numeric import (
+    allclose as allclose,
+    argwhere as argwhere,
+    array_equal as array_equal,
+    array_equiv as array_equiv,
+    astype as astype,
+    base_repr as base_repr,
+    binary_repr as binary_repr,
+    convolve as convolve,
+    correlate as correlate,
+    count_nonzero as count_nonzero,
+    cross as cross,
+    flatnonzero as flatnonzero,
+    fromfunction as fromfunction,
+    full_like as full_like,
+    indices as indices,
+    isclose as isclose,
+    isfortran as isfortran,
+    isscalar as isscalar,
+    moveaxis as moveaxis,
+    ones_like as ones_like,
+    outer as outer,
+    roll as roll,
+    rollaxis as rollaxis,
+    tensordot as tensordot,
+    zeros_like as zeros_like,
+)
+from numpy._core.numerictypes import (
+    isdtype as isdtype,
+    issubdtype as issubdtype,
+    ScalarType as ScalarType,
+    typecodes as typecodes,
+)
+from numpy._core.records import (
+    recarray as recarray,
+    record as record,
+)
+from numpy._core.shape_base import (
+    atleast_1d as atleast_1d,
+    atleast_2d as atleast_2d,
+    atleast_3d as atleast_3d,
+    block as block,
+    hstack as hstack,
+    stack as stack,
+    unstack as unstack,
+    vstack as vstack,
+)
 from numpy._shapes import diag_extent, matmul_shape, reduce_shape
+from numpy._typing._extended_precision import (
+    complex256 as complex256,
+    float128 as float128,
+)
+from numpy.lib import (
+    scimath as emath,
+)
+from numpy.lib._arraypad_impl import (
+    pad as pad,
+)
+from numpy.lib._arraysetops_impl import (
+    ediff1d as ediff1d,
+    intersect1d as intersect1d,
+    isin as isin,
+    setdiff1d as setdiff1d,
+    setxor1d as setxor1d,
+    union1d as union1d,
+    unique as unique,
+    unique_all as unique_all,
+    unique_counts as unique_counts,
+    unique_inverse as unique_inverse,
+    unique_values as unique_values,
+)
+from numpy.lib._function_base_impl import (
+    angle as angle,
+    append as append,
+    asarray_chkfinite as asarray_chkfinite,
+    average as average,
+    bartlett as bartlett,
+    blackman as blackman,
+    copy as copy,
+    corrcoef as corrcoef,
+    cov as cov,
+    delete as delete,
+    diff as diff,
+    digitize as digitize,
+    extract as extract,
+    flip as flip,
+    gradient as gradient,
+    hamming as hamming,
+    hanning as hanning,
+    i0 as i0,
+    insert as insert,
+    interp as interp,
+    iterable as iterable,
+    kaiser as kaiser,
+    median as median,
+    meshgrid as meshgrid,
+    percentile as percentile,
+    piecewise as piecewise,
+    place as place,
+    quantile as quantile,
+    rot90 as rot90,
+    select as select,
+    sinc as sinc,
+    sort_complex as sort_complex,
+    trapezoid as trapezoid,
+    trim_zeros as trim_zeros,
+    unwrap as unwrap,
+    vectorize as vectorize,
+)
+from numpy.lib._histograms_impl import (
+    histogram as histogram,
+    histogram_bin_edges as histogram_bin_edges,
+    histogramdd as histogramdd,
+)
+from numpy.lib._index_tricks_impl import (
+    c_ as c_,
+    diag_indices as diag_indices,
+    diag_indices_from as diag_indices_from,
+    index_exp as index_exp,
+    ix_ as ix_,
+    mgrid as mgrid,
+    ndenumerate as ndenumerate,
+    ndindex as ndindex,
+    ogrid as ogrid,
+    r_ as r_,
+    ravel_multi_index as ravel_multi_index,
+    s_ as s_,
+    unravel_index as unravel_index,
+)
+from numpy.lib._nanfunctions_impl import (
+    nanargmax as nanargmax,
+    nanargmin as nanargmin,
+    nancumprod as nancumprod,
+    nancumsum as nancumsum,
+    nanmax as nanmax,
+    nanmean as nanmean,
+    nanmedian as nanmedian,
+    nanmin as nanmin,
+    nanpercentile as nanpercentile,
+    nanprod as nanprod,
+    nanquantile as nanquantile,
+    nanstd as nanstd,
+    nansum as nansum,
+    nanvar as nanvar,
+)
+from numpy.lib._npyio_impl import (
+    fromregex as fromregex,
+    genfromtxt as genfromtxt,
+    load as load,
+    loadtxt as loadtxt,
+    save as save,
+    savetxt as savetxt,
+    savez as savez,
+    savez_compressed as savez_compressed,
+)
+from numpy.lib._polynomial_impl import (
+    poly as poly,
+    poly1d as poly1d,
+    polyadd as polyadd,
+    polyder as polyder,
+    polydiv as polydiv,
+    polyfit as polyfit,
+    polyint as polyint,
+    polymul as polymul,
+    polysub as polysub,
+    polyval as polyval,
+    roots as roots,
+)
+from numpy.lib._shape_base_impl import (
+    apply_along_axis as apply_along_axis,
+    apply_over_axes as apply_over_axes,
+    array_split as array_split,
+    column_stack as column_stack,
+    dsplit as dsplit,
+    dstack as dstack,
+    hsplit as hsplit,
+    kron as kron,
+    put_along_axis as put_along_axis,
+    split as split,
+    take_along_axis as take_along_axis,
+    tile as tile,
+    vsplit as vsplit,
+)
+from numpy.lib._stride_tricks_impl import (
+    broadcast_arrays as broadcast_arrays,
+    broadcast_shapes as broadcast_shapes,
+    broadcast_to as broadcast_to,
+)
+from numpy.lib._twodim_base_impl import (
+    diagflat as diagflat,
+    fliplr as fliplr,
+    flipud as flipud,
+    histogram2d as histogram2d,
+    mask_indices as mask_indices,
+    tri as tri,
+    tril as tril,
+    tril_indices as tril_indices,
+    tril_indices_from as tril_indices_from,
+    triu as triu,
+    triu_indices as triu_indices,
+    triu_indices_from as triu_indices_from,
+    vander as vander,
+)
+from numpy.lib._type_check_impl import (
+    common_type as common_type,
+    imag as imag,
+    iscomplex as iscomplex,
+    iscomplexobj as iscomplexobj,
+    isreal as isreal,
+    isrealobj as isrealobj,
+    mintypecode as mintypecode,
+    nan_to_num as nan_to_num,
+    real as real,
+    real_if_close as real_if_close,
+    typename as typename,
+)
+from numpy.lib._ufunclike_impl import (
+    fix as fix,
+    isneginf as isneginf,
+    isposinf as isposinf,
+)
+from numpy.lib._utils_impl import (
+    get_include as get_include,
+    info as info,
+    show_runtime as show_runtime,
+)
+from numpy.matrixlib import (
+    asmatrix as asmatrix,
+    bmat as bmat,
+    matrix as matrix,
+)
 from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple, IntVar
 
-from . import linalg as linalg, random as random
+# Preserve NumPy's canonical re-exports before local shape-aware declarations.
+from . import (
+    char as char,
+    core as core,
+    ctypeslib as ctypeslib,
+    dtypes as dtypes,
+    exceptions as exceptions,
+    f2py as f2py,
+    fft as fft,
+    lib as lib,
+    linalg as linalg,
+    ma as ma,
+    polynomial as polynomial,
+    random as random,
+    rec as rec,
+    strings as strings,
+    testing as testing,
+    typing as typing,
+)
 
 type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None

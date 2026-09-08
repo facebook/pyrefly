@@ -12,10 +12,8 @@ per-package `run_pyrefly.py` and `run_runtime_tests.py` remain the things to
 reach for while iterating on a single library.
 
 Builds Pyrefly before checking, and needs the shared virtualenv from
-bootstrap_venv.py for the runtime half. `--static-only` drops the virtualenv
-requirement entirely,
-which is the usual mode when changing Pyrefly rather than the stubs. Nothing
-here downloads anything.
+bootstrap_venv.py for runtime tests and NumPy static checks. Nothing here
+downloads anything.
 """
 
 from __future__ import annotations
@@ -78,12 +76,12 @@ def main() -> int:
         "--python",
         type=Path,
         default=None,
-        help="interpreter with torch/numpy/jax installed (default: the shared virtualenv)",
+        help="virtualenv interpreter with torch/numpy/jax installed (default: shared virtualenv)",
     )
     parser.add_argument(
         "--static-only",
         action="store_true",
-        help="only type check; needs no virtualenv",
+        help="only type check; NumPy checking still requires a virtualenv",
     )
     parser.add_argument(
         "--runtime-only",
@@ -111,18 +109,7 @@ def main() -> int:
             explicit=args.pyrefly, buck=args.buck, release=args.release
         )
     )
-    python = (
-        None
-        if args.static_only
-        else venv_python(
-            args.python,
-            extra_hint=(
-                "Pass --static-only to run just the type checking, which needs no\n"
-                "virtualenv. That is usually the right mode when working on Pyrefly\n"
-                "itself rather than on the stubs, since CI runs the runtime tests.\n\n"
-            ),
-        )
-    )
+    python = venv_python(args.python)
 
     failures: list[str] = []
     for package in PACKAGES:
@@ -141,11 +128,13 @@ def main() -> int:
                 command.extend(["--pyrefly", pyrefly[0]])
             else:
                 command.append("--buck")
+            if package == "pyrefly-numpy-stubs":
+                command.extend(["--python", str(python)])
             if args.nocapture:
                 command.append("--nocapture")
             if not run(command):
                 failures.append(step)
-        if python is not None:
+        if not args.static_only:
             step = f"{package} runtime"
             print(f"\n=== {step} ===", flush=True)
             if not run([str(python), str(package_root / "run_runtime_tests.py")]):
