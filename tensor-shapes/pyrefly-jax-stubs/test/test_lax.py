@@ -420,3 +420,280 @@ def test_lax_dtype_bitcast():
     # bitcast_convert_type
     res_bitcast = lax.bitcast_convert_type(x, jnp.int32)
     assert res_bitcast.shape == (2, 3)
+
+
+def reject_lax_argmax_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.argmax(x, axis=3, index_dtype=jnp.int32)
+
+
+def reject_lax_argmax_negative_axis(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.argmax(x, axis=-1, index_dtype=jnp.int32)
+
+
+def reject_lax_argmin_negative_axis(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.argmin(x, axis=-1, index_dtype=jnp.int32)
+
+
+def reject_lax_cumsum_negative_axis(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.cumsum(x, axis=-1)
+
+
+def reject_lax_cummax_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.cummax(x, axis=3)
+
+
+def reject_lax_associative_scan_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.associative_scan(lax.add, x, axis=3)
+
+
+def reject_lax_associative_scan_negative_out_of_bounds(
+    x: jax.Array[[2, 3, 4]],
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.associative_scan(lax.add, x, axis=-4)
+
+
+def reject_lax_reduce_sum_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.reduce_sum(x, (3,))
+
+
+def reject_lax_reduce_sum_negative_axis(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.reduce_sum(x, (-1,))
+
+
+def reject_lax_reduce_sum_duplicate_axis(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: duplicate axis
+    lax.reduce_sum(x, (0, 0))
+
+
+def reject_lax_approx_max_k_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.approx_max_k(x, 2, reduction_dimension=3)
+
+
+def reject_lax_approx_min_k_negative_k(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: k must be non-negative
+    lax.approx_min_k(x, -1)
+
+
+def reject_lax_clamp_mismatched_min(
+    x: jax.Array[[2, 3, 4]], bad_min: jax.Array[[3, 4]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: clamp requires min.shape == operand.shape or min.shape == ()
+    lax.clamp(bad_min, x, 1.0)
+
+
+def reject_lax_clamp_mismatched_max(
+    x: jax.Array[[2, 3, 4]], bad_max: jax.Array[[3, 4]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: clamp requires max.shape == operand.shape or max.shape == ()
+    lax.clamp(0.0, x, bad_max)
+
+
+def reject_lax_select_mismatched_cases(
+    x: jax.Array[[2, 3, 4]], y: jax.Array[[2, 3]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: select cases must have the same shapes
+    lax.select(True, x, y)
+
+
+def reject_lax_select_mismatched_pred(
+    pred: jax.Array[[4]], x: jax.Array[[2, 3, 4]], y: jax.Array[[2, 3, 4]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: select `which` must be scalar or have the same shape as cases
+    lax.select(pred, x, y)
+
+
+def reject_lax_select_n_mismatched_which(
+    which: jax.Array[[4]], x: jax.Array[[2, 3, 4]], y: jax.Array[[2, 3, 4]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: select `which` must be scalar or have the same shape as cases
+    lax.select_n(which, x, y)
+
+
+def reject_lax_sort_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.sort(x, dimension=3)
+
+
+def reject_lax_sort_key_val_mismatched(
+    x: jax.Array[[2, 3, 4]], bad_val: jax.Array[[2, 3]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: Arguments to sort must have equal shapes
+    lax.sort_key_val(x, bad_val)
+
+
+def reject_lax_top_k_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.top_k(x, 2, axis=3)
+
+
+def reject_lax_top_k_negative_k(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: k must be non-negative
+    lax.top_k(x, -1)
+
+
+def test_lax_argmax_argmin() -> None:
+    x = jnp.ones((2, 3, 4))
+    assert_shape(lax.argmax(x, axis=0, index_dtype=jnp.int32).shape, (3, 4))
+    assert_shape(lax.argmax(x, axis=1, index_dtype=jnp.int32).shape, (2, 4))
+    assert_shape(lax.argmax(x, axis=2, index_dtype=jnp.int32).shape, (2, 3))
+    assert_shape(lax.argmin(x, axis=0, index_dtype=jnp.int32).shape, (3, 4))
+    assert_shape(lax.argmin(x, axis=1, index_dtype=jnp.int32).shape, (2, 4))
+    assert_shape(lax.argmin(x, axis=2, index_dtype=jnp.int32).shape, (2, 3))
+
+
+def test_lax_scans() -> None:
+    x = jnp.ones((2, 3, 4))
+    # associative_scan
+    assert_shape(lax.associative_scan(lax.add, x, axis=0).shape, (2, 3, 4))
+    assert_shape(
+        lax.associative_scan(lax.add, x, axis=1, reverse=True).shape, (2, 3, 4)
+    )
+    assert_shape(lax.associative_scan(lax.add, x, axis=-1).shape, (2, 3, 4))
+    assert_shape(lax.associative_scan(lax.add, x).shape, (2, 3, 4))
+
+    # cumlogsumexp
+    assert_shape(lax.cumlogsumexp(x, axis=0).shape, (2, 3, 4))
+    assert_shape(lax.cumlogsumexp(x, axis=1, reverse=True).shape, (2, 3, 4))
+    assert_shape(lax.cumlogsumexp(x).shape, (2, 3, 4))
+
+    # cummax, cummin, cumprod, cumsum
+    assert_shape(lax.cummax(x, axis=0).shape, (2, 3, 4))
+    assert_shape(lax.cummax(x).shape, (2, 3, 4))
+    assert_shape(lax.cummin(x, axis=1).shape, (2, 3, 4))
+    assert_shape(lax.cummin(x).shape, (2, 3, 4))
+    assert_shape(lax.cumprod(x, axis=2).shape, (2, 3, 4))
+    assert_shape(lax.cumprod(x).shape, (2, 3, 4))
+    assert_shape(lax.cumsum(x, axis=0).shape, (2, 3, 4))
+    assert_shape(lax.cumsum(x).shape, (2, 3, 4))
+
+
+def test_lax_reductions() -> None:
+    x = jnp.ones((2, 3, 4))
+    b = jnp.array([[[True, False, True, False]] * 3] * 2)
+
+    # reduce
+    assert_shape(lax.reduce(x, 0.0, lax.add, (0, 2)).shape, (3,))
+    assert_shape(lax.reduce(x, 0.0, lax.add, ()).shape, (2, 3, 4))
+    assert_shape(lax.reduce(x, 0.0, lax.add, (0, 1, 2)).shape, ())
+
+    # reduce_sum, reduce_prod, reduce_max, reduce_min
+    assert_shape(lax.reduce_sum(x, (1,)).shape, (2, 4))
+    assert_shape(lax.reduce_sum(x, (0, 1, 2)).shape, ())
+    assert_shape(lax.reduce_prod(x, ()).shape, (2, 3, 4))
+    assert_shape(lax.reduce_prod(x, (0, 2)).shape, (3,))
+    assert_shape(lax.reduce_max(x, (2,)).shape, (2, 3))
+    assert_shape(lax.reduce_min(x, (0,)).shape, (3, 4))
+
+    # reduce_and, reduce_or, reduce_xor
+    assert_shape(lax.reduce_and(b, (0,)).shape, (3, 4))
+    assert_shape(lax.reduce_or(b, (1, 2)).shape, (2,))
+    assert_shape(lax.reduce_xor(b, (2,)).shape, (2, 3))
+
+
+def test_lax_reduce_precision() -> None:
+    x = jnp.ones((2, 3, 4))
+    assert_shape(lax.reduce_precision(x, 8, 7).shape, (2, 3, 4))
+    assert_shape(lax.reduce_precision(3.14, 8, 7).shape, ())
+
+
+def test_lax_reduce_window() -> None:
+    x = jnp.ones((2, 4, 6))
+    res_window = lax.reduce_window(x, 0.0, lax.add, (1, 2, 2), (1, 1, 1), "VALID")
+    assert res_window.shape == (2, 3, 5)
+
+    res_tuple = lax.reduce_window_shape_tuple(
+        (2, 4, 6), (1, 2, 2), (1, 1, 1), ((0, 0), (0, 0), (0, 0))
+    )
+    assert res_tuple == (2, 3, 5)
+    # Satisfy assert_shape requirement for the test
+    assert_shape(x.shape, (2, 4, 6))
+
+
+def test_lax_approx_max_min_k() -> None:
+    x = jnp.ones((2, 3, 4))
+    val_max, idx_max = lax.approx_max_k(x, 2, reduction_dimension=1)
+    assert_shape(val_max.shape, (2, 2, 4))
+    assert_shape(idx_max.shape, (2, 2, 4))
+
+    val_min, idx_min = lax.approx_min_k(x, 3, reduction_dimension=-1)
+    assert_shape(val_min.shape, (2, 3, 3))
+    assert_shape(idx_min.shape, (2, 3, 3))
+
+
+def test_lax_clamp() -> None:
+    x = jnp.ones((2, 3, 4))
+    assert_shape(lax.clamp(0.0, x, 1.0).shape, (2, 3, 4))
+    assert_shape(lax.clamp(jnp.zeros((2, 3, 4)), x, 1.0).shape, (2, 3, 4))
+    assert_shape(lax.clamp(0.0, x, jnp.ones((2, 3, 4))).shape, (2, 3, 4))
+    assert_shape(
+        lax.clamp(jnp.zeros((2, 3, 4)), x, jnp.ones((2, 3, 4))).shape, (2, 3, 4)
+    )
+    assert_shape(lax.clamp(0.0, 5.0, 1.0).shape, ())
+
+
+def test_lax_select() -> None:
+    x = jnp.ones((2, 3, 4))
+    y = jnp.zeros((2, 3, 4))
+    pred_0d = jnp.array(True)
+    pred_3d = jnp.ones((2, 3, 4), dtype=bool)
+
+    assert_shape(lax.select(True, x, y).shape, (2, 3, 4))
+    assert_shape(lax.select(pred_0d, x, y).shape, (2, 3, 4))
+    assert_shape(lax.select(pred_3d, x, y).shape, (2, 3, 4))
+    assert_shape(lax.select(True, 1.0, 2.0).shape, ())
+
+
+def test_lax_select_n() -> None:
+    x = jnp.ones((2, 3, 4))
+    y = jnp.zeros((2, 3, 4))
+    which_0d = jnp.array(0)
+    which_3d = jnp.zeros((2, 3, 4), dtype=jnp.int32)
+
+    assert_shape(lax.select_n(0, x, y).shape, (2, 3, 4))
+    assert_shape(lax.select_n(which_0d, x, y).shape, (2, 3, 4))
+    assert_shape(lax.select_n(which_3d, x, y, x).shape, (2, 3, 4))
+    assert_shape(lax.select_n(0, 1.0, 2.0).shape, ())
+
+
+def test_lax_sort() -> None:
+    x = jnp.ones((2, 3, 4))
+    y = jnp.ones((2, 3, 4))
+
+    assert_shape(lax.sort(x).shape, (2, 3, 4))
+    assert_shape(lax.sort(x, dimension=0).shape, (2, 3, 4))
+    assert_shape(lax.sort(x, dimension=-1).shape, (2, 3, 4))
+
+    s1, s2 = lax.sort((x, y), dimension=1)
+    assert_shape(s1.shape, (2, 3, 4))
+    assert_shape(s2.shape, (2, 3, 4))
+
+
+def test_lax_sort_key_val() -> None:
+    x = jnp.ones((2, 3, 4))
+    y = jnp.ones((2, 3, 4))
+
+    sk, sv = lax.sort_key_val(x, y, dimension=-1)
+    assert_shape(sk.shape, (2, 3, 4))
+    assert_shape(sv.shape, (2, 3, 4))
+
+
+def test_lax_top_k() -> None:
+    x = jnp.ones((2, 3, 4))
+
+    top_v, top_i = lax.top_k(x, 2)
+    assert_shape(top_v.shape, (2, 3, 2))
+    assert_shape(top_i.shape, (2, 3, 2))
+
+    top_v0, top_i0 = lax.top_k(x, 1, axis=0)
+    assert_shape(top_v0.shape, (1, 3, 4))
+    assert_shape(top_i0.shape, (1, 3, 4))

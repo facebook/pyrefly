@@ -1023,3 +1023,141 @@ def top_k_shape(shape: IntTuple, k: int, axis: int) -> IntTuple:
         dsl.concat(shape[:norm_axis], dsl.IntTuple((extent,))),
         shape[norm_axis + 1 :],
     )
+
+@type_shape_dsl_function
+def lax_reduce_shape(shape: IntTuple, axes: tuple[int, ...]) -> IntTuple:
+    rank = len(shape)
+    if any(axis < 0 or axis >= rank for axis in axes):
+        return dsl.Invalid("axis out of bounds")
+    if any(axes.count(axis) > 1 for axis in axes):
+        return dsl.Invalid("duplicate axis")
+    return dsl.IntTuple((shape[i] for i in range(rank) if i not in axes))
+
+@type_shape_dsl_function
+def lax_axis_reduce_shape(shape: IntTuple, axis: int) -> IntTuple:
+    rank = len(shape)
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    return dsl.concat(shape[:axis], shape[axis + 1 :])
+
+@type_shape_dsl_function
+def lax_scan_shape(shape: IntTuple, axis: int) -> IntTuple:
+    rank = len(shape)
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    return shape
+
+@type_shape_dsl_function
+def lax_associative_scan_shape(shape: IntTuple, axis: int) -> IntTuple:
+    rank = len(shape)
+    if axis < 0:
+        norm_axis = axis + rank
+    else:
+        norm_axis = axis + 0
+    if norm_axis < 0 or norm_axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    return shape
+
+@type_shape_dsl_function
+def lax_clamp_shape(
+    min_shape: IntTuple, x_shape: IntTuple, max_shape: IntTuple
+) -> IntTuple:
+    if len(min_shape) != 0:
+        if len(min_shape) != len(x_shape) or any(
+            min_shape[i] != x_shape[i] for i in range(len(x_shape))
+        ):
+            return dsl.Invalid(
+                "clamp requires min.shape == operand.shape or min.shape == ()"
+            )
+    if len(max_shape) != 0:
+        if len(max_shape) != len(x_shape) or any(
+            max_shape[i] != x_shape[i] for i in range(len(x_shape))
+        ):
+            return dsl.Invalid(
+                "clamp requires max.shape == operand.shape or max.shape == ()"
+            )
+    return x_shape
+
+@type_shape_dsl_function
+def lax_clamp_min_scalar_shape(x_shape: IntTuple, max_shape: IntTuple) -> IntTuple:
+    if len(max_shape) != 0:
+        if len(max_shape) != len(x_shape) or any(
+            max_shape[i] != x_shape[i] for i in range(len(x_shape))
+        ):
+            return dsl.Invalid(
+                "clamp requires max.shape == operand.shape or max.shape == ()"
+            )
+    return x_shape
+
+@type_shape_dsl_function
+def lax_clamp_max_scalar_shape(min_shape: IntTuple, x_shape: IntTuple) -> IntTuple:
+    if len(min_shape) != 0:
+        if len(min_shape) != len(x_shape) or any(
+            min_shape[i] != x_shape[i] for i in range(len(x_shape))
+        ):
+            return dsl.Invalid(
+                "clamp requires min.shape == operand.shape or min.shape == ()"
+            )
+    return x_shape
+
+@type_shape_dsl_function
+def lax_select_shape(
+    pred_shape: IntTuple, true_shape: IntTuple, false_shape: IntTuple
+) -> IntTuple:
+    if len(true_shape) != len(false_shape) or any(
+        true_shape[i] != false_shape[i] for i in range(len(true_shape))
+    ):
+        return dsl.Invalid("select cases must have the same shapes")
+    if len(pred_shape) != 0:
+        if len(pred_shape) != len(true_shape) or any(
+            pred_shape[i] != true_shape[i] for i in range(len(true_shape))
+        ):
+            return dsl.Invalid(
+                "select `which` must be scalar or have the same shape as cases"
+            )
+    return true_shape
+
+@type_shape_dsl_function
+def lax_select_scalar_pred_shape(
+    true_shape: IntTuple, false_shape: IntTuple
+) -> IntTuple:
+    if len(true_shape) != len(false_shape) or any(
+        true_shape[i] != false_shape[i] for i in range(len(true_shape))
+    ):
+        return dsl.Invalid("select cases must have the same shapes")
+    return true_shape
+
+@type_shape_dsl_function
+def lax_select_n_shape(which_shape: IntTuple, case_shape: IntTuple) -> IntTuple:
+    if len(which_shape) != 0:
+        if len(which_shape) != len(case_shape) or any(
+            which_shape[i] != case_shape[i] for i in range(len(case_shape))
+        ):
+            return dsl.Invalid(
+                "select `which` must be scalar or have the same shape as cases"
+            )
+    return case_shape
+
+@type_shape_dsl_function
+def lax_sort_shape(shape: IntTuple, dimension: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return dsl.Invalid("axis out of bounds")
+    if dimension < 0 - rank or dimension >= rank:
+        return dsl.Invalid("axis out of bounds")
+    return shape
+
+@type_shape_dsl_function
+def lax_sort_key_val_shape(
+    keys_shape: IntTuple, values_shape: IntTuple, dimension: int
+) -> IntTuple:
+    if len(keys_shape) != len(values_shape) or any(
+        keys_shape[i] != values_shape[i] for i in range(len(keys_shape))
+    ):
+        return dsl.Invalid("Arguments to sort must have equal shapes")
+    rank = len(keys_shape)
+    if rank == 0:
+        return dsl.Invalid("axis out of bounds")
+    if dimension < 0 - rank or dimension >= rank:
+        return dsl.Invalid("axis out of bounds")
+    return keys_shape
