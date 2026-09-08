@@ -473,7 +473,7 @@ impl JoinHow {
         })
     }
 
-    fn coalesces(self) -> bool {
+    fn coalesces_by_default(self) -> bool {
         matches!(self, Self::Inner | Self::Left | Self::Right)
     }
 }
@@ -2897,7 +2897,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         Some(dataframe_type_with_columns(schema, columns))
     }
 
-    /// Merge schemas for joins with same-name keys and default coalescing.
+    /// Merge schemas for joins with same-name keys, honoring the `how` and `coalesce` arguments.
     fn polars_join(&self, base: &Type, args: &Arguments, errors: &ErrorCollector) -> Option<Type> {
         let Type::DataFrame(schema) = base else {
             return None;
@@ -2910,6 +2910,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
         let mut on = None;
         let mut how = JoinHow::Inner;
+        let mut coalesce = None;
         for kw in &args.keywords {
             let Some(arg) = &kw.arg else {
                 return None;
@@ -2918,6 +2919,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 "on" => on = Some(&kw.value),
                 "how" => {
                     how = JoinHow::parse(self.polars_string_literal(&kw.value)?.as_str())?;
+                }
+                // An explicit `None` is the runtime default, so leave it to `how`.
+                "coalesce" => {
+                    if !matches!(&kw.value, Expr::NoneLiteral(_)) {
+                        coalesce = Some(self.polars_bool_literal(&kw.value)?);
+                    }
                 }
                 _ => return None,
             }
@@ -2964,27 +2971,30 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .find(|(column, _)| column == name)
                 .map(|(_, dtype)| dtype.clone())
         };
-        // A coalesced key keeps the primary side's dtype, so paired keys with differing dtypes could
-        // be cast or rejected at runtime; fall back rather than pick one side.
-        if how.coalesces()
-            && key_set.iter().any(|name| {
-                column_dtype(&schema.columns, name) != column_dtype(&other.columns, name)
-            })
+        // Polars rejects a join whose paired keys have differing dtypes, so fall back.
+        if key_set
+            .iter()
+            .any(|name| column_dtype(&schema.columns, name) != column_dtype(&other.columns, name))
         {
             return None;
         }
         let not_key = |(name, _): &&(Name, PolarsDType)| !key_set.contains(name);
+        // Coalescing keeps one copy of each shared key; otherwise the secondary side's copy stays
+        // and is suffixed below. A right join's secondary side is the left frame, not the right.
+        let coalesce_keys = coalesce.unwrap_or(how.coalesces_by_default());
+        let drop_secondary_keys = |columns: &[(Name, PolarsDType)]| -> Vec<(Name, PolarsDType)> {
+            if coalesce_keys {
+                columns.iter().filter(not_key).cloned().collect()
+            } else {
+                columns.to_vec()
+            }
+        };
         let (base_columns, other_columns): (Vec<_>, Vec<_>) = match how {
             JoinHow::Semi | JoinHow::Anti => (schema.columns.clone(), Vec::new()),
-            JoinHow::Inner | JoinHow::Left => (
-                schema.columns.clone(),
-                other.columns.iter().filter(not_key).cloned().collect(),
-            ),
-            JoinHow::Full | JoinHow::Cross => (schema.columns.clone(), other.columns.clone()),
-            JoinHow::Right => (
-                schema.columns.iter().filter(not_key).cloned().collect(),
-                other.columns.clone(),
-            ),
+            JoinHow::Right => (drop_secondary_keys(&schema.columns), other.columns.clone()),
+            JoinHow::Inner | JoinHow::Left | JoinHow::Full | JoinHow::Cross => {
+                (schema.columns.clone(), drop_secondary_keys(&other.columns))
+            }
         };
         let completeness = match how {
             JoinHow::Semi | JoinHow::Anti => schema.completeness,

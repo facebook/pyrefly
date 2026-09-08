@@ -4418,29 +4418,16 @@ reveal_type(d1.join(d2, on="k", how="inner"))  # E: Column `k` is not in the Dat
 );
 
 testcase!(
-    test_join_coalesced_key_dtype_mismatch_falls_back,
+    test_join_key_dtype_mismatch_falls_back,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-# A coalesced key with differing dtypes is cast or rejected at runtime, so we fall back rather
-# than pick one side's dtype.
 d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
 d2 = pl.DataFrame(schema={"k": pl.Float64, "b": pl.Int64})
 reveal_type(d1.join(d2, on="k", how="inner"))  # E: revealed type: DataFrame
-"#,
-);
-
-testcase!(
-    test_join_full_dtype_mismatch_kept_separately,
-    env_with_polars_stubs(),
-    r#"
-import polars as pl
-from typing import reveal_type
-# A full join keeps both keys, so differing key dtypes never coalesce and the schema stands.
-d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
-d2 = pl.DataFrame(schema={"k": pl.Float64, "b": pl.Int64})
-reveal_type(d1.join(d2, on="k", how="full"))  # E: revealed type: DataFrame[k: Int64, a: Int64, k_right: Float64, b: Int64]
+reveal_type(d1.join(d2, on="k", how="full"))  # E: revealed type: DataFrame
+reveal_type(d1.join(d2, on="k", how="full", coalesce=False))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -4587,15 +4574,57 @@ reveal_type(d1.join(d2, left_on="kl", right_on="kr", how="inner"))  # E: reveale
 );
 
 testcase!(
-    test_join_explicit_coalesce_falls_back,
+    test_join_coalesce_none_matches_default,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="inner", coalesce=None))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_coalesce_true_matches_default_for_inner,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="inner", coalesce=True))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_coalesce_false_keeps_secondary_key_suffixed,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="inner", coalesce=False))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, k_right: Int64, a_right: Int64, c: Boolean]
+reveal_type(left.join(right, on="k", how="right", coalesce=False))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, k_right: Int64, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_full_coalesce_overrides_default,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="full", coalesce=True))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, a_right: Int64, c: Boolean]
+reveal_type(left.join(right, on="k", how="full", coalesce=False))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, k_right: Int64, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_non_literal_coalesce_falls_back,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-# An explicit coalesce= is not yet modeled, so we fall back.
 d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
 d2 = pl.DataFrame(schema={"k": pl.Int64, "b": pl.Int64})
-reveal_type(d1.join(d2, on="k", how="inner", coalesce=False))  # E: revealed type: DataFrame
+def f(flag: bool) -> None:
+    reveal_type(d1.join(d2, on="k", how="inner", coalesce=flag))  # E: revealed type: DataFrame
 "#,
 );
 
