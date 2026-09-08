@@ -17,11 +17,13 @@ import {
   ConfigurationParams,
   ConfigurationRequest,
   DidChangeConfigurationNotification,
+  Executable,
   LanguageClient,
   LanguageClientOptions,
   LSPAny,
   ResponseError,
   ServerOptions,
+  State,
 } from 'vscode-languageclient/node';
 import {
   TYPE_ERROR_DISPLAY_STATUS_VERSION,
@@ -35,20 +37,143 @@ import {PythonEnvironment} from './python-environment';
 import {
   triggerMsPythonRefreshLanguageServersIfInstalled,
 } from './extension-interop';
-import {resolveLspPath} from './lspPath';
+import {describeError, resolveExecutable} from './lspPath';
 
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
 let traceOutputChannel: vscode.OutputChannel;
 let inferOutputChannel: vscode.OutputChannel;
+/**
+ * The launch specification `client` was constructed with. `LanguageClient`
+ * re-reads it on every start, so mutating it in place is what lets a restart
+ * pick up a binary resolved from a different Python environment.
+ */
+let launchSpec: Executable;
+let clientOptions: LanguageClientOptions;
+let pythonEnv: PythonEnvironment;
 
-/// Get a setting at the path, or throw an error if it's not set.
-function requireSetting<T>(path: string): T {
-  const ret: T | undefined = vscode.workspace.getConfiguration().get(path);
-  if (ret == undefined) {
-    throw new Error(`Setting "${path}" was not configured`);
+/**
+ * Restarts are serialized: `client.restart()` is not re-entrant, and the
+ * restart command, an interpreter change and a settings change can each ask
+ * for one at any time.
+ */
+let restartQueue: Promise<unknown> = Promise.resolve();
+
+function queueRestart<T>(work: () => Promise<T>): Promise<T> {
+  const next = restartQueue.catch(() => {}).then(work);
+  restartQueue = next;
+  return next;
+}
+
+function logServerVersion(): void {
+  outputChannel.appendLine(
+    `Pyrefly language server version: ${client.initializeResult?.serverInfo?.version ?? '<unknown>'}`,
+  );
+}
+
+/**
+ * Re-resolve the binary and arguments into the launch specification. Returns
+ * whether either changed, which is exactly when a restart is needed for the
+ * new selection to take effect.
+ */
+async function refreshLaunchSpec(extensionUri: vscode.Uri): Promise<boolean> {
+  const next = await resolveExecutable(extensionUri, pythonEnv, outputChannel);
+  const changed =
+    next.command !== launchSpec.command ||
+    JSON.stringify(next.args) !== JSON.stringify(launchSpec.args);
+  launchSpec.command = next.command;
+  launchSpec.args = next.args;
+  return changed;
+}
+
+/**
+ * Restart the client, reverting to `fallback` if the new specification does
+ * not come up. Returns whether the restart succeeded as asked.
+ *
+ * A `LanguageClient` whose start fails moves to `StartFailed` and caches the
+ * rejection, so it never reaches `start()` again — neither a corrected setting
+ * nor the restart command could recover it. Reverting therefore means building
+ * a fresh client rather than restarting this one.
+ */
+async function restartOrRevert(fallback: Executable): Promise<boolean> {
+  try {
+    await client.restart();
+    logServerVersion();
+    return true;
+  } catch (error) {
+    const attempted = launchSpec.command;
+    const message = describeError(error);
+    outputChannel.appendLine(
+      `Could not start the Pyrefly language server at ${attempted}: ${message}`,
+    );
+    // Put the specification back too, so that the next interpreter or settings
+    // change is still seen as a change and gets to retry. Leaving the failed
+    // selection in place would make every later comparison report "no change".
+    launchSpec.command = fallback.command;
+    launchSpec.args = fallback.args;
+    try {
+      // Be safe in case client.dispose() runs synchronously.
+      await client.dispose().catch(() => {});
+    } catch {}
+    client = new LanguageClient(
+      'pyrefly',
+      'Pyrefly language server',
+      launchSpec,
+      clientOptions,
+    );
+    try {
+      await client.start();
+      logServerVersion();
+    } catch (revertError) {
+      outputChannel.appendLine(
+        `Pyrefly language server is not running: ${describeError(revertError)}`,
+      );
+    }
+    // The status bar is still describing the client we just disposed. Refreshing
+    // it against the replacement covers both outcomes above: `updateStatusBar`
+    // hides the item when the server does not answer.
+    await updateStatusBar(client);
+    void vscode.window.showErrorMessage(
+      `Pyrefly could not start ${attempted}, and went back to ${fallback.command}. See the "Pyrefly language server" output for details.`,
+    );
+    return false;
   }
-  return ret;
+}
+
+/** Restart the client if the launch specification changed. */
+async function restartIfLaunchSpecChanged(
+  extensionUri: vscode.Uri,
+  reason: string,
+): Promise<'restarted' | 'unchanged' | 'failed' | 'not-running'> {
+  return queueRestart(async () => {
+    const previous: Executable = {
+      command: launchSpec.command,
+      args: launchSpec.args,
+    };
+    let changed: boolean;
+    try {
+      changed = await refreshLaunchSpec(extensionUri);
+    } catch (error) {
+      outputChannel.appendLine(
+        `Could not resolve the Pyrefly binary, keeping ${launchSpec.command}: ${describeError(error)}`,
+      );
+      return 'failed';
+    }
+    // Both callers are registered before activation's own `client.start()`, so
+    // a change can arrive with no server to restart. Recording it above is what
+    // makes it take effect anyway: the client reads the launch specification
+    // when it spawns the process, which has not happened yet.
+    if (client.state !== State.Running) {
+      return 'not-running';
+    }
+    if (!changed) {
+      return 'unchanged';
+    }
+    outputChannel.appendLine(
+      `Restarting the Pyrefly language server because ${reason}.`,
+    );
+    return (await restartOrRevert(previous)) ? 'restarted' : 'failed';
+  });
 }
 
 /**
@@ -64,7 +189,6 @@ function requireSetting<T>(path: string): T {
  * - {setting: 'value', pythonPath: '/usr/bin/python3'} is returned
  */
 async function overridePythonPath(
-  pythonEnv: PythonEnvironment,
   configurationItems: ConfigurationItem[],
   configuration: (object | null)[],
 ): Promise<(object | null)[]> {
@@ -107,37 +231,14 @@ export async function activate(context: ExtensionContext) {
     inferOutputChannel = vscode.window.createOutputChannel('Pyrefly infer');
   }
 
-  // There may be more than one URI due to multi-root workspaces, so just take the primary root.
-  let globalCwd: vscode.Uri | undefined = vscode.workspace.workspaceFolders?.[0]?.uri;
+  pythonEnv = new PythonEnvironment(context);
 
-  const lspPath: string = resolveLspPath(
-    requireSetting('pyrefly.lspPath'),
-    globalCwd?.fsPath,
-  );
-  // `pyrefly.lspArguments` resolves to an empty array in some environments
-  // (notably dev containers / remote, where the `machine-overridable` default
-  // of `["lsp"]` is not applied). Spawning the binary with no subcommand makes
-  // pyrefly print its help text and exit, which the client only sees as a
-  // `write EPIPE` when it writes the `initialize` request. Fall back to the
-  // `lsp` subcommand so the server always starts.
-  const configuredArgs: string[] = requireSetting('pyrefly.lspArguments');
-  const args: string[] = configuredArgs.length > 0 ? configuredArgs : ['lsp'];
-
-  const bundledPyreflyPath = vscode.Uri.joinPath(
+  launchSpec = await resolveExecutable(
     context.extensionUri,
-    'bin',
-    // process.platform returns win32 on any windows CPU architecture
-    process.platform === 'win32' ? 'pyrefly.exe' : 'pyrefly',
+    pythonEnv,
+    outputChannel,
   );
-  const pyreflyPath = lspPath === '' ? bundledPyreflyPath.fsPath : lspPath;
 
-  const pythonEnv = new PythonEnvironment(context);
-
-  // Otherwise to spawn the server
-  let serverOptions: ServerOptions = {
-    command: pyreflyPath,
-    args: args,
-  };
   // `getConfiguration` returns a `WorkspaceConfiguration` proxy, not a
   // plain object: spread (`{...cfg}`) and `Object.assign({}, cfg)` rely
   // on own enumerable properties and may silently drop the configured
@@ -168,7 +269,7 @@ export async function activate(context: ExtensionContext) {
   };
 
   // Options to control the language client
-  let clientOptions: LanguageClientOptions = {
+  clientOptions = {
     initializationOptions,
     // Register the server for Python documents
     documentSelector: [
@@ -204,7 +305,6 @@ export async function activate(context: ExtensionContext) {
             return result;
           }
           return await overridePythonPath(
-            pythonEnv,
             params.items,
             result as (object | null)[],
           );
@@ -212,6 +312,8 @@ export async function activate(context: ExtensionContext) {
       },
     },
   };
+
+  const serverOptions: ServerOptions = launchSpec;
 
   // Create the language client and start the client.
   client = new LanguageClient(
@@ -231,10 +333,19 @@ export async function activate(context: ExtensionContext) {
   );
 
   pythonEnv
-    .onDidChangeInterpreter(() => {
-      client.sendNotification(DidChangeConfigurationNotification.type, {
-        settings: {},
-      });
+    .onDidChangeInterpreter(async () => {
+      // A new environment may ship its own Pyrefly. If it does not, the server
+      // stays up and only needs to hear about the new interpreter. A failed
+      // restart leaves no running server to notify.
+      const outcome = await restartIfLaunchSpecChanged(
+        context.extensionUri,
+        'the active Python interpreter changed',
+      );
+      if (outcome === 'unchanged') {
+        client.sendNotification(DidChangeConfigurationNotification.type, {
+          settings: {},
+        });
+      }
     })
     .then(disposable => {
       if (disposable) {
@@ -249,6 +360,16 @@ export async function activate(context: ExtensionContext) {
           settings: {},
         });
       }
+      if (
+        event.affectsConfiguration('pyrefly.lspPath') ||
+        event.affectsConfiguration('pyrefly.pyreflyExecutable') ||
+        event.affectsConfiguration('pyrefly.lspArguments')
+      ) {
+        await restartIfLaunchSpecChanged(
+          context.extensionUri,
+          'the configured Pyrefly executable changed',
+        );
+      }
       await updateStatusBar(client);
     }),
   );
@@ -258,7 +379,22 @@ export async function activate(context: ExtensionContext) {
       // Clear the output channel but don't dispose it
       outputChannel.clear();
       traceOutputChannel.clear();
-      await client.restart();
+      await queueRestart(async () => {
+        const previous: Executable = {
+          command: launchSpec.command,
+          args: launchSpec.args,
+        };
+        try {
+          await refreshLaunchSpec(context.extensionUri);
+        } catch (error) {
+          // This command is the escape hatch from a bad selection, so restart
+          // with the previous one rather than not restarting at all.
+          outputChannel.appendLine(
+            `Could not re-resolve the Pyrefly binary, restarting with the previous one: ${describeError(error)}`,
+          );
+        }
+        await restartOrRevert(previous);
+      });
     }),
   );
 
@@ -307,7 +443,7 @@ export async function activate(context: ExtensionContext) {
           async () => {
             await new Promise<void>((resolve, reject) => {
               execFile(
-                pyreflyPath,
+                launchSpec.command,
                 ['infer', document.uri.fsPath],
                 {cwd},
                 (error, stdout, stderr) => {
@@ -347,6 +483,7 @@ export async function activate(context: ExtensionContext) {
 
   // Start the client. This will also launch the server
   await client.start();
+  logServerVersion();
 
   await updateStatusBar(client);
   const statusBarItem = getStatusBarItem();

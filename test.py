@@ -49,6 +49,7 @@ class TestFlags:
     run_tensor_shapes: bool
     run_conformance: bool
     run_jsonschema: bool
+    run_extension: bool
 
 
 def print_running(msg: str) -> None:
@@ -127,6 +128,25 @@ class Executor(abc.ABC):
     @abc.abstractmethod
     def jsonschema(self) -> None:
         raise NotImplementedError()
+
+    def extension(self) -> None:
+        """Test the VS Code extension's Python helper.
+
+        This is not abstract: `find_pyrefly.py` is a standalone stdlib script
+        shipped inside the extension and run by the user's own interpreter, so
+        neither build system produces it and the command is the same in both
+        modes.
+        """
+        run(
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "lsp/test",
+            ]
+        )
 
 
 @final
@@ -319,6 +339,11 @@ def run_tests(executor: Executor, test_flags: TestFlags) -> None:
         with timing():
             executor.jsonschema()
 
+    if test_flags.run_extension:
+        print_running("extension tests")
+        with timing():
+            executor.extension()
+
 
 def get_executor(mode: str) -> Executor:
     if mode == "auto":
@@ -381,6 +406,12 @@ def invoke_main() -> None:
         default=True,
         help="Whether to run jsonschema test or not",
     )
+    parser.add_argument(
+        "--extension",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to run the VS Code extension's Python tests or not",
+    )
     args = parser.parse_args()
     try:
         main(
@@ -392,6 +423,7 @@ def invoke_main() -> None:
                 run_tensor_shapes=args.tensor_shapes,
                 run_conformance=args.conformance,
                 run_jsonschema=args.jsonschema,
+                run_extension=args.extension,
             ),
         )
     except KeyboardInterrupt:
