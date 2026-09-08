@@ -21,6 +21,7 @@ use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -340,6 +341,94 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Visits an explicit keyword or the entries of a supported unpacked mapping in source order.
+    /// A `None` name is an unknown key or unpack that may override preceding entries.
+    fn visit_keyword_entries<'b>(
+        &self,
+        handle: &Handle,
+        keyword: &'b Keyword,
+        mut visit: impl FnMut(Option<&'b str>, &'b Expr),
+    ) {
+        match (&keyword.arg, &keyword.value) {
+            (Some(name), value) => visit(Some(name.id.as_str()), value),
+            (None, Expr::Dict(dict)) => {
+                for item in &dict.items {
+                    let name = match item.key.as_ref() {
+                        Some(Expr::StringLiteral(key)) => Some(key.value.to_str()),
+                        _ => None,
+                    };
+                    visit(name, &item.value);
+                }
+            }
+            (None, Expr::Call(unpacked))
+                if unpacked.arguments.args.is_empty()
+                    && matches!(
+                        self.get_type_trace(handle, unpacked.func.range()),
+                        Some(Type::ClassDef(class)) if class.is_builtin("dict")
+                    ) =>
+            {
+                for keyword in &unpacked.arguments.keywords {
+                    visit(
+                        keyword.arg.as_ref().map(|name| name.id.as_str()),
+                        &keyword.value,
+                    );
+                }
+            }
+            (None, value) => visit(None, value),
+        }
+    }
+
+    /// Finds the argument containing the literal, resolving inline keyword mappings.
+    fn dataframe_call_argument_slot<'b>(
+        &self,
+        handle: &Handle,
+        call: &'b ExprCall,
+        literal_range: TextRange,
+    ) -> Option<ArgumentSlot<'b>> {
+        let mut slot = None;
+        let mut axis = None;
+        for keyword in &call.arguments.keywords {
+            let mut unpacked_slot = None;
+            self.visit_keyword_entries(handle, keyword, |name, value| {
+                if value.range().contains_range(literal_range) {
+                    unpacked_slot = Some(
+                        name.map(ArgumentSlot::Keyword)
+                            .unwrap_or(ArgumentSlot::UnpackedKeyword),
+                    );
+                } else if let Some(ArgumentSlot::Keyword(current)) = unpacked_slot
+                    && name.is_none_or(|name| name == current)
+                {
+                    // A later duplicate or unknown key can replace the value containing the cursor.
+                    unpacked_slot = Some(ArgumentSlot::UnpackedKeyword);
+                }
+                match name {
+                    Some("axis") => axis = Some(value),
+                    None => axis = None,
+                    _ => {}
+                }
+            });
+            if unpacked_slot.is_some() {
+                slot = unpacked_slot;
+            }
+        }
+        let slot = slot.or_else(|| {
+            call.arguments
+                .args
+                .iter()
+                .any(|arg| arg.range().contains_range(literal_range))
+                .then_some(ArgumentSlot::Positional)
+        })?;
+        if matches!(call.func.as_ref(), Expr::Attribute(attr) if attr.attr.id.as_str() == "drop")
+            && matches!(slot, ArgumentSlot::Keyword("labels"))
+            && (matches!(axis, Some(Expr::StringLiteral(axis)) if axis.value.to_str() == "columns")
+                || matches!(axis, Some(Expr::NumberLiteral(axis)) if axis.value.as_int().and_then(|axis| axis.as_i64()) == Some(1)))
+        {
+            Some(ArgumentSlot::Keyword("columns"))
+        } else {
+            Some(slot)
+        }
+    }
+
     fn expr_has_typed_dict_type(&self, handle: &Handle, expr: &Expr) -> bool {
         self.get_type_trace(handle, expr.range())
             .map(|ty| Self::type_contains_typed_dict(&ty))
@@ -486,24 +575,7 @@ impl<'a> Transaction<'a> {
             let AnyNodeRef::ExprCall(call) = node else {
                 continue;
             };
-            let slot = if let Some(keyword) = call
-                .arguments
-                .keywords
-                .iter()
-                .find(|keyword| keyword.value.range().contains_range(literal_range))
-            {
-                match &keyword.arg {
-                    Some(name) => ArgumentSlot::Keyword(name.id.as_str()),
-                    None => ArgumentSlot::UnpackedKeyword,
-                }
-            } else if call
-                .arguments
-                .args
-                .iter()
-                .any(|arg| arg.range().contains_range(literal_range))
-            {
-                ArgumentSlot::Positional
-            } else {
+            let Some(slot) = self.dataframe_call_argument_slot(handle, call, literal_range) else {
                 continue;
             };
             if let Some(treats_strings_as_columns) = self
