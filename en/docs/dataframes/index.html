@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.caa578e5.css">
-<script src="/assets/js/runtime~main.13ba30ec.js" defer="defer"></script>
-<script src="/assets/js/main.524d80f0.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.d5810273.js" defer="defer"></script>
+<script src="/assets/js/main.9fd94b80.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -279,6 +279,9 @@ tuple inputs.</li>
 <li><code>join</code> supports same-name <code>on=</code> keys and the <code>semi</code>, <code>anti</code>, <code>inner</code>, <code>left</code>,
 <code>right</code>, <code>full</code>, and <code>cross</code> modes with default suffix and coalesce behavior.</li>
 </ul>
+<p>A <code>join</code> whose suffixed name collides with a column that already exists is a
+<code>duplicate-column</code> error. A selector, wildcard, or regex in <code>on</code> names a set of
+columns rather than one, so the join is left unmodeled.</p>
 <p>Separate <code>left_on</code> and <code>right_on</code> keys, custom suffixes, explicit coalesce
 settings, other concat modes, mismatched concat schemas, and <code>hstack</code> with a
 list of Series are not modeled.</p>
@@ -325,9 +328,9 @@ strict Polars construction value that does not fit the dtype established by
 the first non-null value.</li>
 <li><a href="/en/docs/error-kinds/#column-schema-mismatch"><code>column-schema-mismatch</code></a> reports
 statically known data names that do not match declared schema names.</li>
-<li><a href="/en/docs/error-kinds/#duplicate-column"><code>duplicate-column</code></a> reports a projection
-that would produce two columns with the same name, which Polars rejects when
-an eager projection runs or a lazy projection is collected.</li>
+<li><a href="/en/docs/error-kinds/#duplicate-column"><code>duplicate-column</code></a> reports an operation
+that would produce two columns with the same name, such as a projection with
+duplicate output names or a join suffix collision.</li>
 </ul>
 <hr>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="feedback">Feedback<a href="#feedback" class="hash-link" aria-label="Direct link to Feedback" title="Direct link to Feedback">​</a></h2>

@@ -2465,7 +2465,46 @@ more details on how baseline files work.
     - `baseline` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
     - Errors suppressed by the baseline file are still shown in the IDE.
-    - Errors are matched with the baseline by file, error code, and column number.
+
+### `baseline-matching-mode`
+
+Controls how diagnostics are matched against baseline entries. `"column"`
+matches the file, error kind, and starting column. `"concise-description"`
+matches the file, error kind, and concise description.
+
+```toml
+baseline-matching-mode = "concise-description"
+```
+
+- Type: `"column"` | `"concise-description"`
+- Default: `"column"`
+- Flag equivalent: none
+- Notes:
+    - `baseline-matching-mode` is a **project-level setting** and cannot be
+      overridden in [`sub-config`](#sub-configs) sections.
+    - There is intentionally no CLI equivalent because the matching mode is a
+      property of the checked-in baseline and must be consistent for all users.
+    - After changing modes, regenerate a baseline that does not contain the new
+      mode's required field with `pyrefly check --update-baseline`.
+
+### `baseline-format`
+
+Controls how much information `--update-baseline` writes for each baseline
+entry. `"full"` writes all baseline metadata. `"minimal"` writes only the file,
+error kind, and the field required by `baseline-matching-mode`.
+
+```toml
+baseline-format = "minimal"
+```
+
+- Type: `"full"` | `"minimal"`
+- Default: `"full"`
+- Flag equivalent: none
+- Notes:
+    - `baseline-format` is a **project-level setting** and cannot be overridden
+      in [`sub-config`](#sub-configs) sections.
+    - There is intentionally no CLI equivalent so every baseline update uses
+      the same format, avoiding conflicting rewrites.
 
 ### `baseline-error-level`
 
@@ -4064,6 +4103,10 @@ Pyrefly models common ways to combine complete Polars schemas.
 - `join` supports same-name `on=` keys and the `semi`, `anti`, `inner`, `left`,
   `right`, `full`, and `cross` modes with default suffix and coalesce behavior.
 
+A `join` whose suffixed name collides with a column that already exists is a
+`duplicate-column` error. A selector, wildcard, or regex in `on` names a set of
+columns rather than one, so the join is left unmodeled.
+
 Separate `left_on` and `right_on` keys, custom suffixes, explicit coalesce
 settings, other concat modes, mismatched concat schemas, and `hstack` with a
 list of Series are not modeled.
@@ -4171,9 +4214,9 @@ configuration.
   the first non-null value.
 - [`column-schema-mismatch`](../error-kinds/#column-schema-mismatch) reports
   statically known data names that do not match declared schema names.
-- [`duplicate-column`](../error-kinds/#duplicate-column) reports a projection
-  that would produce two columns with the same name, which Polars rejects when
-  an eager projection runs or a lazy projection is collected.
+- [`duplicate-column`](../error-kinds/#duplicate-column) reports an operation
+  that would produce two columns with the same name, such as a projection with
+  duplicate output names or a join suffix collision.
 
 ---
 
@@ -5101,7 +5144,7 @@ z = 10 % 0   # error: division by zero
 
 ## duplicate-column
 
-A Polars projection produces more than one column with the same name. Polars rejects duplicate output names when an eager projection runs or a lazy projection is collected.
+A Polars operation produces more than one column with the same name. Pyrefly reports this for projections with duplicate output names and join suffix collisions that Polars rejects at execution.
 
 ```python
 import polars as pl
@@ -7002,7 +7045,24 @@ When the baseline is specified in the configuration file, you don't need to pass
 
 Note that `baseline` is a **project-level setting** and cannot be overridden in [`sub-config`](./configuration.mdx#sub-configs) sections. If you need different baseline files for different parts of your codebase, consider using separate Pyrefly configuration files.
 
-Errors are matched with the baseline by looking at file, error code, and column number.
+`baseline-matching-mode` controls how errors are matched:
+
+- `"column"` (default) matches the file, error kind, and starting column.
+- `"concise-description"` matches the file, error kind, and concise description.
+
+`baseline-format` controls which fields `--update-baseline` writes. `"full"`
+(default) includes all baseline metadata. `"minimal"` includes only the file,
+error kind, and the field required by the configured matching mode:
+
+```toml
+baseline = "baseline.json"
+baseline-matching-mode = "concise-description"
+baseline-format = "minimal"
+```
+
+Both settings are configuration-only so all users interpret and update the
+checked-in baseline consistently.
+
 Note that errors suppressed by the baseline file are still shown in the IDE.
 
 `--baseline-error-level=<ignore|info|warn|error>` and the project-level
@@ -7024,7 +7084,11 @@ Pyrefly records baseline provenance differently depending on the output format:
 - `sarif`: when a baseline is configured, each result has `baselineState` set to `unchanged` for a match and `new` otherwise.
 - `omit-errors`: the summary includes the number of emitted baselined diagnostics.
 
-If a baseline file is configured but cannot be read or parsed, the run fails with an error rather than proceeding as if no baseline were set. The exception is `--update-baseline`, which regenerates the file from scratch and so tolerates a missing or unparseable baseline.
+If a baseline file is configured but cannot be read, parsed, or does not contain
+the fields required by `baseline-matching-mode`, the run fails with an error.
+Rerun the command with `--update-baseline` to regenerate it using the current
+matching mode and format. Baseline regeneration tolerates a missing or invalid
+existing file.
 
 As you fix errors, the entries that suppressed them become stale. Two flags help keep the baseline current:
 

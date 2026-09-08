@@ -475,6 +475,10 @@ Pyrefly models common ways to combine complete Polars schemas.
 - `join` supports same-name `on=` keys and the `semi`, `anti`, `inner`, `left`,
   `right`, `full`, and `cross` modes with default suffix and coalesce behavior.
 
+A `join` whose suffixed name collides with a column that already exists is a
+`duplicate-column` error. A selector, wildcard, or regex in `on` names a set of
+columns rather than one, so the join is left unmodeled.
+
 Separate `left_on` and `right_on` keys, custom suffixes, explicit coalesce
 settings, other concat modes, mismatched concat schemas, and `hstack` with a
 list of Series are not modeled.
@@ -582,9 +586,9 @@ configuration.
   the first non-null value.
 - [`column-schema-mismatch`](../error-kinds/#column-schema-mismatch) reports
   statically known data names that do not match declared schema names.
-- [`duplicate-column`](../error-kinds/#duplicate-column) reports a projection
-  that would produce two columns with the same name, which Polars rejects when
-  an eager projection runs or a lazy projection is collected.
+- [`duplicate-column`](../error-kinds/#duplicate-column) reports an operation
+  that would produce two columns with the same name, such as a projection with
+  duplicate output names or a join suffix collision.
 
 ---
 
