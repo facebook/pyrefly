@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, overload, Sequence
+from typing import Any, Callable, overload, Sequence
 
 from jax._array import Array
 from jax._shapes import (
@@ -11,10 +11,23 @@ from jax._shapes import (
     collapse_shape,
     collapse_to_end_shape,
     concatenate_shape,
+    lax_associative_scan_shape,
+    lax_axis_reduce_shape,
     lax_broadcast,
+    lax_clamp_max_scalar_shape,
+    lax_clamp_min_scalar_shape,
+    lax_clamp_shape,
+    lax_reduce_shape,
+    lax_scan_shape,
+    lax_select_n_shape,
+    lax_select_scalar_pred_shape,
+    lax_select_shape,
+    lax_sort_key_val_shape,
+    lax_sort_shape,
     lax_squeeze_shape,
     permute_shape,
     stack_shape,
+    top_k_shape,
 )
 from shape_extensions import (
     Elements,
@@ -663,3 +676,437 @@ def convert_element_type(
     operand: Any,
     new_dtype: Any,
 ) -> Array[IntTuple]: ...
+
+# Reductions, Scans & Window Operations
+@overload
+def argmax[Shape: _Shape, Axis: Flag[int]](
+    operand: Array[Shape],
+    axis: Axis,
+    index_dtype: Any = ...,
+) -> Array[lax_axis_reduce_shape(Shape, Axis)]: ...
+@overload
+def argmax(
+    operand: Any,
+    axis: int,
+    index_dtype: Any = ...,
+) -> Array[IntTuple]: ...
+@overload
+def argmin[Shape: _Shape, Axis: Flag[int]](
+    operand: Array[Shape],
+    axis: Axis,
+    index_dtype: Any = ...,
+) -> Array[lax_axis_reduce_shape(Shape, Axis)]: ...
+@overload
+def argmin(
+    operand: Any,
+    axis: int,
+    index_dtype: Any = ...,
+) -> Array[IntTuple]: ...
+@overload
+def associative_scan[Shape: _Shape, Axis: Flag[int] = 0](
+    fn: Callable[[Any, Any], Any],
+    elems: Array[Shape],
+    reverse: bool = False,
+    axis: Axis = 0,
+) -> Array[lax_associative_scan_shape(Shape, Axis)]: ...
+@overload
+def associative_scan(
+    fn: Callable[[Any, Any], Any],
+    elems: Any,
+    reverse: bool = False,
+    axis: int = 0,
+) -> Any: ...
+@overload
+def cumlogsumexp[Shape: _Shape, Axis: Flag[int] = 0](
+    operand: Array[Shape],
+    axis: Axis = 0,
+    reverse: bool = False,
+) -> Array[lax_scan_shape(Shape, Axis)]: ...
+@overload
+def cumlogsumexp(
+    operand: Any,
+    axis: int = 0,
+    reverse: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def cummax[Shape: _Shape, Axis: Flag[int] = 0](
+    operand: Array[Shape],
+    axis: Axis = 0,
+    reverse: bool = False,
+) -> Array[lax_scan_shape(Shape, Axis)]: ...
+@overload
+def cummax(
+    operand: Any,
+    axis: int = 0,
+    reverse: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def cummin[Shape: _Shape, Axis: Flag[int] = 0](
+    operand: Array[Shape],
+    axis: Axis = 0,
+    reverse: bool = False,
+) -> Array[lax_scan_shape(Shape, Axis)]: ...
+@overload
+def cummin(
+    operand: Any,
+    axis: int = 0,
+    reverse: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def cumprod[Shape: _Shape, Axis: Flag[int] = 0](
+    operand: Array[Shape],
+    axis: Axis = 0,
+    reverse: bool = False,
+) -> Array[lax_scan_shape(Shape, Axis)]: ...
+@overload
+def cumprod(
+    operand: Any,
+    axis: int = 0,
+    reverse: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def cumsum[Shape: _Shape, Axis: Flag[int] = 0](
+    operand: Array[Shape],
+    axis: Axis = 0,
+    reverse: bool = False,
+) -> Array[lax_scan_shape(Shape, Axis)]: ...
+@overload
+def cumsum(
+    operand: Any,
+    axis: int = 0,
+    reverse: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def reduce[Shape: _Shape, Dims: Flag[tuple[int, ...]]](
+    operands: Array[Shape],
+    init_values: Any,
+    computation: Callable[[Any, Any], Any],
+    dimensions: Dims,
+    out_sharding: Any = None,
+) -> Array[lax_reduce_shape(Shape, Dims)]: ...
+@overload
+def reduce(
+    operands: Any,
+    init_values: Any,
+    computation: Callable[..., Any],
+    dimensions: Sequence[int],
+    out_sharding: Any = None,
+) -> Any: ...
+@overload
+def reduce_and[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
+    operand: Array[Shape],
+    axes: Axes,
+) -> Array[lax_reduce_shape(Shape, Axes)]: ...
+@overload
+def reduce_and(
+    operand: Any,
+    axes: Sequence[int],
+) -> Array[IntTuple]: ...
+@overload
+def reduce_max[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
+    operand: Array[Shape],
+    axes: Axes,
+    *,
+    out_sharding: Any = None,
+) -> Array[lax_reduce_shape(Shape, Axes)]: ...
+@overload
+def reduce_max(
+    operand: Any,
+    axes: Sequence[int],
+    *,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def reduce_min[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
+    operand: Array[Shape],
+    axes: Axes,
+    *,
+    out_sharding: Any = None,
+) -> Array[lax_reduce_shape(Shape, Axes)]: ...
+@overload
+def reduce_min(
+    operand: Any,
+    axes: Sequence[int],
+    *,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def reduce_or[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
+    operand: Array[Shape],
+    axes: Axes,
+) -> Array[lax_reduce_shape(Shape, Axes)]: ...
+@overload
+def reduce_or(
+    operand: Any,
+    axes: Sequence[int],
+) -> Array[IntTuple]: ...
+@overload
+def reduce_precision[Shape: _Shape](
+    operand: Array[Shape],
+    exponent_bits: int,
+    mantissa_bits: int,
+) -> Array[Shape]: ...
+@overload
+def reduce_precision(
+    operand: float | int,
+    exponent_bits: int,
+    mantissa_bits: int,
+) -> Array[[]]: ...
+@overload
+def reduce_precision(
+    operand: Any,
+    exponent_bits: int,
+    mantissa_bits: int,
+) -> Array[IntTuple]: ...
+@overload
+def reduce_prod[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
+    operand: Array[Shape],
+    axes: Axes,
+) -> Array[lax_reduce_shape(Shape, Axes)]: ...
+@overload
+def reduce_prod(
+    operand: Any,
+    axes: Sequence[int],
+) -> Array[IntTuple]: ...
+@overload
+def reduce_sum[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
+    operand: Array[Shape],
+    axes: Axes,
+    *,
+    out_sharding: Any = None,
+) -> Array[lax_reduce_shape(Shape, Axes)]: ...
+@overload
+def reduce_sum(
+    operand: Any,
+    axes: Sequence[int],
+    *,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def reduce_window[Shape: _Shape](
+    operand: Array[Shape],
+    init_value: Any,
+    computation: Callable[..., Any],
+    window_dimensions: Sequence[int],
+    window_strides: Sequence[int] | None = None,
+    padding: str | Sequence[tuple[int, int]] = "VALID",
+    base_dilation: Sequence[int] | None = None,
+    window_dilation: Sequence[int] | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def reduce_window(
+    operand: Any,
+    init_value: Any,
+    computation: Callable[..., Any],
+    window_dimensions: Sequence[int],
+    window_strides: Sequence[int] | None = None,
+    padding: str | Sequence[tuple[int, int]] = "VALID",
+    base_dilation: Sequence[int] | None = None,
+    window_dilation: Sequence[int] | None = None,
+) -> Any: ...
+def reduce_window_shape_tuple(
+    operand_shape: Sequence[int],
+    window_dimensions: Sequence[int],
+    window_strides: Sequence[int],
+    padding: Sequence[tuple[int, int]],
+    base_dilation: Sequence[int] | None = None,
+    window_dilation: Sequence[int] | None = None,
+) -> tuple[int, ...]: ...
+@overload
+def reduce_xor[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
+    operand: Array[Shape],
+    axes: Axes,
+) -> Array[lax_reduce_shape(Shape, Axes)]: ...
+@overload
+def reduce_xor(
+    operand: Any,
+    axes: Sequence[int],
+) -> Array[IntTuple]: ...
+
+# Selection, Sorting & Searching
+@overload
+def approx_max_k[Shape: _Shape, K: Flag[int], Dim: Flag[int] = -1](
+    operand: Array[Shape],
+    k: K,
+    reduction_dimension: Dim = -1,
+    recall_target: float = 0.95,
+    reduction_input_size_override: int = -1,
+    aggregate_to_topk: bool = True,
+) -> tuple[
+    Array[top_k_shape(Shape, K, Dim)],
+    Array[top_k_shape(Shape, K, Dim)],
+]: ...
+@overload
+def approx_max_k(
+    operand: Any,
+    k: int,
+    reduction_dimension: int = -1,
+    recall_target: float = 0.95,
+    reduction_input_size_override: int = -1,
+    aggregate_to_topk: bool = True,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+@overload
+def approx_min_k[Shape: _Shape, K: Flag[int], Dim: Flag[int] = -1](
+    operand: Array[Shape],
+    k: K,
+    reduction_dimension: Dim = -1,
+    recall_target: float = 0.95,
+    reduction_input_size_override: int = -1,
+    aggregate_to_topk: bool = True,
+) -> tuple[
+    Array[top_k_shape(Shape, K, Dim)],
+    Array[top_k_shape(Shape, K, Dim)],
+]: ...
+@overload
+def approx_min_k(
+    operand: Any,
+    k: int,
+    reduction_dimension: int = -1,
+    recall_target: float = 0.95,
+    reduction_input_size_override: int = -1,
+    aggregate_to_topk: bool = True,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+@overload
+def clamp[Shape: _Shape](
+    min: _Scalar,
+    x: Array[Shape],
+    max: _Scalar,
+) -> Array[Shape]: ...
+@overload
+def clamp[Shape: _Shape, ShapeMin: _Shape](
+    min: Array[ShapeMin],
+    x: Array[Shape],
+    max: _Scalar,
+) -> Array[lax_clamp_max_scalar_shape(ShapeMin, Shape)]: ...
+@overload
+def clamp[Shape: _Shape, ShapeMax: _Shape](
+    min: _Scalar,
+    x: Array[Shape],
+    max: Array[ShapeMax],
+) -> Array[lax_clamp_min_scalar_shape(Shape, ShapeMax)]: ...
+@overload
+def clamp[Shape: _Shape, ShapeMin: _Shape, ShapeMax: _Shape](
+    min: Array[ShapeMin],
+    x: Array[Shape],
+    max: Array[ShapeMax],
+) -> Array[lax_clamp_shape(ShapeMin, Shape, ShapeMax)]: ...
+@overload
+def clamp(
+    min: _Scalar,
+    x: _Scalar,
+    max: _Scalar,
+) -> Array[[]]: ...
+@overload
+def clamp(
+    min: Any,
+    x: Any,
+    max: Any,
+) -> Array[IntTuple]: ...
+@overload
+def select[Shape: _Shape, Shape2: _Shape](
+    pred: bool | int,
+    on_true: Array[Shape],
+    on_false: Array[Shape2],
+) -> Array[lax_select_scalar_pred_shape(Shape, Shape2)]: ...
+@overload
+def select[Shape: _Shape, Shape2: _Shape, PredShape: _Shape](
+    pred: Array[PredShape],
+    on_true: Array[Shape],
+    on_false: Array[Shape2],
+) -> Array[lax_select_shape(PredShape, Shape, Shape2)]: ...
+@overload
+def select(
+    pred: bool | int,
+    on_true: _Scalar,
+    on_false: _Scalar,
+) -> Array[[]]: ...
+@overload
+def select(
+    pred: Any,
+    on_true: Any,
+    on_false: Any,
+) -> Array[IntTuple]: ...
+@overload
+def select_n[Shape: _Shape, WhichShape: _Shape](
+    which: Array[WhichShape],
+    *cases: Array[Shape],
+) -> Array[lax_select_n_shape(WhichShape, Shape)]: ...
+@overload
+def select_n[Shape: _Shape](
+    which: bool | int,
+    *cases: Array[Shape],
+) -> Array[Shape]: ...
+@overload
+def select_n(
+    which: bool | int,
+    *cases: _Scalar,
+) -> Array[[]]: ...
+@overload
+def select_n(
+    which: Any,
+    *cases: Any,
+) -> Array[IntTuple]: ...
+@overload
+def sort[Shape: _Shape, Dim: Flag[int] = -1](
+    operand: Array[Shape],
+    dimension: Dim = -1,
+    is_stable: bool = True,
+    num_keys: int = 1,
+) -> Array[lax_sort_shape(Shape, Dim)]: ...
+@overload
+def sort[Shape: _Shape, Dim: Flag[int] = -1](
+    operand: tuple[Array[Shape], Array[Shape]],
+    dimension: Dim = -1,
+    is_stable: bool = True,
+    num_keys: int = 1,
+) -> tuple[Array[lax_sort_shape(Shape, Dim)], Array[lax_sort_shape(Shape, Dim)]]: ...
+@overload
+def sort[Shape: _Shape, Dim: Flag[int] = -1](
+    operand: Sequence[Array[Shape]],
+    dimension: Dim = -1,
+    is_stable: bool = True,
+    num_keys: int = 1,
+) -> tuple[Array[lax_sort_shape(Shape, Dim)], ...]: ...
+@overload
+def sort(
+    operand: Any,
+    dimension: int = -1,
+    is_stable: bool = True,
+    num_keys: int = 1,
+) -> Any: ...
+@overload
+def sort_key_val[Shape1: _Shape, Shape2: _Shape, Dim: Flag[int] = -1](
+    keys: Array[Shape1],
+    values: Array[Shape2],
+    dimension: Dim = -1,
+    is_stable: bool = True,
+) -> tuple[
+    Array[lax_sort_key_val_shape(Shape1, Shape2, Dim)],
+    Array[lax_sort_key_val_shape(Shape1, Shape2, Dim)],
+]: ...
+@overload
+def sort_key_val(
+    keys: Any,
+    values: Any,
+    dimension: int = -1,
+    is_stable: bool = True,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+@overload
+def top_k[Shape: _Shape, K: Flag[int], Axis: Flag[int] = -1](
+    operand: Array[Shape],
+    k: K,
+    *,
+    axis: Axis = -1,
+    is_stable: bool = True,
+) -> tuple[
+    Array[top_k_shape(Shape, K, Axis)],
+    Array[top_k_shape(Shape, K, Axis)],
+]: ...
+@overload
+def top_k(
+    operand: Any,
+    k: int,
+    *,
+    axis: int = -1,
+    is_stable: bool = True,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
