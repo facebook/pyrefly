@@ -105,6 +105,11 @@ pub struct Error {
     secondary_annotations: Vec<SecondaryAnnotation>,
     /// Structured fixes that can be exposed by editor integrations.
     quick_fixes: Vec<ErrorQuickFix>,
+    /// Whether to mark `range` with the LSP `DEPRECATED` tag, which editors render as a
+    /// strikethrough. This is only correct when `range` is the reference to the deprecated
+    /// symbol, so it is cleared for a deprecation reached through an implicit dunder call,
+    /// which is reported at the whole enclosing expression.
+    deprecated_tag: bool,
 }
 
 /// An error representation that preserves the data needed for supported CLI output formats.
@@ -595,7 +600,7 @@ impl Error {
             message: self.msg().to_owned().into(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
-            tags: if self.error_kind() == ErrorKind::Deprecated {
+            tags: if self.deprecated_tag {
                 Some(vec![DiagnosticTag::DEPRECATED])
             } else {
                 None
@@ -686,7 +691,15 @@ impl Error {
             msg_details,
             secondary_annotations: Vec::new(),
             quick_fixes: Vec::new(),
+            deprecated_tag: error_kind == ErrorKind::Deprecated,
         }
+    }
+
+    /// Stop marking this error's range as deprecated in editors. Used when the range spans
+    /// more than the deprecated symbol, so striking it through would obscure unrelated code.
+    pub fn without_deprecated_tag(mut self) -> Self {
+        self.deprecated_tag = false;
+        self
     }
 
     /// Add a secondary labeled annotation to this error. These appear as additional
@@ -714,6 +727,7 @@ impl Error {
             || self.msg_header != other.msg_header
             || self.msg_details != other.msg_details
             || self.secondary_annotations != other.secondary_annotations
+            || self.deprecated_tag != other.deprecated_tag
         {
             return false;
         }

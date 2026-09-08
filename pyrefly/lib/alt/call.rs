@@ -766,6 +766,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         errors
                             .error_builder(range, ErrorKind::Deprecated, ctx().format())
                             .with_detail(header)
+                            .without_deprecated_tag()
                     } else {
                         errors.error_builder(range, ErrorKind::Deprecated, header)
                     };
