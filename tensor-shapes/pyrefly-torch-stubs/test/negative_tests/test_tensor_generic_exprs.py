@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 from shape_extensions import IntVar
 
-
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -130,20 +129,20 @@ def test_chained_symbolic[N: IntVar, M: IntVar](
 
 def test_sum_dims_wrong(x: Tensor[[2, 3]]) -> Tensor[[6]]:
     """N+M=5, not 6."""
-    # E: Returned type `Tensor[[5]]` is not assignable
-    #    to declared return type `Tensor[[6]]`
+    # E: Returned type `Tensor[IntTuple[5]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[6]]`
     return sum_dims(x)
 
 
 def test_product_dims_wrong(x: Tensor[[2, 3]]) -> Tensor[[5]]:
     """N*M=6, not 5."""
-    # E: Returned type `Tensor[[6]]` is not assignable
-    #    to declared return type `Tensor[[5]]`
+    # E: Returned type `Tensor[IntTuple[6]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[5]]`
     return product_dims(x)
 
 
 def test_double_first_wrong(x: Tensor[[4, 5]]) -> Tensor[[4, 5]]:
     """First dim should be 8, not 4."""
-    # E: Returned type `Tensor[[8, 5]]` is not assignable
-    #    to declared return type `Tensor[[4, 5]]`
+    # E: Returned type `Tensor[IntTuple[8, 5]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[4, 5]]`
     return double_first(x)

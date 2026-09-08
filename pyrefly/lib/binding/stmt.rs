@@ -58,6 +58,7 @@ use crate::binding::expr::Usage;
 use crate::binding::narrow::AtomicNarrowOp;
 use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowOps;
+use crate::binding::narrow::identifier_and_chain_prefix_for_expr;
 use crate::binding::polars::polars_column_mutation;
 use crate::binding::scope::FlowStyle;
 use crate::binding::scope::LoopExit;
@@ -337,7 +338,7 @@ impl<'a> BindingsBuilder<'a> {
         // The constraints (i.e., any positional arguments after the first)
         // and some keyword arguments are types.
         for arg in iargs {
-            if self.as_direct_shape_intvar(arg) {
+            if self.as_special_export(arg) == Some(SpecialExport::IntVar) {
                 self.error(
                     arg.range(),
                     ErrorKind::InvalidTypeVar,
@@ -352,7 +353,7 @@ impl<'a> BindingsBuilder<'a> {
             if let Some(id) = &kw.arg
                 && (id.id == "bound" || id.id == "default")
             {
-                if self.as_direct_shape_intvar(&kw.value) {
+                if self.as_special_export(&kw.value) == Some(SpecialExport::IntVar) {
                     let role = if id.id == "bound" { "bound" } else { "default" };
                     self.error(
                         kw.value.range(),
@@ -498,7 +499,7 @@ impl<'a> BindingsBuilder<'a> {
             if let Expr::StringLiteral(lit) = arg {
                 if lit.value.to_str() != name.as_str() {
                     self.error(
-                        x.range,
+                        x.range(),
                         ErrorKind::InvalidTypeAlias,
                         format!(
                             "TypeAliasType must be assigned to a variable named `{}`",
@@ -585,7 +586,7 @@ impl<'a> BindingsBuilder<'a> {
         }
         if !arg_name {
             self.error(
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeAlias,
                 "Missing `name` argument".to_owned(),
             );
@@ -594,7 +595,7 @@ impl<'a> BindingsBuilder<'a> {
             (Some(value), type_params.unwrap_or_default())
         } else {
             self.error(
-                x.range,
+                x.range(),
                 ErrorKind::InvalidTypeAlias,
                 "Missing `value` argument".to_owned(),
             );
@@ -719,10 +720,15 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         self.ensure_expr(target, delete_idx.usage());
                     }
-                    self.insert_binding_current(
+                    let idx = self.insert_binding_current(
                         delete_idx,
                         Binding::Delete(Box::new(target.clone())),
                     );
+                    if let Expr::Attribute(_) = target
+                        && let Some((identifier, _)) = identifier_and_chain_prefix_for_expr(target)
+                    {
+                        self.narrow_if_name_is_defined(identifier, idx);
+                    }
                 }
             }
             Stmt::Assign(ref x)
@@ -1668,7 +1674,7 @@ impl<'a> BindingsBuilder<'a> {
                 let Expr::Call(call) = *stmt_expr.value else {
                     unreachable!("guarded by matches! above")
                 };
-                let call_range = call.range;
+                let call_range = call.range();
                 let args = call.arguments.args;
                 let (test, msg) = if args.len() == 1 {
                     (args[0].clone(), None)
@@ -1694,6 +1700,42 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     None
                 };
+                // PyTorch nn.Module registers buffers and parameters as instance attributes.
+                // Collect literal-name candidates now; solving later verifies nn.Module ancestry.
+                if let Expr::Call(call) = x.value.as_ref()
+                    && let Expr::Attribute(func) = call.func.as_ref()
+                    && let Some(value_keyword) = match func.attr.id.as_str() {
+                        "register_buffer" => Some("tensor"),
+                        "register_parameter" => Some("param"),
+                        _ => None,
+                    }
+                {
+                    let name = call.arguments.args.first().or_else(|| {
+                        call.arguments.keywords.iter().find_map(|keyword| {
+                            (keyword
+                                .arg
+                                .as_ref()
+                                .is_some_and(|arg| arg.as_str() == "name"))
+                            .then_some(&keyword.value)
+                        })
+                    });
+                    let value = call.arguments.args.get(1).or_else(|| {
+                        call.arguments.keywords.iter().find_map(|keyword| {
+                            (keyword
+                                .arg
+                                .as_ref()
+                                .is_some_and(|arg| arg.as_str() == value_keyword))
+                            .then_some(&keyword.value)
+                        })
+                    });
+                    if let (Some(Expr::StringLiteral(name)), Some(value)) = (name, value) {
+                        self.scopes.record_nn_module_registration(
+                            &func.value,
+                            Name::new(name.value.to_str()),
+                            value.clone(),
+                        );
+                    }
+                }
                 let special_export = if let Expr::Call(ExprCall { func, .. }) = &*x.value {
                     self.as_special_export(func)
                 } else {

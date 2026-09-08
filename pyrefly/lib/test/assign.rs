@@ -1017,8 +1017,7 @@ assert_type(x, int)
 );
 
 testcase!(
-    bug = "Any assignment should not erase declared annotation",
-    test_reassigned_var_does_not_preserve_annotation_over_any,
+    test_reassigned_var_preserves_annotation_over_any,
     r#"
 from typing import Any, assert_type
 
@@ -1026,7 +1025,7 @@ def f() -> Any: ...
 
 x: str = "hello"
 x = f()
-assert_type(x, str)  # E: assert_type(Any, str) failed
+assert_type(x, str)
 "#,
 );
 
@@ -1072,7 +1071,6 @@ for y in xs:
 );
 
 testcase!(
-    bug = "Any assignment should not erase nullable annotation",
     test_nullable_annotation_any_assign,
     r#"
 from typing import Any, assert_type
@@ -1081,12 +1079,11 @@ def f() -> Any: ...
 
 x: int | None = None
 x = f()
-assert_type(x, int | None)  # E: assert_type(Any, int | None) failed
+assert_type(x, int | None)
 "#,
 );
 
 testcase!(
-    bug = "Any assignment should not erase nullable parameter annotation",
     test_param_nullable_annotation_any_reassign,
     r#"
 from typing import Any, assert_type
@@ -1095,7 +1092,7 @@ def f() -> Any: ...
 
 def test(x: int | None) -> None:
     x = f()
-    assert_type(x, int | None)  # E: assert_type(Any, int | None) failed
+    assert_type(x, int | None)
 "#,
 );
 
@@ -1170,7 +1167,6 @@ assert_type(x, list[int])
 );
 
 testcase!(
-    bug = "Any expr should preserve full annotation, not erase it",
     test_any_expr_preserves_full_union_annotation,
     r#"
 from typing import Any, assert_type
@@ -1179,12 +1175,11 @@ def f() -> Any: ...
 
 x: int | str | None = None
 x = f()
-assert_type(x, int | str | None)  # E: assert_type(Any, int | str | None) failed
+assert_type(x, int | str | None)
 "#,
 );
 
 testcase!(
-    bug = "Any assignment should not erase concrete parameter annotation",
     test_param_concrete_annotation_any_reassign,
     r#"
 from typing import Any, assert_type
@@ -1193,12 +1188,11 @@ def f() -> Any: ...
 
 def test(x: int) -> None:
     x = f()
-    assert_type(x, int)  # E: assert_type(Any, int) failed
+    assert_type(x, int)
 "#,
 );
 
 testcase!(
-    bug = "Any assignment should not erase union annotation",
     test_union_annotation_any_assign,
     r#"
 from typing import Any, assert_type
@@ -1207,12 +1201,11 @@ def f() -> Any: ...
 
 x: int | str = 0
 x = f()
-assert_type(x, int | str)  # E: assert_type(Any, int | str) failed
+assert_type(x, int | str)
 "#,
 );
 
 testcase!(
-    bug = "Any assignment should not erase generic annotation",
     test_generic_annotation_any_assign,
     r#"
 from typing import Any, assert_type
@@ -1221,7 +1214,7 @@ def f() -> Any: ...
 
 x: list[int] = [1, 2, 3]
 x = f()
-assert_type(x, list[int])  # E: assert_type(Any, list[int]) failed
+assert_type(x, list[int])
 "#,
 );
 
@@ -1247,7 +1240,6 @@ assert_type(x, list[Any])
 );
 
 testcase!(
-    bug = "None guard + Any assignment should preserve annotation",
     test_param_none_guard_any_reassign,
     r#"
 from typing import Any, assert_type
@@ -1257,7 +1249,7 @@ def f() -> Any: ...
 def test(x: int | None) -> None:
     if x is None:
         x = f()
-    assert_type(x, int | None)  # E: assert_type(int | Any, int | None) failed
+    assert_type(x, int | None)
 "#,
 );
 

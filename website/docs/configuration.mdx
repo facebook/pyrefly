@@ -414,8 +414,8 @@ We will query Conda for information about this environment, even when it's not s
 unless a Python environment (venv, Conda) is activated or `--python-interpreter-path` or
 `--conda-environment` are passed in through the CLI.
 
-**`conda-environment`, `fallback-python-interpreter-name`, `conda-environment`,
-and `skip-interpreter-query` are mutually exclusive with each other.**
+**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
+`fallback-python-interpreter-name`, and `skip-interpreter-query` are mutually exclusive.**
 
 - Type: string of existing Conda environment name
 - Default: none
@@ -430,8 +430,8 @@ The Python interpreter to query when attempting to autoconfigure
 Python environment values (`site-package-path`, `python-platform`, `python-version`).
 See the [Environment Autoconfiguration section](#environment-autoconfiguration) for more information.
 
-**`conda-environment`, `fallback-python-interpreter-name`, `conda-environment`,
-and `skip-interpreter-query` are mutually exclusive with each other.**
+**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
+`fallback-python-interpreter-name`, and `skip-interpreter-query` are mutually exclusive.**
 
 - Type: path to executable
 - Default: `$(which python3)`, then `$(which python)`, or none
@@ -449,6 +449,32 @@ testing specific behavior, or having trouble with [Environment Autoconfiguration
 Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
 to be reused between different systems and platforms.
 
+### `python-interpreter-find-command`
+
+A command that prints the path of the Python interpreter Pyrefly should query. Configure it as an
+array containing the program followed by its arguments. Pyrefly runs the program directly from the
+configuration file's directory; it does not invoke a shell. The command must succeed and print exactly
+one non-empty line. A relative path is resolved from the configuration file's directory.
+
+```toml
+python-interpreter-find-command = ["poetry", "env", "info", "-e"]
+```
+
+For workflows that require shell features, invoke the shell explicitly, for example
+`["sh", "-c", "eval \"$(direnv export bash)\"; command -v python"]`. On Windows, use the
+equivalent `cmd /C` or PowerShell command.
+
+**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
+`fallback-python-interpreter-name`, and `skip-interpreter-query` are mutually exclusive.**
+
+- Type: array of strings containing a program and its arguments
+- Default: none
+- Flag equivalent: none
+- Equivalent configs: none
+- Notes:
+    - This executes the configured program without checking whether it is trusted. Review project
+      configuration before running Pyrefly in an untrusted checkout.
+
 ### `fallback-python-interpreter-name`
 
 The Python interpreter, available on your `$PATH`, to use. Pyrefly will perform
@@ -459,8 +485,8 @@ path when this option and [`python-interpreter-path`](#python-interpreter-path) 
 so this should primarily be used when you have a non-standard Python executable you want to
 use.
 
-**`conda-environment`, `fallback-python-interpreter-name`, `conda-environment`,
-and `skip-interpreter-query` are mutually exclusive with each other.**
+**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
+`fallback-python-interpreter-name`, and `skip-interpreter-query` are mutually exclusive.**
 
 - Type: string of command to use
 - Default: `python3`, then `python`, or none
@@ -482,8 +508,8 @@ and [`python-platform`](#python-platform), and will use an empty
 [`site-package-path`](#site-package-path). It's likely you'll want to override
 these to match the environment you'll be running in.
 
-**`conda-environment`, `fallback-python-interpreter-name`, `conda-environment`,
-and `skip-interpreter-query` are mutually exclusive with each other.**
+**`conda-environment`, `python-interpreter-path`, `python-interpreter-find-command`,
+`fallback-python-interpreter-name`, and `skip-interpreter-query` are mutually exclusive.**
 
 - Type: bool
 - Default: `false`
@@ -598,6 +624,30 @@ set on the CLI.
     - `"sarif"` emits a SARIF 2.1.0 report suitable for static-analysis
       integrations.
 
+### `required-version`
+
+Enforces a requirement on the version of Pyrefly at runtime. Pyrefly reports a
+configuration error if its version does not satisfy the requirement. This can
+keep local CLI runs, editor integrations, and CI on compatible versions.
+
+```toml
+# pyrefly.toml
+required-version = ">=1.2.0,<2.0.0"
+```
+
+```toml
+# pyproject.toml
+[tool.pyrefly]
+required-version = ">=1.2.0,<2.0.0"
+```
+
+- Type: string containing a [PEP 440 version specifier](https://peps.python.org/pep-0440/#version-specifiers)
+- Default: none
+- Flag equivalent: none
+- Notes:
+    - `required-version` is a **project-level setting** and cannot be overridden
+      in [`sub-config`](#sub-configs) sections.
+
 ### `preset`
 
 A named collection of error severities and behavior settings that serves as the base configuration.
@@ -623,9 +673,9 @@ A minimal-checking preset used when automatic configuration selection finds no m
 
 #### Preset: `legacy`
 
-A looser, less-strict preset intended for codebases migrating from mypy. This is the preset `pyrefly init` writes when it detects an existing mypy configuration. Pyrefly does not aim to mimic mypy precisely — type-checking behavior will still differ between the two tools — this preset just disables a few checks that mypy does not have, so migrating users aren't hit with new errors for classes of issues mypy never flagged.
+A looser, less-strict preset intended for codebases migrating from mypy. This is the preset `pyrefly init` writes when it detects an existing mypy configuration. Pyrefly does not aim to mimic mypy precisely, but the preset preserves selected defaults that would otherwise produce new migration errors.
 
-- Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`legacy-overload-expansion`](#legacy-overload-expansion) `= true`
+- Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`legacy-overload-expansion`](#legacy-overload-expansion) `= true`, [`replace-untyped-imports-with-any`](#replace-untyped-imports-with-any) `= ["*"]`
 - Disables: [`bad-override-mutable-attribute`](./error-kinds.mdx#bad-override-mutable-attribute), [`bad-override-param-name`](./error-kinds.mdx#bad-override-param-name), [`unbound-name`](./error-kinds.mdx#unbound-name)
 
 #### Preset: `default`
@@ -741,6 +791,19 @@ will always, unconditionally replace the import with `typing.Any`.
       _all_ import errors instead of import errors from specific modules.
     - When a `.pyc` file is encountered and no source/stub files are available, Pyrefly automatically treats module as `typing.Any`.
       This behavior ensures that compiled Python files without available source code do not cause import errors and are handled permissively.
+
+### `replace-untyped-imports-with-any`
+
+Instruct Pyrefly to replace the given [`ModuleGlob`](#module-globbing)s from
+installed third-party packages with `typing.Any` if the package provides neither
+stubs nor a `py.typed` marker. Stubs and `py.typed` packages are analyzed
+normally, and first-party modules are not affected.
+
+- Type: list of regex
+- Default: `[]`
+- Flag equivalent: `--replace-untyped-imports-with-any`
+- Equivalent config: `follow_untyped_imports = false` in mypy; use `["*"]` to
+  apply it to every module. `pyrefly init` converts global and per-module values.
 
 ### `ignore-errors-in-generated-code`
 
@@ -1212,18 +1275,20 @@ We look for an interpreter with the following logic:
 2. Determine if there's an active `venv` or `conda` environment. If both are active at
    the same time, we take `venv` over `conda`.
 3. Use [`python-interpreter-path`](#python-interpreter-path),
+   [`python-interpreter-find-command`](#python-interpreter-find-command),
    [`fallback-python-interpreter-name`](#fallback-python-interpreter-name), or
-   [`conda-environment`](#conda-environment) if either are set in a config file.
-   Both cannot be set in a config at the same time.
-4. Starting from the project root, look for `pyvenv.cfg` in the root itself or in a
-   `.venv`, `venv`, or `env` directory. If none is found, repeat the search in each
-   ancestor directory up to the filesystem root, preferring the nearest match. Pyrefly
-   infers a project root from the files being checked when there is no config file or
-   other root marker. After finding `pyvenv.cfg`, Pyrefly probes the standard interpreter
-   paths: `bin/python3`, `bin/python`, `python3`, and `python` on macOS and Linux, or
-   `Scripts/python.exe` and `python.exe` on Windows. Environments in other directories or
-   with only a version-specific executable such as `python3.12` must be activated or set
-   explicitly with [`python-interpreter-path`](#python-interpreter-path).
+   [`conda-environment`](#conda-environment) if any are set in a config file.
+   Only one of these options can be set in a configuration.
+4. Starting from the project root, look for `pyvenv.cfg` in a `.venv`, `venv`, or `env`
+   directory. If none is found, repeat the search in each ancestor directory up to the
+   filesystem root, preferring the nearest match. Pyrefly infers a project root from the
+   files being checked when there is no config file or other root marker. After finding
+   `pyvenv.cfg`, Pyrefly uses the interpreter every
+   environment builder creates: `bin/python` on macOS and Linux, or
+   `Scripts/python.exe` on Windows. Environments in other directories, or that no longer
+   have that interpreter and keep only a name such as `python3` or `python3.12`, must be
+   activated or set explicitly with
+   [`python-interpreter-path`](#python-interpreter-path).
 5. Query `$(which python3)` and `$(which python)` (platform independent) to use
    a system-installed interpreter.
 6. Fall back to Pyrefly's default values for any unspecified config options.
@@ -1313,6 +1378,7 @@ We currently allow the following config options to be overridden in a SubConfig:
 
 - `errors`
 - `replace-imports-with-any`
+- `replace-untyped-imports-with-any`
 - `check-unannotated-defs`
 - `infer-return-types`
 - `ignore-errors-in-generated-code`
@@ -1480,6 +1546,7 @@ skip-interpreter-query = false
 # query the default Python interpreter on your system, if installed and `python_platform`,
 # `python-version`, or `site-package-path` are unset.
 # python-interpreter-path = null # this is commented out because there are no `null` values in TOML
+# python-interpreter-find-command = ["poetry", "env", "info", "-e"]
 
 #### configuring your type check settings
 
@@ -1487,6 +1554,8 @@ skip-interpreter-query = false
 replace-imports-with-any = []
 # wildcards for which Pyrefly will replace the import with `typing.Any` if it can't be found
 ignore-missing-imports = []
+# wildcards for which Pyrefly will replace untyped third-party imports with `typing.Any`
+replace-untyped-imports-with-any = []
 # should Pyrefly skip type checking if we find a generated file?
 ignore-errors-in-generated-code = false
 # should Pyrefly check the bodies of unannotated function definitions?

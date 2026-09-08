@@ -12,31 +12,22 @@ uphold (add a unit test).
 
 ## How the DSL works (the 30-second version)
 
-A shape rule has two pieces. An **IR function** is a Python function in
-`tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`, decorated `@shape_dsl_function`, that
-computes shapes using a restricted Python subset (arithmetic `+ - * // %`,
-comprehensions, `if`, a few builtins, `ShapedArray`). It is *traced*, not
-executed by CPython. A library stub attaches it to an op with
-`@uses_shape_dsl(ir_fn)` (e.g. `tensor-shapes/pyrefly-torch-stubs/torch-stubs/linalg.pyi`); the
-stub's declared return is a "fixture" (gives the base `Tensor`/tuple structure)
-and the IR function fills in the actual dims.
+A shape rule is a Python function in
+`tensor-shapes/pyrefly-torch-stubs/torch-stubs/_shapes.pyi`, decorated with
+`@type_shape_dsl_function`, that computes a type-level value using a restricted
+Python subset. Public stubs call the function directly in return annotations,
+for example `Tensor[reshape(Shape, Target)]`. The checker validates and
+evaluates these calls; CPython treats the decorator as a runtime no-op.
 
-There are two kinds of change. A **stub-only change** edits `_shapes.pyi` to add
-or fix an IR function composing existing arithmetic — no rebuild needed, and it
-covers the large majority of cases. A **DSL-kernel change** edits the Rust
-evaluator to add a genuinely new primitive operation; reach for it only when the
-arithmetic you need cannot be expressed by composing what `_shapes.pyi` already
-has.
+There are two kinds of change. A **stub-only change** edits `_shapes.pyi` and the
+public return annotation to compose existing operations. A **DSL-kernel change**
+edits the Rust validator or evaluator to add a genuinely new operation; reach
+for it only when the rule cannot be expressed by composing the existing DSL.
 
-How the decorator is traced into the checker (follow this chain if you need to
-touch the wiring): `uses_shape_dsl`/`shape_dsl_function` are recognized in
-`pyrefly/lib/export/special.rs`; the binding step extracts the IR name in
-`pyrefly/lib/binding/function.rs`; the solve step resolves it to a
-`ShapeTransform` in `pyrefly/lib/alt/function.rs`; it's applied at call sites via
-`alt/callable.rs` (`evaluate`). The Rust evaluator and all arithmetic primitives
-live in **one file**, `crates/pyrefly_types/src/meta_shape_dsl.rs` (the binop
-arithmetic is `eval_binop`); the symbolic dim algebra it calls
-(`SizeExpr::add/sub/mul/floor_div`) is in `crates/pyrefly_types/src/dimension.rs`.
+The type-level DSL implementation lives primarily in
+`crates/pyrefly_types/src/type_level_dsl.rs`, with separate modules for type
+system operations such as `MapIntTuples`. The symbolic dimension algebra it
+uses lives in `crates/pyrefly_types/src/dimension.rs`.
 
 ### Preserve tensor types in numeric formulas
 
@@ -53,14 +44,11 @@ An end-to-end example (`tensor-shapes/pyrefly-torch-stubs/examples`) exercises a
 **not** pin the algebra — off-by-one, ceiling-vs-floor, and zero/negative-dim
 edge cases slip through. Add a targeted test that asserts the computed shape.
 
-Tests live in **`pyrefly/lib/test/shape_dsl.rs`**. Read it before adding one —
-`shape_dsl_env()` defines IR functions in a synthetic `my_shapes.pyi` and
-consumers in `my_lib.pyi`, and `testcase!` blocks assert results with
-`assert_type(fn(args), Literal[n])`. Copy an existing case
-(`test_uses_shape_dsl_cross_function_call` is a good template). For pure
-arithmetic, an `int -> int` IR function with `assert_type(..., Literal[n])`
-tests the primitives directly without needing `ShapedArray` fixtures. Use inline
-`# E: ...` markers to assert compile-time DSL diagnostics.
+Tests live in **`pyrefly/lib/test/shape_dsl.rs`**. Read nearby type-level DSL
+tests before adding one. Use `assert_type` when the expected type is expressible
+and inline `# E: ...` markers for diagnostics. Tests for the retained V1 kernel
+compatibility path are isolated in the `legacy` module and should not be used as
+templates for new rules.
 
 Run it:
 - buck: `buck test pyrefly:pyrefly_library -- <test_name>`

@@ -27,7 +27,7 @@ use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::type_alias::TypeAlias;
 use pyrefly_types::type_alias::TypeAliasIndex;
-use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
+use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_util::assert_bytes;
 use pyrefly_util::assert_words;
 use pyrefly_util::display::DisplayWith;
@@ -42,6 +42,7 @@ use ruff_python_ast::ExprSubscript;
 use ruff_python_ast::ExprYield;
 use ruff_python_ast::ExprYieldFrom;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Keyword;
 use ruff_python_ast::Parameters;
 use ruff_python_ast::StmtAugAssign;
 use ruff_python_ast::StmtClassDef;
@@ -50,6 +51,7 @@ use ruff_python_ast::TypeParams;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
+use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
@@ -78,6 +80,7 @@ use crate::binding::narrow::NarrowOp;
 use crate::binding::narrow::NarrowingSubject;
 use crate::binding::pydantic::PydanticConfigDict;
 use crate::binding::scope::is_constant_name;
+use crate::binding::shape_type::TypeParameterBound;
 use crate::binding::table::TableKeyed;
 use crate::export::special::SpecialExport;
 use crate::module::module_info::ModuleInfo;
@@ -121,10 +124,10 @@ assert_words!(KeyDecorator, 1);
 assert_words!(KeyDecoratedFunction, 1);
 assert_words!(KeyUndecoratedFunction, 1);
 
-assert_words!(Binding, 6);
-assert_words!(BindingExpect, 14);
+assert_words!(Binding, 4);
+assert_words!(BindingExpect, 13);
 assert_words!(BindingTypeAlias, 6);
-assert_words!(BindingAnnotation, 13);
+assert_words!(BindingAnnotation, 12);
 assert_words!(BindingClass, 10);
 assert_words!(BindingTParams, 9);
 assert_words!(BindingClassBaseType, 3);
@@ -136,11 +139,11 @@ assert_bytes!(BindingClassDisjointBase, 4);
 assert_bytes!(BindingAbstractClassCheck, 4);
 assert_bytes!(BindingClassSubscriptSymmetry, 4);
 assert_words!(BindingClassField, 11);
-assert_bytes!(BindingClassSynthesizedFields, 4);
+assert_words!(BindingClassSynthesizedFields, 2);
 assert_bytes!(BindingLegacyTypeParam, 16);
 assert_words!(BindingYield, 4);
 assert_words!(BindingYieldFrom, 4);
-assert_words!(BindingDecorator, 11);
+assert_words!(BindingDecorator, 10);
 assert_bytes!(BindingDecoratedFunction, 20);
 assert_words!(BindingUndecoratedFunction, 18);
 
@@ -499,7 +502,7 @@ impl Keyed for KeyClass {
 impl Keyed for KeyTParams {
     const EXPORTED: bool = true;
     type Value = BindingTParams;
-    type Answer = TParams;
+    type Answer = Arc<TParams>;
     fn to_anyidx(idx: Idx<Self>) -> AnyIdx {
         AnyIdx::KeyTParams(idx)
     }
@@ -573,7 +576,7 @@ impl Keyed for KeyClassSynthesizedFields {
     where
         BindingTable: TableKeyed<Self, Value = BindingEntry<Self>>,
     {
-        bindings.idx_to_key(bindings.get(idx).0).range()
+        bindings.idx_to_key(bindings.get(idx).class_idx).range()
     }
     fn try_to_anykey(&self) -> Option<AnyExportedKey> {
         Some(AnyExportedKey::KeyClassSynthesizedFields(self.clone()))
@@ -969,11 +972,12 @@ pub enum Key {
     /// The resulting type may not actually involve a legacy type param, since it may turn out I am
     /// some other kind of type.
     PossibleLegacyTParam(TextRange),
-    /// A `del` statement. It is a `Binding` associated with a the type `Any` because `del` defines a name in scope,
-    /// so we need to provide a `Key` for any reads of that name in the edge case where there is no other definition
+    /// A `del` statement.
     ///
-    /// This `Key` is *only* ever used if the variable has only a `del` but is not otherwise defined (which is
-    /// always a type error, since you cannot delete an uninitialized variable).
+    /// Deleting an attribute from a defined root uses this key to propagate the root's `TypeInfo`
+    /// after invalidating narrowing for the deleted facet. It also supplies implicit `Any` for
+    /// reads of a name defined only by `del`; those reads are errors because the name was never
+    /// initialized.
     Delete(TextRange),
     /// Match statement or if/elif chain that needs type-based exhaustiveness checking
     Exhaustive(ExhaustivenessKind, TextRange),
@@ -1211,10 +1215,7 @@ pub enum BindingExpect {
     /// Expression used in a boolean context (`bool()`, `if`, or `while`)
     Bool(Expr),
     /// A match statement that may be non-exhaustive at runtime.
-    /// Due to gaps in our type algebra, we only check exhaustiveness for enums & unions
-    /// of enum literals.
-    /// Since this makes use of narrowing, not every match subject will be
-    /// checked for exhaustiveness, only variables and chained subscripts/attributes of variables
+    /// The solver checks closed subject types by default and all representable subjects when configured.
     MatchExhaustiveness {
         subject_idx: Idx<Key>,
         narrowing_subject: Option<NarrowingSubject>,
@@ -1967,8 +1968,8 @@ pub struct BindingUndecoratedFunction {
     /// When the function is decorated with `@shape_dsl_function`, this holds the
     /// parsed DSL IR so the solver can produce `FunctionKind::ShapeDsl`.
     pub shape_dsl_def: Option<Arc<ShapeDslFunction>>,
-    /// Validated source for a user-defined type-level shape DSL function.
-    pub type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
+    /// Parsed source for a user-defined type-level shape DSL function.
+    pub type_shape_dsl_def: Option<Arc<ParsedTypeShapeDslFunction>>,
     /// Identifier of the IR function passed as the first positional argument to
     /// `@uses_shape_dsl(ir_fn)`. Extracted at binding time so the solver can
     /// resolve it to a `FunctionKind::ShapeDsl` type.
@@ -2107,7 +2108,7 @@ pub struct TypeParameter {
     pub name: Name,
     pub identity: QuantifiedIdentity,
     pub kind: QuantifiedKind,
-    pub bound: Option<Expr>,
+    pub bound: Option<TypeParameterBound>,
     pub default: Option<Expr>,
     pub constraints: Option<(Vec<Expr>, TextRange)>,
     pub owner: Option<Name>,
@@ -2220,6 +2221,16 @@ pub struct MultiTargetReceiver {
     pub idx: Idx<Key>,
 }
 
+/// Data for a value at a specific position in an unpacked iterable expression.
+#[derive(Clone, Debug)]
+pub struct UnpackedValue {
+    pub annotation: Option<Idx<KeyAnnotation>>,
+    pub source: Idx<Key>,
+    pub range: TextRange,
+    pub position: UnpackedPosition,
+    pub receiver: Option<Box<MultiTargetReceiver>>,
+}
+
 /// Data for a type alias binding.
 #[derive(Clone, Debug)]
 pub struct TypeAliasBinding {
@@ -2274,6 +2285,23 @@ pub struct SuppressedException {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct LambdaParamId(pub u32);
 
+/// Which rule a lambda's parameters follow, decided while its enclosing expression is bound.
+#[derive(Copy, Clone, Debug)]
+pub enum LambdaKind {
+    Ordinary,
+    /// A lambda whose parameter denotes a type rather than a runtime value.
+    TypeLevel,
+}
+
+/// Binding data for a parameter introduced by a type-level lambda.
+#[derive(Clone, Debug)]
+pub struct TypeLevelLambdaParameter {
+    /// Retained because the lambda expression can still pass through ordinary callable inference.
+    pub id: LambdaParamId,
+    /// Determines the synthetic type binder independently of solve order.
+    pub identifier: Identifier,
+}
+
 /// Data for `Binding::Import`. Carries the `(module, name)` of an imported
 /// symbol, plus metadata for downstream consumers.
 #[derive(Clone, Debug)]
@@ -2317,6 +2345,15 @@ pub struct ImportFallback {
     /// Suppress the missing-attribute error in that case — the bind-time
     /// logic did the same via `is_unreachable_from_static_test`.
     pub is_unreachable: bool,
+}
+
+/// Data for a name in a class body that wasn't found in the static scope.
+#[derive(Clone, Debug)]
+pub struct ClassBodyUnknownName {
+    pub class_key: Idx<KeyClass>,
+    pub name: Identifier,
+    pub suggestion: Option<Name>,
+    pub allow_class_body_forward_reference: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2373,13 +2410,7 @@ pub enum Binding {
     /// The optional `MultiTargetReceiver` carries the canonical class identity
     /// when this is a receiver-constrained class rebind (`Real, _ = (Dummy, 0)`),
     /// so the solver can apply the same checks as a single-target rebind.
-    UnpackedValue(
-        Option<Idx<KeyAnnotation>>,
-        Idx<Key>,
-        TextRange,
-        UnpackedPosition,
-        Option<Box<MultiTargetReceiver>>,
-    ),
+    UnpackedValue(Box<UnpackedValue>),
     /// A type where we have an annotation, but also a type we computed.
     /// If the annotation has a type inside it (e.g. `int` then use the annotation).
     /// If the annotation doesn't (e.g. it's `Final`), then use the binding.
@@ -2395,8 +2426,13 @@ pub enum Binding {
     Global(ImplicitGlobal),
     /// A type parameter.
     TypeParameter(Box<TypeParameter>),
-    /// A reference to a type parameter from outside the class scope that owns it.
-    OutOfScopeTypeParameter(Idx<Key>, TextRange),
+    /// A reference in an inner scope to a type parameter from an outer class scope. A class
+    /// scope is "outer" if there is another intervening class scope in between. Example:
+    ///   class A[T]:
+    ///     class B[U]:
+    ///       x: T  # <- this is an OuterClassTypeParameter
+    ///       y: U  # <- this is not
+    OuterClassTypeParameter(Idx<Key>, TextRange),
     /// The type of a function.
     Function {
         /// A reference to the KeyDecoratedFunction that points to the def.
@@ -2428,7 +2464,7 @@ pub enum Binding {
     /// A phi node for a name that was defined above a loop. This can involve recursion
     /// due to reassingment in the loop, so we provide a prior idx of the type from above
     /// the loop, which can be used if the resulting Var is forced.
-    LoopPhi(Idx<Key>, SmallSet<Idx<Key>>),
+    LoopPhi(Box<(Idx<Key>, SmallSet<Idx<Key>>)>),
     /// A narrowed type.
     Narrow(Idx<Key>, Box<NarrowOp>, NarrowUseLocation),
     /// An import of a module.
@@ -2443,10 +2479,12 @@ pub enum Binding {
     /// diagnostic.
     Module(Box<(ModuleName, Box<[Name]>, Option<Idx<Key>>, Option<TextRange>)>),
     /// A name that might be a legacy type parameter. Solving this gives the Quantified type if so.
-    /// The flag records that this function / class has scoped type parameters, in which case
-    /// the use of legacy type parameters is invalid; the error is reported at the range of
-    /// whichever key it applies to.
-    PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, bool),
+    /// - The first `bool` flag records that this function / class has scoped type parameters, in
+    ///   which case the use of legacy type parameters is invalid; the error is reported at the
+    ///   range of whichever key it applies to.
+    /// - The second `bool` flag records whether the type parameter shadows a same-named type
+    ///   parameter from an enclosing scope, which is an error.
+    PossibleLegacyTParam(Idx<KeyLegacyTypeParam>, bool, bool),
     /// An assignment to a name.
     NameAssign(Box<NameAssign>),
     /// A type alias (legacy, scoped, or `TypeAliasType` call).
@@ -2462,15 +2500,19 @@ pub enum Binding {
     PatternMatchMapping(Box<Expr>, Idx<Key>),
     /// An entry in a MatchClass. The Key looks up the value being matched, the Expr is the class name.
     /// Positional patterns index into __match_args__, and keyword patterns match an attribute name.
-    PatternMatchClassPositional(Box<Expr>, usize, Idx<Key>, TextRange),
+    PatternMatchClassPositional(Box<(Box<Expr>, usize, Idx<Key>, TextRange)>),
     PatternMatchClassKeyword(Box<(Box<Expr>, Identifier, Idx<Key>)>),
     /// Binding for an `except` (if the boolean flag is false) or `except*` (if the boolean flag is true) clause
     ExceptionHandler(Box<Expr>, bool),
-    /// Binding for a lambda parameter.
+    /// Binding for an ordinary lambda parameter.
     /// The optional owner is the binding whose expression contains this lambda.
     /// If the parameter is solved before that owner has established thread-local
     /// lambda vars, we can force the owner to solve first.
     LambdaParameter(LambdaParamId, Option<Idx<Key>>),
+    /// Parameter of a type-level lambda. It denotes a deterministic synthetic type binder rather
+    /// than a contextual value type. The experimental `shape_extensions.MapIntTuples` operation
+    /// is currently the only syntax that creates this binding.
+    TypeLevelLambdaParameter(Box<TypeLevelLambdaParameter>),
     /// Binding for a function parameter. We either have an annotation, or we will determine the
     /// parameter type when solving the function type.
     FunctionParameter(Box<FunctionParameter>),
@@ -2489,8 +2531,9 @@ pub enum Binding {
     Delete(Box<Expr>),
     /// A name in the class body that wasn't found in the static scope
     /// It could either be an unbound name or a reference to an inherited attribute
-    /// We'll find out which when we solve the class
-    ClassBodyUnknownName(Box<(Idx<KeyClass>, Identifier, Option<Name>)>),
+    /// We'll find out which when we solve the class. The boolean records whether a postponed or
+    /// quoted annotation may also resolve an attribute declared later in the same class body.
+    ClassBodyUnknownName(Box<ClassBodyUnknownName>),
     /// A match statement or if/elif chain that may be type-exhaustive.
     /// Resolves to Never if ANY narrow entry narrows to Never, None otherwise.
     Exhaustive(Box<ExhaustiveBinding>),
@@ -2584,8 +2627,8 @@ impl DisplayWith<Bindings> for Binding {
             Self::ContextValue(a, x, _, kind) => {
                 write!(f, "ContextValue({}, {}, {kind:?})", ann(a), ctx.display(*x))
             }
-            Self::UnpackedValue(a, x, range, pos, receiver) => {
-                let pos = match pos {
+            Self::UnpackedValue(value) => {
+                let pos = match &value.position {
                     UnpackedPosition::ExactIndex(i, _) | UnpackedPosition::Index(i, _) => {
                         i.to_string()
                     }
@@ -2601,12 +2644,12 @@ impl DisplayWith<Bindings> for Binding {
                 write!(
                     f,
                     "UnpackedValue({}, {}, {}, {}",
-                    ann(a),
-                    ctx.display(*x),
-                    m.display(range),
+                    ann(&value.annotation),
+                    ctx.display(value.source),
+                    m.display(&value.range),
                     pos
                 )?;
-                if let Some(receiver) = receiver {
+                if let Some(receiver) = &value.receiver {
                     write!(
                         f,
                         ", receiver={}@{}",
@@ -2644,10 +2687,10 @@ impl DisplayWith<Bindings> for Binding {
             Self::TypeParameter(tp) => {
                 write!(f, "TypeParameter({}, {}, ..)", tp.identity, tp.kind)
             }
-            Self::OutOfScopeTypeParameter(k, _) => {
-                write!(f, "OutOfScopeTypeParameter({})", ctx.display(*k))
+            Self::OuterClassTypeParameter(k, _) => {
+                write!(f, "OuterClassTypeParameter({})", ctx.display(*k))
             }
-            Self::PossibleLegacyTParam(legacy_tparam, _) => {
+            Self::PossibleLegacyTParam(legacy_tparam, ..) => {
                 write!(f, "PossibleLegacyTParam({})", ctx.display(*legacy_tparam))
             }
             Self::AnnotatedType(k1, k2) => {
@@ -2679,7 +2722,8 @@ impl DisplayWith<Bindings> for Binding {
                         .map(|branch| ctx.display(branch.value_key))),
                 )
             }
-            Self::LoopPhi(k, xs) => {
+            Self::LoopPhi(phi) => {
+                let (k, xs) = phi.as_ref();
                 write!(
                     f,
                     "LoopPhi({}, {})",
@@ -2718,7 +2762,8 @@ impl DisplayWith<Bindings> for Binding {
                     ctx.display(*binding_key),
                 )
             }
-            Self::PatternMatchClassPositional(class, idx, key, range) => {
+            Self::PatternMatchClassPositional(pattern) => {
+                let (class, idx, key, range) = pattern.as_ref();
                 write!(
                     f,
                     "PatternMatchClassPositional({}, {idx}, {}, {})",
@@ -2738,6 +2783,9 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::LambdaParameter(id, owner) => {
                 write!(f, "LambdaParameter(id={id:?}, owner={owner:?})")
+            }
+            Self::TypeLevelLambdaParameter(parameter) => {
+                write!(f, "TypeLevelLambdaParameter({parameter:?})")
             }
             Self::FunctionParameter(x) => write!(
                 f,
@@ -2792,12 +2840,18 @@ impl DisplayWith<Bindings> for Binding {
             }
             Self::Delete(x) => write!(f, "Delete({})", m.display(x)),
             Self::ClassBodyUnknownName(x) => {
-                let (class_key, name, suggestion) = x.as_ref();
+                let ClassBodyUnknownName {
+                    class_key,
+                    name,
+                    suggestion,
+                    allow_class_body_forward_reference,
+                } = x.as_ref();
                 write!(
                     f,
-                    "ClassBodyUnknownName({}, {}",
+                    "ClassBodyUnknownName({}, {}, allow_class_body_forward_reference={}",
                     m.display(ctx.idx_to_key(*class_key)),
                     name,
+                    allow_class_body_forward_reference,
                 )?;
                 if let Some(suggestion) = suggestion {
                     write!(f, ", {suggestion}")?;
@@ -2847,8 +2901,8 @@ impl Binding {
             | Binding::ParamSpec(_)
             | Binding::TypeVarTuple(_)
             | Binding::TypeParameter(_)
-            | Binding::OutOfScopeTypeParameter(..)
-            | Binding::PossibleLegacyTParam(_, _) => Some(SymbolKind::TypeParameter),
+            | Binding::OuterClassTypeParameter(..)
+            | Binding::PossibleLegacyTParam(..) => Some(SymbolKind::TypeParameter),
             Binding::Global(_) => Some(SymbolKind::Variable),
             Binding::Function { in_class, .. } => {
                 if *in_class {
@@ -2885,9 +2939,9 @@ impl Binding {
                     Some(SymbolKind::Variable)
                 }
             }
-            Binding::LambdaParameter(..) | Binding::FunctionParameter(_) => {
-                Some(SymbolKind::Parameter)
-            }
+            Binding::LambdaParameter(..)
+            | Binding::TypeLevelLambdaParameter(_)
+            | Binding::FunctionParameter(_) => Some(SymbolKind::Parameter),
             Binding::PatternCapture(_) => Some(SymbolKind::Variable),
             Binding::IterableValueComprehension(_, _, _) | Binding::IterableValueLoop(_, _, _) => {
                 Some(SymbolKind::Variable)
@@ -2897,27 +2951,27 @@ impl Binding {
             }
             // Receiver-constrained multi-target / unpacked rebinds are
             // class-shaped — match the `NameAssign` path above.
-            Binding::MultiTargetAssign(_, _, _, Some(_))
-            | Binding::UnpackedValue(_, _, _, _, Some(_)) => Some(SymbolKind::Class),
-            Binding::UnpackedValue(_, _, _, _, None) => Some(SymbolKind::Variable),
-            Binding::AugAssign(_, _) => Some(SymbolKind::Variable),
-            Binding::Expr(_, _)
-            | Binding::StmtExpr(_, _)
+            Binding::MultiTargetAssign(_, _, _, Some(_)) => Some(SymbolKind::Class),
+            Binding::UnpackedValue(value) if value.receiver.is_some() => Some(SymbolKind::Class),
+            Binding::UnpackedValue(_) => Some(SymbolKind::Variable),
+            Binding::AugAssign(_, _)
+            | Binding::Expr(_, _)
             | Binding::MultiTargetAssign(_, _, _, None)
+            | Binding::AnnotatedType(_, _) => Some(SymbolKind::Variable),
+            Binding::StmtExpr(_, _)
             | Binding::ReturnExplicit(_)
             | Binding::ReturnImplicit(_)
             | Binding::ReturnType(_)
-            | Binding::AnnotatedType(_, _)
             | Binding::None
             | Binding::Any(_)
             | Binding::Forward(_)
             | Binding::PromoteForward(_)
             | Binding::ForwardToFirstUse(_)
             | Binding::Phi(_, _)
-            | Binding::LoopPhi(_, _)
+            | Binding::LoopPhi(_)
             | Binding::Narrow(_, _, _)
             | Binding::PatternMatchMapping(_, _)
-            | Binding::PatternMatchClassPositional(_, _, _, _)
+            | Binding::PatternMatchClassPositional(_)
             | Binding::PatternMatchClassKeyword(_)
             | Binding::SuperInstance(_)
             | Binding::AssignToAttribute(_)
@@ -3062,7 +3116,7 @@ impl Display for AnnotationTarget {
 }
 
 impl AnnotationTarget {
-    pub fn type_form_context(&self) -> TypeFormContext {
+    pub fn type_form_context(&self) -> TypeFormContext<'static> {
         match self {
             Self::Param(_) => TypeFormContext::ParameterAnnotation,
             Self::ArgsParam(_) => TypeFormContext::ParameterArgsAnnotation,
@@ -3307,11 +3361,18 @@ pub enum MethodSelfKind {
 /// has to be its own key/binding type because of the dependencies between the various pieces of
 /// information about a class: ClassDef -> ClassMetadata -> ClassField -> ClassSynthesizedFields.
 #[derive(Clone, Debug)]
-pub struct BindingClassSynthesizedFields(pub Idx<KeyClass>);
+pub struct BindingClassSynthesizedFields {
+    pub class_idx: Idx<KeyClass>,
+    pub nn_module_registrations: Option<Box<SmallMap<Name, Vec<Expr>>>>,
+}
 
 impl DisplayWith<Bindings> for BindingClassSynthesizedFields {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &Bindings) -> fmt::Result {
-        write!(f, "BindingClassSynthesizedFields({})", ctx.display(self.0))
+        write!(
+            f,
+            "BindingClassSynthesizedFields({})",
+            ctx.display(self.class_idx)
+        )
     }
 }
 
@@ -3345,6 +3406,7 @@ impl DisplayWith<Bindings> for BindingClassChecks {
 pub struct ShapedArrayMetadata {
     pub shape_name: Name,
     pub range: TextRange,
+    pub builtin_indexing: bool,
 }
 
 /// Binding for the class's metadata (anything obtained directly from base classes,
@@ -3357,7 +3419,7 @@ pub struct BindingClassMetadata {
     /// The class keywords (these are keyword args that appear in the base class list, the
     /// Python runtime will dispatch most of them to the metaclass, but the metaclass
     /// itself can also potentially be one of these).
-    pub keywords: Box<[(Identifier, Expr)]>,
+    pub keywords: Box<[Keyword]>,
     /// The class decorators.
     pub decorators: Box<[Idx<KeyDecorator>]>,
     /// Is this a new type? True only for synthesized classes created from a `NewType` call.
@@ -3476,12 +3538,13 @@ pub enum BindingLegacyTypeParam {
 /// the binding for the local name `pkg`, and `attrs` contains `mod` and `T`.
 #[derive(Clone, Debug)]
 pub struct LegacyTypeParamModule {
-    /// The original binding for the dotted reference's base name.
+    /// The binding for the dotted reference's base name.
+    /// Every possible legacy type param from the same module rebinds this name, so `base` points
+    /// to the preceding binding for the base name, with the first legacy type param binding
+    /// pointing to the original binding for the base name.
     pub base: Idx<Key>,
     /// The attribute path from the base name to the possible type parameter.
     pub attrs: Vec1<Name>,
-    /// The preceding binding for the same base name, if any.
-    pub prior: Option<Idx<Key>>,
 }
 
 impl DisplayWith<Bindings> for BindingLegacyTypeParam {
@@ -3493,9 +3556,6 @@ impl DisplayWith<Bindings> for BindingLegacyTypeParam {
                 write!(f, "{}", ctx.display(module.base))?;
                 for attr in module.attrs.iter() {
                     write!(f, ".{}", attr)?;
-                }
-                if let Some(prior) = module.prior {
-                    write!(f, ", prior={}", ctx.display(prior))?;
                 }
                 Ok(())
             }

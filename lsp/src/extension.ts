@@ -35,6 +35,7 @@ import {PythonEnvironment} from './python-environment';
 import {
   triggerMsPythonRefreshLanguageServersIfInstalled,
 } from './extension-interop';
+import {resolveLspPath} from './lspPath';
 
 let client: LanguageClient;
 let outputChannel: vscode.OutputChannel;
@@ -106,7 +107,13 @@ export async function activate(context: ExtensionContext) {
     inferOutputChannel = vscode.window.createOutputChannel('Pyrefly infer');
   }
 
-  const lspPath: string = requireSetting('pyrefly.lspPath');
+  // There may be more than one URI due to multi-root workspaces, so just take the primary root.
+  let globalCwd: vscode.Uri | undefined = vscode.workspace.workspaceFolders?.[0]?.uri;
+
+  const lspPath: string = resolveLspPath(
+    requireSetting('pyrefly.lspPath'),
+    globalCwd?.fsPath,
+  );
   // `pyrefly.lspArguments` resolves to an empty array in some environments
   // (notably dev containers / remote, where the `machine-overridable` default
   // of `["lsp"]` is not applied). Spawning the binary with no subcommand makes
@@ -173,12 +180,12 @@ export async function activate(context: ExtensionContext) {
       // Support for in-memory documents like the Positron Console
       {scheme: 'inmemory', language: 'python'},
     ],
-    // Support for notebooks
+    // Support for any notebook type
     // @ts-ignore
     notebookDocumentSync: {
       notebookSelector: [
         {
-          notebook: {notebookType: 'jupyter-notebook'},
+          notebook: '*',
           cells: [{language: 'python'}],
         },
       ],

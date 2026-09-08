@@ -71,6 +71,41 @@ class E(B):
 );
 
 testcase!(
+    test_override_class_var_callable,
+    r#"
+from collections.abc import Callable
+from typing import ClassVar
+
+class Parent:
+    x: ClassVar[Callable]
+
+class Child(Parent):
+    x: ClassVar[Callable] = lambda x: None
+
+def get_value() -> Callable[[object], int]: ...
+
+class ParameterizedParent:
+    x: ClassVar[Callable[[object], int]]
+
+class ParameterizedChild(ParameterizedParent):
+    x: ClassVar[Callable[[object], int]] = get_value()
+
+class InstanceVariableChild(ParameterizedParent):
+    x: Callable[[object], int] = get_value()  # E: Instance variable `InstanceVariableChild.x` overrides ClassVar
+
+def inferred_value(x: object) -> int: ...
+
+class InferredClassVarChild(ParameterizedParent):
+    x = inferred_value
+
+def get_incompatible_value() -> Callable[[str], int]: ...
+
+class IncompatibleChild(ParameterizedParent):
+    x: ClassVar[Callable[[str], int]] = get_incompatible_value()  # E: is not consistent with
+"#,
+);
+
+testcase!(
     test_override_classvar_with_nested_class,
     r#"
 from typing import ClassVar
@@ -142,6 +177,33 @@ class B(A):
     def method(self, x: int | str) -> int | str:
         return 0
  "#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/1493
+testcase!(
+    test_override_with_differently_named_parent_overloads,
+    r#"
+from typing import overload
+
+class A:
+    @overload
+    def f(self, x: int) -> None: ...
+    @overload
+    def f(self, y: int, z: str) -> None: ...
+    def f(self, *args, **kwargs) -> None: ...
+
+class B(A):
+    # E: Class member `B.f` overrides parent class `A` in an inconsistent manner
+    # !E: Got parameter name
+    def f(self, x: int) -> None:
+        pass
+
+class C(A):
+    # E: Class member `C.f` overrides parent class `A` in an inconsistent manner
+    # !E: Got parameter name
+    def f(self, y: int) -> None:
+        pass
+"#,
 );
 
 testcase!(
@@ -932,7 +994,7 @@ class A:
     def f(self, x: TA1):
         pass
 class B(A):
-    def f(self, x: TA2):  # E: `B.f` has type `(self: B, x: TA2) -> None`, which is not assignable to `(self: B, x: TA1) -> None`, the type of `A.f`
+    def f(self, x: TA2):  # E: `B.f` has type `(x: TA2) -> None`, which is not assignable to `(x: TA1) -> None`, the type of `A.f`
         pass
     "#,
 );
@@ -1960,6 +2022,90 @@ class B(A):
 );
 
 testcase!(
+    test_override_mutable_attribute_with_property,
+    r#"
+class ExprNode: ...
+
+class Expr:
+    def __init__(self, *nodes: ExprNode) -> None:
+        self._nodes = nodes
+
+class Then(Expr):
+    _cached_nodes: tuple[ExprNode, ...] | None = None
+
+    @property
+    def _nodes(self) -> tuple[ExprNode, ...]:
+        return self._cached_nodes or ()
+
+    @_nodes.setter
+    def _nodes(self, nodes: tuple[ExprNode, ...]) -> None:
+        self._cached_nodes = nodes
+
+class Value:
+    value: int
+
+class WideGetter(Value):
+    @property
+    def value(self) -> object:  # E: Class member `WideGetter.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+    @value.setter
+    def value(self, value: int) -> None:
+        pass
+
+class WideGetterSuppressed(Value):
+    @property
+    def value(self) -> object:  # pyrefly: ignore[bad-override-mutable-attribute]
+        return 0
+
+    @value.setter
+    def value(self, value: int) -> None:
+        pass
+
+class NarrowSetter(Value):
+    @property
+    def value(self) -> int:  # E: Class member `NarrowSetter.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+    @value.setter
+    def value(self, value: bool) -> None:
+        pass
+
+class NarrowSetterSuppressed(Value):
+    @property
+    def value(self) -> int:  # pyrefly: ignore[bad-override-mutable-attribute]
+        return 0
+
+    @value.setter
+    def value(self, value: bool) -> None:
+        pass
+
+class Compatible(Value):
+    @property
+    def value(self) -> bool:
+        return True
+
+    @value.setter
+    def value(self, value: object) -> None:
+        pass
+
+class ReadOnly(Value):
+    @property
+    def value(self) -> int:  # E: Class member `ReadOnly.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+class MissingSetterValue(Value):
+    @property
+    def value(self) -> int:  # E: Class member `MissingSetterValue.value` overrides parent class `Value` in an inconsistent manner
+        return 0
+
+    @value.setter
+    def value(self) -> None:
+        pass
+ "#,
+);
+
+testcase!(
     test_override_mutable_attribute_suppressed_by_parent_kind,
     r#"
 class A:
@@ -2030,7 +2176,7 @@ class Base:
         pass
 
 class ChildNarrowed(Base):
-    p: B  # E: `ChildNarrowed.p` has type `B`, which is not assignable from `(self: ChildNarrowed, value: A) -> None`, the property setter for `Base.p`
+    p: B  # E: `ChildNarrowed.p` has type `B`, which is not assignable from `(value: A) -> None`, the property setter for `Base.p`
 
 class ChildSuppressed(Base):
     p: B  # pyrefly: ignore[bad-override-mutable-attribute]
@@ -2046,7 +2192,7 @@ class ChildWidened(Base):
 # Property-to-property override with narrowed setter.
 class ChildPropertyNarrowedSetter(Base):
     @property
-    def p(self) -> A:  # E: The property setter for `ChildPropertyNarrowedSetter.p` has type `(self: ChildPropertyNarrowedSetter, value: B) -> None`, which is not assignable from `(self: ChildPropertyNarrowedSetter, value: A) -> None`, the property setter for `Base.p`
+    def p(self) -> A:  # E: The property setter for `ChildPropertyNarrowedSetter.p` has type `(value: B) -> None`, which is not assignable from `(value: A) -> None`, the property setter for `Base.p`
         return A()
     @p.setter
     def p(self, value: B) -> None:

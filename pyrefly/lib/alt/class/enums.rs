@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
@@ -42,7 +40,7 @@ pub const VALUE_PROP: Name = Name::new_static("value");
 
 pub const GENERATE_NEXT_VALUE: Name = Name::new_static("_generate_next_value_");
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Suggest an enum member when a raw literal matches exactly one expected enum value.
     pub fn suggest_enum_member_for_value(&self, got: &Type, want: &Type) -> Option<String> {
         match want {
@@ -73,7 +71,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     pub fn get_enum_member(&self, cls: &Class, name: &Name) -> Option<Lit> {
         self.get_field_from_current_class_only(cls, name)
-            .and_then(|field| self.as_enum_member(Arc::unwrap_or_clone(field), cls))
+            .and_then(|field| self.as_enum_member(field, cls))
     }
 
     pub fn get_enum_members(&self, cls: &Class) -> SmallSet<Lit> {
@@ -118,7 +116,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return false;
         }
         // Methods decorated with @enum.member are always enum members.
-        if ty.has_enum_member_decoration() {
+        if ty
+            .toplevel_func_metadata()
+            .is_some_and(|meta| meta.flags.has_enum_member_decoration)
+        {
             return true;
         }
         // Only values assigned or defined in the class body can be enum members.

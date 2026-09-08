@@ -8,6 +8,23 @@
 use crate::test::util::TestEnv;
 use crate::testcase;
 
+// `CallArgPreEval::advance_after_match` is shared with shape-specific call matching. Keep this
+// regression in the general callable suite so the refactor cannot change ordinary variadic
+// type-variable consumption.
+testcase!(
+    ordinary_type_var_tuple_argument_advancement_is_unchanged,
+    r#"
+from typing import assert_type
+
+def pack[*Ts](*args: *Ts) -> tuple[*Ts]: ...
+
+assert_type(pack(1, "x"), tuple[int, str])
+
+def check(xs: tuple[int, str]) -> None:
+    assert_type(pack(*xs), tuple[int, str])
+"#,
+);
+
 testcase!(
     test_lambda,
     r#"
@@ -832,6 +849,29 @@ def test(kwargs: dict[str, int]):
 );
 
 testcase!(
+    test_splat_unknown_length_with_known_kwargs_keys,
+    r#"
+from typing import Any
+
+def get_content(
+    service_instance: Any,
+    obj_type: str,
+    property_list: list[str] | None = None,
+    container_ref: Any = None,
+) -> dict[str, Any]:
+    return {}
+
+def call_get_content(instance: Any, obj_type: str) -> dict[str, Any]:
+    args: list[Any] = [instance, obj_type]
+    kwargs = {
+        "property_list": ["name"],
+        "container_ref": None,
+    }
+    return get_content(*args, **kwargs)  # OK
+"#,
+);
+
+testcase!(
     test_splat_kwargs_mixed_with_keywords,
     r#"
 def f(x: str, y: int, z: int): ...
@@ -1518,6 +1558,29 @@ def f(
 );
 
 testcase!(
+    test_builtins_callable_narrow_unknown,
+    r#"
+from typing import Any, Callable, TypeIs, assert_type
+
+def f(x):
+    assert callable(x)
+    assert_type(x, Callable[..., Any])
+    assert_type(x(), Any)
+
+def g(x: object):
+    assert callable(x)
+    assert_type(x, Callable[..., Any])
+
+def is_object_callable(x: object) -> TypeIs[Callable[..., object]]:
+    return callable(x)
+
+def h(x):
+    assert is_object_callable(x)
+    assert_type(x(), object)
+    "#,
+);
+
+testcase!(
     test_narrow_union,
     r#"
 from typing import Any, Callable, assert_type
@@ -1868,9 +1931,7 @@ constrained_first(0, lambda x: None)
 "#,
 );
 
-// Lambda arguments are inferred before later arguments can constrain the generic parameter.
 testcase!(
-    bug = "Lambda context ignores later generic constraints",
     test_implicit_any_lambda_late_generic_context,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
@@ -1878,7 +1939,7 @@ from typing import Callable
 
 def constrained_later[T](f: Callable[[T], None], x: T) -> None: ...
 
-constrained_later(lambda x: None, 0)  # E: Type of lambda parameter `x` is unknown
+constrained_later(lambda x: None, 0)
 "#,
 );
 
@@ -2043,11 +2104,10 @@ f = lambda x=1: x
 );
 
 testcase!(
-    bug = "Pyrefly does not contextually type lambda parameters in generic callback arguments (e.g. `sorted(key=...)`), so they become implicit `Any` and are flagged, even though the type is derivable (Pyright infers `int` here)",
     test_implicit_any_lambda_in_generic_call,
     TestEnv::new().enable_implicit_any_lambda_error(),
     r#"
-xs = sorted([3, 1, 2], key=lambda x: x)  # E: Type of lambda parameter `x` is unknown
+xs = sorted([3, 1, 2], key=lambda x: x)
 "#,
 );
 

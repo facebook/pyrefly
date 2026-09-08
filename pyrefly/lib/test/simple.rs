@@ -463,7 +463,7 @@ class Asset(TestABC):
 
 class PensionAsset(Asset):
     @classmethod
-    def _money_desc(cls):  # E: `PensionAsset._money_desc` has type `(cls: type[PensionAsset]) -> Literal['90岁累计可领(元)']`, which is not assignable to `(cls: type[PensionAsset]) -> Literal['累计可领(元)']`, the type of `Asset._money_desc`
+    def _money_desc(cls):  # E: `PensionAsset._money_desc` has type `() -> Literal['90岁累计可领(元)']`, which is not assignable to `() -> Literal['累计可领(元)']`, the type of `Asset._money_desc`
         return '90岁累计可领(元)'
 "#,
 );
@@ -748,6 +748,35 @@ def f[T](x: T) -> T:
     return x
 reveal_type(f(0))  # E: revealed type: int
     "#,
+);
+
+testcase!(
+    test_regex_checks,
+    r#"
+import re
+from re import X as verbose
+
+re.compile("(")  # E: missing ), unterminated subpattern
+re.search("(", "")  # E: missing ), unterminated subpattern
+re.sub("(", "", "")  # E: missing ), unterminated subpattern
+re.compile(pattern="(")  # E: missing ), unterminated subpattern
+re.compile("a(b(c)")  # E: missing ), unterminated subpattern
+re.compile(b"(")  # E: missing ), unterminated subpattern
+re.compile("(?# comment)")
+re.compile("(\n# ignored )\na)", re.VERBOSE)
+re.search("(\n# ignored )\na)", "", flags=re.X)
+re.compile("(\n# ignored )\na)", re.I | re.X)
+re.compile("(\n# ignored )\na)", verbose)
+re.compile("(?i:x)(?P<n>a)#(b)")
+re.compile("(?=x)(?P<n>a)#(b)")
+
+def unknown_flags(flags: int) -> None:
+    # Unknown flags may enable verbose mode, so checking this pattern would be unsafe.
+    re.compile("(", flags)
+
+def match_and(value: str) -> int | None:
+    return re.match("x", value) and 1
+"#,
 );
 
 testcase!(
@@ -2162,7 +2191,7 @@ testcase!(
     test_crash_on_decorator_assign,
     r#"
 from typing import TypeVar
-@T=TypeVar()  # E: Expected newline, found `=` # E: TypeVar must be assigned to a variable # E: Missing argument `name`
+@T=TypeVar()  # E: Could not find name `T` # E: Expected newline, found `=` # E: TypeVar must be assigned to a variable # E: Missing argument `name`
 "#,
 );
 
@@ -2676,17 +2705,16 @@ def f(fi: Any, buffering1: int, buffering2: Any):
     with open(fi, "rb", buffering1) as f:
         assert_type(f, BinaryIO)
     with open(fi, "rb", buffering2) as f:
-        assert_type(f, IO[Any])
+        assert_type(f, Any)
     "#,
 );
 
 testcase!(
     test_index_into_sequence_of_str,
     r#"
-from typing import assert_type, Sequence
+from typing import Any, Sequence, assert_type
 def f(x: Sequence[str], idx):
-    # idx may be a slice
-    assert_type(x[idx], Sequence[str])
+    assert_type(x[idx], Any)
     "#,
 );
 

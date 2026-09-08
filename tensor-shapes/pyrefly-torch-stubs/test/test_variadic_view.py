@@ -6,7 +6,7 @@
 """Test that view/reshape gracefully handle variadic (*Bs) tensor shapes.
 
 The view DSL computes prod(self.shape) for -1 inference. When the tensor has
-variadic batch dims (*Bs), prod must return Unsupported rather than panicking.
+variadic batch dims (*Bs), it preserves the fixed target rank and known dimensions.
 """
 
 from typing import assert_type, TYPE_CHECKING
@@ -34,9 +34,7 @@ class Reshaper[K: IntVar, D: IntVar](nn.Module):
 
     def forward[B: IntVar](self, x: Tensor[[B, 256]]) -> Tensor[[B, K, D]]:
         # proj(x) returns Tensor[[*Elements[Bs], K*D]] — *Elements[Bs] is unresolved variadic.
-        # view should fall back to bare rather than crashing.
         p = self.proj(x)
-        # Annotation fallback: view can't infer -1 from variadic shape
         out: Tensor[[B, K, D]] = p.view(-1, self.k, self.d)
         return out
 
@@ -54,16 +52,15 @@ def test_view_on_variadic_linear():
 
 def reshape_variadic[Bs: IntTuple, C: IntVar](
     x: Tensor[[*Elements[Bs], C]], c: Int[C]
-) -> Tensor[[*Elements[Bs], C]]:
+) -> Tensor[[int, C]]:
     """reshape on a variadic tensor should not crash."""
     y = x.reshape(-1, c)
-    # y is bare (can't infer -1 from variadic); annotation fallback
-    result: Tensor[[*Elements[Bs], C]] = y
-    return result
+    assert_type(y, Tensor[[int, C]])
+    return y
 
 
 def test_reshape_variadic_param():
     """reshape() on explicitly variadic tensor doesn't crash."""
     x: Tensor[[2, 3, 10]] = torch.randn(2, 3, 10)
     out = reshape_variadic(x, 10)
-    assert_type(out, Tensor[[2, 3, 10]])
+    assert_type(out, Tensor[[int, 10]])

@@ -132,6 +132,68 @@ x: int = 0
     assert!(!compact_can_increase);
 }
 
+#[test]
+fn hover_shows_qualified_type_names() {
+    let torch = "class Tensor: ...";
+    let numpy = "class ndarray: ...";
+    let library = r#"
+from numpy import ndarray
+from torch import Tensor
+
+TensorLike = Tensor | ndarray
+
+def foo(value: TensorLike) -> TensorLike: ...
+def shape() -> list[int]: ...
+"#;
+    let main = r#"
+import numpy as np
+import torch as t
+import library as lib
+
+class Local: ...
+
+local = Local()
+#^
+tensor = t.Tensor()
+#^
+array = np.ndarray()
+#^
+combined = lib.foo(tensor)
+#^
+shape = lib.shape()
+#^
+"#;
+    let report = get_batched_lsp_operations_report(
+        &[
+            ("torch", torch),
+            ("numpy", numpy),
+            ("library", library),
+            ("main", main),
+        ],
+        get_test_report,
+    );
+    assert!(
+        report.contains("(variable) local: Local"),
+        "Expected hover to omit the current module, got: {report}"
+    );
+    assert!(
+        report.contains("(variable) tensor: torch.Tensor"),
+        "Expected hover to include the canonical torch module, got: {report}"
+    );
+    assert!(
+        report.contains("(variable) array: numpy.ndarray"),
+        "Expected hover to include the canonical numpy module, got: {report}"
+    );
+    assert!(
+        report.contains("(variable) combined: torch.Tensor | numpy.ndarray"),
+        "Expected hover to qualify names in a library type alias, got: {report}"
+    );
+    assert!(
+        report.contains("(variable) shape: list[int]"),
+        "Expected hover to omit the builtins module, got: {report}"
+    );
+}
+
 fn assert_sphinx_resolved_as_link(report: &str, role: &str, target: &str) {
     let raw = format!(":{role}:`{target}`");
     assert!(
@@ -428,6 +490,27 @@ drop_str
 }
 
 #[test]
+fn hover_shows_flag_type_parameter_domain() {
+    let code = r#"
+from shape_extensions import Flag
+
+def select[K: Flag[int]](key: K) -> K: ...
+
+select(1)
+#^
+"#;
+    let shape_extensions = "class Flag[T]: ...";
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("shape_extensions", shape_extensions)],
+        get_test_report,
+    );
+    assert!(
+        report.contains("def select[K: Flag[int]]("),
+        "Expected hover to display the Flag domain, got: {report}"
+    );
+}
+
+#[test]
 fn hover_on_callable_instance_uses_dunder_call_signature() {
     let code = r#"
 class Greeter:
@@ -443,7 +526,7 @@ greeter("hi")
         "Expected hover to refer to __call__, got: {report}"
     );
     assert!(
-        report.contains("name: str"),
+        report.contains("name  : str"),
         "Expected hover to show parameter 'name', got: {report}"
     );
     assert!(
@@ -477,7 +560,7 @@ mark.parametrize("role", ids=["owner"])
         "Expected hover to show the positional parameter, got: {report}"
     );
     assert!(
-        report.contains("ids: list[str] | None = None"),
+        report.contains("ids     : list[str] | None = None"),
         "Expected hover to show the keyword-only parameter, got: {report}"
     );
 }
@@ -1154,6 +1237,27 @@ c += 1
             "```python\n(method) __iadd__: def __iadd__(\n    self: Counter,\n    other: int\n) -> Counter: ...\n```"
         ),
         "Expected __iadd__ signature in hover, got: {report}"
+    );
+}
+
+#[test]
+fn hover_over_binop_lhs_literal_does_not_show_operator_dunder() {
+    let code = r#"
+x = 1 + 1
+#   ^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert_eq!(
+        r#"
+# main.py
+2 | x = 1 + 1
+        ^
+```python
+Literal[1]
+```
+"#
+        .trim(),
+        report.trim(),
     );
 }
 
@@ -1938,6 +2042,32 @@ y = 1 or 2
 }
 
 #[test]
+fn hover_over_not_operator_highlights_unary_expression() {
+    let code = r#"
+x = not value
+#   ^
+"#;
+    let mut test_env = TestEnv::new();
+    test_env.add("main", code);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let handle = handle("main");
+    let position = extract_cursors_for_test(code)[0];
+    let range = match get_hover(&state.transaction(), &handle, position, false) {
+        Some(hover) => hover.range,
+        None => panic!("Expected hover result for not operator"),
+    };
+    assert_eq!(
+        range,
+        Some(Range {
+            start: Position::new(1, 4),
+            end: Position::new(1, 13),
+        })
+    );
+}
+
+#[test]
 fn hover_over_bool_operator_chain_highlights_whole_chain() {
     // `a and b and c` is a single flat BoolOp, so hovering any operator in the
     // chain highlights the entire boolean expression, not just the adjacent
@@ -1992,6 +2122,51 @@ Person("Alice", 25)
         report.contains("-> Person"),
         "Expected constructor hover to show -> Person, got: {report}"
     );
+}
+
+#[test]
+fn hover_on_pydantic_constructor_ignores_inherited_unannotated_new() {
+    let sqlmodel = r#"
+from typing import Any
+from pydantic import BaseModel
+
+class SQLModel(BaseModel):
+    def __new__(cls, *args: Any, **kwargs: Any):
+        return object.__new__(cls)
+
+    def __init__(self, **data: Any) -> None: ...
+"#;
+    let main = r#"
+from sqlmodel import SQLModel
+
+class A(SQLModel):
+    a: int
+    b: str
+
+value = A
+#       ^
+A(a=1, b="")
+#^
+"#;
+    let pydantic_path =
+        std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
+    let mut test_env = TestEnv::new_with_site_package_paths(&[&pydantic_path]);
+    test_env.add("sqlmodel", sqlmodel);
+    test_env.add("main", main);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    for position in extract_cursors_for_test(main) {
+        let report = get_test_report(&state, &handle("main"), position);
+        assert!(
+            report.contains("a:") && report.contains("b:"),
+            "Expected Pydantic constructor hover to show synthesized fields, got: {report}"
+        );
+        assert!(
+            !report.contains("*args: Any") && !report.contains("**kwargs: Any"),
+            "Expected Pydantic constructor hover to hide inherited broad __new__, got: {report}"
+        );
+    }
 }
 
 #[test]
@@ -2160,7 +2335,7 @@ class DCTransformDeclarative(DeclarativeAttributeIntercept):
         "Hover must not expose an internal inference variable, got: {report}"
     );
     assert!(
-        report.contains(") -> Self@DeclarativeAttributeIntercept: ..."),
+        report.contains(") -> DeclarativeAttributeIntercept: ..."),
         "Hover should resolve the constructor's return type, got: {report}"
     );
 }
@@ -2282,8 +2457,37 @@ f(y=1, x=1.0)
         "Expected hover to show float default value '3.14', got: {report}"
     );
     assert!(
-        report.contains("y: int = 2"),
+        report.contains("y: int   = 2"),
         "Expected hover to show int default value '2', got: {report}"
+    );
+}
+
+#[test]
+fn hover_aligns_multiline_signature_defaults() {
+    let code = r#"
+def f(a: int = 1, long_name: float = 2.0, *args: bool, flag: bool = False) -> None:
+    pass
+
+f()
+#^
+"#;
+    let report = get_batched_lsp_operations_report(&[("main", code)], get_test_report);
+    assert!(
+        report.contains(
+            r#"
+```python
+(function) f: def f(
+    a        : int   = 1,
+    long_name: float = 2.0,
+    *args    : bool,
+    *,
+    flag     : bool  = False
+) -> None: ...
+```
+"#
+            .trim()
+        ),
+        "Expected aligned hover signature, got: {report}",
     );
 }
 

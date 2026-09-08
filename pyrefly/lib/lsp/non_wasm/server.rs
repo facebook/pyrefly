@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+mod event_loop;
+
 use std::cmp::min;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -258,7 +260,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use starlark_map::Hashed;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
@@ -271,7 +272,6 @@ use vec1::Vec1;
 use crate::ModuleInfo;
 use crate::alt::types::class_metadata::ClassMro;
 use crate::binding::binding::KeyClassMro;
-use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::lsp::IndexingMode;
 use crate::config::config::ConfigFile;
@@ -308,6 +308,7 @@ use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
 use crate::lsp::non_wasm::queue::LspEvent;
 use crate::lsp::non_wasm::queue::LspQueue;
+use crate::lsp::non_wasm::queue::QueuedEvent;
 use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
@@ -440,7 +441,7 @@ pub trait TspInterface: Send + Sync + 'static {
         telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
-        event: LspEvent,
+        event: QueuedEvent,
     ) -> anyhow::Result<ProcessEvent>;
 
     fn telemetry_state(&self) -> TelemetryServerState;
@@ -481,7 +482,14 @@ pub trait TspInterface: Send + Sync + 'static {
     ///
     /// Returns `None` when the URI cannot be resolved, the position is invalid,
     /// or no type information is available at that location.
-    fn type_at_position(&self, uri: &str, line: u32, character: u32) -> Option<tsp_types::Type>;
+    fn type_at_position<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> Option<tsp_types::Type>;
 
     /// Return the computed (inferred) type for a node spanning the given range,
     /// converted to the TSP wire format.
@@ -500,8 +508,10 @@ pub trait TspInterface: Send + Sync + 'static {
     /// declaration locations are resolved against the same warm transaction
     /// that produced the type, so the export lookups cannot hit a cold
     /// `get_stdlib`.
-    fn computed_type_at_range(
-        &self,
+    fn computed_type_at_range<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         uri: &str,
         start_line: u32,
         start_character: u32,
@@ -513,8 +523,10 @@ pub trait TspInterface: Send + Sync + 'static {
     /// expected type — a call argument's parameter type, an annotated target's
     /// declared type, etc. — falling back to the computed type where no
     /// expected-type context applies.
-    fn expected_type_at_position(
-        &self,
+    fn expected_type_at_position<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         uri: &str,
         line: u32,
         character: u32,
@@ -986,6 +998,8 @@ pub struct Server {
     external_references: Arc<dyn ExternalProvider>,
     /// The time at which the server was started, for telemetry.
     server_start_time: Instant,
+    /// The version of Pyrefly that's currently running.
+    server_version: Option<String>,
 }
 
 pub fn shutdown_finish(sender: &Sender<Message>, reader: &mut MessageReader, id: RequestId) {
@@ -1483,6 +1497,7 @@ fn matches_fix_all_kind(kind: &CodeActionKind) -> bool {
 
 struct TypeHierarchyTarget {
     def_index: ClassDefIndex,
+    module_name: ModuleName,
     module_path: ModulePath,
     name_range: TextRange,
     is_object: bool,
@@ -1502,6 +1517,7 @@ pub fn lsp_loop(
     wrapper: Option<ConfigConfigurerWrapper>,
     thread_count: ThreadCount,
     lsp_start_time: Instant,
+    server_version: Option<String>,
 ) -> anyhow::Result<()> {
     info!("Reading messages");
     let lsp_queue = LspQueue::new();
@@ -1526,6 +1542,7 @@ pub fn lsp_loop(
         wrapper,
         thread_count,
         lsp_start_time,
+        server_version,
     );
     std::thread::scope(|scope| {
         // Spawn the event processing loop on a thread with a large stack
@@ -1537,59 +1554,7 @@ pub fn lsp_loop(
             .name("lsp-event-loop".into())
             .stack_size(ThreadPool::stack_size())
             .spawn_scoped(scope, || {
-                let mut ide_transaction_manager = TransactionManager::default();
-                let mut canceled_requests = HashSet::new();
-                // Start at 1 because task_id 0 is used by the startup event below.
-                let mut next_task_id = 1_usize;
-                TelemetryEvent::new_task(
-                    TelemetryEventKind::LspStartup,
-                    server.telemetry_state(),
-                    QueueName::LspQueue,
-                    0,
-                    lsp_start_time,
-                )
-                .finish_and_record(telemetry, None);
-                while let Ok((subsequent_mutation, event, enqueue_time)) = server.lsp_queue.recv() {
-                    let task_id = next_task_id;
-                    next_task_id += 1;
-                    let (mut event_telemetry, queue_duration) = TelemetryEvent::new_dequeued(
-                        TelemetryEventKind::LspEvent(event.describe()),
-                        enqueue_time,
-                        server.telemetry_state(),
-                        QueueName::LspQueue,
-                        task_id,
-                    );
-                    let event_description = event.describe();
-                    let result = server.process_event(
-                        &mut ide_transaction_manager,
-                        &mut canceled_requests,
-                        telemetry,
-                        &mut event_telemetry,
-                        subsequent_mutation,
-                        event,
-                    );
-                    let process_duration =
-                        event_telemetry.finish_and_record(telemetry, result.as_ref().err());
-                    match result {
-                        Ok(ProcessEvent::Continue) => {
-                            info!(
-                                "Language server processed event `{}` in {:.2}s ({:.2}s waiting)",
-                                event_description,
-                                process_duration.as_secs_f32(),
-                                queue_duration.as_secs_f32()
-                            );
-                        }
-                        Ok(ProcessEvent::Exit) => break,
-                        Err(e) => {
-                            // Log the error and continue processing the next event
-                            error!("Error processing event `{}`: {:?}", event_description, e);
-                        }
-                    }
-                }
-                info!("waiting for connection to close");
-                server.recheck_queue.stop();
-                server.find_reference_queue.stop();
-                server.sourcedb_queue.stop();
+                event_loop::run(&server, telemetry, lsp_start_time)
             })
             .expect("failed to spawn LSP event loop thread");
         scope.spawn(|| {
@@ -1836,11 +1801,15 @@ impl Server {
         telemetry_event: &mut TelemetryEvent,
         // After this event there is another mutation
         subsequent_mutation: bool,
-        event: LspEvent,
+        event: QueuedEvent,
     ) -> anyhow::Result<ProcessEvent> {
+        let (queue_id, event, enqueued_at) = event.into_parts();
         match event {
             LspEvent::Exit => {
                 return Ok(ProcessEvent::Exit);
+            }
+            LspEvent::TspExtraRequest { .. } => {
+                unreachable!("extra TSP connection requests are answered by the TSP loop")
             }
             LspEvent::RecheckFinished => {
                 // We did a commit and want to get back to a stable state.
@@ -1934,23 +1903,10 @@ impl Server {
                     let ruff_notebook =
                         params.notebook_document.to_ruff_notebook(&cell_contents)?;
                     let lsp_notebook = LspNotebook::new(ruff_notebook, notebook_document);
-                    let notebook_path = url
-                        .to_file_path()
-                        .or_else(|_| {
-                            if url.scheme() == "untitled" || url.scheme() == "inmemory" {
-                                Ok(self
-                                    .unsaved_file_tracker
-                                    .ensure_path_for_open(&url, "jupyter"))
-                            } else {
-                                Err(())
-                            }
-                        })
-                        .map_err(|_| {
-                            anyhow::anyhow!(
-                                "Could not convert uri to filepath: {}, expected a notebook",
-                                url
-                            )
-                        })?;
+                    let notebook_path = url.to_file_path().unwrap_or_else(|_| {
+                        self.unsaved_file_tracker
+                            .ensure_path_for_open(&url, "jupyter")
+                    });
                     for cell_url in lsp_notebook.code_cell_urls() {
                         self.open_notebook_cells
                             .write()
@@ -2099,9 +2055,14 @@ impl Server {
                 if x.method == InlayHintRequest::METHOD
                     && let Some(remaining) = self.inlay_hint_debounce_remaining(&x)
                 {
-                    if let Some(superseded) =
-                        self.lsp_queue.send_delayed(x, Instant::now() + remaining)
-                    {
+                    if let Some(superseded) = self.lsp_queue.send_delayed(
+                        QueuedEvent::from_parts(queue_id, LspEvent::LspRequest(x), enqueued_at),
+                        Instant::now() + remaining,
+                    ) {
+                        let (_, superseded, _) = superseded.into_parts();
+                        let LspEvent::LspRequest(superseded) = superseded else {
+                            unreachable!("only LSP requests enter the delayed queue")
+                        };
                         canceled_requests.remove(&superseded.id);
                         self.send_response(Response::new_err(
                             superseded.id,
@@ -2646,7 +2607,9 @@ impl Server {
                                 )
                             }
                             TypeErrorDisplayStatusVersion::V2 => {
-                                TypeErrorDisplayStatusResponse::V2(default_v2_response())
+                                TypeErrorDisplayStatusResponse::V2(default_v2_response(
+                                    self.server_version.clone(),
+                                ))
                             }
                         }
                     };
@@ -2694,6 +2657,7 @@ impl Server {
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
         lsp_start_time: Instant,
+        server_version: Option<String>,
     ) -> Self {
         let folders = if let Some(capability) = &initialize_params.capabilities.workspace
             && let Some(true) = capability.workspace_folders
@@ -2778,6 +2742,7 @@ impl Server {
             pending_invalidation_events: Arc::new(Mutex::new(CategorizedEvents::default())),
             external_references,
             server_start_time: lsp_start_time,
+            server_version,
         };
 
         if let Some(init_options) = &s.initialize_params.initialization_options {
@@ -2963,7 +2928,11 @@ impl Server {
             // resolver at config synthesis time, not per-diagnostic.
 
             if let Some(lsp_file) = open_files.get(&path)
-                && config.project_includes.covers(&path)
+                && (config.project_includes.covers(&path)
+                    || (matches!(&**lsp_file, LspFile::Notebook(_))
+                        && config
+                            .project_includes
+                            .covers(&path.with_extension("ipynb"))))
                 && !config.project_excludes.covers(&path)
                 && type_error_status.is_enabled()
             {
@@ -3076,6 +3045,7 @@ impl Server {
             config.disable_type_errors_in_ide(path),
             workspace_disable_type_errors,
             workspace_type_checking_mode,
+            self.server_version.clone(),
         )
     }
 
@@ -3368,6 +3338,83 @@ impl Server {
         }
     }
 
+    fn invalidate_queue(
+        server: &Server,
+        telemetry_event: &mut TelemetryEvent,
+        open_handles: Vec<Handle>,
+        f: Option<impl FnOnce(&mut Transaction) + Send + Sync + 'static>,
+    ) {
+        // Filter to only include handles from workspaces with streaming enabled
+        let streaming_handles: SmallSet<Handle> = open_handles
+            .iter()
+            .filter(|h| {
+                server
+                    .workspaces
+                    .should_stream_diagnostics(h.path().as_path())
+            })
+            .cloned()
+            .collect();
+        // Store the snapshot so non-committable transactions know not to publish
+        // diagnostics for these files (they'll be streamed by this transaction)
+        let has_streaming = !streaming_handles.is_empty();
+        if has_streaming {
+            *server.currently_streaming_diagnostics_for_handles.write() =
+                Some(streaming_handles.clone());
+        }
+        let publish_callback =
+            move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
+                if changed && streaming_handles.contains(handle) {
+                    server.publish_for_handles(
+                        transaction,
+                        std::slice::from_ref(handle),
+                        DiagnosticSource::Streaming,
+                    )
+                }
+            };
+        let subscriber = server.make_recheck_subscriber(publish_callback);
+        let mut transaction = server
+            .state
+            .new_committable_transaction(Require::Exports, Some(subscriber));
+        let invalidate_start = Instant::now();
+        let has_f = f.is_some();
+        if let Some(i) = f {
+            // Mark files as dirty
+            i(transaction.as_mut());
+        } else {
+            transaction.as_mut().invalidate_config();
+        }
+
+        telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
+
+        // Run transaction prioritizing currently-open files, sending diagnostics as soon as they are available via the subscriber
+        server.validate_in_memory_for_transaction(transaction.as_mut(), telemetry_event, None);
+
+        if has_f {
+            // Wait in a loop while do_not_commit_recheck flag is set (testing only)
+            while server.do_not_commit_recheck.load(Ordering::SeqCst) {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+
+        // Commit will be blocked until there are no ongoing reads.
+        // If we have some long running read jobs that can be cancelled, we should cancel them
+        // to unblock committing transactions.
+        for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
+            cancellation_handle.cancel();
+        }
+
+        // we have to run, not just commit to process updates
+        server.state.run_with_committing_transaction(
+            transaction,
+            &[],
+            Require::Everything,
+            Some(telemetry_event),
+            None,
+        );
+
+        *server.currently_streaming_diagnostics_for_handles.write() = None;
+    }
+
     fn invalidate(
         &self,
         kind: TelemetryEventKind,
@@ -3381,69 +3428,8 @@ impl Server {
                 if let Some(reason) = invalidate_find_reason {
                     telemetry_event.set_invalidate_find_reason(reason);
                 }
-                // Filter to only include handles from workspaces with streaming enabled
-                let streaming_handles: SmallSet<Handle> = open_handles
-                    .iter()
-                    .filter(|h| {
-                        server
-                            .workspaces
-                            .should_stream_diagnostics(h.path().as_path())
-                    })
-                    .cloned()
-                    .collect();
-                // Store the snapshot so non-committable transactions know not to publish
-                // diagnostics for these files (they'll be streamed by this transaction)
-                let has_streaming = !streaming_handles.is_empty();
-                if has_streaming {
-                    *server.currently_streaming_diagnostics_for_handles.write() =
-                        Some(streaming_handles.clone());
-                }
-                let publish_callback =
-                    move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
-                        if changed && streaming_handles.contains(handle) {
-                            server.publish_for_handles(
-                                transaction,
-                                std::slice::from_ref(handle),
-                                DiagnosticSource::Streaming,
-                            )
-                        }
-                    };
-                let subscriber = server.make_recheck_subscriber(publish_callback);
-                let mut transaction = server
-                    .state
-                    .new_committable_transaction(Require::Exports, Some(subscriber));
-                let invalidate_start = Instant::now();
-                // Mark files as dirty
-                f(transaction.as_mut());
-                telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
 
-                // Run transaction prioritizing currently-open files, sending diagnostics as soon as they are available via the subscriber
-                server.validate_in_memory_for_transaction(
-                    transaction.as_mut(),
-                    telemetry_event,
-                    None,
-                );
-
-                // Wait in a loop while do_not_commit_recheck flag is set (testing only)
-                while server.do_not_commit_recheck.load(Ordering::SeqCst) {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-
-                // Commit will be blocked until there are no ongoing reads.
-                // If we have some long running read jobs that can be cancelled, we should cancel them
-                // to unblock committing transactions.
-                for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
-                    cancellation_handle.cancel();
-                }
-                // we have to run, not just commit to process updates
-                server.state.run_with_committing_transaction(
-                    transaction,
-                    &[],
-                    Require::Everything,
-                    Some(telemetry_event),
-                    None,
-                );
-                *server.currently_streaming_diagnostics_for_handles.write() = None;
+                Self::invalidate_queue(server, telemetry_event, open_handles, Some(f));
 
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
                 // the main event loop of the server. As a result, the server can do a revalidation of
@@ -3657,12 +3643,12 @@ impl Server {
                     .insert(handle.path().dupe());
             }
             let task_telemetry = SubTaskTelemetry::new(telemetry, telemetry_event);
-            let (new_invalidated_source_dbs, rebuild_stats) =
+            let outcome =
                 ConfigFile::query_source_db(&configs_to_paths, force, Some(task_telemetry));
-            telemetry_event.set_sourcedb_rebuild_stats(rebuild_stats);
-            if !new_invalidated_source_dbs.is_empty() {
+            telemetry_event.set_sourcedb_rebuild_stats(outcome.stats);
+            if !outcome.reloaded.is_empty() {
                 let mut lock = server.invalidated_source_dbs.lock();
-                for db in new_invalidated_source_dbs {
+                for db in outcome.reloaded {
                     lock.insert(db);
                 }
                 let _ = server.lsp_queue.send(LspEvent::InvalidateConfigFind);
@@ -3695,13 +3681,14 @@ impl Server {
         version: i32,
         contents: Arc<LspFile>,
     ) -> anyhow::Result<()> {
+        let is_notebook = matches!(&*contents, LspFile::Notebook(_));
         let path = url
             .to_file_path()
             .or_else(|_| {
-                if url.scheme() == "untitled" || url.scheme() == "inmemory" {
+                if is_notebook || url.scheme() == "untitled" || url.scheme() == "inmemory" {
                     Ok(self
                         .unsaved_file_tracker
-                        .ensure_path_for_open(&url, "python"))
+                        .ensure_path_for_open(&url, if is_notebook { "jupyter" } else { "python" }))
                 } else {
                     Err(())
                 }
@@ -4801,6 +4788,10 @@ impl Server {
                 transaction.introduce_parameter_code_actions(&handle, range)
             );
             timed_refactor_action!(
+                "change_signature",
+                transaction.change_signature_code_actions(&handle, range)
+            );
+            timed_refactor_action!(
                 "convert_star_import",
                 transaction.convert_star_import_code_actions(&handle, range)
             );
@@ -4836,17 +4827,17 @@ impl Server {
                 actions.push(action);
             }
             record_code_action_telemetry("move_symbol_new_file", start);
+            let start = Instant::now();
+            if let Some(action) = safe_delete_file_code_action(
+                &self.initialize_params.capabilities,
+                &self.state,
+                transaction,
+                uri,
+            ) {
+                actions.push(action);
+            }
+            record_code_action_telemetry("safe_delete_file", start);
         }
-        let start = Instant::now();
-        if let Some(action) = safe_delete_file_code_action(
-            &self.initialize_params.capabilities,
-            &self.state,
-            transaction,
-            uri,
-        ) {
-            actions.push(action);
-        }
-        record_code_action_telemetry("safe_delete_file", start);
         Ok((!actions.is_empty()).then_some(actions))
     }
 
@@ -5963,57 +5954,13 @@ impl Server {
             TelemetryEventKind::InvalidateConfig,
             Box::new(move |server, _telemetry, telemetry_event| {
                 // Filter to only include handles from workspaces with streaming enabled
-                let streaming_handles: SmallSet<Handle> = open_handles
-                    .iter()
-                    .filter(|h| {
-                        server
-                            .workspaces
-                            .should_stream_diagnostics(h.path().as_path())
-                    })
-                    .cloned()
-                    .collect();
-                let has_streaming = !streaming_handles.is_empty();
-                if has_streaming {
-                    *server.currently_streaming_diagnostics_for_handles.write() =
-                        Some(streaming_handles.clone());
-                }
-                let publish_callback =
-                    move |transaction: &Transaction<'_>, handle: &Handle, changed: bool| {
-                        if changed && streaming_handles.contains(handle) {
-                            server.publish_for_handles(
-                                transaction,
-                                std::slice::from_ref(handle),
-                                DiagnosticSource::Streaming,
-                            )
-                        }
-                    };
-                let subscriber = server.make_recheck_subscriber(publish_callback);
-                let mut transaction = server
-                    .state
-                    .new_committable_transaction(Require::Exports, Some(subscriber));
-                let invalidate_start = Instant::now();
-                transaction.as_mut().invalidate_config();
-                telemetry_event.set_invalidate_duration(invalidate_start.elapsed());
-                server.validate_in_memory_for_transaction(
-                    transaction.as_mut(),
+                Self::invalidate_queue(
+                    server,
                     telemetry_event,
-                    None,
+                    open_handles,
+                    None::<fn(&mut Transaction)>,
                 );
-                // Commit will be blocked until there are no ongoing reads.
-                // If we have some long running read jobs that can be cancelled, we should cancel them
-                // to unblock committing transactions.
-                for (_, cancellation_handle) in server.cancellation_handles.lock().drain() {
-                    cancellation_handle.cancel();
-                }
-                // we have to run, not just commit to process updates
-                server.state.run_with_committing_transaction(
-                    transaction,
-                    &[],
-                    Require::Everything,
-                    Some(telemetry_event),
-                    None,
-                );
-                *server.currently_streaming_diagnostics_for_handles.write() = None;
+
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
                 // the main event loop of the server. As a result, the server can do a revalidation of
                 // all the in-memory files based on the fresh main State as soon as possible.
@@ -6291,7 +6238,8 @@ impl Server {
         let def_index = bindings.class_def_index(class_def)?;
         Some(TypeHierarchyTarget {
             def_index,
-            module_path: definition.module.path().dupe(),
+            module_name: definition.module.name(),
+            module_path: definition.module.path().to_key_eq(),
             name_range: class_def.name.range,
             is_object: class_def.name.id == "object"
                 && definition.module.name().as_str() == "builtins",
@@ -6352,7 +6300,9 @@ impl Server {
                 let Some(class_def_index) = bindings.class_def_index(class_def) else {
                     continue;
                 };
-                if class_def_index == target.def_index && module_info.path() == &target.module_path
+                if class_def_index == target.def_index
+                    && module_info.name() == target.module_name
+                    && module_info.path().to_key_eq() == target.module_path
                 {
                     continue;
                 }
@@ -6362,8 +6312,10 @@ impl Server {
                     let mro = solutions.get(&KeyClassMro(class_def_index));
                     mro.ancestors_no_object().iter().any(|ancestor| {
                         let ancestor_class = ancestor.class_object();
+                        // Imports resolve an open module through its filesystem counterpart.
                         ancestor_class.index() == target.def_index
-                            && ancestor_class.module_path() == &target.module_path
+                            && ancestor_class.module_name() == target.module_name
+                            && ancestor_class.module_path().to_key_eq() == target.module_path
                     })
                 };
                 if !is_subtype {
@@ -6538,64 +6490,81 @@ impl Server {
         )
     }
 
-    /// Build a read transaction and the handle the type checker analyzes `path`
-    /// under, so `(uri, range)` queries resolve for any analyzable file rather
-    /// than only open documents.
+    /// Run `query` in a read-only transaction where `uri` is analyzed, then
+    /// save the transaction for the next IDE request.
     ///
-    /// Open files are served from their in-memory overlay (already committed by
-    /// the recheck that ran on `didOpen`). For anything else we reuse the handle
-    /// the file was already analyzed under — an imported dependency's filesystem
-    /// handle, or a bundled stdlib stub's `BundledTypeshed` handle whose
-    /// `SysInfo` we can't reconstruct here, hence the by-path lookup — and force
-    /// a full solve (`Require::Everything` is the only level that retains
-    /// bindings/answers, which the type lookup reads) so narrowed/computed types
-    /// are available. A file that isn't analyzed yet falls back to a fresh
-    /// filesystem handle read from disk.
-    fn query_transaction_and_handle<'a>(&'a self, path: &Path) -> (Transaction<'a>, Handle) {
-        if self.open_files.read().contains_key(path) {
-            return (
-                self.state.transaction(),
-                make_open_handle(&self.state, path),
-            );
-        }
-        let mut transaction = self.state.transaction();
-        // Imported dependencies live under a filesystem handle we can rebuild
-        // directly; only scan when that misses (bundled stubs, unusual SysInfo).
-        let fs_handle =
-            handle_from_module_path(&self.state, ModulePath::filesystem(path.to_owned()));
-        let handle = if transaction.get_module_info(&fs_handle).is_some() {
-            fs_handle
-        } else {
-            transaction
-                .handles()
-                .into_iter()
-                .find(|h| !h.path().is_memory() && to_real_path(h.path()).as_deref() == Some(path))
-                .unwrap_or(fs_handle)
-        };
-        transaction.run(&[handle.dupe()], Require::Everything, None);
-        (transaction, handle)
-    }
-
-    /// Open `uri` at `(line, character)`: resolve the path, build a handle, and
-    /// start a transaction, returning it alongside the handle and the resolved
-    /// in-file position.
-    fn open_at_position<'a>(
+    /// A file the client never opened may not be retained at
+    /// `Require::Everything` yet. When it isn't we solve it in a committable
+    /// transaction and commit before answering: raising a module's `Require`
+    /// dirties it, so the solve rebuilds the module and its dependencies from
+    /// scratch, and discarding it would repeat that for every query against
+    /// the same file.
+    fn with_query_transaction<'a, T>(
         &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         uri: &str,
-        line: u32,
-        character: u32,
-    ) -> Option<(Transaction<'a>, Handle, TextSize)> {
+        query: impl FnOnce(&Transaction<'a>, &Handle, Option<usize>) -> Option<T>,
+    ) -> Option<T> {
         let url = Url::parse(uri)
             .ok()
             .or_else(|| Url::from_file_path(uri).ok())?;
         let path = self.path_for_uri_or_notebook_cell(&url)?;
         let notebook_cell = self.maybe_get_code_cell_index(&url);
 
-        let (transaction, handle) = self.query_transaction_and_handle(&path);
-        let module_info = transaction.get_module_info(&handle)?;
-        let position =
-            module_info.from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
-        Some((transaction, handle, position))
+        // The config finder picks the config, and so the `SysInfo`, from the
+        // path, so a rebuilt handle matches the one state holds. A bundled stub
+        // is the exception: state holds it under a `bundled_*` `ModulePath`, so
+        // the materialized path the client sends back rebuilds as a separate
+        // filesystem module and the stub is solved twice. Opening one in the
+        // editor already does the same through `ModulePath::memory`.
+        let handle = if self.open_files.read().contains_key(&path) {
+            make_open_handle(&self.state, &path)
+        } else {
+            handle_from_module_path(&self.state, ModulePath::filesystem(path.to_owned()))
+        };
+
+        let (mut transaction, needs_validation) =
+            match ide_transaction_manager.get_possibly_committable_transaction(&self.state) {
+                Ok(mut committable) => {
+                    // Read before validation runs: validation raises open
+                    // files to `Require::Everything`, so checking afterwards
+                    // would see the level it just created.
+                    if committable.as_ref().get_require(&handle) == Some(Require::Everything) {
+                        // Nothing to cache, so the committing lock buys us nothing.
+                        (committable.downgrade(), true)
+                    } else {
+                        let transaction = committable.as_mut();
+                        self.validate_in_memory_for_transaction(transaction, telemetry_event, None);
+                        transaction.run(&[handle.dupe()], Require::Everything, None);
+                        // `commit_transaction_downgrade` holds the state lock
+                        // across the commit, so what it hands back is the state
+                        // validated and solved just above.
+                        (
+                            self.state.commit_transaction_downgrade(
+                                committable,
+                                Some(telemetry_event),
+                                Require::Exports,
+                            ),
+                            false,
+                        )
+                    }
+                }
+                // A recheck holds the committing lock, so there is nothing to
+                // commit into and the solve happens in the read-only transaction.
+                Err(transaction) => (transaction, true),
+            };
+
+        if needs_validation {
+            // `didChange` skips validation when another mutation is already
+            // queued, so the overlay can be behind `open_files` even once the
+            // queue drains.
+            self.validate_in_memory_for_transaction(&mut transaction, telemetry_event, None);
+            transaction.run(&[handle.dupe()], Require::Everything, None);
+        }
+        let result = query(&transaction, &handle, notebook_cell);
+        ide_transaction_manager.save(transaction, telemetry_event);
+        result
     }
 
     /// Convert `ty` to the TSP wire format, resolving every declaration location
@@ -6620,16 +6589,14 @@ impl Server {
         // config-default `SysInfo` would miss the module in a multi-`SysInfo`
         // transaction and silently collapse the range to zero.
         let resolve_func_range = |func_id: &pyrefly_types::function::FuncDefId| {
-            let def_index = func_id.def_index;
             let handle = Handle::new(
                 func_id.qname.module_name(),
                 func_id.qname.module_path().dupe(),
                 source_handle.sys_info().dupe(),
             );
-            let bindings = transaction.get_bindings(&handle)?;
-            let key = KeyUndecoratedFunctionRange(def_index);
-            let idx = bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
-            Some(bindings.get(idx).0.range())
+            transaction
+                .get_bindings(&handle)?
+                .function_def_range(func_id.def_index)
         };
         // An importable module's backing filesystem path.
         let resolve_module_path = |module: &pyrefly_types::module::ModuleType| {
@@ -6726,7 +6693,7 @@ impl TspInterface for Server {
         telemetry: &'a dyn Telemetry,
         telemetry_event: &mut TelemetryEvent,
         subsequent_mutation: bool,
-        event: LspEvent,
+        event: QueuedEvent,
     ) -> anyhow::Result<ProcessEvent> {
         self.process_event(
             ide_transaction_manager,
@@ -6794,69 +6761,99 @@ impl TspInterface for Server {
         Ok(paths)
     }
 
-    fn type_at_position(&self, uri: &str, line: u32, character: u32) -> Option<tsp_types::Type> {
-        let (transaction, handle, position) = self.open_at_position(uri, line, character)?;
+    fn type_at_position<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> Option<tsp_types::Type> {
         // For TSP, return the raw declared type without coercing callees in
         // call position. This keeps the function's `Declaration::Regular`
         // intact on the wire, which TSP clients need to re-resolve the
         // signature (parameters, overloads) from source.
-        let ty = transaction.get_type_at_preserving_declaration(&handle, position)?;
-        Some(self.convert_type_in_transaction(&transaction, &handle, &ty))
+        self.with_query_transaction(
+            ide_transaction_manager,
+            telemetry_event,
+            uri,
+            |transaction, handle, notebook_cell| {
+                let module_info = transaction.get_module_info(handle)?;
+                let position = module_info
+                    .from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
+                let ty = transaction.get_type_at_preserving_declaration(handle, position)?;
+                Some(self.convert_type_in_transaction(transaction, handle, &ty))
+            },
+        )
     }
 
-    fn computed_type_at_range(
-        &self,
+    fn computed_type_at_range<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         uri: &str,
         start_line: u32,
         start_character: u32,
         end_line: u32,
         end_character: u32,
     ) -> Option<tsp_types::Type> {
-        let url = Url::parse(uri)
-            .ok()
-            .or_else(|| Url::from_file_path(uri).ok())?;
-        let path = self.path_for_uri_or_notebook_cell(&url)?;
-        let notebook_cell = self.maybe_get_code_cell_index(&url);
-
-        let (transaction, handle) = self.query_transaction_and_handle(&path);
-        let module_info = transaction.get_module_info(&handle)?;
-        let start = module_info.from_lsp_position(
-            lsp_types::Position {
-                line: start_line,
-                character: start_character,
+        self.with_query_transaction(
+            ide_transaction_manager,
+            telemetry_event,
+            uri,
+            |transaction, handle, notebook_cell| {
+                let module_info = transaction.get_module_info(handle)?;
+                let start = module_info.from_lsp_position(
+                    lsp_types::Position {
+                        line: start_line,
+                        character: start_character,
+                    },
+                    notebook_cell,
+                );
+                let end = module_info.from_lsp_position(
+                    lsp_types::Position {
+                        line: end_line,
+                        character: end_character,
+                    },
+                    notebook_cell,
+                );
+                let range = TextRange::new(start, end);
+                // Range-aware lookup: a whole call-expression range resolves to the
+                // call's result type, other ranges to the declaration-preserving
+                // type. Convert against the *same* transaction that produced `ty`,
+                // so export location resolution stays warm and cannot hit a cold
+                // `get_stdlib`.
+                let ty = transaction.get_computed_type_at_range(handle, range)?;
+                Some(self.convert_type_in_transaction(transaction, handle, &ty))
             },
-            notebook_cell,
-        );
-        let end = module_info.from_lsp_position(
-            lsp_types::Position {
-                line: end_line,
-                character: end_character,
-            },
-            notebook_cell,
-        );
-        let range = TextRange::new(start, end);
-        // Range-aware lookup: a whole call-expression range resolves to the
-        // call's result type, other ranges to the declaration-preserving type.
-        // Convert against the *same* transaction that produced `ty`, so export
-        // location resolution stays warm and cannot hit a cold `get_stdlib`.
-        let ty = transaction.get_computed_type_at_range(&handle, range)?;
-        Some(self.convert_type_in_transaction(&transaction, &handle, &ty))
+        )
     }
 
-    fn expected_type_at_position(
-        &self,
+    fn expected_type_at_position<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         uri: &str,
         line: u32,
         character: u32,
     ) -> Option<tsp_types::Type> {
-        let (transaction, handle, position) = self.open_at_position(uri, line, character)?;
         // Prefer the contextually expected type; fall back to the computed type
         // (preserving declarations) so the result is meaningful even outside an
         // expected-type context.
-        let ty = transaction
-            .get_expected_type_at(&handle, position)
-            .or_else(|| transaction.get_type_at_preserving_declaration(&handle, position))?;
-        Some(self.convert_type_in_transaction(&transaction, &handle, &ty))
+        self.with_query_transaction(
+            ide_transaction_manager,
+            telemetry_event,
+            uri,
+            |transaction, handle, notebook_cell| {
+                let module_info = transaction.get_module_info(handle)?;
+                let position = module_info
+                    .from_lsp_position(lsp_types::Position { line, character }, notebook_cell);
+                let ty = transaction
+                    .get_expected_type_at(handle, position)
+                    .or_else(|| transaction.get_type_at_preserving_declaration(handle, position))?;
+                Some(self.convert_type_in_transaction(transaction, handle, &ty))
+            },
+        )
     }
 
     fn resolve_uri_to_path(&self, uri: &Url) -> Option<PathBuf> {

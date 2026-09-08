@@ -27,15 +27,14 @@ use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::name::Name;
 
 use crate::callable::Callable;
-use crate::callable::IdentityIgnored;
 use crate::class::Class;
 use crate::class::ClassType;
 use crate::equality::TypeEq;
+use crate::identity::IdentityIgnored;
 use crate::keywords::DataclassTransformMetadata;
 use crate::meta_shape_dsl::ShapeDslFunction;
 use crate::meta_shape_dsl::ShapeTransform;
-use crate::type_level_dsl::TypeShapeDslDomain;
-use crate::type_level_dsl::ValidatedTypeShapeDslFunction;
+use crate::type_level_dsl::ResolvedTypeShapeDslFunction;
 use crate::types::Type;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -194,6 +193,9 @@ pub struct FuncFlags {
     pub is_overload: bool,
     pub is_staticmethod: bool,
     pub is_classmethod: bool,
+    /// Parameter indices whose annotations directly name a type parameter of the defining class.
+    /// This is used when a subclass binds that parameter to a shape `Flag`.
+    pub shape_flag_constructor_sources: Option<Box<Vec<usize>>>,
     /// A function decorated with `@deprecated`
     pub deprecation: Option<Deprecation>,
     /// Metadata for `@property`, `@foo.setter`, and `@foo.deleter`.
@@ -405,6 +407,7 @@ impl FuncSymbol {
 pub enum FunctionKind {
     IsInstance,
     IsSubclass,
+    Callable,
     /// The builtin `len`. Special-cased so that when the argument's `__len__`
     /// returns a subtype of `int` (e.g. a shaped array's `Int[N]`), `len(x)`
     /// yields that type instead of typeshed's plain `int`.
@@ -459,12 +462,13 @@ pub enum FunctionKind {
         Arc<ShapeDslFunction>,
         IdentityIgnored<Arc<Vec<Arc<ShapeDslFunction>>>>,
     ),
-    /// A validated user-defined type-level shape DSL function.
-    TypeShapeDsl(
-        Arc<FuncDefId>,
-        TypeShapeDslDomain,
-        Arc<ValidatedTypeShapeDslFunction>,
-    ),
+    /// A user-defined type-level shape DSL function.
+    ///
+    /// The first field preserves ordinary function identity for generic type-system machinery.
+    /// The resolved program repeats that root identity and owns every resolved function definition
+    /// used during evaluation, so changes anywhere in the shape-specific program affect
+    /// incremental equality.
+    TypeShapeDsl(Arc<FuncDefId>, Arc<ResolvedTypeShapeDslFunction>),
     /// The `shape_extensions.uses_shape_dsl` decorator function itself.
     UsesShapeDsl,
     /// The `shape_extensions.defines_assert_shape` decorator function itself.
@@ -503,6 +507,7 @@ impl FunctionKind {
         match (qname.module_name().as_str(), qname.id().as_str()) {
             ("builtins", "isinstance") => Self::IsInstance,
             ("builtins", "issubclass") => Self::IsSubclass,
+            ("builtins", "callable") => Self::Callable,
             ("builtins", "len") => Self::Len,
             ("builtins", "classmethod") => Self::ClassMethod,
             ("dataclasses", "dataclass") => Self::Dataclass,
@@ -539,6 +544,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => ModuleName::builtins(),
             Self::IsSubclass => ModuleName::builtins(),
+            Self::Callable => ModuleName::builtins(),
             Self::Len => ModuleName::builtins(),
             Self::ClassMethod => ModuleName::builtins(),
             Self::Dataclass => ModuleName::dataclasses(),
@@ -569,7 +575,7 @@ impl FunctionKind {
             Self::NumbaNjit => ModuleName::from_str("numba"),
             Self::Synthesized(id) => id.module.name(),
             Self::Def(func_id) => func_id.qname.module_name(),
-            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.qname.module_name(),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _) => id.qname.module_name(),
             Self::UsesShapeDsl => ModuleName::from_str("shape_extensions"),
             Self::DefinesAssertShape => ModuleName::from_str("shape_extensions"),
         }
@@ -579,6 +585,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => Cow::Owned(Name::new_static("isinstance")),
             Self::IsSubclass => Cow::Owned(Name::new_static("issubclass")),
+            Self::Callable => Cow::Owned(Name::new_static("callable")),
             Self::Len => Cow::Owned(Name::new_static("len")),
             Self::ClassMethod => Cow::Owned(Name::new_static("classmethod")),
             Self::Dataclass => Cow::Owned(Name::new_static("dataclass")),
@@ -609,7 +616,7 @@ impl FunctionKind {
             Self::NumbaNjit => Cow::Owned(Name::new_static("njit")),
             Self::Synthesized(id) => Cow::Borrowed(&id.name),
             Self::Def(func_id) => Cow::Borrowed(func_id.qname.id()),
-            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => Cow::Borrowed(id.qname.id()),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _) => Cow::Borrowed(id.qname.id()),
             Self::UsesShapeDsl => Cow::Owned(Name::new_static("uses_shape_dsl")),
             Self::DefinesAssertShape => Cow::Owned(Name::new_static("defines_assert_shape")),
         }
@@ -619,6 +626,7 @@ impl FunctionKind {
         match self {
             Self::IsInstance => None,
             Self::IsSubclass => None,
+            Self::Callable => None,
             Self::Len => None,
             Self::ClassMethod => None,
             Self::Dataclass => None,
@@ -649,7 +657,7 @@ impl FunctionKind {
             Self::TotalOrdering => None,
             Self::DisjointBase => None,
             Self::Def(func_id) => func_id.cls.clone(),
-            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _, _) => id.cls.clone(),
+            Self::ShapeDsl(id, _, _) | Self::TypeShapeDsl(id, _) => id.cls.clone(),
             Self::UsesShapeDsl => None,
             Self::DefinesAssertShape => None,
         }

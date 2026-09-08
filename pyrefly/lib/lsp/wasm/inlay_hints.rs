@@ -335,7 +335,7 @@ impl<'a> Transaction<'a> {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
                         Binding::Function { decorated_idx, .. } => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
-                                && let Some(mut ty) = self.get_type_for_display(handle, key)
+                                && let Some(mut ty) = self.get_type(handle, key)
                                 && !ty.is_any()
                             {
                                 let fun =
@@ -362,7 +362,7 @@ impl<'a> Transaction<'a> {
                 }
                 key @ Key::Definition(_)
                     if inlay_hint_config.variable_types
-                        && let Some(mut ty) = self.get_type_for_display(handle, key) =>
+                        && let Some(mut ty) = self.get_type(handle, key) =>
                 {
                     let mut insertable = true;
                     if let Some(constructor) = self.new_type_constructor_signature(handle, &ty) {
@@ -388,10 +388,15 @@ impl<'a> Transaction<'a> {
                         // applies to receiver-bearing unpacked rebinds.
                         Binding::NameAssign(x) if !x.is_pinned() => (Some(&*x.expr), false),
                         Binding::Expr(None, e) => (Some(&**e), false),
-                        Binding::UnpackedValue(None, unpack_idx, _, pos, None) => {
+                        Binding::UnpackedValue(value)
+                            if value.annotation.is_none() && value.receiver.is_none() =>
+                        {
                             // Try to get the element expression from the unpacked source
-                            let element_expr =
-                                Self::get_unpacked_element_expr(&bindings, *unpack_idx, *pos);
+                            let element_expr = Self::get_unpacked_element_expr(
+                                &bindings,
+                                value.source,
+                                value.position,
+                            );
                             (element_expr, true)
                         }
                         _ => (None, false),
@@ -444,7 +449,7 @@ impl<'a> Transaction<'a> {
                     let Some(class_field) = answers.get_idx::<KeyClassField>(field_idx) else {
                         continue;
                     };
-                    let mut ty = answers.solver().for_display(class_field.ty());
+                    let mut ty = class_field.ty();
                     let mut insertable = true;
                     if let Some(constructor) = self.new_type_constructor_signature(handle, &ty) {
                         ty = constructor;
@@ -858,7 +863,7 @@ impl<'a> Transaction<'a> {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
                         Binding::Function { decorated_idx, .. } => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
-                                && let Some(ty) = self.get_type_for_display(handle, key)
+                                && let Some(ty) = self.get_type(handle, key)
                                 && is_interesting_type(&ty)
                             {
                                 let fun =
@@ -875,7 +880,7 @@ impl<'a> Transaction<'a> {
                 }
                 // Only annotate empty containers for now
                 key @ Key::Definition(_) if containers => {
-                    if let Some(ty) = self.get_type_for_display(handle, key) {
+                    if let Some(ty) = self.get_type(handle, key) {
                         let e = match bindings.get(idx) {
                             Binding::NameAssign(x) if !x.is_pinned() => match &*x.expr {
                                 Expr::List(ExprList { elts, .. }) => {

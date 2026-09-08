@@ -35,8 +35,8 @@ def test_symbolic_identity_wrong() -> Tensor[[4, 3]]:
     x_concrete: Tensor[[2, 3]] = torch.randn(2, 3)
     result = accepts_symbolic_returns_symbolic(x_concrete)
     assert_type(result, Tensor[[2, 3]])
-    # E: Returned type `Tensor[[2, 3]]` is not assignable
-    #    to declared return type `Tensor[[4, 3]]`
+    # E: Returned type `Tensor[IntTuple[2, 3]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[4, 3]]`
     return result
 
 
@@ -55,8 +55,8 @@ def view_returns_bad_explicit_tensor[N: IntVar, M: IntVar](
 ) -> Tensor[[N + M]]:
     v = x.view(-1)
     assert_type(v, Tensor[[N * M]])
-    # E: Returned type `Tensor[[(N * M)]]` is not assignable
-    #    to declared return type `Tensor[[(N + M)]]`
+    # E: Returned type `Tensor[IntTuple[(N * M)]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[(N + M)]]`
     return v
 
 
@@ -75,8 +75,8 @@ def view_returns_bad_implicit_tensor[N: IntVar, M: IntVar, K: IntVar](
 ) -> Tensor[[K]]:
     v = x.view(-1)
     assert_type(v, Tensor[[N * M]])
-    # E: Returned type `Tensor[[(N * M)]]` is not assignable
-    #    to declared return type `Tensor[[K]]`
+    # E: Returned type `Tensor[IntTuple[(N * M)]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[K]]`
     return v
 
 

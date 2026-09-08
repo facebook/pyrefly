@@ -138,7 +138,7 @@
           "ruleIndex": 0,
           "level": "error",
           "message": {
-            "text": "`Mismatched` is not assignable to `Comparable`\n`Mismatched.compare` has type `(self: Mismatched) -> str`, which is not assignable to `(self: Mismatched) -> int`, the type of `Comparable.compare`"
+            "text": "`Mismatched` is not assignable to `Comparable`\n`Mismatched.compare` has type `() -> str`, which is not assignable to `() -> int`, the type of `Comparable.compare`"
           },
           "locations": [
             {

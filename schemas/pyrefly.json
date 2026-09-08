@@ -54,6 +54,14 @@
           },
           "default": []
         },
+        "replace-untyped-imports-with-any": {
+          "description": "Instruct Pyrefly to replace the given module globs with typing.Any when the installed third-party package provides neither stubs nor a py.typed marker.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
         "ignore-errors-in-generated-code": {
           "description": "Whether to ignore type errors in generated code. If enabled, generated files will be treated as if they are included in project-excludes. The generated code status is determined by checking if the file contents contain the substring '@generated'.",
           "type": "boolean",
@@ -108,6 +116,11 @@
         "extends": {
           "description": "Path to a pyrefly.toml or pyproject.toml [tool.pyrefly] configuration to inherit. The current file's explicit settings override inherited settings, and paths in each file are resolved relative to that file.",
           "type": "string"
+        },
+        "required-version": {
+          "description": "A PEP 440 version specifier that the running version of Pyrefly must satisfy.",
+          "type": "string",
+          "examples": [">=1.2.0", ">=1.2.0,<2.0.0", "==1.2.0"]
         },
         "preset": {
           "description": "Named preset that provides default error severities and behavior settings. User-specified settings override the preset.",
@@ -185,6 +198,20 @@
         "python-interpreter-path": {
           "description": "The Python interpreter to query when attempting to autoconfigure Python environment values (site-package-path, python-platform, python-version).",
           "type": "string"
+        },
+        "python-interpreter-find-command": {
+          "description": "A program and its arguments that print the path of the Python interpreter to query.",
+          "type": "array",
+          "items": [
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ],
+          "additionalItems": {
+            "type": "string"
+          },
+          "minItems": 1
         },
         "fallback-python-interpreter-name": {
           "description": "The Python interpreter, available on your $PATH, to use. Pyrefly will perform 'which <your command>', and automatically fill in python-interpreter-path for you with the found path.",

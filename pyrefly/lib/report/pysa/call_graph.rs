@@ -63,7 +63,6 @@ use vec1::Vec1;
 
 use crate::alt::call::CallTarget;
 use crate::alt::call::CallTargetLookup;
-use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::binding::binding::KeyDecoratedFunction;
 use crate::error::collector::ErrorCollector;
 use crate::error::style::ErrorStyle;
@@ -79,10 +78,11 @@ use crate::report::pysa::captured_variable::CapturedVariableRef;
 use crate::report::pysa::captured_variable::ModuleCapturedVariables;
 use crate::report::pysa::class::ClassId;
 use crate::report::pysa::class::ClassRef;
-use crate::report::pysa::class::get_super_class_member;
+use crate::report::pysa::class::get_super_class_member_defining_class;
 use crate::report::pysa::collect::CollectNoDuplicateKeys;
 use crate::report::pysa::context::ModuleAnswersContext;
 use crate::report::pysa::context::ModuleContext;
+use crate::report::pysa::function::DecoratedFunction;
 use crate::report::pysa::function::FunctionBaseDefinition;
 use crate::report::pysa::function::FunctionId;
 use crate::report::pysa::function::FunctionRef;
@@ -1627,6 +1627,13 @@ impl<'a> CallGraphVisitor<'a> {
                     // Use the bound of the type var as the base class.
                     self.receiver_class_from_type(bound, is_class_method)
                 }
+                Restriction::ShapeExtension(extension) => self.receiver_class_from_type(
+                    &extension.upper_bound(
+                        &self.module_answers_context.stdlib,
+                        self.module_answers_context.answers.heap(),
+                    ),
+                    is_class_method,
+                ),
                 _ => ReceiverClassResult {
                     class: None,
                     is_class_def: false,
@@ -1675,13 +1682,12 @@ impl<'a> CallGraphVisitor<'a> {
         }
 
         // Fall back to super class member lookup.
-        if let Some(with_defining_class) = get_super_class_member(
+        if let Some(parent_class) = get_super_class_member_defining_class(
             class,
             field_name,
             /* start_lookup_cls */ None,
             self.module_context,
         ) {
-            let parent_class = with_defining_class.defining_class;
             let object = self.module_answers_context.stdlib.object().class_object();
             if exclude_object_methods && parent_class == *object {
                 return Result::Err(UnresolvedReason::ClassFieldOnlyExistInObject);
@@ -2896,9 +2902,8 @@ impl<'a> CallGraphVisitor<'a> {
 
         // Extract parameter types from the callee's callable signature.
         // Only filter when there's exactly one signature (no overloads).
-        let signatures = callee_type.callable_signatures();
-        let params = match signatures.as_slice() {
-            [sig] => match &sig.params {
+        let params = match callee_type.toplevel_callable_signatures().exactly_one() {
+            Ok((sig, _)) => match &sig.params {
                 Params::List(param_list) => param_list.items(),
                 _ => return higher_order_parameters,
             },
@@ -4075,24 +4080,23 @@ impl<'a> CallGraphVisitor<'a> {
             .bindings
             .key_to_idx_hashed_opt(Hashed::new(&key))
             .and_then(|idx| {
-                let decorated_function = DecoratedFunction::from_bindings_answers(
+                let function = DecoratedFunction {
                     idx,
-                    &self.module_answers_context.bindings,
-                    &self.module_answers_context.answers,
-                );
-                if should_export_decorated_function(
-                    &decorated_function,
-                    &self.module_answers_context,
-                ) {
-                    let return_type = decorated_function
-                        .ty
+                    undecorated: self.module_answers_context.undecorated_function(idx),
+                };
+                if should_export_decorated_function(&function, &self.module_answers_context) {
+                    let return_type = self
+                        .module_answers_context
+                        .answers
+                        .get_idx(idx)
+                        .unwrap()
                         .callable_return_type(self.module_answers_context.answers.heap())
                         .map_or(ScalarTypeProperties::none(), |type_| {
                             ScalarTypeProperties::from_type(&type_, self.module_context)
                         });
                     let target = self.call_target_from_function_target(
                         Target::Function(FunctionRef::from_decorated_function(
-                            &decorated_function,
+                            &function,
                             &self.module_answers_context,
                         )),
                         return_type,

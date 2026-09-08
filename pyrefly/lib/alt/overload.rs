@@ -88,7 +88,7 @@ pub struct ArgsExpander<'a, Ans: LookupAnswer> {
     arg_lists: Vec<(Vec<CallArg<'a>>, Vec<CallKeyword<'a>>)>,
     /// Hard-coded limit to how many times we'll expand.
     gas: Gas,
-    solver: &'a AnswersSolver<'a, Ans>,
+    solver: &'a AnswersSolver<'a, 'a, Ans>,
 }
 
 impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
@@ -97,7 +97,7 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
     pub fn new(
         posargs: Vec<CallArg<'a>>,
         keywords: Vec<CallKeyword<'a>>,
-        solver: &'a AnswersSolver<'a, Ans>,
+        solver: &'a AnswersSolver<'a, 'a, Ans>,
     ) -> Self {
         Self {
             idx: if posargs.is_empty() {
@@ -252,7 +252,7 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Calls an overloaded function, returning the return type and the closest matching overload signature.
     pub fn call_overloads(
         &self,
@@ -834,7 +834,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 }
             }
             if matched_overloads.len() > 1 {
-                // Step 5, part 1: for each overload, check whether it's the case that all possible
+                // Step 5: for each overload, check whether it's the case that all possible
                 // materializations of each argument are assignable to the corresponding parameter.
                 // If so, eliminate all subsequent overloads.
                 //
@@ -909,11 +909,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     let _ = matched_overloads.split_off(split_point);
                 }
             }
-            let selected_overload = if spec_compliant {
-                self.disambiguate_overloads_spec_compliant(&matched_overloads)
-            } else {
-                self.disambiguate_overloads(&matched_overloads)
-            };
+            let selected_overload = self.disambiguate_overloads(&matched_overloads);
             if let Some(idx) = selected_overload {
                 let overload = matched_overloads
                     .into_iter()
@@ -959,49 +955,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
     }
 
-    fn disambiguate_overloads_spec_compliant(
-        &self,
-        matched_overloads: &[CalledOverload<'_>],
-    ) -> Option<usize> {
-        // Step 5, part 2: are all remaining return types equivalent to one another?
-        // If not, the call is ambiguous.
-        let mut matched_overloads = matched_overloads.iter();
-        let first_overload = matched_overloads
-            .next()
-            .expect("Expected at least one overload");
-        if matched_overloads.any(|o| !self.is_equivalent(&first_overload.res, &o.res)) {
-            return None;
-        }
-        // Step 6: if there are still multiple matches, pick the first one.
-        Some(0)
-    }
-
     fn disambiguate_overloads(&self, matched_overloads: &[CalledOverload<'_>]) -> Option<usize> {
-        // When a call to an overloaded function may match multiple overloads, the spec says to
-        // return Any when the return types are not all equivalent.
-        // However, neither mypy nor pyright fully follows this part of the spec, and many
-        // third-party libraries have come to rely on mypy and pyright's behavior. So we do the
-        // following for ecosystem compatibility:
+        // Step 6: does there exist a return type that is consistent with all materializations of
+        // every other return type? If so, use this return type. Else, return Any.
         //
-        // Step 6 (non-spec-compliant): does there exist a return type such that all
-        // materializations of every other return type are assignable to it? If so, use this
-        // return type. Else, return Any.
-        //
-        // We check materializations rather than assignability so that we end up with the most
-        // "general" return type. E.g., if the candidates are `A[None]` and `A[Any]`, we want
-        // to select `A[Any]`.
+        // We check materializations so that we end up with the most "general" return type. E.g.,
+        // if the candidates are `A[None]` and `A[Any]`, we want to select `A[Any]`.
         //
         // First, find a candidate return type.
         let mut candidate = 0;
         for (i, o) in matched_overloads.iter().enumerate().skip(1) {
-            if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
+            if !self.is_consistent(&o.res.materialize(), &matched_overloads[candidate].res) {
                 candidate = i;
             }
         }
         // We've already checked every return type after the candidate.
         // Check every return type before the candidate.
         for o in matched_overloads.iter().take(candidate) {
-            if !self.is_subset_eq(&o.res.materialize(), &matched_overloads[candidate].res) {
+            if !self.is_consistent(&o.res.materialize(), &matched_overloads[candidate].res) {
                 return None;
             }
         }

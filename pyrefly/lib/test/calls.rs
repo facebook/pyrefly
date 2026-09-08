@@ -325,6 +325,15 @@ reduce(max, [1,2])
 );
 
 testcase!(
+    test_iter_list_literal,
+    r#"
+from typing import Iterator, assert_type
+
+assert_type(iter([0]), Iterator[int])
+    "#,
+);
+
+testcase!(
     test_call_arg_lambda_contextual_typing,
     r#"
 from typing import Callable
@@ -333,6 +342,17 @@ def takes(cb: Callable[[int], int]) -> None: ...
 
 # This only errors because we're able to pass down the `int` hint through contextual typing.
 takes(lambda x: x + "")  # E:  Argument `Literal['']` is not assignable to parameter `value` with type `int` in function `int.__add__`
+    "#,
+);
+
+testcase!(
+    test_generic_callback_contextual_typing_from_later_argument,
+    r#"
+map(lambda x: x.does_not_exist(), [1])  # E: Object of class `int` has no attribute `does_not_exist`
+
+def takes_bool(value: bool) -> None: ...
+
+map(takes_bool, [1])  # E: is not assignable to parameter
     "#,
 );
 
@@ -566,6 +586,20 @@ class Uncallable:
 
 obj = Uncallable()
 obj()  # E: Expected a callable, got `Uncallable`
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/4590
+testcase!(
+    test_call_instance_with_self_recursive_dunder_call,
+    r#"
+from typing import Self
+
+class C:
+    __call__: Self | None
+
+x = C()
+x()  # E: `__call__` on `C` resolves back to the same type, creating infinite recursion at runtime
 "#,
 );
 

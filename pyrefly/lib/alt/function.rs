@@ -7,10 +7,10 @@
 
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use dupe::Dupe;
+use itertools::Itertools;
 use pyrefly_graph::index::Idx;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::dunder;
@@ -18,21 +18,20 @@ use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::nesting_context::NestingContext;
 use pyrefly_python::qname::QName;
 use pyrefly_python::short_identifier::ShortIdentifier;
-use pyrefly_types::callable::IdentityIgnored;
 use pyrefly_types::callable::Params;
 use pyrefly_types::class::Class;
 use pyrefly_types::class::ClassType;
 use pyrefly_types::dimension::Int;
 use pyrefly_types::function::BodyKind;
 use pyrefly_types::function::FuncDefId;
+use pyrefly_types::identity::IdentityIgnored;
 use pyrefly_types::literal::LitStyle;
 use pyrefly_types::meta_shape_dsl::ShapeDslFunction;
 use pyrefly_types::meta_shape_dsl::ShapeTransform;
 use pyrefly_types::meta_shape_dsl::validate_shape_dsl_functions;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedOrigin;
-use pyrefly_types::type_level_dsl::TypeShapeDslDomain;
-use pyrefly_types::type_level_dsl::ValidatedTypeShapeDslFunction;
+use pyrefly_types::type_level_dsl::ParsedTypeShapeDslFunction;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::AnyStyle;
 use pyrefly_types::types::BoundMethod;
@@ -59,7 +58,6 @@ use crate::alt::call::CallStyle;
 use crate::alt::call::CallTarget;
 use crate::alt::callable::CallArg;
 use crate::alt::singledispatch::DispatcherDef;
-use crate::alt::types::decorated_function::DecoratedFunction;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::types::decorated_function::SpecialDecorator;
 use crate::alt::types::decorated_function::UndecoratedFunction;
@@ -69,6 +67,7 @@ use crate::binding::binding::FunctionDefData;
 use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClass;
+use crate::binding::binding::KeyDecoratedFunction;
 use crate::binding::binding::KeyDecorator;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::config::error_kind::ErrorKind;
@@ -150,14 +149,6 @@ struct FunctionParamsResult {
     paramspec: Option<Quantified>,
     /// Maps parameter names to their resolved types for unannotated parameters.
     resolved_param_types: SmallMap<Name, Type>,
-}
-
-fn type_shape_dsl_domain(ty: &Type) -> Option<TypeShapeDslDomain> {
-    match ty {
-        Type::Int(_) => Some(TypeShapeDslDomain::Int),
-        Type::IntTuple(_) => Some(TypeShapeDslDomain::IntTuple),
-        _ => None,
-    }
 }
 
 struct ParentParamHints {
@@ -268,7 +259,7 @@ impl DecoratorParamHints {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn decorator_param_hints(
         &self,
         decorators: &[(Type, TextRange)],
@@ -276,113 +267,58 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         decorators.iter().rev().find_map(|(decorator_ty, _)| {
             decorator_ty
                 .callable_first_param(self.heap)
-                .and_then(|param_ty| param_ty.callable_signatures().into_iter().next().cloned())
+                .and_then(|param_ty| {
+                    param_ty
+                        .toplevel_callable_signatures()
+                        .next()
+                        .map(|(sig, _)| sig.clone())
+                })
                 .and_then(DecoratorParamHints::from_callable)
         })
     }
 
-    /// Validates resolved DSL annotations, emitting diagnostics and metadata only on success.
-    fn validate_type_shape_dsl_declaration(
-        &self,
-        dsl: &Arc<ValidatedTypeShapeDslFunction>,
-        params: &[Param],
-        return_type: &Type,
-        function_kind: &FunctionKind,
-        function_range: TextRange,
-        errors: &ErrorCollector,
-    ) -> Option<FunctionKind> {
-        let parameter_domain = if dsl.has_parameter_annotation() {
-            params
-                .first()
-                .and_then(|param| type_shape_dsl_domain(param.as_type()))
-        } else {
-            None
-        };
-        let return_domain = if dsl.has_return_annotation() {
-            type_shape_dsl_domain(return_type)
-        } else {
-            None
-        };
-        match (parameter_domain, return_domain) {
-            (Some(parameter), Some(result)) if parameter == result => {
-                if let FunctionKind::Def(func_id) = function_kind {
-                    Some(FunctionKind::TypeShapeDsl(
-                        func_id.clone(),
-                        parameter,
-                        dsl.clone(),
-                    ))
-                } else {
-                    self.error(
-                        errors,
-                        function_range,
-                        ErrorKind::InvalidArgument,
-                        "`@type_shape_dsl_function` must be applied to an ordinary function definition"
-                            .to_owned(),
-                    );
-                    None
-                }
-            }
-            (None, _) => {
-                self.error(
-                    errors,
-                    dsl.parameter_annotation_range(),
-                    ErrorKind::InvalidArgument,
-                    format!(
-                        "`@type_shape_dsl_function` parameter `{}` must be annotated as `Int` or `IntTuple`",
-                        dsl.parameter_name()
-                    ),
-                );
-                None
-            }
-            (_, None) => {
-                self.error(
-                    errors,
-                    dsl.return_annotation_range(),
-                    ErrorKind::InvalidArgument,
-                    "`@type_shape_dsl_function` return must be annotated as `Int` or `IntTuple`"
-                        .to_owned(),
-                );
-                None
-            }
-            (Some(_), Some(_)) => {
-                self.error(
-                    errors,
-                    dsl.return_annotation_range(),
-                    ErrorKind::InvalidArgument,
-                    "`@type_shape_dsl_function` parameter and return annotations must use the same domain"
-                        .to_owned(),
-                );
-                None
-            }
-        }
-    }
-
     pub fn solve_function_binding(
         &self,
-        def: DecoratedFunction,
+        idx: Idx<KeyDecoratedFunction>,
         predecessor: &mut Option<Idx<Key>>,
         errors: &ErrorCollector,
     ) -> Type {
-        let mut ty = if def.metadata().flags.is_overload {
+        let function_binding = self.bindings().get(idx);
+        let undecorated = self.get_idx(function_binding.undecorated_idx);
+        let def_ty = self.get_idx(idx);
+        let mut ty = if undecorated.metadata.flags.is_overload {
             // This function is decorated with @overload. We should warn if this function is actually called anywhere.
-            let successor = self.get_function_successor(&def);
-            if successor.is_none() {
+            if function_binding.successor.is_none() {
                 // This is the last definition in the chain. We should produce an overload type.
-                let mut acc =
-                    Vec1::new((def.id_range(), (*def.ty).clone(), def.metadata().clone()));
+                let mut acc = Vec1::new((
+                    undecorated.id_range(),
+                    (*def_ty).clone(),
+                    undecorated.metadata.clone(),
+                ));
                 let mut impl_before_overload_range = None;
-                while let Some(def) = self.step_pred(predecessor) {
-                    if def.is_overload() {
-                        acc.push((def.id_range(), (*def.ty).clone(), def.metadata().clone()));
+                while let Some(predecessor_idx) = self.step_pred(predecessor) {
+                    let predecessor_binding = self.bindings().get(predecessor_idx);
+                    let predecessor_undecorated = self.get_idx(predecessor_binding.undecorated_idx);
+                    if predecessor_undecorated.metadata.flags.is_overload {
+                        let predecessor_ty = self.get_idx(predecessor_idx);
+                        acc.push((
+                            predecessor_undecorated.id_range(),
+                            (*predecessor_ty).clone(),
+                            predecessor_undecorated.metadata.clone(),
+                        ));
                     } else {
-                        impl_before_overload_range = Some(def.id_range());
+                        impl_before_overload_range = Some(predecessor_undecorated.id_range());
                         break;
                     }
                 }
                 let first_range = acc.last().0;
                 let last_range = acc.first().0;
                 if self.module().path().style() == ModuleStyle::Executable
-                    && !def.metadata().flags.facts().allows_missing_implementation()
+                    && !undecorated
+                        .metadata
+                        .flags
+                        .facts()
+                        .allows_missing_implementation()
                 {
                     // The last definition in the chain is decorated with `@overload`, and we're in
                     // a context in which an overloaded function must end with an implementation.
@@ -398,7 +334,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                                 .to_owned(),
                         );
                     } else if !matches!(
-                        def.metadata().flags.body_kind,
+                        undecorated.metadata.flags.body_kind,
                         BodyKind::Ellipsis | BodyKind::Trivial
                     ) {
                         // This definition has a non-trivial body, so the mistake was likely
@@ -441,17 +377,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     })
                 }
             } else {
-                (*def.ty).clone()
+                (*def_ty).clone()
             }
         } else {
             let mut acc = Vec::new();
-            while let Some(def) = self.step_pred(predecessor)
-                && def.is_overload()
-            {
-                acc.push((def.id_range(), (*def.ty).clone(), def.metadata().clone()));
+            while let Some(predecessor_idx) = self.step_pred(predecessor) {
+                let predecessor_binding = self.bindings().get(predecessor_idx);
+                let predecessor_undecorated = self.get_idx(predecessor_binding.undecorated_idx);
+                if !predecessor_undecorated.metadata.flags.is_overload {
+                    break;
+                }
+                let predecessor_ty = self.get_idx(predecessor_idx);
+                acc.push((
+                    predecessor_undecorated.id_range(),
+                    (*predecessor_ty).clone(),
+                    predecessor_undecorated.metadata.clone(),
+                ));
             }
             acc.reverse();
-            self.check_decorator_consistency_with_implementation(&acc, &def, errors);
+            self.check_decorator_consistency_with_implementation(&acc, undecorated, errors);
             if let Ok(defs) = Vec1::try_from_vec(acc) {
                 if defs.len() == 1 {
                     self.error(
@@ -462,26 +406,28 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
                     defs.split_off_first().0.1
                 } else {
-                    let metadata = self
-                        .merge_overload_metadata_with_implementation(&defs, def.metadata().clone());
+                    let metadata = self.merge_overload_metadata_with_implementation(
+                        &defs,
+                        undecorated.metadata.clone(),
+                    );
                     let sigs = self.extract_signatures(
                         metadata.kind.function_name().as_ref(),
                         defs,
                         errors,
                     );
-                    self.check_signature_consistency(&sigs, &def, errors);
+                    self.check_signature_consistency(&sigs, def_ty, undecorated, errors);
                     Type::Overload(Overload {
                         signatures: sigs.mapped(|(_, sig)| sig),
                         metadata: Box::new(metadata),
                     })
                 }
             } else {
-                (*def.ty).clone()
+                (*def_ty).clone()
             }
         };
 
-        if let Some(metadata) = def
-            .metadata()
+        if let Some(metadata) = undecorated
+            .metadata
             .flags
             .property_metadata
             .as_ref()
@@ -491,38 +437,37 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .setter
                 .clone()
                 .unwrap_or_else(|| metadata.getter.clone());
-            ty.transform_toplevel_func_metadata(|meta| {
-                if let Some(property) = &mut meta.flags.property_metadata {
-                    property.has_deleter = true;
-                }
-            });
+            if let Some(meta) = ty.toplevel_func_metadata_mut()
+                && let Some(property) = &mut meta.flags.property_metadata
+            {
+                property.has_deleter = true;
+            };
         }
 
         if matches!(
-            def.metadata().flags.body_kind,
+            undecorated.metadata.flags.body_kind,
             BodyKind::Ellipsis | BodyKind::Trivial
         ) && self.module().path().style() != ModuleStyle::Interface
-            && def.metadata().flags.is_in_protocol_class
+            && undecorated.metadata.flags.is_in_protocol_class
+            && let Some(meta) = ty.toplevel_func_metadata_mut()
         {
-            ty.transform_toplevel_func_metadata(|meta| {
-                meta.flags.is_abstract_method = true;
-            });
+            meta.flags.is_abstract_method = true;
         }
 
         let sanitized = ty.without_property_metadata();
-        ty.transform_toplevel_func_metadata(|meta| {
-            if let Some(property) = &mut meta.flags.property_metadata {
-                match property.role {
-                    PropertyRole::Getter => {
-                        property.getter = sanitized.clone();
-                    }
-                    PropertyRole::Setter => {
-                        property.setter = Some(sanitized.clone());
-                    }
-                    _ => {}
+        if let Some(meta) = ty.toplevel_func_metadata_mut()
+            && let Some(property) = &mut meta.flags.property_metadata
+        {
+            match property.role {
+                PropertyRole::Getter => {
+                    property.getter = sanitized.clone();
                 }
+                PropertyRole::Setter => {
+                    property.setter = Some(sanitized.clone());
+                }
+                _ => {}
             }
-        });
+        };
 
         ty
     }
@@ -540,10 +485,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         legacy_tparams: &[Idx<KeyLegacyTypeParam>],
         parent: &NestingContext,
         shape_dsl_def: Option<Arc<ShapeDslFunction>>,
-        type_shape_dsl_def: Option<Arc<ValidatedTypeShapeDslFunction>>,
+        type_shape_dsl_def: Option<Arc<ParsedTypeShapeDslFunction>>,
         uses_shape_dsl_ir_name: Option<ShortIdentifier>,
         errors: &ErrorCollector,
-    ) -> Arc<UndecoratedFunction> {
+    ) -> UndecoratedFunction {
         let defining_cls = class_key.and_then(|k| self.get_idx(*k).0.dupe());
         let is_top_level_function = defining_cls.is_none();
         let mut self_type = defining_cls
@@ -570,7 +515,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let decorators = Box::from_iter(decorators.iter().filter_map(|k| {
             let decorator = self.get_idx(*k);
             let range = self.bindings().idx_to_key(*k).range();
-            let keep = match self.get_special_decorator(&decorator) {
+            let keep = match self.get_special_decorator(decorator) {
                 // Filter `@disjoint_base` out before generic decorator application,
                 // otherwise it would produce a misleading bad-specialization error.
                 Some(SpecialDecorator::DisjointBase) => {
@@ -694,9 +639,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let mut tparams = self.scoped_type_params(def.type_params.as_deref(), errors);
         let legacy_tparams = legacy_tparams
             .iter()
-            .filter_map(|key| self.get_idx(*key).deref().parameter().cloned());
+            .filter_map(|key| self.get_idx(*key).parameter().cloned());
         tparams.extend(legacy_tparams);
-        let tparams = self.validated_tparams(def.range, tparams, TParamsSource::Function, errors);
+        let tparams =
+            Arc::new(self.validated_tparams(def.range, tparams, TParamsSource::Function, errors));
         let func_id = Arc::new(FuncDefId {
             qname: QName::new(def.name.clone(), parent.dupe(), self.module().dupe()),
             cls: defining_cls.clone(),
@@ -730,7 +676,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // Resolve the IR function reference from @uses_shape_dsl(ir_fn) and
         // populate `flags.shape_transform` with the DSL function it points to.
         if let Some(ir_identifier) = uses_shape_dsl_ir_name {
-            let ir_type = self.get(&Key::BoundName(ir_identifier)).arc_clone_ty();
+            let ir_type = self.get(&Key::BoundName(ir_identifier)).ty().clone();
             if let Type::Function(func) = &ir_type
                 && let FunctionKind::ShapeDsl(_, dsl_fn, fn_closure) = &func.metadata.kind
             {
@@ -752,7 +698,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         flags.has_gradual_variadic_params = params_are_gradual_variadic(&params);
         let metadata = FuncMetadata { kind, flags };
 
-        Arc::new(UndecoratedFunction {
+        UndecoratedFunction {
             def_index,
             identifier: ShortIdentifier::new(&def.name),
             metadata,
@@ -763,7 +709,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             defining_cls,
             type_shape_dsl_def,
             resolved_param_types,
-        })
+        }
     }
 
     pub fn decorated_function_type(
@@ -771,10 +717,11 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         def: &UndecoratedFunction,
         stmt: &FunctionDefData,
         errors: &ErrorCollector,
-    ) -> Arc<Type> {
+    ) -> Type {
         let ret = self
             .get(&Key::ReturnType(ShortIdentifier::new(&stmt.name)))
-            .arc_clone_ty();
+            .ty()
+            .clone();
         // `stmt.returns` is always set to None because the binding step calls `mem::take` on it
         let has_return_annotation = self.bindings().function_has_return_annotation(&stmt.name);
         if !has_return_annotation && !def.metadata.flags.has_no_type_check {
@@ -854,7 +801,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     stmt,
                     &def.defining_cls,
                     def.metadata.flags.is_staticmethod,
-                    ty_narrow,
+                    ty_narrow.as_ref(),
                     errors,
                 );
             }
@@ -959,7 +906,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let tparams =
             self.collect_jaxtyping_tparams(&callable, &def.tparams, stmt.name.range, errors);
 
+        self.validate_shape_extension_function_parameters(stmt, &def.params, &tparams, errors);
+
         let mut metadata = def.metadata.clone();
+        self.record_shape_flag_constructor_sources(
+            stmt,
+            &def.params,
+            def.defining_cls.as_ref(),
+            &mut metadata,
+        );
         if let Some(dsl) = &def.type_shape_dsl_def
             && let Some(kind) = self.validate_type_shape_dsl_declaration(
                 dsl,
@@ -992,10 +947,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             },
             errors,
         );
-        Arc::new(ty)
+        ty
     }
 
-    pub fn get_special_decorator(
+    pub fn get_special_decorator<'a>(
         &'a self,
         decorator: &'a Decorator,
     ) -> Option<SpecialDecorator<'a>> {
@@ -1254,8 +1209,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                             value: ruff_python_ast::Number::Int(i),
                             ..
                         }))
-                    ) if i.as_i64().is_some() && matches!(inner.as_ref(), Type::Quantified(_))
-                );
+                ) if i.as_i64().is_some() && matches!(inner.as_ref(), Type::Quantified(_))
+                ) || (default.is_some()
+                    && self.is_shape_flag_parameter_type(&param_ty));
                 let check: Option<(&Type, &dyn Fn() -> TypeCheckContext)> = if skip_check {
                     None
                 } else {
@@ -1502,6 +1458,24 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             params.push(Param::Kwargs(Some(x.name.id().clone()), ty));
         }
 
+        self.validate_map_int_tuples_parameter_patterns(
+            &params,
+            def.parameters
+                .posonlyargs
+                .iter()
+                .map(|x| x.parameter.name.range)
+                .chain(def.parameters.args.iter().map(|x| x.parameter.name.range))
+                .chain(def.parameters.vararg.iter().map(|x| x.name.range))
+                .chain(
+                    def.parameters
+                        .kwonlyargs
+                        .iter()
+                        .map(|x| x.parameter.name.range),
+                )
+                .chain(def.parameters.kwarg.iter().map(|x| x.name.range)),
+            errors,
+        );
+
         let paramspec = if let Some(q) = &paramspec_args
             && paramspec_args == paramspec_kwargs
         {
@@ -1704,8 +1678,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         let bound_receiver_type = |ty: &Type| match ty {
             Type::SelfType(cls) => Some(self.heap.mk_class_type(cls.clone())),
             Type::Quantified(q)
-                if q.identity().origin == QuantifiedOrigin::SyntheticSelf
-                    && let Restriction::Bound(bound) = q.restriction() =>
+                if matches!(
+                    q.identity().origin,
+                    QuantifiedOrigin::Synthetic { is_self: true }
+                ) && let Restriction::Bound(bound) = q.restriction() =>
             {
                 Some(bound.clone())
             }
@@ -1802,12 +1778,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     }
                 });
                 if let Some(mut call_attr) = call_attr {
-                    call_attr.transform_toplevel_func_metadata(|m| {
+                    if let Some(m) = call_attr.toplevel_func_metadata_mut() {
                         *m = FuncMetadata {
                             kind: FunctionKind::CallbackProtocol(Box::new(cls.clone())),
                             flags: metadata.flags.clone(),
                         };
-                    });
+                    };
                     call_attr
                 } else {
                     self.heap.mk_class_type(cls)
@@ -1881,26 +1857,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         }
 
         let new_tparams = Arc::new(TParams::new(relevant_tparams_vec));
-        match inferred_ty {
-            // Merge tparams from decoratee and inferred_ty.
-            Type::Forall(forall) => {
-                let mut merged_tparams = (*new_tparams).clone();
-                merged_tparams.extend(&forall.tparams);
-                forall.body.forall(Arc::new(merged_tparams))
-            }
-            // Wrap callable inferred_ty in a Forall with the decoratee tparams that appear in it.
-            Type::Function(f) => Forallable::Function(*f).forall(new_tparams),
-            Type::Callable(c) => Forallable::Callable(*c).forall(new_tparams),
+        if !inferred_ty.is_toplevel_callable() {
             // Convert any `Type::Quantified` from the original Forall to gradual types if
             // the type isn't callable.
-            ty => {
-                let substitution_map: SmallMap<_, _> = new_tparams
-                    .iter()
-                    .map(|p| (p, p.as_gradual_type()))
-                    .collect();
-                ty.subst(&substitution_map.iter().map(|(k, v)| (*k, v)).collect())
-            }
+            let substitution_map: SmallMap<_, _> = new_tparams
+                .iter()
+                .map(|p| (p, p.as_gradual_type()))
+                .collect();
+            return inferred_ty.subst(&substitution_map.iter().map(|(k, v)| (*k, v)).collect());
         }
+
+        let mut inferred_ty = inferred_ty;
+        inferred_ty.transform_toplevel_callable_signatures(|_, tparams| {
+            let mut merged_tparams = (*new_tparams).clone();
+            if let Some(tparams) = tparams.as_deref() {
+                merged_tparams.extend(tparams);
+            }
+            *tparams = Some(Arc::new(merged_tparams));
+        });
+        inferred_ty
     }
 
     fn apply_function_decorator(
@@ -1915,8 +1890,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // the impl's own type so direct calls to the registered function are type-checked, rather
         // than the stub `register`'s erased `Callable[..., _T]` return.
         if let Some(fallback_first) = Self::singledispatch_register_first(&decorator) {
-            // `callable_signatures` recognizes overloaded and generic impls.
-            if let [sig, ..] = decoratee.callable_signatures().as_slice()
+            // `toplevel_callable_signatures` recognizes overloaded and generic impls.
+            if let Some((sig, _)) = decoratee.toplevel_callable_signatures().next()
                 && let Some(dispatch_ty) = Self::first_positional_param_type(sig)
             {
                 self.check_singledispatch_register(&dispatch_ty, &fallback_first, range, errors);
@@ -2057,7 +2032,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     }
 
     // Given the index to a function binding, return the previous function binding, if any.
-    fn step_pred(&self, pred: &mut Option<Idx<Key>>) -> Option<DecoratedFunction> {
+    fn step_pred(&self, pred: &mut Option<Idx<Key>>) -> Option<Idx<KeyDecoratedFunction>> {
         let pred_idx = (*pred)?;
         let mut b = self.bindings().get(pred_idx);
         while let Binding::Forward(k) | Binding::PromoteForward(k) | Binding::ForwardToFirstUse(k) =
@@ -2072,7 +2047,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         } = b
         {
             *pred = *pred_idx;
-            Some(self.get_decorated_function(*decorated_idx))
+            Some(*decorated_idx)
         } else {
             None
         }
@@ -2205,38 +2180,35 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn check_signature_consistency(
         &self,
         overloads: &Vec1<(TextRange, OverloadType)>,
-        def: &DecoratedFunction,
+        ty: &Type,
+        def: &UndecoratedFunction,
         errors: &ErrorCollector,
     ) {
         // A `@functools.singledispatch` implementation's overloads describe the registered dispatch
         // variants, not the fallback's own signature, so implementation-consistency does not apply.
-        if Self::is_singledispatch_dispatcher(&def.ty) {
+        if Self::is_singledispatch_dispatcher(ty) {
             return;
         }
-        let impl_tparams = match &*def.ty {
-            Type::Forall(forall) => Some(&forall.tparams),
-            _ => None,
+        let Ok((impl_sig, impl_tparams)) = ty.toplevel_callable_signatures().exactly_one() else {
+            // If this is somehow not a callable (len == 0), there's nothing to check.
+            // An overload's implementation can't be overloaded (len > 1).
+            return;
         };
-        let impl_sig = {
-            let sigs = def.ty.callable_signatures();
-            if sigs.len() != 1 {
-                // If this is somehow not a callable (len == 0), there's nothing to check.
-                // An overload's implementation can't be overloaded (len > 1).
-                return;
-            }
-            sigs[0]
-        };
-        let all_tparams = |tparams: Option<&Arc<TParams>>| match (tparams, def.defining_cls()) {
-            (None, None) => None,
-            (Some(_), None) => tparams.cloned(),
-            (None, Some(cls)) => Some(self.get_class_tparams(cls)),
-            (Some(tparams), Some(cls)) => {
-                let mut all_tparams = (**tparams).clone();
-                all_tparams.extend(&self.get_class_tparams(cls));
-                Some(Arc::new(all_tparams))
-            }
-        };
-        let has_self_param = def.defining_cls().is_some() && !def.metadata().flags.is_staticmethod;
+        let all_tparams =
+            |tparams: Option<&Arc<TParams>>| match (tparams, def.defining_cls.as_ref()) {
+                (None, None) => None,
+                (Some(_), None) => tparams.cloned(),
+                (None, Some(cls)) => self.get_class_tparams(cls).map(Dupe::dupe),
+                (Some(tparams), Some(cls)) => match self.get_class_tparams(cls) {
+                    Some(class_tparams) => {
+                        let mut all_tparams = (**tparams).clone();
+                        all_tparams.extend(class_tparams);
+                        Some(Arc::new(all_tparams))
+                    }
+                    None => Some((*tparams).dupe()),
+                },
+            };
+        let has_self_param = def.defining_cls.is_some() && !def.metadata.flags.is_staticmethod;
         let sig_for_input_check = |sig: &Callable| {
             let mut sig = sig.clone();
             // Set the return type to `Any` so that we check just the input signature.
@@ -2281,7 +2253,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let (vs, impl_func) = {
                 let func = Function {
                     signature: impl_sig.clone(),
-                    metadata: def.metadata().clone(),
+                    metadata: def.metadata.clone(),
                 };
                 if let Some(tparams) = all_tparams(impl_tparams) {
                     self.instantiate_fresh_function(&tparams, func)
@@ -2422,13 +2394,13 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn check_decorator_consistency_with_implementation(
         &self,
         overloads: &[(TextRange, Type, FuncMetadata)],
-        def: &DecoratedFunction,
+        def: &UndecoratedFunction,
         errors: &ErrorCollector,
     ) {
-        let is_static_method = def.metadata().flags.is_staticmethod
+        let is_static_method = def.metadata.flags.is_staticmethod
             || overloads.iter().any(|x| x.2.flags.is_staticmethod);
-        let is_class_method = def.metadata().flags.is_classmethod
-            || overloads.iter().any(|x| x.2.flags.is_classmethod);
+        let is_class_method =
+            def.metadata.flags.is_classmethod || overloads.iter().any(|x| x.2.flags.is_classmethod);
         for (overload_range, _, overload_metadata) in overloads.iter() {
             if overload_metadata.flags.has_final_decoration {
                 self.error(
@@ -2463,7 +2435,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     );
             }
         }
-        if def.metadata().flags.is_staticmethod != is_static_method {
+        if def.metadata.flags.is_staticmethod != is_static_method {
             self.error(
                     errors,
                     def.id_range(),
@@ -2471,7 +2443,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     "If `@staticmethod` is present on any overload or the implementation, it should be on every overload and the implementation.".to_owned(),
                 );
         }
-        if def.metadata().flags.is_classmethod != is_class_method {
+        if def.metadata.flags.is_classmethod != is_class_method {
             self.error(
                     errors,
                     def.id_range(),
@@ -2492,7 +2464,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         // tparams, otherwise those class tparams would be erased to `Unknown` in the resulting callable.
         let skip_instantiation = if let Type::ClassDef(cls) = &m.obj {
             let class_tparams = self.get_class_tparams(cls);
-            let class_tparams = class_tparams.iter().collect::<SmallSet<_>>();
+            let class_tparams = class_tparams
+                .iter()
+                .flat_map(|tparams| tparams.iter())
+                .collect::<SmallSet<_>>();
             let uses_class_tparam =
                 |tparams: &TParams| tparams.iter().any(|tp| class_tparams.contains(tp));
             !class_tparams.is_empty()
@@ -2515,124 +2490,39 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub fn bind_dunder_new(&self, t: &Type, cls: ClassType) -> Option<Type> {
         self.bind_function(
             t,
-            &self.heap.mk_type_of(self.heap.mk_self_type(cls)),
+            &self.heap.mk_type_of(self.heap.mk_class_type(cls)),
             false,
             &mut |a, b| self.is_subset_eq(a, b),
         )
     }
 
-    /// Bind `__new__` while keeping class type parameters used by the constructor callable.
-    pub fn bind_dunder_new_for_class_def(&self, t: &Type, cls: ClassType) -> Option<Type> {
-        let class_tparams = self.get_class_tparams(cls.class_object());
-        let mut bound = self.bind_function(
-            t,
-            &self.heap.mk_type_of(self.heap.mk_class_type(cls)),
-            false,
-            &mut |a, b| self.is_subset_eq(a, b),
-        )?;
-        self.expand_mut(&mut bound);
-        Some(self.normalize_class_constructor_tparams(bound, class_tparams.as_ref()))
-    }
-
-    /// Normalize class type parameters independently for each callable branch in `ty`.
-    fn normalize_class_constructor_tparams(&self, mut ty: Type, class_tparams: &TParams) -> Type {
-        ty.transform_toplevel_callable(&mut |callable: &mut Callable| {
-            let mut parameter_tparams = SmallSet::new();
-            callable
-                .params
-                .visit(&mut |ty| ty.collect_quantifieds(&mut parameter_tparams));
-            for q in class_tparams.iter() {
-                if !parameter_tparams.contains(q) {
-                    let gradual = q.as_gradual_type();
-                    callable
-                        .ret
-                        .subst_mut_fn(&mut |candidate| (candidate == q).then(|| gradual.clone()));
-                }
-            }
-        });
-
-        fn quantify<T: Visit<Type>>(
-            body: &T,
-            tparams: Option<&TParams>,
-            class_tparams: &TParams,
-        ) -> Arc<TParams> {
-            let mut used = SmallSet::new();
-            body.visit(&mut |ty| ty.collect_quantifieds(&mut used));
-            let mut quantifieds = Vec::new();
-            for q in tparams
-                .iter()
-                .flat_map(|tparams| tparams.iter())
-                .chain(class_tparams.iter())
-            {
-                if used.contains(q) && !quantifieds.contains(q) {
-                    quantifieds.push(q.clone());
-                }
-            }
-            Arc::new(TParams::new(quantifieds))
-        }
-
-        match ty {
-            Type::Forall(forall) => {
-                let Forall { tparams, body } = *forall;
-                let tparams = quantify(&body, Some(&tparams), class_tparams);
-                body.forall(tparams)
-            }
-            Type::Overload(Overload {
-                signatures,
-                metadata,
-            }) => {
-                let signatures = signatures.mapped(|sig| {
-                    let (body, tparams) = match sig {
-                        OverloadType::Function(body) => (body, None),
-                        OverloadType::Forall(Forall { tparams, body }) => (body, Some(tparams)),
-                    };
-                    let tparams = quantify(&body, tparams.as_deref(), class_tparams);
-                    if tparams.is_empty() {
-                        OverloadType::Function(body)
-                    } else {
-                        OverloadType::Forall(Forall { tparams, body })
-                    }
-                });
-                self.heap.mk_overload(Overload {
-                    signatures,
-                    metadata,
-                })
-            }
-            Type::Function(body) => {
-                let tparams = quantify(&*body, None, class_tparams);
-                Forallable::Function(*body).forall(tparams)
-            }
-            Type::Callable(body) => {
-                let tparams = quantify(&*body, None, class_tparams);
-                Forallable::Callable(*body).forall(tparams)
-            }
-            ty => ty,
-        }
-    }
-
     /// Bind a `__init__` method for constructor callable conversion.
-    /// Strips the first parameter and sets the return type to the first param's type.
+    /// Attempts to strip the first parameter and sets the return type to the first param's type.
     /// Does not instantiate type variables (they should be inferred at the call site).
-    pub fn bind_dunder_init_for_callable(&self, m: &BoundMethod) -> Option<Type> {
-        self.bind_dunder_init_type(m.func.clone().as_type(), &m.obj)
-    }
-
-    /// Bind `__init__` while keeping class type parameters used by the constructor callable.
-    pub fn bind_dunder_init_for_class_def(&self, t: &Type, cls: ClassType) -> Option<Type> {
-        let class_tparams = self.get_class_tparams(cls.class_object());
-        let mut bound = self.bind_dunder_init_type(t.clone(), &self.heap.mk_class_type(cls))?;
-        self.expand_mut(&mut bound);
-        Some(self.normalize_class_constructor_tparams(bound, class_tparams.as_ref()))
-    }
-
-    fn bind_dunder_init_type(&self, mut func_type: Type, obj: &Type) -> Option<Type> {
-        // For each callable, set its return type to its first param's type (i.e. `self`).
-        func_type.transform_toplevel_callable(&mut |c: &mut Callable| {
-            if let Some(self_type) = c.get_first_param() {
-                c.ret = self_type.clone();
-            }
-        });
-        self.bind_function(&func_type, obj, true, &mut |_, _| false)
+    pub fn bind_dunder_init(&self, mut t: Type, cls: &ClassType) -> Type {
+        let bound = if let Type::BoundMethod(m) = &t {
+            let mut func_type = m.func.clone().as_type();
+            // For each callable, set its return type to its first param's type (i.e. `self`).
+            func_type.transform_toplevel_callable_signatures(|c: &mut Callable, _| {
+                if let Some(self_type) = c.get_first_param() {
+                    c.ret = self_type.clone();
+                }
+            });
+            self.bind_function(&func_type, &m.obj, true, &mut |_, _| false)
+        } else {
+            None
+        };
+        bound.unwrap_or_else(|| {
+            // Turn a `__init__` that could not be bound into a constructor callable by setting its return
+            // type, without stripping the `self` parameter.
+            let ret_type = t
+                .callable_first_param(self.heap)
+                .unwrap_or_else(|| self.heap.mk_class_type(cls.clone()));
+            t.transform_toplevel_callable_signatures(|c: &mut Callable, _| {
+                c.ret = ret_type.clone()
+            });
+            t
+        })
     }
 
     /// Strip the first parameter from a BoundMethodType and optionally instantiate

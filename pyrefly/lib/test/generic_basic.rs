@@ -677,6 +677,30 @@ assert_type(bad(Sub), Sub)
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4187
+testcase!(
+    test_generic_keyword_inference_is_order_independent,
+    r#"
+class P: ...
+
+class Controller[T: P]:
+    value: T
+
+def target[T: P](
+    value: T | None = None,
+    *,
+    controller: Controller[T] | None = None,
+) -> None: ...
+
+def caller[T: P](
+    value: T | None,
+    controller: Controller[T] | None,
+) -> None:
+    target(value=value, controller=controller)
+    target(controller=controller, value=value)
+"#,
+);
+
 testcase!(
     test_typevar_union_with_type_of_specialized_generic_alias,
     r#"
@@ -864,4 +888,34 @@ def test2(cls: T2) -> str:
     # this should error because `name` is instance-only
     return cls.name  # E:
     "#,
+);
+
+testcase!(
+    test_instantiate_type_of,
+    r#"
+from typing import assert_type
+class A[T]: ...
+def f(a: A[int]):
+    assert_type(type(a)(), A[int])
+"#,
+);
+
+testcase!(
+    bug = "Ordinary generics widen index literals",
+    test_generic_index_inference_widens_literals,
+    r#"
+from typing import assert_type
+
+class TypeVarCapture:
+    def __getitem__[I](self, index: I) -> I: ...
+
+class TypeVarTupleCapture:
+    def __getitem__[*Is](self, index: tuple[*Is]) -> tuple[*Is]: ...
+
+def f(by_type: TypeVarCapture, by_elements: TypeVarTupleCapture) -> None:
+    assert_type(by_type[0], int)
+    assert_type(by_type[1:5:2], slice[int, int, int])
+    assert_type(by_type[0, :, None], tuple[int, slice[None, None, None], None])
+    assert_type(by_elements[0, :, None], tuple[int, slice[None, None, None], None])
+"#,
 );

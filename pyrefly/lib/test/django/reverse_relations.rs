@@ -138,8 +138,9 @@ class Magazine(models.Model):
     );
     let (state, handle_for) = env.to_state();
     let handle = handle_for("main");
-    let author = get_class("Author", &handle, &state);
-    let solutions = state.transaction().get_solutions(&handle).unwrap();
+    let reader = state.reader();
+    let author = get_class("Author", &handle, &reader);
+    let solutions = reader.get_solutions(&handle).unwrap();
     let fields = solutions.get(&KeyClassSynthesizedFields(author.index()));
     let mut names = fields
         .fields()

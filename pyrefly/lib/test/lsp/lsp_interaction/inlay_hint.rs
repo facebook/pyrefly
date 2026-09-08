@@ -958,3 +958,62 @@ fn test_inlay_hint_unpack_has_location() {
 
     interaction.shutdown().unwrap();
 }
+
+// Regression coverage for #4611: instance-method parameter-name hints must
+// align one-to-one with positional arguments (`self` never consumes a slot)
+// through the full LSP handler path.
+#[test]
+fn test_inlay_hint_issue_4611_instance_method_alignment() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(json!([{
+                "pyrefly": {"analysis": {"inlayHints": {
+                    "callArgumentNames": "all",
+                    "functionReturnTypes": false,
+                    "pytestParameters": false,
+                    "variableTypes": false,
+                }}},
+            }]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("issue_4611_inlay_hint_test.py");
+
+    interaction
+        .client
+        .inlay_hint("issue_4611_inlay_hint_test.py", 0, 0, 100, 0)
+        .expect_response_with(|result| {
+            let hints = match result {
+                Some(hints) => hints,
+                None => return false,
+            };
+            if hints.len() != 3 {
+                return false;
+            }
+            // All three hints sit on the `m.method(1, "x", 2.0)` call line,
+            // ordered by column; labels align with the positional args.
+            let mut sorted = hints.clone();
+            sorted.sort_by_key(|hint| hint.position.character);
+            let expected_columns = [9, 12, 17];
+            let expected_labels = ["a= ", "b= ", "c= "];
+            for (hint, (column, label)) in sorted
+                .iter()
+                .zip(expected_columns.iter().zip(expected_labels.iter()))
+            {
+                if hint.position.line != 12 || hint.position.character != *column {
+                    return false;
+                }
+                if !check_inlay_hint_label_values(hint, &[(*label, false)]) {
+                    return false;
+                }
+            }
+            true
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}

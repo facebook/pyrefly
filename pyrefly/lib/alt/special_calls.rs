@@ -12,8 +12,9 @@
  */
 
 use pyrefly_python::dunder;
-use pyrefly_types::function::FuncMetadata;
 use pyrefly_types::shaped_array::IntTuple;
+use pyrefly_types::shaped_array::IntTupleView;
+use pyrefly_types::shaped_array::is_tuple_carrier_shape_middle;
 use pyrefly_util::visit::Visit;
 use pyrefly_util::visit::VisitMut;
 use ruff_python_ast::Expr;
@@ -27,6 +28,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::callable::CallArg;
 use crate::alt::callable::CallKeyword;
 use crate::alt::expr::ExprOptions;
+use crate::alt::shape_extension::is_int_tuple_bound;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::types::decorated_function::Decorator;
 use crate::alt::unwrap::HintRef;
@@ -40,7 +42,25 @@ use crate::types::function::FunctionKind;
 use crate::types::tuple::Tuple;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
+    /// Interpret an arbitrary expression as a shape without trusting unvalidated type variables.
+    /// A valid type variable contributes the shape constraints from its normalized upper bound.
+    fn assert_shape_input_to_int_tuple(&self, ty: &Type) -> Option<IntTuple> {
+        let upper_bound = match ty {
+            Type::Quantified(q) if q.is_type_var() => Some(q.upper_bound(self.stdlib, self.heap)),
+            Type::TypeVar(tv) => Some(tv.upper_bound(self.stdlib, self.heap)),
+            _ => None,
+        };
+        if let Some(upper_bound) = upper_bound {
+            let int_type = self.stdlib.int().clone().to_type();
+            if !is_int_tuple_bound(&upper_bound, &int_type) {
+                return None;
+            }
+            return self.shape_arg_to_int_tuple(&upper_bound);
+        }
+        self.shape_arg_to_int_tuple(ty)
+    }
+
     pub fn call_assert_type(
         &self,
         args: &[Expr],
@@ -60,7 +80,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 TypeFormContext::FunctionArgument,
                 errors,
             ));
-            if !self.is_equivalent(&a, &b) {
+            if !b.is_error() && !self.is_equivalent(&a, &b) {
                 self.error(
                     errors,
                     range,
@@ -210,23 +230,45 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             let actual = self
                 .solver()
                 .force(self.expr_infer_with_hint(&args[0], hint, errors));
-            if let Type::ShapedArray(shaped_array) = &actual {
+            let (actual_shape, return_actual) = match &actual {
+                Type::ShapedArray(array) => (Some(array.shape()), true),
+                _ if actual.is_any() => (Some(IntTuple::shapeless()), false),
+                _ => (self.assert_shape_input_to_int_tuple(&actual), false),
+            };
+            if let Some(actual_shape) = actual_shape {
                 if let Some(shape) = self.parse_assert_shape_expr(&args[1], errors) {
-                    let expected = self
-                        .shaped_array_with_shape(shaped_array, shape.clone())
-                        .to_type();
-                    if !self.is_equivalent(&actual, &expected) {
+                    let expected = self.heap.mk_int_tuple(shape.clone());
+                    let constraint = match actual_shape.view() {
+                        IntTupleView::Unpacked {
+                            prefix,
+                            middle,
+                            suffix,
+                        } if is_tuple_carrier_shape_middle(middle) => IntTuple::unpacked(
+                            prefix.to_vec(),
+                            IntTuple::shapeless().to_shape_arg_type(),
+                            suffix.to_vec(),
+                        ),
+                        IntTupleView::Concrete(_)
+                        | IntTupleView::Gradual
+                        | IntTupleView::Unpacked { .. } => actual_shape.clone(),
+                    };
+                    // Do not solve a generic shape parameter from an assertion, but preserve its
+                    // known prefix, suffix, and minimum-rank constraints.
+                    if !self.is_subset_eq(&expected, &self.heap.mk_int_tuple(constraint)) {
                         self.error(
                             errors,
                             range,
                             ErrorKind::AssertType,
                             format!(
                                 "assert_shape({}, {}) failed",
-                                format_assert_shape_shape(&shaped_array.shape()),
+                                format_assert_shape_shape(&actual_shape),
                                 format_assert_shape_shape(&shape)
                             ),
                         );
                     }
+                    if return_actual { actual } else { expected }
+                } else {
+                    self.heap.mk_any_error()
                 }
             } else {
                 self.error(
@@ -234,12 +276,12 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     args[0].range(),
                     ErrorKind::BadArgumentType,
                     format!(
-                        "First argument to `assert_shape` must be a shaped array, got `{}`",
+                        "First argument to `assert_shape` must be an `IntTuple`, got `{}`",
                         self.for_display(actual.clone())
                     ),
                 );
+                self.heap.mk_any_error()
             }
-            actual
         } else {
             self.error(
                 errors,
@@ -297,7 +339,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         if !self.has_valid_annotation_syntax(&args[0], errors) {
             return Type::TypeForm(Box::new(self.heap.mk_any_error()));
         }
-        let inner = self.expr_untype(&args[0], TypeFormContext::TypeArgument, errors);
+        let inner = self.expr_untype(&args[0], TypeFormContext::type_argument(), errors);
         Type::TypeForm(Box::new(inner))
     }
 
@@ -365,14 +407,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             );
         }
         let ret = if let Some(t) = typ {
-            match self.untype_opt(self.expr_infer(t, errors), range, errors) {
-                Some(t) => t,
-                None => self.error(
-                    errors,
-                    range,
-                    ErrorKind::BadArgumentType,
-                    "First argument to `typing.cast` must be a type".to_owned(),
-                ),
+            if matches!(t, Expr::Call(_)) {
+                self.expr_untype(t, TypeFormContext::FunctionArgument, errors)
+            } else {
+                match self.untype_opt(self.expr_infer(t, errors), range, errors) {
+                    Some(t) => t,
+                    None => self.error(
+                        errors,
+                        range,
+                        ErrorKind::BadArgumentType,
+                        "First argument to `typing.cast` must be a type".to_owned(),
+                    ),
+                }
             }
         } else {
             self.error(
@@ -701,7 +747,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
 
     /// Returns the list of types passed as the second argument to `isinstance` or `issubclass`.
     pub fn as_class_info(&self, ty: Type) -> Vec<Type> {
-        fn f<'a, Ans: LookupAnswer>(me: &AnswersSolver<'a, Ans>, t: Type, res: &mut Vec<Type>) {
+        fn f<Ans: LookupAnswer>(me: &AnswersSolver<'_, '_, Ans>, t: Type, res: &mut Vec<Type>) {
             match t {
                 Type::Var(v) if let Some(_guard) = me.recurse(v) => {
                     f(me, me.solver().force_var(v), res)
@@ -776,10 +822,10 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             // Try to apply the decorator to arg_ty. Does nothing if the decorator does not have known
             // typing effects or if arg_ty is not a function.
             let mut applied = false;
-            arg_ty.transform_toplevel_func_metadata(|meta: &mut FuncMetadata| {
+            if let Some(meta) = arg_ty.toplevel_func_metadata_mut() {
                 applied |=
                     self.set_flag_from_special_decorator(&mut meta.flags, &special_decorator);
-            });
+            };
             if applied { Some(arg_ty) } else { None }
         } else {
             None

@@ -6,3 +6,5 @@ target/criterion/
 criterion/
 *.bench
 criterion-*/
+
+.idea/

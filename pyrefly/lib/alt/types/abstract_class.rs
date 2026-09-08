@@ -21,6 +21,10 @@ use crate::types::types::Type;
 pub struct AbstractClassMembers {
     pub unimplemented_abstract_methods: SmallSet<Name>,
 }
+
+static RECURSIVE_ABSTRACT_CLASS_MEMBERS: AbstractClassMembers = AbstractClassMembers {
+    unimplemented_abstract_methods: SmallSet::new(),
+};
 impl Visit<Type> for AbstractClassMembers {
     fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a Type)) {}
 }
@@ -47,10 +51,8 @@ impl AbstractClassMembers {
         }
     }
 
-    pub fn recursive() -> Self {
-        AbstractClassMembers {
-            unimplemented_abstract_methods: SmallSet::new(),
-        }
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_ABSTRACT_CLASS_MEMBERS
     }
 
     pub fn unimplemented_abstract_methods(&self) -> &SmallSet<Name> {

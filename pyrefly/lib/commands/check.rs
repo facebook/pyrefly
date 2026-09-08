@@ -12,7 +12,9 @@ use std::fmt;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::BufWriter;
+use std::io::Read;
 use std::io::Write;
+use std::io::stdin;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -62,6 +64,7 @@ use pyrefly_util::thread_pool::ThreadCount;
 use pyrefly_util::unix_path::path_to_unix_string;
 use pyrefly_util::watcher::Watcher;
 use ruff_text_size::Ranged;
+use serde::Serialize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
@@ -81,6 +84,7 @@ use crate::error::code_climate::CodeClimateIssues;
 use crate::error::error::BaselineStatus;
 use crate::error::error::Error;
 use crate::error::error::ErrorRenderer;
+use crate::error::error::SerializableError;
 use crate::error::error::print_error_counts;
 use crate::error::legacy::BaselineErrors;
 use crate::error::legacy::LegacyError;
@@ -95,6 +99,7 @@ use crate::report;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::require::RequireLevels;
+use crate::state::state::CommittingTransaction;
 use crate::state::state::State;
 use crate::state::state::Transaction;
 use crate::state::steps::Step;
@@ -191,7 +196,8 @@ async fn run_check(
             display::intersperse_iter(";", || roots.iter().map(|p| p.display()))
         );
         let watcher = Watcher::notify(&roots)?;
-        args.run_watch(
+        run_watch(
+            args,
             watcher,
             version,
             files_to_check,
@@ -224,7 +230,7 @@ pub struct CheckArgs {
 #[deny(clippy::missing_docs_in_private_items)]
 #[derive(Debug, Parser, Clone)]
 pub struct SnippetCheckArgs {
-    /// Python code to type check
+    /// Python code to type check. Pass '-' to read from STDIN.
     code: String,
 
     /// Explicitly set the Pyrefly configuration to use when type checking.
@@ -259,8 +265,22 @@ impl SnippetCheckArgs {
                 remove_unused_ignores: None,
             },
         };
+
+        let code = if self.code.trim() == "-" {
+            let mut code = String::new();
+            match stdin().read_to_string(&mut code) {
+                Ok(_) => code,
+                Err(error) => {
+                    error!("Failed to read input from stdin: {error:?}");
+                    return Ok((CommandExitStatus::UserError, None));
+                }
+            }
+        } else {
+            self.code
+        };
+
         let (status, check_result) =
-            check_args.run_once_with_snippet(self.code, version, config_finder, thread_count)?;
+            check_args.run_once_with_snippet(code, version, config_finder, thread_count)?;
         Ok((status, Some(check_result)))
     }
 }
@@ -452,6 +472,79 @@ impl FromStr for ErrorOutput {
 }
 
 impl OutputArgs {
+    fn has_daemon_incompatible_options(&self) -> bool {
+        let Self {
+            output,
+            output_format,
+            debug_info,
+            report_binding_memory,
+            report_trace,
+            dependency_graph,
+            report_timings,
+            report_glean,
+            report_pysa,
+            report_pysa_format,
+            report_demand_tree,
+            report_cinderx,
+            cinderx_include_readable,
+            cinderx_include_deps,
+            count_errors,
+            summarize_errors,
+            only,
+            summary,
+            no_progress_bar,
+            progress_bar,
+            relative_to,
+            baseline,
+            baseline_error_level,
+            update_baseline,
+            prune_baseline,
+            error_stale_baseline,
+            min_severity: _,
+        } = self;
+
+        let unsupported_output_format = match output_format {
+            None | Some(OutputFormat::MinText | OutputFormat::FullText | OutputFormat::Json) => {
+                false
+            }
+            Some(
+                OutputFormat::FullTextWithGithub
+                | OutputFormat::Github
+                | OutputFormat::JunitXml
+                | OutputFormat::CodeClimate
+                | OutputFormat::Sarif
+                | OutputFormat::OmitErrors,
+            ) => true,
+        };
+
+        !output.is_empty()
+            || unsupported_output_format
+            || debug_info.is_some()
+            || report_binding_memory.is_some()
+            || report_trace.is_some()
+            || dependency_graph.is_some()
+            || report_timings.is_some()
+            || report_glean.is_some()
+            || report_pysa.is_some()
+            || !matches!(report_pysa_format, report::pysa::PysaFormat::Capnp)
+            || report_demand_tree.is_some()
+            || report_cinderx.is_some()
+            || *cinderx_include_readable
+            || *cinderx_include_deps
+            || count_errors.is_some()
+            || summarize_errors.is_some()
+            || only.is_some()
+            || !matches!(summary, Summary::Default)
+            || *no_progress_bar
+            || progress_bar.is_some()
+            || relative_to.is_some()
+            || baseline.is_some()
+            || baseline_error_level.is_some()
+            || *update_baseline
+            || *prune_baseline
+            || *error_stale_baseline
+    }
+
     /// Validate invariants across all requested output destinations.
     fn validate_outputs(&self) -> anyhow::Result<()> {
         let mut has_stdout = false;
@@ -477,27 +570,29 @@ impl OutputArgs {
         Ok(())
     }
 
-    fn inherit_defaults_from_config(&mut self, config: &ConfigFile) {
-        if self.baseline.is_none() {
-            self.baseline = config.baseline.clone();
+    /// Resolve the settings that a project configuration can supply.
+    ///
+    /// The result depends only on the arguments, so resolving again against a changed
+    /// configuration always yields the current values.
+    fn resolve(&self, config: Option<&ConfigFile>) -> OutputDefaults {
+        OutputDefaults {
+            baseline: self
+                .baseline
+                .clone()
+                .or_else(|| config.and_then(|config| config.baseline.clone())),
+            baseline_error_level: self
+                .baseline_error_level
+                .or_else(|| config.and_then(|config| config.baseline_error_level))
+                .unwrap_or(Severity::Ignore),
+            output_format: self
+                .output_format
+                .or_else(|| config.and_then(|config| config.output_format))
+                .unwrap_or_default(),
+            min_severity: self
+                .min_severity
+                .or_else(|| config.and_then(|config| config.min_severity))
+                .unwrap_or(Severity::Error),
         }
-        if self.baseline_error_level.is_none() {
-            self.baseline_error_level = config.baseline_error_level;
-        }
-        if self.output_format.is_none() {
-            self.output_format = config.output_format;
-        }
-        if self.min_severity.is_none() {
-            self.min_severity = config.min_severity;
-        }
-    }
-
-    fn output_format(&self) -> OutputFormat {
-        self.output_format.unwrap_or_default()
-    }
-
-    fn baseline_error_level(&self) -> Severity {
-        self.baseline_error_level.unwrap_or(Severity::Ignore)
     }
 
     /// Resolve the effective progress bar style, taking deprecated flags into account.
@@ -511,6 +606,15 @@ impl OutputArgs {
             ProgressBarStyle::Interactive
         }
     }
+}
+
+/// The effective values of the output settings that a project configuration can supply.
+#[derive(Clone, Debug, PartialEq)]
+struct OutputDefaults {
+    baseline: Option<PathBuf>,
+    baseline_error_level: Severity,
+    output_format: OutputFormat,
+    min_severity: Severity,
 }
 
 #[derive(Clone, Debug, ValueEnum, Default, PartialEq, Eq)]
@@ -545,6 +649,19 @@ struct BehaviorArgs {
         default_missing_value = "pyrefly"
     )]
     remove_unused_ignores: Option<UnusedIgnoreKind>,
+}
+
+impl BehaviorArgs {
+    fn has_custom_options(&self) -> bool {
+        let Self {
+            check_all,
+            suppress_errors,
+            expectations,
+            remove_unused_ignores,
+        } = self;
+
+        *check_all || *suppress_errors || *expectations || remove_unused_ignores.is_some()
+    }
 }
 
 fn write_errors_to_file(
@@ -588,6 +705,53 @@ pub(crate) fn write_errors_to_console(
         OutputFormat::Sarif => write_error_sarif_to_console(version, relative_to, errors),
         OutputFormat::OmitErrors => Ok(()),
     }
+}
+
+pub fn write_serializable_errors_to_console(
+    format: OutputFormat,
+    errors: &[SerializableError],
+) -> anyhow::Result<()> {
+    match format {
+        OutputFormat::MinText => write_serializable_error_text_to_console(errors, false),
+        OutputFormat::FullText => write_serializable_error_text_to_console(errors, true),
+        OutputFormat::Json => write_serializable_error_json_to_console(errors),
+        OutputFormat::FullTextWithGithub
+        | OutputFormat::Github
+        | OutputFormat::JunitXml
+        | OutputFormat::CodeClimate
+        | OutputFormat::Sarif
+        | OutputFormat::OmitErrors => {
+            bail!("output format `{format:?}` is not supported for serialized errors")
+        }
+    }
+}
+
+fn write_serializable_error_text_to_console(
+    errors: &[SerializableError],
+    verbose: bool,
+) -> anyhow::Result<()> {
+    let stdout = stdout();
+    let color_choice = stdout.current_choice();
+    let mut renderer = ErrorRenderer::new(BufWriter::new(stdout.lock()), color_choice);
+    // Serialized diagnostics arrive as a complete batch, so there is no partial result to flush.
+    for error in errors {
+        renderer.write_serializable(error, verbose)?;
+    }
+    renderer.flush()?;
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct LegacyErrorReferences<'a> {
+    errors: Vec<&'a LegacyError>,
+}
+
+fn write_serializable_error_json_to_console(errors: &[SerializableError]) -> anyhow::Result<()> {
+    let errors = errors.iter().map(SerializableError::legacy_error).collect();
+    let mut writer = BufWriter::new(stdout());
+    serde_json::to_writer_pretty(&mut writer, &LegacyErrorReferences { errors })?;
+    writer.flush()?;
+    Ok(())
 }
 
 fn write_error_text_to_file(
@@ -884,11 +1048,7 @@ fn github_actions_command(error: &Error) -> Option<String> {
     let command = severity_to_github_command(error.severity())?;
     let range = error.display_range();
     let file = path_to_unix_string(error.path().as_path());
-    let baseline_marker = if error.baseline_status() == BaselineStatus::Matched {
-        " [baselined]"
-    } else {
-        ""
-    };
+    let baseline_marker = error.baseline_status().display_suffix();
     let params = format!(
         "file={},line={},col={},endLine={},endColumn={},title={}",
         escape_workflow_property(&file),
@@ -980,6 +1140,14 @@ impl Handles {
         self.path_data.len()
     }
 
+    fn with_additional_files(&self, files: &[PathBuf]) -> Self {
+        // `path_data` is a set, so explicitly requesting a configured file does not
+        // create a duplicate handle.
+        let mut path_data = self.path_data.clone();
+        path_data.extend(files.iter().cloned().map(ModulePath::filesystem));
+        Self { path_data }
+    }
+
     pub fn all(
         &self,
         config_finder: &ConfigFinder,
@@ -994,7 +1162,7 @@ impl Handles {
         }
 
         // TODO(connernilsen): wire in force logic
-        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false, None).0;
+        let reloaded_source_dbs = ConfigFile::query_source_db(&configs, false, None).reloaded;
         let result = configs
             .iter()
             .flat_map(|(c, files)| files.iter().map(|p| c.handle_from_module_path(p.dupe())))
@@ -1011,16 +1179,16 @@ impl Handles {
         (result, reloaded_configs, Vec::new())
     }
 
-    fn update<'a>(
-        &mut self,
-        created_files: impl Iterator<Item = &'a PathBuf>,
-        removed_files: impl Iterator<Item = &'a PathBuf>,
-    ) {
-        for file in created_files {
-            self.path_data
-                .insert(ModulePath::filesystem(file.to_path_buf()));
+    /// Removals need no `covers` check because a path the include set does not cover is
+    /// never a member of `path_data`.
+    fn apply_events(&mut self, events: &CategorizedEvents, includes: &dyn Includes) {
+        for file in &events.created {
+            if includes.covers(file) {
+                self.path_data
+                    .insert(ModulePath::filesystem(file.to_path_buf()));
+            }
         }
-        for file in removed_files {
+        for file in &events.removed {
             self.path_data
                 .remove(&ModulePath::filesystem(file.to_path_buf()));
         }
@@ -1177,11 +1345,254 @@ fn write_unconfigured_upsell<W: Write>(
     Ok(())
 }
 
+/// A checker that preserves type-checking state across caller-supplied filesystem events.
+pub struct IncrementalChecker {
+    require_levels: RequireLevels,
+    files_to_check: Box<dyn Includes>,
+
+    handles: Handles,
+    state: State,
+}
+
+/// The diagnostics produced by an incremental check.
+pub struct IncrementalCheckResult {
+    /// Type-checking diagnostics for the configured file set.
+    pub diagnostics: Vec<Error>,
+    /// Configuration errors discovered while resolving or checking the file set.
+    pub config_errors: Vec<ConfigError>,
+}
+
+/// An incremental transaction that runs before exposing results and commits afterward.
+struct IncrementalCheckTransaction<'a> {
+    state: &'a State,
+    transaction: CommittingTransaction<'a>,
+    handles: Vec<Handle>,
+    sourcedb_errors: Vec<ConfigError>,
+    require: Require,
+}
+
+impl IncrementalCheckTransaction<'_> {
+    fn run<T>(
+        mut self,
+        finish: impl FnOnce(&mut Transaction, &[Handle], Vec<ConfigError>) -> T,
+    ) -> T {
+        self.transaction
+            .as_mut()
+            .run(&self.handles, self.require, None);
+        let result = finish(
+            self.transaction.as_mut(),
+            &self.handles,
+            self.sourcedb_errors,
+        );
+        self.state.commit_transaction(self.transaction, None);
+        result
+    }
+}
+
+impl IncrementalChecker {
+    /// Initialize a checker without running a check.
+    pub fn new(
+        require_levels: RequireLevels,
+        files_to_check: Box<dyn Includes>,
+        config_finder: ConfigFinder,
+        thread_count: ThreadCount,
+    ) -> anyhow::Result<Self> {
+        let handles = {
+            let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
+            Handles::new(expanded_file_list)
+        };
+        Ok(Self {
+            require_levels,
+            files_to_check,
+            handles,
+            state: State::new(config_finder, thread_count),
+        })
+    }
+
+    /// Run a check after applying the filesystem events supplied by the caller.
+    pub fn check(&mut self, events: &CategorizedEvents) -> IncrementalCheckResult {
+        self.check_with_additional_files(events, &[])
+    }
+
+    /// Run a check with additional files without adding them to the configured file set.
+    pub fn check_with_additional_files(
+        &mut self,
+        events: &CategorizedEvents,
+        additional_files: &[PathBuf],
+    ) -> IncrementalCheckResult {
+        self.prepare_check(events, additional_files).run(
+            |transaction, handles, mut sourcedb_errors| {
+                let diagnostics = transaction
+                    .get_errors(handles)
+                    .collect_display_errors_with_unused_ignores();
+                let mut config_errors = transaction.get_config_errors();
+                config_errors.append(&mut sourcedb_errors);
+                IncrementalCheckResult {
+                    diagnostics,
+                    config_errors,
+                }
+            },
+        )
+    }
+
+    /// Return the number of configured files checked by this checker.
+    pub fn checked_file_count(&self) -> usize {
+        self.handles.len()
+    }
+
+    /// Return whether every file is already in the configured handle set.
+    pub fn all_files_are_configured(&self, files: &[PathBuf]) -> bool {
+        files.iter().all(|file| {
+            self.handles
+                .path_data
+                .contains(&ModulePath::filesystem(file.clone()))
+        })
+    }
+
+    fn prepare_check(
+        &mut self,
+        events: &CategorizedEvents,
+        additional_files: &[PathBuf],
+    ) -> IncrementalCheckTransaction<'_> {
+        let mut transaction = self
+            .state
+            .new_committable_transaction(self.require_levels.default, None);
+        transaction.as_mut().invalidate_events(events);
+        self.handles
+            .apply_events(events, self.files_to_check.as_ref());
+
+        let (loaded_handles, reloaded_configs, sourcedb_errors) = if additional_files.is_empty() {
+            self.handles.all(self.state.config_finder())
+        } else {
+            self.handles
+                .with_additional_files(additional_files)
+                .all(self.state.config_finder())
+        };
+
+        transaction
+            .as_mut()
+            .invalidate_find_for_configs(reloaded_configs);
+        IncrementalCheckTransaction {
+            state: &self.state,
+            transaction,
+            handles: loaded_handles,
+            sourcedb_errors,
+            require: self.require_levels.specified,
+        }
+    }
+}
+
+/// Adapts incremental checking to the existing CLI reporting and source-mutation behavior.
+struct IncrementalCheckCommand {
+    args: CheckArgs,
+    checker: IncrementalChecker,
+}
+
+impl IncrementalCheckCommand {
+    fn new(
+        args: CheckArgs,
+        files_to_check: Box<dyn Includes>,
+        config_finder: ConfigFinder,
+        thread_count: ThreadCount,
+    ) -> anyhow::Result<Self> {
+        args.output.validate_outputs()?;
+        let require_levels = args.get_required_levels();
+        Ok(Self {
+            args,
+            checker: IncrementalChecker::new(
+                require_levels,
+                files_to_check,
+                config_finder,
+                thread_count,
+            )?,
+        })
+    }
+
+    fn check(
+        &mut self,
+        version: &str,
+        events: &CategorizedEvents,
+        upsell: UpsellDecision,
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let timings = Timings::new();
+        let args = &self.args;
+        let mut check = self.checker.prepare_check(events, &[]);
+        let transaction = check.transaction.as_mut();
+        let handles = &check.handles;
+        let config = handles.first().map(|handle| {
+            transaction.config_finder().python_file(
+                ModuleNameWithKind::guaranteed(handle.module()),
+                handle.path(),
+            )
+        });
+        let defaults = args.output.resolve(config.as_deref());
+        let run = args.prepare_cli_run(timings, transaction, handles, &defaults)?;
+        check.run(|transaction, handles, sourcedb_errors| {
+            args.finish_cli_run(
+                run,
+                transaction,
+                version,
+                handles,
+                &defaults,
+                sourcedb_errors,
+                upsell,
+            )
+        })
+    }
+}
+
+async fn run_watch(
+    args: CheckArgs,
+    mut watcher: Watcher,
+    version: &str,
+    files_to_check: Box<dyn Includes>,
+    config_finder: ConfigFinder,
+    upsell: UpsellDecision,
+    thread_count: ThreadCount,
+) -> anyhow::Result<()> {
+    // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
+    // - Config search is stable across incremental runs.
+    let mut command =
+        IncrementalCheckCommand::new(args, files_to_check, config_finder, thread_count)?;
+    if let Err(e) = command.check(version, &CategorizedEvents::default(), upsell) {
+        eprintln!("{e:#}");
+    }
+    loop {
+        let events = get_watcher_events(&mut watcher).await?;
+        if let Err(e) = command.check(version, &events, UpsellDecision::Skip) {
+            eprintln!("{e:#}");
+        }
+    }
+}
+
+/// CLI-owned state that must remain live across a type-checking run.
+struct PreparedCliRun {
+    timings: Timings,
+    memory_trace: MemoryUsageTrace,
+    demand_tree_subscriber: Option<TestSubscriber>,
+    type_check_start: Instant,
+}
+
 impl CheckArgs {
+    /// Whether the invocation uses an option unsupported by daemon checks.
+    pub fn has_daemon_incompatible_options(&self) -> bool {
+        self.output.has_daemon_incompatible_options() || self.behavior.has_custom_options()
+    }
+
+    /// Return the output format selected by the client, configuration, or built-in default.
+    pub fn output_format(&self, config: Option<&ConfigFile>) -> OutputFormat {
+        self.output.resolve(config).output_format
+    }
+
+    /// Return the minimum severity selected by the client, configuration, or built-in default.
+    pub fn min_severity(&self, config: Option<&ConfigFile>) -> Severity {
+        self.output.resolve(config).min_severity
+    }
+
     /// Run a one-shot type check. Returns the exit status, the CLI-visible errors,
     /// and a `CheckResult` suitable for telemetry logging.
     pub fn run_once(
-        mut self,
+        self,
         version: &str,
         files_to_check: Box<dyn Includes>,
         config_finder: ConfigFinder,
@@ -1218,19 +1629,13 @@ impl CheckArgs {
         );
         let (loaded_handles, _, sourcedb_errors) = handles.all(state.as_ref().config_finder());
 
-        // Project-level output settings can come from config when CLI flags are absent.
-        if (self.output.baseline.is_none()
-            || self.output.baseline_error_level.is_none()
-            || self.output.output_format.is_none()
-            || self.output.min_severity.is_none())
-            && let Some(handle) = loaded_handles.first()
-        {
-            let config = state.as_ref().config_finder().python_file(
+        let config = loaded_handles.first().map(|handle| {
+            state.as_ref().config_finder().python_file(
                 ModuleNameWithKind::guaranteed(handle.module()),
                 handle.path(),
-            );
-            self.output.inherit_defaults_from_config(&config);
-        }
+            )
+        });
+        let defaults = self.output.resolve(config.as_deref());
 
         let checked_file_count = loaded_handles.len();
         let relative_to = resolve_relative_to(self.output.relative_to.as_ref());
@@ -1239,6 +1644,7 @@ impl CheckArgs {
             transaction.as_mut(),
             version,
             &loaded_handles,
+            &defaults,
             sourcedb_errors,
             require_levels.specified,
             upsell,
@@ -1248,7 +1654,7 @@ impl CheckArgs {
     }
 
     pub fn run_once_with_snippet(
-        mut self,
+        self,
         code: String,
         version: &str,
         config_finder: ConfigFinder,
@@ -1270,14 +1676,7 @@ impl CheckArgs {
         let sys_info = config.get_sys_info();
         let handle = Handle::new(module_name, module_path.clone(), sys_info);
 
-        // Project-level output settings can come from config when CLI flags are absent.
-        if self.output.baseline.is_none()
-            || self.output.baseline_error_level.is_none()
-            || self.output.output_format.is_none()
-            || self.output.min_severity.is_none()
-        {
-            self.output.inherit_defaults_from_config(&config);
-        }
+        let defaults = self.output.resolve(Some(&config));
 
         let require_levels = self.get_required_levels();
         let mut transaction = Forgetter::new(
@@ -1299,103 +1698,13 @@ impl CheckArgs {
             transaction.as_mut(),
             version,
             &[handle],
+            &defaults,
             vec![],
             require_levels.specified,
             // Snippet checks are interactive ad-hoc inputs — never upsell.
             UpsellDecision::Skip,
         )?;
         Ok((status, CheckResult::from_errors(&errors, &relative_to, 1)))
-    }
-
-    pub async fn run_watch(
-        mut self,
-        mut watcher: Watcher,
-        version: &str,
-        files_to_check: Box<dyn Includes>,
-        config_finder: ConfigFinder,
-        mut upsell: UpsellDecision,
-        thread_count: ThreadCount,
-    ) -> anyhow::Result<()> {
-        self.output.validate_outputs()?;
-        // TODO: We currently make 1 unrealistic assumptions, which should be fixed in the future:
-        // - Config search is stable across incremental runs.
-        let expanded_file_list = config_finder.checkpoint(files_to_check.files_iter())?;
-        let require_levels = self.get_required_levels();
-        let mut handles = Handles::new(expanded_file_list);
-        let state = State::new(config_finder, thread_count);
-
-        // Track which output settings were explicitly set on the CLI.
-        let cli_provided_baseline = self.output.baseline.is_some();
-        let cli_provided_baseline_error_level = self.output.baseline_error_level.is_some();
-        let cli_provided_min_severity = self.output.min_severity.is_some();
-        let cli_provided_output_format = self.output.output_format.is_some();
-
-        let mut transaction = state.new_committable_transaction(require_levels.default, None);
-        loop {
-            let timings = Timings::new();
-            let (loaded_handles, reloaded_configs, sourcedb_errors) =
-                handles.all(state.config_finder());
-
-            // Inherit project-level output settings from config on every iteration
-            // to pick up config file changes when the CLI did not override them.
-            // Reset non-CLI-provided fields first so updated config values are applied.
-            if (!cli_provided_baseline
-                || !cli_provided_baseline_error_level
-                || !cli_provided_output_format
-                || !cli_provided_min_severity)
-                && let Some(handle) = loaded_handles.first()
-            {
-                if !cli_provided_baseline {
-                    self.output.baseline = None;
-                }
-                if !cli_provided_output_format {
-                    self.output.output_format = None;
-                }
-                if !cli_provided_baseline_error_level {
-                    self.output.baseline_error_level = None;
-                }
-                if !cli_provided_min_severity {
-                    self.output.min_severity = None;
-                }
-                let config = state.config_finder().python_file(
-                    ModuleNameWithKind::guaranteed(handle.module()),
-                    handle.path(),
-                );
-                self.output.inherit_defaults_from_config(&config);
-            }
-            let mut_transaction = transaction.as_mut();
-            mut_transaction.invalidate_find_for_configs(reloaded_configs);
-            let res = self.run_inner(
-                timings,
-                mut_transaction,
-                version,
-                &loaded_handles,
-                sourcedb_errors,
-                require_levels.specified,
-                upsell,
-            );
-            // The upsell is a one-time CTA. Re-nagging on every file
-            // save during a long watch session is noise — clamp to
-            // `Skip` after the first iteration regardless of decision.
-            upsell = UpsellDecision::Skip;
-            state.commit_transaction(transaction, None);
-            if let Err(e) = res {
-                eprintln!("{e:#}");
-            }
-            let events = get_watcher_events(&mut watcher).await?;
-            transaction = state.new_committable_transaction(
-                require_levels.default,
-                self.output.progress_bar_style().make_subscriber(),
-            );
-            let new_transaction_mut = transaction.as_mut();
-            new_transaction_mut.invalidate_events(&events);
-            // File addition and removal may affect the list of files/handles to check. Update
-            // the handles accordingly.
-            handles.update(
-                events.created.iter().filter(|p| files_to_check.covers(p)),
-                events.removed.iter().filter(|p| files_to_check.covers(p)),
-            );
-        }
     }
 
     fn get_required_levels(&self) -> RequireLevels {
@@ -1424,14 +1733,35 @@ impl CheckArgs {
 
     fn run_inner(
         &self,
-        mut timings: Timings,
+        timings: Timings,
         transaction: &mut Transaction,
         version: &str,
         handles: &[Handle],
-        mut sourcedb_errors: Vec<ConfigError>,
+        defaults: &OutputDefaults,
+        sourcedb_errors: Vec<ConfigError>,
         require: Require,
         upsell: UpsellDecision,
     ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let run = self.prepare_cli_run(timings, transaction, handles, defaults)?;
+        transaction.run(handles, require, None);
+        self.finish_cli_run(
+            run,
+            transaction,
+            version,
+            handles,
+            defaults,
+            sourcedb_errors,
+            upsell,
+        )
+    }
+
+    fn prepare_cli_run(
+        &self,
+        timings: Timings,
+        transaction: &mut Transaction,
+        handles: &[Handle],
+        defaults: &OutputDefaults,
+    ) -> anyhow::Result<PreparedCliRun> {
         // Baseline maintenance actions are mutually exclusive.
         let baseline_action = if self.output.update_baseline {
             Some("--update-baseline")
@@ -1444,7 +1774,7 @@ impl CheckArgs {
         };
         if let Some(flag) = baseline_action {
             ensure!(
-                self.output.baseline.is_some(),
+                defaults.baseline.is_some(),
                 "`{flag}` requires a baseline file set by `--baseline` or configuration"
             );
         }
@@ -1454,7 +1784,7 @@ impl CheckArgs {
         // wrong `--baseline` path) rather than a silent success.
         if let Some(flag) = baseline_action
             && !self.output.update_baseline
-            && let Some(baseline_path) = self.output.baseline.as_deref()
+            && let Some(baseline_path) = defaults.baseline.as_deref()
         {
             ensure!(
                 baseline_path.exists(),
@@ -1462,7 +1792,7 @@ impl CheckArgs {
                 baseline_path.display()
             );
         }
-        let mut memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
+        let memory_trace = MemoryUsageTrace::start(Duration::from_secs_f32(0.1));
 
         if let Some(pysa_directory) = &self.output.report_pysa {
             let reporter = report::pysa::PysaReporter::new(
@@ -1499,7 +1829,31 @@ impl CheckArgs {
             transaction.set_subscriber(self.output.progress_bar_style().make_subscriber());
             None
         };
-        transaction.run(handles, require, None);
+
+        Ok(PreparedCliRun {
+            timings,
+            memory_trace,
+            demand_tree_subscriber,
+            type_check_start,
+        })
+    }
+
+    fn finish_cli_run(
+        &self,
+        run: PreparedCliRun,
+        transaction: &mut Transaction,
+        version: &str,
+        handles: &[Handle],
+        defaults: &OutputDefaults,
+        mut sourcedb_errors: Vec<ConfigError>,
+        upsell: UpsellDecision,
+    ) -> anyhow::Result<(CommandExitStatus, Vec<Error>)> {
+        let PreparedCliRun {
+            mut timings,
+            mut memory_trace,
+            demand_tree_subscriber,
+            type_check_start,
+        } = run;
         transaction.set_subscriber(None);
 
         let loads = if self.behavior.check_all {
@@ -1524,93 +1878,63 @@ impl CheckArgs {
             || std::env::current_dir().ok().unwrap_or_default(),
             |x| PathBuf::from_str(x.as_str()).unwrap(),
         );
-        let output_format = self.output.output_format();
+        let output_format = defaults.output_format;
 
         let mut collected = loads.collect_errors();
         // Pass pre-collected errors to avoid redundant error collection.
         let unused_ignore_errors = loads.collect_unused_ignore_errors_for_display(&collected);
         collected.ordinary.extend(unused_ignore_errors.ordinary);
-        let (unused_baseline_entries, retained_baseline_entries, baseline_loaded) = match loads
-            .apply_baseline(
-                &mut collected,
-                self.output.baseline.as_deref(),
-                relative_to.as_path(),
-                self.output.prune_baseline || self.output.error_stale_baseline,
-            ) {
-            Ok(result) => result,
-            // `--update-baseline` regenerates the baseline from the current run, so
-            // a missing or unreadable existing baseline is not fatal. Log the
-            // discarded error so a genuinely broken environment (e.g. a permission
-            // error) leaves a trace rather than silently surfacing later as an
-            // unrelated write failure.
-            Err(e) if self.output.update_baseline => {
-                debug!(
-                    "ignoring unreadable baseline while regenerating it with `--update-baseline`: {e:#}"
-                );
-                (0, Vec::new(), false)
-            }
-            Err(e) => return Err(e),
-        };
+
+        let baseline_apply_result = loads.apply_baseline(
+            &mut collected,
+            defaults.baseline.as_deref(),
+            relative_to.as_path(),
+            self.output.prune_baseline || self.output.error_stale_baseline,
+        );
+
+        let (baseline_status, unused_baseline_entries, retained_baseline_entries) =
+            baseline_apply_result.resolve(self.output.update_baseline)?;
         let errors = collected;
-        let baseline_status = if self.output.baseline.is_none() {
-            BaselineStatus::NotConfigured
-        } else if baseline_loaded {
-            BaselineStatus::Unmatched
-        } else {
-            BaselineStatus::NotCompared
-        };
-        let (directives, ordinary_errors): (Vec<Error>, Vec<Error>) =
-            if let Some(only) = &self.output.only {
-                let only = only.iter().collect::<SmallSet<_>>();
-                (
-                    errors
-                        .directives
-                        .into_iter()
-                        .filter(|e| only.contains(&e.error_kind()))
-                        .map(|e| e.with_baseline_status(baseline_status))
-                        .collect(),
-                    errors
-                        .ordinary
-                        .into_iter()
-                        .filter(|e| only.contains(&e.error_kind()))
-                        .map(|e| e.with_baseline_status(baseline_status))
-                        .collect(),
-                )
+        let only_filter = self
+            .output
+            .only
+            .as_ref()
+            .map(|only| only.iter().collect::<SmallSet<&ErrorKind>>());
+
+        let with_status = |errors: Vec<Error>, status: BaselineStatus| -> Vec<Error> {
+            if let Some(only) = &only_filter {
+                errors
+                    .into_iter()
+                    .filter(|e| only.contains(&e.error_kind()))
+                    .map(|e| e.with_baseline_status(status))
+                    .collect()
             } else {
-                (
-                    errors
-                        .directives
-                        .into_iter()
-                        .map(|e| e.with_baseline_status(baseline_status))
-                        .collect(),
-                    errors
-                        .ordinary
-                        .into_iter()
-                        .map(|e| e.with_baseline_status(baseline_status))
-                        .collect(),
-                )
-            };
+                errors
+                    .into_iter()
+                    .map(|e| e.with_baseline_status(status))
+                    .collect()
+            }
+        };
+
+        let directives = with_status(errors.directives, baseline_status);
+        let ordinary_errors = with_status(errors.ordinary, baseline_status);
 
         // Baseline matches are cloned for display. Baseline maintenance uses the
         // original severity and baseline representation.
-        let baseline_error_level = self.output.baseline_error_level();
+        let baseline_error_level = defaults.baseline_error_level;
         let displayed_baseline_errors = if baseline_error_level == Severity::Ignore {
             Vec::new()
-        } else if let Some(only) = &self.output.only {
-            let only = only.iter().collect::<SmallSet<_>>();
-            errors
-                .baseline
-                .iter()
-                .filter(|e| only.contains(&e.error_kind()))
-                .map(|e| {
-                    e.with_severity(e.severity().min(baseline_error_level))
-                        .with_baseline_status(BaselineStatus::Matched)
-                })
-                .collect()
         } else {
             errors
                 .baseline
                 .iter()
+                .filter(|e| {
+                    if let Some(only) = &only_filter {
+                        only.contains(&e.error_kind())
+                    } else {
+                        true
+                    }
+                })
                 .map(|e| {
                     e.with_severity(e.severity().min(baseline_error_level))
                         .with_baseline_status(BaselineStatus::Matched)
@@ -1624,7 +1948,7 @@ impl CheckArgs {
         // the user's severity threshold: a finding the user asked to hide
         // via `--min-severity` should not get a suppression comment written
         // into source.
-        let min_severity = self.output.min_severity.unwrap_or(Severity::Error);
+        let min_severity = defaults.min_severity;
         let (ordinary_errors, mut hidden_errors): (Vec<_>, Vec<_>) = ordinary_errors
             .into_iter()
             .partition(|e| e.severity() >= min_severity);
@@ -1657,8 +1981,7 @@ impl CheckArgs {
         // `--prune-baseline` rewrites the file only when there is something to drop.
         let rewriting_baseline = self.output.prune_baseline && unused_baseline_entries > 0;
         if self.output.update_baseline {
-            let baseline_path = self
-                .output
+            let baseline_path = defaults
                 .baseline
                 .as_ref()
                 .expect("a baseline action requires a baseline path");
@@ -1676,8 +1999,7 @@ impl CheckArgs {
             });
             write_baseline_to_file(baseline_path, relative_to.as_path(), &new_baseline)?;
         } else if rewriting_baseline {
-            let baseline_path = self
-                .output
+            let baseline_path = defaults
                 .baseline
                 .as_ref()
                 .expect("a baseline action requires a baseline path");
@@ -1924,6 +2246,8 @@ impl CheckArgs {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -1932,8 +2256,86 @@ mod tests {
     use pyrefly_python::module_path::ModulePath;
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
+    use tempfile::TempDir;
 
     use super::*;
+
+    struct TestIncludes {
+        root: PathBuf,
+        initial_files: Vec<PathBuf>,
+    }
+
+    impl Includes for TestIncludes {
+        fn roots(&self) -> Vec<PathBuf> {
+            vec![self.root.clone()]
+        }
+
+        fn files_iter(&self) -> anyhow::Result<Box<dyn Iterator<Item = PathBuf> + '_>> {
+            Ok(Box::new(self.initial_files.clone().into_iter()))
+        }
+
+        fn covers(&self, path: &Path) -> bool {
+            path.starts_with(&self.root)
+                && matches!(
+                    path.extension().and_then(|x| x.to_str()),
+                    Some("py" | "pyi")
+                )
+        }
+
+        fn covers_ignoring_excludes(&self, path: &Path) -> bool {
+            self.covers(path)
+        }
+
+        fn errors(&mut self) -> Vec<anyhow::Error> {
+            Vec::new()
+        }
+    }
+
+    /// A config finder that resolves everything under `root` without querying an
+    /// interpreter, so tests do not depend on the machine's Python environment.
+    fn test_config_finder(root: &Path) -> ConfigFinder {
+        let mut config = ConfigFile::default();
+        config.python_environment.set_empty_to_default();
+        config.interpreters.skip_interpreter_query = true;
+        config.search_path_from_file = vec![root.to_path_buf()];
+        config.disable_search_path_heuristics = true;
+        config.configure();
+        ConfigFinder::new_constant(ArcId::new(config))
+    }
+
+    fn incremental_checker(root: &Path, initial_files: Vec<PathBuf>) -> IncrementalChecker {
+        IncrementalChecker::new(
+            RequireLevels {
+                specified: Require::Errors,
+                default: Require::Exports,
+            },
+            Box::new(TestIncludes {
+                root: root.to_path_buf(),
+                initial_files,
+            }),
+            test_config_finder(root),
+            ThreadCount::Inline,
+        )
+        .unwrap()
+    }
+
+    fn check(
+        checker: &mut IncrementalChecker,
+        events: &CategorizedEvents,
+    ) -> IncrementalCheckResult {
+        let result = checker.check(events);
+        assert!(
+            result.config_errors.is_empty(),
+            "unexpected config errors:\n{}",
+            result
+                .config_errors
+                .iter()
+                .map(ConfigError::get_message)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        result
+    }
 
     fn sample_error(msg: String) -> Error {
         let module = Module::new(
@@ -1948,6 +2350,238 @@ mod tests {
             Vec::new(),
             ErrorKind::BadAssignment,
         )
+    }
+
+    /// Asking for two reports in one run must produce both of them in full.
+    /// See https://github.com/facebook/pyrefly/issues/4683: the CinderX report
+    /// dropped the ASTs that the Glean report reads once the check is done, so
+    /// the run died partway through writing its output.
+    #[test]
+    fn check_writes_cinderx_and_glean_reports_together() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let module = root.join("main.py");
+        fs::write(
+            &module,
+            r#"class Widget:
+    def apply(self, n: int) -> int:
+        return n + 1
+
+
+def go(w: Widget) -> int:
+    return w.apply(1)
+"#,
+        )
+        .unwrap();
+        let cinderx_dir = temp.path().join("cinderx");
+        let glean_dir = temp.path().join("glean");
+
+        let args = CheckArgs::parse_from([
+            "check",
+            "--report-cinderx",
+            cinderx_dir.to_str().unwrap(),
+            "--report-glean",
+            glean_dir.to_str().unwrap(),
+        ]);
+        let (status, errors, _) = args
+            .run_once(
+                "test",
+                Box::new(TestIncludes {
+                    root: root.clone(),
+                    initial_files: vec![module],
+                }),
+                test_config_finder(&root),
+                UpsellDecision::Skip,
+                ThreadCount::Inline,
+            )
+            .unwrap();
+        assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
+        assert!(matches!(status, CommandExitStatus::Success));
+
+        // The CinderX report is only complete with its two project-level files
+        // beside `types/`; a consumer that sees `types/` alone cannot tell a
+        // truncated report from a report over a smaller codebase.
+        assert!(cinderx_dir.join("types").join("main.json").is_file());
+        assert!(cinderx_dir.join("index.json").is_file());
+        assert!(cinderx_dir.join("class_metadata.json").is_file());
+
+        // Glean names each file after a hash of the module path, so look for
+        // any non-empty file rather than a fixed name.
+        let glean_files: Vec<_> = fs::read_dir(&glean_dir)
+            .expect("glean output directory should exist")
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(glean_files.len(), 1, "expected one Glean file per module");
+        assert!(fs::metadata(&glean_files[0]).unwrap().len() > 0);
+    }
+
+    #[test]
+    fn incremental_checker_rechecks_modified_files() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let path = root.join("main.py");
+        fs::write(&path, "x: int = 'bad'\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![path.clone()]);
+
+        let errors = check(&mut checker, &CategorizedEvents::default()).diagnostics;
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].path().as_path(), path);
+
+        fs::write(&path, "x: int = 1\n").unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                modified: vec![path],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn incremental_checker_checks_additional_files_without_retaining_them() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let configured = root.join("configured.py");
+        let additional = root.join("excluded.py");
+        fs::write(&configured, "x: int = 1\n").unwrap();
+        fs::write(&additional, "x: int = 'bad'\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![configured]);
+
+        let result = checker.check_with_additional_files(
+            &CategorizedEvents::default(),
+            std::slice::from_ref(&additional),
+        );
+        assert!(result.config_errors.is_empty());
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(result.diagnostics[0].path().as_path(), additional);
+
+        assert!(
+            check(&mut checker, &CategorizedEvents::default())
+                .diagnostics
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn incremental_checker_updates_checked_files() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let initial = root.join("main.py");
+        fs::write(&initial, "x: int = 1\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![initial]);
+        assert!(
+            check(&mut checker, &CategorizedEvents::default())
+                .diagnostics
+                .is_empty()
+        );
+
+        let outside = temp.path().join("outside.py");
+        fs::write(&outside, "x: int = 'bad'\n").unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                created: vec![outside],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert!(errors.is_empty());
+
+        let created = root.join("created.py");
+        fs::write(&created, "x: int = 'bad'\n").unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                created: vec![created.clone()],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].path().as_path(), created);
+
+        fs::remove_file(&created).unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                removed: vec![created],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn incremental_checker_rechecks_dependents() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let dependency = root.join("dependency.py");
+        let dependent = root.join("dependent.py");
+        fs::write(&dependency, "value: str = 'ok'\n").unwrap();
+        fs::write(
+            &dependent,
+            "from dependency import value\nresult: str = value\n",
+        )
+        .unwrap();
+        let mut checker = incremental_checker(&root, vec![dependency.clone(), dependent.clone()]);
+        assert!(
+            check(&mut checker, &CategorizedEvents::default())
+                .diagnostics
+                .is_empty()
+        );
+
+        fs::write(&dependency, "value: int = 1\n").unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                modified: vec![dependency],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path().as_path() == dependent)
+        );
+    }
+
+    #[test]
+    fn incremental_checker_reports_removed_imports() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let dependency = root.join("dependency.py");
+        let dependent = root.join("dependent.py");
+        fs::write(&dependency, "value = 1\n").unwrap();
+        fs::write(&dependent, "from dependency import value\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![dependency.clone(), dependent.clone()]);
+        assert!(
+            check(&mut checker, &CategorizedEvents::default())
+                .diagnostics
+                .is_empty()
+        );
+
+        fs::remove_file(&dependency).unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                removed: vec![dependency],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert!(errors.iter().any(|error| {
+            error.path().as_path() == dependent && error.error_kind() == ErrorKind::MissingImport
+        }));
     }
 
     #[test]
@@ -2209,47 +2843,64 @@ mod tests {
 
     #[test]
     fn output_args_inherit_output_format_from_config() {
-        let mut output = OutputArgs::parse_from(["pyrefly-check"]);
+        let output = OutputArgs::parse_from(["pyrefly-check"]);
         let config = ConfigFile {
             output_format: Some(OutputFormat::MinText),
             ..Default::default()
         };
 
-        output.inherit_defaults_from_config(&config);
+        assert_eq!(
+            output.resolve(Some(&config)).output_format,
+            OutputFormat::MinText
+        );
+    }
 
-        assert_eq!(output.output_format(), OutputFormat::MinText);
+    #[test]
+    fn output_args_fall_back_to_built_in_defaults() {
+        let output = OutputArgs::parse_from(["pyrefly-check"]);
+        let defaults = output.resolve(None);
+
+        assert_eq!(defaults.baseline, None);
+        assert_eq!(defaults.baseline_error_level, Severity::Ignore);
+        assert_eq!(defaults.output_format, OutputFormat::default());
+        assert_eq!(defaults.min_severity, Severity::Error);
     }
 
     #[test]
     fn baseline_error_level_cli_and_config_precedence() {
-        let mut inherited = OutputArgs::parse_from(["pyrefly-check"]);
-        assert_eq!(inherited.baseline_error_level(), Severity::Ignore);
-        inherited.inherit_defaults_from_config(&ConfigFile {
+        let inherited = OutputArgs::parse_from(["pyrefly-check"]);
+        assert_eq!(
+            inherited.resolve(None).baseline_error_level,
+            Severity::Ignore
+        );
+        let warn = ConfigFile {
             baseline_error_level: Some(Severity::Warn),
             ..Default::default()
-        });
-        assert_eq!(inherited.baseline_error_level(), Severity::Warn);
+        };
+        assert_eq!(
+            inherited.resolve(Some(&warn)).baseline_error_level,
+            Severity::Warn
+        );
 
-        // Watch mode clears inherited values before reloading project configuration.
-        inherited.baseline_error_level = None;
-        inherited.inherit_defaults_from_config(&ConfigFile {
+        let info = ConfigFile {
             baseline_error_level: Some(Severity::Info),
             ..Default::default()
-        });
-        assert_eq!(inherited.baseline_error_level(), Severity::Info);
+        };
+        assert_eq!(
+            inherited.resolve(Some(&info)).baseline_error_level,
+            Severity::Info
+        );
 
-        let mut overridden =
-            OutputArgs::parse_from(["pyrefly-check", "--baseline-error-level=error"]);
-        overridden.inherit_defaults_from_config(&ConfigFile {
-            baseline_error_level: Some(Severity::Warn),
-            ..Default::default()
-        });
-        assert_eq!(overridden.baseline_error_level(), Severity::Error);
+        let overridden = OutputArgs::parse_from(["pyrefly-check", "--baseline-error-level=error"]);
+        assert_eq!(
+            overridden.resolve(Some(&warn)).baseline_error_level,
+            Severity::Error
+        );
     }
 
     #[test]
     fn cli_output_format_overrides_config_output_format() {
-        let mut output = OutputArgs::parse_from([
+        let output = OutputArgs::parse_from([
             "pyrefly-check",
             "--output-format",
             "json",
@@ -2259,49 +2910,47 @@ mod tests {
             output_format: Some(OutputFormat::MinText),
             ..Default::default()
         };
+        let defaults = output.resolve(Some(&config));
 
-        output.inherit_defaults_from_config(&config);
-
-        assert_eq!(output.output_format(), OutputFormat::Json);
+        assert_eq!(defaults.output_format, OutputFormat::Json);
         assert_eq!(
-            output.output[0].format.unwrap_or(output.output_format()),
+            output.output[0].format.unwrap_or(defaults.output_format),
             OutputFormat::Json
         );
     }
 
     #[test]
     fn explicit_output_formats_override_the_reloadable_default() {
-        let mut output = OutputArgs::parse_from([
+        let output = OutputArgs::parse_from([
             "pyrefly-check",
             "--output=json:explicit.json",
             "--output=default.txt",
         ]);
-        output.inherit_defaults_from_config(&ConfigFile {
-            output_format: Some(OutputFormat::MinText),
-            ..Default::default()
-        });
+        let min_text = output
+            .resolve(Some(&ConfigFile {
+                output_format: Some(OutputFormat::MinText),
+                ..Default::default()
+            }))
+            .output_format;
 
         assert_eq!(
-            output.output[0].format.unwrap_or(output.output_format()),
+            output.output[0].format.unwrap_or(min_text),
             OutputFormat::Json
         );
         assert_eq!(
-            output.output[1].format.unwrap_or(output.output_format()),
+            output.output[1].format.unwrap_or(min_text),
             OutputFormat::MinText
         );
 
-        // Watch mode resets only the inherited default before loading updated config.
-        output.output_format = None;
-        output.inherit_defaults_from_config(&ConfigFile {
-            output_format: Some(OutputFormat::Sarif),
-            ..Default::default()
-        });
+        let sarif = output
+            .resolve(Some(&ConfigFile {
+                output_format: Some(OutputFormat::Sarif),
+                ..Default::default()
+            }))
+            .output_format;
+        assert_eq!(output.output[0].format.unwrap_or(sarif), OutputFormat::Json);
         assert_eq!(
-            output.output[0].format.unwrap_or(output.output_format()),
-            OutputFormat::Json
-        );
-        assert_eq!(
-            output.output[1].format.unwrap_or(output.output_format()),
+            output.output[1].format.unwrap_or(sarif),
             OutputFormat::Sarif
         );
     }

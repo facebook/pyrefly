@@ -38,6 +38,7 @@ use crate::binding::binding::SizeExpectation;
 use crate::binding::binding::TypeAliasBinding;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::UnpackedPosition;
+use crate::binding::binding::UnpackedValue;
 use crate::binding::bindings::BindingsBuilder;
 use crate::binding::bindings::LegacyTParamCollector;
 use crate::binding::expr::Usage;
@@ -104,13 +105,13 @@ impl<'a> BindingsBuilder<'a> {
                     // Counts how many elements are after the splat.
                     let j = len - i - 1;
                     let make_nested_binding = |ann| {
-                        Binding::UnpackedValue(
-                            ann,
-                            unpack_idx,
+                        Binding::UnpackedValue(Box::new(UnpackedValue {
+                            annotation: ann,
+                            source: unpack_idx,
                             range,
-                            UnpackedPosition::Slice(i, j),
-                            None,
-                        )
+                            position: UnpackedPosition::Slice(i, j),
+                            receiver: None,
+                        }))
                     };
                     self.bind_target_no_expr(&mut e.value, &make_nested_binding);
                 }
@@ -125,7 +126,13 @@ impl<'a> BindingsBuilder<'a> {
                         UnpackedPosition::Index(i, num_targets)
                     };
                     let make_nested_binding = |ann| {
-                        Binding::UnpackedValue(ann, unpack_idx, range, unpacked_position, None)
+                        Binding::UnpackedValue(Box::new(UnpackedValue {
+                            annotation: ann,
+                            source: unpack_idx,
+                            range,
+                            position: unpacked_position,
+                            receiver: None,
+                        }))
                     };
                     self.bind_target_no_expr(e, &make_nested_binding);
                 }
@@ -143,21 +150,25 @@ impl<'a> BindingsBuilder<'a> {
     }
 
     /// Narrow a name to `Idx` if the name is defined in the current scope stack. Used
-    /// to handle attribute and subscript assignment narrows, which we want to allow whenever
+    /// to handle attribute and subscript mutation narrows, which we want to allow whenever
     /// the name was defined, but we don't want them to cause us to treat nonexistent names
     /// as defined downstream.
-    fn narrow_if_name_is_defined(&mut self, identifier: Identifier, narrowed_idx: Idx<Key>) {
+    pub(crate) fn narrow_if_name_is_defined(
+        &mut self,
+        identifier: Identifier,
+        narrowed_idx: Idx<Key>,
+    ) {
         let name = Hashed::new(&identifier.id);
         let usage = Usage::NonPinningValue(None);
         let name_is_defined = match self.look_up_name_for_read(name, &usage) {
-            NameReadInfo::Flow { .. } | NameReadInfo::Anywhere { .. } => true,
+            NameReadInfo::Flow { .. }
+            | NameReadInfo::Anywhere { .. }
+            | NameReadInfo::OuterClassTypeParameter { .. } => true,
             // This helper only runs after attribute/subscript assignment targets. If the base is an
             // implicit builtin, binding the assigned expression has already materialized it. A still
             // unmaterialized builtin here is indistinguishable from any other name that is absent
             // from local flow, so leave it un-narrowed.
-            NameReadInfo::ImplicitBuiltin { .. }
-            | NameReadInfo::OutOfScopeTypeParameter { .. }
-            | NameReadInfo::NotFound => false,
+            NameReadInfo::ImplicitBuiltin { .. } | NameReadInfo::NotFound => false,
         };
         if name_is_defined {
             self.scopes.narrow_in_current_flow(name, narrowed_idx);
@@ -584,12 +595,12 @@ impl<'a> BindingsBuilder<'a> {
                 });
                 Binding::MultiTargetAssign(a, rhs, range, Some(receiver))
             }
-            (Some(idx), Binding::UnpackedValue(a, src, range, pos, _)) => {
-                let receiver = Box::new(MultiTargetReceiver {
+            (Some(idx), Binding::UnpackedValue(mut value)) => {
+                value.receiver = Some(Box::new(MultiTargetReceiver {
                     name: name.id.clone(),
                     idx,
-                });
-                Binding::UnpackedValue(a, src, range, pos, Some(receiver))
+                }));
+                Binding::UnpackedValue(value)
             }
             (_, binding) => binding,
         };

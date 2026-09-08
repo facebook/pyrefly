@@ -29,7 +29,8 @@ use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_types::type_info::JoinStyle;
 use pyrefly_util::display::DisplayWithCtx;
 use pyrefly_util::gas::Gas;
-use pyrefly_util::suggest::best_suggestion;
+use pyrefly_util::suggest::Candidate;
+use pyrefly_util::suggest::Search;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::Identifier;
@@ -79,15 +80,18 @@ use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyLegacyTypeParam;
 use crate::binding::binding::KeyTypeAlias;
 use crate::binding::binding::KeyUndecoratedFunction;
+use crate::binding::binding::KeyUndecoratedFunctionRange;
 use crate::binding::binding::KeyYield;
 use crate::binding::binding::KeyYieldFrom;
 use crate::binding::binding::Keyed;
+use crate::binding::binding::LambdaKind;
 use crate::binding::binding::LambdaParamId;
 use crate::binding::binding::LastStmt;
 use crate::binding::binding::LegacyTypeParamModule;
 use crate::binding::binding::NarrowUseLocation;
 use crate::binding::binding::TypeAliasParams;
 use crate::binding::binding::TypeAliasRefBinding;
+use crate::binding::binding::TypeLevelLambdaParameter;
 use crate::binding::binding::TypeParameter;
 use crate::binding::expr::Usage;
 use crate::binding::metadata::BindingsMetadata;
@@ -105,6 +109,7 @@ use crate::binding::scope::UnusedParameter;
 use crate::binding::scope::UnusedVariable;
 use crate::binding::scope::fallback_builtin_modules;
 use crate::binding::scope::is_constant_name;
+use crate::binding::shape_type::TypeParameterBound;
 use crate::binding::table::TableKeyed;
 use crate::config::base::InferReturnTypes;
 use crate::config::error_kind::ErrorKind;
@@ -147,9 +152,9 @@ pub enum NameLookupResult {
         idx: Idx<Key>,
         initialized: InitializedInFlow,
         is_module_scope: bool,
+        /// Does this name resolve to a type parameter outside the current class's scope?
+        is_outer_class_type_parameter: bool,
     },
-    /// This name resolves to a type parameter outside the current class's scope.
-    OutOfScopeTypeParameter { idx: Idx<Key> },
     /// This name is not defined in the current scope stack.
     NotFound,
 }
@@ -158,7 +163,7 @@ impl NameLookupResult {
     fn found(self) -> Option<Idx<Key>> {
         match self {
             NameLookupResult::Found { idx, .. } => Some(idx),
-            NameLookupResult::OutOfScopeTypeParameter { .. } | NameLookupResult::NotFound => None,
+            NameLookupResult::NotFound => None,
         }
     }
 }
@@ -425,6 +430,15 @@ impl Bindings {
         }
     }
 
+    /// The range of the name in the `def` statement a `FuncDefIndex` refers to.
+    /// Returns `None` if the index does not name a function in this module, which
+    /// happens for a stale cross-module index after an incremental rebuild.
+    pub fn function_def_range(&self, def_index: FuncDefIndex) -> Option<TextRange> {
+        let key = KeyUndecoratedFunctionRange(def_index);
+        let idx = self.key_to_idx_hashed_opt(Hashed::new(&key))?;
+        Some(KeyUndecoratedFunctionRange::range_with(idx, self))
+    }
+
     pub fn unused_parameters(&self) -> &[UnusedParameter] {
         &self.0.unused_parameters
     }
@@ -560,18 +574,26 @@ impl Bindings {
 
     pub fn get_lambda_param_id(&self, name: &Identifier) -> LambdaParamId {
         let b = self.get(self.key_to_idx(&Key::Definition(ShortIdentifier::new(name))));
-        if let Binding::LambdaParameter(id, _) = b {
-            *id
-        } else {
-            panic!(
+        match b {
+            Binding::LambdaParameter(id, _) => *id,
+            Binding::TypeLevelLambdaParameter(parameter) => parameter.id,
+            _ => panic!(
                 "Internal error: unexpected binding for lambda parameter `{}` @  {:?}: {}, module={}, path={}",
                 name.id,
                 name.range,
                 b.display_with(self),
                 self.module().name(),
                 self.module().path(),
-            )
+            ),
         }
+    }
+
+    /// Whether `name` is bound as an experimental `MapIntTuples` mapper parameter.
+    pub fn is_type_level_lambda_parameter(&self, name: &Identifier) -> bool {
+        matches!(
+            self.get(self.key_to_idx(&Key::Definition(ShortIdentifier::new(name)))),
+            Binding::TypeLevelLambdaParameter(_)
+        )
     }
 
     pub fn get_function_param(&self, name: &Identifier) -> &FunctionParameter {
@@ -703,8 +725,8 @@ impl Bindings {
             );
         }
 
-        if let Some(exported_names) = exports.get_explicit_dunder_all_names_iter() {
-            builder.record_used_imports_from_dunder_all_names(exported_names);
+        if let Some(exported_names) = exports.explicit_dunder_all_names() {
+            builder.record_used_imports_from_dunder_all_names(exported_names.iter());
         }
 
         let unused_imports = builder.scopes.collect_module_unused_imports();
@@ -794,6 +816,7 @@ impl Bindings {
             | SemanticSyntaxErrorKind::LateFutureImport
             | SemanticSyntaxErrorKind::ReboundComprehensionVariable
             | SemanticSyntaxErrorKind::DuplicateParameter(_)
+            | SemanticSyntaxErrorKind::DuplicateKeywordArgument(_)
             | SemanticSyntaxErrorKind::NonlocalDeclarationAtModuleLevel
             | SemanticSyntaxErrorKind::MultipleCaseAssignment(_)
             | SemanticSyntaxErrorKind::DuplicateMatchKey(_)
@@ -830,7 +853,8 @@ impl Bindings {
             | SemanticSyntaxErrorKind::NamedExpressionInClassBodyComprehension
             | SemanticSyntaxErrorKind::TypeParameterDefaultOrder(_)
             | SemanticSyntaxErrorKind::MultipleStarredNamesInSequencePattern
-            | SemanticSyntaxErrorKind::ReturnInGenerator => false,
+            | SemanticSyntaxErrorKind::ReturnInGenerator
+            | SemanticSyntaxErrorKind::NonlocalParameter(_) => false,
         }
     }
 }
@@ -990,6 +1014,10 @@ impl<'a> BindingsBuilder<'a> {
         self.table.get::<K>().1.get(idx)
     }
 
+    pub(super) fn binding_is_class_def(&self, idx: Idx<Key>) -> bool {
+        matches!(self.idx_to_binding(idx), Some(Binding::ClassDef(..)))
+    }
+
     fn idx_to_binding_mut<K>(&mut self, idx: Idx<K>) -> Option<&mut K::Value>
     where
         K: Keyed,
@@ -1075,32 +1103,24 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    fn suggest_builtin_name(&self, missing: &Name) -> Option<Name> {
-        // Hold the wildcard sets so `best_suggestion` can borrow their names; only the chosen
-        // suggestion is cloned, not every builtin candidate.
+    pub fn suggest_similar_name(&self, missing: &Name) -> Option<Name> {
+        // Hold the wildcard sets so their names can be borrowed for the search;
+        // only the chosen suggestion is cloned, not every builtin candidate.
         let wildcards: Vec<_> = fallback_builtin_modules(self.module_info.name())
             .filter_map(|module| self.lookup.get_wildcard(module))
             .collect();
-        best_suggestion(
-            missing,
-            wildcards
-                .iter()
-                .flat_map(|wildcard| wildcard.iter())
-                .map(|candidate| (candidate, 0)),
-        )
-    }
-
-    pub fn suggest_similar_name(&self, missing: &Name, position: TextSize) -> Option<Name> {
-        let scope_suggestion = self.scopes.suggest_similar_name(missing, position);
-        let builtin_suggestion = self.suggest_builtin_name(missing);
-        let mut candidates = Vec::new();
-        if let Some(scope_suggestion) = &scope_suggestion {
-            candidates.push((scope_suggestion, 0));
-        }
-        if let Some(builtin_suggestion) = &builtin_suggestion {
-            candidates.push((builtin_suggestion, 1));
-        }
-        best_suggestion(missing, candidates)
+        // Builtins are the outermost scope there is, so they are searched in the
+        // same pass and lose every tie to a name that is actually in scope.
+        // Sharing one pass also lets a close match found anywhere tighten the
+        // bound for everything after it.
+        let builtins = wildcards
+            .iter()
+            .flat_map(|wildcard| wildcard.iter())
+            .map(|candidate| Candidate::measured(candidate, usize::MAX));
+        let mut search = Search::new(missing);
+        self.scopes
+            .fold_suggestion_candidates(&mut search, builtins);
+        search.finish()
     }
 
     /// Materialize a lazily-discovered implicit builtin as an entry in the module's static
@@ -1297,39 +1317,6 @@ impl<'a> BindingsBuilder<'a> {
         self.as_special_export_inner(e, &mut visited_names, &mut visited_keys)
     }
 
-    pub fn as_direct_shape_intvar(&self, e: &Expr) -> bool {
-        let shape_extensions = ModuleName::from_str("shape_extensions");
-        match e {
-            Expr::Name(name) => {
-                if name.id == "IntVar" && self.module_info.name() == shape_extensions {
-                    return true;
-                }
-                matches!(
-                    self.scopes.binding_idx_for_name(&name.id),
-                    Some((
-                        _,
-                        FlowStyle::Import(module, upstream_name)
-                    )) if module == shape_extensions && upstream_name == "IntVar"
-                )
-            }
-            Expr::Attribute(ExprAttribute {
-                value, attr: name, ..
-            }) if name == "IntVar" => {
-                let Expr::Name(base_name) = &**value else {
-                    return false;
-                };
-                matches!(
-                    self.scopes.binding_idx_for_name(&base_name.id),
-                    Some((
-                        _,
-                        FlowStyle::MergeableImport(module) | FlowStyle::ImportAs(module)
-                    )) if module == shape_extensions
-                )
-            }
-            _ => false,
-        }
-    }
-
     pub fn class_object_is_generic(&self, idx: Idx<Key>) -> bool {
         let Some(Binding::ClassDef(class_idx, _)) = self.idx_to_binding(idx) else {
             return false;
@@ -1471,6 +1458,22 @@ impl<'a> BindingsBuilder<'a> {
             .emit();
     }
 
+    /// Like [`Self::error_with_detail`], but for a detail that costs something
+    /// to work out. Modules loaded below `Require::Errors` discard everything
+    /// they collect, so for them the detail is never computed at all.
+    pub fn error_with_detail_from(
+        &self,
+        range: TextRange,
+        kind: ErrorKind,
+        header: String,
+        detail: impl FnOnce() -> Option<String>,
+    ) {
+        self.errors
+            .error_builder(range, kind, header)
+            .with_detail_from(detail)
+            .emit();
+    }
+
     pub fn declare_mutable_capture(&mut self, name: &Identifier, kind: MutableCaptureKind) {
         // Record any errors finding the identity of the mutable capture, and get a binding
         // that provides the type coming from the parent scope.
@@ -1560,10 +1563,6 @@ impl<'a> BindingsBuilder<'a> {
     /// First-use detection happens later in `process_deferred_bound_names`
     /// when all phi nodes are populated.
     pub fn lookup_name(&mut self, name: Hashed<&Name>, usage: &mut Usage) -> NameLookupResult {
-        let may_prove_initialized = !matches!(
-            usage,
-            Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
-        );
         let name_read_info = self.look_up_name_for_read(name, usage);
         match name_read_info {
             NameReadInfo::Flow { idx, initialized } => {
@@ -1571,7 +1570,7 @@ impl<'a> BindingsBuilder<'a> {
                 self.scopes.mark_parameter_used(name.key());
                 self.scopes.mark_import_used(name.key());
                 self.scopes.mark_variable_used(name.key());
-                if may_prove_initialized
+                if !usage.is_static()
                     && matches!(
                         initialized,
                         InitializedInFlow::No
@@ -1593,6 +1592,7 @@ impl<'a> BindingsBuilder<'a> {
                     idx,
                     initialized,
                     is_module_scope: false,
+                    is_outer_class_type_parameter: false,
                 }
             }
             NameReadInfo::Anywhere {
@@ -1609,7 +1609,7 @@ impl<'a> BindingsBuilder<'a> {
                     self.insert_implicit_builtin_binding(idx, module, name.key());
                 }
                 // NameReadInfo::Anywhere can only be InitializedInFlow::Yes or InitializedInFlow::No
-                if may_prove_initialized && matches!(initialized, InitializedInFlow::No) {
+                if !usage.is_static() && matches!(initialized, InitializedInFlow::No) {
                     // When we use a variable, we mark it as initialized
                     // If the variable was uninitialized before, this will
                     // prevent us from emitting errors for every subsequent usage
@@ -1620,6 +1620,7 @@ impl<'a> BindingsBuilder<'a> {
                     idx,
                     initialized,
                     is_module_scope,
+                    is_outer_class_type_parameter: false,
                 }
             }
             NameReadInfo::ImplicitBuiltin { module } => {
@@ -1628,13 +1629,15 @@ impl<'a> BindingsBuilder<'a> {
                     idx,
                     initialized: InitializedInFlow::Yes,
                     is_module_scope: true,
+                    is_outer_class_type_parameter: false,
                 }
             }
-            NameReadInfo::OutOfScopeTypeParameter { key } => {
-                NameLookupResult::OutOfScopeTypeParameter {
-                    idx: self.idx_for_promise(key),
-                }
-            }
+            NameReadInfo::OuterClassTypeParameter { key } => NameLookupResult::Found {
+                idx: self.idx_for_promise(key),
+                initialized: InitializedInFlow::Yes,
+                is_module_scope: false,
+                is_outer_class_type_parameter: true,
+            },
             NameReadInfo::NotFound => NameLookupResult::NotFound,
         }
     }
@@ -1725,40 +1728,44 @@ impl<'a> BindingsBuilder<'a> {
         let (default_idx, partial_type_info) =
             self.follow_to_partial_type(deferred.lookup_result_idx);
 
-        if let Some((def_idx, first_use)) = partial_type_info {
-            // Determine side effects based on usage and first_use state.
-            if matches!(
-                deferred.usage,
-                Usage::StaticTypeInformation { .. } | Usage::TypeAliasRhs
-            ) {
-                self.mark_does_not_pin_if_first_use(def_idx);
-            } else if deferred.usage.may_pin_partial_type() {
-                // Normal reads: if this is the first use, mark it.
-                if matches!(first_use, FirstUse::Undetermined)
-                    && let Some(current_idx) = deferred.usage.current_idx()
-                {
-                    self.mark_first_use(def_idx, current_idx);
+        let (target_idx, forward_to_first_use) =
+            if let Some((def_idx, first_use)) = partial_type_info {
+                // Determine side effects based on usage and first_use state.
+                if deferred.usage.is_static() {
+                    self.mark_does_not_pin_if_first_use(def_idx);
+                } else if deferred.usage.may_pin_partial_type() {
+                    // Normal reads: if this is the first use, mark it.
+                    if matches!(first_use, FirstUse::Undetermined)
+                        && let Some(current_idx) = deferred.usage.current_idx()
+                    {
+                        self.mark_first_use(def_idx, current_idx);
+                    }
                 }
-            }
-            // Non-pinning reads leave first_use as Undetermined so that the next
-            // semantic read can still become the first use for pinning.
-            // All partial type reads forward to the NameAssign (def_idx).
-            self.insert_binding_idx(deferred.bound_name_idx, Binding::ForwardToFirstUse(def_idx));
-        } else {
-            let orig_binding = self.idx_to_binding(default_idx);
-            let binding = if let Some(b) = orig_binding
-                && matches!(b, Binding::LambdaParameter(..))
-            {
-                // Lambda parameters have special handling in Key::check_shortcut.
-                // We bind directly to the definition to ensure the shortcut is always detected.
-                b.clone()
-            } else if deferred.promote {
-                Binding::PromoteForward(default_idx)
+                // Non-pinning reads leave first_use as Undetermined so that the next
+                // semantic read can still become the first use for pinning.
+                // All partial type reads forward to the NameAssign (def_idx).
+                (def_idx, true)
             } else {
-                Binding::Forward(default_idx)
+                (default_idx, false)
             };
-            self.insert_binding_idx(deferred.bound_name_idx, binding);
-        }
+
+        let binding = if forward_to_first_use {
+            Binding::ForwardToFirstUse(target_idx)
+        } else if let Some(b) = self.idx_to_binding(target_idx)
+            && matches!(
+                b,
+                Binding::LambdaParameter(..) | Binding::TypeLevelLambdaParameter(_)
+            )
+        {
+            // Lambda parameters have special handling in Key::check_shortcut.
+            // We bind directly to the definition to ensure the shortcut is always detected.
+            b.clone()
+        } else if deferred.promote {
+            Binding::PromoteForward(target_idx)
+        } else {
+            Binding::Forward(target_idx)
+        };
+        self.insert_binding_idx(deferred.bound_name_idx, binding);
 
         if matches!(
             deferred.usage,
@@ -1847,7 +1854,7 @@ impl<'a> BindingsBuilder<'a> {
             // intercept_lookup which wraps them in PossibleLegacyTParam.
             // By finalize time we can follow through to the original
             // binding to check whether it's actually a type alias.
-            Binding::PossibleLegacyTParam(legacy_tparam, _)
+            Binding::PossibleLegacyTParam(legacy_tparam, ..)
                 if let Some(legacy_binding) = self.idx_to_binding(*legacy_tparam) =>
             {
                 self.follow_to_type_alias(legacy_binding.idx())
@@ -2115,7 +2122,8 @@ impl<'a> BindingsBuilder<'a> {
                             let mut invalid_intvar_constraint = false;
                             let mut constraint_exprs = Vec::new();
                             for constraint in &mut tuple.elts {
-                                if self.as_direct_shape_intvar(constraint) {
+                                if self.as_special_export(constraint) == Some(SpecialExport::IntVar)
+                                {
                                     self.error(
                                         constraint.range(),
                                         ErrorKind::InvalidTypeVar,
@@ -2132,16 +2140,23 @@ impl<'a> BindingsBuilder<'a> {
                             if !invalid_intvar_constraint {
                                 constraints = Some((constraint_exprs, bound_expr.range()))
                             }
-                        } else if self.as_direct_shape_intvar(bound_expr) {
+                        } else if self.as_special_export(bound_expr) == Some(SpecialExport::IntVar)
+                        {
                             self.ensure_expr(bound_expr, &mut usage);
                             kind = QuantifiedKind::IntVar;
                         } else {
-                            self.ensure_type_with_usage(bound_expr, None, &mut usage);
-                            bound = Some((**bound_expr).clone());
+                            bound = Some(self.record_type_parameter_bound(bound_expr, &mut usage));
                         }
                     }
                     if let Some(default_expr) = &mut tv.default {
-                        self.ensure_type_with_usage(default_expr, None, &mut usage);
+                        if bound
+                            .as_ref()
+                            .is_some_and(TypeParameterBound::infer_default_as_value)
+                        {
+                            self.ensure_expr(default_expr, &mut usage);
+                        } else {
+                            self.ensure_type_with_usage(default_expr, None, &mut usage);
+                        }
                         default = Some((**default_expr).clone());
                     }
                     kind
@@ -2208,13 +2223,19 @@ impl<'a> BindingsBuilder<'a> {
         }
     }
 
-    pub fn bind_lambda_param(&mut self, name: &Identifier, owner: Option<Idx<Key>>) {
+    pub fn bind_lambda_param(&mut self, name: &Identifier, kind: LambdaKind, usage: &Usage) {
         let id = LambdaParamId(self.next_lambda_param_id);
         self.next_lambda_param_id += 1;
-        let idx = self.insert_binding(
-            Key::Definition(ShortIdentifier::new(name)),
-            Binding::LambdaParameter(id, owner),
-        );
+        let binding = match kind {
+            LambdaKind::Ordinary => Binding::LambdaParameter(id, usage.current_idx()),
+            LambdaKind::TypeLevel => {
+                Binding::TypeLevelLambdaParameter(Box::new(TypeLevelLambdaParameter {
+                    id,
+                    identifier: name.clone(),
+                }))
+            }
+        };
+        let idx = self.insert_binding(Key::Definition(ShortIdentifier::new(name)), binding);
         self.scopes.add_parameter_to_current_static(name, None);
         self.bind_name(&name.id, idx, FlowStyle::Other);
     }
@@ -2320,9 +2341,7 @@ enum TParamLookupResult {
     NotTParam {
         idx: Idx<Key>,
         initialized: InitializedInFlow,
-    },
-    OutOfScopeTypeParameter {
-        idx: Idx<Key>,
+        is_outer_class_type_parameter: bool,
     },
     NotFound,
 }
@@ -2334,15 +2353,18 @@ impl TParamLookupResult {
                 idx: possible_tparam.idx,
                 initialized: possible_tparam.initialized.clone(),
                 is_module_scope: false,
+                is_outer_class_type_parameter: false,
             },
-            Self::NotTParam { idx, initialized } => NameLookupResult::Found {
+            Self::NotTParam {
+                idx,
+                initialized,
+                is_outer_class_type_parameter,
+            } => NameLookupResult::Found {
                 idx: *idx,
                 initialized: initialized.clone(),
                 is_module_scope: false,
+                is_outer_class_type_parameter: *is_outer_class_type_parameter,
             },
-            Self::OutOfScopeTypeParameter { idx } => {
-                NameLookupResult::OutOfScopeTypeParameter { idx: *idx }
-            }
             Self::NotFound => NameLookupResult::NotFound,
         }
     }
@@ -2451,6 +2473,7 @@ impl<'a> BindingsBuilder<'a> {
             NameLookupResult::Found {
                 idx: original_idx,
                 initialized,
+                is_outer_class_type_parameter,
                 ..
             } => {
                 self.mark_does_not_pin_if_first_use(original_idx);
@@ -2463,30 +2486,25 @@ impl<'a> BindingsBuilder<'a> {
                     return TParamLookupResult::NotTParam {
                         idx: original_idx,
                         initialized,
+                        is_outer_class_type_parameter,
                     };
                 }
-                // A legacy TypeVar that is already a type parameter of an enclosing class is out of
-                // scope when referenced from a nested class. Leave it as a raw type variable so it is
-                // flagged as out of scope.
-                if self
+                let shadows_enclosing_annotation_scope = self
                     .scopes
-                    .legacy_tparam_out_of_scope_in_nested_class(&name.id)
-                {
-                    return TParamLookupResult::NotTParam {
-                        idx: original_idx,
-                        initialized,
-                    };
-                }
-                match self.lookup_legacy_tparam_from_idx(id, original_idx, has_scoped_type_params) {
+                    .legacy_tparam_shadows_enclosing_annotation_scope(&name.id);
+                match self.lookup_legacy_tparam_from_idx(
+                    id,
+                    original_idx,
+                    has_scoped_type_params,
+                    shadows_enclosing_annotation_scope,
+                ) {
                     Some(possible_tparam) => TParamLookupResult::MaybeTParam(possible_tparam),
                     None => TParamLookupResult::NotTParam {
                         idx: original_idx,
                         initialized,
+                        is_outer_class_type_parameter,
                     },
                 }
-            }
-            NameLookupResult::OutOfScopeTypeParameter { idx } => {
-                TParamLookupResult::OutOfScopeTypeParameter { idx }
             }
             NameLookupResult::NotFound => TParamLookupResult::NotFound,
         }
@@ -2527,8 +2545,18 @@ impl<'a> BindingsBuilder<'a> {
         id: LegacyTParamId,
         original_idx: Idx<Key>,
         has_scoped_type_params: bool,
+        shadows_enclosing_annotation_scope: bool,
     ) -> Option<PossibleTParam> {
-        let (original_idx, original_binding) = self.get_original_binding(original_idx)?;
+        let (mut original_idx, mut original_binding) = self.get_original_binding(original_idx)?;
+        if shadows_enclosing_annotation_scope {
+            // If we know that the current scope shadows (i.e., re-defines) a legacy tparam from an
+            // enclosing scope, then we need to create a fresh legacy tparam rather than reusing
+            // the one from the enclosing scope.
+            while let Some(Binding::PossibleLegacyTParam(tparam_idx, ..)) = original_binding {
+                (original_idx, original_binding) =
+                    self.get_original_binding(self.idx_to_binding(*tparam_idx)?.idx())?;
+            }
+        }
         // If we found a potential legacy type variable, first insert the key / binding pair
         // for the raw lookup, then insert another key / binding pair for the
         // `CheckLegacyTypeParam`, and return the `Idx<Key>`.
@@ -2536,7 +2564,11 @@ impl<'a> BindingsBuilder<'a> {
             .map(|(k, v)| self.insert_binding(k, v))?;
         let idx = self.insert_binding(
             id.as_possible_legacy_tparam_key(),
-            Binding::PossibleLegacyTParam(tparam_idx, has_scoped_type_params),
+            Binding::PossibleLegacyTParam(
+                tparam_idx,
+                has_scoped_type_params,
+                shadows_enclosing_annotation_scope,
+            ),
         );
         Some(PossibleTParam {
             id,
@@ -2585,7 +2617,6 @@ impl<'a> BindingsBuilder<'a> {
                     BindingLegacyTypeParam::ModuleKeyed(Box::new(LegacyTypeParamModule {
                         base: original_idx,
                         attrs: attrs.mapped_ref(|a| a.id.clone()),
-                        prior: None,
                     })),
                 )),
                 Some(_) => None,
@@ -2610,11 +2641,13 @@ impl<'a> BindingsBuilder<'a> {
                     .expect("a possible legacy type parameter should have a binding")
                 {
                     let base = possible_tparam.id.as_identifier().id.clone();
-                    module.prior = module_heads.get(&base).copied();
-                    module_heads.insert(base, possible_tparam.idx);
+                    if let Some(prior) = module_heads.insert(base, possible_tparam.idx) {
+                        module.base = prior;
+                    }
                 }
-                self.scopes
-                    .add_possible_legacy_tparam(possible_tparam.id.as_identifier());
+                self.scopes.add_possible_legacy_tparam_to_current_static(
+                    possible_tparam.id.as_identifier(),
+                );
             }
         }
     }

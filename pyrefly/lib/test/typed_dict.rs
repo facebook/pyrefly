@@ -1552,6 +1552,19 @@ class BadChild2(Parent):
 );
 
 testcase!(
+    test_recursive_field_with_extra_items,
+    r#"
+from typing import NotRequired, TypedDict
+
+class C(TypedDict, extra_items=bool):
+    pass
+
+class D(C):
+    a: NotRequired[D]  # E: `D` is not consistent with `extra_items` type `bool` of TypedDict `C`  # E: `D` is uninitialized
+"#,
+);
+
+testcase!(
     test_extra_items_assignability,
     r#"
 from typing import ReadOnly, TypedDict

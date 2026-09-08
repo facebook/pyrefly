@@ -14,7 +14,7 @@ Original: pytorch/benchmark/torchbenchmark/models/Super_SloMo/slomo_model.py
 Port notes:
 - Uses nn.AvgPool2d for spatial shape tracking (DSL redirect computes shapes)
 - Uses scale_factor=2 (int) instead of 2.0 (float) for F.interpolate
-    (the DSL's interpolate_ir expects int|symint for scale_factor)
+    (integer scale factors retain precise output shapes)
 - Uses (k - 1) // 2 instead of int((filterSize - 1) / 2) for padding
     (equivalent for odd kernel sizes, keeps Int type tracking)
 - Variable reassignment with shape change requires unique variable names
@@ -92,8 +92,7 @@ class Up[InC: IntVar, OutC: IntVar](nn.Module):
     def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, InC, H, W]], skp: Tensor[[B, OutC, H * 2, W * 2]]
     ) -> Tensor[[B, OutC, H * 2, W * 2]]:
-        # WORKAROUND: F.interpolate scale_factor=2 (int) not 2.0 (float)
-        # DSL's interpolate_ir expects int|symint for scale_factor
+        # Integer scale factors retain precise output shapes; floats are gradual.
         x_up = F.interpolate(x, scale_factor=2, mode="bilinear")
         assert_type(x_up, Tensor[[B, InC, H * 2, W * 2]])
         x1 = F.leaky_relu(self.conv1(x_up), negative_slope=0.1)

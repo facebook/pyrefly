@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -28,6 +29,7 @@ use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::fs_anyhow;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use pyrefly_util::trace::init_tracing;
@@ -38,6 +40,7 @@ use ruff_source_file::PositionEncoding;
 use ruff_source_file::SourceLocation;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
+use tempfile::TempDir;
 
 use crate::binding::binding::KeyExport;
 use crate::config::base::InferReturnTypes;
@@ -51,9 +54,46 @@ use crate::state::errors::Errors;
 use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::state::State;
+use crate::state::state::StateReader;
 use crate::state::subscriber::TestSubscriber;
 use crate::types::class::Class;
 use crate::types::types::Type;
+
+pub fn get_test_files_root() -> TempDir {
+    let mut source_files =
+        std::env::current_dir().expect("std:env::current_dir() unavailable for test");
+    let test_files_path = std::env::var("TEST_FILES_PATH")
+        .expect("TEST_FILES_PATH env var not set: cargo or buck should set this automatically");
+    source_files.push(test_files_path);
+
+    // Copy the fixtures so tests can mutate them and behave consistently under Cargo and Buck.
+    let temp_dir = TempDir::with_prefix("pyrefly_lsp_test").unwrap();
+    copy_dir_recursively(&source_files, temp_dir.path());
+    temp_dir
+}
+
+fn copy_dir_recursively(src: &Path, dst: &Path) {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst).unwrap();
+    }
+
+    for entry in fs_anyhow::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir_recursively(&src_path, &dst_path);
+        } else {
+            std::fs::copy(src_path, dst_path).unwrap();
+        }
+    }
+}
+
+pub fn shape_extensions_env() -> TestEnv {
+    let path = std::env::var("SHAPE_EXTENSIONS_TEST_PATH")
+        .expect("SHAPE_EXTENSIONS_TEST_PATH must be set");
+    TestEnv::new_with_site_package_paths(&[&path])
+}
 
 #[macro_export]
 macro_rules! testcase {
@@ -105,6 +145,7 @@ pub struct TestEnv {
     check_unannotated_defs: bool,
     infer_return_types: InferReturnTypes,
     infer_with_first_use: bool,
+    non_exhaustive_match_open_type_error: bool,
     recursion_depth_limit: Option<u32>,
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
@@ -160,6 +201,7 @@ impl TestEnv {
             check_unannotated_defs: true,
             infer_return_types: InferReturnTypes::Checked,
             infer_with_first_use: true,
+            non_exhaustive_match_open_type_error: false,
             recursion_depth_limit: None,
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
@@ -404,6 +446,11 @@ impl TestEnv {
         self
     }
 
+    pub fn enable_non_exhaustive_match_open_type_error(mut self) -> Self {
+        self.non_exhaustive_match_open_type_error = true;
+        self
+    }
+
     pub fn enable_strict_partial_subtyping(mut self) -> Self {
         self.strict_partial_subtyping = true;
         self
@@ -615,6 +662,9 @@ impl TestEnv {
         }
         if self.no_any_return_implicit_error {
             errors.set_error_severity(ErrorKind::NoAnyReturnImplicit, Severity::Error);
+        }
+        if self.non_exhaustive_match_open_type_error {
+            errors.set_error_severity(ErrorKind::NonExhaustiveMatchOpenType, Severity::Error);
         }
         if self.implicit_reexport_error {
             errors.set_error_severity(ErrorKind::ImplicitReexport, Severity::Error);
@@ -992,8 +1042,8 @@ pub fn mk_state(code: &str) -> (Handle, State) {
     (handle("main"), state)
 }
 
-pub fn get_class(name: &str, handle: &Handle, state: &State) -> Class {
-    let solutions = state.transaction().get_solutions(handle).unwrap();
+pub fn get_class(name: &str, handle: &Handle, reader: &StateReader) -> Class {
+    let solutions = reader.get_solutions(handle).unwrap();
 
     match solutions.get(&KeyExport(Name::new(name))) {
         Type::ClassDef(cls) => cls.dupe(),

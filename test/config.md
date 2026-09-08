@@ -70,6 +70,31 @@ $ mkdir $TMPDIR/replace_bound && \
 [0]
 ```
 
+## Untyped third-party imports are followed by default
+
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/untyped_import/site_packages/untyped_package && \
+> printf '' > $TMPDIR/untyped_import/site_packages/untyped_package/__init__.py && \
+> printf 'from untyped_package import missing\nmissing()\n' > $TMPDIR/untyped_import/main.py && \
+> printf 'project-includes = ["main.py"]\nsite-package-path = ["site_packages"]\nskip-interpreter-query = true\n' > $TMPDIR/untyped_import/pyrefly.toml && \
+> $PYREFLY check -c $TMPDIR/untyped_import/pyrefly.toml --output-format=min-text
+ INFO Checking project configured at `*/pyrefly.toml` (glob)
+ INFO 1 error
+[1]
+```
+
+## Replace untyped third-party imports with Any
+
+Same project, with the option turned on: `untyped_package` becomes `typing.Any`,
+so importing a name it does not define is no longer an error.
+
+```scrut {output_stream: stderr}
+$ $PYREFLY check -c $TMPDIR/untyped_import/pyrefly.toml --replace-untyped-imports-with-any untyped_package --output-format=min-text
+ INFO Checking project configured at `*/pyrefly.toml` (glob)
+ INFO 0 errors
+[0]
+```
+
 ## Error in implicit config (project mode)
 
 ```scrut {output_stream: stderr}

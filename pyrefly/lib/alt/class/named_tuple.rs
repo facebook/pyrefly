@@ -29,7 +29,7 @@ use crate::types::types::Type;
 
 const NAMED_TUPLE_REPLACE: Name = Name::new_static("_replace");
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn get_named_tuple_elements(&self, cls: &Class, errors: &ErrorCollector) -> SmallSet<Name> {
         let Some(class_fields) = self.get_class_fields(cls) else {
             return SmallSet::new();

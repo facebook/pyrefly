@@ -59,6 +59,10 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use tracing::error;
+#[cfg(not(target_arch = "wasm32"))]
+use uv_pep440::Version;
+#[cfg(not(target_arch = "wasm32"))]
+use uv_pep440::VersionSpecifiers;
 
 use crate::base::ConfigBase;
 use crate::base::ExtraConfigs;
@@ -75,6 +79,7 @@ use crate::finder::ConfigError;
 use crate::migration::run::MigratedFromKind;
 use crate::module_wildcard::Match;
 use crate::pyproject::PyProject;
+use crate::util::ConfigOrigin;
 
 pub static GENERATED_FILE_CONFIG_OVERRIDE: LazyLock<
     RwLock<SmallMap<InternedPath, ArcId<ConfigFile>>>,
@@ -531,6 +536,9 @@ pub struct ConfigFile {
     #[serde(skip)]
     pub source: ConfigSource,
 
+    /// The PEP 440 version requirement that the running Pyrefly must satisfy.
+    pub required_version: Option<String>,
+
     /// Files that should be counted as sources (e.g. user-space code).
     /// NOTE: unlike other args, this is never replaced with CLI arg overrides
     /// in this config, but may be overridden by CLI args where used.
@@ -705,11 +713,13 @@ impl Default for ConfigFile {
     fn default() -> Self {
         ConfigFile {
             source: ConfigSource::Synthetic(None),
+            required_version: None,
             project_includes: Default::default(),
             project_excludes: Default::default(),
             interpreters: Interpreters {
                 python_interpreter_path: None,
                 fallback_python_interpreter_name: None,
+                python_interpreter_find_command: None,
                 conda_environment: None,
                 skip_interpreter_query: false,
             },
@@ -739,6 +749,18 @@ impl Default for ConfigFile {
             extended_config_paths: Vec::new(),
         }
     }
+}
+
+/// The result of requerying every live source database for a set of configs.
+/// See [`ConfigFile::query_source_db`].
+pub struct SourceDbQueryOutcome {
+    /// The source databases whose contents changed, and whose dependent caches
+    /// therefore need invalidating.
+    pub reloaded: SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>>,
+    pub stats: TelemetrySourceDbRebuildStats,
+    /// The first query failure, rendered for display. `None` when every queried
+    /// source database succeeded.
+    pub error: Option<String>,
 }
 
 impl ConfigFile {
@@ -1039,6 +1061,34 @@ impl ConfigFile {
         found_match == Some(true)
     }
 
+    /// Whether an untyped third-party import should be replaced with `typing.Any`.
+    pub fn replace_untyped_imports_with_any(
+        &self,
+        path: Option<&Path>,
+        module: ModuleName,
+    ) -> bool {
+        let wildcards = path
+            .and_then(|path| {
+                self.get_from_sub_configs(ConfigBase::get_replace_untyped_imports_with_any, path)
+            })
+            .unwrap_or_else(|| {
+                self.root
+                    .replace_untyped_imports_with_any
+                    .as_deref()
+                    .expect("configure should set replace_untyped_imports_with_any")
+            });
+        let found_match = wildcards.iter().find_map(|w| {
+            if w.matches(module) == Match::Negative {
+                Some(false)
+            } else if w.matches(module) == Match::Positive {
+                Some(true)
+            } else {
+                None
+            }
+        });
+        found_match == Some(true)
+    }
+
     pub fn check_unannotated_defs(&self, path: &Path) -> bool {
         self.get_from_sub_configs(ConfigBase::get_check_unannotated_defs, path)
             .unwrap_or_else(|| self.root.check_unannotated_defs.unwrap())
@@ -1126,7 +1176,7 @@ impl ConfigFile {
 
     pub fn get_error_config(&self, path: &Path) -> ErrorConfig<'_> {
         ErrorConfig::new(
-            self.errors(path),
+            Cow::Borrowed(self.errors(path)),
             self.ignore_errors_in_generated_code(path),
             self.enabled_ignores(path).clone(),
         )
@@ -1247,12 +1297,10 @@ impl ConfigFile {
         configs_to_files: &SmallMap<ArcId<ConfigFile>, SmallSet<ModulePath>>,
         force: bool,
         telemetry: Option<SubTaskTelemetry>,
-    ) -> (
-        SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>>,
-        TelemetrySourceDbRebuildStats,
-    ) {
+    ) -> SourceDbQueryOutcome {
         let mut stats: TelemetrySourceDbRebuildStats = Default::default();
         stats.common.forced = force;
+        let mut first_error = None;
         let mut reloaded_source_dbs = SmallSet::new();
         let mut sourcedb_configs: SmallMap<_, Vec<_>> = SmallMap::new();
         for (config, files) in configs_to_files {
@@ -1304,7 +1352,7 @@ impl ConfigFile {
                 Err(error) => {
                     log_telemetry(&telemetry, start, instance_stats, Some(&error));
                     error!("Error reloading source database for config: {error:?}");
-                    stats.had_error = true;
+                    first_error.get_or_insert_with(|| format!("{error:#}"));
                     continue;
                 }
                 Ok(r) => r,
@@ -1331,7 +1379,12 @@ impl ConfigFile {
             }
             log_telemetry(&telemetry, start, instance_stats, None);
         }
-        (reloaded_source_dbs, stats)
+        stats.had_error = first_error.is_some();
+        SourceDbQueryOutcome {
+            reloaded: reloaded_source_dbs,
+            stats,
+            error: first_error,
+        }
     }
 
     /// Configures values that must be updated *after* overwriting with CLI flag values,
@@ -1357,16 +1410,38 @@ impl ConfigFile {
         // file or CLI flag). If not, we auto-discover a `typings/` directory below.
         let site_package_path_set = self.python_environment.site_package_path.is_some();
 
+        let mut interpreter_selections = Vec::new();
+        // Only explicit user selections conflict. `Auto` records a resolved interpreter,
+        // while `Lsp` is paired with `skip_interpreter_query` when the IDE supplied the
+        // environment.
+        if matches!(
+            self.interpreters.python_interpreter_path.as_ref(),
+            Some(ConfigOrigin::CommandLine(_) | ConfigOrigin::ConfigFile(_))
+        ) {
+            interpreter_selections.push("python-interpreter-path");
+        }
+        if self.interpreters.python_interpreter_find_command.is_some() {
+            interpreter_selections.push("python-interpreter-find-command");
+        }
+        if self.interpreters.fallback_python_interpreter_name.is_some() {
+            interpreter_selections.push("fallback-python-interpreter-name");
+        }
+        if self.interpreters.conda_environment.is_some() {
+            interpreter_selections.push("conda-environment");
+        }
+        if self.interpreters.skip_interpreter_query {
+            interpreter_selections.push("skip-interpreter-query");
+        }
+        if interpreter_selections.len() > 1 {
+            configure_errors.push(anyhow::anyhow!(
+                "Only one interpreter selection option can be set, but found: {}.",
+                interpreter_selections.join(", ")
+            ));
+        }
+
         if self.interpreters.skip_interpreter_query {
             self.python_environment.set_empty_to_default();
         } else {
-            if self.interpreters.python_interpreter_path.is_some()
-                && self.interpreters.fallback_python_interpreter_name.is_some()
-            {
-                configure_errors.push(anyhow::anyhow!(
-                        "`python-interpreter-path` and `fallback-python-interpreter-name` both set, but only one can be used."
-                ));
-            }
             match self.interpreters.find_interpreter(project_root.as_deref()) {
                 Ok(interpreter) => {
                     let (env, error) = PythonEnvironment::get_interpreter_env(&interpreter);
@@ -1444,8 +1519,8 @@ impl ConfigFile {
                 }
                 (Some(_), None) => {}
             }
-            // For scalar fields: preset fills in None values. Any preset field
-            // not listed here is silently dropped, so new fields added to
+            // The preset fills in None values. Any preset field not listed here
+            // is silently dropped, so new fields added to
             // `Preset::apply()` must be added here as well — `test_preset_fields_propagate`
             // guards against accidental omissions.
             macro_rules! apply_preset_default {
@@ -1464,6 +1539,7 @@ impl ConfigFile {
             apply_preset_default!(legacy_overload_expansion);
             apply_preset_default!(ignore_errors_in_generated_code);
             apply_preset_default!(permissive_ignores);
+            apply_preset_default!(replace_untyped_imports_with_any);
             apply_preset_default!(treat_all_caps_as_final);
         }
 
@@ -1499,6 +1575,10 @@ impl ConfigFile {
 
         if self.root.ignore_missing_imports.is_none() {
             self.root.ignore_missing_imports = Some(Default::default());
+        }
+
+        if self.root.replace_untyped_imports_with_any.is_none() {
+            self.root.replace_untyped_imports_with_any = Some(Default::default());
         }
 
         if self.root.check_unannotated_defs.is_none() {
@@ -1616,14 +1696,6 @@ impl ConfigFile {
             configure_errors.extend(validate(site_package_path.as_ref(), "site-package-path"));
         }
         configure_errors.extend(validate(&self.search_path_from_file, "search-path"));
-
-        if self.interpreters.python_interpreter_path.is_some()
-            && self.interpreters.conda_environment.is_some()
-        {
-            configure_errors.push(anyhow::anyhow!(
-                     "Cannot use both `python-interpreter-path` and `conda-environment`. Finding environment info using `python-interpreter-path`.",
-             ));
-        }
 
         if let ConfigSource::File(path) = &self.source {
             configure_errors
@@ -1777,6 +1849,32 @@ impl ConfigFile {
             {
                 errors.push(ConfigError::warn(anyhow!(
                     "The top-level `pytorch-efficiency-lints` option is deprecated. Set the `pytorch-efficiency-lints` error kind in `[errors]` instead."
+                )));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(required_version) = &config.required_version {
+                match required_version.parse::<VersionSpecifiers>() {
+                    Ok(specifiers) => {
+                        let running_version = env!("CARGO_PKG_VERSION");
+                        let parsed_running_version = running_version
+                            .parse::<Version>()
+                            .expect("Pyrefly's package version must be PEP 440 compatible");
+                        if !specifiers.contains(&parsed_running_version) {
+                            errors.push(ConfigError::error(anyhow!(
+                                "Pyrefly {running_version} does not satisfy `required-version = \"{required_version}\"`"
+                            )));
+                        }
+                    }
+                    Err(error) => errors.push(ConfigError::error(anyhow!(
+                        "Invalid `required-version` `{required_version}`: {error}"
+                    ))),
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            if config.required_version.is_some() {
+                errors.push(ConfigError::error(anyhow!(
+                    "`required-version` is not supported on WebAssembly"
                 )));
             }
 
@@ -2165,7 +2263,7 @@ impl Display for ConfigFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{{source: {:?}, project_includes: {}, project_excludes: {}, search_path: [{}], python_interpreter_path: {:?}, python_environment: {}, replace_imports_with_any: [{}], ignore_missing_imports: [{}]}}",
+            "{{source: {:?}, project_includes: {}, project_excludes: {}, search_path: [{}], python_interpreter_path: {:?}, python_environment: {}, replace_imports_with_any: [{}], ignore_missing_imports: [{}], replace_untyped_imports_with_any: [{}]}}",
             self.source,
             self.project_includes,
             self.project_excludes,
@@ -2179,6 +2277,11 @@ impl Display for ConfigFile {
                 .unwrap_or_default(),
             self.root
                 .ignore_missing_imports
+                .as_ref()
+                .map(|r| { r.iter().map(|p| p.as_str()).join(", ") })
+                .unwrap_or_default(),
+            self.root
+                .replace_untyped_imports_with_any
                 .as_ref()
                 .map(|r| { r.iter().map(|p| p.as_str()).join(", ") })
                 .unwrap_or_default(),
@@ -2217,6 +2320,7 @@ mod tests {
     use super::*;
     use crate::base::ExtraConfigs;
     use crate::base::UntypedDefBehavior;
+    use crate::environment::interpreters::InterpreterDiscoveryCommand;
     use crate::error_kind::ErrorKind;
     use crate::error_kind::Severity;
     use crate::module_wildcard::ModuleWildcard;
@@ -2266,6 +2370,7 @@ mod tests {
             config,
             ConfigFile {
                 source: ConfigSource::Synthetic(None),
+                required_version: None,
                 project_includes: Globs::new(vec![
                     "tests".to_owned(),
                     "./implementation".to_owned()
@@ -2300,6 +2405,7 @@ mod tests {
                         "venv/my/python"
                     ))),
                     fallback_python_interpreter_name: None,
+                    python_interpreter_find_command: None,
                     conda_environment: None,
                     skip_interpreter_query: false,
                 },
@@ -2317,6 +2423,7 @@ mod tests {
                     strict_partial_subtyping: None,
                     replace_imports_with_any: Some(vec![ModuleWildcard::new("fibonacci").unwrap()]),
                     ignore_missing_imports: Some(vec![ModuleWildcard::new("sprout").unwrap()]),
+                    replace_untyped_imports_with_any: None,
                     untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                     check_unannotated_defs: None,
                     infer_return_types: None,
@@ -2345,6 +2452,7 @@ mod tests {
                         strict_partial_subtyping: None,
                         replace_imports_with_any: Some(Vec::new()),
                         ignore_missing_imports: Some(Vec::new()),
+                        replace_untyped_imports_with_any: None,
                         untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnAny),
                         check_unannotated_defs: None,
                         infer_return_types: None,
@@ -2656,6 +2764,7 @@ mod tests {
         let interpreter = "venv/bin/python3".to_owned();
         let mut config = ConfigFile {
             source: ConfigSource::Synthetic(None),
+            required_version: None,
             project_includes: Globs::new(vec!["path1/**".to_owned(), "path2/path3".to_owned()])
                 .unwrap(),
             project_excludes: Globs::new(vec!["tests/untyped/**".to_owned()]).unwrap(),
@@ -2675,6 +2784,7 @@ mod tests {
                     interpreter.clone(),
                 ))),
                 fallback_python_interpreter_name: None,
+                python_interpreter_find_command: None,
                 conda_environment: None,
                 skip_interpreter_query: false,
             },
@@ -2732,11 +2842,13 @@ mod tests {
 
         let expected_config = ConfigFile {
             source: ConfigSource::Synthetic(None),
+            required_version: None,
             project_includes: Globs::new(project_includes_vec).unwrap(),
             project_excludes: Globs::new(project_excludes_vec).unwrap(),
             interpreters: Interpreters {
                 python_interpreter_path: Some(ConfigOrigin::config(test_path.join(interpreter))),
                 fallback_python_interpreter_name: None,
+                python_interpreter_find_command: None,
                 conda_environment: None,
                 skip_interpreter_query: false,
             },
@@ -2891,6 +3003,34 @@ output-format = "omit-errors"
     }
 
     #[test]
+    fn test_python_interpreter_find_command_config_parsing() {
+        let config = ConfigFile::parse_config(
+            r#"python-interpreter-find-command = ["poetry", "env", "info", "-e"]"#,
+        )
+        .unwrap();
+        let expected = ["poetry", "env", "info", "-e"].map(str::to_owned);
+        assert_eq!(
+            config
+                .interpreters
+                .python_interpreter_find_command
+                .as_deref(),
+            Some(expected.as_slice())
+        );
+        let serialized = toml::to_string(&config).unwrap();
+        assert_eq!(ConfigFile::parse_config(&serialized).unwrap(), config);
+
+        let error =
+            ConfigFile::parse_config(r#"python-interpreter-find-command = []"#).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("`python-interpreter-find-command` must contain a program")
+        );
+
+        assert!(ConfigFile::parse_config(r#"python-interpreter-find-command = [""]"#).is_err());
+    }
+
+    #[test]
     fn test_expect_all_fields_set_in_root_config() {
         let root = TempDir::new().unwrap();
         let mut config = ConfigFile::init_at_root(root.path(), &ProjectLayout::default(), false);
@@ -2905,6 +3045,7 @@ output-format = "omit-errors"
             "project-excludes",
             "python-interpreter-path",
             "fallback-python-interpreter-name",
+            "python-interpreter-find-command",
             // values we won't be getting
             "extras",
             // values that must be Some (if flattened, their contents will be checked)
@@ -2933,6 +3074,7 @@ output-format = "omit-errors"
                 errors: Some(Default::default()),
                 replace_imports_with_any: Some(vec![ModuleWildcard::new("root").unwrap()]),
                 ignore_missing_imports: None,
+                replace_untyped_imports_with_any: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 check_unannotated_defs: None,
                 infer_return_types: None,
@@ -3126,6 +3268,10 @@ output-format = "omit-errors"
         // Preset leaves `infer_with_first_use` unset, so the post-preset
         // default-fill in `configure()` provides the default value of `true`.
         assert_eq!(config.root.infer_with_first_use, Some(true));
+        assert_eq!(
+            config.root.replace_untyped_imports_with_any,
+            Some(vec![ModuleWildcard::new("*").unwrap()])
+        );
         let errors = config.root.errors.as_ref().unwrap();
         assert_eq!(
             errors.severity(ErrorKind::BadOverrideMutableAttribute),
@@ -3144,6 +3290,7 @@ output-format = "omit-errors"
             preset: Some(Preset::Legacy),
             root: ConfigBase {
                 check_unannotated_defs: Some(true),
+                replace_untyped_imports_with_any: Some(vec![ModuleWildcard::new("!*").unwrap()]),
                 errors: Some(ErrorDisplayConfig::new(HashMap::from([(
                     ErrorKind::BadOverrideMutableAttribute,
                     Severity::Error,
@@ -3156,6 +3303,10 @@ output-format = "omit-errors"
 
         // User setting overrides preset
         assert_eq!(config.root.check_unannotated_defs, Some(true));
+        assert_eq!(
+            config.root.replace_untyped_imports_with_any,
+            Some(vec![ModuleWildcard::new("!*").unwrap()])
+        );
         let errors = config.root.errors.as_ref().unwrap();
         // Explicit user error override wins
         assert_eq!(
@@ -3807,24 +3958,61 @@ output-format = "omit-errors"
     }
 
     #[test]
-    fn test_python_interpreter_conda_environment() {
-        let mut config = ConfigFile {
-            interpreters: Interpreters {
-                python_interpreter_path: Some(ConfigOrigin::config(PathBuf::new())),
-                fallback_python_interpreter_name: None,
-                conda_environment: Some(ConfigOrigin::config("".to_owned())),
-                skip_interpreter_query: false,
-            },
-            ..Default::default()
-        };
+    fn test_interpreter_selection_options_are_mutually_exclusive() {
+        let selections = [
+            "python-interpreter-path",
+            "python-interpreter-find-command",
+            "fallback-python-interpreter-name",
+            "conda-environment",
+            "skip-interpreter-query",
+        ];
 
-        let validation_errors = config.configure();
+        for (first_index, first) in selections.iter().enumerate() {
+            for second in &selections[first_index + 1..] {
+                let mut interpreters = Interpreters::default();
+                for selection in [first, second] {
+                    match *selection {
+                        "python-interpreter-path" => {
+                            interpreters.python_interpreter_path =
+                                Some(ConfigOrigin::config(PathBuf::from("ignored")));
+                        }
+                        "python-interpreter-find-command" => {
+                            interpreters.python_interpreter_find_command = Some(
+                                InterpreterDiscoveryCommand::try_from(vec!["ignored".to_owned()])
+                                    .unwrap(),
+                            );
+                        }
+                        "fallback-python-interpreter-name" => {
+                            interpreters.fallback_python_interpreter_name =
+                                Some(ConfigOrigin::config("ignored".to_owned()));
+                        }
+                        "conda-environment" => {
+                            interpreters.conda_environment =
+                                Some(ConfigOrigin::config("ignored".to_owned()));
+                        }
+                        "skip-interpreter-query" => {
+                            interpreters.skip_interpreter_query = true;
+                        }
+                        _ => unreachable!("all interpreter selections are covered"),
+                    }
+                }
 
-        assert!(
-             validation_errors.iter().any(|e| {
-                 e.get_message() == "Cannot use both `python-interpreter-path` and `conda-environment`. Finding environment info using `python-interpreter-path`."
-             })
-         );
+                let mut config = ConfigFile {
+                    interpreters,
+                    ..Default::default()
+                };
+                let expected = format!(
+                    "Only one interpreter selection option can be set, but found: {first}, {second}."
+                );
+                assert!(
+                    config
+                        .configure()
+                        .iter()
+                        .any(|error| error.get_message() == expected),
+                    "missing validation error for {first} and {second}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3848,6 +4036,7 @@ output-format = "omit-errors"
             interpreters: Interpreters {
                 python_interpreter_path: Some(ConfigOrigin::config(PathBuf::from("abcd"))),
                 fallback_python_interpreter_name: None,
+                python_interpreter_find_command: None,
                 conda_environment: None,
                 skip_interpreter_query: false,
             },
@@ -3878,6 +4067,7 @@ output-format = "omit-errors"
                     ModuleWildcard::new("example.path.*").unwrap(),
                 ]),
                 ignore_missing_imports: None,
+                replace_untyped_imports_with_any: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 check_unannotated_defs: None,
                 infer_return_types: None,
@@ -3920,6 +4110,7 @@ output-format = "omit-errors"
                     ModuleWildcard::new("!example.path.specific.*").unwrap(),
                 ]),
                 ignore_missing_imports: None,
+                replace_untyped_imports_with_any: None,
                 untyped_def_behavior: Some(UntypedDefBehavior::CheckAndInferReturnType),
                 check_unannotated_defs: None,
                 infer_return_types: None,
@@ -4442,6 +4633,30 @@ bad-override = "error"
 
         assert!(matches!(config.source, ConfigSource::FailedParse(path) if path == first));
         assert!(!errors.is_empty(), "expected inheritance cycle error");
+    }
+
+    #[test]
+    fn test_required_version() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join(ConfigFile::PYREFLY_FILE_NAME);
+        for (required_version, expect_error) in [
+            (format!("=={}", env!("CARGO_PKG_VERSION")), false),
+            ("<0".to_owned(), true),
+            ("not a specifier".to_owned(), true),
+        ] {
+            fs::write(&path, format!("required-version = {required_version:?}")).unwrap();
+            let (config, errors) = ConfigFile::from_file(&path);
+            assert_eq!(
+                config.required_version.as_deref(),
+                Some(required_version.as_str())
+            );
+            if expect_error {
+                assert_eq!(errors.len(), 1);
+                assert_eq!(errors[0].severity(), Severity::Error);
+            } else {
+                assert!(errors.is_empty());
+            }
+        }
     }
 
     #[test]

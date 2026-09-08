@@ -43,6 +43,7 @@ const config: Config.InitialOptions = {
         '@docusaurus/useDocusaurusContext':
             '<rootDir>/__mocks__/docusaurusContextMock.ts',
         '@docusaurus/BrowserOnly': '<rootDir>/__mocks__/browserOnlyMock.ts',
+        '@docusaurus/Head': '<rootDir>/__mocks__/@docusaurus/Head.tsx',
         '@docusaurus/useBaseUrl':
             '<rootDir>/__mocks__/@docusaurus/useBaseUrl.ts',
         '@theme/ThemedImage': '<rootDir>/__mocks__/@theme/ThemedImage.tsx',

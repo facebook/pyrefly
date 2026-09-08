@@ -5,11 +5,19 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::path::Path;
+
+use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Url;
 use lsp_types::notification::DidOpenNotebookDocument;
+use lsp_types::notification::DidOpenTextDocument;
+use lsp_types::notification::Notification as _;
+use lsp_types::notification::PublishDiagnostics;
+use pyrefly_lsp_test::Message;
 use pyrefly_lsp_test::object_model::CellKind;
 use pyrefly_lsp_test::object_model::InitializeSettings;
 use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspMessageError;
 use serde_json::json;
 
 use crate::test::lsp::lsp_interaction::util::get_test_files_root;
@@ -613,6 +621,531 @@ fn test_unsaved_notebook_did_open() {
     interaction
         .client
         .expect_publish_diagnostics_uri(&cell2_url, 1)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// Builds the URI a client uses for a notebook that projects the code chunks of
+/// a source document: a custom scheme, no authority, and the source document's
+/// path preserved.
+fn projected_notebook_uri(root: &Path, file_name: &str) -> String {
+    let file_uri = Url::from_file_path(root.join(file_name)).unwrap();
+    format!("quarto-cells:{}", file_uri.path())
+}
+
+#[test]
+fn test_notebook_with_custom_scheme_publishes_cell_diagnostics() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let file_name = "notebook_custom_scheme/analysis.qmd";
+    let notebook_uri = projected_notebook_uri(root.path(), file_name);
+    interaction.open_notebook_with_uri(
+        &notebook_uri,
+        "quarto-cells",
+        file_name,
+        vec![(CellKind::Code, "z: str = ''\nz = 1")],
+    );
+
+    let cell_uri = interaction.cell_uri(file_name, "cell1");
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell_uri, 1)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_notebook_with_non_python_extension_publishes_cell_diagnostics() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let file_name = "notebook_custom_scheme/analysis.qmd";
+    interaction.open_notebook(file_name, vec!["z: str = \'\'\nz = 1"]);
+
+    let cell_uri = interaction.cell_uri(file_name, "cell1");
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell_uri, 1)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_notebook_with_custom_scheme_and_ipynb_path_publishes_cell_diagnostics() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let file_name = "notebook_custom_scheme/analysis.ipynb";
+    let notebook_uri = projected_notebook_uri(root.path(), file_name);
+    interaction.open_notebook_with_uri(
+        &notebook_uri,
+        "quarto-cells",
+        file_name,
+        vec![(CellKind::Code, "z: str = \'\'\nz = 1")],
+    );
+
+    let cell_uri = interaction.cell_uri(file_name, "cell1");
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell_uri, 1)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_notebook_with_non_python_path_resolves_names_across_cells() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let file_name = "notebook_custom_scheme/analysis.qmd";
+    interaction.open_notebook(file_name, vec!["shared: int = 1", "shared = 'text'"]);
+
+    interaction
+        .diagnostic_for_cell(file_name, "cell2")
+        .expect_response(json!({
+            "items": [{
+                "code": "bad-assignment",
+                "codeDescription": {
+                    "href": "https://pyrefly.org/en/docs/error-kinds/#bad-assignment"
+                },
+                "message": "`Literal['text']` is not assignable to variable `shared` with type `int`",
+                "range": {
+                    "start": {"line": 0, "character": 9},
+                    "end": {"line": 0, "character": 15}
+                },
+                "severity": 1,
+                "source": "Pyrefly"
+            }],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_notebook_with_custom_scheme_resolves_sibling_module() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let file_name = "notebook_custom_scheme/analysis.qmd";
+    let notebook_uri = projected_notebook_uri(root.path(), file_name);
+    interaction.open_notebook_with_uri(
+        &notebook_uri,
+        "quarto-cells",
+        file_name,
+        vec![(CellKind::Code, "from helpers import scale\n\nscale('one')")],
+    );
+
+    interaction
+        .diagnostic_for_cell(file_name, "cell1")
+        .expect_response(json!({
+            "items": [{
+                "code": "bad-argument-type",
+                "codeDescription": {
+                    "href": "https://pyrefly.org/en/docs/error-kinds/#bad-argument-type"
+                },
+                "message": "Argument `Literal['one']` is not assignable to parameter `value` with type `int` in function `helpers.scale`",
+                "range": {
+                    "start": {"line": 2, "character": 6},
+                    "end": {"line": 2, "character": 11}
+                },
+                "severity": 1,
+                "source": "Pyrefly"
+            }],
+            "kind": "full"
+        }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_notebook_with_non_python_path_republishes_on_change_and_close() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let file_name = "notebook_custom_scheme/analysis.qmd";
+    interaction.open_notebook(file_name, vec!["z: str = ''\nz = 1"]);
+    let cell_uri = interaction.cell_uri(file_name, "cell1");
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell_uri, 1)
+        .unwrap();
+
+    interaction.change_notebook(
+        file_name,
+        2,
+        json!({
+            "cells": {
+                "textContent": [{
+                    "document": { "uri": cell_uri, "version": 2 },
+                    "changes": [{ "text": "z: str = ''\nz = 'fixed'" }]
+                }]
+            }
+        }),
+    );
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell_uri, 0)
+        .unwrap();
+
+    interaction.close_notebook(file_name);
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell_uri, 0)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_notebook_with_python_path_publishes_cell_diagnostics() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    // A Marimo notebook is a `.py` file on disk, synced under its own notebook type.
+    let file_name = "notebook_custom_scheme/marimo_nb.py";
+    let notebook_uri = Url::from_file_path(root.path().join(file_name))
+        .unwrap()
+        .to_string();
+    interaction.open_notebook_with_uri(
+        &notebook_uri,
+        "marimo-notebook",
+        file_name,
+        vec![(CellKind::Code, "z: str = ''\nz = 1")],
+    );
+
+    let cell_uri = interaction.cell_uri(file_name, "cell1");
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell_uri, 1)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_notebook_outside_project_includes_publishes_no_diagnostics() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.open_notebook(
+        "notebook_not_in_includes/outside.ipynb",
+        vec!["z: str = ''\nz = 1"],
+    );
+    interaction
+        .diagnostic_for_cell("notebook_not_in_includes/outside.ipynb", "cell1")
+        .expect_response(json!({ "items": [], "kind": "full" }))
+        .unwrap();
+
+    let file_name = "notebook_not_in_includes/outside.qmd";
+    let notebook_uri = projected_notebook_uri(root.path(), file_name);
+    interaction.open_notebook_with_uri(
+        &notebook_uri,
+        "quarto-cells",
+        file_name,
+        vec![(CellKind::Code, "z: str = ''\nz = 1")],
+    );
+    interaction
+        .diagnostic_for_cell(file_name, "cell1")
+        .expect_response(json!({ "items": [], "kind": "full" }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_notebook_inside_project_includes_publishes_cell_diagnostics() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let file_name = "notebook_not_in_includes/included/inside.qmd";
+    let notebook_uri = projected_notebook_uri(root.path(), file_name);
+    interaction.open_notebook_with_uri(
+        &notebook_uri,
+        "quarto-cells",
+        file_name,
+        vec![(CellKind::Code, "z: str = ''\nz = 1")],
+    );
+
+    let cell_uri = interaction.cell_uri(file_name, "cell1");
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell_uri, 1)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_notebook_under_excluded_path_publishes_no_diagnostics() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let file_name = "notebook_excluded/excluded.qmd";
+    let notebook_uri = projected_notebook_uri(root.path(), file_name);
+    interaction.open_notebook_with_uri(
+        &notebook_uri,
+        "quarto-cells",
+        file_name,
+        vec![(CellKind::Code, "z: str = ''\nz = 1")],
+    );
+
+    interaction
+        .diagnostic_for_cell(file_name, "cell1")
+        .expect_response(json!({ "items": [], "kind": "full" }))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_notebook_diagnostics_are_published_on_cell_uris_only() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let file_name = "notebook_custom_scheme/analysis.qmd";
+    let notebook_uri = projected_notebook_uri(root.path(), file_name);
+    interaction.open_notebook_with_uri(
+        &notebook_uri,
+        "quarto-cells",
+        file_name,
+        vec![(CellKind::Code, "z: str = ''\nz = 1")],
+    );
+
+    interaction
+        .client
+        .expect_message("first publishDiagnostics notification", |msg| {
+            if let Message::Notification(x) = msg
+                && x.method == PublishDiagnostics::METHOD
+            {
+                let params: PublishDiagnosticsParams = serde_json::from_value(x.params).unwrap();
+                if params.uri.scheme() == "vscode-notebook-cell" {
+                    Some(Ok(()))
+                } else {
+                    Some(Err(LspMessageError::Custom {
+                        description: format!(
+                            "diagnostics published on {} instead of a cell URI",
+                            params.uri
+                        ),
+                    }))
+                }
+            } else {
+                None
+            }
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_projected_unsaved_notebook_did_open() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let notebook_uri = "quarto-cells:Untitled-1.qmd";
+    let cell1_uri_str = "vscode-notebook-cell://Untitled-1.qmd#cell1";
+    let cell2_uri_str = "vscode-notebook-cell://Untitled-1.qmd#cell2";
+    let cell1_url = Url::parse(cell1_uri_str).unwrap();
+    let cell2_url = Url::parse(cell2_uri_str).unwrap();
+
+    interaction
+        .client
+        .send_notification::<DidOpenNotebookDocument>(json!({
+            "notebookDocument": {
+                "uri": notebook_uri,
+                "notebookType": "quarto-cells",
+                "version": 1,
+                "metadata": {
+                    "language_info": { "name": "python" }
+                },
+                "cells": [
+                    { "kind": 2, "document": cell1_uri_str },
+                    { "kind": 2, "document": cell2_uri_str },
+                ]
+            },
+            "cellTextDocuments": [
+                { "uri": cell1_uri_str, "languageId": "python", "version": 1, "text": "x: int = 1" },
+                { "uri": cell2_uri_str, "languageId": "python", "version": 1, "text": "y: str = 1" },
+            ]
+        }));
+
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell1_url, 0)
+        .unwrap();
+    interaction
+        .client
+        .expect_publish_diagnostics_uri(&cell2_url, 1)
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn test_text_document_under_unknown_scheme_is_not_opened() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .send_notification::<DidOpenTextDocument>(json!({
+            "textDocument": {
+                "uri": "quarto-cells:Untitled-1.qmd",
+                "languageId": "python",
+                "version": 1,
+                "text": "y: str = 1"
+            }
+        }));
+
+    let file_name = "notebook_custom_scheme/analysis.qmd";
+    interaction.open_notebook(file_name, vec!["z: str = \'\'\nz = 1"]);
+
+    interaction
+        .client
+        .expect_message("first publishDiagnostics notification", |msg| {
+            if let Message::Notification(x) = msg
+                && x.method == PublishDiagnostics::METHOD
+            {
+                let params: PublishDiagnosticsParams = serde_json::from_value(x.params).unwrap();
+                if params.uri.scheme() == "vscode-notebook-cell" {
+                    Some(Ok(()))
+                } else {
+                    Some(Err(LspMessageError::Custom {
+                        description: format!(
+                            "text document under an unhandled scheme was opened: {}",
+                            params.uri
+                        ),
+                    }))
+                }
+            } else {
+                None
+            }
+        })
         .unwrap();
 
     interaction.shutdown().unwrap();

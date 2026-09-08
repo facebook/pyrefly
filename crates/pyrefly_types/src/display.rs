@@ -24,7 +24,11 @@ use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 use starlark_map::smallmap;
 
+use crate::callable::Callable;
+use crate::callable::Param;
 use crate::callable::ParamOverlay;
+use crate::callable::Params;
+use crate::callable::Required;
 use crate::callable_residual::CallableResidualKind;
 use crate::class::Class;
 use crate::data_frame::SchemaCompleteness;
@@ -44,6 +48,7 @@ use crate::tuple::Tuple;
 use crate::type_alias::TypeAliasData;
 use crate::type_alias::TypeAliasRef;
 use crate::type_alias::TypeAliasStyle;
+use crate::type_level_dsl::TypeLevelDslFunction;
 use crate::type_output::AnnotationOutput;
 use crate::type_output::AnnotationPart;
 use crate::type_output::DisplayOutput;
@@ -61,6 +66,15 @@ use crate::types::NeverStyle;
 use crate::types::SuperObj;
 use crate::types::TArgs;
 use crate::types::Type;
+
+enum HoverParamRow {
+    Marker(&'static str),
+    Param {
+        name: Option<String>,
+        ty: String,
+        default: Option<String>,
+    },
+}
 
 /// Scope guard that truncates the forall type-parameter tracking stack on drop,
 /// ensuring cleanup even on early return or panic.
@@ -246,22 +260,29 @@ impl<'a> TypeDisplayContext<'a> {
         self.render_self_type_as_self = true;
     }
 
-    /// Always display the module name, except for builtins.
-    pub fn always_display_module_name_except_builtins(&mut self) {
-        let builtins_module = ModuleName::from_str("builtins");
+    /// Always qualify names backed by a `QName`, except for builtins.
+    fn qualify_qnames_except(&mut self, unqualified_modules: &[ModuleName]) {
         let fake_module = ModuleName::from_str("__pyrefly__type__display__context__");
         for c in self.qnames.values_mut() {
-            if c.info.len() > 1 {
-                continue; // Multiple modules, so we need to keep the module name to disambiguate.
-            }
-            if let Some(value) = c.info.get_mut(&builtins_module) {
-                // Name is a builtin, we set it a default location so we hit the fallback branch in `QNameInfo::fmt`.
-                *value = Some(TextRange::default());
-            } else {
-                // Name is not a builtins, so we add a fake module to force the module name to be displayed.
+            if c.info.len() == 1
+                && !c
+                    .info
+                    .keys()
+                    .any(|module| unqualified_modules.contains(module))
+            {
                 c.info.insert(fake_module, None);
             }
         }
+    }
+
+    /// Qualify names from outside the current module, except for builtins.
+    fn always_display_external_qname_module_names(&mut self, current_module: ModuleName) {
+        self.qualify_qnames_except(&[ModuleName::builtins(), current_module]);
+    }
+
+    /// Always display the module name, except for builtins.
+    pub fn always_display_module_name_except_builtins(&mut self) {
+        self.qualify_qnames_except(&[ModuleName::builtins()]);
         self.always_display_module_name = true;
     }
 
@@ -386,6 +407,7 @@ impl<'a> TypeDisplayContext<'a> {
                     commas_iter(|| tys.iter().map(|ty| self.display_internal(ty)))
                 )?;
             }
+            Restriction::ShapeExtension(extension) => write!(f, ": {extension}")?,
             _ => {}
         }
         if let Some(default) = param.default() {
@@ -414,7 +436,7 @@ impl<'a> TypeDisplayContext<'a> {
         shaped_array: &ShapedArrayType,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
-        match shaped_array.syntax {
+        match *shaped_array.syntax {
             ShapedArraySyntax::Native => {
                 let shape_idx = match shaped_array.tuple_carrier_shape_arg_index() {
                     Some(index) => index,
@@ -572,6 +594,23 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
+    /// Whether a type has to be parenthesized for display in a sequence of types, such as a union
+    /// written with the `|` syntax.
+    fn needs_parens_in_sequence(&self, t: &Type) -> bool {
+        match t {
+            Type::Callable(_)
+            | Type::CallableResidual(_)
+            | Type::Function(_)
+            | Type::Intersect(_) => true,
+            // Overloads are already wrapped in `Overload[...]`, and query mode wraps bound methods in `BoundMethod[...]`.
+            Type::BoundMethod(m) => {
+                !matches!(m.func, BoundMethodType::Overload(_))
+                    && self.lsp_display_mode != LspDisplayMode::Query
+            }
+            _ => false,
+        }
+    }
+
     /// Helper function to format a sequence of types with a separator.
     /// Used for unions, intersections, and other type sequences.
     fn fmt_type_sequence<'b>(
@@ -586,14 +625,7 @@ impl<'a> TypeDisplayContext<'a> {
                 output.write_str(separator)?;
             }
 
-            let needs_parens = wrap_callables_and_intersect
-                && matches!(
-                    t,
-                    Type::Callable(_)
-                        | Type::CallableResidual(_)
-                        | Type::Function(_)
-                        | Type::Intersect(_)
-                );
+            let needs_parens = wrap_callables_and_intersect && self.needs_parens_in_sequence(t);
             if needs_parens {
                 output.write_str("(")?;
             }
@@ -611,7 +643,7 @@ impl<'a> TypeDisplayContext<'a> {
         &self,
         output: &mut impl TypeOutput,
         func_name: &Name,
-        kind: &crate::function::FunctionKind,
+        kind: &FunctionKind,
     ) -> fmt::Result {
         if self.always_display_module_name {
             let module = kind.module_name();
@@ -646,6 +678,177 @@ impl<'a> TypeDisplayContext<'a> {
         }
     }
 
+    fn fmt_callable_hover(
+        &self,
+        callable: &Callable,
+        output: &mut impl TypeOutput,
+        indent: usize,
+    ) -> fmt::Result {
+        match &callable.params {
+            Params::List(params)
+                if params.len() > 1
+                    && params.items().iter().all(|param| {
+                        !self
+                            .display_internal(param.as_type())
+                            .to_string()
+                            .contains('\n')
+                    }) =>
+            {
+                let param_indent = indent + 4;
+                output.write_str("(\n")?;
+                output.write_str(&" ".repeat(param_indent))?;
+                self.fmt_params_hover(params.items(), output, param_indent)?;
+                output.write_str("\n")?;
+                output.write_str(&" ".repeat(indent))?;
+                output.write_str(") -> ")?;
+                self.fmt_hover_type(&callable.ret, false, output, indent)
+            }
+            _ => callable.fmt_with_type_with_newlines(
+                output,
+                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
+                indent,
+            ),
+        }
+    }
+
+    fn fmt_params_hover(
+        &self,
+        params: &[Param],
+        output: &mut impl TypeOutput,
+        indent: usize,
+    ) -> fmt::Result {
+        let mut rows = Vec::new();
+        let mut named_posonly = false;
+        let mut kwonly = false;
+        for param in params {
+            if matches!(param, Param::PosOnly(Some(_), _, _)) {
+                named_posonly = true;
+            } else if named_posonly {
+                named_posonly = false;
+                rows.push(HoverParamRow::Marker("/"));
+            }
+
+            if !kwonly && matches!(param, Param::KwOnly(..)) {
+                kwonly = true;
+                rows.push(HoverParamRow::Marker("*"));
+            }
+
+            rows.push(self.param_hover_row(param));
+        }
+        if named_posonly {
+            rows.push(HoverParamRow::Marker("/"));
+        }
+
+        let align = rows.iter().any(|row| {
+            matches!(
+                row,
+                HoverParamRow::Param {
+                    default: Some(_),
+                    ..
+                }
+            )
+        });
+        let name_width = if align {
+            rows.iter()
+                .filter_map(|row| match row {
+                    HoverParamRow::Param {
+                        name: Some(name), ..
+                    } => Some(name.len()),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or_default()
+        } else {
+            0
+        };
+        let default_type_width = if align {
+            rows.iter()
+                .filter_map(|row| match row {
+                    HoverParamRow::Param {
+                        ty,
+                        default: Some(_),
+                        ..
+                    } => Some(ty.len()),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or_default()
+        } else {
+            0
+        };
+
+        for (i, row) in rows.iter().enumerate() {
+            if i > 0 {
+                output.write_str(",\n")?;
+                output.write_str(&" ".repeat(indent))?;
+            }
+            match row {
+                HoverParamRow::Marker(marker) => output.write_str(marker)?,
+                HoverParamRow::Param { name, ty, default } => {
+                    if let Some(name) = name {
+                        output.write_str(name)?;
+                        if align {
+                            for _ in 0..name_width - name.len() {
+                                output.write_str(" ")?;
+                            }
+                        }
+                        output.write_str(": ")?;
+                    }
+                    output.write_str(ty)?;
+                    if let Some(default) = default {
+                        if align {
+                            for _ in 0..default_type_width - ty.len() {
+                                output.write_str(" ")?;
+                            }
+                        }
+                        output.write_str(" = ")?;
+                        output.write_str(default)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn param_hover_row(&self, param: &Param) -> HoverParamRow {
+        let ty = self.display_internal(param.as_type()).to_string();
+        let named = |name: String, default| HoverParamRow::Param {
+            name: Some(name),
+            ty: ty.clone(),
+            default,
+        };
+        match param {
+            Param::PosOnly(None, _, Required::Required) => HoverParamRow::Param {
+                name: None,
+                ty,
+                default: None,
+            },
+            Param::PosOnly(None, _, Required::Optional(default)) => {
+                named("_".to_owned(), Some(param.fmt_default(default)))
+            }
+            Param::PosOnly(Some(name), _, Required::Required)
+            | Param::Pos(name, _, Required::Required)
+            | Param::KwOnly(name, _, Required::Required) => named(name.to_string(), None),
+            Param::PosOnly(Some(name), _, Required::Optional(default))
+            | Param::Pos(name, _, Required::Optional(default))
+            | Param::KwOnly(name, _, Required::Optional(default)) => {
+                named(name.to_string(), Some(param.fmt_default(default)))
+            }
+            Param::Varargs(Some(name), _) => named(format!("*{name}"), None),
+            Param::Varargs(None, _) => HoverParamRow::Param {
+                name: None,
+                ty: format!("*{ty}"),
+                default: None,
+            },
+            Param::Kwargs(Some(name), _) => named(format!("**{name}"), None),
+            Param::Kwargs(None, _) => HoverParamRow::Param {
+                name: None,
+                ty: format!("**{ty}"),
+                default: None,
+            },
+        }
+    }
+
     /// Format the value type of an anonymous typed dict by computing the union
     /// of all field types on-the-fly. This avoids storing a redundant clone in the
     /// type tree (which caused exponential memory growth for nested dict literals).
@@ -672,11 +875,7 @@ impl<'a> TypeDisplayContext<'a> {
             return self.fmt_helper_generic(t, is_toplevel, output);
         }
         match t {
-            Type::Callable(c) => c.fmt_with_type_with_newlines(
-                output,
-                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
-                indent,
-            ),
+            Type::Callable(c) => self.fmt_callable_hover(c, output, indent),
             Type::Forall(forall) => {
                 let Forall { tparams, body } = &**forall;
                 let Forallable::Callable(c) = body else {
@@ -689,11 +888,7 @@ impl<'a> TypeDisplayContext<'a> {
                     commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
                 )?;
                 output.write_str("]")?;
-                c.fmt_with_type_with_newlines(
-                    output,
-                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
-                    indent,
-                )
+                self.fmt_callable_hover(c, output, indent)
             }
             _ => self.fmt_helper_generic(t, is_toplevel, output),
         }
@@ -809,7 +1004,7 @@ impl<'a> TypeDisplayContext<'a> {
                     }
                     output.write_str(name.as_str())?;
                     output.write_str(": ")?;
-                    output.write_str(dtype.name())?;
+                    output.write_fmt(format_args!("{dtype}"))?;
                 }
                 if schema.completeness == SchemaCompleteness::Partial {
                     if !schema.columns.is_empty() {
@@ -826,7 +1021,7 @@ impl<'a> TypeDisplayContext<'a> {
             Type::Series(schema) => {
                 self.fmt_helper_generic(&schema.underlying_type(), false, output)?;
                 output.write_str("[")?;
-                output.write_str(schema.dtype.name())?;
+                output.write_fmt(format_args!("{}", schema.dtype))?;
                 output.write_str("]")
             }
             Type::Int(dim) => output.write_str(&format!("Int[{dim}]")),
@@ -877,11 +1072,7 @@ impl<'a> TypeDisplayContext<'a> {
                 // Hover output should be readable even when callables appear inside unions
                 // (e.g. constructor display that unions __new__ and __init__).
                 if self.lsp_display_mode == LspDisplayMode::Hover {
-                    c.fmt_with_type_with_newlines(
-                        output,
-                        &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
-                        0,
-                    )
+                    self.fmt_callable_hover(c, output, 0)
                 } else {
                     c.fmt_with_type(output, &|t, o| self.fmt_helper_generic(t, false, o))
                 }
@@ -902,8 +1093,20 @@ impl<'a> TypeDisplayContext<'a> {
                     output.write_str("]")
                 }
             },
+            Type::TypeLevelDslCall(call)
+                if let TypeLevelDslFunction::MapIntTuples(map) = &call.function =>
+            {
+                let (mapper, _, source) = map.parts();
+                write!(output, "{}[lambda ", call.function_name())?;
+                output.write_str(mapper.parameter().name.as_str())?;
+                output.write_str(": ")?;
+                self.fmt_helper_generic(mapper.body(), false, output)?;
+                output.write_str(", ")?;
+                self.fmt_helper_generic(source, false, output)?;
+                output.write_str("]")
+            }
             Type::TypeLevelDslCall(call) => {
-                output.write_str(call.function.name)?;
+                output.write_str(call.function_name())?;
                 output.write_str("(")?;
                 for (i, arg) in call.args.iter().enumerate() {
                     if i > 0 {
@@ -944,11 +1147,7 @@ impl<'a> TypeDisplayContext<'a> {
                         self.write_func_fqn(output, &func_name, &metadata.kind)?;
                         match self.lsp_display_mode {
                             LspDisplayMode::Hover => {
-                                signature.fmt_with_type_with_newlines(
-                                    output,
-                                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
-                                    0,
-                                )?;
+                                self.fmt_callable_hover(signature, output, 0)?;
                             }
                             _ => {
                                 signature.fmt_with_type(output, &|t, o| {
@@ -1057,13 +1256,7 @@ impl<'a> TypeDisplayContext<'a> {
                                 };
                                 match self.lsp_display_mode {
                                     LspDisplayMode::Hover => {
-                                        effective_sig.fmt_with_type_with_newlines(
-                                            output,
-                                            &|t, o, indent| {
-                                                self.fmt_hover_type(t, false, o, indent)
-                                            },
-                                            0,
-                                        )?;
+                                        self.fmt_callable_hover(&effective_sig, output, 0)?;
                                     }
                                     _ => {
                                         effective_sig.fmt_with_type(output, &|t, o| {
@@ -1107,14 +1300,9 @@ impl<'a> TypeDisplayContext<'a> {
                                 };
                                 let _scope = self.push_forall_scope(tparams.iter());
                                 let result = match self.lsp_display_mode {
-                                    LspDisplayMode::Hover => effective_sig
-                                        .fmt_with_type_with_newlines(
-                                            output,
-                                            &|t, o, indent| {
-                                                self.fmt_hover_type(t, false, o, indent)
-                                            },
-                                            0,
-                                        ),
+                                    LspDisplayMode::Hover => {
+                                        self.fmt_callable_hover(&effective_sig, output, 0)
+                                    }
                                     _ => effective_sig.fmt_with_type(output, &|t, o| {
                                         self.fmt_helper_generic(t, false, o)
                                     }),
@@ -1135,7 +1323,13 @@ impl<'a> TypeDisplayContext<'a> {
                     LspDisplayMode::Hover | LspDisplayMode::SignatureHelp => {
                         self.fmt_helper_generic(&func.clone().as_type(), false, output)
                     }
-                    _ => self.fmt_helper_generic(&func.clone().as_type(), is_toplevel, output),
+                    // Binding has already consumed the receiver, so showing it would
+                    // misreport what the value can be called with, and would make a bound
+                    // method indistinguishable from the unbound one it came from.
+                    _ => {
+                        let displayed = func.strip_receiver().unwrap_or_else(|| func.clone());
+                        self.fmt_helper_generic(&displayed.as_type(), is_toplevel, output)
+                    }
                 }
             }
             Type::Never(NeverStyle::NoReturn) => {
@@ -1152,7 +1346,7 @@ impl<'a> TypeDisplayContext<'a> {
             }
             Type::Union(u)
                 if !(self.always_display_expanded_unions || is_toplevel)
-                    && let Some((module, name)) = &u.display_name =>
+                    && let Some((module, name)) = &u.display_name.0 =>
             {
                 if self.always_display_module_name && *module != ModuleName::unknown() {
                     output.write_reference(*module, name.as_ref())
@@ -1183,10 +1377,7 @@ impl<'a> TypeDisplayContext<'a> {
                             }
                             literals.push(&lit.value)
                         }
-                        Type::Callable(_)
-                        | Type::CallableResidual(_)
-                        | Type::Function(_)
-                        | Type::Intersect(_) => {
+                        t if self.needs_parens_in_sequence(t) => {
                             // These types need parentheses in union context
                             let mut temp = String::new();
                             {
@@ -1244,13 +1435,7 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str("]")?;
                         } else {
                             // Regular union member - use helper for just this one
-                            let needs_parens = matches!(
-                                t,
-                                Type::Callable(_)
-                                    | Type::CallableResidual(_)
-                                    | Type::Function(_)
-                                    | Type::Intersect(_)
-                            );
+                            let needs_parens = self.needs_parens_in_sequence(t);
                             if needs_parens {
                                 output.write_str("(")?;
                             }
@@ -1288,11 +1473,7 @@ impl<'a> TypeDisplayContext<'a> {
                                 commas_iter(|| tparams.iter().map(|q| q.display_with_bounds()))
                             )?;
                             output.write_str("]")?;
-                            c.fmt_with_type_with_newlines(
-                                output,
-                                &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
-                                0,
-                            )
+                            self.fmt_callable_hover(c, output, 0)
                         } else {
                             output.write_str("[")?;
                             write!(
@@ -1327,11 +1508,9 @@ impl<'a> TypeDisplayContext<'a> {
                             output.write_str("]")?;
                             let _scope = self.push_forall_scope(tparams.iter());
                             match self.lsp_display_mode {
-                                LspDisplayMode::Hover => signature.fmt_with_type_with_newlines(
-                                    output,
-                                    &|t, o, indent| self.fmt_hover_type(t, false, o, indent),
-                                    0,
-                                ),
+                                LspDisplayMode::Hover => {
+                                    self.fmt_callable_hover(signature, output, 0)
+                                }
                                 _ => signature.fmt_with_type(output, &|t, o| {
                                     self.fmt_helper_generic(t, false, o)
                                 }),
@@ -1611,28 +1790,28 @@ fn annotation_context<'a>(ty: &'a Type, stdlib: Option<&'a Stdlib>) -> TypeDispl
 
 impl Type {
     pub fn as_lsp_string(&self, mode: LspDisplayMode) -> String {
-        self.as_lsp_string_with_fallback_name(None, mode)
+        self.as_lsp_string_with_options(None, mode, false, None)
     }
 
-    pub fn as_lsp_string_with_fallback_name(
-        &self,
-        fallback_name: Option<&str>,
-        mode: LspDisplayMode,
-    ) -> String {
-        self.as_lsp_string_with_fallback_name_and_expanded_unions(fallback_name, mode, false)
-    }
-
-    /// Render the type for LSP display. When `expand_unions` is true, named
-    /// nested unions are shown by their members instead of their alias name —
-    /// this backs the hover panel's "+" verbosity control.
-    pub fn as_lsp_string_with_fallback_name_and_expanded_unions(
+    /// Render the type for LSP display.
+    ///
+    /// A `fallback_name` renders a bare callable as `def <name>(...): ...`.
+    /// `expand_unions` shows named nested unions by their members instead of
+    /// their alias name, backing the hover panel's "+" verbosity control.
+    /// `qualify_outside` prefixes names backed by a `QName` with their module,
+    /// except for builtins and for the given module.
+    pub fn as_lsp_string_with_options(
         &self,
         fallback_name: Option<&str>,
         mode: LspDisplayMode,
         expand_unions: bool,
+        qualify_outside: Option<ModuleName>,
     ) -> String {
         let mut c = TypeDisplayContext::new(&[self]);
         c.set_lsp_display_mode(mode);
+        if let Some(current_module) = qualify_outside {
+            c.always_display_external_qname_module_names(current_module);
+        }
         if expand_unions {
             c.always_display_expanded_unions();
         }
@@ -1642,7 +1821,7 @@ impl Type {
         {
             let trimmed = rendered.trim_start();
             if trimmed.starts_with('(') {
-                return format!("def {}{}: ...", name, trimmed);
+                return format!("def {name}{trimmed}: ...");
             }
         }
         rendered
@@ -1712,11 +1891,13 @@ pub mod tests {
     use crate::class::Class;
     use crate::class::ClassDefIndex;
     use crate::class::ClassType;
+    use crate::class::PrecomputedTParams;
     use crate::data_frame::DataFrameKind;
     use crate::data_frame::DataFrameSchema;
     use crate::dimension::Int;
     use crate::function::FuncMetadata;
     use crate::function::Function;
+    use crate::identity::IdentityIgnored;
     use crate::literal::Lit;
     use crate::literal::LitEnum;
     use crate::literal::LitStyle;
@@ -1754,7 +1935,7 @@ pub mod tests {
             Identifier::new(Name::new(name), TextRange::empty(TextSize::new(range))),
             NestingContext::toplevel(),
             mi,
-            None,
+            PrecomputedTParams::NotGeneric,
             false,
         )
     }
@@ -2359,7 +2540,7 @@ pub mod tests {
         assert_eq!(
             Type::type_of(Type::Union(Box::new(Union {
                 members: vec![nonlit1, nonlit2],
-                display_name: Some((ModuleName::unknown(), Name::new("MyUnion")))
+                display_name: IdentityIgnored(Some((ModuleName::unknown(), Name::new("MyUnion"),)))
             })))
             .to_string(),
             "type[MyUnion]"
@@ -2681,7 +2862,7 @@ pub mod tests {
         let mut ctx = TypeDisplayContext::new(&[&bound_method]);
         assert_eq!(
             ctx.display(&bound_method).to_string(),
-            "(self: Any, x: Any, y: Any) -> None"
+            "(x: Any, y: Any) -> None"
         );
         ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
@@ -2700,6 +2881,22 @@ pub mod tests {
     }
 
     #[test]
+    fn test_display_bound_method_in_union() {
+        let bound_method = fake_bound_method("foo", "MyClass", "my.module");
+        let union = Type::union(vec![bound_method, Type::None]);
+        let mut ctx = TypeDisplayContext::new(&[&union]);
+        assert_eq!(
+            ctx.display(&union).to_string(),
+            "((x: Any, y: Any) -> None) | None"
+        );
+        ctx.set_lsp_display_mode(LspDisplayMode::Query);
+        assert_eq!(
+            ctx.display(&union).to_string(),
+            "BoundMethod[builtins.type[my.module.MyClass], (self: typing.Any, x: typing.Any, y: typing.Any) -> None] | None"
+        );
+    }
+
+    #[test]
     fn test_display_generic_bound_method() {
         let bound_method = fake_generic_bound_method(
             "foo",
@@ -2710,7 +2907,7 @@ pub mod tests {
         let mut ctx = TypeDisplayContext::new(&[&bound_method]);
         assert_eq!(
             ctx.display(&bound_method).to_string(),
-            "[T](self: Any, x: Any, y: Any) -> None"
+            "[T](x: Any, y: Any) -> None"
         );
         ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
@@ -2739,7 +2936,7 @@ pub mod tests {
         let mut ctx = TypeDisplayContext::new(&[&method]);
         assert_eq!(
             ctx.display(&method).to_string(),
-            "[T, **P, R](self: Any, x: Any, y: Any) -> None"
+            "[T, **P, R](x: Any, y: Any) -> None"
         );
         ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
@@ -2763,7 +2960,7 @@ pub mod tests {
         let mut ctx = TypeDisplayContext::new(&[&method]);
         assert_eq!(
             ctx.display(&method).to_string(),
-            "[T, *Ts, R](self: Any, x: Any, y: Any) -> None"
+            "[T, *Ts, R](x: Any, y: Any) -> None"
         );
         ctx.set_lsp_display_mode(LspDisplayMode::Hover);
         assert_eq!(
@@ -2868,7 +3065,7 @@ def overloaded_func[T](
         let ctx = TypeDisplayContext::new(&[&bound_method_overload]);
         assert_eq!(
             ctx.display(&bound_method_overload).to_string(),
-            "Overload[\n  (x: Any) -> None\n  [T](x: Any, y: Any) -> None\n]"
+            "Overload[\n  () -> None\n  [T](y: Any) -> None\n]"
         );
 
         // Test compact display mode as non-toplevel type (non-hover)
@@ -2876,7 +3073,7 @@ def overloaded_func[T](
         let ctx = TypeDisplayContext::new(&[&type_form_of_bound_method_overload]);
         assert_eq!(
             ctx.display(&type_form_of_bound_method_overload).to_string(),
-            "type[Overload[(x: Any) -> None, [T](x: Any, y: Any) -> None]]"
+            "type[Overload[() -> None, [T](y: Any) -> None]]"
         );
 
         // Test hover display mode (with @overload decorators)

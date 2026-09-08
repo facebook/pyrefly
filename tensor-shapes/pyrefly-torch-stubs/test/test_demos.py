@@ -302,9 +302,8 @@ def test_batched_queries():
 
 def spatial_to_sequence[B: IntVar](
     spatial_features: Tensor[[B, 256, 7, 7]],
-) -> Tensor:
+) -> Tensor[[B * 49, 256]]:
     """Convert spatial features to sequence (flatten spatial dimensions)"""
-    # Permute may not fully support symbolic yet, returning shapeless
     transposed = spatial_features.permute(0, 2, 3, 1)
 
     # Flatten
@@ -318,8 +317,7 @@ def test_spatial_to_sequence():
     features: Tensor[[2, 256, 7, 7]] = torch.randn(2, 256, 7, 7)
 
     sequence = spatial_to_sequence(features)
-    # Permute returns shapeless currently
-    assert_type(sequence, Tensor)
+    assert_type(sequence, Tensor[[98, 256]])
 
 
 # ============================================================================

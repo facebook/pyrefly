@@ -482,6 +482,23 @@ const config: Config = {
                     ],
                 },
                 {
+                    title: 'Follow Us',
+                    items: [
+                        {
+                            label: 'X (Twitter)',
+                            href: 'https://x.com/pyrefly_dev',
+                        },
+                        {
+                            label: 'Bluesky',
+                            href: 'https://bsky.app/profile/pyrefly-dev.bsky.social',
+                        },
+                        {
+                            label: 'Mastodon',
+                            href: 'https://mastodon.social/@pyrefly',
+                        },
+                    ],
+                },
+                {
                     title: 'Legal',
                     // Please do not remove the privacy and terms, it's a legal requirement.
                     items: [

@@ -11,6 +11,7 @@
 # This adaptation adds tensor shape type annotations for pyrefly.
 
 from dataclasses import dataclass, field
+
 # ## Inventory
 # - [x] FinalMLPConfig — dataclass; Dims: mlp1_output_dim, mlp2_output_dim, num_heads, num_output_features; int: num_layers
 # - [x] MLP.__init__ — Dims: input_dim, output_dim; int: hidden_units (list)
@@ -22,7 +23,6 @@ from dataclasses import dataclass, field
 # - [x] FinalMLPBackbone.__init__ — Dims: num_features, emb_dim; config provides rest
 # - [x] FinalMLPBackbone.output_dim — property
 # - [x] FinalMLPBackbone.forward
-
 from typing import Any, assert_type, TYPE_CHECKING
 
 import torch

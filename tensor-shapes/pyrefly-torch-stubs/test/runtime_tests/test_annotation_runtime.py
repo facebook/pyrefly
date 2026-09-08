@@ -20,18 +20,20 @@ This file tests both the remaining problems (PEP 695 TypeVar arithmetic)
 and the solutions (shape_extensions patches, shape_extensions.IntVar, Generic integration).
 """
 
+import importlib
 import unittest
-from typing import Generic, TypedDict
+from typing import Any, Generic, Never, TypedDict
 
 import torch
 from shape_extensions import (
     assert_shape,
     D,
     defines_assert_shape,
-    enable_torchscript_runtime_compat,
+    gufunc_broadcast,
     Int,
     IntTuple,
     IntVar,
+    MapIntTuples,
     TypeVarTuple,
 )
 
@@ -80,8 +82,17 @@ class TestTorchScriptRuntimeCompat(unittest.TestCase):
 
         self.addCleanup(restore_int_class_getitem)
 
+    def _enable_torchscript_runtime_compat(self):
+        # Compatibility mode is applied as an import side effect, and it is
+        # process-global, so it is imported here rather than at module scope to
+        # keep it away from the tests that exercise ordinary `Int[...]`
+        # behavior. Reloading re-applies it after a previous test's cleanup.
+        import shape_extensions.torchscript
+
+        importlib.reload(shape_extensions.torchscript)
+
     def test_int_subscript_erases_to_int(self):
-        enable_torchscript_runtime_compat()
+        self._enable_torchscript_runtime_compat()
 
         def f[N]() -> None:
             self.assertIs(Int[N], int)
@@ -89,7 +100,7 @@ class TestTorchScriptRuntimeCompat(unittest.TestCase):
         f()
 
     def test_tensor_subscript_still_erases_to_tensor(self):
-        enable_torchscript_runtime_compat()
+        self._enable_torchscript_runtime_compat()
 
         self.assertIs(torch.Tensor[[3, 4]], torch.Tensor)
 
@@ -103,6 +114,18 @@ class TestIntTupleRuntime(unittest.TestCase):
 
     def test_subscript_erases_to_runtime_helper(self):
         self.assertIs(IntTuple[1, 2], IntTuple)
+
+    def test_gufunc_broadcast_is_safe_in_eager_annotations(self):
+        def f() -> gufunc_broadcast("(),()->()", tuple[IntTuple[2], IntTuple[3]]): ...
+
+        self.assertEqual(f.__annotations__["return"], ())
+
+
+class TestMapIntTuplesRuntime(unittest.TestCase):
+    def test_sources_are_not_evaluated(self):
+        self.assertIs(MapIntTuples[lambda s: int, Any], tuple)
+        self.assertIs(MapIntTuples[lambda s: int, Never], tuple)
+        self.assertIs(MapIntTuples[lambda s: int, tuple[int, int]], tuple)
 
 
 class TestTypeVarArithmetic(unittest.TestCase):
@@ -223,25 +246,33 @@ class TestAssertShapeRuntime(unittest.TestCase):
 
     def test_concrete_shape_matches(self):
         x = self.Array((2, 3))
+        self.assertIs(assert_shape(x.shape, (2, 3)), x.shape)
+
+    def test_tuple_subclass_identity_is_preserved(self):
+        shape = torch.Size((2, 3))
+        self.assertIs(assert_shape(shape, (2, 3)), shape)
+
+    def test_array_argument_uses_shape(self):
+        x = self.Array([2, 3])
         self.assertIs(assert_shape(x, (2, 3)), x)
 
     def test_concrete_shape_mismatch(self):
         with self.assertRaisesRegex(
             AssertionError, r"expected shape \(2, 3\), got \(2, 4\)"
         ):
-            assert_shape(self.Array((2, 4)), (2, 3))
+            assert_shape(self.Array((2, 4)).shape, (2, 3))
 
     def test_symbolic_shape_checks_rank_only(self):
         def f[N]() -> None:
             x = self.Array((2, 4))
-            self.assertIs(assert_shape(x, (2, D[N] + 1)), x)
+            self.assertIs(assert_shape(x.shape, (2, D[N] + 1)), x.shape)
 
         f()
 
     def test_symbolic_shape_rank_mismatch(self):
         def f[N]() -> None:
             with self.assertRaisesRegex(AssertionError, r"expected rank 2"):
-                assert_shape(self.Array((2, 4, 5)), (2, D[N] + 1))
+                assert_shape(self.Array((2, 4, 5)).shape, (2, D[N] + 1))
 
         f()
 
@@ -394,6 +425,10 @@ class TestIntVarRuntime(unittest.TestCase):
         N = IntVar("N")
         self.assertEqual(repr(N), "N")
 
+    def test_has_no_default(self):
+        N = IntVar("N")
+        self.assertFalse(N.has_default())
+
     def test_in_dim(self):
         """Int[N] with shape_extensions.IntVar."""
         N = IntVar("N")
@@ -524,6 +559,10 @@ class TestTypeVarTupleRuntime(unittest.TestCase):
         """shape_extensions.TypeVarTuple repr shows *name."""
         Ns = TypeVarTuple("Ns")
         self.assertEqual(repr(Ns), "*Ns")
+
+    def test_has_no_default(self):
+        Ns = TypeVarTuple("Ns")
+        self.assertFalse(Ns.has_default())
 
 
 if __name__ == "__main__":

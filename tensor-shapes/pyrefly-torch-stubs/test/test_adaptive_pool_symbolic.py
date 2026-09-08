@@ -47,3 +47,15 @@ def test_adaptive_pool_mixed[B: IntVar, H: IntVar](
 
     # Output has one symbolic, one literal dimension
     assert_type(y, Tensor[[B, 64, H, 7]])
+
+
+def test_adaptive_max_pool_symbolic[B: IntVar, H: IntVar](
+    x: Tensor[[B, 64, 56, 56]], h: Int[H]
+):
+    assert_type(F.adaptive_max_pool2d(x, (h, 5)), Tensor[[B, 64, H, 5]])
+
+
+def test_adaptive_pool3d_symbolic[B: IntVar, D: IntVar, W: IntVar](
+    x: Tensor[[B, 32, 12, 16, 20]], depth: Int[D], width: Int[W]
+):
+    assert_type(F.adaptive_avg_pool3d(x, (depth, 7, width)), Tensor[[B, 32, D, 7, W]])

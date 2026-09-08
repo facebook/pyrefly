@@ -6,6 +6,7 @@
  */
 
 use std::fmt;
+use std::sync::LazyLock;
 
 use dupe::Dupe;
 use pyrefly_derive::Visit;
@@ -16,6 +17,7 @@ use pyrefly_types::class::ClassType;
 use pyrefly_types::equality::TypeEq;
 use pyrefly_types::equality::TypeEqCtx;
 use pyrefly_types::special_form::SpecialForm;
+use pyrefly_types::type_info::TypeInfo;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_util::display::commas_iter;
 use ruff_python_ast::Expr;
@@ -61,6 +63,13 @@ pub struct ClassBases {
     pub has_pydantic_strict_metadata: bool,
 }
 
+static RECURSIVE_CLASS_BASES: LazyLock<ClassBases> = LazyLock::new(|| ClassBases {
+    base_types: Box::new([]),
+    base_ranges: Box::new([]),
+    tuple_ancestor: None,
+    has_pydantic_strict_metadata: false,
+});
+
 /// Manual TypeEq implementation that ignores base_ranges.
 /// TextRange contains source positions which shouldn't affect interface equality.
 impl TypeEq for ClassBases {
@@ -72,13 +81,8 @@ impl TypeEq for ClassBases {
 }
 
 impl ClassBases {
-    pub fn recursive() -> Self {
-        Self {
-            base_types: Box::new([]),
-            base_ranges: Box::new([]),
-            tuple_ancestor: None,
-            has_pydantic_strict_metadata: false,
-        }
+    pub fn recursive() -> &'static Self {
+        &RECURSIVE_CLASS_BASES
     }
 
     pub fn tuple_ancestor(&self) -> Option<&Tuple> {
@@ -109,7 +113,7 @@ impl fmt::Display for ClassBases {
     }
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // This is a version of `subscript_infer_for_type` with very restricted capability, in order to avoid cyclic dependencies
     fn base_class_subscript_infer(
         &self,
@@ -126,23 +130,32 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .heap
                 .mk_type_of(self.heap.mk_special_form(SpecialForm::Tuple));
         }
+        let type_form_context = TypeFormContext::BaseClassList;
+        // This restricted parser does not recurse through `expr_untype`, so recognize the
+        // shape-extension-specific `IntTuple[...]` form before ordinary class specialization
+        // erases its dimensions. For example, `Box[IntTuple[2, 3]]` must retain `[2, 3]` in the
+        // generic base so superclass projection can later recover that specialization.
+        if matches!(&base, Type::ClassDef(cls) if self.is_int_tuple_class(cls)) {
+            return (
+                self.parse_int_tuple_type(Ast::unpack_slice(slice), type_form_context, errors),
+                false,
+            );
+        }
+        let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
         let mut has_strict = false;
         let arguments_untype = |slice: &Expr, has_strict: &mut bool| {
             Ast::unpack_slice(slice)
                 .iter()
                 .map(|x| match BaseClassExpr::from_expr(x) {
                     Some(base_expr) => {
-                        let (ty, arg_has_strict) = self.base_class_expr_untype(
-                            &base_expr,
-                            TypeFormContext::TypeArgument,
-                            errors,
-                        );
+                        let (ty, arg_has_strict) =
+                            self.base_class_expr_untype(&base_expr, type_argument_context, errors);
                         if arg_has_strict {
                             *has_strict = true;
                         }
                         ty
                     }
-                    None => self.expr_untype(x, TypeFormContext::TypeArgument, errors),
+                    None => self.expr_untype(x, type_argument_context, errors),
                 })
                 .collect::<Vec<_>>()
         };
@@ -158,7 +171,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 errors,
             )),
             Type::Type(f) if let Type::SpecialForm(special) = *f => {
-                self.apply_special_form(special, slice, range, errors)
+                self.apply_special_form(special, slice, range, type_form_context, errors)
             }
             Type::Any(style) => style.propagate(),
             t => self.error(
@@ -174,17 +187,21 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         (result, has_strict)
     }
 
-    fn base_class_expr_infer(&self, expr: &BaseClassExpr, errors: &ErrorCollector) -> (Type, bool) {
+    fn base_class_expr_infer(
+        &self,
+        expr: &BaseClassExpr,
+        errors: &ErrorCollector,
+    ) -> (TypeInfo, bool) {
         match expr {
             BaseClassExpr::Name(x) => (
                 self.get(&Key::BoundName(ShortIdentifier::expr_name(x)))
-                    .arc_clone_ty(),
+                    .clone(),
                 false,
             ),
             BaseClassExpr::Attribute { value, attr, range } => {
                 let (base, has_strict) = self.base_class_expr_infer(value, errors);
                 (
-                    self.attr_infer_for_type(&base, &attr.id, *range, errors, None),
+                    self.attr_infer(&base, &attr.id, *range, errors, None),
                     has_strict,
                 )
             }
@@ -195,9 +212,9 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             } => {
                 let (base_ty, has_strict_from_value) = self.base_class_expr_infer(value, errors);
                 let (result_ty, has_strict_from_subscript) =
-                    self.base_class_subscript_infer(base_ty, slice, *range, errors);
+                    self.base_class_subscript_infer(base_ty.into_ty(), slice, *range, errors);
                 (
-                    result_ty,
+                    TypeInfo::of_ty(result_ty),
                     has_strict_from_value || has_strict_from_subscript,
                 )
             }
@@ -224,14 +241,15 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn base_class_expr_untype(
         &self,
         base_expr: &BaseClassExpr,
-        type_form_context: TypeFormContext,
+        type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> (Type, bool) {
         let range = base_expr.range();
         let (inferred_ty, has_strict_from_infer) = self.base_class_expr_infer(base_expr, errors);
-        let has_pydantic_strict_metadata =
-            self.is_type_alias_with_pydantic_strict_metadata(&inferred_ty) || has_strict_from_infer;
-        let ty = self.untype(inferred_ty, range, errors);
+        let has_pydantic_strict_metadata = self
+            .is_type_alias_with_pydantic_strict_metadata(inferred_ty.ty())
+            || has_strict_from_infer;
+        let ty = self.untype(inferred_ty.into_ty(), range, errors);
         (
             self.validate_type_form(ty, range, type_form_context, errors),
             has_pydantic_strict_metadata,
@@ -275,14 +293,18 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                     x.range(),
                 )),
                 BaseClass::SynthesizedBase(class_idx, _) => {
-                    self.get_idx(*class_idx).as_ref().0.as_ref().map(|cls| {
+                    self.get_idx(*class_idx).0.as_ref().map(|cls| {
                         let ct = self.promote_nontypeddict_silently_to_classtype(cls);
                         (self.heap.mk_class_type(ct), x.range())
                     })
                 }
                 BaseClass::TypeOf(inner_expr, _) => {
                     let (ty, _) = self.base_class_expr_infer(inner_expr, &fake_error_collector);
-                    match self.untype_opt(ty.clone(), inner_expr.range(), &fake_error_collector) {
+                    match self.untype_opt(
+                        ty.ty().clone(),
+                        inner_expr.range(),
+                        &fake_error_collector,
+                    ) {
                         Some(Type::ClassType(c)) => {
                             // X is a class. type(X) = metaclass of X.
                             let class_obj = c.class_object();
@@ -292,8 +314,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                         }
                         None => {
                             // X is an instance. type(X) = its class.
-                            match &ty {
-                                Type::ClassType(_) => Some((ty, x.range())),
+                            match ty.ty() {
+                                Type::ClassType(_) => Some((ty.into_ty(), x.range())),
                                 _ => None,
                             }
                         }

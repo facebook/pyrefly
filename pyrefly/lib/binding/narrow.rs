@@ -411,6 +411,8 @@ pub enum FacetOrigin {
     Direct,
     // This facet came from a call to a `get` method, like `x.get("key")`
     GetMethod,
+    // This facet belongs to the evaluated tuple in a multi-subject match.
+    MatchSubject,
 }
 
 #[derive(Clone, Debug)]
@@ -527,6 +529,17 @@ impl NarrowOp {
         }
     }
 
+    /// Whether this operation narrows an element of a multi-subject match tuple.
+    pub(crate) fn has_match_subject_facet(&self) -> bool {
+        match self {
+            Self::Atomic(Some(facet_subject), _) => {
+                facet_subject.origin == FacetOrigin::MatchSubject
+            }
+            Self::Atomic(None, _) => false,
+            Self::And(ops) | Self::Or(ops) => ops.iter().any(Self::has_match_subject_facet),
+        }
+    }
+
     fn and(&mut self, other: Self) {
         match self {
             Self::And(ops) => ops.push(other),
@@ -581,6 +594,9 @@ impl NarrowOp {
             chain.extend(extra.chain.facets().clone());
             let origin = match (base.origin, extra.origin) {
                 (FacetOrigin::GetMethod, _) | (_, FacetOrigin::GetMethod) => FacetOrigin::GetMethod,
+                (FacetOrigin::MatchSubject, _) | (_, FacetOrigin::MatchSubject) => {
+                    FacetOrigin::MatchSubject
+                }
                 _ => FacetOrigin::Direct,
             };
             FacetSubject {
@@ -1070,23 +1086,31 @@ impl NarrowOps {
                 op: UnaryOp::Not,
                 operand: e,
             }) => Self::from_expr_helper(builder, Some(e), seen).negate(),
-            Expr::Call(ExprCall {
-                node_index: _,
-                range,
-                func,
-                arguments,
-            }) if builder.as_special_export(func) == Some(SpecialExport::Bool)
+            Expr::Call(
+                test @ ExprCall {
+                    node_index: _,
+                    range_start: _,
+                    func,
+                    arguments,
+                },
+            ) if builder.as_special_export(func) == Some(SpecialExport::Bool)
                 && arguments.args.len() == 1
                 && arguments.keywords.is_empty() =>
             {
-                Self::from_single_narrow_op(&arguments.args[0], AtomicNarrowOp::IsTruthy, *range)
+                Self::from_single_narrow_op(
+                    &arguments.args[0],
+                    AtomicNarrowOp::IsTruthy,
+                    test.range(),
+                )
             }
-            Expr::Call(ExprCall {
-                node_index: _,
-                range,
-                func,
-                arguments,
-            }) if builder.as_special_export(func) == Some(SpecialExport::HasAttr)
+            Expr::Call(
+                test @ ExprCall {
+                    node_index: _,
+                    range_start: _,
+                    func,
+                    arguments,
+                },
+            ) if builder.as_special_export(func) == Some(SpecialExport::HasAttr)
                 && arguments.args.len() == 2
                 && arguments.keywords.is_empty()
                 && let Expr::StringLiteral(ExprStringLiteral { value, .. }) =
@@ -1095,15 +1119,17 @@ impl NarrowOps {
                 Self::from_single_narrow_op(
                     &arguments.args[0],
                     AtomicNarrowOp::HasAttr(Name::new(value.to_string())),
-                    *range,
+                    test.range(),
                 )
             }
-            Expr::Call(ExprCall {
-                node_index: _,
-                range,
-                func,
-                arguments,
-            }) if builder.as_special_export(func) == Some(SpecialExport::GetAttr)
+            Expr::Call(
+                test @ ExprCall {
+                    node_index: _,
+                    range_start: _,
+                    func,
+                    arguments,
+                },
+            ) if builder.as_special_export(func) == Some(SpecialExport::GetAttr)
                 && (arguments.args.len() == 2 || arguments.args.len() == 3)
                 && arguments.keywords.is_empty()
                 && let Expr::StringLiteral(ExprStringLiteral { value, .. }) =
@@ -1119,7 +1145,7 @@ impl NarrowOps {
                             Some(Box::new(arguments.args[2].clone()))
                         },
                     ),
-                    *range,
+                    test.range(),
                 )
             }
             e @ Expr::Call(call) if dict_get_subject_for_call_expr(call).is_some() => {
@@ -1128,18 +1154,20 @@ impl NarrowOps {
                 // This cannot be a TypeGuard/TypeIs function call, since the first argument is a string literal
                 Self::from_single_narrow_op(e, AtomicNarrowOp::IsTruthy, e.range())
             }
-            Expr::Call(ExprCall {
-                node_index: _,
-                range,
-                func,
-                arguments: args @ Arguments { args: posargs, .. },
-            }) if !posargs.is_empty() => {
+            Expr::Call(
+                test @ ExprCall {
+                    node_index: _,
+                    range_start: _,
+                    func,
+                    arguments: args @ Arguments { args: posargs, .. },
+                },
+            ) if !posargs.is_empty() => {
                 // This may be a function call that narrows the type of its first argument. Record
                 // it as a possible narrowing operation that we'll resolve in the answers phase.
                 Self::from_single_narrow_op(
                     &posargs[0],
                     AtomicNarrowOp::Call(Box::new((**func).clone()), args.clone()),
-                    *range,
+                    test.range(),
                 )
             }
             Expr::Named(named) => {
@@ -1206,7 +1234,7 @@ impl NarrowOps {
             // implicit builtins, and missing names do not.
             NameReadInfo::Anywhere { .. }
             | NameReadInfo::ImplicitBuiltin { .. }
-            | NameReadInfo::OutOfScopeTypeParameter { .. }
+            | NameReadInfo::OuterClassTypeParameter { .. }
             | NameReadInfo::NotFound => None,
         }
     }

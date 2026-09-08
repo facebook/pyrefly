@@ -17,7 +17,7 @@ use crate::types::function::FuncMetadata;
 use crate::types::function::Function;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Wrap a parameter list and return type into a synthesized method `Type` bound to `cls`. Shared
     /// by the dataclass, attrs, and pydantic synthesizers, which all build methods this same way.
     pub(crate) fn synthesized_method(

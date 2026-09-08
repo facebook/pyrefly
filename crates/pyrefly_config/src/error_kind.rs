@@ -325,8 +325,12 @@ pub enum ErrorKind {
     /// The SCC fixpoint iteration did not converge within the maximum number of
     /// iterations. The inferred type may be incorrect; adding annotations can help.
     NonConvergentRecursion,
-    /// Matching on an enum without covering all possible cases.
+    /// Matching on a closed type without covering all possible cases.
     NonExhaustiveMatch,
+    /// Matching on an open type without covering all possible cases.
+    /// This is a sub-kind of [NonExhaustiveMatch]: suppressing `non-exhaustive-match` also
+    /// suppresses this error.
+    NonExhaustiveMatchOpenType,
     /// Attempting to use something that isn't a type where a type is expected.
     /// This is a very general error and should be used sparingly.
     NotAType,
@@ -379,6 +383,8 @@ pub enum ErrorKind {
     RedundantCast,
     /// Attempting to use value that is equivalent to True or always False in boolean context.
     RedundantCondition,
+    /// An invalid regex pattern or regex group access.
+    Regex,
     /// Raised by a call to reveal_type().
     RevealType,
     /// Passing a string to something that expects an iterable of strings.
@@ -511,6 +517,7 @@ impl ErrorKind {
             ErrorKind::NoAnyReturnExplicit | ErrorKind::NoAnyReturnImplicit => {
                 Some(ErrorKind::NoAnyReturn)
             }
+            ErrorKind::NonExhaustiveMatchOpenType => Some(ErrorKind::NonExhaustiveMatch),
             ErrorKind::PytorchEfficiencyLintCudaCall
             | ErrorKind::PytorchEfficiencyLintItemCall
             | ErrorKind::PytorchEfficiencyLintPrintTensor
@@ -574,6 +581,7 @@ impl ErrorKind {
             ErrorKind::NoAnyReturnExplicit => Severity::Ignore,
             ErrorKind::NoAnyReturnImplicit => Severity::Ignore,
             ErrorKind::NonExhaustiveMatch => Severity::Warn,
+            ErrorKind::NonExhaustiveMatchOpenType => Severity::Ignore,
             ErrorKind::NonConvergentRecursion => Severity::Warn,
             ErrorKind::NotRequiredKeyAccess => Severity::Ignore,
             ErrorKind::OpenUnpacking => Severity::Ignore,
@@ -620,14 +628,18 @@ impl ErrorKind {
         matches!(self, ErrorKind::RevealType)
     }
 
+    /// Returns true if this error kind reports a suppression comment that
+    /// suppresses nothing, covering both Pyrefly/Pyre ignores and
+    /// `# type: ignore`.
+    pub fn is_unused_ignore(self) -> bool {
+        matches!(self, ErrorKind::UnusedIgnore | ErrorKind::UnusedTypeIgnore)
+    }
+
     /// Returns whether `--suppress-errors` may write a suppression comment for
     /// this kind. Unused-ignore diagnostics are excluded because suppressing one
     /// would only leave behind another unused ignore.
     pub fn is_suppressable(self) -> bool {
-        match self {
-            ErrorKind::UnusedIgnore | ErrorKind::UnusedTypeIgnore => false,
-            _ => true,
-        }
+        !self.is_unused_ignore()
     }
 
     /// A soft error is a diagnostic that should not influence overload selection

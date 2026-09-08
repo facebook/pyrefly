@@ -49,11 +49,18 @@ this list. A global `ignore_missing_imports = true` becomes the module glob
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
 | `ignore-missing-imports`             | Substitutes `Any` only when the matched module cannot be found. If it is found, its real type information is used. |
 | `replace-imports-with-any`           | Always substitutes `Any` for the matched module, even when source or stubs are available.                          |
+| `replace-untyped-imports-with-any`   | Substitutes `Any` when a matched installed package has neither stubs nor a `py.typed` marker.                       |
 | `[errors] missing-import = "ignore"` | Suppresses missing-import diagnostics everywhere, rather than for selected modules.                                |
 
 Prefer `ignore-missing-imports` for optional dependencies.
 `replace-imports-with-any` is the closer match for mypy's
 `follow_imports = "skip"`, and it is a much stronger escape hatch.
+
+Mypy's `follow_untyped_imports` has the opposite polarity from
+`replace-untyped-imports-with-any`. `pyrefly init` converts mypy's default of
+`false` to `["*"]`. It converts per-module overrides to module globs, using
+negated globs when a module enables `follow_untyped_imports` against that
+global default.
 
 :::warning
 

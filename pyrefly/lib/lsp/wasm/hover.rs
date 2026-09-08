@@ -44,6 +44,7 @@ use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::UnaryOp;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -99,6 +100,12 @@ pub struct HoverResult {
 pub struct HoverOptions {
     pub show_go_to_links: bool,
     pub verbosity_level: usize,
+}
+
+/// Hover qualifies the module of a value's type, but not of a signature, where a
+/// prefix on every parameter costs more than it explains.
+fn qualify_hover_names(kind: Option<SymbolKind>, type_: &Type) -> bool {
+    kind != Some(SymbolKind::Class) && !type_.is_toplevel_callable()
 }
 
 impl HoverValue {
@@ -193,7 +200,8 @@ impl HoverValue {
 
         // For methods, search in parent class; for constructors, use the return type
         let search_type = context_type
-            .visit_toplevel_func_metadata(&|meta| {
+            .toplevel_func_metadata()
+            .and_then(|meta| {
                 let symbol = meta.kind.to_func_symbol()?;
                 let class = symbol.cls.as_ref()?;
                 Some(Type::ClassType(ClassType::new(
@@ -288,8 +296,12 @@ impl HoverValue {
             section
         };
         let type_display = self.display.clone().unwrap_or_else(|| {
-            self.type_
-                .as_lsp_string_with_fallback_name(self.name.as_deref(), LspDisplayMode::Hover)
+            self.type_.as_lsp_string_with_options(
+                self.name.as_deref(),
+                LspDisplayMode::Hover,
+                false,
+                qualify_hover_names(self.kind, &self.type_).then(|| handle.module()),
+            )
         });
 
         Hover {
@@ -415,7 +427,9 @@ fn position_is_in_docstring(ast: Option<&ModModule>, position: TextSize) -> bool
 /// type metadata knows about the callable. This primarily handles third-party stubs
 /// where we only have typeshed information.
 fn fallback_hover_name_from_type(type_: &Type) -> Option<String> {
-    let name = type_.visit_toplevel_func_metadata(&|meta| Some(meta.kind.function_name()));
+    let name = type_
+        .toplevel_func_metadata()
+        .map(|meta| meta.kind.function_name());
     if let Some(name) = name {
         return Some(name.to_string());
     }
@@ -558,7 +572,7 @@ fn get_owner_class_of_pep695_type_parameter_at(
             _ => None,
         });
     let key = Key::Definition(ShortIdentifier::new(&owner?));
-    match transaction.get_type_for_display(handle, &key)? {
+    match transaction.get_type(handle, &key)? {
         Type::ClassDef(class) => Some(class),
         _ => None,
     }
@@ -628,7 +642,8 @@ fn class_display_type(solver: &AnswersSolver<TransactionHandle<'_>>, type_: &Typ
         },
         _ => None,
     }?;
-    constructor.transform_toplevel_callable(|c| expand_callable_kwargs_for_hover(solver, c));
+    constructor
+        .transform_toplevel_callable_signatures(|c, _| expand_callable_kwargs_for_hover(solver, c));
     Some(solver.for_display(constructor))
 }
 
@@ -781,7 +796,7 @@ fn in_keyword_hover(
     position: TextSize,
 ) -> Option<HoverResult> {
     let iterable_range = in_keyword_in_iteration_at(ast, position)?;
-    let iterable_type = transaction.get_type_at_for_display(handle, iterable_range.start())?;
+    let iterable_type = transaction.get_type_at(handle, iterable_range.start())?;
     Some(HoverResult {
         hover: Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -806,7 +821,7 @@ fn resolve_hovered_type(
 ) -> Option<Type> {
     let mut type_ = transaction
         .subscript_operator_type_at(handle, position)
-        .or_else(|| transaction.get_type_at_for_display(handle, position))
+        .or_else(|| transaction.get_type_at(handle, position))
         .or_else(|| transaction.operator_type_at(handle, position))?;
 
     // Find the innermost call whose callee (func) encloses the cursor, returning the
@@ -935,7 +950,7 @@ pub fn get_hover_with_verbosity(
     let type_ = resolve_hovered_type(transaction, handle, ast.as_deref(), position)?;
 
     // `a and b and c` is a single flat BoolOp, so hovering any operator in the
-    // chain highlights the whole expression.
+    // chain highlights the whole expression. `not` highlights its unary expression.
     let range = ast
         .as_deref()
         .zip(module_info.as_ref())
@@ -946,6 +961,9 @@ pub fn get_hover_with_verbosity(
                 .and_then(|node| match node {
                     AnyNodeRef::ExprBoolOp(bool_op) => {
                         Some(module_info.to_lsp_range(bool_op.range()))
+                    }
+                    AnyNodeRef::ExprUnaryOp(unary_op) if unary_op.op == UnaryOp::Not => {
+                        Some(module_info.to_lsp_range(unary_op.range()))
                     }
                     _ => None,
                 })
@@ -1021,16 +1039,19 @@ pub fn get_hover_with_verbosity(
                 {
                     class_type
                 } else {
-                    cloned.transform_toplevel_callable(|c| {
+                    cloned.transform_toplevel_callable_signatures(|c, _| {
                         expand_callable_kwargs_for_hover(&solver, c)
                     });
                     cloned
                 };
+                let qualify_outside =
+                    qualify_hover_names(kind, &display_type).then(|| handle.module());
                 let render = |expand| {
-                    display_type.as_lsp_string_with_fallback_name_and_expanded_unions(
+                    display_type.as_lsp_string_with_options(
                         name_for_display.as_deref(),
                         LspDisplayMode::Hover,
                         expand,
+                        qualify_outside,
                     )
                 };
                 let rendered = render(unions_expanded);
@@ -1110,7 +1131,7 @@ mod tests {
     #[test]
     fn fallback_recurses_through_type_wrapper() {
         let heap = TypeHeap::new();
-        let ty = heap.mk_type(make_function_type(&heap, "pkg.subpkg", "run"));
+        let ty = heap.mk_type_of(make_function_type(&heap, "pkg.subpkg", "run"));
         let fallback = fallback_hover_name_from_type(&ty);
         assert_eq!(fallback.as_deref(), Some("run"));
     }

@@ -14,7 +14,6 @@ import PyreflyVideo from './PyreflyVideo';
 import LandingPageSection from './landingPageSection';
 import PresetLandingPageHeader from './presetLandingPageHeader';
 import StrictnessPresets from './strictnessPresets';
-import IDECarousel from './IDECarousel';
 
 // Shared layout behind the preset landing page URLs registered in
 // docusaurus.config.ts.
@@ -38,10 +37,6 @@ export default function PresetLandingPage(): React.ReactElement {
                 title="Improve code quality at your own pace"
                 child={<StrictnessPresets />}
                 isTitleCentered={true}
-            />
-            <LandingPageSection
-                id="ide-carousel-section"
-                child={<IDECarousel />}
             />
             <LandingPageSection
                 id="performance-comparison-section"

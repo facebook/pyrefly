@@ -346,8 +346,8 @@ class Pair2[T](NamedTuple):
     y: T
 
 def test(p: Pair, p2: Pair2[bytes]):
-    reveal_type(p.__iter__)  # E: (self: Pair) -> Iterator[int | str]
-    reveal_type(p2.__iter__)  # E: (self: Pair2[bytes]) -> Iterator[bytes | int]
+    reveal_type(p.__iter__)  # E: () -> Iterator[int | str]
+    reveal_type(p2.__iter__)  # E: () -> Iterator[bytes | int]
     "#,
 );
 
