@@ -40,6 +40,10 @@ type TypeErrorDisplayStatusV2 = {
   // Version string of the language server binary, or null when the
   // server doesn't know it.
   pyreflyVersion: string | null;
+  // The current status of the build system. Typically, if a build system is
+  // configured, here you would see something like `building`, `ready`,
+  // or `error: <error>`.
+  buildSystem: string | null;
 };
 
 /// Update the status bar based on current configuration
@@ -172,6 +176,9 @@ function renderV2(status: TypeErrorDisplayStatusV2) {
       // (and copyable) while still clickable.
       sections.push(`Docs: [${status.docsUrl}](${status.docsUrl})`);
     }
+  }
+  if (status.buildSystem) {
+    sections.push(`Build system: ${status.buildSystem}`);
   }
   if (status.pyreflyVersion) {
     sections.push(`Pyrefly version: ${status.pyreflyVersion}`);

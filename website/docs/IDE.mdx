@@ -335,7 +335,9 @@ versioned via `initializationOptions.pyrefly.typeErrorDisplayStatusVersion`:
     "version": "v2",
     "label": "Basic" | "Legacy" | "Default" | "Errors Off" | null,
     "tooltip": "markdown string",
-    "docsUrl": "https://pyrefly.org/..."
+    "docsUrl": "https://pyrefly.org/...",
+    "pyreflyVersion": "1.2.3" | null,
+    "buildSystem": "building" | "ready" | "error: <message>" | null
   }
   ```
   `Basic` / `Legacy` / `Default` are emitted when Pyrefly synthesized
@@ -348,6 +350,11 @@ versioned via `initializationOptions.pyrefly.typeErrorDisplayStatusVersion`:
   render plain `Pyrefly` with no parenthetical. The Pyrefly VS Code
   extension uses V2 to render the status-bar parenthetical (e.g.
   `Pyrefly (Basic)` or `Pyrefly (Errors Off)`).
+
+  `buildSystem` reports the state of the most recent source-database
+  query if any open files have an IDE-compatible one configured. If
+  no open projects have a configured build system, it will be set to
+  `null`, and clients should not render it.
 
 Clients should dispatch on response shape (`typeof resp === 'string'`
 for V1, `resp.version` for V2+) so they can transparently support

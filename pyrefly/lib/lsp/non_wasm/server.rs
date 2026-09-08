@@ -312,6 +312,7 @@ use crate::lsp::non_wasm::queue::QueuedEvent;
 use crate::lsp::non_wasm::safe_delete_file::safe_delete_file_code_action;
 use crate::lsp::non_wasm::stdlib::should_show_stdlib_error;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::lsp::non_wasm::type_error_display_status::BuildSystemStatus;
 use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatus;
 pub use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusRequest;
 use crate::lsp::non_wasm::type_error_display_status::TypeErrorDisplayStatusResponse;
@@ -897,6 +898,9 @@ pub struct Server {
     sourcedb_queue: HeavyTaskQueue,
     /// Any configs whose find cache should be invalidated.
     invalidated_source_dbs: Mutex<SmallSet<ArcId<Box<dyn SourceDatabase + 'static>>>>,
+    /// State of the most recent build-system source database query, surfaced in
+    /// the status bar.
+    build_system_status: Mutex<Option<BuildSystemStatus>>,
     /// Custom initialization options are provided via initialize_params.initializationOptions
     /// The type should match `LspConfig`
     initialize_params: InitializeParams,
@@ -2700,6 +2704,7 @@ impl Server {
             find_reference_queue: HeavyTaskQueue::new(QueueName::FindReferenceQueue),
             sourcedb_queue: HeavyTaskQueue::new(QueueName::SourceDbQueue),
             invalidated_source_dbs: Mutex::new(SmallSet::new()),
+            build_system_status: Mutex::new(None),
             initialize_params,
             indexing_mode,
             workspace_indexing_limit,
@@ -3046,6 +3051,10 @@ impl Server {
             workspace_disable_type_errors,
             workspace_type_checking_mode,
             self.server_version.clone(),
+            self.build_system_status
+                .lock()
+                .as_ref()
+                .map(BuildSystemStatus::display),
         )
     }
 
@@ -3615,6 +3624,14 @@ impl Server {
         !self.workspaces.workspace_diagnostic_roots().is_empty()
     }
 
+    /// Records the build system's state for the status bar.
+    ///
+    /// Called from the source database queue thread, so it must not take any
+    /// lock the query itself holds.
+    fn set_build_system_status(&self, status: BuildSystemStatus) {
+        *self.build_system_status.lock() = Some(status);
+    }
+
     /// Attempts to requery any open sourced_dbs for open files, and if there are changes,
     /// invalidate find and perform a recheck.
     fn queue_source_db_rebuild_and_recheck(
@@ -3643,8 +3660,25 @@ impl Server {
                     .insert(handle.path().dupe());
             }
             let task_telemetry = SubTaskTelemetry::new(telemetry, telemetry_event);
+            // Mirrors the filter in `ConfigFile::query_source_db` to see if we
+            // will actually kick a build system query off.
+            let queries_build_system = configs_to_paths.keys().any(|config| {
+                config
+                    .source_db
+                    .as_ref()
+                    .is_some_and(|db| db.as_live_source_database().is_some())
+            });
+            if queries_build_system {
+                server.set_build_system_status(BuildSystemStatus::Building);
+            }
             let outcome =
                 ConfigFile::query_source_db(&configs_to_paths, force, Some(task_telemetry));
+            if queries_build_system {
+                server.set_build_system_status(match outcome.error {
+                    Some(error) => BuildSystemStatus::Failed(error),
+                    None => BuildSystemStatus::Ready,
+                });
+            }
             telemetry_event.set_sourcedb_rebuild_stats(outcome.stats);
             if !outcome.reloaded.is_empty() {
                 let mut lock = server.invalidated_source_dbs.lock();
