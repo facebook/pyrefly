@@ -174,12 +174,39 @@ fn dict_field_labels(txn: &Transaction<'_>, handle: &Handle, position: TextSize)
 fn polars_column_completion_labels(code: &str) -> Vec<String> {
     let mut env = TestEnv::new();
     env.add_with_path(
+        "polars.expr.expr",
+        "polars/expr/expr.pyi",
+        "class Expr: ...",
+    );
+    env.add_with_path(
+        "polars.functions.col",
+        "polars/functions/col.pyi",
+        r#"
+from polars.expr.expr import Expr
+class Col:
+    def __call__(self, *names: str) -> Expr: ...
+    def __getattr__(self, name: str) -> Expr: ...
+col: Col
+"#,
+    );
+    env.add_with_path(
+        "polars.functions.lit",
+        "polars/functions/lit.pyi",
+        r#"
+from polars.expr.expr import Expr
+def lit(value: object) -> Expr: ...
+"#,
+    );
+    env.add_with_path(
         "polars.dataframe.frame",
         "polars/dataframe/frame.pyi",
         r#"
 class DataFrame:
     def __init__(self, data: object = None) -> None: ...
-    def select(self, *exprs: object) -> "DataFrame": ...
+    def select(self, *exprs: object, **named_exprs: object) -> "DataFrame": ...
+    def with_columns(self, *exprs: object, **named_exprs: object) -> "DataFrame": ...
+    def filter(self, *predicates: object, **constraints: object) -> "DataFrame": ...
+    def sort(self, by: object, *more_by: object, descending: bool = False) -> "DataFrame": ...
     def write_csv(self, file: str) -> None: ...
 "#,
     );
@@ -187,8 +214,9 @@ class DataFrame:
         "polars",
         r#"
 from polars.dataframe.frame import DataFrame as DataFrame
-class Expr: ...
-def col(name: str) -> Expr: ...
+from polars.expr.expr import Expr as Expr
+from polars.functions.col import col as col
+from polars.functions.lit import lit as lit
 "#,
     );
     env.add("main", code);
@@ -207,6 +235,7 @@ fn pandas_column_completion_labels(code: &str) -> Vec<String> {
 class DataFrame:
     def __init__(self, data: object = None) -> None: ...
     def groupby(self, by: object) -> object: ...
+    def filter(self, items: object = None, axis: object = None) -> object: ...
 "#,
     );
     env.add(
@@ -602,6 +631,45 @@ df.select(pl.col(""))
 }
 
 #[test]
+fn dataframe_column_completion_from_aliased_column_helper() {
+    let code = r#"
+from polars import DataFrame, col as column
+df = DataFrame({"foo": [1], "bar": [2]})
+df.filter(foo=column(""))
+#                    ^
+"#;
+    assert_eq!(
+        polars_column_completion_labels(code),
+        vec!["bar".to_owned(), "foo".to_owned()]
+    );
+}
+
+#[test]
+fn dataframe_column_completion_uses_innermost_polars_helper() {
+    let column_code = r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.select(pl.lit(pl.col("")))
+#                       ^
+"#;
+    assert_eq!(
+        polars_column_completion_labels(column_code),
+        vec!["bar".to_owned(), "foo".to_owned()]
+    );
+
+    let literal_code = r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.select(pl.col(pl.lit("")))
+#                       ^
+"#;
+    assert_eq!(
+        polars_column_completion_labels(literal_code),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
 fn pandas_column_completion_from_method_argument() {
     let code = r#"
 import pandas as pd
@@ -628,6 +696,121 @@ f(df, "")
 }
 
 #[test]
+fn dataframe_column_completion_from_sort_by_keyword() {
+    let code = r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.sort(by="")
+#            ^
+"#;
+    assert_eq!(
+        polars_column_completion_labels(code),
+        vec!["bar".to_owned(), "foo".to_owned()]
+    );
+}
+
+#[test]
+fn no_column_completion_from_sort_control_keyword() {
+    let code = r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.sort(by="foo", descending="")
+#                             ^
+"#;
+    assert_eq!(polars_column_completion_labels(code), Vec::<String>::new());
+}
+
+// A splat leaves the number of positional arguments unknown, but every positional parameter of
+// these methods names a column, so a literal after one is still a column position.
+#[test]
+fn dataframe_column_completion_after_positional_splat() {
+    let code = r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+keys: list[str] = []
+df.select(*keys, "")
+#                 ^
+"#;
+    assert_eq!(
+        polars_column_completion_labels(code),
+        vec!["bar".to_owned(), "foo".to_owned()]
+    );
+}
+
+// `filter(name=value)` reads the keyword as the column and a direct string value as data.
+#[test]
+fn no_column_completion_from_filter_keyword_value() {
+    let code = r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.filter(foo="")
+#              ^
+"#;
+    assert_eq!(polars_column_completion_labels(code), Vec::<String>::new());
+}
+
+#[test]
+fn dataframe_column_completion_from_named_expression_keyword() {
+    let code = r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.select(alias="")
+#               ^
+"#;
+    assert_eq!(
+        polars_column_completion_labels(code),
+        vec!["bar".to_owned(), "foo".to_owned()]
+    );
+}
+
+#[test]
+fn dataframe_column_completion_from_keyword_splat() {
+    for code in [
+        r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.select(**dict(alias=""))
+#                       ^
+"#,
+        r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.select(**{"alias": ""})
+#                      ^
+"#,
+        r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.select(**dict(alias=pl.col("")))
+#                              ^
+"#,
+        r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.select(**{"alias": pl.col("")})
+#                             ^
+"#,
+    ] {
+        assert_eq!(
+            polars_column_completion_labels(code),
+            vec!["bar".to_owned(), "foo".to_owned()]
+        );
+    }
+}
+
+#[test]
+fn named_expression_alias_key_does_not_complete_source_columns() {
+    let code = r#"
+import polars as pl
+df = pl.DataFrame({"foo": [1], "bar": [2]})
+df.select(**{"": "bar"})
+#             ^
+"#;
+    let labels = polars_column_completion_labels(code);
+    assert!(!labels.iter().any(|label| label == "foo" || label == "bar"));
+}
+
+#[test]
 fn no_column_completion_from_non_column_dataframe_method() {
     let code = r#"
 import polars as pl
@@ -636,6 +819,44 @@ df.write_csv("")
 #             ^
 "#;
     assert_eq!(polars_column_completion_labels(code), Vec::<String>::new());
+}
+
+#[test]
+fn no_column_completion_falls_through_to_outer_dataframe_call() {
+    for code in [
+        r#"
+import polars as pl
+outer = pl.DataFrame({"outer_column": [1]})
+inner = pl.DataFrame({"inner_column": [1]})
+outer.select(inner.filter(constraint=""))
+#                                     ^
+"#,
+        r#"
+import polars as pl
+outer = pl.DataFrame({"outer_column": [1]})
+frame = pl.DataFrame({"inner_column": [1]})
+def f(cond: bool, unknown: object) -> None:
+    inner = frame if cond else unknown
+    outer.select(inner.filter(constraint=""))
+#                                         ^
+"#,
+    ] {
+        assert_eq!(polars_column_completion_labels(code), Vec::<String>::new());
+    }
+}
+
+#[test]
+fn pandas_column_completion_from_filter_items_keyword() {
+    let code = r#"
+import pandas as pd
+df = pd.DataFrame({"foo": [1], "bar": [2]})
+df.filter(items=[""])
+#                 ^
+"#;
+    assert_eq!(
+        pandas_column_completion_labels(code),
+        vec!["bar".to_owned(), "foo".to_owned()]
+    );
 }
 
 #[test]
