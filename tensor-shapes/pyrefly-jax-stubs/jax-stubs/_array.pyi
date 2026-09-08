@@ -24,6 +24,7 @@ from jax._shapes import (
     swapaxes_shape,
     trace_shape,
 )
+from jax.typing import DTypeLike
 from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple, IntVar
 
 type _Shape = IntTuple
@@ -237,7 +238,7 @@ class Array[Shape: _Shape = _Shape]:
         axis: Axis = None,
         *,
         keepdims: KeepDims = False,
-        dtype: Any = ...,
+        dtype: DTypeLike | None = ...,
         out: Any = ...,
         initial: Any = ...,
         where: Any = ...,
@@ -249,7 +250,7 @@ class Array[Shape: _Shape = _Shape]:
         axis: Sequence[int],
         *,
         keepdims: bool = False,
-        dtype: Any = ...,
+        dtype: DTypeLike | None = ...,
         out: Any = ...,
         initial: Any = ...,
         where: Any = ...,
@@ -261,7 +262,7 @@ class Array[Shape: _Shape = _Shape]:
         axis: Axis = None,
         *,
         keepdims: KeepDims = False,
-        dtype: Any = ...,
+        dtype: DTypeLike | None = ...,
         out: Any = ...,
         initial: Any = ...,
         where: Any = ...,
@@ -273,7 +274,7 @@ class Array[Shape: _Shape = _Shape]:
         axis: Sequence[int],
         *,
         keepdims: bool = False,
-        dtype: Any = ...,
+        dtype: DTypeLike | None = ...,
         out: Any = ...,
         initial: Any = ...,
         where: Any = ...,
@@ -285,7 +286,7 @@ class Array[Shape: _Shape = _Shape]:
         axis: Axis = None,
         *,
         keepdims: KeepDims = False,
-        dtype: Any = ...,
+        dtype: DTypeLike | None = ...,
         out: Any = ...,
         initial: Any = ...,
         where: Any = ...,
@@ -297,7 +298,7 @@ class Array[Shape: _Shape = _Shape]:
         axis: Sequence[int],
         *,
         keepdims: bool = False,
-        dtype: Any = ...,
+        dtype: DTypeLike | None = ...,
         out: Any = ...,
         initial: Any = ...,
         where: Any = ...,
@@ -309,7 +310,7 @@ class Array[Shape: _Shape = _Shape]:
         axis: Axis = None,
         *,
         keepdims: KeepDims = False,
-        dtype: Any = ...,
+        dtype: DTypeLike | None = ...,
         out: Any = ...,
         initial: Any = ...,
         where: Any = ...,
@@ -321,7 +322,7 @@ class Array[Shape: _Shape = _Shape]:
         axis: Sequence[int],
         *,
         keepdims: bool = False,
-        dtype: Any = ...,
+        dtype: DTypeLike | None = ...,
         out: Any = ...,
         initial: Any = ...,
         where: Any = ...,
@@ -333,7 +334,7 @@ class Array[Shape: _Shape = _Shape]:
         axis: Axis = None,
         *,
         keepdims: KeepDims = False,
-        dtype: Any = ...,
+        dtype: DTypeLike | None = ...,
         out: Any = ...,
         initial: Any = ...,
         where: Any = ...,
@@ -345,7 +346,7 @@ class Array[Shape: _Shape = _Shape]:
         axis: Sequence[int],
         *,
         keepdims: bool = False,
-        dtype: Any = ...,
+        dtype: DTypeLike | None = ...,
         out: Any = ...,
         initial: Any = ...,
         where: Any = ...,
@@ -391,7 +392,7 @@ class Array[Shape: _Shape = _Shape]:
     def std[Axis: Flag[_Axis], KeepDims: Flag[bool]](
         self,
         axis: Axis = None,
-        dtype: Any = None,
+        dtype: DTypeLike | None = None,
         out: Any = None,
         ddof: int = 0,
         keepdims: KeepDims = False,
@@ -404,7 +405,7 @@ class Array[Shape: _Shape = _Shape]:
     def std(
         self,
         axis: Sequence[int],
-        dtype: Any = None,
+        dtype: DTypeLike | None = None,
         out: Any = None,
         ddof: int = 0,
         keepdims: bool = False,
@@ -417,7 +418,7 @@ class Array[Shape: _Shape = _Shape]:
     def var[Axis: Flag[_Axis], KeepDims: Flag[bool]](
         self,
         axis: Axis = None,
-        dtype: Any = None,
+        dtype: DTypeLike | None = None,
         out: Any = None,
         ddof: int = 0,
         keepdims: KeepDims = False,
@@ -430,7 +431,7 @@ class Array[Shape: _Shape = _Shape]:
     def var(
         self,
         axis: Sequence[int],
-        dtype: Any = None,
+        dtype: DTypeLike | None = None,
         out: Any = None,
         ddof: int = 0,
         keepdims: bool = False,
@@ -485,28 +486,28 @@ class Array[Shape: _Shape = _Shape]:
     def cumsum(
         self,
         axis: int,
-        dtype: Any = None,
+        dtype: DTypeLike | None = None,
         out: Any = None,
     ) -> Array[Shape]: ...
     @overload
     def cumsum(
         self,
         axis: None = None,
-        dtype: Any = None,
+        dtype: DTypeLike | None = None,
         out: Any = None,
     ) -> Array[IntTuple]: ...
     @overload
     def cumprod(
         self,
         axis: int,
-        dtype: Any = None,
+        dtype: DTypeLike | None = None,
         out: Any = None,
     ) -> Array[Shape]: ...
     @overload
     def cumprod(
         self,
         axis: None = None,
-        dtype: Any = None,
+        dtype: DTypeLike | None = None,
         out: Any = None,
     ) -> Array[IntTuple]: ...
     def dot[OtherShape: _Shape](
@@ -545,7 +546,7 @@ class Array[Shape: _Shape = _Shape]:
         offset: Offset = 0,
         axis1: Axis1 = 0,
         axis2: Axis2 = 1,
-        dtype: Any = None,
+        dtype: DTypeLike | None = None,
         out: None = None,
     ) -> Array[trace_shape(Shape, Offset, Axis1, Axis2)]: ...
     @overload
@@ -554,7 +555,7 @@ class Array[Shape: _Shape = _Shape]:
         offset: int = 0,
         axis1: int = 0,
         axis2: int = 1,
-        dtype: Any = None,
+        dtype: DTypeLike | None = None,
         out: None = None,
     ) -> Array[IntTuple]: ...
     @overload

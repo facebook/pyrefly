@@ -45,6 +45,7 @@ from jax._shapes import (
     vecmat_shape,
     vstack_shape,
 )
+from jax.typing import DTypeLike
 from shape_extensions import (
     broadcast,
     Elements,
@@ -69,7 +70,7 @@ type _Scalar = bool | int | float | complex
 @overload
 def array(
     object: _Scalar,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     copy: bool | None = ...,
     order: str | None = ...,
     ndmin: Literal[0] = 0,
@@ -80,7 +81,7 @@ def array(
 @overload
 def array[Shape: _Shape](
     object: Array[Shape],
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     copy: bool | None = ...,
     order: str | None = ...,
     ndmin: Literal[0] = 0,
@@ -91,7 +92,7 @@ def array[Shape: _Shape](
 @overload
 def array(
     object: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     copy: bool | None = ...,
     order: str | None = ...,
     ndmin: int = 0,
@@ -102,7 +103,7 @@ def array(
 @overload
 def asarray(
     a: _Scalar,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     order: str | None = ...,
     *,
     copy: bool | None = ...,
@@ -112,7 +113,7 @@ def asarray(
 @overload
 def asarray[Shape: _Shape](
     a: Array[Shape],
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     order: str | None = ...,
     *,
     copy: bool | None = ...,
@@ -122,7 +123,7 @@ def asarray[Shape: _Shape](
 @overload
 def asarray(
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     order: str | None = ...,
     *,
     copy: bool | None = ...,
@@ -137,37 +138,41 @@ def asarray(
 # through downstream array operations without degrading to unknown. The NumPy
 # stubs carry the same limitation.
 @overload
-def zeros(shape: tuple[()], dtype: Any = ..., *, device: Any = ...) -> Array[[]]: ...
+def zeros(
+    shape: tuple[()], dtype: DTypeLike | None = ..., *, device: Any = ...
+) -> Array[[]]: ...
 @overload
 def zeros[N: IntVar](
-    shape: Int[N], dtype: Any = ..., *, device: Any = ...
+    shape: Int[N], dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
 @overload
 def zeros[Shape: _Shape](
-    shape: Shape, dtype: Any = ..., *, device: Any = ...
+    shape: Shape, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[Shape]: ...
 @overload
 def zeros(
-    shape: Sequence[int] | int, dtype: Any = ..., *, device: Any = ...
+    shape: Sequence[int] | int, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[IntTuple]: ...
 @overload
-def ones(shape: tuple[()], dtype: Any = ..., *, device: Any = ...) -> Array[[]]: ...
+def ones(
+    shape: tuple[()], dtype: DTypeLike | None = ..., *, device: Any = ...
+) -> Array[[]]: ...
 @overload
 def ones[N: IntVar](
-    shape: Int[N], dtype: Any = ..., *, device: Any = ...
+    shape: Int[N], dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
 @overload
 def ones[Shape: _Shape](
-    shape: Shape, dtype: Any = ..., *, device: Any = ...
+    shape: Shape, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[Shape]: ...
 @overload
 def ones(
-    shape: Sequence[int] | int, dtype: Any = ..., *, device: Any = ...
+    shape: Sequence[int] | int, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[IntTuple]: ...
 @overload
 def empty[N: IntVar](
     shape: Int[N],
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
@@ -175,7 +180,7 @@ def empty[N: IntVar](
 @overload
 def empty[Shape: _Shape](
     shape: Shape,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
@@ -183,28 +188,32 @@ def empty[Shape: _Shape](
 @overload
 def empty(
     shape: Sequence[int] | int,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
 ) -> Array[IntTuple]: ...
 @overload
 def full(
-    shape: tuple[()], fill_value: Any, dtype: Any = ..., *, device: Any = ...
+    shape: tuple[()],
+    fill_value: Any,
+    dtype: DTypeLike | None = ...,
+    *,
+    device: Any = ...,
 ) -> Array[[]]: ...
 @overload
 def full[N: IntVar](
-    shape: Int[N], fill_value: Any, dtype: Any = ..., *, device: Any = ...
+    shape: Int[N], fill_value: Any, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
 @overload
 def full[Shape: _Shape](
-    shape: Shape, fill_value: Any, dtype: Any = ..., *, device: Any = ...
+    shape: Shape, fill_value: Any, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[Shape]: ...
 @overload
 def full(
     shape: Sequence[int] | int,
     fill_value: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     *,
     device: Any = ...,
 ) -> Array[IntTuple]: ...
@@ -213,7 +222,7 @@ def full(
 @overload
 def empty_like[Shape: _Shape](
     prototype: Array[Shape],
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: None = None,
     *,
     device: Any = ...,
@@ -221,7 +230,7 @@ def empty_like[Shape: _Shape](
 @overload
 def empty_like[N: IntVar](
     prototype: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Int[N] = ...,
     *,
     device: Any = ...,
@@ -229,7 +238,7 @@ def empty_like[N: IntVar](
 @overload
 def empty_like[Shape: _Shape](
     prototype: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Shape = ...,
     *,
     device: Any = ...,
@@ -237,7 +246,7 @@ def empty_like[Shape: _Shape](
 @overload
 def empty_like(
     prototype: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Sequence[int] | int | None = None,
     *,
     device: Any = ...,
@@ -245,7 +254,7 @@ def empty_like(
 @overload
 def zeros_like[Shape: _Shape](
     a: Array[Shape],
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: None = None,
     *,
     device: Any = ...,
@@ -254,7 +263,7 @@ def zeros_like[Shape: _Shape](
 @overload
 def zeros_like[N: IntVar](
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Int[N] = ...,
     *,
     device: Any = ...,
@@ -263,7 +272,7 @@ def zeros_like[N: IntVar](
 @overload
 def zeros_like[Shape: _Shape](
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Shape = ...,
     *,
     device: Any = ...,
@@ -272,7 +281,7 @@ def zeros_like[Shape: _Shape](
 @overload
 def zeros_like(
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Sequence[int] | int | None = None,
     *,
     device: Any = ...,
@@ -281,7 +290,7 @@ def zeros_like(
 @overload
 def ones_like[Shape: _Shape](
     a: Array[Shape],
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: None = None,
     *,
     device: Any = ...,
@@ -290,7 +299,7 @@ def ones_like[Shape: _Shape](
 @overload
 def ones_like[N: IntVar](
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Int[N] = ...,
     *,
     device: Any = ...,
@@ -299,7 +308,7 @@ def ones_like[N: IntVar](
 @overload
 def ones_like[Shape: _Shape](
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Shape = ...,
     *,
     device: Any = ...,
@@ -308,7 +317,7 @@ def ones_like[Shape: _Shape](
 @overload
 def ones_like(
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Sequence[int] | int | None = None,
     *,
     device: Any = ...,
@@ -318,7 +327,7 @@ def ones_like(
 def full_like[Shape: _Shape](
     a: Array[Shape],
     fill_value: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: None = None,
     *,
     device: Any = ...,
@@ -328,7 +337,7 @@ def full_like[Shape: _Shape](
 def full_like[N: IntVar](
     a: Any,
     fill_value: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Int[N] = ...,
     *,
     device: Any = ...,
@@ -338,7 +347,7 @@ def full_like[N: IntVar](
 def full_like[Shape: _Shape](
     a: Any,
     fill_value: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Shape = ...,
     *,
     device: Any = ...,
@@ -348,7 +357,7 @@ def full_like[Shape: _Shape](
 def full_like(
     a: Any,
     fill_value: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Sequence[int] | int | None = None,
     *,
     device: Any = ...,
@@ -358,16 +367,18 @@ def full_like(
 # `arange`, `linspace`, `logspace`, `geomspace`
 @overload
 def arange[N: IntVar](
-    start: Int[N], *, dtype: Any = ..., device: Any = ...
+    start: Int[N], *, dtype: DTypeLike | None = ..., device: Any = ...
 ) -> Array[[N]]: ...
 @overload
-def arange(start: float, *, dtype: Any = ..., device: Any = ...) -> Array[[int]]: ...
+def arange(
+    start: float, *, dtype: DTypeLike | None = ..., device: Any = ...
+) -> Array[[int]]: ...
 @overload
 def arange(
     start: int | float,
     stop: int | float,
     step: int | float = ...,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
 ) -> Array[[int]]: ...
 @overload
 def linspace[N: IntVar](
@@ -376,7 +387,7 @@ def linspace[N: IntVar](
     num: Int[N],
     endpoint: bool = True,
     retstep: Literal[False] = False,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
     *,
     device: Any = None,
@@ -388,7 +399,7 @@ def linspace[N: IntVar](
     num: Int[N],
     endpoint: bool,
     retstep: Literal[True],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
     *,
     device: Any = None,
@@ -400,7 +411,7 @@ def linspace(
     num: int = 50,
     endpoint: bool = True,
     retstep: Literal[False] = False,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
     *,
     device: Any = None,
@@ -412,7 +423,7 @@ def linspace(
     num: int,
     endpoint: bool,
     retstep: Literal[True],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
     *,
     device: Any = None,
@@ -424,7 +435,7 @@ def linspace(
     num: int = 50,
     endpoint: bool = True,
     retstep: bool = False,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
     *,
     device: Any = None,
@@ -436,7 +447,7 @@ def logspace[N: IntVar](
     num: Int[N],
     endpoint: bool = True,
     base: Any = 10.0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
 ) -> Array[[N]]: ...
 @overload
@@ -446,7 +457,7 @@ def logspace(
     num: int = 50,
     endpoint: bool = True,
     base: Any = 10.0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
 ) -> Array[[int]]: ...
 @overload
@@ -455,7 +466,7 @@ def geomspace[N: IntVar](
     stop: Any,
     num: Int[N],
     endpoint: bool = True,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
 ) -> Array[[N]]: ...
 @overload
@@ -464,21 +475,31 @@ def geomspace(
     stop: Any,
     num: int = 50,
     endpoint: bool = True,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
 ) -> Array[[int]]: ...
 
 # `eye`, `identity`, `diag`, `diagflat`, `tri`, `tril`, `triu`, `vander`
 @overload
 def eye[N: IntVar](
-    N: Int[N], M: None = ..., k: int = ..., dtype: Any = ..., *, device: Any = ...
+    N: Int[N],
+    M: None = ...,
+    k: int = ...,
+    dtype: DTypeLike | None = ...,
+    *,
+    device: Any = ...,
 ) -> Array[[N, N]]: ...
 @overload
 def eye[N: IntVar, M: IntVar](
-    N: Int[N], M: Int[M], k: int = ..., dtype: Any = ..., *, device: Any = ...
+    N: Int[N],
+    M: Int[M],
+    k: int = ...,
+    dtype: DTypeLike | None = ...,
+    *,
+    device: Any = ...,
 ) -> Array[[N, M]]: ...
 def identity[N: IntVar](
-    n: Int[N], dtype: Any = ..., *, device: Any = ...
+    n: Int[N], dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[[N, N]]: ...
 @overload
 def diag[N: IntVar](v: Array[[N]], k: int = 0) -> Array[[N, N]]: ...
@@ -494,15 +515,15 @@ def diagflat[N: IntVar](v: Array[[N]], k: int = 0) -> Array[[N, N]]: ...
 def diagflat(v: Any, k: int = 0) -> Array[IntTuple]: ...
 @overload
 def tri[N: IntVar](
-    N: Int[N], M: None = None, k: int = 0, dtype: Any = None
+    N: Int[N], M: None = None, k: int = 0, dtype: DTypeLike | None = None
 ) -> Array[[N, N]]: ...
 @overload
 def tri[N: IntVar, M: IntVar](
-    N: Int[N], M: Int[M], k: int = 0, dtype: Any = None
+    N: Int[N], M: Int[M], k: int = 0, dtype: DTypeLike | None = None
 ) -> Array[[N, M]]: ...
 @overload
 def tri(
-    N: int, M: int | None = None, k: int = 0, dtype: Any = None
+    N: int, M: int | None = None, k: int = 0, dtype: DTypeLike | None = None
 ) -> Array[IntTuple]: ...
 def tril[Shape: _Shape](m: Array[Shape], k: int = 0) -> Array[Shape]: ...
 def triu[Shape: _Shape](m: Array[Shape], k: int = 0) -> Array[Shape]: ...
@@ -523,24 +544,24 @@ def vander(
 @overload
 def indices[N: IntVar](
     dimensions: IntTuple[N],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     sparse: Literal[False] = False,
 ) -> Array[[1, N]]: ...
 @overload
 def indices[N: IntVar, M: IntVar](
     dimensions: IntTuple[N, M],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     sparse: Literal[False] = False,
 ) -> Array[[2, N, M]]: ...
 @overload
 def indices[N: IntVar, M: IntVar, K: IntVar](
     dimensions: IntTuple[N, M, K],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     sparse: Literal[False] = False,
 ) -> Array[[3, N, M, K]]: ...
 @overload
 def indices(
-    dimensions: Sequence[int], dtype: Any = None, sparse: bool = False
+    dimensions: Sequence[int], dtype: DTypeLike | None = None, sparse: bool = False
 ) -> Array[IntTuple] | tuple[Array[IntTuple], ...]: ...
 @overload
 def meshgrid[N: IntVar, M: IntVar](
@@ -594,7 +615,7 @@ def from_dlpack(
     x: Any, /, *, device: Any = None, copy: bool | None = None
 ) -> Array[IntTuple]: ...
 def frombuffer(
-    buffer: Any, dtype: Any = float, count: int = -1, offset: int = 0
+    buffer: Any, dtype: DTypeLike = float, count: int = -1, offset: int = 0
 ) -> Array[IntTuple]: ...
 def fromfile(*args: Any, **kwargs: Any) -> Array[IntTuple]: ...
 @overload
@@ -602,7 +623,7 @@ def fromfunction[N: IntVar](
     function: Callable[..., Any],
     shape: IntTuple[N],
     *,
-    dtype: Any = float,
+    dtype: DTypeLike = float,
     **kwargs: Any,
 ) -> Array[[N]]: ...
 @overload
@@ -610,7 +631,7 @@ def fromfunction[N: IntVar, M: IntVar](
     function: Callable[..., Any],
     shape: IntTuple[N, M],
     *,
-    dtype: Any = float,
+    dtype: DTypeLike = float,
     **kwargs: Any,
 ) -> Array[[N, M]]: ...
 @overload
@@ -618,7 +639,7 @@ def fromfunction[N: IntVar, M: IntVar, K: IntVar](
     function: Callable[..., Any],
     shape: IntTuple[N, M, K],
     *,
-    dtype: Any = float,
+    dtype: DTypeLike = float,
     **kwargs: Any,
 ) -> Array[[N, M, K]]: ...
 @overload
@@ -626,12 +647,12 @@ def fromfunction(
     function: Callable[..., Any],
     shape: Sequence[int],
     *,
-    dtype: Any = float,
+    dtype: DTypeLike = float,
     **kwargs: Any,
 ) -> Array[IntTuple]: ...
 def fromiter(*args: Any, **kwargs: Any) -> Array[IntTuple]: ...
 def fromstring(
-    string: str, dtype: Any = float, count: int = -1, *, sep: str
+    string: str, dtype: DTypeLike = float, count: int = -1, *, sep: str
 ) -> Array[IntTuple]: ...
 
 # Window functions
@@ -1150,7 +1171,7 @@ def trace[
     offset: Offset = 0,
     axis1: Axis1 = 0,
     axis2: Axis2 = 1,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: None = None,
 ) -> Array[trace_shape(Shape, Offset, Axis1, Axis2)]: ...
 @overload
@@ -1159,7 +1180,7 @@ def trace(
     offset: int = 0,
     axis1: int = 0,
     axis2: int = 1,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: None = None,
 ) -> Array[IntTuple]: ...
 def vdot[Shape1: _Shape, Shape2: _Shape](
@@ -1407,13 +1428,13 @@ def broadcast_to(
 def concatenate[Shapes: IntTuples, Axis: Flag[int] = 0](
     arrays: MapIntTuples[lambda S: Array[S], Shapes],
     axis: Axis = 0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[concatenate_shape(Shapes, Axis)]: ...
 @overload
 def concatenate(
     arrays: Any,
     axis: int | None = 0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 
 concat = concatenate
@@ -1422,7 +1443,7 @@ concat = concatenate
 def stack[Shapes: IntTuples, Axis: Flag[int] = 0](
     arrays: MapIntTuples[lambda S: Array[S], Shapes],
     axis: Axis = 0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     *,
     out: Any = None,
 ) -> Array[stack_shape(Shapes, Axis)]: ...
@@ -1430,7 +1451,7 @@ def stack[Shapes: IntTuples, Axis: Flag[int] = 0](
 def stack(
     arrays: Any,
     axis: int = 0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     *,
     out: Any = None,
 ) -> Array[IntTuple]: ...
@@ -1438,25 +1459,25 @@ def stack(
 def vstack[Shapes: IntTuples](
     tup: MapIntTuples[lambda S: Array[S], Shapes],
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[vstack_shape(Shapes)]: ...
 @overload
 def vstack(
     tup: Any,
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 @overload
 def hstack[Shapes: IntTuples](
     tup: MapIntTuples[lambda S: Array[S], Shapes],
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[hstack_shape(Shapes)]: ...
 @overload
 def hstack(
     tup: Any,
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 @overload
 def column_stack[Shapes: IntTuples](
@@ -1470,13 +1491,13 @@ def column_stack(
 def dstack[Shapes: IntTuples](
     tup: MapIntTuples[lambda S: Array[S], Shapes],
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[dstack_shape(Shapes)]: ...
 @overload
 def dstack(
     tup: Any,
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 @overload
 def swapaxes[Shape: _Shape, Axis1: Flag[int], Axis2: Flag[int]](
@@ -1583,7 +1604,7 @@ def sum[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     axis: Axis = None,
     *,
     keepdims: KeepDims = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1595,7 +1616,7 @@ def sum[Shape: _Shape](
     axis: Sequence[int],
     *,
     keepdims: bool = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1607,7 +1628,7 @@ def prod[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     axis: Axis = None,
     *,
     keepdims: KeepDims = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1619,7 +1640,7 @@ def prod[Shape: _Shape](
     axis: Sequence[int],
     *,
     keepdims: bool = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1631,7 +1652,7 @@ def mean[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     axis: Axis = None,
     *,
     keepdims: KeepDims = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1643,7 +1664,7 @@ def mean[Shape: _Shape](
     axis: Sequence[int],
     *,
     keepdims: bool = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1655,7 +1676,7 @@ def max[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     axis: Axis = None,
     *,
     keepdims: KeepDims = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1667,7 +1688,7 @@ def max[Shape: _Shape](
     axis: Sequence[int],
     *,
     keepdims: bool = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1679,7 +1700,7 @@ def min[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     axis: Axis = None,
     *,
     keepdims: KeepDims = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1691,7 +1712,7 @@ def min[Shape: _Shape](
     axis: Sequence[int],
     *,
     keepdims: bool = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1793,7 +1814,7 @@ def amin[Shape: _Shape](
 def std[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: KeepDims = False,
@@ -1806,7 +1827,7 @@ def std[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def std[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: bool = False,
@@ -1819,7 +1840,7 @@ def std[Shape: _Shape](
 def var[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: KeepDims = False,
@@ -1832,7 +1853,7 @@ def var[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def var[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: bool = False,
@@ -1917,7 +1938,7 @@ def nanmin[Shape: _Shape](
 def nansum[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     keepdims: KeepDims = False,
     initial: Any = None,
@@ -1927,7 +1948,7 @@ def nansum[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def nansum[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     keepdims: bool = False,
     initial: Any = None,
@@ -1937,7 +1958,7 @@ def nansum[Shape: _Shape](
 def nanprod[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     keepdims: KeepDims = False,
     initial: Any = None,
@@ -1947,7 +1968,7 @@ def nanprod[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def nanprod[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     keepdims: bool = False,
     initial: Any = None,
@@ -1957,7 +1978,7 @@ def nanprod[Shape: _Shape](
 def nanmean[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     keepdims: KeepDims = False,
     where: Any = None,
@@ -1966,7 +1987,7 @@ def nanmean[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def nanmean[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     keepdims: bool = False,
     where: Any = None,
@@ -1975,7 +1996,7 @@ def nanmean[Shape: _Shape](
 def nanstd[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: KeepDims = False,
@@ -1986,7 +2007,7 @@ def nanstd[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def nanstd[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: bool = False,
@@ -1997,7 +2018,7 @@ def nanstd[Shape: _Shape](
 def nanvar[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: KeepDims = False,
@@ -2008,7 +2029,7 @@ def nanvar[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def nanvar[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: bool = False,
@@ -2124,28 +2145,28 @@ def nanargmin(
 def cumsum[Shape: _Shape](
     a: Array[Shape],
     axis: int,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[Shape]: ...
 @overload
 def cumsum(
     a: Array[Any],
     axis: None = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[IntTuple]: ...
 @overload
 def cumprod[Shape: _Shape](
     a: Array[Shape],
     axis: int,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[Shape]: ...
 @overload
 def cumprod(
     a: Array[Any],
     axis: None = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[IntTuple]: ...
 @overload
@@ -2154,7 +2175,7 @@ def cumulative_sum[Shape: _Shape](
     /,
     *,
     axis: int,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     include_initial: Literal[False] = False,
 ) -> Array[Shape]: ...
 @overload
@@ -2163,7 +2184,7 @@ def cumulative_sum(
     /,
     *,
     axis: int | None = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     include_initial: bool = False,
 ) -> Array[IntTuple]: ...
 @overload
@@ -2172,7 +2193,7 @@ def cumulative_prod[Shape: _Shape](
     /,
     *,
     axis: int,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     include_initial: Literal[False] = False,
 ) -> Array[Shape]: ...
 @overload
@@ -2181,35 +2202,35 @@ def cumulative_prod(
     /,
     *,
     axis: int | None = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     include_initial: bool = False,
 ) -> Array[IntTuple]: ...
 @overload
 def nancumsum[Shape: _Shape](
     a: Array[Shape],
     axis: int,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[Shape]: ...
 @overload
 def nancumsum(
     a: Array[Any],
     axis: None = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[IntTuple]: ...
 @overload
 def nancumprod[Shape: _Shape](
     a: Array[Shape],
     axis: int,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[Shape]: ...
 @overload
 def nancumprod(
     a: Array[Any],
     axis: None = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[IntTuple]: ...
 
@@ -2358,7 +2379,7 @@ def corrcoef(
     x: Array[Any],
     y: Any = None,
     rowvar: bool = True,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 def cov(
     m: Array[Any],
@@ -2368,7 +2389,7 @@ def cov(
     ddof: int | None = None,
     fweights: Any = None,
     aweights: Any = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 
 # Sorting and Partitioning
@@ -2401,7 +2422,7 @@ def argsort[Shape: _Shape, Axis: Flag[int | None] = -1](
     order: None = None,
     stable: bool = True,
     descending: bool = False,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[sort_shape(Shape, Axis)]: ...
 @overload
 def argsort(
@@ -2412,7 +2433,7 @@ def argsort(
     order: None = None,
     stable: bool = True,
     descending: bool = False,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 @overload
 def sort_complex[Shape: _Shape](a: Array[Shape]) -> Array[Shape]: ...
