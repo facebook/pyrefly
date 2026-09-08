@@ -100,14 +100,14 @@ def reshape_shape(shape: IntTuple, newshape: int | tuple[int, ...] | None) -> In
         dims = (newshape,)
     else:
         dims = newshape
-    # The DSL does not support unary negation of a Flag integer, so the
-    # placeholder dimension is spelled `0 - 1` throughout.
-    if any(dim < 0 - 1 for dim in dims):
+    if any(dsl.is_concrete_int(dim) and dim < -1 for dim in dims):
         return dsl.Invalid("reshape sizes must be -1 or non-negative")
-    inferred = tuple(dim for dim in dims if dim == 0 - 1)
+    inferred = tuple(dim for dim in dims if dsl.is_concrete_int(dim) and dim == -1)
     if len(inferred) > 1:
         return dsl.Invalid("reshape accepts at most one -1")
-    known_shape = dsl.IntTuple((dim for dim in dims if dim != 0 - 1))
+    known_shape = dsl.IntTuple(
+        (dim for dim in dims if not (dsl.is_concrete_int(dim) and dim == -1))
+    )
     known = dsl.prod(known_shape)
     total = dsl.prod(shape)
     if len(inferred) == 0:
@@ -119,7 +119,12 @@ def reshape_shape(shape: IntTuple, newshape: int | tuple[int, ...] | None) -> In
             return dsl.Invalid("could not infer size for dimension -1")
         if dsl.is_concrete_int(total) and total % known != 0:
             return dsl.Invalid("could not infer size for dimension -1")
-    return dsl.IntTuple((total // known if dim == 0 - 1 else dim for dim in dims))
+    return dsl.IntTuple(
+        (
+            total // known if dsl.is_concrete_int(dim) and dim == -1 else dim
+            for dim in dims
+        )
+    )
 
 @type_shape_dsl_function
 def fft_n_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:

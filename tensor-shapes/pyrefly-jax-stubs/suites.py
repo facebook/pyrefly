@@ -32,7 +32,7 @@ def _suites() -> list[Suite]:
     paths = sorted((_PACKAGE_ROOT / "test").glob("test_*.py"))
     if not paths:
         raise ValueError(f"no test files under {_PACKAGE_ROOT / 'test'}")
-    return [
+    suites = [
         Suite(
             name=path.stem.removeprefix("test_").replace("_", "-"),
             patterns=(f"test/{path.name}",),
@@ -40,6 +40,10 @@ def _suites() -> list[Suite]:
         )
         for path in paths
     ]
+    suites.append(
+        Suite(name="examples", expectations=True, patterns=("examples/*.py",))
+    )
+    return suites
 
 
 SUITES: list[Suite] = _suites()
