@@ -12,18 +12,22 @@ from jax._shapes import (
     atleast_3d_shape,
     broadcast_to_shape,
     column_stack_shape,
+    compress_shape,
     concatenate_shape,
     cross_axes_shape,
     cross_axis_shape,
+    diag_indices_from_shape,
     diagonal_shape,
     dot_shape,
     dstack_shape,
     einsum_shape,
     expand_dims_shape,
+    fill_diagonal_shape,
     flip_shape,
     hstack_shape,
     inner_shape,
     int_min,
+    ix_shapes,
     kron_shape,
     matmul_shape,
     matvec_shape,
@@ -39,6 +43,9 @@ from jax._shapes import (
     squeeze_shape,
     stack_shape,
     swapaxes_shape,
+    take_along_axis_shape,
+    take_scalar_idx_shape,
+    take_shape,
     tensordot_shape,
     top_k_shape,
     trace_shape,
@@ -2981,6 +2988,271 @@ def unique_values(
     size: int | None = None,
     fill_value: Any = None,
 ) -> Array[IntTuple]: ...
+
+# Indexing, Slicing & Masking
+@overload
+def compress[Shape: _Shape, Size: Flag[int], Axis: Flag[int | None] = None](
+    condition: Any,
+    a: Array[Shape],
+    axis: Axis = None,
+    *,
+    size: Size,
+    fill_value: Any = 0,
+    out: None = None,
+) -> Array[compress_shape(Shape, Size, Axis)]: ...
+@overload
+def compress[Shape: _Shape, Axis: Flag[int | None] = None](
+    condition: Any,
+    a: Array[Shape],
+    axis: Axis = None,
+    *,
+    size: int | None = None,
+    fill_value: Any = 0,
+    out: None = None,
+) -> Array[IntTuple]: ...
+@overload
+def compress(
+    condition: Any,
+    a: Any,
+    axis: int | None = None,
+    *,
+    size: int | None = None,
+    fill_value: Any = 0,
+    out: None = None,
+) -> Array[IntTuple]: ...
+def delete(
+    arr: Any,
+    obj: Any,
+    axis: int | None = None,
+    *,
+    assume_unique_indices: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def extract[Size: IntVar](
+    condition: Any,
+    arr: Any,
+    *,
+    size: Int[Size],
+    fill_value: Any = 0,
+) -> Array[[Size]]: ...
+@overload
+def extract(
+    condition: Any,
+    arr: Any,
+    *,
+    size: int | None = None,
+    fill_value: Any = 0,
+) -> Array[IntTuple]: ...
+@overload
+def fill_diagonal[Shape: _Shape](
+    a: Array[Shape],
+    val: Any,
+    wrap: bool = False,
+    *,
+    inplace: bool = True,
+) -> Array[fill_diagonal_shape(Shape)]: ...
+@overload
+def fill_diagonal(
+    a: Any,
+    val: Any,
+    wrap: bool = False,
+    *,
+    inplace: bool = True,
+) -> Array[IntTuple]: ...
+def insert(
+    arr: Any,
+    obj: Any,
+    values: Any,
+    axis: int | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def place[Shape: _Shape](
+    arr: Array[Shape],
+    mask: Any,
+    vals: Any,
+    *,
+    inplace: bool = True,
+) -> Array[Shape]: ...
+@overload
+def place(
+    arr: Any,
+    mask: Any,
+    vals: Any,
+    *,
+    inplace: bool = True,
+) -> Array[IntTuple]: ...
+@overload
+def put[Shape: _Shape](
+    a: Array[Shape],
+    ind: Any,
+    v: Any,
+    mode: str | None = None,
+    *,
+    inplace: bool = True,
+) -> Array[Shape]: ...
+@overload
+def put(
+    a: Any,
+    ind: Any,
+    v: Any,
+    mode: str | None = None,
+    *,
+    inplace: bool = True,
+) -> Array[IntTuple]: ...
+@overload
+def put_along_axis[Shape: _Shape](
+    arr: Array[Shape],
+    indices: Any,
+    values: Any,
+    axis: int | None,
+    inplace: bool = True,
+    *,
+    mode: str | None = None,
+) -> Array[Shape]: ...
+@overload
+def put_along_axis(
+    arr: Any,
+    indices: Any,
+    values: Any,
+    axis: int | None,
+    inplace: bool = True,
+    *,
+    mode: str | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def take[Shape: _Shape, IdxShape: _Shape, Axis: Flag[int | None] = None](
+    a: Array[Shape],
+    indices: Array[IdxShape],
+    axis: Axis = None,
+    out: None = None,
+    mode: str | None = None,
+    unique_indices: bool = False,
+    indices_are_sorted: bool = False,
+    fill_value: Any = None,
+) -> Array[take_shape(Shape, IdxShape, Axis)]: ...
+@overload
+def take[Shape: _Shape, Axis: Flag[int | None] = None](
+    a: Array[Shape],
+    indices: int,
+    axis: Axis = None,
+    out: None = None,
+    mode: str | None = None,
+    unique_indices: bool = False,
+    indices_are_sorted: bool = False,
+    fill_value: Any = None,
+) -> Array[take_scalar_idx_shape(Shape, Axis)]: ...
+@overload
+def take(
+    a: Any,
+    indices: Any,
+    axis: int | None = None,
+    out: None = None,
+    mode: str | None = None,
+    unique_indices: bool = False,
+    indices_are_sorted: bool = False,
+    fill_value: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def take_along_axis[ArrShape: _Shape, IdxShape: _Shape, Axis: Flag[int | None] = -1](
+    arr: Array[ArrShape],
+    indices: Array[IdxShape],
+    axis: Axis = -1,
+    mode: str | None = None,
+    fill_value: Any = None,
+    *,
+    wrap_negative_indices: bool = True,
+) -> Array[take_along_axis_shape(ArrShape, IdxShape, Axis)]: ...
+@overload
+def take_along_axis(
+    arr: Any,
+    indices: Any,
+    axis: int | None = -1,
+    mode: str | None = None,
+    fill_value: Any = None,
+    *,
+    wrap_negative_indices: bool = True,
+) -> Array[IntTuple]: ...
+def trim_zeros(
+    filt: Any,
+    trim: str = "fb",
+    axis: int | Sequence[int] | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def diag_indices[N: IntVar](
+    n: Int[N],
+    ndim: int = 2,
+) -> tuple[Array[[N]], ...]: ...
+@overload
+def diag_indices(
+    n: int,
+    ndim: int = 2,
+) -> tuple[Array[IntTuple], ...]: ...
+@overload
+def diag_indices_from[Shape: _Shape](
+    arr: Array[Shape],
+) -> tuple[Array[diag_indices_from_shape(Shape)], ...]: ...
+@overload
+def diag_indices_from(
+    arr: Any,
+) -> tuple[Array[IntTuple], ...]: ...
+@overload
+def mask_indices[Size: IntVar](
+    n: int,
+    mask_func: Callable[..., Any],
+    k: int = 0,
+    *,
+    size: Int[Size],
+) -> tuple[Array[[Size]], Array[[Size]]]: ...
+@overload
+def mask_indices(
+    n: int,
+    mask_func: Callable[..., Any],
+    k: int = 0,
+    *,
+    size: int | None = None,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+def ravel_multi_index(
+    multi_index: Sequence[Any],
+    dims: Sequence[int],
+    mode: str = "raise",
+    order: str = "C",
+    *,
+    dtype: Any = None,
+) -> Array[IntTuple]: ...
+def tril_indices(
+    n: int,
+    k: int = 0,
+    m: int | None = None,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+def tril_indices_from(
+    arr: Any,
+    k: int = 0,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+def triu_indices(
+    n: int,
+    k: int = 0,
+    m: int | None = None,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+def triu_indices_from(
+    arr: Any,
+    k: int = 0,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+@overload
+def unravel_index[Shape: _Shape](
+    indices: Array[Shape],
+    shape: Any,
+) -> tuple[Array[Shape], ...]: ...
+@overload
+def unravel_index(
+    indices: int,
+    shape: Any,
+) -> tuple[Array[[]], ...]: ...
+@overload
+def ix_[Shapes: IntTuples](
+    *args: Unpack[MapIntTuples[lambda S: Array[S], Shapes]],
+) -> MapIntTuples[lambda S: Array[S], ix_shapes(Shapes)]: ...
+@overload
+def ix_(*args: Array[Any]) -> tuple[Array[IntTuple], ...]: ...
 
 float32: Any
 float64: Any
