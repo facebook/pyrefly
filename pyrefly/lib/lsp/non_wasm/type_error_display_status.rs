@@ -168,6 +168,32 @@ impl lsp_types::request::Request for TypeErrorDisplayStatusRequest {
     const METHOD: &'static str = "pyrefly/textDocument/typeErrorDisplayStatus";
 }
 
+/// Parameters of [`TypeErrorDisplayStatusChangedNotification`]. we have an
+/// empty struct here, since JSONRPC requires this to be an object or array.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct TypeErrorDisplayStatusChangedParams {}
+
+/// Tells the client that its cached [`TypeErrorDisplayStatusRequest`] response
+/// may be stale and should be re-requested.
+pub enum TypeErrorDisplayStatusChangedNotification {}
+
+impl lsp_types::notification::Notification for TypeErrorDisplayStatusChangedNotification {
+    type Params = TypeErrorDisplayStatusChangedParams;
+    const METHOD: &'static str = "pyrefly/typeErrorDisplayStatusChanged";
+}
+
+/// Resolve `initializationOptions.pyrefly.pushTypeErrorDisplayStatus`, which
+/// declares that the client handles
+/// [`TypeErrorDisplayStatusChangedNotification`]. Defaults to `false`: a client
+/// that didn't opt in would log every unrecognized notification as a warning.
+pub fn should_push_type_error_display_status(initialization_options: Option<&Value>) -> bool {
+    initialization_options
+        .and_then(|opts| opts.get("pyrefly"))
+        .and_then(|pyrefly| pyrefly.get("pushTypeErrorDisplayStatus"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 /// URL referenced from the V2 tooltip / docs link. Module-level so the
 /// derivation logic and tests share the exact string the user sees.
 const STATUS_BAR_DOCS_URL: &str = "https://pyrefly.org/en/docs/IDE/";
@@ -739,6 +765,26 @@ mod tests {
                     negotiate_type_error_display_status_version(Some(&opts)),
                     TypeErrorDisplayStatusVersion::LATEST
                 );
+            }
+
+            #[test]
+            fn push_defaults_to_disabled() {
+                use super::super::super::should_push_type_error_display_status;
+                assert!(!should_push_type_error_display_status(None));
+                let opts = serde_json::json!({ "pyrefly": {} });
+                assert!(!should_push_type_error_display_status(Some(&opts)));
+                let opts = serde_json::json!({ "pyrefly": { "pushTypeErrorDisplayStatus": null } });
+                assert!(!should_push_type_error_display_status(Some(&opts)));
+            }
+
+            #[test]
+            fn push_honors_explicit_opt_in() {
+                use super::super::super::should_push_type_error_display_status;
+                let opts = serde_json::json!({ "pyrefly": { "pushTypeErrorDisplayStatus": true } });
+                assert!(should_push_type_error_display_status(Some(&opts)));
+                let opts =
+                    serde_json::json!({ "pyrefly": { "pushTypeErrorDisplayStatus": false } });
+                assert!(!should_push_type_error_display_status(Some(&opts)));
             }
         }
     }

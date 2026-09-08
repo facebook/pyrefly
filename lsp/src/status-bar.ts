@@ -8,7 +8,7 @@
  */
 
 import * as vscode from 'vscode';
-import {LanguageClient} from 'vscode-languageclient/node';
+import {LanguageClient, State} from 'vscode-languageclient/node';
 
 let statusBarItem: vscode.StatusBarItem;
 
@@ -21,6 +21,13 @@ let statusBarItem: vscode.StatusBarItem;
  * dispatch all change together.
  */
 export const TYPE_ERROR_DISPLAY_STATUS_VERSION = 'v2' as const;
+
+/**
+ * Method name of the server→client notification saying our cached status may
+ * be stale.
+ */
+export const TYPE_ERROR_DISPLAY_STATUS_CHANGED_METHOD =
+  'pyrefly/typeErrorDisplayStatusChanged' as const;
 
 /**
  * V2 wire shape for `pyrefly/textDocument/typeErrorDisplayStatus`. The
@@ -105,6 +112,36 @@ export async function updateStatusBar(client: LanguageClient) {
     statusBarItem.hide();
   }
 }
+
+/**
+ * Trailing-debounced `updateStatusBar`, for server-pushed refreshes.
+ *
+ * A single source-database rebuild pushes at least a `building`/`ready` pair,
+ * and a workspace with several configs pushes more, so coalescing keeps this to
+ * one round-trip per burst. The trailing edge also means a build that finishes
+ * within the window never flashes `building` at all.
+ */
+export function scheduleStatusBarUpdate(client: LanguageClient) {
+  if (pushRefreshTimer != null) {
+    clearTimeout(pushRefreshTimer);
+  }
+  pushRefreshTimer = setTimeout(() => {
+    pushRefreshTimer = undefined;
+    if (client.state !== State.Running) {
+      return;
+    }
+    // A push is server-driven and can land while focus sits on a non-Python
+    // editor. Skip rather than let `updateStatusBar` hide the item, which
+    // nothing would undo until the next editor change.
+    if (vscode.window.activeTextEditor?.document.languageId !== 'python') {
+      return;
+    }
+    void updateStatusBar(client);
+  }, PUSH_REFRESH_DEBOUNCE_MS);
+}
+
+const PUSH_REFRESH_DEBOUNCE_MS = 150;
+let pushRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 
 /**
  * V1 renderer: legacy bare-string responses from older binaries. Kept
