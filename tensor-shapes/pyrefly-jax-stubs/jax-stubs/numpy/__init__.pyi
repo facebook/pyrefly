@@ -1352,6 +1352,15 @@ def reshape[Shape: _Shape, NewShape: Flag[_NewShape]](
     out_sharding: Any = ...,
 ) -> Array[reshape_shape(Shape, NewShape)]: ...
 @overload
+def reshape[NewShape: _Shape](
+    a: Array[Any],
+    shape: NewShape,
+    order: str = ...,
+    *,
+    copy: bool | None = ...,
+    out_sharding: Any = ...,
+) -> Array[NewShape]: ...
+@overload
 def reshape(
     a: Array[Any],
     shape: Sequence[int],
