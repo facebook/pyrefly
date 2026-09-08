@@ -794,6 +794,17 @@ impl Solver {
         }
     }
 
+    /// Return the type parameter for a variable awaiting first-use inference.
+    pub fn partial_quantified(&self, ty: &Type) -> Option<Quantified> {
+        if let Type::Var(v) = ty {
+            let variables = self.variables.lock();
+            if let Variable::PartialQuantified(q) = &*variables.get(*v) {
+                return Some(q.clone());
+            }
+        }
+        None
+    }
+
     /// Witnesses track both origin and deferred vars for residual plumbing,
     /// but overload branch capture snapshots only quantified vars. Only
     /// quantified vars can carry the per-branch residual candidates that we
