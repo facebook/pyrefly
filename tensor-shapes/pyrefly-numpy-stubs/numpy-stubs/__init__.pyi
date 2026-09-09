@@ -180,7 +180,14 @@ from numpy._core.shape_base import (
     unstack as unstack,
     vstack as vstack,
 )
-from numpy._shapes import diag_extent, matmul_shape, reduce_shape
+from numpy._shapes import (
+    diag_extent,
+    matmul_shape,
+    matvec_shape,
+    reduce_shape,
+    vecdot_shape,
+    vecmat_shape,
+)
 from numpy._typing._extended_precision import (
     complex256 as complex256,
     float128 as float128,
@@ -626,6 +633,100 @@ class _MatmulUFunc(ufunc):
         **kwargs: Any,
     ) -> ndarray[matmul_shape(LeftShape, RightShape), Any]: ...
 
+class _UnaryTwoOutputUFunc(ufunc):
+    @overload
+    def __call__[Shape: _Shape](
+        self, x: ndarray[Shape], /, out: Any = None, *outputs: Any, **kwargs: Any
+    ) -> tuple[ndarray[Shape], ndarray[Shape]]: ...
+    @overload
+    def __call__(
+        self, x: Any, /, out: Any = None, *outputs: Any, **kwargs: Any
+    ) -> tuple[Any, Any]: ...
+
+class _BinaryTwoOutputUFunc(ufunc):
+    @overload
+    def __call__[Shape1: _Shape, Shape2: _Shape](
+        self,
+        x1: ndarray[Shape1],
+        x2: ndarray[Shape2],
+        /,
+        out: Any = None,
+        *outputs: Any,
+        **kwargs: Any,
+    ) -> tuple[
+        ndarray[broadcast(Shape1, Shape2)],
+        ndarray[broadcast(Shape1, Shape2)],
+    ]: ...
+    @overload
+    def __call__[Shape: _Shape](
+        self,
+        x1: ndarray[Shape],
+        x2: Any,
+        /,
+        out: Any = None,
+        *outputs: Any,
+        **kwargs: Any,
+    ) -> tuple[ndarray[Shape], ndarray[Shape]]: ...
+    @overload
+    def __call__[Shape: _Shape](
+        self,
+        x1: Any,
+        x2: ndarray[Shape],
+        /,
+        out: Any = None,
+        *outputs: Any,
+        **kwargs: Any,
+    ) -> tuple[ndarray[Shape], ndarray[Shape]]: ...
+    @overload
+    def __call__(
+        self,
+        x1: Any,
+        x2: Any,
+        /,
+        out: Any = None,
+        *outputs: Any,
+        **kwargs: Any,
+    ) -> tuple[Any, Any]: ...
+
+class _MatvecUFunc(ufunc):
+    @overload
+    def __call__[Shape1: _Shape, Shape2: _Shape](
+        self,
+        x1: ndarray[Shape1],
+        x2: ndarray[Shape2],
+        /,
+        out: Any = None,
+        **kwargs: Any,
+    ) -> ndarray[matvec_shape(Shape1, Shape2)]: ...
+    @overload
+    def __call__(self, x1: Any, x2: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
+
+class _VecdotUFunc(ufunc):
+    @overload
+    def __call__[Shape1: _Shape, Shape2: _Shape](
+        self,
+        x1: ndarray[Shape1],
+        x2: ndarray[Shape2],
+        /,
+        out: Any = None,
+        **kwargs: Any,
+    ) -> ndarray[vecdot_shape(Shape1, Shape2)]: ...
+    @overload
+    def __call__(self, x1: Any, x2: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
+
+class _VecmatUFunc(ufunc):
+    @overload
+    def __call__[Shape1: _Shape, Shape2: _Shape](
+        self,
+        x1: ndarray[Shape1],
+        x2: ndarray[Shape2],
+        /,
+        out: Any = None,
+        **kwargs: Any,
+    ) -> ndarray[vecmat_shape(Shape1, Shape2)]: ...
+    @overload
+    def __call__(self, x1: Any, x2: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
+
 abs: _UnaryUFunc
 absolute: _UnaryUFunc
 acos: _UnaryUFunc
@@ -727,6 +828,13 @@ remainder: _BinaryUFunc
 right_shift: _BinaryUFunc
 subtract: _BinaryUFunc
 true_divide: _BinaryUFunc
+
+frexp: _UnaryTwoOutputUFunc
+modf: _UnaryTwoOutputUFunc
+divmod: _BinaryTwoOutputUFunc
+matvec: _MatvecUFunc
+vecdot: _VecdotUFunc
+vecmat: _VecmatUFunc
 
 def round[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 def clip[Shape: _Shape](

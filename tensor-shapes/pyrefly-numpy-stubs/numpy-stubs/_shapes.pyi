@@ -38,6 +38,24 @@ def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     return gufunc_broadcast(spec, operands)
 
 @type_shape_dsl_function
+def matvec_shape(left: IntTuple, right: IntTuple) -> IntTuple:
+    spec = "(m,n),(n)->(m)"
+    operands = dsl.IntTuples((left, right))
+    return gufunc_broadcast(spec, operands)
+
+@type_shape_dsl_function
+def vecdot_shape(left: IntTuple, right: IntTuple) -> IntTuple:
+    spec = "(n),(n)->()"
+    operands = dsl.IntTuples((left, right))
+    return gufunc_broadcast(spec, operands)
+
+@type_shape_dsl_function
+def vecmat_shape(left: IntTuple, right: IntTuple) -> IntTuple:
+    spec = "(n),(n,m)->(m)"
+    operands = dsl.IntTuples((left, right))
+    return gufunc_broadcast(spec, operands)
+
+@type_shape_dsl_function
 def reduce_shape(
     shape: IntTuple,
     axis: int | tuple[int, ...] | None,
