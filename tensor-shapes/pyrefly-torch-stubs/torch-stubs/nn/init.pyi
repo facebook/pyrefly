@@ -12,7 +12,7 @@ tensor's shape and return the same tensor. They use the Tensor[Shape] pattern
 to maintain shape information through initialization calls.
 """
 
-from typing import Literal
+from typing import Literal, overload
 
 from shape_extensions import IntTuple
 from torch import Tensor
@@ -117,6 +117,7 @@ def sparse_[Shape: IntTuple](
     ...
 
 # Truncated normal initialization
+@overload
 def trunc_normal_[Shape: IntTuple](
     tensor: Tensor[Shape],
     mean: float = 0.0,
@@ -126,3 +127,12 @@ def trunc_normal_[Shape: IntTuple](
 ) -> Tensor[Shape]:
     """Fill tensor with truncated normal distribution."""
     ...
+
+@overload
+def trunc_normal_(
+    tensor: Tensor,
+    mean: float = 0.0,
+    std: float = 1.0,
+    a: float = -2.0,
+    b: float = 2.0,
+) -> Tensor: ...

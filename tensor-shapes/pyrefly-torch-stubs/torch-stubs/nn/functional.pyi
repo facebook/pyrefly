@@ -152,6 +152,7 @@ def conv2d[
     """2D convolution. Shape inference via meta-shape: torch.nn.functional.conv2d"""
     ...
 
+@overload
 def conv3d[
     InputShape: IntTuple,
     WeightShape: IntTuple,
@@ -169,6 +170,17 @@ def conv3d[
 ) -> Tensor[conv_shape(InputShape, WeightShape, Stride, Padding, Dilation)]:
     """3D convolution. Shape inference via meta-shape: torch.nn.functional.conv3d"""
     ...
+
+@overload
+def conv3d(
+    self: Tensor,
+    weight: Tensor,
+    bias: Tensor | None = None,
+    stride: builtins.int | tuple[builtins.int, builtins.int, builtins.int] = 1,
+    padding: str = "valid",
+    dilation: builtins.int | tuple[builtins.int, builtins.int, builtins.int] = 1,
+    groups: int = 1,
+) -> Tensor: ...
 
 # Transposed convolution operations
 def conv_transpose1d[
@@ -639,6 +651,16 @@ def interpolate(
     self: Tensor,
     size: None = None,
     scale_factor: float | tuple[float, ...] = ...,
+    mode: str = "nearest",
+    align_corners: bool | None = None,
+    recompute_scale_factor: bool | None = None,
+    antialias: bool = False,
+) -> Tensor: ...
+@overload
+def interpolate(
+    self: Tensor,
+    size: int | tuple[int, ...] | None = None,
+    scale_factor: int | float | tuple[int | float, ...] | None = None,
     mode: str = "nearest",
     align_corners: bool | None = None,
     recompute_scale_factor: bool | None = None,

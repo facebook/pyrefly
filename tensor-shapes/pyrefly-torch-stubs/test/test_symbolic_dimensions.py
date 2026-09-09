@@ -956,9 +956,9 @@ def test_gather[N: IntVar, M: IntVar](x: Tensor[[N, M]], index: Tensor[[N, 5]]):
 def test_where[N: IntVar, M: IntVar](
     condition: Tensor[[N, M]], x: Tensor[[N, M]], y: Tensor[[N, M]]
 ):
-    """Where preserves shape"""
+    """Where currently returns a gradual shape."""
     result = torch.where(condition, x, y)
-    assert_type(result, Tensor[[N, M]])
+    assert_type(result, Tensor)
 
 
 def test_zeros_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):

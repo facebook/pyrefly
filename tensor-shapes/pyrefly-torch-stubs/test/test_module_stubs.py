@@ -255,6 +255,28 @@ def test_conv2d_stride():
     assert_type(y, Tensor[[4, 128, 16, 16]])
 
 
+def test_conv3d_scalar_controls():
+    conv = nn.Conv3d(3, 8, kernel_size=3, stride=2, padding=1, dilation=1)
+    x: Tensor[[2, 3, 9, 17, 17]] = torch.randn(2, 3, 9, 17, 17)
+    assert_type(conv(x), Tensor[[2, 8, 5, 9, 9]])
+
+
+def test_conv3d_omitted_controls_use_scalar_defaults():
+    conv = nn.Conv3d(3, 8, kernel_size=3)
+    x: Tensor[[2, 3, 9, 17, 17]] = torch.randn(2, 3, 9, 17, 17)
+    assert_type(conv(x), Tensor[[2, 8, 7, 15, 15]])
+
+
+def test_conv3d_gradual_controls():
+    x: Tensor[[2, 3, 9, 17, 17]] = torch.randn(2, 3, 9, 17, 17)
+    tuple_stride = nn.Conv3d(3, 8, kernel_size=3, stride=(2, 1, 1))
+    tuple_kernel = nn.Conv3d(3, 8, kernel_size=(3, 3, 3))
+    string_padding = nn.Conv3d(3, 8, kernel_size=3, padding="same")
+    assert_type(tuple_stride(x), Tensor[[2, 8, int, int, int]])
+    assert_type(tuple_kernel(x), Tensor[[2, 8, int, int, int]])
+    assert_type(string_padding(x), Tensor[[2, 8, int, int, int]])
+
+
 def test_conv_transpose2d():
     # S, P, D bound from constructor args via _Int[T]
     conv = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1)
