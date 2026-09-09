@@ -11,6 +11,7 @@ from types import EllipsisType
 from typing import Any, overload, Protocol, Sequence, SupportsIndex
 
 from jax._shapes import (
+    compress_shape,
     diagonal_shape,
     dot_shape,
     matmul_shape,
@@ -22,6 +23,8 @@ from jax._shapes import (
     sort_shape,
     squeeze_shape,
     swapaxes_shape,
+    take_scalar_idx_shape,
+    take_shape,
     trace_shape,
 )
 from jax.typing import DTypeLike
@@ -694,4 +697,57 @@ class Array[Shape: _Shape = _Shape]:
         self,
         min: Any = None,
         max: Any = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def take[IdxShape: _Shape, Axis: Flag[int | None] = None](
+        self,
+        indices: Array[IdxShape],
+        axis: Axis = None,
+        out: None = None,
+        mode: str | None = None,
+        unique_indices: bool = False,
+        indices_are_sorted: bool = False,
+        fill_value: Any = None,
+    ) -> Array[take_shape(Shape, IdxShape, Axis)]: ...
+    @overload
+    def take[Axis: Flag[int | None] = None](
+        self,
+        indices: int,
+        axis: Axis = None,
+        out: None = None,
+        mode: str | None = None,
+        unique_indices: bool = False,
+        indices_are_sorted: bool = False,
+        fill_value: Any = None,
+    ) -> Array[take_scalar_idx_shape(Shape, Axis)]: ...
+    @overload
+    def take(
+        self,
+        indices: Any,
+        axis: int | None = None,
+        out: None = None,
+        mode: str | None = None,
+        unique_indices: bool = False,
+        indices_are_sorted: bool = False,
+        fill_value: Any = None,
+    ) -> Array[IntTuple]: ...
+    @overload
+    def compress[Size: Flag[int], Axis: Flag[int | None] = None](
+        self,
+        condition: Any,
+        axis: Axis = None,
+        out: None = None,
+        *,
+        size: Size,
+        fill_value: Any = 0,
+    ) -> Array[compress_shape(Shape, Size, Axis)]: ...
+    @overload
+    def compress(
+        self,
+        condition: Any,
+        axis: int | None = None,
+        out: None = None,
+        *,
+        size: int | None = None,
+        fill_value: Any = 0,
     ) -> Array[IntTuple]: ...
