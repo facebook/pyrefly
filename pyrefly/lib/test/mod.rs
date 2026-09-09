@@ -9,6 +9,7 @@
 
 mod abstract_methods;
 mod annotation;
+mod array_coercible;
 mod assign;
 mod attribute_narrow;
 mod attributes;

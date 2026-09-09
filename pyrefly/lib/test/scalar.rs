@@ -43,6 +43,14 @@ def consume[Shape: IntTuple](x: Scalar[Shape, int]) -> Array[Shape]: ...
 def consume_unpacked[Shape: IntTuple](
     x: Scalar[IntTuple[*Elements[Shape]], int],
 ) -> Array[Shape]: ...
+def unpacked_prefix_is_never[Shape: IntTuple](
+    x: Scalar[IntTuple[2, *Elements[Shape]], int],
+) -> Never:
+    return x
+def unpacked_suffix_is_never[Shape: IntTuple](
+    x: Scalar[IntTuple[*Elements[Shape], 2], int],
+) -> Never:
+    return x
 def scalar_identity[Shape: IntTuple](x: Scalar[Shape, int]) -> Scalar[Shape, int]: ...
 def identity_helper[T](x: T) -> T: ...
 
@@ -298,6 +306,26 @@ def dependent_default[
 ](
     x: int | Scalar[Shape, int],  # E: Redundant `Scalar` union arm cannot bind observable type parameter `Shape`
 ) -> Result: ...
+
+def nested[Shape: IntTuple](
+    x: list[int | Scalar[Shape, int]],  # E: Redundant `Scalar` union arm cannot bind observable type parameter `Shape`
+) -> Array[Shape]: ...
+
+def paramspec[Shape: IntTuple, **P](
+    x: int | Scalar[Shape, int],  # E: Redundant `Scalar` union arm cannot bind observable type parameter `Shape`
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> Array[Shape]: ...
+
+def optional_binder[Shape: IntTuple](
+    x: int | Scalar[Shape, int],  # E: Redundant `Scalar` union arm cannot bind observable type parameter `Shape`
+    array: Array[Shape] | None = None,
+) -> Array[Shape]: ...
+
+def variadic_binder[Shape: IntTuple](
+    x: int | Scalar[Shape, int],  # E: Redundant `Scalar` union arm cannot bind observable type parameter `Shape`
+    *arrays: Array[Shape],
+) -> Array[Shape]: ...
 
 def not_redundant[Shape: IntTuple](
     x: str | Scalar[Shape, int],

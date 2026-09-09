@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing_extensions import TypeVar
 
 __all__ = [
+    "ArrayCoercible",
     "D",
     "Elements",
     "Int",
@@ -189,9 +190,22 @@ class Scalar(typing.Generic[_Shape, _Domain]):
     """A value from ``Domain`` indexed by a potential array ``Shape``.
 
     Rank-zero and gradual shapes expose ``Domain`` and its attributes. A
-    statically non-empty specialization normalizes to ``Never``. An unresolved
-    symbolic shape remains linked to the scalar until inference determines
-    whether it is empty.
+    shape with a known dimension normalizes to ``Never``. An unresolved symbolic
+    shape remains linked to the scalar until inference determines whether it is
+    empty.
+    """
+
+    def __class_getitem__(cls, params):
+        return cls
+
+
+class ArrayCoercible(typing.Generic[_Shape, _Domain]):
+    """Python data structurally convertible to an array of ``Domain`` leaves.
+
+    Scalars bind ``Shape`` to ``IntTuple[()]``. Rectangular list literals bind an
+    exact shape, such as ``[[1, 2], [3, 4]]`` binding ``IntTuple[2, 2]``.
+    Existing containers, starred literals, and statically ragged literals are
+    not projected; callers may provide an ordinary gradual fallback overload.
     """
 
     def __class_getitem__(cls, params):

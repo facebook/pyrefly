@@ -1808,6 +1808,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         got: &Type,
         want: &Type,
     ) -> Result<(), SubsetError> {
+        // The shape-marker hooks below self-guard on `tensor_shapes`; keep the check in
+        // that one layer rather than duplicating it here.
+        if let Some(result) = self.is_subset_array_coercible(got, want) {
+            return result;
+        }
         if let Some(result) = self.is_subset_scalar(got, want) {
             return result;
         }
@@ -3407,9 +3412,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     /// Infer `IntTuple` parameters shared by several right-hand union arms from all left-hand
     /// alternatives before committing any one arm's solution.
     ///
-    /// Shapes have an intentional gradual join that preserves common rank and dimensions. This
-    /// makes a single useful shape available to later shape operations without defining analogous
-    /// union inference for unrestricted type variables.
+    /// Shapes have an intentional gradual join that preserves common rank and dimensions while
+    /// the candidate search is bounded. Wider products use a fully gradual shape and validate the
+    /// complete union, avoiding both quadratic probing and width-dependent rejection.
     fn try_join_union_shape_parameters(
         &mut self,
         members: &[Type],
@@ -3436,8 +3441,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             .collect::<Vec<_>>();
         if vars.is_empty()
             || vars.iter().any(|var| {
-                !self.solver.has_int_tuple_bound_var(*var)
-                    || !self.active_call_context.allows_union_shape_widening(*var)
+                !self.active_call_context.allows_union_shape_widening(*var)
+                    || !self.solver.has_int_tuple_bound_var(*var)
             })
         {
             return None;

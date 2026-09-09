@@ -5,15 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! Solver integration for `shape_extensions.Scalar`.
+//! Normalization and redundant-union simplification for `shape_extensions.Scalar`.
+//!
+//! The marker representation and subset logic live in `crate::solver::shape_markers`; this module
+//! keeps only the `AnswersSolver` work of normalizing markers and simplifying signatures.
 
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::Params;
-use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::callable::PrefixParam;
+use pyrefly_types::callable::Required;
 use pyrefly_types::quantified::Quantified;
-use pyrefly_types::shaped_array::IntTuple;
-use pyrefly_types::shaped_array::IntTupleView;
-use pyrefly_types::shaped_array::tuple_carrier_to_shape;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::types::TParams;
 use pyrefly_types::types::Type;
@@ -24,80 +25,15 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
+use crate::solver::shape_markers::ScalarFamily;
+use crate::solver::shape_markers::ScalarNormalForm;
+use crate::solver::shape_markers::expanded_scalar_normal_form;
+use crate::solver::shape_markers::scalar;
 use crate::solver::solver::Solver;
-use crate::solver::solver::Subset;
-use crate::solver::solver::SubsetError;
-
-/// The shape witness and scalar domain extracted from `Scalar[Shape, Domain]`.
-struct ScalarFamily {
-    shape: Type,
-    domain: Type,
-}
-
-/// The semantic form of a `Scalar` after its shape has been normalized.
-enum ScalarNormalForm {
-    /// A rank-zero or gradual shape exposes the scalar domain.
-    Domain(Type),
-    /// The shape is not yet known, so its relationship with the domain must be preserved.
-    Suspended(ScalarFamily),
-}
-
-fn scalar(ty: &Type) -> Option<ScalarFamily> {
-    let Type::ClassType(cls) = ty else {
-        return None;
-    };
-    if cls.has_qname("shape_extensions", "Scalar") {
-        let [shape, domain] = cls.targs().as_slice() else {
-            return None;
-        };
-        Some(ScalarFamily {
-            shape: shape.clone(),
-            domain: domain.clone(),
-        })
-    } else {
-        None
-    }
-}
-
-fn scalar_normal_form(heap: &TypeHeap, marker: ScalarFamily) -> ScalarNormalForm {
-    let shape = match &marker.shape {
-        Type::Any(_) => return ScalarNormalForm::Domain(marker.domain),
-        Type::IntTuple(shape) => shape.normalize(),
-        shape => match tuple_carrier_to_shape(shape) {
-            Some(shape) => shape.normalize(),
-            // Unresolved or invalid shapes retain the marker. Validation reports malformed
-            // specializations, while inference may later solve suspended variables.
-            None => return ScalarNormalForm::Suspended(marker),
-        },
-    };
-    match shape.view() {
-        IntTupleView::Concrete([]) => ScalarNormalForm::Domain(marker.domain),
-        IntTupleView::Concrete(_) => ScalarNormalForm::Domain(heap.mk_never()),
-        IntTupleView::Gradual => ScalarNormalForm::Domain(marker.domain),
-        IntTupleView::Unpacked { prefix, suffix, .. }
-            if !prefix.is_empty() || !suffix.is_empty() =>
-        {
-            ScalarNormalForm::Domain(heap.mk_never())
-        }
-        IntTupleView::Unpacked { .. } => ScalarNormalForm::Suspended(marker),
-    }
-}
 
 /// Whether `ty` contains a `Scalar` marker that normalization may replace.
 fn contains_scalar(ty: &Type) -> bool {
     ty.any(|candidate| scalar(candidate).is_some())
-}
-
-fn contains_var(ty: &Type) -> bool {
-    ty.any(|candidate| matches!(candidate, Type::Var(_)))
-}
-
-fn expanded_scalar_normal_form(solver: &Solver, ty: &Type) -> Option<ScalarNormalForm> {
-    let mut marker = scalar(ty)?;
-    if contains_var(&marker.shape) {
-        solver.expand_with_bounds(&mut marker.shape);
-    }
-    Some(scalar_normal_form(&solver.heap, marker))
 }
 
 /// Return the ordinary domain represented by a viable `Scalar` specialization.
@@ -110,113 +46,6 @@ pub(crate) fn scalar_upper_bound(solver: &Solver, ty: &Type) -> Option<Type> {
             | ScalarNormalForm::Suspended(ScalarFamily { domain, .. }),
         ) => Some(domain),
         None => None,
-    }
-}
-
-impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
-    fn is_subset_domain_to_suspended(
-        &mut self,
-        got: &Type,
-        want: &ScalarFamily,
-    ) -> Result<(), SubsetError> {
-        self.with_speculative_subset_branch_result(&[got, &want.domain, &want.shape], |me| {
-            me.is_subset_eq(got, &want.domain)?;
-            me.is_subset_eq(&IntTuple::new(Vec::new()).to_shape_arg_type(), &want.shape)
-        })
-    }
-
-    /// Handle a subset relation involving `Scalar`, or delegate by returning `None`.
-    ///
-    /// Successful speculative branches retain inferred variable constraints. Failed branches and
-    /// probes restore all subset state captured by the transaction helper.
-    pub(crate) fn is_subset_scalar(
-        &mut self,
-        got: &Type,
-        want: &Type,
-    ) -> Option<Result<(), SubsetError>> {
-        if !self.solver.tensor_shapes {
-            return None;
-        }
-        if got.is_any() || want.is_any() {
-            return None;
-        }
-        let got_scalar = expanded_scalar_normal_form(self.solver, got);
-        let want_scalar = expanded_scalar_normal_form(self.solver, want);
-        if got.is_never() && want_scalar.is_some() {
-            return Some(Ok(()));
-        }
-        match (got_scalar, want_scalar) {
-            (None, None) => None,
-            (Some(ScalarNormalForm::Domain(domain)), None) => {
-                Some(self.is_subset_eq(&domain, want))
-            }
-            (Some(ScalarNormalForm::Suspended(got_marker)), None) => {
-                if let Type::Union(union) = want {
-                    for member in union
-                        .members
-                        .iter()
-                        .filter(|member| scalar(member).is_some())
-                    {
-                        if self
-                            .with_speculative_subset_branch_result(
-                                &[got, &got_marker.shape, &got_marker.domain, member],
-                                |me| me.is_subset_eq(got, member),
-                            )
-                            .is_ok()
-                        {
-                            return Some(Ok(()));
-                        }
-                    }
-                }
-                Some(self.is_subset_eq(&got_marker.domain, want))
-            }
-            (None, Some(ScalarNormalForm::Domain(domain))) => Some(self.is_subset_eq(got, &domain)),
-            (None, Some(ScalarNormalForm::Suspended(want))) => {
-                Some(self.is_subset_domain_to_suspended(got, &want))
-            }
-            (
-                Some(ScalarNormalForm::Domain(got_domain)),
-                Some(ScalarNormalForm::Domain(want_domain)),
-            ) => Some(self.is_subset_eq(&got_domain, &want_domain)),
-            (
-                Some(ScalarNormalForm::Domain(got_domain)),
-                Some(ScalarNormalForm::Suspended(want_marker)),
-            ) => Some(self.is_subset_domain_to_suspended(&got_domain, &want_marker)),
-            (
-                Some(ScalarNormalForm::Suspended(got_marker)),
-                Some(ScalarNormalForm::Domain(want_domain)),
-            ) => Some(self.is_subset_eq(&got_marker.domain, &want_domain)),
-            (
-                Some(ScalarNormalForm::Suspended(got_marker)),
-                Some(ScalarNormalForm::Suspended(want_marker)),
-            ) => {
-                if contains_var(&got_marker.shape) || contains_var(&want_marker.shape) {
-                    return Some(self.with_speculative_subset_branch_result(
-                        &[
-                            &got_marker.domain,
-                            &got_marker.shape,
-                            &want_marker.domain,
-                            &want_marker.shape,
-                        ],
-                        |me| {
-                            me.is_subset_eq(&got_marker.domain, &want_marker.domain)?;
-                            me.is_subset_eq(&got_marker.shape, &want_marker.shape)?;
-                            me.is_subset_eq(&want_marker.shape, &got_marker.shape)
-                        },
-                    ));
-                }
-                Some(
-                    self.probe_speculative_subset_branch_result(
-                        &[&got_marker.shape, &want_marker.shape],
-                        |me| {
-                            me.is_subset_eq(&got_marker.shape, &want_marker.shape)?;
-                            me.is_subset_eq(&want_marker.shape, &got_marker.shape)
-                        },
-                    )
-                    .and_then(|()| self.is_subset_eq(&got_marker.domain, &want_marker.domain)),
-                )
-            }
-        }
     }
 }
 
@@ -241,8 +70,48 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         changed
     }
 
-    /// Remove redundant `Scalar` union arms and reject annotations that would strand an observable
-    /// shape variable by doing so.
+    /// Remove `Scalar` members already covered by ordinary members of the same union.
+    fn simplify_redundant_scalar_unions_in_type(&self, ty: Type) -> Type {
+        ty.transform(&mut |candidate| {
+            let Type::Union(union) = candidate else {
+                return;
+            };
+            let ordinary_members = union
+                .members
+                .iter()
+                .filter(|member| scalar(member).is_none())
+                .cloned()
+                .collect::<Vec<_>>();
+            if ordinary_members.is_empty() {
+                return;
+            }
+            let ordinary = self.unions(ordinary_members);
+            let members = union
+                .members
+                .iter()
+                .filter(|member| {
+                    let Some(marker) = scalar(member) else {
+                        return true;
+                    };
+                    let snapshot = self
+                        .solver()
+                        .snapshot_for_speculative_inference(&[&marker.domain, &ordinary]);
+                    // `AnswersSolver::is_subset_eq` owns a transient `Subset`, so only solver
+                    // variables need to be restored after this probe.
+                    let redundant = self.is_subset_eq(&marker.domain, &ordinary);
+                    self.solver().restore_vars(snapshot);
+                    !redundant
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if members.len() != union.members.len() {
+                *candidate = self.unions(members);
+            }
+        })
+    }
+
+    /// Remove redundant `Scalar` union arms recursively and reject annotations that would strand
+    /// an observable shape variable by doing so.
     pub(crate) fn simplify_redundant_scalar_unions(
         &self,
         callable: &mut Callable,
@@ -252,54 +121,44 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) {
         let ret = &callable.ret;
-        let Params::List(params) = &mut callable.params else {
-            return;
+        let (original_parameter_types, required_parameters) = match &callable.params {
+            Params::List(params) => (
+                params
+                    .items()
+                    .iter()
+                    .map(|param| param.as_type().clone())
+                    .collect::<Vec<_>>(),
+                params
+                    .items()
+                    .iter()
+                    .map(|param| param.is_required())
+                    .collect::<Vec<_>>(),
+            ),
+            Params::ParamSpec(prefix, _) => (
+                prefix
+                    .iter()
+                    .map(|param| param.ty().clone())
+                    .collect::<Vec<_>>(),
+                prefix
+                    .iter()
+                    .map(|param| {
+                        matches!(
+                            param,
+                            PrefixParam::PosOnly(_, _, Required::Required)
+                                | PrefixParam::Pos(_, _, Required::Required)
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            Params::Partial(_) | Params::Ellipsis | Params::Materialization => return,
         };
-        if !params
-            .items()
-            .iter()
-            .any(|param| contains_scalar(param.as_type()))
-        {
+        if !original_parameter_types.iter().any(contains_scalar) {
             return;
         }
-        let original_parameter_types = params
-            .items()
-            .iter()
-            .map(|param| param.as_type().clone())
-            .collect::<Vec<_>>();
         let mut simplified_parameter_types = original_parameter_types
             .iter()
             .map(|parameter_type| {
-                let Type::Union(union) = parameter_type else {
-                    return parameter_type.clone();
-                };
-                let ordinary = union
-                    .members
-                    .iter()
-                    .filter(|member| scalar(member).is_none())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if ordinary.is_empty() {
-                    return parameter_type.clone();
-                }
-                let ordinary = self.unions(ordinary);
-                let members = union
-                    .members
-                    .iter()
-                    .filter(|member| {
-                        let Some(marker) = scalar(member) else {
-                            return true;
-                        };
-                        let snapshot = self
-                            .solver()
-                            .snapshot_for_speculative_inference(&[&marker.domain, &ordinary]);
-                        let redundant = self.is_subset_eq(&marker.domain, &ordinary);
-                        self.solver().restore_vars(snapshot);
-                        !redundant
-                    })
-                    .cloned()
-                    .collect();
-                self.unions(members)
+                self.simplify_redundant_scalar_unions_in_type(parameter_type.clone())
             })
             .collect::<Vec<_>>();
 
@@ -340,7 +199,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
         for tparam in observable_tparams {
             let mentions_tparam = |ty: &Type| contains_tparam(ty, tparam);
-            if simplified_parameter_types.iter().any(&mentions_tparam) {
+            if simplified_parameter_types
+                .iter()
+                .zip(&required_parameters)
+                .any(|(parameter_type, required)| *required && mentions_tparam(parameter_type))
+            {
                 continue;
             }
             let lost_indices = original_parameter_types
@@ -369,19 +232,35 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
         }
-        for (param, parameter_type) in params
-            .items_mut()
-            .iter_mut()
-            .zip(simplified_parameter_types)
-        {
-            *param.as_type_mut() = parameter_type;
+        match &mut callable.params {
+            Params::List(params) => {
+                for (param, parameter_type) in params
+                    .items_mut()
+                    .iter_mut()
+                    .zip(simplified_parameter_types)
+                {
+                    *param.as_type_mut() = parameter_type;
+                }
+            }
+            Params::ParamSpec(prefix, _) => {
+                for (param, parameter_type) in prefix.iter_mut().zip(simplified_parameter_types) {
+                    match param {
+                        PrefixParam::PosOnly(_, ty, _) | PrefixParam::Pos(_, ty, _) => {
+                            *ty = parameter_type
+                        }
+                    }
+                }
+            }
+            Params::Partial(_) | Params::Ellipsis | Params::Materialization => {
+                unreachable!("only callable parameters collected above are rewritten")
+            }
         }
     }
 
     /// Replace resolved `Scalar` occurrences with their domain or `Never` normal form.
     ///
-    /// Union members are normalized before their containing union so redundant members can be
-    /// simplified together.
+    /// Union members are normalized first so their containing union can simplify redundant
+    /// members. Unchanged unions are left intact to preserve alias display names.
     pub(crate) fn normalize_scalar_type(&self, ty: Type) -> Type {
         if !self.solver().tensor_shapes || !contains_scalar(&ty) {
             return ty;

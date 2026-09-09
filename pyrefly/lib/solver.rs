@@ -6,6 +6,7 @@
  */
 
 pub(crate) mod shape;
+pub(crate) mod shape_markers;
 pub mod solver;
 pub mod subset;
 pub mod type_order;
