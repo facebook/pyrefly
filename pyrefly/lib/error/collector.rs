@@ -182,6 +182,7 @@ impl ErrorCollector {
             context: None,
             annotations: Vec::new(),
             quick_fixes: Vec::new(),
+            deprecated_tag: true,
         }
     }
 
@@ -389,6 +390,7 @@ pub struct ErrorBuilder<'a> {
     context: Option<ErrorContext>,
     annotations: Vec<(TextRange, String)>,
     quick_fixes: Vec<ErrorQuickFix>,
+    deprecated_tag: bool,
 }
 
 impl ErrorBuilder<'_> {
@@ -433,6 +435,13 @@ impl ErrorBuilder<'_> {
         if self.active {
             self.annotations.push((range, label));
         }
+        self
+    }
+
+    /// Report the deprecation without marking the range as deprecated in editors. See
+    /// [`Error::without_deprecated_tag`].
+    pub fn without_deprecated_tag(mut self) -> Self {
+        self.deprecated_tag = false;
         self
     }
 
@@ -482,6 +491,9 @@ impl ErrorBuilder<'_> {
         }
         for fix in self.quick_fixes {
             err = err.with_quick_fix(fix);
+        }
+        if !self.deprecated_tag {
+            err = err.without_deprecated_tag();
         }
         self.collector.errors.lock().push(err);
     }

@@ -1945,6 +1945,22 @@ fn test_deprecated_diagnostic_tag() {
                     "severity": 2,
                     "source": "Pyrefly",
                     "tags": [2]
+                },
+                // Reported at the whole `WithDeprecatedOperator() + 1`, so it carries no
+                // DEPRECATED tag: striking that range through would cross out code that is
+                // not deprecated.
+                {
+                    "code": "deprecated",
+                    "codeDescription": {
+                        "href": "https://pyrefly.org/en/docs/error-kinds/#deprecated"
+                    },
+                    "message": "`+` is not supported between `WithDeprecatedOperator` and `Literal[1]`\n  `WithDeprecatedOperator.__add__` is deprecated\n  use the add method instead",
+                    "range": {
+                        "start": {"line": 20, "character": 0},
+                        "end": {"line": 20, "character": 28}
+                    },
+                    "severity": 2,
+                    "source": "Pyrefly"
                 }
             ],
             "kind": "full"

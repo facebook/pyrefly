@@ -107,10 +107,11 @@ a given file to the root of your filesystem. For example, if you have the follow
 
 The site package path
 ([see `site-package-path` in configuration docs](configuration.mdx#site-package-path))
-consists of several entries representing third-party packages.
+contains roots from the configuration and the interpreter. Pyrefly uses these roots to
+resolve imports.
 
-1. Site package path from a config file (if no CLI override is present) or CLI args.
-2. A site package path queried from a Python interpreter, if one could be found.
+1. Site package paths from a config file (if no CLI override is present) or CLI args.
+2. Filtered entries from a Python interpreter's `sys.path`, if Pyrefly finds an interpreter.
    See [Environment Autoconfiguration](configuration.mdx#environment-autoconfiguration)
    for more information on finding interpreters.
 

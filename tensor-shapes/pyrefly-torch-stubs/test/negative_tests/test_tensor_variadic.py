@@ -104,8 +104,8 @@ def test_split_init_last_4d(
 
 def test_variadic_identity_wrong(x: Tensor[[10, 20]]) -> Tensor[[10, 30]]:
     """Shape is preserved."""
-    # E: Returned type `Tensor[[10, 20]]` is not assignable
-    #    to declared return type `Tensor[[10, 30]]`
+    # E: Returned type `Tensor[IntTuple[10, 20]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[10, 30]]`
     return variadic_identity(x)
 
 
@@ -113,6 +113,6 @@ def test_split_first_wrong_rest(
     x: Tensor[[1, 2, 3, 4]],
 ) -> tuple[Tensor[[1]], Tensor[[2, 3]]]:
     """Rest is [2, 3, 4], not [2, 3]."""
-    # E: Returned type `tuple[Tensor[[1]], Tensor[[2, 3, 4]]]`
-    #    is not assignable to declared return type `tuple[Tensor[[1]], Tensor[[2, 3]]]`
+    # E: Returned type `tuple[Tensor[IntTuple[1]], Tensor[IntTuple[2, 3, 4]]]`
+    #    is not assignable to declared return type `tuple[Tensor[IntTuple[1]], Tensor[IntTuple[2, 3]]]`
     return split_first_rest(x)

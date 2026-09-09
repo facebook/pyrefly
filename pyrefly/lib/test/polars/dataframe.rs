@@ -2113,7 +2113,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df[["a", "a"]])  # E: Projection produces duplicate column `a` # E: revealed type: DataFrame
+reveal_type(df[["a", "a"]])  # E: Operation produces duplicate column `a` # E: revealed type: DataFrame
 "#,
 );
 
@@ -2279,7 +2279,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.select("a", "a"))  # E: Projection produces duplicate column `a` # E: revealed type: DataFrame
+reveal_type(df.select("a", "a"))  # E: Operation produces duplicate column `a` # E: revealed type: DataFrame
 "#,
 );
 
@@ -2302,7 +2302,7 @@ from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 result = df.select(
     1,
-    2,  # E: Projection produces duplicate column `literal`
+    2,  # E: Operation produces duplicate column `literal`
     "d",  # E: Column `d` is not in the DataFrame schema
 )
 reveal_type(result)  # E: revealed type: DataFrame
@@ -2334,8 +2334,8 @@ import polars as pl
 df = pl.DataFrame({"a": [1]})
 df.select(
     1,
-    2,  # E: Projection produces duplicate column `literal`
-    3,  # E: Projection produces duplicate column `literal`
+    2,  # E: Operation produces duplicate column `literal`
+    3,  # E: Operation produces duplicate column `literal`
 )
 "#,
 );
@@ -2351,7 +2351,7 @@ expr = pl.col("a")
 result = df.select(
     expr,
     1,
-    2,  # E: Projection produces duplicate column `literal`
+    2,  # E: Operation produces duplicate column `literal`
     "missing",  # E: Column `missing` is not in the DataFrame schema
 )
 reveal_type(result)  # E: revealed type: DataFrame
@@ -2371,7 +2371,7 @@ td: Cols = {"a": [1]}
 df = pl.DataFrame(td)
 result = df.select(
     1,
-    2,  # E: Projection produces duplicate column `literal`
+    2,  # E: Operation produces duplicate column `literal`
     "missing",
 )
 reveal_type(result)  # E: revealed type: DataFrame
@@ -2752,7 +2752,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.select(pl.col("a"), pl.col("b").alias("a")))  # E: Projection produces duplicate column `a` # E: revealed type: DataFrame
+reveal_type(df.select(pl.col("a"), pl.col("b").alias("a")))  # E: Operation produces duplicate column `a` # E: revealed type: DataFrame
 "#,
 );
 
@@ -4445,16 +4445,41 @@ reveal_type(d1.join(d2, on="k", how="full"))  # E: revealed type: DataFrame[k: I
 );
 
 testcase!(
-    test_join_suffix_collision_falls_back,
+    test_join_suffix_collision_reported,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-# The right `a` would become `a_right`, which already exists on the left, a runtime DuplicateError,
-# so we fall back rather than emit a schema with a duplicate column.
+# The right `a` becomes `a_right`, which already exists
+# on the left, so Polars raises a DuplicateError.
 d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64, "a_right": pl.Int64})
 d2 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
-reveal_type(d1.join(d2, on="k", how="inner"))  # E: revealed type: DataFrame
+reveal_type(d1.join(d2, on="k", how="inner"))  # E: Operation produces duplicate column `a_right` # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_rhs_internal_suffix_collision_reported,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import assert_type
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64, "a_right": pl.Int64})
+assert_type(d1.join(d2, on="k", how="inner"), pl.DataFrame)  # E: Operation produces duplicate column `a_right`
+"#,
+);
+
+testcase!(
+    test_join_semi_anti_accept_colliding_schemas,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64, "a_right": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+reveal_type(d1.join(d2, on="k", how="semi"))  # E: revealed type: DataFrame[k: Int64, a: Int64, a_right: Int64]
+reveal_type(d1.join(d2, on="k", how="anti"))  # E: revealed type: DataFrame[k: Int64, a: Int64, a_right: Int64]
 "#,
 );
 
@@ -4584,6 +4609,22 @@ from typing import reveal_type
 d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
 d2 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
 reveal_type(d1.join(d2, on="k", how="inner", suffix="_r"))  # E: revealed type: DataFrame
+"#,
+);
+
+// A selector or pattern names a set of columns rather than one, so it cannot be matched against
+// either schema. Without this the names would be looked up literally and reported as missing.
+testcase!(
+    test_join_selector_keys_fall_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+left = pl.DataFrame({"id": [1], "a": [2]})
+right = pl.DataFrame({"id": [1], "b": [3]})
+reveal_type(left.join(right, on="*"))  # E: revealed type: DataFrame
+reveal_type(left.join(right, on="^id$"))  # E: revealed type: DataFrame
+reveal_type(left.join(right, on=["id", "*"]))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -5839,7 +5880,7 @@ from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 result = df.lazy().select(
     "a",
-    "a",  # E: Projection produces duplicate column `a`
+    "a",  # E: Operation produces duplicate column `a`
 )
 reveal_type(result)  # E: revealed type: LazyFrame
 "#,

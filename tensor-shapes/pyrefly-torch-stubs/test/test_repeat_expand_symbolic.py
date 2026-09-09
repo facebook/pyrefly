@@ -85,5 +85,5 @@ def check_expand_gradual(
 def check_expand_partially_known_shape[Batch: IntTuple](
     x: Tensor[[*Elements[Batch], 2]],
 ) -> None:
-    # Tuple unpacking currently loses the partial carrier before the DSL runs.
+    # Tuple unpacking currently loses the partially-known shape before the DSL runs.
     assert_type(x.expand(x.size()), Tensor[IntTuple])

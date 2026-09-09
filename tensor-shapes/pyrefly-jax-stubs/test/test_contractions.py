@@ -18,25 +18,25 @@ def test_einsum() -> None:
     batch_b = jnp.ones((5, 3, 4))
 
     # Dot product
-    assert_shape(jnp.einsum("i,i->", v1, v2), ())
+    assert_shape(jnp.einsum("i,i->", v1, v2).shape, ())
 
     # Outer product
-    assert_shape(jnp.einsum("i,j->ij", v1, v2), (3, 3))
+    assert_shape(jnp.einsum("i,j->ij", v1, v2).shape, (3, 3))
 
     # Matrix multiplication
-    assert_shape(jnp.einsum("ij,jk->ik", a, b), (2, 4))
+    assert_shape(jnp.einsum("ij,jk->ik", a, b).shape, (2, 4))
 
     # Batch matrix multiplication
-    assert_shape(jnp.einsum("bij,bjk->bik", batch_a, batch_b), (5, 2, 4))
+    assert_shape(jnp.einsum("bij,bjk->bik", batch_a, batch_b).shape, (5, 2, 4))
 
     # Transpose
-    assert_shape(jnp.einsum("ij->ji", a), (3, 2))
+    assert_shape(jnp.einsum("ij->ji", a).shape, (3, 2))
 
     # Diagonal
-    assert_shape(jnp.einsum("ii->i", jnp.ones((3, 3))), (3,))
+    assert_shape(jnp.einsum("ii->i", jnp.ones((3, 3))).shape, (3,))
 
     # Trace
-    assert_shape(jnp.einsum("ii->", jnp.ones((3, 3))), ())
+    assert_shape(jnp.einsum("ii->", jnp.ones((3, 3))).shape, ())
 
 
 def test_einsum_path() -> None:
@@ -44,7 +44,7 @@ def test_einsum_path() -> None:
     b = jnp.ones((3, 4))
     path, _ = jnp.einsum_path("ij,jk->ik", a, b)
     assert len(path) > 0
-    assert_shape(jnp.einsum("ij,jk->ik", a, b), (2, 4))
+    assert_shape(jnp.einsum("ij,jk->ik", a, b).shape, (2, 4))
 
 
 def test_dot() -> None:
@@ -56,47 +56,49 @@ def test_dot() -> None:
     tensor45 = jnp.ones((4, 5))
 
     # 1D dot 1D -> scalar ()
-    assert_shape(jnp.dot(v1, v2), ())
-    assert_shape(v1.dot(v2), ())
+    assert_shape(jnp.dot(v1, v2).shape, ())
+    assert_shape(v1.dot(v2).shape, ())
 
     # 2D dot 2D -> 2D
-    assert_shape(jnp.dot(mat23, mat34), (2, 4))
-    assert_shape(mat23.dot(mat34), (2, 4))
+    assert_shape(jnp.dot(mat23, mat34).shape, (2, 4))
+    assert_shape(mat23.dot(mat34).shape, (2, 4))
 
     # 2D dot 1D -> 1D
-    assert_shape(jnp.dot(mat23, v1), (2,))
-    assert_shape(mat23.dot(v1), (2,))
+    assert_shape(jnp.dot(mat23, v1).shape, (2,))
+    assert_shape(mat23.dot(v1).shape, (2,))
 
     # 1D dot 2D -> 1D
-    assert_shape(jnp.dot(jnp.ones(2), mat23), (3,))
-    assert_shape(jnp.ones(2).dot(mat23), (3,))
+    assert_shape(jnp.dot(jnp.ones(2), mat23).shape, (3,))
+    assert_shape(jnp.ones(2).dot(mat23).shape, (3,))
 
     # 3D dot 2D -> 3D
-    assert_shape(jnp.dot(tensor234, tensor45), (2, 3, 5))
-    assert_shape(tensor234.dot(tensor45), (2, 3, 5))
+    assert_shape(jnp.dot(tensor234, tensor45).shape, (2, 3, 5))
+    assert_shape(tensor234.dot(tensor45).shape, (2, 3, 5))
 
 
 def test_vdot() -> None:
-    assert_shape(jnp.vdot(jnp.ones(3), jnp.ones(3)), ())
-    assert_shape(jnp.vdot(jnp.ones((2, 3)), jnp.ones((2, 3))), ())
+    assert_shape(jnp.vdot(jnp.ones(3), jnp.ones(3)).shape, ())
+    assert_shape(jnp.vdot(jnp.ones((2, 3)), jnp.ones((2, 3))).shape, ())
 
 
 def test_inner() -> None:
-    assert_shape(jnp.inner(jnp.ones(3), jnp.ones(3)), ())
-    assert_shape(jnp.inner(jnp.ones((2, 3)), jnp.ones((4, 3))), (2, 4))
-    assert_shape(jnp.inner(jnp.ones((2, 3, 4)), jnp.ones((5, 4))), (2, 3, 5))
-    assert_shape(jnp.inner(jnp.ones((2, 3, 4)), jnp.ones((5, 6, 4))), (2, 3, 5, 6))
+    assert_shape(jnp.inner(jnp.ones(3), jnp.ones(3)).shape, ())
+    assert_shape(jnp.inner(jnp.ones((2, 3)), jnp.ones((4, 3))).shape, (2, 4))
+    assert_shape(jnp.inner(jnp.ones((2, 3, 4)), jnp.ones((5, 4))).shape, (2, 3, 5))
+    assert_shape(
+        jnp.inner(jnp.ones((2, 3, 4)), jnp.ones((5, 6, 4))).shape, (2, 3, 5, 6)
+    )
 
 
 def test_outer() -> None:
-    assert_shape(jnp.outer(jnp.ones(3), jnp.ones(4)), (3, 4))
+    assert_shape(jnp.outer(jnp.ones(3), jnp.ones(4)).shape, (3, 4))
     assert jnp.outer(jnp.ones((2, 3)), jnp.ones((4, 5))).shape == (6, 20)
 
 
 def test_kron() -> None:
-    assert_shape(jnp.kron(jnp.ones(2), jnp.ones(3)), (6,))
-    assert_shape(jnp.kron(jnp.ones((2, 3)), jnp.ones((4, 5))), (8, 15))
-    assert_shape(jnp.kron(jnp.ones(2), jnp.ones((4, 5))), (4, 10))
+    assert_shape(jnp.kron(jnp.ones(2), jnp.ones(3)).shape, (6,))
+    assert_shape(jnp.kron(jnp.ones((2, 3)), jnp.ones((4, 5))).shape, (8, 15))
+    assert_shape(jnp.kron(jnp.ones(2), jnp.ones((4, 5))).shape, (4, 10))
 
 
 def test_matvec_and_vecmat() -> None:
@@ -105,51 +107,53 @@ def test_matvec_and_vecmat() -> None:
     batch_mat = jnp.ones((4, 2, 3))
     batch_vec = jnp.ones((4, 3))
 
-    assert_shape(jnp.matvec(mat, vec), (2,))
-    assert_shape(jnp.matvec(batch_mat, vec), (4, 2))
-    assert_shape(jnp.matvec(batch_mat, batch_vec), (4, 2))
+    assert_shape(jnp.matvec(mat, vec).shape, (2,))
+    assert_shape(jnp.matvec(batch_mat, vec).shape, (4, 2))
+    assert_shape(jnp.matvec(batch_mat, batch_vec).shape, (4, 2))
 
-    assert_shape(jnp.vecmat(jnp.ones(2), mat), (3,))
-    assert_shape(jnp.vecmat(jnp.ones(2), batch_mat), (4, 3))
-    assert_shape(jnp.vecmat(jnp.ones((4, 2)), batch_mat), (4, 3))
+    assert_shape(jnp.vecmat(jnp.ones(2), mat).shape, (3,))
+    assert_shape(jnp.vecmat(jnp.ones(2), batch_mat).shape, (4, 3))
+    assert_shape(jnp.vecmat(jnp.ones((4, 2)), batch_mat).shape, (4, 3))
 
 
 def test_vecdot() -> None:
-    assert_shape(jnp.vecdot(jnp.ones(3), jnp.ones(3)), ())
-    assert_shape(jnp.vecdot(jnp.ones((2, 3)), jnp.ones((2, 3))), (2,))
-    assert_shape(jnp.vecdot(jnp.ones((2, 3)), jnp.ones((2, 3)), axis=0), (3,))
+    assert_shape(jnp.vecdot(jnp.ones(3), jnp.ones(3)).shape, ())
+    assert_shape(jnp.vecdot(jnp.ones((2, 3)), jnp.ones((2, 3))).shape, (2,))
+    assert_shape(jnp.vecdot(jnp.ones((2, 3)), jnp.ones((2, 3)), axis=0).shape, (3,))
 
 
 def test_cross() -> None:
     # 3D vectors
-    assert_shape(jnp.cross(jnp.ones(3), jnp.ones(3)), (3,))
-    assert_shape(jnp.cross(jnp.ones((2, 3)), jnp.ones((2, 3))), (2, 3))
+    assert_shape(jnp.cross(jnp.ones(3), jnp.ones(3)).shape, (3,))
+    assert_shape(jnp.cross(jnp.ones((2, 3)), jnp.ones((2, 3))).shape, (2, 3))
 
     # 2D vectors
-    assert_shape(jnp.cross(jnp.ones(2), jnp.ones(2)), ())
-    assert_shape(jnp.cross(jnp.ones((4, 2)), jnp.ones((4, 2))), (4,))
+    assert_shape(jnp.cross(jnp.ones(2), jnp.ones(2)).shape, ())
+    assert_shape(jnp.cross(jnp.ones((4, 2)), jnp.ones((4, 2))).shape, (4,))
 
     # Mixed 2D and 3D
-    assert_shape(jnp.cross(jnp.ones((4, 2)), jnp.ones((4, 3))), (4, 3))
-    assert_shape(jnp.cross(jnp.ones((4, 3)), jnp.ones((4, 2))), (4, 3))
+    assert_shape(jnp.cross(jnp.ones((4, 2)), jnp.ones((4, 3))).shape, (4, 3))
+    assert_shape(jnp.cross(jnp.ones((4, 3)), jnp.ones((4, 2))).shape, (4, 3))
 
     # axis parameter
-    assert_shape(jnp.cross(jnp.ones((3, 4)), jnp.ones((3, 4)), axis=0), (3, 4))
-    assert_shape(jnp.cross(jnp.ones((2, 4)), jnp.ones((2, 4)), axis=0), (4,))
+    assert_shape(jnp.cross(jnp.ones((3, 4)), jnp.ones((3, 4)), axis=0).shape, (3, 4))
+    assert_shape(jnp.cross(jnp.ones((2, 4)), jnp.ones((2, 4)), axis=0).shape, (4,))
 
     # axisa, axisb, axisc
-    assert_shape(jnp.cross(jnp.ones((4, 3)), jnp.ones((4, 3)), axisc=0), (3, 4))
+    assert_shape(jnp.cross(jnp.ones((4, 3)), jnp.ones((4, 3)), axisc=0).shape, (3, 4))
     assert_shape(
-        jnp.cross(jnp.ones((3, 4)), jnp.ones((4, 3)), axisa=0, axisb=1, axisc=0),
+        jnp.cross(jnp.ones((3, 4)), jnp.ones((4, 3)), axisa=0, axisb=1, axisc=0).shape,
         (3, 4),
     )
 
 
 def test_tensordot() -> None:
-    assert_shape(jnp.tensordot(jnp.ones((2, 3)), jnp.ones((2, 3)), axes=2), ())
-    assert_shape(jnp.tensordot(jnp.ones((2, 3)), jnp.ones((3, 4)), axes=1), (2, 4))
+    assert_shape(jnp.tensordot(jnp.ones((2, 3)), jnp.ones((2, 3)), axes=2).shape, ())
     assert_shape(
-        jnp.tensordot(jnp.ones((2, 3, 4)), jnp.ones((3, 4, 5)), axes=2),
+        jnp.tensordot(jnp.ones((2, 3)), jnp.ones((3, 4)), axes=1).shape, (2, 4)
+    )
+    assert_shape(
+        jnp.tensordot(jnp.ones((2, 3, 4)), jnp.ones((3, 4, 5)), axes=2).shape,
         (2, 5),
     )
 
@@ -161,33 +165,33 @@ def test_diagonal_and_trace() -> None:
     t3d = jnp.ones((2, 3, 4))
 
     # 2D diagonal
-    assert_shape(jnp.diagonal(mat), (3,))
-    assert_shape(jnp.diagonal(rect), (4,))
-    assert_shape(mat.diagonal(), (3,))
+    assert_shape(jnp.diagonal(mat).shape, (3,))
+    assert_shape(jnp.diagonal(rect).shape, (4,))
+    assert_shape(mat.diagonal().shape, (3,))
 
     # 2D diagonal with positive and negative offsets
-    assert_shape(jnp.diagonal(mat, offset=1), (2,))
-    assert_shape(jnp.diagonal(mat, offset=-1), (2,))
-    assert_shape(jnp.diagonal(mat, offset=2), (1,))
-    assert_shape(mat.diagonal(offset=1), (2,))
+    assert_shape(jnp.diagonal(mat, offset=1).shape, (2,))
+    assert_shape(jnp.diagonal(mat, offset=-1).shape, (2,))
+    assert_shape(jnp.diagonal(mat, offset=2).shape, (1,))
+    assert_shape(mat.diagonal(offset=1).shape, (2,))
 
-    assert_shape(jnp.diagonal(rect, offset=1), (4,))
-    assert_shape(jnp.diagonal(rect, offset=2), (3,))
-    assert_shape(jnp.diagonal(rect, offset=-1), (3,))
-    assert_shape(jnp.diagonal(rect, offset=-2), (2,))
+    assert_shape(jnp.diagonal(rect, offset=1).shape, (4,))
+    assert_shape(jnp.diagonal(rect, offset=2).shape, (3,))
+    assert_shape(jnp.diagonal(rect, offset=-1).shape, (3,))
+    assert_shape(jnp.diagonal(rect, offset=-2).shape, (2,))
 
     # 3D diagonal with axis1, axis2
-    assert_shape(jnp.diagonal(t3d), (4, 2))
-    assert_shape(jnp.diagonal(t3d, axis1=0, axis2=2), (3, 2))
-    assert_shape(jnp.diagonal(t3d, axis1=1, axis2=2), (2, 3))
-    assert_shape(jnp.diagonal(t3d, axis1=-2, axis2=-1), (2, 3))
-    assert_shape(jnp.diagonal(t3d, offset=2, axis1=1, axis2=2), (2, 2))
-    assert_shape(t3d.diagonal(axis1=1, axis2=2), (2, 3))
+    assert_shape(jnp.diagonal(t3d).shape, (4, 2))
+    assert_shape(jnp.diagonal(t3d, axis1=0, axis2=2).shape, (3, 2))
+    assert_shape(jnp.diagonal(t3d, axis1=1, axis2=2).shape, (2, 3))
+    assert_shape(jnp.diagonal(t3d, axis1=-2, axis2=-1).shape, (2, 3))
+    assert_shape(jnp.diagonal(t3d, offset=2, axis1=1, axis2=2).shape, (2, 2))
+    assert_shape(t3d.diagonal(axis1=1, axis2=2).shape, (2, 3))
 
     # Trace
-    assert_shape(jnp.trace(mat), ())
-    assert_shape(mat.trace(), ())
-    assert_shape(jnp.trace(batch_mat), (3,))
-    assert_shape(jnp.trace(batch_mat, axis1=1, axis2=2), (2,))
-    assert_shape(jnp.trace(t3d, axis1=1, axis2=2), (2,))
-    assert_shape(t3d.trace(axis1=1, axis2=2), (2,))
+    assert_shape(jnp.trace(mat).shape, ())
+    assert_shape(mat.trace().shape, ())
+    assert_shape(jnp.trace(batch_mat).shape, (3,))
+    assert_shape(jnp.trace(batch_mat, axis1=1, axis2=2).shape, (2,))
+    assert_shape(jnp.trace(t3d, axis1=1, axis2=2).shape, (2,))
+    assert_shape(t3d.trace(axis1=1, axis2=2).shape, (2,))

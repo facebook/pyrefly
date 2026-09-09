@@ -10,7 +10,6 @@
 from types import EllipsisType
 from typing import Any, overload, Protocol, Sequence, SupportsIndex
 
-import shape_extensions
 from jax._shapes import (
     diagonal_shape,
     dot_shape,
@@ -28,7 +27,6 @@ from jax._shapes import (
 from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple, IntVar
 
 type _Shape = IntTuple
-type _AnyShape = tuple[Any, ...]
 type _Axis = int | tuple[int, ...] | None
 type _Scalar = bool | int | float | complex
 
@@ -50,8 +48,7 @@ type _BasicIndex = SupportsIndex | slice | _IntegerSequence | None | EllipsisTyp
 # after narrowing with `is_int_value` alone. See `reshape_shape`, which rejects it.
 type _NewShape = int | tuple[int, ...] | None
 
-@shape_extensions.shaped_array(shape="Shape", builtin_indexing=False)
-class Array[Shape: _Shape = _AnyShape]:
+class Array[Shape: _Shape = _Shape]:
     shape: Shape
     @overload
     def __getitem__[I: Index](self, index: I) -> Array[index_shape(Shape, I)]: ...
@@ -202,6 +199,8 @@ class Array[Shape: _Shape = _AnyShape]:
     def reshape[NewShape: Flag[_NewShape]](
         self, shape: NewShape, /, *, order: str = ..., out_sharding: Any = ...
     ) -> Array[reshape_shape(Shape, NewShape)]: ...
+    @overload
+    def reshape[NewShape: IntTuple](self, *shape: *NewShape) -> Array[NewShape]: ...
     # JAX's variadic spelling is accepted but intentionally not modeled: an
     # argument list cannot be captured as a `Flag`, so the shape is gradual and
     # `reshape_shape` never runs, which leaves the `-1` and negative-size checks

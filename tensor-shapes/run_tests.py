@@ -12,10 +12,8 @@ per-package `run_pyrefly.py` and `run_runtime_tests.py` remain the things to
 reach for while iterating on a single library.
 
 Builds Pyrefly before checking, and needs the shared virtualenv from
-bootstrap_venv.py for the runtime half. `--static-only` drops the virtualenv
-requirement entirely,
-which is the usual mode when changing Pyrefly rather than the stubs. Nothing
-here downloads anything.
+bootstrap_venv.py for runtime tests and NumPy static checks. Nothing here
+downloads anything.
 """
 
 from __future__ import annotations
@@ -32,6 +30,28 @@ PACKAGES: tuple[str, ...] = (
     "pyrefly-numpy-stubs",
     "pyrefly-jax-stubs",
 )
+
+
+def shaped_array_reference_lines(source: str) -> list[int]:
+    return [
+        line_number
+        for line_number, line in enumerate(source.splitlines(), start=1)
+        if "shaped_array" in line
+    ]
+
+
+def shaped_array_references() -> list[str]:
+    uses = []
+    for package in PACKAGES:
+        package_root = TENSOR_SHAPES_ROOT / package
+        for path in package_root.rglob("*"):
+            if path.suffix not in {".py", ".pyi"}:
+                continue
+            uses.extend(
+                f"{path.relative_to(TENSOR_SHAPES_ROOT)}:{line}"
+                for line in shaped_array_reference_lines(path.read_text())
+            )
+    return uses
 
 
 def main() -> int:
@@ -56,12 +76,12 @@ def main() -> int:
         "--python",
         type=Path,
         default=None,
-        help="interpreter with torch/numpy/jax installed (default: the shared virtualenv)",
+        help="virtualenv interpreter with torch/numpy/jax installed (default: shared virtualenv)",
     )
     parser.add_argument(
         "--static-only",
         action="store_true",
-        help="only type check; needs no virtualenv",
+        help="only type check; NumPy checking still requires a virtualenv",
     )
     parser.add_argument(
         "--runtime-only",
@@ -73,6 +93,12 @@ def main() -> int:
 
     if args.static_only and args.runtime_only:
         raise SystemExit("--static-only and --runtime-only are mutually exclusive")
+    if references := shaped_array_references():
+        print(
+            "Legacy shaped_array references remain:\n" + "\n".join(references),
+            file=sys.stderr,
+        )
+        return 1
 
     # Resolve both toolchains before running anything, so a missing virtualenv
     # fails immediately rather than after several minutes of type checking.
@@ -83,18 +109,7 @@ def main() -> int:
             explicit=args.pyrefly, buck=args.buck, release=args.release
         )
     )
-    python = (
-        None
-        if args.static_only
-        else venv_python(
-            args.python,
-            extra_hint=(
-                "Pass --static-only to run just the type checking, which needs no\n"
-                "virtualenv. That is usually the right mode when working on Pyrefly\n"
-                "itself rather than on the stubs, since CI runs the runtime tests.\n\n"
-            ),
-        )
-    )
+    python = venv_python(args.python)
 
     failures: list[str] = []
     for package in PACKAGES:
@@ -113,11 +128,13 @@ def main() -> int:
                 command.extend(["--pyrefly", pyrefly[0]])
             else:
                 command.append("--buck")
+            if package == "pyrefly-numpy-stubs":
+                command.extend(["--python", str(python)])
             if args.nocapture:
                 command.append("--nocapture")
             if not run(command):
                 failures.append(step)
-        if python is not None:
+        if not args.static_only:
             step = f"{package} runtime"
             print(f"\n=== {step} ===", flush=True)
             if not run([str(python), str(package_root / "run_runtime_tests.py")]):

@@ -37,6 +37,7 @@ use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::config::config::BaselineMatchingMode;
 use crate::config::config::ConfigFile;
 use crate::error::baseline::BaselineProcessor;
 use crate::error::baseline::TrackedBaselineProcessor;
@@ -379,6 +380,7 @@ impl Errors {
         errors: &mut CollectedErrors,
         baseline_path: Option<&Path>,
         relative_to: &Path,
+        matching_mode: BaselineMatchingMode,
         classify_stale_entries: bool,
     ) -> BaselineApplyResult {
         let Some(baseline_path) = baseline_path else {
@@ -403,12 +405,13 @@ impl Errors {
         };
 
         if classify_stale_entries {
-            let mut processor = match TrackedBaselineProcessor::from_json(&content, relative_to)
-                .with_context(fail_ctx)
-            {
-                Ok(p) => p,
-                Err(e) => return BaselineApplyResult::FailedToRead(e),
-            };
+            let mut processor =
+                match TrackedBaselineProcessor::from_json(&content, relative_to, matching_mode)
+                    .with_context(fail_ctx)
+                {
+                    Ok(p) => p,
+                    Err(e) => return BaselineApplyResult::FailedToRead(e),
+                };
             processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
             let checked_paths: HashSet<_> = self
                 .loads
@@ -424,11 +427,12 @@ impl Errors {
                 retained_entries: result.retained_entries,
             }
         } else {
-            let processor =
-                match BaselineProcessor::from_json(&content, relative_to).with_context(fail_ctx) {
-                    Ok(p) => p,
-                    Err(e) => return BaselineApplyResult::FailedToRead(e),
-                };
+            let processor = match BaselineProcessor::from_json(&content, relative_to, matching_mode)
+                .with_context(fail_ctx)
+            {
+                Ok(p) => p,
+                Err(e) => return BaselineApplyResult::FailedToRead(e),
+            };
             processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
             BaselineApplyResult::Applied {
                 unused_entry_count: 0,
@@ -471,7 +475,8 @@ impl Errors {
                     .or_else(|| baseline_path.parent())
                     .unwrap_or_else(|| Path::new(""));
                 let content = fs::read_to_string(baseline_path).ok()?;
-                BaselineProcessor::from_json(&content, relative_to).ok()
+                BaselineProcessor::from_json(&content, relative_to, config.baseline_matching_mode)
+                    .ok()
             });
             if processor
                 .as_ref()

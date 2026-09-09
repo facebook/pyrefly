@@ -40,7 +40,7 @@ jobs:
       uses: astral-sh/setup-uv@v5
       with:
         enable-cache: true
-      if: ${{ matrix.os == 'ubuntu-latest' }}
+        cache-dependency-glob: tensor-shapes/test-requirements.txt
     - name: Check Python formatting (ruff)
       run: |
         uv tool run --from ruff==0.14.3 ruff format --check --config ruff.toml .
@@ -85,16 +85,15 @@ jobs:
       run: env -u GITHUB_ACTIONS scrut test test
       if: ${{ matrix.os != 'windows-latest' }}
     # Every library's stub tests run in one step rather than one job per
-    # library. Type checking runs on the whole matrix: it needs no virtualenv,
-    # and the runners carry Windows-specific interpreter and `.exe` path
-    # handling that nothing else would exercise. Only the runtime half is
-    # Ubuntu-only, so that torch and jax are not installed three times to run
-    # platform-independent assertions.
-    - name: Run tensor-shape type checks
-      run: python tensor-shapes/run_tests.py --release --static-only
+    # library. Type checking runs on the whole matrix because the runners carry
+    # Windows-specific interpreter and `.exe` path handling that nothing else
+    # would exercise. Static fallback needs the installed array libraries, so
+    # the virtualenv is bootstrapped on every platform. Runtime assertions are
+    # platform-independent and run only on Ubuntu.
     - name: Bootstrap tensor-shapes virtualenv
       run: python tensor-shapes/bootstrap_venv.py
-      if: ${{ matrix.os == 'ubuntu-latest' }}
+    - name: Run tensor-shape type checks
+      run: python tensor-shapes/run_tests.py --release --static-only
     - name: Run tensor-shape runtime tests
       run: python tensor-shapes/run_tests.py --runtime-only
       if: ${{ matrix.os == 'ubuntu-latest' }}

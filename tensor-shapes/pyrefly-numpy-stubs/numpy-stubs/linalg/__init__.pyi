@@ -6,6 +6,37 @@
 from typing import Literal, overload
 
 from numpy._shapes import int_min
+
+# Preserve NumPy's canonical re-exports before local shape-aware declarations.
+from numpy.linalg._linalg import (
+    cholesky as cholesky,
+    cond as cond,
+    cross as cross,
+    det as det,
+    diagonal as diagonal,
+    eig as eig,
+    eigvals as eigvals,
+    eigvalsh as eigvalsh,
+    inv as inv,
+    lstsq as lstsq,
+    matmul as matmul,
+    matrix_norm as matrix_norm,
+    matrix_power as matrix_power,
+    matrix_rank as matrix_rank,
+    matrix_transpose as matrix_transpose,
+    multi_dot as multi_dot,
+    outer as outer,
+    pinv as pinv,
+    qr as qr,
+    slogdet as slogdet,
+    svdvals as svdvals,
+    tensordot as tensordot,
+    tensorinv as tensorinv,
+    tensorsolve as tensorsolve,
+    trace as trace,
+    vecdot as vecdot,
+    vector_norm as vector_norm,
+)
 from shape_extensions import Int, IntVar
 
 from .. import ndarray

@@ -101,6 +101,7 @@ use crate::binding::pytest::PytestBindingInfo;
 use crate::binding::pytest::is_pytest_fixture_function;
 use crate::binding::scope::Exportable;
 use crate::binding::scope::FlowStyle;
+use crate::binding::scope::MutableCaptureError;
 use crate::binding::scope::NameReadInfo;
 use crate::binding::scope::ScopeTrace;
 use crate::binding::scope::Scopes;
@@ -998,6 +999,17 @@ impl<'a> BindingsBuilder<'a> {
         self.table.get_mut::<K>().0.insert(key)
     }
 
+    /// The `Idx` of `key`, if a promise for it has already been made, otherwise `None`.
+    /// Lets a caller distinguish a key that some existing binding may already refer to
+    /// from one that nothing can possibly refer to yet.
+    pub fn promised_idx<K>(&self, key: &K) -> Option<Idx<K>>
+    where
+        K: Keyed,
+        BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
+    {
+        self.table.get::<K>().0.key_to_idx(key)
+    }
+
     pub fn idx_to_key<K>(&self, idx: Idx<K>) -> &K
     where
         K: Keyed,
@@ -1489,9 +1501,14 @@ impl<'a> BindingsBuilder<'a> {
                 Binding::Forward(idx)
             }
             Err(error) => {
-                let should_suppress = matches!(kind, MutableCaptureKind::Nonlocal)
+                let should_suppress = (matches!(kind, MutableCaptureKind::Nonlocal)
                     && self.scopes.in_module_or_class_top_level()
-                    && !self.scopes.in_class_body();
+                    && !self.scopes.in_class_body())
+                    || (matches!(kind, MutableCaptureKind::Global)
+                        && matches!(error, MutableCaptureError::NotFound)
+                        && self
+                            .scopes
+                            .global_capture_self_defined(Hashed::new(&name.id)));
                 if !should_suppress {
                     self.error(name.range, ErrorKind::UnknownName, error.message(name));
                 }

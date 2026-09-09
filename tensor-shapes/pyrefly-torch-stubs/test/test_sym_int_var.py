@@ -8,7 +8,7 @@
 shape_extensions.IntVar marks symbolic integer dimensions in pyrefly.
 This test verifies that:
 1. IntVar("N") works for shape annotations
-2. IntTuple carriers work for variadic shapes
+2. IntTuple parameters work for variadic shapes
 3. Generic works with shape_extensions.IntVar for class-level type parameters
 4. Shape arithmetic (N+1, N*2) works in annotations
 """
@@ -96,17 +96,17 @@ def test_class_generic():
 
 
 # ============================================================================
-# IntTuple carrier in function signatures
+# IntTuple in function signatures
 # ============================================================================
 
 
 def test_inttuple_identity[Ns: IntTuple](x: Tensor[Ns]) -> Tensor[Ns]:
-    """IntTuple carrier preserves shape"""
+    """An IntTuple parameter preserves the whole shape."""
     return x
 
 
 def test_inttuple_inference():
-    """IntTuple carrier binds to concrete dims via inference"""
+    """An IntTuple parameter binds to concrete dimensions through inference."""
     import torch
 
     t: Tensor[[10, 20]] = torch.randn(10, 20)
@@ -117,31 +117,31 @@ def test_inttuple_inference():
 def test_inttuple_with_fixed_dim[Ns: IntTuple, N: IntVar](
     x: Tensor[[*Elements[Ns], N]],
 ) -> Tensor[[*Elements[Ns], N]]:
-    """IntTuple carrier mixed with IntVar"""
+    """An IntTuple parameter can be combined with an IntVar."""
     return x
 
 
 def test_inttuple_with_arithmetic[Ns: IntTuple, N: IntVar](
     x: Tensor[[*Elements[Ns], N]],
 ) -> Tensor[[*Elements[Ns], N + 1]]:
-    """IntTuple carrier with IntVar arithmetic"""
+    """An IntTuple parameter composes with IntVar arithmetic."""
     return x  # type: ignore[bad-return]
 
 
 # ============================================================================
-# IntTuple carrier with Generic for class-level shape parameters
+# IntTuple with Generic for class-level shape parameters
 # ============================================================================
 
 
 class VariadicLayer:
-    """Layer with a generic IntTuple carrier method"""
+    """Layer with a generic whole-shape method."""
 
     def forward[Shape: IntTuple](self, x: Tensor[Shape]) -> Tensor[Shape]:
         return x
 
 
-def test_class_inttuple_carrier():
-    """Generic class with IntTuple carrier — shape preserved"""
+def test_class_inttuple_parameter():
+    """A generic class preserves an IntTuple shape parameter."""
     layer = VariadicLayer()
     import torch
 

@@ -31,6 +31,24 @@ def test_exponential_and_log_preserve_shape() -> None:
     assert_shape(np.power(b, 2).shape, (3, 4))
 
 
+def test_unary_ufuncs_preserve_shape() -> None:
+    a = np.ones((2, 3))
+
+    assert_shape(np.arcsin(a).shape, (2, 3))
+    assert_shape(np.absolute(a).shape, (2, 3))
+    assert_shape(np.exp2(a).shape, (2, 3))
+    assert_shape(np.isfinite(a).shape, (2, 3))
+    assert_shape(np.sin(a).shape, (2, 3))
+    assert_shape(np.square(a).shape, (2, 3))
+    # @lint-ignore SPELL
+    assert np.arcsin.nin == 1
+    assert np.abs.nout == 1
+    # @lint-ignore SPELL
+    assert np.absolute.nin == 1
+    assert np.absolute.nout == 1
+    assert np.absolute(-1.0) == 1.0
+
+
 def test_binary_ufuncs_preserve_matrix_shape() -> None:
     a = np.ones((3, 4))
     b = np.full((3, 4), 2.0)
@@ -38,6 +56,74 @@ def test_binary_ufuncs_preserve_matrix_shape() -> None:
     assert_shape(np.minimum(a, b).shape, (3, 4))
     assert_shape(np.maximum(a, b).shape, (3, 4))
     assert_shape(np.arctan2(a, b).shape, (3, 4))
+
+
+def test_binary_ufunc_objects_broadcast_arrays_and_scalars() -> None:
+    matrix = np.ones((3, 1))
+    row = np.full((1, 4), 2.0)
+
+    assert_shape(np.add(matrix, row).shape, (3, 4))
+    assert_shape(np.multiply(matrix, 2.0).shape, (3, 1))
+    assert_shape(np.power(matrix, row).shape, (3, 4))
+    assert_shape(np.equal(2.0, row).shape, (1, 4))
+    # @lint-ignore SPELL
+    assert np.add.nin == 2
+    assert np.add.nout == 1
+    # @lint-ignore SPELL
+    assert np.arctan2.nin == 2
+    # @lint-ignore SPELL
+    assert np.matmul.nin == 2
+
+
+def test_multi_output_ufuncs_preserve_shapes() -> None:
+    matrix = np.ones((2, 3))
+    row = np.full((1, 3), 2.0)
+
+    fraction, exponent = np.frexp(matrix)
+    assert_shape(fraction.shape, (2, 3))
+    assert_shape(exponent.shape, (2, 3))
+    fractional, integral = np.modf(matrix)
+    assert_shape(fractional.shape, (2, 3))
+    assert_shape(integral.shape, (2, 3))
+    quotient, remainder = np.divmod(matrix, row)
+    assert_shape(quotient.shape, (2, 3))
+    assert_shape(remainder.shape, (2, 3))
+
+    frexp_fraction_out = np.empty_like(matrix)
+    frexp_exponent_out = np.empty_like(matrix)
+    frexp_result = np.frexp(matrix, frexp_fraction_out, frexp_exponent_out)
+    assert frexp_result[0] is frexp_fraction_out
+    assert frexp_result[1] is frexp_exponent_out
+
+    divmod_quotient_out = np.empty_like(matrix)
+    divmod_remainder_out = np.empty_like(matrix)
+    divmod_result = np.divmod(matrix, row, divmod_quotient_out, divmod_remainder_out)
+    assert divmod_result[0] is divmod_quotient_out
+    assert divmod_result[1] is divmod_remainder_out
+
+
+def test_vector_gufuncs_track_core_and_batch_dimensions() -> None:
+    matrices = cast(
+        "np.ndarray[tuple[Literal[4], Literal[2], Literal[3]]]",
+        make_array((4, 2, 3)),
+    )
+    vectors = np.ones((4, 3))
+    right_matrices = cast(
+        "np.ndarray[tuple[Literal[4], Literal[3], Literal[5]]]",
+        make_array((4, 3, 5)),
+    )
+
+    assert_shape(np.matvec(matrices, vectors).shape, (4, 2))
+    assert_shape(np.vecdot(vectors, vectors).shape, (4,))
+    assert_shape(np.vecmat(vectors, right_matrices).shape, (4, 5))
+    try:
+        np.vecdot(  # E: core dimension 'n' has conflicting extents 3 and 4
+            np.ones(3), np.ones(4)
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected NumPy to reject mismatched core dimensions")
 
 
 def test_extrema_broadcast_row_vector_over_matrix() -> None:
@@ -105,9 +191,9 @@ def test_binary_ufuncs_remain_positional_only() -> None:
 
     assert_shape(np.minimum(a, b).shape, (3, 4))
     try:
-        np.minimum(
-            x1=a,  # E: Expected argument `x1` to be positional
-            x2=b,  # E: Expected argument `x2` to be positional
+        np.minimum(  # E: No matching overload found
+            x1=a,
+            x2=b,
         )
     except TypeError:
         pass

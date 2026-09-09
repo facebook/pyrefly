@@ -80,16 +80,14 @@ class Suite:
         return [str(path.relative_to(package_root)) for path in paths]
 
 
-def venv_python(explicit: Path | None = None, *, extra_hint: str = "") -> Path:
+def venv_python(explicit: Path | None = None) -> Path:
     """Resolve the interpreter that has the shaped libraries installed.
 
     Order: an explicit `--python`, then $TENSOR_SHAPES_VENV, then the default
     virtualenv. This never creates anything -- see the module docstring.
 
-    Only the runtime tests need this. Type checking resolves the stubs through
-    `--search-path` and never imports the real library, so it runs with no
-    virtualenv at all; `extra_hint` is how a caller offering a static-only mode
-    advertises it here.
+    Runtime tests and partial stubs that re-export installed library definitions
+    need this.
     """
 
     # Made absolute throughout, because callers pass these on to child processes
@@ -115,10 +113,27 @@ def venv_python(explicit: Path | None = None, *, extra_hint: str = "") -> Path:
         hint = _BOOTSTRAP_HINT.format(
             bootstrap=(TENSOR_SHAPES_ROOT / "bootstrap_venv.py").relative_to(REPO_ROOT)
         )
-        raise SystemExit(
-            f"No tensor-shapes virtualenv at {venv} ({source}).\n\n{extra_hint}{hint}"
-        )
+        raise SystemExit(f"No tensor-shapes virtualenv at {venv} ({source}).\n\n{hint}")
     return python
+
+
+def venv_site_packages(python: Path) -> Path:
+    """Return the site-packages directory belonging to a virtualenv interpreter."""
+    venv = python.parent.parent
+    if os.name == "nt":
+        site_packages = venv / "Lib" / "site-packages"
+        if site_packages.is_dir():
+            return site_packages
+    else:
+        candidates = sorted((venv / "lib").glob("python*/site-packages"))
+        if len(candidates) == 1:
+            return candidates[0]
+        if candidates:
+            raise SystemExit(
+                f"Could not choose site-packages for {python}; found: "
+                + ", ".join(str(candidate) for candidate in candidates)
+            )
+    raise SystemExit(f"Could not locate site-packages for {python}")
 
 
 def pyrefly_command(
@@ -201,6 +216,7 @@ def check_suites(
     suites: list[Suite],
     nocapture: bool = False,
     check_stubs: bool = True,
+    site_package_paths: tuple[Path, ...] = (),
 ) -> int:
     """Type check the stubs and then every suite, returning the last nonzero exit code.
 
@@ -235,6 +251,8 @@ def check_suites(
             SHAPE_EXTENSIONS_ROOT,
         ):
             command.extend(["--search-path", str(search_path)])
+        for site_package_path in site_package_paths:
+            command.extend(["--site-package-path", str(site_package_path)])
         command.extend(files)
 
         if nocapture:
@@ -291,7 +309,7 @@ def run_suites(
             "shape_extensions",
             SHAPE_EXTENSIONS_ROOT / "shape_extensions" / "__init__.py",
         )
-    import shape_extensions
+    import shape_extensions  # @manual=//pyrefly/tensor-shapes/pyrefly-shape-extensions:shape_extensions
 
     if not suites:
         raise ValueError(f"no suites to run under {package_root}")

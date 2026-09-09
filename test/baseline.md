@@ -68,12 +68,75 @@ $ grep '"name": "bad-assignment"' $TMPDIR/baseline_update_from_pyproject/baselin
 [0]
 ```
 
-The written baseline omits fields that are not used for matching.
+The default `full` format includes matching and informational fields.
+
+```scrut {output_stream: stdout}
+$ $JQ -c '.errors[0] | keys' $TMPDIR/baseline_update_from_pyproject/baseline.json
+["column","concise_description","name","path","severity"]
+[0]
+```
+
+The baseline format omits legacy display fields.
 
 ```scrut {output_stream: stdout}
 $ grep -cE '"(line|stop_line|stop_column|code|description)"' $TMPDIR/baseline_update_from_pyproject/baseline.json
 0
 [1]
+```
+
+## Minimal baselines contain only the configured matching fields
+
+```scrut
+$ mkdir -p $TMPDIR/baseline_minimal && \
+> echo "x: str = 1" > $TMPDIR/baseline_minimal/bad.py && \
+> printf 'baseline = "baseline.json"\nbaseline-format = "minimal"\n' > $TMPDIR/baseline_minimal/pyrefly.toml && \
+> cd $TMPDIR/baseline_minimal && \
+> $PYREFLY check --update-baseline --summary=none --output-format=omit-errors >/dev/null 2>/dev/null
+[1]
+```
+
+The default `column` mode needs only the path, error kind, and column.
+
+```scrut {output_stream: stdout}
+$ $JQ -c '.errors[0] | keys' $TMPDIR/baseline_minimal/baseline.json
+["column","name","path"]
+[0]
+```
+
+## A baseline missing the configured matching field explains how to update it
+
+Changing the matching mode makes the column-only baseline invalid.
+
+```scrut {output_stream: stderr}
+$ printf 'baseline = "baseline.json"\nbaseline-format = "minimal"\nbaseline-matching-mode = "concise-description"\n' > $TMPDIR/baseline_minimal/pyrefly.toml && \
+> cd $TMPDIR/baseline_minimal && \
+> $PYREFLY check bad.py --summary=none
+*failed to read baseline file*baseline file is invalid*rerun with `--update-baseline`*missing field `concise_description`* (glob)
+[1]
+```
+
+Regenerating the baseline writes the matching fields for the new mode.
+
+```scrut
+$ cd $TMPDIR/baseline_minimal && \
+> $PYREFLY check --update-baseline --summary=none --output-format=omit-errors >/dev/null 2>/dev/null
+[1]
+```
+
+```scrut {output_stream: stdout}
+$ $JQ -c '.errors[0] | keys' $TMPDIR/baseline_minimal/baseline.json
+["concise_description","name","path"]
+[0]
+```
+
+The concise-description mode keeps matching when the diagnostic moves to a
+different column.
+
+```scrut {output_stream: stderr}
+$ printf 'if True:\n    x: str = 1\n' > $TMPDIR/baseline_minimal/bad.py && \
+> cd $TMPDIR/baseline_minimal && \
+> $PYREFLY check bad.py --summary=none
+[0]
 ```
 
 ## Updating a baseline requires a path from the CLI or configuration
@@ -216,11 +279,43 @@ $ grep -c '"name":' $TMPDIR/baseline_prune/baseline.json
 ```
 
 The surviving entry keeps its existing concise description rather than refreshing
-it from the current error. Re-serialization may normalize formatting and fields.
+it from the current error.
 
 ```scrut {output_stream: stdout}
 $ grep -c '"concise_description": "test"' $TMPDIR/baseline_prune/baseline.json
 1
+[0]
+```
+
+## `--prune-baseline` does not apply `baseline-format`
+
+Changing the configured format from full to minimal does not change the fields
+of retained entries while pruning.
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_prune_full && \
+> echo 'x: str = 1' > $TMPDIR/baseline_prune_full/bad.py && \
+> echo '{"errors":[{"column":10,"path":"bad.py","name":"bad-assignment","concise_description":"test","severity":"error"},{"column":1,"path":"gone.py","name":"bad-return","concise_description":"stale","severity":"error"}]}' > $TMPDIR/baseline_prune_full/baseline.json && \
+> printf 'baseline = "baseline.json"\nbaseline-format = "minimal"\n' > $TMPDIR/baseline_prune_full/pyrefly.toml && \
+> cd $TMPDIR/baseline_prune_full && \
+> $PYREFLY check bad.py --prune-baseline --summary=none --output-format=omit-errors >/dev/null 2>/dev/null && \
+> $JQ -c '.errors[0] | keys' baseline.json
+["column","concise_description","name","path","severity"]
+[0]
+```
+
+Changing the configured format from minimal to full likewise leaves the fields
+of retained entries minimal.
+
+```scrut {output_stream: stdout}
+$ mkdir -p $TMPDIR/baseline_prune_minimal && \
+> echo 'x: str = 1' > $TMPDIR/baseline_prune_minimal/bad.py && \
+> echo '{"errors":[{"column":10,"path":"bad.py","name":"bad-assignment"},{"column":1,"path":"gone.py","name":"bad-return"}]}' > $TMPDIR/baseline_prune_minimal/baseline.json && \
+> printf 'baseline = "baseline.json"\nbaseline-format = "full"\n' > $TMPDIR/baseline_prune_minimal/pyrefly.toml && \
+> cd $TMPDIR/baseline_prune_minimal && \
+> $PYREFLY check bad.py --prune-baseline --summary=none --output-format=omit-errors >/dev/null 2>/dev/null && \
+> $JQ -c '.errors[0] | keys' baseline.json
+["column","name","path"]
 [0]
 ```
 

@@ -58,7 +58,7 @@ checkout you can pass the combined filegroup
 The `shape_extensions` package exports `Int` — the bridge between runtime
 integer values and type-level symbols. The package also includes utilities to
 support runtime evaluation of types with shapes, and the stub-authoring
-primitives (`@type_shape_dsl_function`, `MapIntTuples`, `@shaped_array(...)`).
+primitives (`@type_shape_dsl_function`, `MapIntTuples`).
 
 ### Concrete shape annotations
 

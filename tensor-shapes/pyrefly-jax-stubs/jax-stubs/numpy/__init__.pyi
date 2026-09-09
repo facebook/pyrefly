@@ -129,6 +129,13 @@ def asarray(
     device: Any = ...,
     out_sharding: Any = ...,
 ) -> Array[IntTuple]: ...
+
+# Literal tuples and values typed as `IntTuple` retain their shape. Other integer
+# sequences fall through to a gradual overload rather than being rejected.
+# TODO(stroxler): Replace these finite tuple-shape constructor overloads with a
+# single `Shape: tuple[int, ...]` overload once whole-shape parameters flow
+# through downstream array operations without degrading to unknown. The NumPy
+# stubs carry the same limitation.
 @overload
 def zeros(shape: tuple[()], dtype: Any = ..., *, device: Any = ...) -> Array[[]]: ...
 @overload
@@ -1344,6 +1351,15 @@ def reshape[Shape: _Shape, NewShape: Flag[_NewShape]](
     copy: bool | None = ...,
     out_sharding: Any = ...,
 ) -> Array[reshape_shape(Shape, NewShape)]: ...
+@overload
+def reshape[NewShape: _Shape](
+    a: Array[Any],
+    shape: NewShape,
+    order: str = ...,
+    *,
+    copy: bool | None = ...,
+    out_sharding: Any = ...,
+) -> Array[NewShape]: ...
 @overload
 def reshape(
     a: Array[Any],

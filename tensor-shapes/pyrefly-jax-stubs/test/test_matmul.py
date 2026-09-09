@@ -117,14 +117,14 @@ def test_batched_matmul() -> None:
     # ND @ 1D -> (*batch, n)
     assert_shape(jnp.matmul(mat34, vec4).shape, (3,))
     assert_shape(jnp.matmul(batch_234, vec4).shape, (2, 3))
-    assert_shape(batch_234 @ vec4, (2, 3))
+    assert_shape((batch_234 @ vec4).shape, (2, 3))
 
     # ND @ ND -> (*broadcast(batch_left, batch_right), n, m)
     assert_shape(jnp.matmul(mat34, mat45).shape, (3, 5))
     assert_shape(jnp.matmul(batch_234, mat45).shape, (2, 3, 5))
     assert_shape(jnp.matmul(batch_234, batch_245).shape, (2, 3, 5))
-    assert_shape(batch_234 @ mat45, (2, 3, 5))
-    assert_shape(batch_234 @ batch_245, (2, 3, 5))
+    assert_shape((batch_234 @ mat45).shape, (2, 3, 5))
+    assert_shape((batch_234 @ batch_245).shape, (2, 3, 5))
 
 
 def test_matmul_contracts_vector_operands() -> None:

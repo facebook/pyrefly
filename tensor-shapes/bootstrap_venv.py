@@ -28,7 +28,7 @@ from pathlib import Path
 
 from shape_testing import DEFAULT_VENV, TENSOR_SHAPES_ROOT
 
-PYTHON_VERSION = "3.12"
+PYTHON_VERSION = "3.13"
 REQUIREMENTS: Path = TENSOR_SHAPES_ROOT / "test-requirements.txt"
 
 # Meta hosts have no direct egress; `--fwdproxy` routes uv through the forward

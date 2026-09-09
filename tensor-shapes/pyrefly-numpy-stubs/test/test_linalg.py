@@ -185,12 +185,12 @@ def test_matmul_vector_operands() -> None:
     mat34 = np.ones((3, 4))
     mat45 = np.ones((4, 5))
 
-    assert_shape(np.matmul(vec4, vec4), ())
-    assert_shape(vec4 @ vec4, ())
-    assert_shape(np.matmul(vec4, mat45), (5,))
-    assert_shape(vec4 @ mat45, (5,))
-    assert_shape(np.matmul(mat34, vec4), (3,))
-    assert_shape(mat34 @ vec4, (3,))
+    assert_shape(np.matmul(vec4, vec4).shape, ())
+    assert_shape((vec4 @ vec4).shape, ())
+    assert_shape(np.matmul(vec4, mat45).shape, (5,))
+    assert_shape((vec4 @ mat45).shape, (5,))
+    assert_shape(np.matmul(mat34, vec4).shape, (3,))
+    assert_shape((mat34 @ vec4).shape, (3,))
 
 
 def test_matmul_batched_vector_operands() -> None:
@@ -198,10 +198,10 @@ def test_matmul_batched_vector_operands() -> None:
     batch_234 = np.ones((2, 4))[:, None, :] + np.ones((3, 4))[None, :, :]
     batch_245 = np.ones((2, 5))[:, None, :] + np.ones((4, 5))[None, :, :]
 
-    assert_shape(np.matmul(vec4, batch_245), (2, 5))
-    assert_shape(vec4 @ batch_245, (2, 5))
-    assert_shape(np.matmul(batch_234, vec4), (2, 3))
-    assert_shape(batch_234 @ vec4, (2, 3))
+    assert_shape(np.matmul(vec4, batch_245).shape, (2, 5))
+    assert_shape((vec4 @ batch_245).shape, (2, 5))
+    assert_shape(np.matmul(batch_234, vec4).shape, (2, 3))
+    assert_shape((batch_234 @ vec4).shape, (2, 3))
 
 
 def test_transpose_property_2d() -> None:

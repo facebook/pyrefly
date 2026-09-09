@@ -58,7 +58,7 @@ def test_mismatched_element_count():
 
 def test_zero_sized_inference():
     empty = torch.empty(0, 3)
-    # E: revealed type: Tensor[[0]]
+    # E: revealed type: Tensor[IntTuple[0]]
     reveal_type(empty.reshape(-1))
     # E: could not infer size for dimension -1
     empty.reshape(0, -1)
