@@ -9,12 +9,14 @@
 //! interpreters, REPLs) that want "source in, diagnostics out" against a reused,
 //! warm checker — without driving the editor-oriented [`crate::playground`].
 //!
-//! [`Checker`] holds one warm [`State`] over a fixed set of in-memory modules
-//! declared up front. The first [`Checker::check`] pays the one-time typeshed
-//! load; later checks reuse it, overlaying new module contents in a single
-//! transaction and solving only the target module ([`Require::Errors`]) — so
-//! context modules (stubs) and typeshed are resolved at export level, not
-//! re-checked, and only the target's diagnostics are collected.
+//! This interface is experimental and NOT stable. It will change without notice
+//! during minor version increments, and should not be relied upon.
+//!
+//! [`Checker`] holds one warm [`State`]. The first [`Checker::check`] pays the
+//! one-time typeshed load; later checks reuse it, overlaying the supplied module
+//! contents in a single transaction and solving only the target module
+//! ([`Require::Errors`]) — so context modules (stubs) and typeshed are resolved at
+//! export level, not re-checked, and only the target's diagnostics are collected.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -32,8 +34,10 @@ use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
+use pyrefly_util::lock::Mutex;
 use pyrefly_util::thread_pool::ThreadCount;
 use starlark_map::small_map::SmallMap;
+use starlark_map::small_set::SmallSet;
 
 use crate::config::config::ConfigFile;
 pub use crate::config::error_kind::Severity;
@@ -45,20 +49,24 @@ use crate::state::state::State;
 
 /// A reusable type checker holding one warm [`State`].
 ///
-/// Construct once (amortizing the typeshed load) over the set of in-memory module
-/// names that will be checked, then call [`check`](Checker::check) per snippet.
-/// Cheap to keep alive and share (`&self` checks).
+/// Construct once, amortizing the typeshed load, then call [`check`](Checker::check)
+/// per snippet. Cheap to keep alive and share (`&self` checks).
 pub struct Checker {
     state: State,
     sys_info: SysInfo,
+    /// The in-memory modules visible to the current check, shared with the source
+    /// database so that import resolution sees whatever [`Checker::check`] was given.
+    modules: Arc<Mutex<SmallMap<ModuleName, ModulePath>>>,
+    /// Held so that a changed module set can invalidate the cached import resolutions
+    /// made under it.
+    config: ArcId<ConfigFile>,
 }
 
 impl Checker {
     /// Build a checker for the given Python version (e.g. `"3.14"`, or the default
-    /// when `None`) over the in-memory modules named in `modules`. Only those module
-    /// names are importable between the supplied sources; everything else resolves to
-    /// the bundled typeshed. No interpreter is queried.
-    pub fn new(python_version: Option<&str>, modules: &[&str]) -> Result<Self, String> {
+    /// when `None`). Everything not supplied to [`Checker::check`] resolves to the
+    /// bundled typeshed. No interpreter is queried.
+    pub fn new(python_version: Option<&str>) -> Result<Self, String> {
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
         config.interpreters.skip_interpreter_query = true;
@@ -73,30 +81,42 @@ impl Checker {
             None => SysInfo::default(),
         };
 
-        let module_paths = modules
-            .iter()
-            .map(|name| (ModuleName::from_str(name), memory_path(name)))
-            .collect();
+        let modules = Arc::new(Mutex::new(SmallMap::new()));
         config.source_db = Some(ArcId::new(Box::new(MemorySourceDb {
-            module_paths,
+            modules: modules.dupe(),
             sys_info: sys_info.dupe(),
         })));
 
         config.configure();
-        let config_finder = ConfigFinder::new_constant(ArcId::new(config));
+        let config = ArcId::new(config);
+        let config_finder = ConfigFinder::new_constant(config.dupe());
         Ok(Self {
             state: State::new(config_finder, ThreadCount::default()),
             sys_info,
+            modules,
+            config,
         })
     }
 
     /// Type check the `target` module, returning diagnostics for it only.
     ///
-    /// `files` supplies the current source for each in-memory module (each
-    /// `(module_name, source)`); every name must have been declared in
-    /// [`Checker::new`]. Modules other than `target` are importable but their own
-    /// diagnostics are not reported.
+    /// `files` supplies the source for each in-memory module (each
+    /// `(module_name, source)`), which are importable from one another. Modules other
+    /// than `target` are importable but their own diagnostics are not reported.
     pub fn check(&self, target: &str, files: &[(&str, &str)]) -> Vec<Diagnostic> {
+        let modules: SmallMap<_, _> = files
+            .iter()
+            .map(|(name, _)| (ModuleName::from_str(name), memory_path(name)))
+            .collect();
+        // Import resolutions are cached per config, so a changed module set has to
+        // discard them; otherwise a module dropped since the last check still resolves.
+        let modules_changed = {
+            let mut current = self.modules.lock();
+            let changed = *current != modules;
+            *current = modules;
+            changed
+        };
+
         let target_handle = self.handle(target);
         let memory = files
             .iter()
@@ -114,6 +134,11 @@ impl Checker {
             .state
             .new_committable_transaction(Require::Exports, None);
         transaction.as_mut().set_memory(memory);
+        if modules_changed {
+            transaction
+                .as_mut()
+                .invalidate_find_for_configs(SmallSet::from_iter([self.config.dupe()]));
+        }
         self.state.run_with_committing_transaction(
             transaction,
             &[target_handle.dupe()],
@@ -151,7 +176,7 @@ fn memory_path(name: &str) -> ModulePath {
 /// (typeshed, stdlib) falls through to normal resolution.
 #[derive(Debug)]
 struct MemorySourceDb {
-    module_paths: SmallMap<ModuleName, ModulePath>,
+    modules: Arc<Mutex<SmallMap<ModuleName, ModulePath>>>,
     sys_info: SysInfo,
 }
 
@@ -162,11 +187,12 @@ impl SourceDatabase for MemorySourceDb {
         _origin: Option<&Path>,
         _style_filter: Option<ModuleStyle>,
     ) -> Option<ModulePath> {
-        self.module_paths.get(&module).cloned()
+        self.modules.lock().get(&module).cloned()
     }
 
     fn handle_from_module_path(&self, module_path: &ModulePath) -> Option<Handle> {
-        let (name, _) = self.module_paths.iter().find(|(_, p)| *p == module_path)?;
+        let modules = self.modules.lock();
+        let (name, _) = modules.iter().find(|(_, p)| *p == module_path)?;
         Some(Handle::new(
             name.dupe(),
             module_path.dupe(),
