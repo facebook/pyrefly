@@ -2882,3 +2882,46 @@ def first(shapes: IntTuple) -> IntTuple:
     changed.check_recompute(&["consumer", "helpers", "main"]);
     changed.check_errors();
 }
+
+// The cached field map is keyed without a version, so editing a field's type must invalidate it.
+#[test]
+fn test_typed_dict_field_type_edit_invalidates() {
+    let mut i = Incremental::new();
+    i.set(
+        "foo",
+        r#"
+from typing import TypedDict
+class Coord(TypedDict):
+    x: int
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from foo import Coord
+def f() -> int:
+    c: Coord = {"x": 1}
+    return c["x"]
+"#,
+    );
+    i.check(&["main"], &["foo", "main"]);
+
+    i.set(
+        "foo",
+        r#"
+from typing import TypedDict
+class Coord(TypedDict):
+    x: str
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from foo import Coord
+def f() -> int:
+    c: Coord = {"x": "hello"}
+    return c["x"]  # E: Returned type `str` is not assignable to declared return type `int`
+"#,
+    );
+    i.check(&["main"], &["foo", "main"]);
+}

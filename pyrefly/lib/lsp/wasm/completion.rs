@@ -406,10 +406,11 @@ impl Transaction<'_> {
                                         "completion_typed_dict_kwargs",
                                         |solver| solver.type_order().typed_dict_fields(typed_dict),
                                     )
+                                    .as_deref()
                                     .into_iter()
                                     .flatten()
                                 {
-                                    push_kwarg_completion(&name, &field.ty, &mut seen, completions);
+                                    push_kwarg_completion(name, &field.ty, &mut seen, completions);
                                 }
                             }
                             Param::Varargs(None, _)
