@@ -331,6 +331,10 @@ pub(crate) struct PythonLibraryManifest {
     pub buildfile_path: PathBuf,
     #[serde(default, skip)]
     pub packages: SmallMap<ModuleName, Vec1<InternedPath>>,
+    /// Per-target override of the top-level `root`, used to absolutize this
+    /// target's `srcs` and `buildfile_path`.
+    #[serde(default)]
+    pub root: Option<PathBuf>,
 }
 
 impl PythonLibraryManifest {
@@ -486,7 +490,8 @@ impl TargetManifestDatabase {
                 TargetManifest::Library(lib) => {
                     lib.replace_alias_deps(&aliases);
                     lib.strip_stubs_suffixes();
-                    lib.rewrite_relative_to_root(&self.root);
+                    let root = lib.root.clone().unwrap_or_else(|| self.root.clone());
+                    lib.rewrite_relative_to_root(&root);
                 }
             }
         }
@@ -804,6 +809,7 @@ mod tests {
                 sys_info: SysInfo::new(PythonVersion::new(3, 12, 0), PythonPlatform::linux()),
                 buildfile_path: PathBuf::from(buildfile),
                 packages: map_implicit_packages(implicit_packages, None),
+                root: None,
             })
         }
     }
@@ -824,6 +830,7 @@ mod tests {
                 sys_info: SysInfo::new(PythonVersion::new(3, 12, 0), PythonPlatform::linux()),
                 buildfile_path: PathBuf::from(root).join(buildfile),
                 packages: map_implicit_packages(inits, Some(root)),
+                root: None,
             }
         }
     }
@@ -1634,6 +1641,127 @@ mod tests {
             minimal.buildfile_path,
             PathBuf::from("/src"),
             "an omitted `buildfile_path` defaults to empty, which resolves to the repository root"
+        );
+    }
+
+    /// A per-target `root` sits outside the top-level `root`, which is the case
+    /// a single repository-wide root cannot express.
+    #[test]
+    fn test_per_target_root() {
+        let json = r#"
+{
+  "db": {
+    "//pkg:rooted": {
+      "srcs": {
+        "pkg.foo": ["pkg/foo.py"]
+      },
+      "root": "/generated/Package",
+      "buildfile_path": "BUCK",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//pkg:materialized": {
+      "srcs": {
+        "gen.mod": ["gen/mod.py"]
+      },
+      "root": "/generated/Package",
+      "relative_to": "out",
+      "buildfile_path": "BUCK",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//pkg:default": {
+      "srcs": {
+        "baz": ["baz.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "root": "/src"
+}
+        "#;
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let (db, _) = parsed.produce_map();
+
+        // The per-target root absolutizes `srcs`, `buildfile_path`, and the
+        // packages synthesized from those `srcs`.
+        let rooted = db
+            .get(&Target::from_string("//pkg:rooted".to_owned()))
+            .unwrap();
+        assert_eq!(rooted.root, Some(PathBuf::from("/generated/Package")));
+        assert_eq!(
+            rooted
+                .srcs
+                .get(&ModuleName::from_str("pkg.foo"))
+                .unwrap()
+                .first(),
+            &InternedPath::new(PathBuf::from("/generated/Package/pkg/foo.py")),
+            "srcs should be absolutized against the per-target root"
+        );
+        assert_eq!(
+            rooted.buildfile_path,
+            PathBuf::from("/generated/Package/BUCK"),
+            "buildfile_path should be absolutized against the per-target root"
+        );
+        assert_eq!(
+            rooted
+                .packages
+                .get(&ModuleName::from_str("pkg"))
+                .unwrap()
+                .first(),
+            &InternedPath::new(PathBuf::from("/generated/Package/pkg")),
+            "a synthesized package should sit under the per-target root"
+        );
+
+        // `relative_to` resolves against the per-target root, and `srcs`
+        // resolve against `relative_to` in turn. `buildfile_path` keeps
+        // resolving against the root itself.
+        let materialized = db
+            .get(&Target::from_string("//pkg:materialized".to_owned()))
+            .unwrap();
+        assert_eq!(
+            materialized.relative_to,
+            Some(PathBuf::from("/generated/Package/out")),
+            "relative_to should be resolved against the per-target root"
+        );
+        assert_eq!(
+            materialized
+                .srcs
+                .get(&ModuleName::from_str("gen.mod"))
+                .unwrap()
+                .first(),
+            &InternedPath::new(PathBuf::from("/generated/Package/out/gen/mod.py")),
+            "srcs should be absolutized against relative_to rather than the root"
+        );
+        assert_eq!(
+            materialized.buildfile_path,
+            PathBuf::from("/generated/Package/BUCK"),
+            "buildfile_path should ignore relative_to and use the root"
+        );
+        assert_eq!(
+            materialized
+                .packages
+                .get(&ModuleName::from_str("gen"))
+                .unwrap()
+                .first(),
+            &InternedPath::new(PathBuf::from("/generated/Package/out/gen")),
+            "a synthesized package should follow its srcs under relative_to"
+        );
+
+        // A target with no per-target root falls back to the top-level root.
+        let default = db
+            .get(&Target::from_string("//pkg:default".to_owned()))
+            .unwrap();
+        assert_eq!(default.root, None);
+        assert_eq!(
+            default
+                .srcs
+                .get(&ModuleName::from_str("baz"))
+                .unwrap()
+                .first(),
+            &InternedPath::new(PathBuf::from("/src/baz.py")),
+            "a target with no per-target root should use the top-level root"
         );
     }
 }

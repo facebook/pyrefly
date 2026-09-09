@@ -513,6 +513,12 @@ impl LiveSourceDatabase for QuerySourceDatabase {
             .flatten()
             .collect()
     }
+
+    fn get_target_root(&self, origin: Option<&Path>) -> Option<PathBuf> {
+        let target = self.get_target(origin)?;
+        let read = self.inner.read();
+        read.db.get(&target)?.root.clone()
+    }
 }
 
 #[cfg(test)]
