@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::iter;
+use std::slice;
 use std::sync::Arc;
 
 use itertools::EitherOrBoth;
@@ -51,6 +52,7 @@ use crate::alt::answers::LookupAnswer;
 use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
 use crate::solver::shape::has_int_tuple_bound;
+use crate::solver::shape::join_int_tuples;
 use crate::solver::shape::type_as_intvar_solution;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::OpenTypedDictSubsetError;
@@ -1937,7 +1939,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 )
             }
             (Type::Intersect(l), u) => any(l.0.iter(), |l| self.is_subset_eq(l, u)),
-            (Type::Union(l_union), u) => all(l_union.members.iter(), |l| self.is_subset_eq(l, u)),
+            (Type::Union(l_union), u) => {
+                if let Some(result) = self.try_join_union_shape_parameters(&l_union.members, u) {
+                    result
+                } else {
+                    all(l_union.members.iter(), |l| self.is_subset_eq(l, u))
+                }
+            }
             // Int <: Int - expand bound Vars, canonicalize, and compare for structural equality
             (Type::Int(s1), Type::Int(s2)) => {
                 // Expand any bound Vars in both expressions
@@ -3391,5 +3399,126 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         }
 
         Ok(())
+    }
+
+    /// Infer `IntTuple` parameters shared by several right-hand union arms from all left-hand
+    /// alternatives before committing any one arm's solution.
+    ///
+    /// Shapes have an intentional gradual join that preserves common rank and dimensions. This
+    /// makes a single useful shape available to later shape operations without defining analogous
+    /// union inference for unrestricted type variables.
+    fn try_join_union_shape_parameters(
+        &mut self,
+        members: &[Type],
+        want: &Type,
+    ) -> Option<Result<(), SubsetError>> {
+        const MAX_UNION_SHAPE_PROBES: usize = 32;
+
+        if !self.solver.tensor_shapes
+            || members.is_empty()
+            || !self.active_call_context.has_union_shape_widening_vars()
+        {
+            return None;
+        }
+        // A single-spelled shape-generic parameter widens the same way as a union of them:
+        // each got member is probed against it directly.
+        let want_members: &[Type] = match want {
+            Type::Union(want_union) => &want_union.members,
+            _ => slice::from_ref(want),
+        };
+        let vars = want
+            .collect_maybe_placeholder_vars()
+            .into_iter()
+            .unique()
+            .collect::<Vec<_>>();
+        if vars.is_empty()
+            || vars.iter().any(|var| {
+                !self.solver.has_int_tuple_bound_var(*var)
+                    || !self.active_call_context.allows_union_shape_widening(*var)
+            })
+        {
+            return None;
+        }
+        let mut candidates = vars
+            .iter()
+            .map(|var| (*var, Vec::new()))
+            .collect::<SmallMap<Var, Vec<IntTuple>>>();
+        // Each candidate requires a full speculative subset transaction. Above the cost cap,
+        // deliberately drop shape precision and validate once instead of probing quadratically.
+        if members.len().saturating_mul(want_members.len()) > MAX_UNION_SHAPE_PROBES {
+            for shapes in candidates.values_mut() {
+                shapes.push(IntTuple::shapeless());
+            }
+        } else {
+            for member in members {
+                let mut matched = false;
+                for want_member in want_members {
+                    let Ok(answers) = self.probe_speculative_subset_branch_result(
+                        &[member, want_member],
+                        |probe| {
+                            probe.is_subset_eq(member, want_member)?;
+                            Ok(vars
+                                .iter()
+                                .filter_map(|var| {
+                                    let mut answer = Type::Var(*var);
+                                    probe.solver.expand_with_bounds(&mut answer);
+                                    match answer {
+                                        Type::IntTuple(shape) => Some((*var, *shape)),
+                                        _ => None,
+                                    }
+                                })
+                                .collect::<Vec<_>>())
+                        },
+                    ) else {
+                        continue;
+                    };
+                    matched = true;
+                    if answers.len() != vars.len() {
+                        // This arm accepts the member without binding every candidate shape
+                        // variable. It contributes no shape, but later arms still may.
+                        continue;
+                    }
+                    for (var, shape) in answers {
+                        candidates
+                            .get_mut(&var)
+                            .expect("answers use a candidate shape variable")
+                            .push(shape);
+                    }
+                }
+                if !matched {
+                    return None;
+                }
+            }
+        }
+
+        if candidates.values().any(Vec::is_empty) {
+            return None;
+        }
+
+        let mut transaction_types = members.iter().collect::<Vec<_>>();
+        transaction_types.push(want);
+        match self.with_speculative_subset_branch_result(&transaction_types, |me| {
+            for (var, shapes) in candidates {
+                // The guard above proves that each candidate has at least one contributing arm.
+                let joined = shapes
+                    .into_iter()
+                    .reduce(|left, right| join_int_tuples(&left, &right))
+                    .expect("each candidate shape variable has a probed shape");
+                let joined = joined.to_shape_arg_type();
+                me.is_subset_eq(&joined, &Type::Var(var))?;
+                // Pin the join before rechecking members so the first member cannot replace the
+                // shared solution with its narrower candidate.
+                me.solver.force_var(var);
+            }
+            for member in members {
+                me.is_subset_eq(member, want)?;
+            }
+            Ok(())
+        }) {
+            Ok(()) => Some(Ok(())),
+            // The joined solution was not valid for the complete union. The transaction has
+            // rolled back, so let ordinary subset checking produce the final result.
+            Err(_) => None,
+        }
     }
 }

@@ -7,6 +7,7 @@
 
 //! Used to guard computation that could potentially loop forever.
 
+#[derive(Clone)]
 pub struct Gas(isize);
 
 impl Gas {

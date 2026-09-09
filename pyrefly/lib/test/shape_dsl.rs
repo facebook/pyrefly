@@ -14345,31 +14345,50 @@ def check(
 "#,
 );
 
-// Current inference pins the first compatible target arm and rejects later source arms; union
-// normalization means reversing the source spelling need not change that choice. The desired
-// behavior joins every compatible arm, widening differing ranks to gradual `IntTuple`.
+// Compatible arms contribute shape candidates to one gradual join. Equal dimensions remain
+// precise, differing dimensions widen to `Any`, and differing ranks widen to gradual `IntTuple`.
 testcase!(
-    bug = "union arms should share shape information",
     test_shape_parameter_shared_across_union_arms,
     shape_extensions_env(),
     r#"
-from typing import assert_type
+from typing import Any, assert_type
 from shape_extensions import IntTuple
 
 class Array[Shape: IntTuple]: ...
 class NdArray[Shape: IntTuple]: ...
+class BothA(Array[[2, 3]], NdArray[[2, 4]]): ...
+class BothB(Array[[2, 5]], NdArray[[2, 4]]): ...
 
 type ArrayLike[Shape: IntTuple] = Array[Shape] | NdArray[Shape]
+type ReversedArrayLike[Shape: IntTuple] = NdArray[Shape] | Array[Shape]
+type OptionalArrayLike[Shape: IntTuple] = Array[Shape] | NdArray[Shape] | None
+type TaggedArrayLike[Shape: IntTuple] = Array[Shape] | NdArray[Shape] | str
 
 def as_array[Shape: IntTuple](value: ArrayLike[Shape]) -> Array[Shape]: ...
+def as_reversed_array[Shape: IntTuple](
+    value: ReversedArrayLike[Shape],
+) -> Array[Shape]: ...
+def as_optional_array[Shape: IntTuple](
+    value: OptionalArrayLike[Shape],
+) -> Array[Shape]: ...
+def as_tagged_array[Shape: IntTuple](value: TaggedArrayLike[Shape]) -> Array[Shape]: ...
 
 def check(
     value: Array[[2, 3]] | NdArray[[4, 3]],
     reversed_value: NdArray[[4, 3]] | Array[[2, 3]],
     different_ranks: Array[[2]] | NdArray[[3, 4]],
+    ambiguous: BothA | BothB,
+    optional: Array[[2, 3]] | NdArray[[4, 3]] | None,
+    tagged: Array[[2, 3]] | NdArray[[4, 3]] | str,
 ) -> None:
-    assert_type(as_array(value), Array[[2, 3]])  # E: is not assignable to parameter `value`
-    assert_type(as_array(reversed_value), Array[[2, 3]])  # E: is not assignable to parameter `value`
-    assert_type(as_array(different_ranks), Array[[2]])  # E: is not assignable to parameter `value`
+    assert_type(as_array(value), Array[[Any, 3]])
+    assert_type(as_array(reversed_value), Array[[Any, 3]])
+    assert_type(as_array(different_ranks), Array[IntTuple])
+    # Multiple inheritance lets each source arm match both target arms, so inference falls back
+    # to the fully gradual shape rather than selecting a dimension-wise join.
+    assert_type(as_array(ambiguous), Array[IntTuple])
+    assert_type(as_reversed_array(ambiguous), Array[IntTuple])
+    assert_type(as_optional_array(optional), Array[[Any, 3]])
+    assert_type(as_tagged_array(tagged), Array[[Any, 3]])
 "#,
 );

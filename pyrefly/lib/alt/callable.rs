@@ -55,6 +55,7 @@ use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckContext;
 use crate::error::context::TypeCheckKind;
 use crate::error::display::function_suffix;
+use crate::solver::shape::union_shape_widening_vars;
 use crate::solver::solver::ArgumentKey;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallBoundary;
@@ -2210,7 +2211,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             call_boundary.defer_quantified(qs);
         }
-        let call_context = call_context.with_shape_extension_vars(shape_extension_vars);
+        let widening_vars = self
+            .solver()
+            .tensor_shapes
+            .then(|| union_shape_widening_vars(&callable.params, &callable.ret))
+            .flatten();
+        let call_context = call_context
+            .with_shape_extension_vars(shape_extension_vars)
+            .with_union_shape_widening_vars(widening_vars);
         self.constrain_forwarded_overload_return(ForwardedOverloadCall {
             params: &callable.params,
             has_self: self_obj.is_some(),
