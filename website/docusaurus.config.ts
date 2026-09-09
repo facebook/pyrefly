@@ -359,6 +359,11 @@ const config: Config = {
                   component: '@site/src/pages/landingPage.tsx',
                   exact: true,
                 });
+                addRoute({
+                  path: '/pycontw2026',
+                  component: '@site/src/pages/landingPage.tsx',
+                  exact: true,
+                });
                 // Short vanity URL surfaced from the VS Code extension's
                 // status-bar tooltip and the CLI upsell. Points users at
                 // the install/onboarding docs.
