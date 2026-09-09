@@ -14344,3 +14344,32 @@ def check(
     covariant_narrow: CovariantBox[tuple[int, int]] = covariant_wide  # E: is not assignable
 "#,
 );
+
+// Current inference pins the first compatible target arm and rejects later source arms; union
+// normalization means reversing the source spelling need not change that choice. The desired
+// behavior joins every compatible arm, widening differing ranks to gradual `IntTuple`.
+testcase!(
+    bug = "union arms should share shape information",
+    test_shape_parameter_shared_across_union_arms,
+    shape_extensions_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import IntTuple
+
+class Array[Shape: IntTuple]: ...
+class NdArray[Shape: IntTuple]: ...
+
+type ArrayLike[Shape: IntTuple] = Array[Shape] | NdArray[Shape]
+
+def as_array[Shape: IntTuple](value: ArrayLike[Shape]) -> Array[Shape]: ...
+
+def check(
+    value: Array[[2, 3]] | NdArray[[4, 3]],
+    reversed_value: NdArray[[4, 3]] | Array[[2, 3]],
+    different_ranks: Array[[2]] | NdArray[[3, 4]],
+) -> None:
+    assert_type(as_array(value), Array[[2, 3]])  # E: is not assignable to parameter `value`
+    assert_type(as_array(reversed_value), Array[[2, 3]])  # E: is not assignable to parameter `value`
+    assert_type(as_array(different_ranks), Array[[2]])  # E: is not assignable to parameter `value`
+"#,
+);
