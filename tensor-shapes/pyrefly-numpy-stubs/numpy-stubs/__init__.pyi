@@ -375,6 +375,7 @@ from numpy.matrixlib import (
     matrix as matrix,
 )
 from shape_extensions import (
+    ArrayCoercible,
     broadcast as _broadcast_shape,
     Flag,
     Index,
@@ -420,6 +421,7 @@ class intp(generic): ...
 
 type _IndexScalar = int | bool_ | int32 | int64 | intp
 type _IndexSequence = Sequence[_IndexScalar] | Sequence[Sequence[_IndexScalar]]
+type _ArrayScalar = None | bool | int | float | complex | str | bytes | generic
 
 __version__: Final[str]
 e: Final[float]
@@ -1141,6 +1143,113 @@ matvec: _MatvecUFunc
 vecdot: _VecdotUFunc
 vecmat: _VecmatUFunc
 
+# Constructor overloads preserve dtype only when it is omitted, preserve shape only for
+# `ndmin=0`, and delegate non-None `like` dispatch with an `Any` result.
+@overload
+def array[Shape: _Shape, DType](
+    object: ndarray[Shape, DType],
+    dtype: None = None,
+    *,
+    copy: bool | None = ...,
+    order: str = ...,
+    subok: bool = ...,
+    ndmin: Literal[0] = 0,
+    like: None = None,
+) -> ndarray[Shape, DType]: ...
+@overload
+def array[Shape: _Shape](
+    object: ndarray[Shape, Any],
+    dtype: Any,
+    *,
+    copy: bool | None = ...,
+    order: str = ...,
+    subok: bool = ...,
+    ndmin: Literal[0] = 0,
+    like: None = None,
+) -> ndarray[Shape]: ...
+@overload
+def array[Shape: _Shape](
+    object: ArrayCoercible[Shape, _ArrayScalar],
+    dtype: Any = ...,
+    *,
+    copy: bool | None = ...,
+    order: str = ...,
+    subok: bool = ...,
+    ndmin: Literal[0] = 0,
+    like: None = None,
+) -> ndarray[Shape]: ...
+@overload
+def array(
+    object: Any,
+    dtype: Any = ...,
+    *,
+    copy: bool | None = ...,
+    order: str = ...,
+    subok: bool = ...,
+    ndmin: int = ...,
+    like: None = None,
+) -> ndarray[IntTuple]: ...
+@overload
+def array(
+    object: Any,
+    dtype: Any = ...,
+    *,
+    copy: bool | None = ...,
+    order: str = ...,
+    subok: bool = ...,
+    ndmin: int = ...,
+    like: Any,
+) -> Any: ...
+@overload
+def asarray[Shape: _Shape, DType](
+    a: ndarray[Shape, DType],
+    dtype: None = None,
+    order: str | None = None,
+    *,
+    device: Any = ...,
+    copy: bool | None = ...,
+    like: None = None,
+) -> ndarray[Shape, DType]: ...
+@overload
+def asarray[Shape: _Shape](
+    a: ndarray[Shape, Any],
+    dtype: Any,
+    order: str | None = None,
+    *,
+    device: Any = ...,
+    copy: bool | None = ...,
+    like: None = None,
+) -> ndarray[Shape]: ...
+@overload
+def asarray[Shape: _Shape](
+    a: ArrayCoercible[Shape, _ArrayScalar],
+    dtype: Any = ...,
+    order: str | None = None,
+    *,
+    device: Any = ...,
+    copy: bool | None = ...,
+    like: None = None,
+) -> ndarray[Shape]: ...
+@overload
+def asarray(
+    a: Any,
+    dtype: Any = ...,
+    order: str | None = None,
+    *,
+    device: Any = ...,
+    copy: bool | None = ...,
+    like: None = None,
+) -> ndarray[IntTuple]: ...
+@overload
+def asarray(
+    a: Any,
+    dtype: Any = ...,
+    order: str | None = None,
+    *,
+    device: Any = ...,
+    copy: bool | None = ...,
+    like: Any,
+) -> Any: ...
 def round[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 def clip[Shape: _Shape](
     a: ndarray[Shape], a_min: int | float, a_max: int | float

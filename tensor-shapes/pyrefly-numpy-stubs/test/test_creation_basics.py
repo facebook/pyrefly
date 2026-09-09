@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any, assert_type
+from typing import Any, assert_type, TYPE_CHECKING
 
 import numpy as np
 from shape_extensions import assert_shape, IntTuple, IntVar
@@ -14,6 +14,50 @@ GRADUAL_SHAPE_RUNTIME_TESTS = {
     "test_diag_dtype_and_broad_offset",
     "test_diag_matrix_runtime_shape",
 }
+
+
+def check_array_and_asarray_list_literal_types() -> None:
+    assert_type(np.array(1), np.ndarray[[], Any])
+    assert_type(np.array(None), np.ndarray[[], Any])
+    assert_type(np.array([1, 2, 3]), np.ndarray[[3], Any])
+    assert_type(np.array([[None], [None]]), np.ndarray[[2, 1], Any])
+    assert_type(np.array([[1, 2], [3, 4]]), np.ndarray[[2, 2], Any])
+    assert_type(np.asarray([[], []]), np.ndarray[[2, 0], Any])
+    assert_type(np.asarray(["a", "b"]), np.ndarray[[2], Any])
+    assert_type(np.array([1, 2], dtype=np.float32), np.ndarray[[2], Any])
+
+
+def test_array_and_asarray_list_literals() -> None:
+    assert_shape(np.array([1, 2, 3]).shape, (3,))
+    assert_shape(np.array([[1, 2], [3, 4]]).shape, (2, 2))
+    assert_shape(np.array([[], []]).shape, (2, 0))
+    assert_shape(np.asarray([1, 2, 3]).shape, (3,))
+    assert_shape(np.asarray([[1, 2], [3, 4]]).shape, (2, 2))
+    assert_shape(np.asarray([[], []]).shape, (2, 0))
+
+
+def check_array_compatibility[DType](
+    array: np.ndarray[[2, 3], DType], raw: list[int], dynamic: Any
+) -> None:
+    assert_type(np.array(array), np.ndarray[[2, 3], DType])
+    assert_type(np.asarray(array), np.ndarray[[2, 3], DType])
+    assert_type(np.array(array, dtype=np.float32), np.ndarray[[2, 3], Any])
+    assert_type(np.asarray(array, dtype=np.float32), np.ndarray[[2, 3], Any])
+    assert_type(np.array(raw), np.ndarray[IntTuple, Any])
+    assert_type(np.asarray(dynamic), np.ndarray[Any, Any])
+    assert_type(np.array([1, 2], like=dynamic), Any)
+    assert_type(np.asarray([1, 2], like=dynamic), Any)
+    assert_type(np.array([1, 2], like=object()), Any)
+    assert_type(np.asarray([1, 2], like=object()), Any)
+    assert_type(np.array([1, 2], like=None), np.ndarray[[2], Any])
+    assert_type(np.asarray([1, 2], like=None), np.ndarray[[2], Any])
+    assert_type(np.array([1, 2], ndmin=0), np.ndarray[[2], Any])
+    assert_type(np.array([1, 2], ndmin=2), np.ndarray[IntTuple, Any])
+
+
+if TYPE_CHECKING:
+    assert_type(np.array([[1], [2, 3]]), np.ndarray[IntTuple, Any])
+    assert_type(np.asarray([1, [2]]), np.ndarray[IntTuple, Any])
 
 
 def test_zeros_1d_int_shape() -> None:
