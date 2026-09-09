@@ -681,10 +681,6 @@ impl<K: Keyed> AnswerEntry<K> {
             .get(idx.idx())
             .unwrap_or_else(|| missing_answer_slot(idx))
     }
-
-    fn get(&self, idx: Idx<K>) -> Option<&K::Answer> {
-        self.answer_slot(idx).get()
-    }
 }
 
 table!(
@@ -752,10 +748,6 @@ impl<K: Keyed> SolutionsEntry<K> {
         }
     }
 
-    fn get(&self, idx: Idx<K>) -> Option<&K::Answer> {
-        self.answer_slot(idx).get()
-    }
-
     fn answer_slot_hashed(&self, key: Hashed<&K>) -> Option<SolutionSlot<'_, K::Answer>> {
         Some(SolutionSlot(self.0.get_hashed(key)?))
     }
@@ -806,13 +798,6 @@ impl SolutionsData {
         let mut table = SolutionsTable::default();
         table_mut_for_each!(&mut table, |items| presize(items, bindings));
         Self { table }
-    }
-
-    fn get_idx<K: Keyed>(&self, idx: Idx<K>) -> Option<&K::Answer>
-    where
-        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
-    {
-        self.table.get::<K>().get(idx)
     }
 }
 
@@ -1535,11 +1520,7 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        if K::EXPORTED {
-            self.solutions.get_idx(k)
-        } else {
-            self.table.get::<K>().get(k)
-        }
+        self.answer_slot(k).get()
     }
 
     /// Drive a cross-module iteration member by constructing a temporary
