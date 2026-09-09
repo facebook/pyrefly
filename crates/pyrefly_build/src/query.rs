@@ -232,7 +232,15 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
             cmd.arg(format!("@{}", argfile.path().display()));
             cmd.current_dir(cwd);
 
-            let result = cmd.output()?;
+            // Spawn failures surface as a bare `NotFound`, which is ambiguous between a
+            // missing program and a missing working directory. Name both.
+            let program = cmd.get_program().to_string_lossy().into_owned();
+            let result = cmd.output().with_context(|| {
+                format!(
+                    "Failed to run source DB query command `{program}` with working directory `{}`",
+                    cwd.display(),
+                )
+            })?;
             let parse_start = Instant::now();
             build_duration = Some(parse_start - build_start);
             exit_reason = result.status.code().map(BuckExitReason::from_exit_code);
