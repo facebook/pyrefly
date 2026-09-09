@@ -31,6 +31,24 @@ def test_exponential_and_log_preserve_shape() -> None:
     assert_shape(np.power(b, 2).shape, (3, 4))
 
 
+def test_unary_ufuncs_preserve_shape() -> None:
+    a = np.ones((2, 3))
+
+    assert_shape(np.arcsin(a).shape, (2, 3))
+    assert_shape(np.absolute(a).shape, (2, 3))
+    assert_shape(np.exp2(a).shape, (2, 3))
+    assert_shape(np.isfinite(a).shape, (2, 3))
+    assert_shape(np.sin(a).shape, (2, 3))
+    assert_shape(np.square(a).shape, (2, 3))
+    # @lint-ignore SPELL
+    assert np.arcsin.nin == 1
+    assert np.abs.nout == 1
+    # @lint-ignore SPELL
+    assert np.absolute.nin == 1
+    assert np.absolute.nout == 1
+    assert np.absolute(-1.0) == 1.0
+
+
 def test_binary_ufuncs_preserve_matrix_shape() -> None:
     a = np.ones((3, 4))
     b = np.full((3, 4), 2.0)

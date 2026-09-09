@@ -567,12 +567,89 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         keepdims: KeepDims = False,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), DType]: ...
 
-def abs[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def exp[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def log[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def log2[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def log10[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def sqrt[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
+class ufunc:
+    __name__: str
+    nin: int
+    nout: int
+    nargs: int
+    ntypes: int
+    types: list[str]
+    identity: Any
+    signature: str | None
+    def __call__(self, /, *args: Any, **kwargs: Any) -> Any: ...
+    def accumulate(self, array: Any, /, *args: Any, **kwargs: Any) -> Any: ...
+    def reduce(self, array: Any, /, *args: Any, **kwargs: Any) -> Any: ...
+    def reduceat(
+        self, array: Any, indices: Any, /, *args: Any, **kwargs: Any
+    ) -> Any: ...
+    def outer(self, a: Any, b: Any, /, **kwargs: Any) -> Any: ...
+    def at(self, a: ndarray, indices: Any, b: Any = None, /) -> None: ...
+
+class _UnaryUFunc(ufunc):
+    @overload
+    def __call__[Shape: _Shape](
+        self, x: ndarray[Shape], /, out: Any = None, **kwargs: Any
+    ) -> ndarray[Shape]: ...
+    @overload
+    def __call__(self, x: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
+
+abs: _UnaryUFunc
+absolute: _UnaryUFunc
+acos: _UnaryUFunc
+acosh: _UnaryUFunc
+arccos: _UnaryUFunc
+arccosh: _UnaryUFunc
+arcsin: _UnaryUFunc
+arcsinh: _UnaryUFunc
+arctan: _UnaryUFunc
+arctanh: _UnaryUFunc
+asin: _UnaryUFunc
+asinh: _UnaryUFunc
+atan: _UnaryUFunc
+atanh: _UnaryUFunc
+bitwise_count: _UnaryUFunc
+bitwise_invert: _UnaryUFunc
+bitwise_not: _UnaryUFunc
+cbrt: _UnaryUFunc
+ceil: _UnaryUFunc
+conj: _UnaryUFunc
+conjugate: _UnaryUFunc
+cos: _UnaryUFunc
+cosh: _UnaryUFunc
+deg2rad: _UnaryUFunc
+degrees: _UnaryUFunc
+exp: _UnaryUFunc
+exp2: _UnaryUFunc
+expm1: _UnaryUFunc
+fabs: _UnaryUFunc
+floor: _UnaryUFunc
+invert: _UnaryUFunc
+isfinite: _UnaryUFunc
+isinf: _UnaryUFunc
+isnan: _UnaryUFunc
+isnat: _UnaryUFunc
+log: _UnaryUFunc
+log10: _UnaryUFunc
+log1p: _UnaryUFunc
+log2: _UnaryUFunc
+logical_not: _UnaryUFunc
+negative: _UnaryUFunc
+positive: _UnaryUFunc
+rad2deg: _UnaryUFunc
+radians: _UnaryUFunc
+reciprocal: _UnaryUFunc
+rint: _UnaryUFunc
+sign: _UnaryUFunc
+signbit: _UnaryUFunc
+sin: _UnaryUFunc
+sinh: _UnaryUFunc
+spacing: _UnaryUFunc
+sqrt: _UnaryUFunc
+square: _UnaryUFunc
+tan: _UnaryUFunc
+tanh: _UnaryUFunc
+trunc: _UnaryUFunc
+
 def power[Shape: _Shape](x1: ndarray[Shape], x2: int | float, /) -> ndarray[Shape]: ...
 def minimum[Shape1: _Shape, Shape2: _Shape](
     x1: ndarray[Shape1, Any], x2: ndarray[Shape2, Any], /
@@ -583,18 +660,10 @@ def maximum[Shape1: _Shape, Shape2: _Shape](
 def arctan2[Shape1: _Shape, Shape2: _Shape](
     x1: ndarray[Shape1, Any], x2: ndarray[Shape2, Any], /
 ) -> ndarray[broadcast(Shape1, Shape2)]: ...
-def sin[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def cos[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def tan[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def arcsin[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def floor[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def ceil[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 def round[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def trunc[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 def clip[Shape: _Shape](
     a: ndarray[Shape], a_min: int | float, a_max: int | float
 ) -> ndarray[Shape]: ...
-def negative[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 def fill_diagonal[N: IntVar, DType](
     a: ndarray[[N, N], DType],
     val: Any,
