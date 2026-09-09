@@ -95,9 +95,8 @@ def main() -> int:
     # Deliberately `install` rather than `sync`: this file pins direct
     # dependencies but is not a fully resolved lock, so `sync` would treat every
     # transitive dependency as extraneous and uninstall it.
-    python = venv / ("Scripts" if os.name == "nt" else "bin") / "python"
     run(
-        [uv, "pip", "install", "--python", str(python), "-r", str(REQUIREMENTS)],
+        [uv, "pip", "install", "--python", str(venv), "-r", str(REQUIREMENTS)],
         env=env,
     )
 
