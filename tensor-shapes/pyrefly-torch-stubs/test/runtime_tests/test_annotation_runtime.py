@@ -34,6 +34,7 @@ from shape_extensions import (
     IntTuple,
     IntVar,
     MapIntTuples,
+    Scalar,
     TypeVarTuple,
 )
 
@@ -64,6 +65,9 @@ class TestSubscriptRuntime(unittest.TestCase):
             return x
 
         self.assertTrue(callable(f))
+
+    def test_scalar_shape_subscript_erases_to_scalar(self):
+        self.assertIs(Scalar[[], int], Scalar)
 
 
 class TestTorchScriptRuntimeCompat(unittest.TestCase):

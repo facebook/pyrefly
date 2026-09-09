@@ -72,6 +72,7 @@ mod query;
 mod recursive_alias;
 mod redundant_cast;
 mod returns;
+mod scalar;
 mod scope;
 mod self_cls_default;
 mod semantic_syntax_errors;

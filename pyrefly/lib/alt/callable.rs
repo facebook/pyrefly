@@ -2391,7 +2391,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .collect();
 
         (
-            self.reproject_tuple_carrier_shape(ret),
+            self.normalize_scalar_type(self.reproject_tuple_carrier_shape(ret)),
             errors,
             return_type_errors,
             argmap,

@@ -555,11 +555,11 @@ enum NewBound {
     AddBound(Type),
 }
 
-/// Result of `with_snapshot`, which performs an `is_subset_eq` call with var snapshotting.
+/// Outcome of a speculative subset transaction.
 pub enum SubsetWithSnapshotResult {
-    /// `is_subset_eq` call was successful.
+    /// The subset check succeeded without introducing inconsistent variable solutions.
     Ok,
-    /// `is_subset_eq` call failed.
+    /// The subset check failed or introduced an inconsistent variable solution.
     Err(SubsetError),
 }
 

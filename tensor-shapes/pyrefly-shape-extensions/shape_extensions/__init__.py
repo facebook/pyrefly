@@ -15,6 +15,8 @@ don't crash when evaluated by Python.
 import typing
 from dataclasses import dataclass
 
+from typing_extensions import TypeVar
+
 __all__ = [
     "D",
     "Elements",
@@ -25,6 +27,7 @@ __all__ = [
     "Index",
     "MapIntTuples",
     "ProxyMethod",
+    "Scalar",
     "SymbolicArithExpr",
     "TypeVarTuple",
     "assert_shape",
@@ -176,6 +179,23 @@ class ProxyMethod[T]:
     """Type-checker marker for method forwarding annotations."""
 
     pass
+
+
+_Shape = TypeVar("_Shape", bound=IntTuple, default=IntTuple[()], covariant=True)
+_Domain = TypeVar("_Domain", default=bool | int | float | complex, covariant=True)
+
+
+class Scalar(typing.Generic[_Shape, _Domain]):
+    """A value from ``Domain`` indexed by a potential array ``Shape``.
+
+    Rank-zero and gradual shapes expose ``Domain`` and its attributes. A
+    statically non-empty specialization normalizes to ``Never``. An unresolved
+    symbolic shape remains linked to the scalar until inference determines
+    whether it is empty.
+    """
+
+    def __class_getitem__(cls, params):
+        return cls
 
 
 @dataclass(frozen=True)

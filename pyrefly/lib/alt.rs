@@ -23,6 +23,7 @@ pub mod operators;
 pub mod overload;
 pub mod polars_specials;
 pub mod regex;
+pub mod scalar;
 pub mod shape_extension;
 pub mod shape_flag;
 pub mod shape_index;

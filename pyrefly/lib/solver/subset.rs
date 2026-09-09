@@ -1808,6 +1808,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         got: &Type,
         want: &Type,
     ) -> Result<(), SubsetError> {
+        if let Some(result) = self.is_subset_scalar(got, want) {
+            return result;
+        }
         match (got, want) {
             (Type::Any(_), _) => {
                 all(want.collect_maybe_placeholder_vars().iter(), |var| {
