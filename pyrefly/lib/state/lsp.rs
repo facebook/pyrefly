@@ -79,6 +79,7 @@ use crate::config::error_kind::ErrorKind;
 use crate::error::suppress::detect_line_ending;
 use crate::export::exports::Export;
 use crate::export::exports::ExportLocation;
+use crate::export::exports::Exports;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::wasm::completion::CompletionOptions;
 use crate::lsp::wasm::signature_help::CallInfo;
@@ -4751,6 +4752,57 @@ impl<'a> Transaction<'a> {
         )
     }
 
+    /// Fuzzy-match `pattern` against one module's export table, resolving re-exports.
+    fn fuzzy_match_exports(
+        &self,
+        handle: &Handle,
+        exports_data: &Exports,
+        exports: &SmallMap<Name, ExportLocation>,
+        matcher: &SkimMatcherV2,
+        pattern: &str,
+    ) -> Vec<ExportMatch> {
+        let mut results = Vec::new();
+        for (name, location) in exports.iter() {
+            if let Some(score) = matcher.fuzzy_match(name.as_str(), pattern)
+                && let Some((canonical_handle, canonical_name, export)) =
+                    self.export_from_location(handle, name, location)
+            {
+                let import_from = if canonical_name == *name {
+                    canonical_handle.dupe()
+                } else {
+                    handle.dupe()
+                };
+                results.push(ExportMatch {
+                    score,
+                    definition: canonical_handle.dupe(),
+                    import_from: import_from.dupe(),
+                    name: name.clone(),
+                    export: export.clone(),
+                });
+                if import_from != *handle
+                    && (Self::should_include_reexport(handle, &canonical_handle, name)
+                        || (exports_data.is_explicit_reexport(name)
+                            && Self::allows_explicit_reexport(handle)))
+                {
+                    // Use handle (re-exporting module) so completions
+                    // generate the re-export import path, but zero out the
+                    // location because export.location is a byte range in
+                    // the canonical module's file, not this module's file.
+                    let mut reexport = export;
+                    reexport.location = TextRange::default();
+                    results.push(ExportMatch {
+                        score,
+                        definition: handle.dupe(),
+                        import_from: handle.dupe(),
+                        name: name.clone(),
+                        export: reexport,
+                    });
+                }
+            }
+        }
+        results
+    }
+
     pub fn search_exports_fuzzy(
         &self,
         pattern: &str,
@@ -4759,54 +4811,28 @@ impl<'a> Transaction<'a> {
         let mut res = self.search_exports(
             |handle, exports_data, exports| {
                 let matcher = SkimMatcherV2::default().smart_case();
-                let mut results = Vec::new();
-                for (name, location) in exports.iter() {
-                    if let Some(score) = matcher.fuzzy_match(name.as_str(), pattern)
-                        && let Some((canonical_handle, canonical_name, export)) =
-                            self.export_from_location(handle, name, location)
-                    {
-                        let import_from = if canonical_name == *name {
-                            canonical_handle.dupe()
-                        } else {
-                            handle.dupe()
-                        };
-                        results.push((
-                            score,
-                            canonical_handle.dupe(),
-                            import_from.dupe(),
-                            name.clone(),
-                            export.clone(),
-                        ));
-                        if import_from != *handle
-                            && (Self::should_include_reexport(handle, &canonical_handle, name)
-                                || (exports_data.is_explicit_reexport(name)
-                                    && Self::allows_explicit_reexport(handle)))
-                        {
-                            // Use handle (re-exporting module) so completions
-                            // generate the re-export import path, but zero out the
-                            // location because export.location is a byte range in
-                            // the canonical module's file, not this module's file.
-                            let mut reexport = export;
-                            reexport.location = TextRange::default();
-                            results.push((
-                                score,
-                                handle.dupe(),
-                                handle.dupe(),
-                                name.clone(),
-                                reexport,
-                            ));
-                        }
-                    }
-                }
-                results
+                self.fuzzy_match_exports(handle, exports_data, exports, &matcher, pattern)
             },
             custom_thread_pool,
         )?;
-        res.sort_by_key(|(score, _, _, _, _)| Reverse(*score));
-        Ok(res.into_map(|(_, definition, import_from, name, export)| {
-            (definition, import_from, name, export)
+        res.sort_by_key(|result| Reverse(result.score));
+        Ok(res.into_map(|result| {
+            (
+                result.definition,
+                result.import_from,
+                result.name,
+                result.export,
+            )
         }))
     }
+}
+
+struct ExportMatch {
+    score: i64,
+    definition: Handle,
+    import_from: Handle,
+    name: Name,
+    export: Export,
 }
 
 trait RdepTransaction {
