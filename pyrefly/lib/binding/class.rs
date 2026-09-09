@@ -388,7 +388,21 @@ impl<'a> BindingsBuilder<'a> {
         let mut keywords = Vec::new();
         if let Some(args) = &mut x.arguments {
             args.keywords.iter_mut().for_each(|keyword| {
-                self.ensure_expr(&mut keyword.value, class_object.usage());
+                if keyword
+                    .arg
+                    .as_ref()
+                    .is_some_and(|arg| arg.id == "extra_items")
+                {
+                    self.ensure_type_with_usage(
+                        &mut keyword.value,
+                        Some(&mut legacy),
+                        &mut Usage::StaticTypeInformation {
+                            is_annotation: false,
+                        },
+                    );
+                } else {
+                    self.ensure_expr(&mut keyword.value, class_object.usage());
+                }
                 keywords.push(keyword.clone());
             });
         }

@@ -1357,6 +1357,27 @@ class TD(TypedDict, extra_items=ReadOnly[int]):
 );
 
 testcase!(
+    test_generic_extra_items,
+    r#"
+from typing import TypedDict, assert_type
+
+class TD[T](TypedDict, extra_items=T):
+    a: int
+
+d: TD[str] = {"a": 1}
+assert_type(d["b"], str)
+d2: TD[str] = {"a": 1, "b": "b"}
+assert_type(d2["b"], str)
+
+class Foo[T]:
+    def __init__(self, b: T):
+        self.td: TD[T] = {"a": 1, "b": b}
+
+assert_type(Foo("b").td["b"], str)
+    "#,
+);
+
+testcase!(
     test_bad_extra_items,
     r#"
 from typing import TypedDict

@@ -236,7 +236,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn typed_dict_extra_items(&self, typed_dict: &TypedDict) -> ExtraItems {
         match typed_dict {
             TypedDict::TypedDict(inner) => {
-                self.typed_dict_extra_items_for_cls(inner.class_object())
+                let mut extra_items = self.typed_dict_extra_items_for_cls(inner.class_object());
+                if let ExtraItems::Extra(extra) = &mut extra_items {
+                    inner.targs().substitute_into_mut(&mut extra.ty);
+                }
+                extra_items
             }
             TypedDict::Anonymous(_) => ExtraItems::Extra(ExtraItem {
                 ty: self.get_typed_dict_value_type(typed_dict),
@@ -776,7 +780,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             TypedDict::TypedDict(inner) => {
                 let cls = inner.class_object();
                 if let Some(metadata) = self.get_metadata_for_class(cls).typed_dict_metadata() {
-                    self.get_typed_dict_value_type_from_fields(cls, &metadata.fields)
+                    inner.targs().substitute_into(
+                        self.get_typed_dict_value_type_from_fields(cls, &metadata.fields),
+                    )
                 } else {
                     self.heap.mk_class_type(self.stdlib.object().clone())
                 }
