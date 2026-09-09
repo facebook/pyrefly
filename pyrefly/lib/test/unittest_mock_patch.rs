@@ -295,6 +295,18 @@ with patch("other.foo") as mock_foo:
 "#,
 );
 
+// Calling a mock for `assert_type` must use its ordinary signature instead of the type checker's
+// special handling for direct `assert_type` calls.
+testcase!(
+    test_patch_special_function_call_uses_target_signature,
+    r#"
+from unittest.mock import patch
+
+with patch("typing.assert_type") as mock_assert_type:
+    mock_assert_type("not an int", int)
+"#,
+);
+
 testcase!(
     test_patch_start_checks_target_signature,
     TestEnv::one("other", "def foo(x: int) -> None: ..."),
