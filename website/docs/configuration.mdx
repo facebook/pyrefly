@@ -812,9 +812,13 @@ will always, unconditionally replace the import with `typing.Any`.
 ### `replace-untyped-imports-with-any`
 
 Instruct Pyrefly to replace the given [`ModuleGlob`](#module-globbing)s from
-installed third-party packages with `typing.Any` if the package provides neither
-stubs nor a `py.typed` marker. Stubs and `py.typed` packages are analyzed
-normally, and first-party modules are not affected.
+installed third-party packages with `typing.Any` if the module is untyped. Pyrefly considers a
+module untyped if it does not find any of:
+
+* A `py.typed` marker in the package.
+* A standalone stubs package.
+
+Note that Pyrefly's bundled stubs are ignored for this calculation.
 
 - Type: list of regex
 - Default: `[]`
