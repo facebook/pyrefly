@@ -11,12 +11,16 @@ from jax._shapes import (
     collapse_shape,
     collapse_to_end_shape,
     concatenate_shape,
+    dot_shape,
     lax_associative_scan_shape,
     lax_axis_reduce_shape,
     lax_broadcast,
     lax_clamp_max_scalar_shape,
     lax_clamp_min_scalar_shape,
     lax_clamp_shape,
+    lax_dynamic_index_in_dim_shape,
+    lax_dynamic_slice_in_dim_shape,
+    lax_dynamic_slice_shape,
     lax_reduce_shape,
     lax_scan_shape,
     lax_select_n_shape,
@@ -28,6 +32,28 @@ from jax._shapes import (
     permute_shape,
     stack_shape,
     top_k_shape,
+)
+from jax._src.lax.convolution import (
+    ConvDimensionNumbers as ConvDimensionNumbers,
+    ConvGeneralDilatedDimensionNumbers as ConvGeneralDilatedDimensionNumbers,
+)
+from jax._src.lax.fft import FftType as FftType
+from jax._src.lax.lax import (
+    AccuracyMode as AccuracyMode,
+    DotAlgorithm as DotAlgorithm,
+    DotAlgorithmPreset as DotAlgorithmPreset,
+    DotDimensionNumbers as DotDimensionNumbers,
+    Precision as Precision,
+    PrecisionLike as PrecisionLike,
+    RaggedDotDimensionNumbers as RaggedDotDimensionNumbers,
+    RandomAlgorithm as RandomAlgorithm,
+    RoundingMethod as RoundingMethod,
+    Tolerance as Tolerance,
+)
+from jax._src.lax.slicing import (
+    GatherDimensionNumbers as GatherDimensionNumbers,
+    GatherScatterMode as GatherScatterMode,
+    ScatterDimensionNumbers as ScatterDimensionNumbers,
 )
 from jax.typing import DTypeLike
 from shape_extensions import (
@@ -658,6 +684,496 @@ def unstack(
     x: Any,
     axis: int = 0,
 ) -> tuple[Array[IntTuple], ...]: ...
+
+# Dynamic Slicing & Gather/Scatter
+
+@overload
+def dynamic_index_in_dim[
+    Shape: _Shape,
+    Axis: Flag[int] = 0,
+    KeepDims: Flag[bool] = True,
+](
+    operand: Array[Shape],
+    index: Any,
+    axis: Axis = 0,
+    keepdims: KeepDims = True,
+    *,
+    allow_negative_indices: bool = True,
+) -> Array[lax_dynamic_index_in_dim_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def dynamic_index_in_dim(
+    operand: Any,
+    index: Any,
+    axis: int = 0,
+    keepdims: bool = True,
+    *,
+    allow_negative_indices: bool = True,
+) -> Array[IntTuple]: ...
+@overload
+def dynamic_slice[Shape: _Shape, SliceSizes: _Shape](
+    operand: Array[Shape],
+    start_indices: Any,
+    slice_sizes: SliceSizes,
+    *,
+    allow_negative_indices: bool | Sequence[bool] = True,
+) -> Array[lax_dynamic_slice_shape(Shape, SliceSizes)]: ...
+@overload
+def dynamic_slice(
+    operand: Any,
+    start_indices: Any,
+    slice_sizes: Sequence[int],
+    *,
+    allow_negative_indices: bool | Sequence[bool] = True,
+) -> Array[IntTuple]: ...
+@overload
+def dynamic_slice_in_dim[Shape: _Shape, SliceSize: Flag[int], Axis: Flag[int] = 0](
+    operand: Array[Shape],
+    start_index: Any,
+    slice_size: SliceSize,
+    axis: Axis = 0,
+    *,
+    allow_negative_indices: bool = True,
+) -> Array[lax_dynamic_slice_in_dim_shape(Shape, SliceSize, Axis)]: ...
+@overload
+def dynamic_slice_in_dim(
+    operand: Any,
+    start_index: Any,
+    slice_size: int,
+    axis: int = 0,
+    *,
+    allow_negative_indices: bool = True,
+) -> Array[IntTuple]: ...
+@overload
+def dynamic_update_index_in_dim[Shape: _Shape](
+    operand: Array[Shape],
+    update: Any,
+    index: Any,
+    axis: int,
+    *,
+    allow_negative_indices: bool = True,
+) -> Array[Shape]: ...
+@overload
+def dynamic_update_index_in_dim(
+    operand: Any,
+    update: Any,
+    index: Any,
+    axis: int,
+    *,
+    allow_negative_indices: bool = True,
+) -> Array[IntTuple]: ...
+@overload
+def dynamic_update_slice[Shape: _Shape](
+    operand: Array[Shape],
+    update: Any,
+    start_indices: Any,
+    *,
+    allow_negative_indices: bool | Sequence[bool] = True,
+) -> Array[Shape]: ...
+@overload
+def dynamic_update_slice(
+    operand: Any,
+    update: Any,
+    start_indices: Any,
+    *,
+    allow_negative_indices: bool | Sequence[bool] = True,
+) -> Array[IntTuple]: ...
+@overload
+def dynamic_update_slice_in_dim[Shape: _Shape](
+    operand: Array[Shape],
+    update: Any,
+    start_index: Any,
+    axis: int,
+    *,
+    allow_negative_indices: bool = True,
+) -> Array[Shape]: ...
+@overload
+def dynamic_update_slice_in_dim(
+    operand: Any,
+    update: Any,
+    start_index: Any,
+    axis: int,
+    *,
+    allow_negative_indices: bool = True,
+) -> Array[IntTuple]: ...
+def gather(
+    operand: Array[Any],
+    start_indices: Array[Any],
+    dimension_numbers: GatherDimensionNumbers,
+    slice_sizes: Sequence[int],
+    *,
+    unique_indices: bool = False,
+    indices_are_sorted: bool = False,
+    mode: str | GatherScatterMode | None = None,
+    fill_value: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def index_in_dim[Shape: _Shape, Axis: Flag[int] = 0, KeepDims: Flag[bool] = True](
+    operand: Array[Shape],
+    index: int,
+    axis: Axis = 0,
+    keepdims: KeepDims = True,
+) -> Array[lax_dynamic_index_in_dim_shape(Shape, Axis, KeepDims)]: ...
+@overload
+def index_in_dim(
+    operand: Any,
+    index: int,
+    axis: int = 0,
+    keepdims: bool = True,
+) -> Array[IntTuple]: ...
+def index_take(
+    src: Array[Any],
+    idxs: Array[Any],
+    axes: Sequence[int],
+) -> Array[IntTuple]: ...
+@overload
+def scatter[Shape: _Shape](
+    operand: Array[Shape],
+    scatter_indices: Any,
+    updates: Any,
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[Shape]: ...
+@overload
+def scatter(
+    operand: Any,
+    scatter_indices: Any,
+    updates: Any,
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def scatter_add[Shape: _Shape](
+    operand: Array[Shape],
+    scatter_indices: Any,
+    updates: Any,
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[Shape]: ...
+@overload
+def scatter_add(
+    operand: Any,
+    scatter_indices: Any,
+    updates: Any,
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def scatter_apply[Shape: _Shape](
+    operand: Array[Shape],
+    scatter_indices: Any,
+    func: Callable[[Any], Any],
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    update_shape: Sequence[int] = (),
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[Shape]: ...
+@overload
+def scatter_apply(
+    operand: Any,
+    scatter_indices: Any,
+    func: Callable[[Any], Any],
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    update_shape: Sequence[int] = (),
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def scatter_max[Shape: _Shape](
+    operand: Array[Shape],
+    scatter_indices: Any,
+    updates: Any,
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[Shape]: ...
+@overload
+def scatter_max(
+    operand: Any,
+    scatter_indices: Any,
+    updates: Any,
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def scatter_min[Shape: _Shape](
+    operand: Array[Shape],
+    scatter_indices: Any,
+    updates: Any,
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[Shape]: ...
+@overload
+def scatter_min(
+    operand: Any,
+    scatter_indices: Any,
+    updates: Any,
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def scatter_mul[Shape: _Shape](
+    operand: Array[Shape],
+    scatter_indices: Any,
+    updates: Any,
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[Shape]: ...
+@overload
+def scatter_mul(
+    operand: Any,
+    scatter_indices: Any,
+    updates: Any,
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def scatter_sub[Shape: _Shape](
+    operand: Array[Shape],
+    scatter_indices: Any,
+    updates: Any,
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[Shape]: ...
+@overload
+def scatter_sub(
+    operand: Any,
+    scatter_indices: Any,
+    updates: Any,
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: str | GatherScatterMode | None = None,
+) -> Array[IntTuple]: ...
+
+# Linear Algebra, Contractions & Convolutions
+
+@overload
+def batch_matmul[Batch: IntTuple, M: IntVar, K: IntVar, N: IntVar](
+    lhs: Array[[*Elements[Batch], M, K]],
+    rhs: Array[[*Elements[Batch], K, N]],
+    precision: PrecisionLike = None,
+) -> Array[[*Elements[Batch], M, N]]: ...
+@overload
+def batch_matmul(
+    lhs: Any,
+    rhs: Any,
+    precision: PrecisionLike = None,
+) -> Array[IntTuple]: ...
+def conv(
+    lhs: Any,
+    rhs: Any,
+    window_strides: Sequence[int],
+    padding: str | Sequence[tuple[int, int]],
+    precision: PrecisionLike = None,
+    preferred_element_type: DTypeLike | None = None,
+) -> Array[IntTuple]: ...
+def conv_dimension_numbers(
+    lhs_shape: Sequence[int],
+    rhs_shape: Sequence[int],
+    dimension_numbers: Any,
+) -> ConvDimensionNumbers: ...
+def conv_general_dilated(
+    lhs: Any,
+    rhs: Any,
+    window_strides: Sequence[int],
+    padding: str | Sequence[tuple[int, int]],
+    lhs_dilation: Sequence[int] | None = None,
+    rhs_dilation: Sequence[int] | None = None,
+    dimension_numbers: ConvGeneralDilatedDimensionNumbers = None,
+    feature_group_count: int = 1,
+    batch_group_count: int = 1,
+    precision: PrecisionLike = None,
+    preferred_element_type: DTypeLike | None = None,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+def conv_general_dilated_local(
+    lhs: Any,
+    rhs: Any,
+    window_strides: Sequence[int],
+    padding: str | Sequence[tuple[int, int]],
+    filter_shape: Sequence[int],
+    lhs_dilation: Sequence[int] | None = None,
+    rhs_dilation: Sequence[int] | None = None,
+    dimension_numbers: ConvGeneralDilatedDimensionNumbers = None,
+    precision: PrecisionLike = None,
+) -> Array[IntTuple]: ...
+def conv_general_dilated_patches(
+    lhs: Any,
+    filter_shape: Sequence[int],
+    window_strides: Sequence[int],
+    padding: str | Sequence[tuple[int, int]],
+    lhs_dilation: Sequence[int] | None = None,
+    rhs_dilation: Sequence[int] | None = None,
+    dimension_numbers: ConvGeneralDilatedDimensionNumbers = None,
+    precision: PrecisionLike = None,
+    preferred_element_type: DTypeLike | None = None,
+) -> Array[IntTuple]: ...
+def conv_general_permutations(
+    dimension_numbers: Any,
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]: ...
+def conv_general_shape_tuple(
+    lhs_shape: Sequence[int],
+    rhs_shape: Sequence[int],
+    window_strides: Sequence[int],
+    padding: str | Sequence[tuple[int, int]],
+    dimension_numbers: Any,
+) -> tuple[int, ...]: ...
+def conv_shape_tuple(
+    lhs_shape: Sequence[int],
+    rhs_shape: Sequence[int],
+    strides: Sequence[int],
+    pads: Sequence[tuple[int, int]],
+    batch_group_count: int = 1,
+) -> tuple[int, ...]: ...
+def conv_transpose(
+    lhs: Any,
+    rhs: Any,
+    strides: Sequence[int],
+    padding: str | Sequence[tuple[int, int]],
+    rhs_dilation: Sequence[int] | None = None,
+    dimension_numbers: ConvGeneralDilatedDimensionNumbers = None,
+    transpose_kernel: bool = False,
+    precision: PrecisionLike = None,
+    preferred_element_type: DTypeLike | None = None,
+    use_consistent_padding: bool = False,
+) -> Array[IntTuple]: ...
+def conv_transpose_shape_tuple(
+    lhs_shape: Sequence[int],
+    rhs_shape: Sequence[int],
+    window_strides: Sequence[int],
+    padding: str | Sequence[tuple[int, int]],
+    dimension_numbers: Any,
+) -> tuple[int, ...]: ...
+def conv_with_general_padding(
+    lhs: Any,
+    rhs: Any,
+    window_strides: Sequence[int],
+    padding: str | Sequence[tuple[int, int]],
+    lhs_dilation: Sequence[int] | None,
+    rhs_dilation: Sequence[int] | None,
+    precision: PrecisionLike = None,
+    preferred_element_type: DTypeLike | None = None,
+) -> Array[IntTuple]: ...
+def custom_linear_solve(
+    matvec: Callable[..., Any],
+    b: Any,
+    solve: Callable[[Callable[..., Any], Any], Any],
+    transpose_solve: Callable[[Callable[..., Any], Any], Any] | None = None,
+    symmetric: bool = False,
+    has_aux: bool = False,
+) -> Any: ...
+def custom_root(
+    f: Callable[..., Any],
+    initial_guess: Any,
+    solve: Callable[[Callable[..., Any], Any], Any],
+    tangent_solve: Callable[[Callable[..., Any], Any], Any],
+    has_aux: bool = False,
+) -> Any: ...
+@overload
+def dot[Shape1: _Shape, Shape2: _Shape](
+    lhs: Array[Shape1],
+    rhs: Array[Shape2],
+    *,
+    dimension_numbers: None = None,
+    precision: PrecisionLike = None,
+    preferred_element_type: DTypeLike | None = None,
+    out_sharding: Any = None,
+) -> Array[dot_shape(Shape1, Shape2)]: ...
+@overload
+def dot(
+    lhs: Any,
+    rhs: Any,
+    *,
+    dimension_numbers: Any = None,
+    precision: PrecisionLike = None,
+    preferred_element_type: DTypeLike | None = None,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+def dot_general(
+    lhs: Any,
+    rhs: Any,
+    dimension_numbers: DotDimensionNumbers,
+    precision: PrecisionLike = None,
+    preferred_element_type: DTypeLike | None = None,
+    *,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def ragged_dot[M: IntVar, K: IntVar, G: IntVar, N: IntVar](
+    lhs: Array[[M, K]],
+    rhs: Array[[G, K, N]],
+    group_sizes: Array[[G]],
+    precision: PrecisionLike = None,
+    preferred_element_type: DTypeLike | None = None,
+    group_offset: Any = None,
+    out_sharding: Any = None,
+) -> Array[[M, N]]: ...
+@overload
+def ragged_dot(
+    lhs: Any,
+    rhs: Any,
+    group_sizes: Any,
+    precision: PrecisionLike = None,
+    preferred_element_type: DTypeLike | None = None,
+    group_offset: Any = None,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+def ragged_dot_general(
+    lhs: Any,
+    rhs: Any,
+    group_sizes: Any,
+    ragged_dot_dimension_numbers: Any,
+    precision: PrecisionLike = None,
+    preferred_element_type: DTypeLike | None = None,
+    group_offset: Any = None,
+    out_sharding: Any = None,
+) -> Array[IntTuple]: ...
+def scaled_dot(
+    lhs: Any,
+    rhs: Any,
+    *,
+    lhs_scale: Any = None,
+    rhs_scale: Any = None,
+    dimension_numbers: Any = None,
+    preferred_element_type: DTypeLike | None = None,
+) -> Array[IntTuple]: ...
 
 # Data types & bitcasting
 def bitcast_convert_type(

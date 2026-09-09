@@ -697,3 +697,213 @@ def test_lax_top_k() -> None:
     top_v0, top_i0 = lax.top_k(x, 1, axis=0)
     assert_shape(top_v0.shape, (1, 3, 4))
     assert_shape(top_i0.shape, (1, 3, 4))
+
+
+def test_lax_dynamic_slicing() -> None:
+    x = jnp.ones((3, 4, 5))
+    assert_shape(lax.dynamic_index_in_dim(x, 1, axis=1, keepdims=True).shape, (3, 1, 5))
+    assert_shape(lax.dynamic_index_in_dim(x, 1, axis=1, keepdims=False).shape, (3, 5))
+    assert_shape(
+        lax.dynamic_index_in_dim(x, 0, axis=-1, keepdims=True).shape, (3, 4, 1)
+    )
+    assert_shape(lax.dynamic_index_in_dim(x, 0, axis=-1, keepdims=False).shape, (3, 4))
+
+    assert_shape(lax.dynamic_slice(x, (1, 1, 1), (2, 2, 3)).shape, (2, 2, 3))
+
+    assert_shape(lax.dynamic_slice_in_dim(x, 1, 2, axis=1).shape, (3, 2, 5))
+    assert_shape(lax.dynamic_slice_in_dim(x, 0, 2, axis=-1).shape, (3, 4, 2))
+    assert_shape(
+        lax.dynamic_slice_in_dim(x, 0, 2, axis=-1, allow_negative_indices=False).shape,
+        (3, 4, 2),
+    )
+    assert_shape(
+        lax.dynamic_slice_in_dim(x, 0, 2, axis=-1, allow_negative_indices=True).shape,
+        (3, 4, 2),
+    )
+
+    up1 = jnp.zeros((3, 1, 5))
+    assert_shape(lax.dynamic_update_index_in_dim(x, up1, 1, axis=1).shape, (3, 4, 5))
+
+    up2 = jnp.zeros((2, 2, 3))
+    assert_shape(lax.dynamic_update_slice(x, up2, (1, 1, 1)).shape, (3, 4, 5))
+
+    up3 = jnp.zeros((3, 2, 5))
+    assert_shape(lax.dynamic_update_slice_in_dim(x, up3, 1, axis=1).shape, (3, 4, 5))
+
+    assert_shape(lax.index_in_dim(x, 1, axis=1, keepdims=True).shape, (3, 1, 5))
+    assert_shape(lax.index_in_dim(x, 1, axis=1, keepdims=False).shape, (3, 5))
+
+    src = jnp.ones((5, 4))
+    idxs = jnp.array([[0, 1, 2]])
+    res_it = lax.index_take(src, idxs, (0,))
+    assert isinstance(res_it, jax.Array)
+
+
+def test_lax_gather_scatter() -> None:
+    operand = jnp.ones((5, 3))
+    indices = jnp.array([[1], [2]])
+    g_dnums = lax.GatherDimensionNumbers(
+        offset_dims=(1,),
+        collapsed_slice_dims=(0,),
+        start_index_map=(0,),
+        operand_batching_dims=(),
+        start_indices_batching_dims=(),
+    )
+    res_g = lax.gather(operand, indices, dimension_numbers=g_dnums, slice_sizes=(1, 3))
+    assert isinstance(res_g, jax.Array)
+    res_g_clip = lax.gather(
+        operand,
+        indices,
+        dimension_numbers=g_dnums,
+        slice_sizes=(1, 3),
+        mode=lax.GatherScatterMode.CLIP,
+    )
+    assert isinstance(res_g_clip, jax.Array)
+
+    s_dnums = lax.ScatterDimensionNumbers(
+        update_window_dims=(1,),
+        inserted_window_dims=(0,),
+        scatter_dims_to_operand_dims=(0,),
+        operand_batching_dims=(),
+        scatter_indices_batching_dims=(),
+    )
+    updates = jnp.ones((2, 3))
+    assert_shape(lax.scatter(operand, indices, updates, s_dnums).shape, (5, 3))
+    assert_shape(
+        lax.scatter(
+            operand, indices, updates, s_dnums, mode=lax.GatherScatterMode.FILL_OR_DROP
+        ).shape,
+        (5, 3),
+    )
+    assert_shape(lax.scatter_add(operand, indices, updates, s_dnums).shape, (5, 3))
+    assert_shape(
+        lax.scatter_apply(
+            operand, indices, lambda u: u * 2, s_dnums, update_shape=(2, 3)
+        ).shape,
+        (5, 3),
+    )
+    assert_shape(lax.scatter_max(operand, indices, updates, s_dnums).shape, (5, 3))
+    assert_shape(lax.scatter_min(operand, indices, updates, s_dnums).shape, (5, 3))
+    assert_shape(lax.scatter_mul(operand, indices, updates, s_dnums).shape, (5, 3))
+    assert_shape(lax.scatter_sub(operand, indices, updates, s_dnums).shape, (5, 3))
+
+
+def test_lax_linear_algebra_contractions() -> None:
+    # batch_matmul
+    a = jnp.ones((2, 3, 4))
+    b = jnp.ones((2, 4, 5))
+    assert_shape(lax.batch_matmul(a, b).shape, (2, 3, 5))
+    assert_shape(
+        lax.batch_matmul(a, b, precision=lax.Precision.HIGHEST).shape, (2, 3, 5)
+    )
+    a4 = jnp.ones((7, 2, 3, 4))
+    b4 = jnp.ones((7, 2, 4, 5))
+    assert_shape(lax.batch_matmul(a4, b4).shape, (7, 2, 3, 5))
+
+    # dot
+    v1 = jnp.ones(3)
+    v2 = jnp.ones(3)
+    mat23 = jnp.ones((2, 3))
+    mat34 = jnp.ones((3, 4))
+    assert_shape(lax.dot(v1, v2).shape, ())
+    assert_shape(lax.dot(mat23, v1).shape, (2,))
+    assert_shape(lax.dot(v1, mat34).shape, (4,))
+    assert_shape(lax.dot(mat23, mat34).shape, (2, 4))
+    assert_shape(lax.dot(mat23, mat34, precision=lax.Precision.DEFAULT).shape, (2, 4))
+
+    # dot_general
+    dg_res = lax.dot_general(mat23, mat34, (((1,), (0,)), ((), ())))
+    assert_shape(dg_res.shape, (2, 4))
+
+    # conv & friends
+    lhs = jnp.ones((1, 1, 8, 8))
+    rhs = jnp.ones((1, 1, 3, 3))
+    conv_res = lax.conv(lhs, rhs, (1, 1), "SAME")
+    assert isinstance(conv_res, jax.Array)
+
+    cdnums = lax.conv_dimension_numbers(
+        (1, 1, 8, 8), (1, 1, 3, 3), ("NCHW", "OIHW", "NCHW")
+    )
+    assert cdnums is not None
+
+    cgd_res = lax.conv_general_dilated(lhs, rhs, (1, 1), "SAME")
+    assert isinstance(cgd_res, jax.Array)
+
+    cgdp_res = lax.conv_general_dilated_patches(lhs, (3, 3), (1, 1), "SAME")
+    assert isinstance(cgdp_res, jax.Array)
+
+    cgdl_lhs = jnp.ones((1, 8, 8, 1))
+    cgdl_rhs = jnp.ones((8, 8, 9, 1))
+    cgdl_res = lax.conv_general_dilated_local(
+        cgdl_lhs,
+        cgdl_rhs,
+        (1, 1),
+        "SAME",
+        (3, 3),
+        dimension_numbers=("NHWC", "HWIO", "NHWC"),
+    )
+    assert isinstance(cgdl_res, jax.Array)
+
+    perms = lax.conv_general_permutations(("NCHW", "OIHW", "NCHW"))
+    assert len(perms) == 3
+
+    st1 = lax.conv_general_shape_tuple(
+        (1, 1, 8, 8), (1, 1, 3, 3), (1, 1), "SAME", ("NCHW", "OIHW", "NCHW")
+    )
+    assert len(st1) == 4
+
+    st2 = lax.conv_shape_tuple((1, 1, 8, 8), (1, 1, 3, 3), (1, 1), [(1, 1), (1, 1)])
+    assert len(st2) == 4
+
+    ct_lhs = jnp.ones((1, 8, 8, 1))
+    ct_rhs = jnp.ones((3, 3, 1, 1))
+    ct_res = lax.conv_transpose(ct_lhs, ct_rhs, (1, 1), "SAME")
+    assert isinstance(ct_res, jax.Array)
+
+    st3 = lax.conv_transpose_shape_tuple(
+        (1, 1, 8, 8), (1, 1, 3, 3), (1, 1), "SAME", ("NCHW", "OIHW", "NCHW")
+    )
+    assert len(st3) == 4
+
+    cwgp_res = lax.conv_with_general_padding(lhs, rhs, (1, 1), "SAME", None, None)
+    assert isinstance(cwgp_res, jax.Array)
+
+    # custom_linear_solve & custom_root
+    b_vec = jnp.ones(3)
+    sol_cls = lax.custom_linear_solve(lambda x: x, b_vec, lambda f, x: x)
+    assert sol_cls is not None
+
+    sol_cr = lax.custom_root(lambda x: x, b_vec, lambda f, x: x, lambda f, x: x)
+    assert sol_cr is not None
+
+    # ragged_dot
+    rlhs = jnp.ones((6, 4))
+    rrhs = jnp.ones((2, 4, 5))
+    group_sizes = jnp.array([3, 3])
+    rd_res = lax.ragged_dot(rlhs, rrhs, group_sizes)
+    assert_shape(rd_res.shape, (6, 5))
+
+    rddnums = lax.RaggedDotDimensionNumbers(
+        dot_dimension_numbers=(((1,), (1,)), ((), ())),
+        lhs_ragged_dimensions=(0,),
+        rhs_group_dimensions=(0,),
+    )
+    rdg_res = lax.ragged_dot_general(rlhs, rrhs, group_sizes, rddnums)
+    assert isinstance(rdg_res, jax.Array)
+
+    # scaled_dot
+    sd_res = lax.scaled_dot(mat23, mat34)
+    assert isinstance(sd_res, jax.Array)
+
+    # Section 13: Types, Enums & Dimension Descriptors
+    assert lax.AccuracyMode is not None
+    assert lax.DotAlgorithm is not None
+    assert lax.DotAlgorithmPreset is not None
+    assert lax.FftType is not None
+    assert lax.GatherDimensionNumbers is not None
+    assert lax.GatherScatterMode is not None
+    assert lax.Precision is not None
+    assert lax.RandomAlgorithm is not None
+    assert lax.RoundingMethod is not None
+    assert lax.ScatterDimensionNumbers is not None
+    assert lax.Tolerance is not None

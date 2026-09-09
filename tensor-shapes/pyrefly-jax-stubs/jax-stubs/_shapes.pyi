@@ -1166,3 +1166,44 @@ def lax_sort_key_val_shape(
     if dimension < 0 - rank or dimension >= rank:
         return dsl.Invalid("axis out of bounds")
     return keys_shape
+
+@type_shape_dsl_function
+def lax_dynamic_index_in_dim_shape(
+    shape: IntTuple, axis: int, keepdims: bool
+) -> IntTuple:
+    rank = len(shape)
+    if axis < 0 - rank or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + rank
+    else:
+        norm_axis = axis + 0
+    if keepdims:
+        return dsl.concat(
+            dsl.concat(shape[:norm_axis], dsl.IntTuple((1,))),
+            shape[norm_axis + 1 :],
+        )
+    return dsl.concat(shape[:norm_axis], shape[norm_axis + 1 :])
+
+@type_shape_dsl_function
+def lax_dynamic_slice_in_dim_shape(
+    shape: IntTuple, slice_size: int, axis: int
+) -> IntTuple:
+    rank = len(shape)
+    if axis < 0 - rank or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + rank
+    else:
+        norm_axis = axis + 0
+    extent = slice_size + 0
+    return dsl.concat(
+        dsl.concat(shape[:norm_axis], dsl.IntTuple((extent,))),
+        shape[norm_axis + 1 :],
+    )
+
+@type_shape_dsl_function
+def lax_dynamic_slice_shape(shape: IntTuple, slice_sizes: IntTuple) -> IntTuple:
+    if len(shape) != len(slice_sizes):
+        return dsl.Invalid("slice_sizes must have the same length as operand rank")
+    return slice_sizes
