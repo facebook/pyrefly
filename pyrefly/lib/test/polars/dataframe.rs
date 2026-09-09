@@ -6134,6 +6134,19 @@ reveal_type(unrecognized())  # E: revealed type: DataFrame
 );
 
 testcase!(
+    test_dataframe_type_arguments_are_rejected,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+
+class Schema:
+    value: pl.Int64
+
+frame: pl.DataFrame[Schema]  # E: Expected 0 type arguments for `DataFrame`, got 1
+"#,
+);
+
+testcase!(
     test_plain_annotation_erases_schema,
     env_with_polars_stubs(),
     r#"

@@ -3421,12 +3421,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         errors,
                     ))
                 }
-                Type::ClassDef(ref cls)
-                    if let [arg] = xs
-                        && let Some(df) = self.polars_dataframe_schema_annotation(cls, arg) =>
-                {
-                    Type::type_of(df)
-                }
                 Type::ClassDef(ref cls) if self.is_int_tuple_class(cls) => {
                     self.parse_int_tuple_type(xs, type_form_context, errors)
                 }

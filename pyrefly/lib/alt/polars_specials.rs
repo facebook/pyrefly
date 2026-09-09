@@ -1566,31 +1566,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         Some(entries)
     }
 
-    /// Build the instance type represented by `pl.DataFrame[Schema]`.
-    pub fn polars_dataframe_schema_annotation(&self, base: &Class, arg: &Expr) -> Option<Type> {
-        if !is_polars_dataframe(base) {
-            return None;
-        }
-        let ty = self.expr_infer(arg, &self.error_swallower());
-        let Type::ClassDef(schema_cls) = &ty else {
-            return None;
-        };
-        let columns = self.schema_class_columns(schema_cls)?;
-        let Type::ClassType(underlying) = self.promote_silently(base) else {
-            return None;
-        };
-        Some(
-            DataFrameSchema {
-                underlying,
-                columns,
-                completeness: SchemaCompleteness::Complete,
-                kind: DataFrameKind::Polars,
-                role: SchemaRole::Contract,
-            }
-            .to_type(),
-        )
-    }
-
     /// Interpret supported `Annotated[pl.DataFrame, ...]` metadata as a schema contract.
     pub fn polars_dataframe_annotated_type(&self, inner: &Type, metadata: &[Type]) -> Option<Type> {
         let Type::ClassType(underlying) = inner else {
