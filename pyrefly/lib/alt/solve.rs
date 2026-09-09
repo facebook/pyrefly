@@ -828,7 +828,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         self.expr_qualifier(&x.value, type_form_context, errors) =>
             {
                 if qualifier == Qualifier::Annotated {
-                    // TODO: we may want to preserve the extra annotation info for `Annotated` in the future
                     if unpacked_slice.len() < 2 {
                         self.error(
                             errors,
@@ -850,6 +849,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     );
                 }
                 let mut ann = self.expr_annotation(&unpacked_slice[0], type_form_context, errors);
+                if qualifier == Qualifier::Annotated {
+                    let metadata: Vec<Type> = unpacked_slice[1..]
+                        .iter()
+                        .map(|e| self.expr_infer(e, &self.error_swallower()))
+                        .collect();
+                    if let Some(inner) = ann.ty.as_ref()
+                        && let Some(dataframe) =
+                            self.polars_dataframe_annotated_type(inner, &metadata)
+                    {
+                        ann.ty = Some(dataframe);
+                    }
+                }
                 if qualifier == Qualifier::ClassVar && ann.get_type().contains_type_variable() {
                     self.error(
                         errors,

@@ -590,11 +590,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 |arg| self.heap.mk_typeform(arg),
             ),
             SpecialForm::Annotated if arguments.len() > 1 => {
-                let inner = self.expr_untype(&arguments[0], type_argument_context, errors);
+                let mut inner = self.expr_untype(&arguments[0], type_argument_context, errors);
                 let metadata: Vec<Type> = arguments[1..]
                     .iter()
                     .map(|e| self.expr_infer(e, &self.error_swallower()))
                     .collect();
+                if let Some(dataframe) = self.polars_dataframe_annotated_type(&inner, &metadata) {
+                    inner = dataframe;
+                }
                 Type::Annotated(Box::new(inner), metadata.into_boxed_slice())
             }
             SpecialForm::Annotated => self.error(

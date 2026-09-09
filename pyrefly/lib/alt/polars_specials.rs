@@ -1591,6 +1591,33 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         )
     }
 
+    /// Interpret supported `Annotated[pl.DataFrame, ...]` metadata as a schema contract.
+    pub fn polars_dataframe_annotated_type(&self, inner: &Type, metadata: &[Type]) -> Option<Type> {
+        let Type::ClassType(underlying) = inner else {
+            return None;
+        };
+        if !is_polars_dataframe(underlying.class_object()) {
+            return None;
+        }
+        let (schema_cls, completeness) = match metadata {
+            [Type::ClassDef(schema_cls)] => (schema_cls, SchemaCompleteness::Complete),
+            [Type::ClassDef(schema_cls), tail] if tail.is_ellipsis_value() => {
+                (schema_cls, SchemaCompleteness::Partial)
+            }
+            _ => return None,
+        };
+        Some(
+            DataFrameSchema {
+                underlying: underlying.clone(),
+                columns: self.schema_class_columns(schema_cls)?,
+                completeness,
+                kind: DataFrameKind::Polars,
+                role: SchemaRole::Contract,
+            }
+            .to_type(),
+        )
+    }
+
     fn schema_class_entries(&self, expr: &Expr) -> Option<Vec<(Name, Option<PolarsDType>)>> {
         let ty = self.expr_infer(expr, &self.error_swallower());
         let Type::ClassDef(cls) = &ty else {

@@ -358,12 +358,12 @@ testcase!(
     TestEnv::new(),
     r#"
 import polars as pl  # E: Cannot find module `polars`
-from typing import reveal_type
+from typing import Annotated, reveal_type
 
 class InputSchema:
     a: pl.Int64
 
-def transform(df: pl.DataFrame[InputSchema]) -> pl.LazyFrame:
+def transform(df: Annotated[pl.DataFrame, InputSchema]) -> pl.LazyFrame:
     return df.lazy().select("missing")
 
 reveal_type(transform(pl.DataFrame({"a": [1]})))  # E: revealed type: Unknown
@@ -5959,11 +5959,11 @@ testcase!(
     env_with_polars_stubs(),
     r#"
 import polars as pl
-from typing import reveal_type
+from typing import Annotated, reveal_type
 class MySchema:
     price: pl.Float64
     asset: pl.String
-def f(df: pl.DataFrame[MySchema]) -> None:
+def f(df: Annotated[pl.DataFrame, MySchema]) -> None:
     reveal_type(df)  # E: revealed type: DataFrame[price: Float64, asset: String]
 "#,
 );
@@ -5973,10 +5973,10 @@ testcase!(
     env_with_polars_stubs(),
     r#"
 import polars as pl
-from typing import reveal_type
+from typing import Annotated, reveal_type
 class MySchema:
     price: pl.Float64
-def f(df: pl.DataFrame[MySchema]) -> None:
+def f(df: Annotated[pl.DataFrame, MySchema]) -> None:
     reveal_type(df["price"])  # E: revealed type: Series[Float64]
     df["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
@@ -5987,11 +5987,11 @@ testcase!(
     env_with_polars_stubs(),
     r#"
 import polars as pl
-from typing import reveal_type
+from typing import Annotated, reveal_type
 class MySchema:
     price: pl.Float64
     asset: pl.String
-def load() -> pl.DataFrame[MySchema]: ...
+def load() -> Annotated[pl.DataFrame, MySchema]: ...
 reveal_type(load())  # E: revealed type: DataFrame[price: Float64, asset: String]
 load()["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
@@ -6002,12 +6002,134 @@ testcase!(
     env_with_polars_stubs(),
     r#"
 import polars as pl
-from typing import reveal_type
+from typing import Annotated, reveal_type
 class MySchema:
     price: pl.Float64
-def use(df: pl.DataFrame[MySchema]) -> None:
+def use(df: Annotated[pl.DataFrame, MySchema]) -> None:
     reveal_type(df["price"])  # E: revealed type: Series[Float64]
     df["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_dataframe_exact_schema_assignment,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Annotated
+
+class Schema:
+    asset: pl.String
+    price: pl.Float64
+
+ExactFrame = Annotated[pl.DataFrame, Schema]
+
+def take_exact(df: ExactFrame) -> None: ...
+
+take_exact(pl.DataFrame({"asset": ["A"], "price": [1.0]}))
+take_exact(pl.DataFrame({"price": [1.0], "asset": ["A"]}))  # E: is not assignable to parameter
+take_exact(pl.DataFrame({"asset": ["A"], "price": [1.0], "extra": [1]}))  # E: is not assignable to parameter
+take_exact(pl.DataFrame({"asset": ["A"]}))  # E: is not assignable to parameter
+take_exact(pl.DataFrame({"asset": ["A"], "price": [1]}))  # E: is not assignable to parameter
+
+bad_assignment: ExactFrame = pl.DataFrame({"asset": ["A"]})  # E: is not assignable to
+
+def bad_return() -> ExactFrame:
+    return pl.DataFrame({"asset": ["A"], "price": [1.0], "extra": [1]})  # E: is not assignable to declared return type
+
+def opaque() -> pl.DataFrame: ...
+take_exact(opaque())  # E: is not assignable to parameter
+"#,
+);
+
+testcase!(
+    test_dataframe_open_schema_assignment,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Annotated
+
+class Required:
+    asset: pl.String
+    price: pl.Float64
+
+class Other:
+    other: pl.Int64
+
+OpenFrame = Annotated[pl.DataFrame, Required, ...]
+OtherOpenFrame = Annotated[pl.DataFrame, Other, ...]
+ExactFrame = Annotated[pl.DataFrame, Required]
+
+def take_open(df: OpenFrame) -> None: ...
+def make_open() -> OpenFrame: ...
+def make_other_open() -> OtherOpenFrame: ...
+
+take_open(pl.DataFrame({"asset": ["A"], "price": [1.0]}))
+take_open(pl.DataFrame({"extra": [1], "price": [1.0], "asset": ["A"]}))
+take_open(make_open())
+take_open(make_other_open())  # E: is not assignable to parameter
+take_open(pl.DataFrame({"asset": ["A"]}))  # E: is not assignable to parameter
+take_open(pl.DataFrame({"asset": ["A"], "price": [1]}))  # E: is not assignable to parameter
+
+class Custom: ...
+take_open(pl.DataFrame({"asset": ["A"], "price": [Custom()]}))  # E: is not assignable to parameter
+
+def take_exact(df: ExactFrame) -> None: ...
+take_exact(make_open())  # E: is not assignable to parameter
+
+def opaque() -> pl.DataFrame: ...
+take_open(opaque())  # E: is not assignable to parameter
+"#,
+);
+
+testcase!(
+    test_pandas_annotated_metadata_remains_opaque,
+    env_with_pandas_stubs(),
+    r#"
+import pandas as pd
+from typing import Annotated, reveal_type
+
+class Schema: ...
+
+def use(df: Annotated[pd.DataFrame, Schema]) -> None:
+    reveal_type(df)  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_dataframe_annotated_alias_forms,
+    env_with_polars_stubs(),
+    r#"
+from __future__ import annotations
+import polars as pl
+from typing import Annotated, TypeAlias, reveal_type
+from typing_extensions import Annotated as ExtensionsAnnotated
+
+class Schema:
+    value: pl.Int64
+
+Implicit = Annotated[pl.DataFrame, Schema]
+Explicit: TypeAlias = Annotated[pl.DataFrame, Schema, ...]
+type Pep695 = Annotated[pl.DataFrame, Schema]
+
+def implicit(df: Implicit) -> None:
+    reveal_type(df)  # E: revealed type: DataFrame[value: Int64]
+
+def explicit(df: Explicit) -> None:
+    reveal_type(df)  # E: revealed type: DataFrame[value: Int64, ...]
+
+def pep695(df: Pep695) -> None:
+    reveal_type(df)  # E: revealed type: DataFrame[value: Int64]
+
+def extension(df: ExtensionsAnnotated[pl.DataFrame, Schema]) -> None:
+    reveal_type(df)  # E: revealed type: DataFrame[value: Int64]
+
+def deferred(df: "Annotated[pl.DataFrame, Schema, ...]") -> None:
+    reveal_type(df)  # E: revealed type: DataFrame[value: Int64, ...]
+
+ordinary: Annotated[int, Schema] = 1
+def unrecognized() -> Annotated[pl.DataFrame, "metadata"]: ...
+reveal_type(unrecognized())  # E: revealed type: DataFrame
 "#,
 );
 
