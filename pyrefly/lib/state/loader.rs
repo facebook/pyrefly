@@ -193,6 +193,18 @@ impl<T> FindingOrError<T> {
             x => x,
         }
     }
+
+    pub fn with_error_opt(self, error: Option<FindError>) -> Self {
+        if let Some(error) = error {
+            self.with_error(error)
+        } else {
+            self
+        }
+    }
+
+    pub fn from_error_opt(error: Option<FindError>) -> Self {
+        Self::Error(error.unwrap_or(FindError::Ignored))
+    }
 }
 
 #[derive(Debug)]

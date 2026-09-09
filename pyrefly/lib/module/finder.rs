@@ -172,23 +172,25 @@ fn combine_normal_and_stub_results(
             None
         }
         (Some(normal_result), None) => {
-            let stubs_package = recommended_stubs_package(module);
-            let untyped = (replace_untyped || stubs_package.is_some())
-                // We call this last because it does a filesystem walk.
-                && !package_has_py_typed(module, &normal_result, dir_cache);
-            let hint = if untyped {
-                stubs_package.map(|package| {
-                    FindError::UntypedImport(module, package.as_str().to_owned().into())
-                })
+            let recommended_stubs = recommended_stubs_package(module);
+            if replace_untyped || recommended_stubs.is_some() {
+                // We look up `py.typed` only after we've checked that we actually need it because
+                // this does a filesystem walk.
+                let untyped = !package_has_py_typed(module, &normal_result, dir_cache);
+                let hint = if untyped {
+                    recommended_stubs
+                        .map(|package| FindError::UntypedImport(module, package.to_string().into()))
+                } else {
+                    None
+                };
+                if untyped && replace_untyped {
+                    Some(FindingOrError::from_error_opt(hint))
+                } else {
+                    Some(find_result_module_path(normal_result).with_error_opt(hint))
+                }
             } else {
-                None
-            };
-            Some(match (untyped && replace_untyped, hint) {
-                (true, Some(hint)) => FindingOrError::Error(hint),
-                (true, None) => FindingOrError::Error(FindError::Ignored),
-                (false, Some(hint)) => find_result_module_path(normal_result).with_error(hint),
-                (false, None) => find_result_module_path(normal_result),
-            })
+                Some(find_result_module_path(normal_result))
+            }
         }
         (None, _) => None,
     }
