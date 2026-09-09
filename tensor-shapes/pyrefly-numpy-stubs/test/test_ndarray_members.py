@@ -62,6 +62,32 @@ def test_ndarray_properties_and_shape_preserving_methods() -> None:
         a.imag = np.zeros((2, 3))
 
 
+def test_ndarray_reduction_methods() -> None:
+    a = np.ones((2, 3))
+
+    assert_shape(a.all(axis=0).shape, (3,))
+    assert_shape(a.any(axis=1, keepdims=True).shape, (2, 1))
+    assert_shape(a.argmax(axis=0).shape, (3,))
+    assert_shape(a.argmin(axis=1).shape, (2,))
+    assert_shape(a.prod(axis=0).shape, (3,))
+    assert_shape(a.std(axis=1).shape, (2,))
+    assert_shape(a.var(keepdims=True).shape, (1, 1))
+    assert_shape(a.cumsum(axis=0).shape, (2, 3))
+    assert_type(a.cumprod(), np.ndarray[[int]])
+
+
+def test_ndarray_ordering_and_flattening_methods() -> None:
+    a = np.ones((2, 3))
+
+    assert_shape(a.argsort().shape, (2, 3))
+    assert_shape(a.argpartition(1).shape, (2, 3))
+    assert_type(a.argsort(None), np.ndarray[[int], np.dtype[np.intp]])
+    assert_type(a.argpartition(1, None), np.ndarray[[int], np.dtype[np.intp]])
+    assert_type(a.flatten(), np.ndarray[[int], np.dtype[np.float64]])
+    assert_type(a.ravel(), np.ndarray[[int], np.dtype[np.float64]])
+    assert_shape(a.shape, (2, 3))
+
+
 def test_ndarray_mutating_methods() -> None:
     a = np.ones((2, 3))
 

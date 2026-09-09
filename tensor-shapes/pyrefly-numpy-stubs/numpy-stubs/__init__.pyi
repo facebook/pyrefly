@@ -602,6 +602,106 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         *,
         keepdims: KeepDims = False,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), DType]: ...
+    def all[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+        *,
+        where: Any = True,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[bool_]]: ...
+    def any[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+        *,
+        where: Any = True,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[bool_]]: ...
+    def argmax[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        *,
+        keepdims: KeepDims = False,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[intp]]: ...
+    def argmin[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        *,
+        keepdims: KeepDims = False,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[intp]]: ...
+    def prod[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        dtype: Any = None,
+        out: Any = None,
+        *,
+        keepdims: KeepDims = False,
+        initial: Any = None,
+        where: Any = True,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims)]: ...
+    def std[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        dtype: Any = None,
+        out: Any = None,
+        ddof: float = 0,
+        *,
+        keepdims: KeepDims = False,
+        where: Any = True,
+        mean: Any = None,
+        correction: Any = None,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims)]: ...
+    def var[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+        self,
+        axis: Axis = None,
+        dtype: Any = None,
+        out: Any = None,
+        ddof: float = 0,
+        *,
+        keepdims: KeepDims = False,
+        where: Any = True,
+        mean: Any = None,
+        correction: Any = None,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims)]: ...
+    @overload
+    def argpartition(
+        self,
+        kth: Any,
+        axis: None,
+        kind: str = "introselect",
+        order: Any = None,
+    ) -> ndarray[[int], _dtype[intp]]: ...
+    @overload
+    def argpartition(
+        self,
+        kth: Any,
+        axis: int = -1,
+        kind: str = "introselect",
+        order: Any = None,
+    ) -> ndarray[Shape, _dtype[intp]]: ...
+    @overload
+    def argsort(
+        self,
+        axis: None,
+        kind: str | None = None,
+        order: Any = None,
+        *,
+        stable: bool | None = None,
+        descending: bool | None = None,
+    ) -> ndarray[[int], _dtype[intp]]: ...
+    @overload
+    def argsort(
+        self,
+        axis: int = -1,
+        kind: str | None = None,
+        order: Any = None,
+        *,
+        stable: bool | None = None,
+        descending: bool | None = None,
+    ) -> ndarray[Shape, _dtype[intp]]: ...
     @overload
     def astype[ScalarT: generic](
         self,
@@ -627,9 +727,26 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
     def conj(self) -> ndarray[Shape, DType]: ...
     def conjugate(self) -> ndarray[Shape, DType]: ...
     def copy(self, order: str = "C") -> ndarray[Shape, DType]: ...
+    @overload
+    def cumprod(
+        self, axis: None = None, dtype: Any = None, out: Any = None
+    ) -> ndarray[[int]]: ...
+    @overload
+    def cumprod(
+        self, axis: int, dtype: Any = None, out: Any = None
+    ) -> ndarray[Shape]: ...
+    @overload
+    def cumsum(
+        self, axis: None = None, dtype: Any = None, out: Any = None
+    ) -> ndarray[[int]]: ...
+    @overload
+    def cumsum(
+        self, axis: int, dtype: Any = None, out: Any = None
+    ) -> ndarray[Shape]: ...
     def dump(self, file: Any) -> None: ...
     def dumps(self) -> bytes: ...
     def fill(self, value: Any, /) -> None: ...
+    def flatten(self, order: str = "C") -> ndarray[[int], DType]: ...
     def getfield(self, dtype: Any, offset: int = 0) -> ndarray[Shape]: ...
     def item(self, *args: Any) -> Any: ...
     def partition(
@@ -640,6 +757,7 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         order: Any = None,
     ) -> None: ...
     def put(self, indices: Any, values: Any, mode: str = "raise") -> None: ...
+    def ravel(self, order: str = "C") -> ndarray[[int], DType]: ...
     # TODO(stroxler): Model receiver invalidation for shape-changing mutation.
     resize: Any
     def round(self, decimals: int = 0, out: Any = None) -> ndarray[Shape, DType]: ...
