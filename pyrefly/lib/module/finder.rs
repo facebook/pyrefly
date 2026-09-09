@@ -174,7 +174,6 @@ fn combine_normal_and_stub_results(
         (Some(normal_result), None) => {
             let stubs_package = recommended_stubs_package(module);
             let untyped = (replace_untyped || stubs_package.is_some())
-                && !normal_result.is_stub()
                 // We call this last because it does a filesystem walk.
                 && !package_has_py_typed(module, &normal_result, dir_cache);
             let hint = if untyped {
@@ -2768,8 +2767,8 @@ mod tests {
         config
     }
 
-    /// A first-party root plus a site package directory holding one package of
-    /// each kind Pyrefly distinguishes when deciding whether it is typed.
+    /// A first-party root plus a site package directory holding representative
+    /// package layouts for testing untyped import handling.
     fn untyped_imports_config(root: &Path, replace_untyped: &[&str]) -> ConfigFile {
         TestPath::setup_test_directory(
             root,
@@ -2829,7 +2828,15 @@ mod tests {
     fn test_replace_untyped_imports_with_any() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        let config = untyped_imports_config(root, &["untyped_package", "namespace.*", "django"]);
+        let config = untyped_imports_config(
+            root,
+            &[
+                "untyped_package",
+                "stubbed_package",
+                "namespace.*",
+                "django",
+            ],
+        );
 
         let find = |module| {
             find_import_filtered(
@@ -2843,9 +2850,13 @@ mod tests {
         };
         let found = |path: PathBuf| FindingOrError::new_finding(ModulePath::filesystem(path));
 
-        // Neither stubs nor a `py.typed` marker, so the package becomes `Any`.
+        // Site packages in untyped_imports_config without a `py.typed` marker become `Any`.
         assert_eq!(
             find("untyped_package"),
+            FindingOrError::Error(FindError::Ignored)
+        );
+        assert_eq!(
+            find("stubbed_package"),
             FindingOrError::Error(FindError::Ignored)
         );
         assert_eq!(find("namespace"), FindingOrError::Error(FindError::Ignored));
@@ -2868,7 +2879,7 @@ mod tests {
             ))
         );
 
-        // Everything that is typed still resolves to its own files.
+        // Everything else that is typed still resolves to its own files.
         assert_eq!(
             find("first_party"),
             found(root.join("src/first_party/__init__.py"))
@@ -2876,10 +2887,6 @@ mod tests {
         assert_eq!(
             find("typed_package"),
             found(root.join("site_packages/typed_package/__init__.py"))
-        );
-        assert_eq!(
-            find("stubbed_package"),
-            found(root.join("site_packages/stubbed_package/__init__.pyi"))
         );
         assert_eq!(
             find("namespace.typed_package"),
