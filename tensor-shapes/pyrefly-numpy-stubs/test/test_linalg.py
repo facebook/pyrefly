@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import assert_type
+from typing import Any, assert_type
 
 import numpy as np
 from shape_extensions import assert_shape, Int, IntTuple, IntVar
@@ -95,12 +95,12 @@ def symbolic_concrete_inner_matmul[N: IntVar, M: IntVar, P: IntVar](
 def gradual_matmul[DType](
     left: np.ndarray[IntTuple, DType], right: np.ndarray[IntTuple]
 ) -> None:
-    assert_type(np.matmul(left, right), np.ndarray[IntTuple])
+    assert_type(np.matmul(left, right), Any)
     assert_type(left @ right, np.ndarray[IntTuple, DType])
 
 
 def bare_matmul(left: np.ndarray, right: np.ndarray) -> None:
-    assert_type(np.matmul(left, right), np.ndarray)
+    assert_type(np.matmul(left, right), Any)
 
 
 def same_dtype_matmul(

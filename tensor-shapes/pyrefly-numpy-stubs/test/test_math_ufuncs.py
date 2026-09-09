@@ -75,6 +75,21 @@ def test_binary_ufunc_objects_broadcast_arrays_and_scalars() -> None:
     assert np.matmul.nin == 2
 
 
+def test_matmul_preserves_shapes_and_accepts_array_like_inputs() -> None:
+    left = np.ones((2, 3))
+    right = np.ones((3, 4))
+    result = np.matmul(left, right)
+    assert_type(result, np.ndarray[[2, 4], Any])
+    assert_shape(result.shape, (2, 4))
+
+    array_like = np.matmul([[1.0, 2.0]], [[1.0], [2.0]])
+    assert_type(array_like, Any)
+    assert array_like.shape == (1, 1)
+
+    unknown = cast(Any, left)
+    assert_type(np.matmul(unknown, right), Any)
+
+
 def test_multi_output_ufuncs_preserve_shapes() -> None:
     matrix = np.ones((2, 3))
     row = np.full((1, 3), 2.0)
