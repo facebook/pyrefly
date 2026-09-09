@@ -6024,6 +6024,21 @@ take(pl.DataFrame({"a": [1]}))
 );
 
 testcase!(
+    test_inferred_dataframe_schema_is_equivalent_to_plain_frame,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from polars.lazyframe.frame import LazyFrame
+from typing import assert_type
+
+frame = pl.DataFrame({"a": [1]})
+assert_type(frame, pl.DataFrame)
+assert_type(frame.lazy(), LazyFrame)
+assert_type([frame], list[pl.DataFrame])
+"#,
+);
+
+testcase!(
     test_construct_variable_element_dtype,
     env_with_polars_stubs(),
     r#"

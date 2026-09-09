@@ -10,6 +10,7 @@
 use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::data_frame::DataFrameSchema;
 use pyrefly_types::data_frame::SchemaCompleteness;
+use pyrefly_types::data_frame::SchemaRole;
 use pyrefly_types::polars_dtype::PolarsArrayShape;
 use pyrefly_types::polars_dtype::PolarsDType;
 use pyrefly_types::series::SeriesSchema;
@@ -132,6 +133,7 @@ fn dataframe_type_with_columns_and_completeness(
         underlying: schema.underlying.clone(),
         columns,
         completeness,
+        role: SchemaRole::Inferred,
         ..schema.clone()
     }
     .to_type()
@@ -165,6 +167,7 @@ pub fn polars_degrade_for_mutation(
             );
             DataFrameSchema {
                 columns,
+                role: SchemaRole::Inferred,
                 ..(**schema).clone()
             }
             .to_type()
@@ -172,6 +175,7 @@ pub fn polars_degrade_for_mutation(
         PolarsMutationKind::Add | PolarsMutationKind::Insert(..) if schema.is_complete() => {
             DataFrameSchema {
                 completeness: SchemaCompleteness::Partial,
+                role: SchemaRole::Inferred,
                 ..(**schema).clone()
             }
             .to_type()
@@ -1051,6 +1055,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 columns,
                 completeness,
                 kind,
+                role: SchemaRole::Inferred,
             }
             .to_type(),
             (Some(PolarsCallSpecialization::Series(dtype)), Type::ClassType(underlying)) => {
@@ -1580,6 +1585,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 columns,
                 completeness: SchemaCompleteness::Complete,
                 kind: DataFrameKind::Polars,
+                role: SchemaRole::Contract,
             }
             .to_type(),
         )
@@ -2916,6 +2922,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Some(
                     DataFrameSchema {
                         underlying: cls,
+                        role: SchemaRole::Inferred,
                         ..(**schema).clone()
                     }
                     .to_type(),
@@ -2927,6 +2934,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Some(
                     DataFrameSchema {
                         underlying: cls,
+                        role: SchemaRole::Inferred,
                         ..(**schema).clone()
                     }
                     .to_type(),

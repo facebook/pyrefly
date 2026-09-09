@@ -42,7 +42,16 @@ pub enum DataFrameKind {
     Pandas,
 }
 
-/// A DataFrame whose ordered columns are part of its type identity.
+/// Whether a schema is inferred or declared by an explicit annotation.
+#[derive(
+    Debug, PartialOrd, Ord, Clone, Copy, Eq, PartialEq, Hash, Visit, VisitMut, TypeEq
+)]
+pub enum SchemaRole {
+    Inferred,
+    Contract,
+}
+
+/// A DataFrame with ordered column information.
 #[derive(
     Debug, PartialOrd, Ord, Clone, Eq, PartialEq, Hash, Visit, VisitMut, TypeEq
 )]
@@ -51,6 +60,7 @@ pub struct DataFrameSchema {
     pub columns: Vec<(Name, PolarsDType)>,
     pub completeness: SchemaCompleteness,
     pub kind: DataFrameKind,
+    pub role: SchemaRole,
 }
 
 impl DataFrameSchema {
@@ -66,8 +76,29 @@ impl DataFrameSchema {
         self.completeness == SchemaCompleteness::Complete
     }
 
+    pub fn is_contract(&self) -> bool {
+        self.role == SchemaRole::Contract
+    }
+
     pub fn has_column(&self, name: &Name) -> bool {
         self.columns.iter().any(|(c, _)| c == name)
+    }
+
+    /// Whether this schema guarantees the contract described by `target`.
+    pub fn satisfies(&self, target: &Self) -> bool {
+        if self.kind != target.kind {
+            return false;
+        }
+        match target.completeness {
+            SchemaCompleteness::Complete => {
+                self.completeness == SchemaCompleteness::Complete && self.columns == target.columns
+            }
+            SchemaCompleteness::Partial => target.columns.iter().all(|required| {
+                self.columns
+                    .iter()
+                    .any(|actual| actual.0 == required.0 && actual.1 == required.1)
+            }),
+        }
     }
 }
 
@@ -130,6 +161,7 @@ mod tests {
             columns,
             completeness,
             kind: DataFrameKind::Polars,
+            role: SchemaRole::Inferred,
         }
     }
 
@@ -194,6 +226,20 @@ mod tests {
     }
 
     #[test]
+    fn role_is_part_of_identity() {
+        let inferred = schema(
+            vec![col("a", PolarsDType::Int64)],
+            SchemaCompleteness::Complete,
+        );
+        let contract = DataFrameSchema {
+            role: SchemaRole::Contract,
+            ..inferred.clone()
+        };
+        assert_ne!(inferred, contract);
+        assert!(!inferred.type_eq(&contract, &mut TypeEqCtx::default()));
+    }
+
+    #[test]
     fn combining_completeness_requires_both_schemas_to_be_complete() {
         assert_eq!(
             SchemaCompleteness::Complete.combine(SchemaCompleteness::Complete),
@@ -210,6 +256,75 @@ mod tests {
         assert_eq!(
             SchemaCompleteness::Partial.combine(SchemaCompleteness::Partial),
             SchemaCompleteness::Partial
+        );
+    }
+
+    #[test]
+    fn exact_schema_requires_identical_complete_columns() {
+        let target = schema(
+            vec![col("a", PolarsDType::Int64), col("b", PolarsDType::String)],
+            SchemaCompleteness::Complete,
+        );
+        assert!(target.satisfies(&target));
+        assert!(
+            !schema(
+                vec![col("b", PolarsDType::String), col("a", PolarsDType::Int64)],
+                SchemaCompleteness::Complete,
+            )
+            .satisfies(&target)
+        );
+        assert!(
+            !schema(
+                vec![col("a", PolarsDType::Int64), col("b", PolarsDType::String)],
+                SchemaCompleteness::Partial,
+            )
+            .satisfies(&target)
+        );
+        assert!(
+            !schema(
+                vec![
+                    col("a", PolarsDType::Int64),
+                    col("b", PolarsDType::String),
+                    col("c", PolarsDType::Boolean),
+                ],
+                SchemaCompleteness::Complete,
+            )
+            .satisfies(&target)
+        );
+    }
+
+    #[test]
+    fn open_schema_requires_known_columns_by_name_and_dtype() {
+        let target = schema(
+            vec![col("a", PolarsDType::Int64), col("b", PolarsDType::String)],
+            SchemaCompleteness::Partial,
+        );
+        for completeness in [SchemaCompleteness::Complete, SchemaCompleteness::Partial] {
+            assert!(
+                schema(
+                    vec![
+                        col("extra", PolarsDType::Boolean),
+                        col("b", PolarsDType::String),
+                        col("a", PolarsDType::Int64),
+                    ],
+                    completeness,
+                )
+                .satisfies(&target)
+            );
+        }
+        assert!(
+            !schema(
+                vec![col("a", PolarsDType::Int64)],
+                SchemaCompleteness::Complete,
+            )
+            .satisfies(&target)
+        );
+        assert!(
+            !schema(
+                vec![col("a", PolarsDType::Int64), col("b", PolarsDType::Unknown)],
+                SchemaCompleteness::Partial,
+            )
+            .satisfies(&target)
         );
     }
 
