@@ -281,6 +281,12 @@ Excluded files are still available for import resolution: an excluded module tha
 
 Wire shape the server should use when answering [`pyrefly/textDocument/typeErrorDisplayStatus`](#custom-request-pyreflytextdocumenttypeerrordisplaystatus). See that section for the two shapes and the version-negotiation rules.
 
+##### `pyrefly.pushTypeErrorDisplayStatus`
+
+**Type:** boolean &nbsp; **Default:** `false`
+
+Opt in to the [`pyrefly/typeErrorDisplayStatusChanged`](#custom-notification-pyreflytypeerrordisplaystatuschanged) notification, which tells the client to re-request [`typeErrorDisplayStatus`](#custom-request-pyreflytextdocumenttypeerrordisplaystatus) when the build-system state changes. See that section for the notification's contract. Only meaningful alongside `typeErrorDisplayStatusVersion: "v2"`.
+
 ##### `analysis.diagnosticMode`
 
 **Type:** enum (`openFilesOnly`, `workspace`) &nbsp; **Default:** `"openFilesOnly"`
@@ -368,6 +374,27 @@ client asked for. A fallback to `v1` would silently strip features
 the client explicitly requested. Clients should still defensively
 dispatch on `resp.version` so they can recognize when the server has
 clamped them down.
+
+### Custom notification: `pyrefly/typeErrorDisplayStatusChanged`
+
+`typeErrorDisplayStatus` is a request, so a client only learns about
+changes when it asks. Most of the response is static for a given file,
+but `buildSystem` changes on its own as the build system runs. To keep
+clients from showing a stale build state, the server can push a
+notification telling them to re-request.
+
+Opt in by setting
+`initializationOptions.pyrefly.pushTypeErrorDisplayStatus` to `true`
+alongside `typeErrorDisplayStatusVersion: "v2"`. The server then sends
+`pyrefly/typeErrorDisplayStatusChanged` whenever the build-system state
+changes. It defaults to `false` so clients that predate the notification
+never receive one they would only log as unhandled.
+
+The notification carries no parameters. The status is derived per
+document and only the client knows which document it is displaying, so
+the correct reaction is to re-issue `typeErrorDisplayStatus` for the
+current file. Clients should debounce: a single rebuild sends at least a
+`building` and a `ready` transition.
 
 ## Issues?
 
