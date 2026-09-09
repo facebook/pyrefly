@@ -411,6 +411,11 @@ from shape_extensions import assert_shape
 
 
 def test_reexports_available() -> None:
+    scalar: np.int8 = np.int8(1)
+    scalar_dtype: np.dtype[np.int8] = np.dtype(np.int8)
+
+    assert isinstance(scalar, np.int8)
+    assert scalar_dtype == np.dtype(np.int8)
     assert_shape(np.zeros(1).shape, (1,))
     assert not np.False_
     assert np.True_

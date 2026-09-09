@@ -50,6 +50,7 @@ def test_ndarray_properties_and_shape_preserving_methods() -> None:
 
     if TYPE_CHECKING:
         assert_type(a.__array_interface__, Any)
+        a.__array__(copy="yes")  # E: Argument `Literal['yes']` is not assignable
         a.__array_interface__ = {}  # E: read-only property
         a.base = None  # E: read-only property
         a.data = memoryview(b"")  # E: read-only property

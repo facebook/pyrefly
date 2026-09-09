@@ -3,6 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from builtins import bool as py_bool
 from collections.abc import Sequence
 from types import EllipsisType
 from typing import Any, Final, Literal, overload
@@ -372,7 +373,15 @@ from numpy.matrixlib import (
     bmat as bmat,
     matrix as matrix,
 )
-from shape_extensions import broadcast, Flag, Index, index_shape, Int, IntTuple, IntVar
+from shape_extensions import (
+    broadcast as _broadcast_shape,
+    Flag,
+    Index,
+    index_shape,
+    Int,
+    IntTuple,
+    IntVar,
+)
 
 # Preserve NumPy's canonical re-exports before local shape-aware declarations.
 from . import (
@@ -415,7 +424,7 @@ euler_gamma: Final[float]
 pi: Final[float]
 inf: Final[float]
 nan: Final[float]
-little_endian: Final[bool]
+little_endian: Final[py_bool]
 False_: Final[bool_]
 True_: Final[bool_]
 newaxis: Final[None] = None
@@ -439,7 +448,7 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
     @property
     def __array_interface__(self) -> Any: ...
     def __array__(
-        self, dtype: Any = None, copy: bool | None = None
+        self, dtype: Any = None, copy: py_bool | None = None
     ) -> ndarray[Shape]: ...
     def __buffer__(self, flags: int, /) -> memoryview: ...
     @property
@@ -507,73 +516,73 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
     @overload
     def __add__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __radd__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
     def __radd__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __sub__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
     def __sub__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __rsub__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
     def __rsub__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __truediv__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
     def __truediv__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __rtruediv__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
     def __rtruediv__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __mul__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
     def __mul__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __rmul__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
     def __rmul__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __floordiv__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
     def __floordiv__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __rfloordiv__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
     def __rfloordiv__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __mod__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
     def __mod__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __rmod__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
     def __rmod__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     def __neg__(self) -> ndarray[Shape, DType]: ...
     def __pos__(self) -> ndarray[Shape, DType]: ...
     @overload
@@ -581,41 +590,41 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
     @overload
     def __pow__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __rpow__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
     def __rpow__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
-    ) -> ndarray[broadcast(Shape, OtherShape), DType]: ...
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     def __matmul__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
     ) -> ndarray[matmul_shape(Shape, OtherShape), DType]: ...
-    def mean[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def mean[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         *,
         keepdims: KeepDims = False,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), DType]: ...
-    def sum[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def sum[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         *,
         keepdims: KeepDims = False,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), DType]: ...
-    def min[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def min[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         *,
         keepdims: KeepDims = False,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), DType]: ...
-    def max[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def max[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         *,
         keepdims: KeepDims = False,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), DType]: ...
-    def all[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def all[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         out: Any = None,
@@ -623,7 +632,7 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         *,
         where: Any = True,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[bool_]]: ...
-    def any[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def any[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         out: Any = None,
@@ -631,21 +640,21 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         *,
         where: Any = True,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[bool_]]: ...
-    def argmax[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def argmax[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         out: Any = None,
         *,
         keepdims: KeepDims = False,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[intp]]: ...
-    def argmin[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def argmin[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         out: Any = None,
         *,
         keepdims: KeepDims = False,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[intp]]: ...
-    def prod[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def prod[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         dtype: Any = None,
@@ -655,7 +664,7 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         initial: Any = None,
         where: Any = True,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims)]: ...
-    def std[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def std[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         dtype: Any = None,
@@ -667,7 +676,7 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         mean: Any = None,
         correction: Any = None,
     ) -> ndarray[reduce_shape(Shape, Axis, KeepDims)]: ...
-    def var[Axis: Flag[_Axis], KeepDims: Flag[bool]](
+    def var[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
         self,
         axis: Axis = None,
         dtype: Any = None,
@@ -702,8 +711,8 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         kind: str | None = None,
         order: Any = None,
         *,
-        stable: bool | None = None,
-        descending: bool | None = None,
+        stable: py_bool | None = None,
+        descending: py_bool | None = None,
     ) -> ndarray[[int], _dtype[intp]]: ...
     @overload
     def argsort(
@@ -712,8 +721,8 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         kind: str | None = None,
         order: Any = None,
         *,
-        stable: bool | None = None,
-        descending: bool | None = None,
+        stable: py_bool | None = None,
+        descending: py_bool | None = None,
     ) -> ndarray[Shape, _dtype[intp]]: ...
     @overload
     def astype[ScalarT: generic](
@@ -721,8 +730,8 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         dtype: type[ScalarT] | _dtype[ScalarT],
         order: str = "K",
         casting: str = "unsafe",
-        subok: bool = True,
-        copy: bool = True,
+        subok: py_bool = True,
+        copy: py_bool = True,
     ) -> ndarray[Shape, _dtype[ScalarT]]: ...
     @overload
     def astype(
@@ -730,10 +739,10 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         dtype: Any,
         order: str = "K",
         casting: str = "unsafe",
-        subok: bool = True,
-        copy: bool = True,
+        subok: py_bool = True,
+        copy: py_bool = True,
     ) -> ndarray[Shape]: ...
-    def byteswap(self, inplace: bool = False) -> ndarray[Shape, DType]: ...
+    def byteswap(self, inplace: py_bool = False) -> ndarray[Shape, DType]: ...
     def clip(
         self, min: Any = None, max: Any = None, out: Any = None, **kwargs: Any
     ) -> ndarray[Shape, DType]: ...
@@ -777,9 +786,9 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
     def setfield(self, val: Any, dtype: Any, offset: int = 0) -> None: ...
     def setflags(
         self,
-        write: bool | None = None,
-        align: bool | None = None,
-        uic: bool | None = None,
+        write: py_bool | None = None,
+        align: py_bool | None = None,
+        uic: py_bool | None = None,
     ) -> None: ...
     def sort(
         self,
@@ -787,7 +796,7 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
         kind: str | None = None,
         order: Any = None,
         *,
-        stable: bool | None = None,
+        stable: py_bool | None = None,
     ) -> None: ...
     def to_device(
         self, device: Literal["cpu"], /, *, stream: Any = None
@@ -844,7 +853,7 @@ def from_dlpack(
     /,
     *,
     device: Literal["cpu"] | None = None,
-    copy: bool | None = None,
+    copy: py_bool | None = None,
 ) -> ndarray: ...
 
 class _UnaryUFunc(ufunc):
@@ -864,7 +873,7 @@ class _BinaryUFunc(ufunc):
         /,
         out: Any = None,
         **kwargs: Any,
-    ) -> ndarray[broadcast(Shape1, Shape2)]: ...
+    ) -> ndarray[_broadcast_shape(Shape1, Shape2)]: ...
     @overload
     def __call__[Shape: _Shape](
         self, x1: ndarray[Shape], x2: Any, /, out: Any = None, **kwargs: Any
@@ -912,8 +921,8 @@ class _BinaryTwoOutputUFunc(ufunc):
         *outputs: Any,
         **kwargs: Any,
     ) -> tuple[
-        ndarray[broadcast(Shape1, Shape2)],
-        ndarray[broadcast(Shape1, Shape2)],
+        ndarray[_broadcast_shape(Shape1, Shape2)],
+        ndarray[_broadcast_shape(Shape1, Shape2)],
     ]: ...
     @overload
     def __call__[Shape: _Shape](
@@ -1101,7 +1110,7 @@ def clip[Shape: _Shape](
 def fill_diagonal[N: IntVar, DType](
     a: ndarray[[N, N], DType],
     val: Any,
-    wrap: bool = False,
+    wrap: py_bool = False,
 ) -> None: ...
 @overload
 def diag[N: IntVar, DType, K: Flag[int] = 0](
@@ -1144,7 +1153,7 @@ def sum[
     Shape: _Shape,
     DType,
     Axis: Flag[_Axis],
-    KeepDims: Flag[bool],
+    KeepDims: Flag[py_bool],
 ](
     a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
 ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
@@ -1152,7 +1161,7 @@ def mean[
     Shape: _Shape,
     DType,
     Axis: Flag[_Axis],
-    KeepDims: Flag[bool],
+    KeepDims: Flag[py_bool],
 ](
     a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
 ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
@@ -1160,7 +1169,7 @@ def min[
     Shape: _Shape,
     DType,
     Axis: Flag[_Axis],
-    KeepDims: Flag[bool],
+    KeepDims: Flag[py_bool],
 ](
     a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
 ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
@@ -1168,7 +1177,7 @@ def max[
     Shape: _Shape,
     DType,
     Axis: Flag[_Axis],
-    KeepDims: Flag[bool],
+    KeepDims: Flag[py_bool],
 ](
     a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
 ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
@@ -1430,3 +1439,51 @@ def identity[N: IntVar](
 def identity[N: IntVar](
     n: Int[N], dtype: Any, *, like: Any = ...
 ) -> ndarray[[N, N]]: ...
+
+# TODO(stroxler): Replace these placeholders with NumPy's scalar type hierarchy.
+bool: Any
+broadcast: Any
+byte: Any
+bytes_: Any
+cdouble: Any
+character: Any
+clongdouble: Any
+complex128: Any
+complex64: Any
+complexfloating: Any
+csingle: Any
+datetime64: Any
+double: Any
+flexible: Any
+float16: Any
+floating: Any
+half: Any
+inexact: Any
+int16: Any
+int8: Any
+int_: Any
+intc: Any
+integer: Any
+long: Any
+longdouble: Any
+longlong: Any
+number: Any
+object_: Any
+short: Any
+signedinteger: Any
+single: Any
+str_: Any
+timedelta64: Any
+ubyte: Any
+uint: Any
+uint16: Any
+uint32: Any
+uint64: Any
+uint8: Any
+uintc: Any
+uintp: Any
+ulong: Any
+ulonglong: Any
+unsignedinteger: Any
+ushort: Any
+void: Any
