@@ -1118,10 +1118,22 @@ The command should output a JSON file with the following structure:
 
 Where:
 
-- `root` is the absolute path the root of the repository.
+- `root` is the absolute path to the root of the repository. Source paths in
+  `srcs` are relative to this root.
 - `db` is a map from target names to either:
     - library target definitions (e.g. `//colorama:py` and `//colorama:py-stubs` here)
     - target aliases (e.g. `//colorama:colorama` here)
+
+Each library target definition has the following fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `srcs` | yes | Map from qualified module names to lists of relative source file paths. |
+| `python_version` | yes | The target's [`python-version`](#python-version). |
+| `python_platform` | yes | The target's [`python-platform`](#python-platform). |
+| `deps` | no | List of target names this target depends on. Defaults to `[]`. |
+| `buildfile_path` | no | Relative path to the build file that defines this target. Pyrefly treats any of the target's `srcs` outside this file's directory as generated, and does not watch generated files for changes by default. Defaults to `""`. |
+| `relative_to` | no | Directory, relative to `root`, that this target's `srcs` resolve against instead of `root` itself. A build system sets this when it materializes generated sources outside the source tree, such as the output directory of a Buck genrule. Every `src` of a target that sets this counts as generated. |
 
 For reference, the command invoked as part of the Buck2 integration is:
 

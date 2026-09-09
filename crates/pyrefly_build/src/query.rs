@@ -320,12 +320,14 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub(crate) struct PythonLibraryManifest {
+    #[serde(default)]
     pub deps: SmallSet<Target>,
     pub srcs: SmallMap<ModuleName, Vec1<InternedPath>>,
     #[serde(default)]
     pub relative_to: Option<PathBuf>,
     #[serde(flatten)]
     pub sys_info: SysInfo,
+    #[serde(default)]
     pub buildfile_path: PathBuf,
     #[serde(default, skip)]
     pub packages: SmallMap<ModuleName, Vec1<InternedPath>>,
@@ -1600,6 +1602,38 @@ mod tests {
             manifest.packages.contains_key(&ModuleName::from_str("foo")),
             "Expected packages to contain 'foo', but got: {:?}",
             manifest.packages.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_optional_deps_and_buildfile_path() {
+        let json = r#"
+{
+  "db": {
+    "//pkg:minimal": {
+      "srcs": {
+        "main": ["main.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "root": "/src"
+}
+        "#;
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let (db, _) = parsed.produce_map();
+        let minimal = db
+            .get(&Target::from_string("//pkg:minimal".to_owned()))
+            .unwrap();
+        assert!(
+            minimal.deps.is_empty(),
+            "an omitted `deps` should leave the target with no dependencies"
+        );
+        assert_eq!(
+            minimal.buildfile_path,
+            PathBuf::from("/src"),
+            "an omitted `buildfile_path` defaults to empty, which resolves to the repository root"
         );
     }
 }
