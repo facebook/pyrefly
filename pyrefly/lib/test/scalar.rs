@@ -12,14 +12,18 @@ testcase!(
     scalar_normalization_and_inference,
     shape_extensions_env(),
     r#"
-from typing import Any, Never, assert_type
-from shape_extensions import Elements, IntTuple, Scalar
+from typing import Any, Callable, Never, assert_type
+from shape_extensions import Elements, IntTuple, Scalar, broadcast
 
 class Array[Shape: IntTuple]: ...
+class TypedArray[Shape: IntTuple, T]: ...
 
 type ArrayLike[Shape: IntTuple] = Array[Shape] | Scalar[Shape]
 
 def array_like[Shape: IntTuple](x: ArrayLike[Shape]) -> Array[Shape]: ...
+def add[Left: IntTuple, Right: IntTuple](
+    left: ArrayLike[Left], right: ArrayLike[Right]
+) -> Array[broadcast(Left, Right)]: ...
 def suspended[Shape: IntTuple](x: Scalar[Shape, int]) -> Scalar[Shape, int]:
     y: int = x
     # Reading the scalar through its upper bound does not constrain Shape.
@@ -71,9 +75,42 @@ def use_scalar_union(value: int | float) -> None:
 def use_mixed_union(value: int | Array[[2, 3]]) -> None:
     assert_type(array_like(value), Array[IntTuple])
 
+def use_same_rank_union(value: Array[[2, 3]] | Array[[4, 3]]) -> None:
+    assert_type(array_like(value), Array[[Any, 3]])
+
+def use_scalar_and_rank_zero(value: int | Array[[]]) -> None:
+    assert_type(array_like(value), Array[[]])
+
+def use_bounded_union[T: int | Array[[2, 3]]](value: T) -> None:
+    assert_type(array_like(value), Array[IntTuple])
+
+def callback_or_scalar[Shape: IntTuple](
+    value: Callable[[int], int] | Scalar[Shape, int],
+) -> Array[Shape]: ...
+
+callback_or_scalar(lambda value: value + "bad")  # E: `+` is not supported
+
+def use_independent_widening(
+    left: Array[[2, 3]] | Array[[4, 3]], right: int | Array[[]]
+) -> None:
+    assert_type(add(left, right), Array[[Any, 3]])
+
 def same_shape[Shape: IntTuple](
     left: ArrayLike[Shape], right: ArrayLike[Shape]
 ) -> Array[Shape]: ...
+def variadic_shape[Shape: IntTuple](*values: ArrayLike[Shape]) -> Array[Shape]: ...
+def keyword_variadic_shape[Shape: IntTuple](
+    **values: ArrayLike[Shape],
+) -> Array[Shape]: ...
+def generic_project[Shape: IntTuple, T](
+    x: TypedArray[Shape, T] | Scalar[Shape, int],
+) -> Array[Shape]: ...
+def nested_return_project[Shape: IntTuple](
+    x: ArrayLike[Shape],
+) -> list[Array[Shape]]: ...
+def non_shape_dsl_return[Shape: IntTuple](
+    x: ArrayLike[Shape],
+) -> TypedArray[[], broadcast(Shape, IntTuple[()])]: ...
 
 assert_type(same_shape(1, 2), Array[[]])
 
@@ -84,6 +121,21 @@ def shared_shape_rejects_widening(
         value,  # E: is not assignable to parameter `left`
         array,
     )
+    variadic_shape(
+        value,  # E: is not assignable to parameter `*values`
+        array,
+    )
+    keyword_variadic_shape(
+        value=value,  # E: is not assignable to parameter `**values`
+        array=array,
+    )
+
+def generic_projection(value: int | TypedArray[[2], int]) -> None:
+    generic_project(value)  # E: is not assignable to parameter `x`
+
+def nested_return_rejects_widening(value: int | Array[[2]]) -> None:
+    nested_return_project(value)  # E: is not assignable to parameter `x`
+    non_shape_dsl_return(value)  # E: is not assignable to parameter `x`
 
 default_scalar: Scalar = 1
 empty_scalar: Scalar[[], int] = 1
@@ -199,5 +251,56 @@ assert_type(values, list[int])
 assert_type(aliased, int)
 assert_type(possible_union, str)
 assert_type(ordinary_result(1), OrdinaryUnion)
+"#,
+);
+
+testcase!(
+    scalar_redundant_union_binder,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import Elements, IntTuple, Scalar
+
+class Array[Shape: IntTuple]: ...
+
+def redundant_int[Shape: IntTuple](
+    x: int | Scalar[Shape, int],  # E: Redundant `Scalar` union arm cannot bind observable type parameter `Shape`
+) -> Array[Shape]: ...
+
+def redundant_numeric[Shape: IntTuple](
+    x: float | Scalar[Shape, int],  # E: Redundant `Scalar` union arm cannot bind observable type parameter `Shape`
+) -> Array[Shape]: ...
+
+def unobservable[Shape: IntTuple](x: int | Scalar[Shape, int]) -> None: ...
+
+def bound_elsewhere[Shape: IntTuple](
+    x: int | Scalar[Shape, int], array: Array[Shape]
+) -> Array[Shape]: ...
+
+def redundant_twice[Shape: IntTuple](
+    x: int | Scalar[Shape, int],  # E: Redundant `Scalar` union arm cannot bind observable type parameter `Shape`
+    y: int | Scalar[Shape, int],
+) -> Array[Shape]: ...
+
+def wrapped_shape[Shape: IntTuple](
+    x: int | Scalar[IntTuple[*Elements[Shape]], int],  # E: Redundant `Scalar` union arm cannot bind observable type parameter `Shape`
+) -> Array[Shape]: ...
+
+def defaulted[Shape: IntTuple = IntTuple[()]](
+    x: int | Scalar[Shape, int],  # E: Redundant `Scalar` union arm cannot bind observable type parameter `Shape`
+) -> Array[Shape]: ...
+
+def nonempty_default[Shape: IntTuple = IntTuple[1]](
+    x: int | Scalar[Shape, int],  # E: Redundant `Scalar` union arm cannot bind observable type parameter `Shape`
+) -> Array[Shape]: ...
+
+def dependent_default[
+    Shape: IntTuple = IntTuple[1], Result = Array[Shape]
+](
+    x: int | Scalar[Shape, int],  # E: Redundant `Scalar` union arm cannot bind observable type parameter `Shape`
+) -> Result: ...
+
+def not_redundant[Shape: IntTuple](
+    x: str | Scalar[Shape, int],
+) -> Array[Shape]: ...
 "#,
 );

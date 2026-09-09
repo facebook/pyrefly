@@ -7,15 +7,23 @@
 
 //! Solver integration for `shape_extensions.Scalar`.
 
+use pyrefly_types::callable::Callable;
+use pyrefly_types::callable::Params;
 use pyrefly_types::heap::TypeHeap;
+use pyrefly_types::quantified::Quantified;
 use pyrefly_types::shaped_array::IntTuple;
 use pyrefly_types::shaped_array::IntTupleView;
 use pyrefly_types::shaped_array::tuple_carrier_to_shape;
+use pyrefly_types::type_var::Restriction;
+use pyrefly_types::types::TParams;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::VisitMut;
+use ruff_text_size::TextRange;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
+use crate::config::error_kind::ErrorKind;
+use crate::error::collector::ErrorCollector;
 use crate::solver::solver::Solver;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetError;
@@ -231,6 +239,143 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         }
         changed
+    }
+
+    /// Remove redundant `Scalar` union arms and reject annotations that would strand an observable
+    /// shape variable by doing so.
+    pub(crate) fn simplify_redundant_scalar_unions(
+        &self,
+        callable: &mut Callable,
+        tparams: &TParams,
+        parameter_ranges: &[TextRange],
+        fallback_range: TextRange,
+        errors: &ErrorCollector,
+    ) {
+        let ret = &callable.ret;
+        let Params::List(params) = &mut callable.params else {
+            return;
+        };
+        if !params
+            .items()
+            .iter()
+            .any(|param| contains_scalar(param.as_type()))
+        {
+            return;
+        }
+        let original_parameter_types = params
+            .items()
+            .iter()
+            .map(|param| param.as_type().clone())
+            .collect::<Vec<_>>();
+        let mut simplified_parameter_types = original_parameter_types
+            .iter()
+            .map(|parameter_type| {
+                let Type::Union(union) = parameter_type else {
+                    return parameter_type.clone();
+                };
+                let ordinary = union
+                    .members
+                    .iter()
+                    .filter(|member| scalar(member).is_none())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if ordinary.is_empty() {
+                    return parameter_type.clone();
+                }
+                let ordinary = self.unions(ordinary);
+                let members = union
+                    .members
+                    .iter()
+                    .filter(|member| {
+                        let Some(marker) = scalar(member) else {
+                            return true;
+                        };
+                        let snapshot = self
+                            .solver()
+                            .snapshot_for_speculative_inference(&[&marker.domain, &ordinary]);
+                        let redundant = self.is_subset_eq(&marker.domain, &ordinary);
+                        self.solver().restore_vars(snapshot);
+                        !redundant
+                    })
+                    .cloned()
+                    .collect();
+                self.unions(members)
+            })
+            .collect::<Vec<_>>();
+
+        let contains_tparam = |ty: &Type, tparam: &Quantified| {
+            ty.any(|ty| matches!(ty, Type::Quantified(other) if other.as_ref() == tparam))
+        };
+        let mut observable_tparams = tparams
+            .iter()
+            .filter(|tparam| contains_tparam(ret, tparam))
+            .collect::<Vec<_>>();
+        loop {
+            let mut changed = false;
+            for dependency in tparams.iter() {
+                if observable_tparams.contains(&dependency) {
+                    continue;
+                }
+                let referenced_by_observable = observable_tparams.iter().any(|observable| {
+                    observable
+                        .default()
+                        .is_some_and(|default| contains_tparam(default, dependency))
+                        || match observable.restriction() {
+                            Restriction::Bound(bound) => contains_tparam(bound, dependency),
+                            Restriction::Constraints(constraints) => constraints
+                                .iter()
+                                .any(|constraint| contains_tparam(constraint, dependency)),
+                            Restriction::ShapeExtension(_) | Restriction::Unrestricted => false,
+                        }
+                });
+                if referenced_by_observable {
+                    observable_tparams.push(dependency);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        for tparam in observable_tparams {
+            let mentions_tparam = |ty: &Type| contains_tparam(ty, tparam);
+            if simplified_parameter_types.iter().any(&mentions_tparam) {
+                continue;
+            }
+            let lost_indices = original_parameter_types
+                .iter()
+                .zip(&simplified_parameter_types)
+                .enumerate()
+                .filter_map(|(index, (original, simplified))| {
+                    (mentions_tparam(original) && !mentions_tparam(simplified)).then_some(index)
+                })
+                .collect::<Vec<_>>();
+            if let Some(&first_index) = lost_indices.first() {
+                self.error(
+                    errors,
+                    parameter_ranges
+                        .get(first_index)
+                        .copied()
+                        .unwrap_or(fallback_range),
+                    ErrorKind::InvalidAnnotation,
+                    format!(
+                        "Redundant `Scalar` union arm cannot bind observable type parameter `{}`",
+                        tparam.name()
+                    ),
+                );
+                for index in lost_indices {
+                    simplified_parameter_types[index] = original_parameter_types[index].clone();
+                }
+            }
+        }
+        for (param, parameter_type) in params
+            .items_mut()
+            .iter_mut()
+            .zip(simplified_parameter_types)
+        {
+            *param.as_type_mut() = parameter_type;
+        }
     }
 
     /// Replace resolved `Scalar` occurrences with their domain or `Never` normal form.
