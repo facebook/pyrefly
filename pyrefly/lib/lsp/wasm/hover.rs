@@ -905,6 +905,57 @@ fn resolve_hover_parameter_doc(
     None
 }
 
+/// Find the definition used by hover, excluding unrelated keyword-parameter results.
+fn find_hover_definition(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+    prefer_pyi: bool,
+    keyword_argument_identifier: Option<&Identifier>,
+) -> Option<FindDefinitionItemWithDocstring> {
+    transaction
+        .find_definition(
+            handle,
+            position,
+            FindPreference {
+                prefer_pyi,
+                ..Default::default()
+            },
+        )
+        .ok()?
+        .into_vec()
+        .into_iter()
+        .next()
+        .filter(|item| {
+            keyword_argument_identifier.is_none_or(|identifier| {
+                item.module.code_at(item.definition_range) == identifier.id.as_str()
+            })
+        })
+}
+
+/// Prefer non-empty stub documentation, falling back to the executable definition.
+fn resolve_hover_docstring(
+    transaction: &Transaction<'_>,
+    handle: &Handle,
+    position: TextSize,
+    keyword_argument_identifier: Option<&Identifier>,
+    fallback: Option<Docstring>,
+) -> Option<Docstring> {
+    find_hover_definition(
+        transaction,
+        handle,
+        position,
+        true,
+        keyword_argument_identifier,
+    )
+    .and_then(|item| {
+        item.docstring_range
+            .map(|range| Docstring(range, item.module))
+    })
+    .filter(|docstring| !docstring.resolve().trim().is_empty())
+    .or(fallback)
+}
+
 pub fn get_hover(
     transaction: &Transaction<'_>,
     handle: &Handle,
@@ -971,42 +1022,19 @@ pub fn get_hover_with_verbosity(
 
     let fallback_name_from_type = fallback_hover_name_from_type(&type_);
     let keyword_argument_identifier = keyword_argument_identifier(transaction, handle, position);
-    let find_definition = |prefer_pyi| {
-        transaction
-            .find_definition(
-                handle,
-                position,
-                FindPreference {
-                    prefer_pyi,
-                    ..Default::default()
-                },
-            )
-            .map(Vec1::into_vec)
-            .unwrap_or_default()
-            .into_iter()
-            .next()
-            .filter(|item| {
-                keyword_argument_identifier
-                    .as_ref()
-                    .is_none_or(|identifier| {
-                        item.module.code_at(item.definition_range) == identifier.id.as_str()
-                    })
-            })
-    };
-    let preferred_docstring = find_definition(true)
-        .and_then(|item| {
-            item.docstring_range
-                .map(|range| Docstring(range, item.module))
-        })
-        .filter(|docstring| !docstring.resolve().trim().is_empty());
     let (kind, name, fallback_docstring) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
         definition_range: definition_location,
         module,
         docstring_range,
         display_name,
-    }) = find_definition(false)
-    {
+    }) = find_hover_definition(
+        transaction,
+        handle,
+        position,
+        false,
+        keyword_argument_identifier.as_ref(),
+    ) {
         let kind = metadata.symbol_kind();
         let name = hover_name_from_definition_snippet(
             module.code_at(definition_location),
@@ -1018,6 +1046,13 @@ pub fn get_hover_with_verbosity(
     } else {
         (None, fallback_name_from_type, None)
     };
+    let docstring = resolve_hover_docstring(
+        transaction,
+        handle,
+        position,
+        keyword_argument_identifier.as_ref(),
+        fallback_docstring,
+    );
 
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
@@ -1074,8 +1109,6 @@ pub fn get_hover_with_verbosity(
             Some((display, can_increase)) => (Some(display), can_increase),
             None => (None, false),
         };
-
-    let docstring = preferred_docstring.or(fallback_docstring);
 
     let parameter_doc = resolve_hover_parameter_doc(transaction, handle, position);
 
