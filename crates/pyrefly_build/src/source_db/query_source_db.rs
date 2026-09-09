@@ -36,6 +36,7 @@ use crate::query::QueryResult;
 use crate::query::SourceDbQuerier;
 use crate::query::TargetManifestDatabase;
 use crate::query::path_is_from_stubs_package;
+use crate::source_db::ConfigName;
 use crate::source_db::LiveSourceDatabase;
 use crate::source_db::ModulePathCache;
 use crate::source_db::SourceDatabase;
@@ -103,6 +104,8 @@ struct Inner {
     watched_patterns: SmallSet<WatchPatternPart>,
     /// Non-Python file suffixes referenced in the sourcedb.
     extra_filetypes: SmallSet<String>,
+    /// Raw JSON config overrides, keyed by the name targets refer to them by.
+    configs: SmallMap<ConfigName, serde_json::Value>,
 }
 
 impl Inner {
@@ -114,6 +117,7 @@ impl Inner {
             known_modules: SmallSet::new(),
             watched_patterns: SmallSet::new(),
             extra_filetypes: SmallSet::new(),
+            configs: SmallMap::new(),
         }
     }
 }
@@ -153,11 +157,12 @@ impl QuerySourceDatabase {
         }
     }
 
-    fn update_with_target_manifest(&self, raw_db: TargetManifestDatabase) -> (bool, Duration) {
+    fn update_with_target_manifest(&self, mut raw_db: TargetManifestDatabase) -> (bool, Duration) {
         let start = Instant::now();
+        let configs = mem::take(&mut raw_db.configs);
         let (new_db, extra_filetypes) = raw_db.produce_map();
         let read = self.inner.read();
-        if new_db == read.db && extra_filetypes == read.extra_filetypes {
+        if new_db == read.db && extra_filetypes == read.extra_filetypes && configs == read.configs {
             debug!("No source DB changes from Buck query");
             return (false, start.elapsed());
         }
@@ -226,6 +231,7 @@ impl QuerySourceDatabase {
         let _old_known_modules = mem::replace(&mut write.known_modules, known_modules);
         let _old_patterns = mem::replace(&mut write.watched_patterns, watched_patterns);
         let _old_extra_filetypes = mem::replace(&mut write.extra_filetypes, extra_filetypes);
+        let _old_configs = mem::replace(&mut write.configs, configs);
         drop(write);
         debug!("Finished updating source DB with Buck response");
         (true, start.elapsed())
@@ -518,6 +524,16 @@ impl LiveSourceDatabase for QuerySourceDatabase {
         let target = self.get_target(origin)?;
         let read = self.inner.read();
         read.db.get(&target)?.root.clone()
+    }
+
+    fn get_target_config_name(&self, origin: Option<&Path>) -> Option<ConfigName> {
+        let target = self.get_target(origin)?;
+        let read = self.inner.read();
+        read.db.get(&target)?.config.dupe()
+    }
+
+    fn get_config(&self, name: &ConfigName) -> Option<serde_json::Value> {
+        self.inner.read().configs.get(name).cloned()
     }
 }
 

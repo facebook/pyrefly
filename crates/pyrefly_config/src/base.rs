@@ -351,25 +351,28 @@ impl ConfigBase {
         }
     }
 
-    /// Resolve the deprecated `untyped_def_behavior` field into the two new fields
-    /// (`check_unannotated_defs` and `infer_return_types`).
-    /// New fields take precedence; the old field only fills in unset values.
-    pub fn resolve_legacy_untyped_def_behavior(&mut self) {
-        let Some(behavior) = self.untyped_def_behavior else {
-            return;
-        };
-        if self.check_unannotated_defs.is_none() {
-            self.check_unannotated_defs = Some(!matches!(
-                behavior,
-                UntypedDefBehavior::SkipAndInferReturnAny
-            ));
+    /// Resolve deprecated compatibility settings into their canonical fields.
+    pub fn resolve_legacy_settings(&mut self) {
+        if let Some(behavior) = self.untyped_def_behavior {
+            if self.check_unannotated_defs.is_none() {
+                self.check_unannotated_defs = Some(!matches!(
+                    behavior,
+                    UntypedDefBehavior::SkipAndInferReturnAny
+                ));
+            }
+            if self.infer_return_types.is_none() {
+                self.infer_return_types = Some(match behavior {
+                    UntypedDefBehavior::CheckAndInferReturnType => InferReturnTypes::Checked,
+                    UntypedDefBehavior::CheckAndInferReturnAny
+                    | UntypedDefBehavior::SkipAndInferReturnAny => InferReturnTypes::Never,
+                });
+            }
         }
-        if self.infer_return_types.is_none() {
-            self.infer_return_types = Some(match behavior {
-                UntypedDefBehavior::CheckAndInferReturnType => InferReturnTypes::Checked,
-                UntypedDefBehavior::CheckAndInferReturnAny
-                | UntypedDefBehavior::SkipAndInferReturnAny => InferReturnTypes::Never,
-            });
+
+        if self.pytorch_efficiency_lints == Some(true) {
+            self.errors
+                .get_or_insert_default()
+                .set_default_severity(ErrorKind::PytorchEfficiencyLints, Severity::Warn);
         }
     }
 

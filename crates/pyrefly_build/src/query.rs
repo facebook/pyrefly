@@ -34,6 +34,7 @@ use vec1::Vec1;
 #[allow(unused_imports)]
 use vec1::vec1;
 
+use crate::source_db::ConfigName;
 use crate::source_db::Target;
 
 pub mod buck;
@@ -192,6 +193,7 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
                 db: Ok(TargetManifestDatabase {
                     db: SmallMap::new(),
                     root: cwd.to_path_buf(),
+                    configs: SmallMap::new(),
                     extra_filetypes: SmallSet::new(),
                 }),
                 build_id: None,
@@ -335,6 +337,10 @@ pub(crate) struct PythonLibraryManifest {
     /// target's `srcs` and `buildfile_path`.
     #[serde(default)]
     pub root: Option<PathBuf>,
+    /// Name of the entry in [`TargetManifestDatabase::configs`] holding this
+    /// target's config overrides.
+    #[serde(default)]
+    pub config: Option<ConfigName>,
 }
 
 impl PythonLibraryManifest {
@@ -464,6 +470,11 @@ pub(crate) enum TargetManifest {
 pub(crate) struct TargetManifestDatabase {
     db: SmallMap<Target, TargetManifest>,
     pub root: PathBuf,
+    /// Config overrides shared by targets, stored as raw JSON to avoid a
+    /// circular dependency between `pyrefly_build` and `pyrefly_config`.
+    /// Targets select one by name through `PythonLibraryManifest::config`.
+    #[serde(default)]
+    pub configs: SmallMap<ConfigName, serde_json::Value>,
     /// Non-Python file suffixes discovered by the BXL script (e.g. ["thrift"]).
     /// Used to watch for changes to files with these extensions.
     #[serde(default)]
@@ -523,6 +534,7 @@ mod tests {
             TargetManifestDatabase {
                 db,
                 root,
+                configs: SmallMap::new(),
                 extra_filetypes: SmallSet::new(),
             }
         }
@@ -810,6 +822,7 @@ mod tests {
                 buildfile_path: PathBuf::from(buildfile),
                 packages: map_implicit_packages(implicit_packages, None),
                 root: None,
+                config: None,
             })
         }
     }
@@ -831,6 +844,7 @@ mod tests {
                 buildfile_path: PathBuf::from(root).join(buildfile),
                 packages: map_implicit_packages(inits, Some(root)),
                 root: None,
+                config: None,
             }
         }
     }
@@ -1763,5 +1777,58 @@ mod tests {
             &InternedPath::new(PathBuf::from("/src/baz.py")),
             "a target with no per-target root should use the top-level root"
         );
+    }
+
+    #[test]
+    fn test_named_configs() {
+        let json = r#"
+{
+  "db": {
+    "//pkg:lenient": {
+      "srcs": {
+        "foo": ["foo.py"]
+      },
+      "config": "lenient",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//pkg:strict": {
+      "srcs": {
+        "bar": ["bar.py"]
+      },
+      "config": "strict",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//pkg:unconfigured": {
+      "srcs": {
+        "baz": ["baz.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "configs": {
+    "lenient": { "errors": { "missing-import": "warn" } },
+    "strict": { "check-unannotated-defs": true }
+  },
+  "root": "/src"
+}
+        "#;
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.configs.len(), 2);
+
+        let (db, _) = parsed.produce_map();
+        let config_of = |target: &str| {
+            db.get(&Target::from_string(target.to_owned()))
+                .unwrap()
+                .config
+                .as_ref()
+                .map(|c| c.to_string())
+        };
+
+        assert_eq!(config_of("//pkg:lenient").as_deref(), Some("lenient"));
+        assert_eq!(config_of("//pkg:strict").as_deref(), Some("strict"));
+        assert_eq!(config_of("//pkg:unconfigured"), None);
     }
 }

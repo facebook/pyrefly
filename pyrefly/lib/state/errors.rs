@@ -555,7 +555,7 @@ impl Errors {
             .iter()
             .map(|(load, _, config)| {
                 let path = load.module_info.path();
-                (path, config.enabled_ignores(path.as_path()).clone())
+                (path, config.enabled_ignores(path.as_path()).into_owned())
             })
             .collect();
 

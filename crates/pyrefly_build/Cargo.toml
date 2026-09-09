@@ -10,6 +10,7 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0.104"
+derive_more = { version = "2.1.1", features = ["full"] }
 dupe = "0.9.1"
 itertools = "0.15.0"
 pyrefly_python = { path = "../pyrefly_python" }

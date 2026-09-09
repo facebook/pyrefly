@@ -1124,6 +1124,8 @@ Where:
 - `db` is a map from target names to either:
     - library target definitions (e.g. `//colorama:py` and `//colorama:py-stubs` here)
     - target aliases (e.g. `//colorama:colorama` here)
+- [`configs`](#per-target-configuration) is an optional map from a name to a set
+  of type checking settings that targets can select with their `config` field.
 
 Each library target definition has the following fields:
 
@@ -1136,6 +1138,71 @@ Each library target definition has the following fields:
 | `buildfile_path` | no | Relative path to the build file that defines this target. Pyrefly treats any of the target's `srcs` outside this file's directory as generated, and does not watch generated files for changes by default. Defaults to `""`. |
 | `root` | no | Absolute path override for absolutizing this target's `srcs` and `buildfile_path`. When omitted, the top-level `root` is used. |
 | `relative_to` | no | Directory, itself resolved against the target's root, that this target's `srcs` resolve against instead of that root. A build system sets this when it materializes generated sources outside the source tree, such as the output directory of a Buck genrule. Every `src` of a target that sets this counts as generated. |
+| `config` | no | Name of an entry in the top-level [`configs`](#per-target-configuration) map, holding the type checking settings for this target. |
+
+#### Per-target configuration
+
+A target's `config` must match a name in the top-level `configs` map. The name
+has no meaning to Pyrefly beyond selecting that entry, so the build system can
+choose any names that are convenient. Naming configs rather than spelling their
+settings inline lets many targets share settings that are sent and parsed only
+once.
+
+Each entry in [`configs`](#per-target-configuration) accepts the settings a
+[sub-config](#subconfig-allowed-overrides) can override, for example
+[`errors`](#errors) and [`check-unannotated-defs`](#check-unannotated-defs).
+Target configs take precedence over matching sub-configs because they describe
+the most specific build-system scope. The full resolution chain is: target
+config → sub-config → top-level config → [preset](#preset) defaults. Settings
+that are absent at one level fall through to the next; `errors` maps are merged
+so each level only overrides the error kinds it names.
+
+```json
+{
+    "root": "/src",
+    "db": {
+        "//Project:MyLib": {
+            "srcs": {
+                "Foo": ["Foo.py"],
+                "Bar": ["sub1/Bar.py"]
+            },
+            "root": "/src/Project",
+            "config": "lenient",
+            "python_version": "3.12",
+            "python_platform": "linux"
+        },
+        "//Project:MyPkg": {
+            "srcs": {
+                "MyPkg": ["MyPkg/__init__.py"],
+                "MyPkg.Utils": ["MyPkg/Utils.py"]
+            },
+            "deps": ["//Project:MyLib"],
+            "root": "/src/Project",
+            "config": "lenient",
+            "python_version": "3.12",
+            "python_platform": "linux"
+        },
+        "//Project/test:test": {
+            "srcs": {
+                "test.lib": ["test/lib.py"],
+                "test.test": ["test/test.py"]
+            },
+            "deps": ["//Project:MyLib", "//Project:MyPkg"],
+            "python_version": "3.12",
+            "python_platform": "linux"
+        }
+    },
+    "configs": {
+        "lenient": {
+            "errors": { "missing-import": "warn" },
+            "check-unannotated-defs": false
+        }
+    }
+}
+```
+
+`MyLib` and `MyPkg` share the `lenient` config. The test target names no config,
+so it is checked with the top-level config.
 
 For reference, the command invoked as part of the Buck2 integration is:
 
