@@ -107,8 +107,21 @@ impl VarianceViolation {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct InferenceStatus {
     inferred_variance: Variance,
-    has_variance_inferred: bool,
+    /// Variance reached through a generic whose own variance is still unresolved.
+    fallback_variance: Variance,
+    has_reliable_variance: bool,
     specified_variance: Option<Variance>,
+}
+
+impl InferenceStatus {
+    fn effective_variance(self) -> Variance {
+        self.specified_variance
+            .unwrap_or(if self.has_reliable_variance {
+                self.inferred_variance
+            } else {
+                self.fallback_variance
+            })
+    }
 }
 
 type InferenceMap = SmallMap<Name, InferenceStatus>;
@@ -202,14 +215,10 @@ fn on_type(
             // Zip params (from on_edge) with targs
             // Note: if params.len() != targs.len(), zip will stop at the shorter one
             for (status, ty) in params.values().zip(targs) {
-                // Use specified_variance if available (for externally defined TypeVars
-                // with explicit variance like covariant=True), otherwise use inferred.
-                let effective_variance = status
-                    .specified_variance
-                    .unwrap_or(status.inferred_variance);
+                let effective_variance = status.effective_variance();
                 on_type(
                     variance.compose(effective_variance),
-                    status.has_variance_inferred,
+                    status.has_reliable_variance,
                     ty,
                     on_edge,
                     on_var,
@@ -440,13 +449,7 @@ fn on_class<'s>(
                 }
             }
             ClassFieldVariance::Field { ty, read_only } => {
-                // TODO: We still need a better distinction between callable-valued fields and
-                // descriptors, but receiver skipping only applies to fields modeled as methods.
-                let variance = if ty.is_toplevel_callable()
-                    || is_private_field(name)
-                    || read_only
-                    || field.is_final()
-                {
+                let variance = if is_private_field(name) || read_only || field.is_final() {
                     Variance::Covariant
                 } else {
                     Variance::Invariant
@@ -516,13 +519,14 @@ fn check_callable_variance(
 
 fn initial_inference_status(gp: &Quantified) -> InferenceStatus {
     let variance = pre_to_post_variance(gp.variance());
-    let (specified_variance, has_variance_inferred) = match variance {
+    let (specified_variance, has_reliable_variance) = match variance {
         Variance::Bivariant => (None, false),
         _ => (Some(variance), true),
     };
     InferenceStatus {
         inferred_variance: variance,
-        has_variance_inferred,
+        fallback_variance: Variance::Bivariant,
+        has_reliable_variance,
         specified_variance,
     }
 }
@@ -636,12 +640,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                   has_inferred: bool,
                                   _: PreInferenceVariance| {
                     if let Some(old_status) = new_params.get_mut(name) {
-                        let new_inferred_variance = variance.union(old_status.inferred_variance);
-                        let new_has_variance_inferred = old_status.has_variance_inferred
-                            || has_inferred
-                            || new_inferred_variance != Variance::Bivariant;
-                        old_status.inferred_variance = new_inferred_variance;
-                        old_status.has_variance_inferred = new_has_variance_inferred;
+                        if has_inferred {
+                            old_status.inferred_variance =
+                                variance.union(old_status.inferred_variance);
+                            old_status.has_reliable_variance = true;
+                        } else {
+                            old_status.fallback_variance =
+                                variance.union(old_status.fallback_variance);
+                        }
                     }
                 };
                 let mut on_edge = |c: &Class| env.get(c).cloned().unwrap_or_default();
@@ -676,7 +682,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     p.name().clone(),
                     InferenceStatus {
                         inferred_variance: Variance::Bivariant,
-                        has_variance_inferred: false,
+                        fallback_variance: Variance::Bivariant,
+                        has_reliable_variance: false,
                         specified_variance: None,
                     },
                 )
@@ -687,7 +694,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .get(class)
             .expect("class must be present in environment")
             .iter()
-            .map(|(name, status)| (name.clone(), status.inferred_variance))
+            .map(|(name, status)| (name.clone(), status.effective_variance()))
             .collect::<SmallMap<_, _>>();
         VarianceMap(class_variances)
     }
@@ -699,18 +706,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .get(class)
             .expect("class name must be present in environment")
             .iter()
-            .map(|(name, status)| {
-                (
-                    name.clone(),
-                    if let Some(specified_variance) = status.specified_variance {
-                        specified_variance
-                    } else if status.has_variance_inferred {
-                        status.inferred_variance
-                    } else {
-                        Variance::Bivariant
-                    },
-                )
-            })
+            .map(|(name, status)| (name.clone(), status.effective_variance()))
             .collect::<SmallMap<_, _>>();
         VarianceMap(class_variances)
     }

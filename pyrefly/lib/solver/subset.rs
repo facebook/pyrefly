@@ -2899,6 +2899,13 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             .get_variance_from_class(got_class.class_object());
 
         for (got_arg, want_arg, param) in izip!(got, want, params.iter()) {
+            // ParamSpec values use callable parameter-list ordering, which is already
+            // contravariant. Account for that when applying the class parameter's variance.
+            let variance = match (param.kind(), variances.get(param.name())) {
+                (QuantifiedKind::ParamSpec, Variance::Covariant) => Variance::Contravariant,
+                (QuantifiedKind::ParamSpec, Variance::Contravariant) => Variance::Covariant,
+                (_, variance) => variance,
+            };
             if param.kind() == QuantifiedKind::TypeVarTuple {
                 let as_tuple_carrier = |arg: &Type| {
                     // A symbolic variadic argument represents the whole tuple, like `tuple[*Ts]`.
@@ -2914,7 +2921,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             } else if param.kind() == QuantifiedKind::IntVar {
                 let got_arg = Self::intvar_targ_for_compare(got_arg)?;
                 let want_arg = Self::intvar_targ_for_compare(want_arg)?;
-                self.check_targ_variance(variances.get(param.name()), &got_arg, &want_arg)?;
+                self.check_targ_variance(variance, &got_arg, &want_arg)?;
             } else if self.solver.tensor_shapes && has_int_tuple_bound(param) {
                 match (
                     IntTuple::from_shape_arg_or_tuple_carrier(got_arg),
@@ -2938,12 +2945,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     _ if got_arg.is_any() || want_arg.is_any() => {
                         // A gradual peer is compatible but provides no shape information.
                     }
-                    _ => {
-                        self.check_targ_variance(variances.get(param.name()), got_arg, want_arg)?
-                    }
+                    _ => self.check_targ_variance(variance, got_arg, want_arg)?,
                 }
             } else {
-                self.check_targ_variance(variances.get(param.name()), got_arg, want_arg)?;
+                self.check_targ_variance(variance, got_arg, want_arg)?;
             }
         }
         Ok(())

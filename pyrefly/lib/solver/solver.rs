@@ -20,6 +20,7 @@ use std::sync::Arc;
 use itertools::Either;
 use itertools::Itertools;
 use pyrefly_python::qname::QName;
+use pyrefly_types::callable_residual::CallableResidualKind;
 use pyrefly_types::callable_residual::OverloadBranchProjection;
 use pyrefly_types::callable_residual::OverloadResidualIdentity;
 use pyrefly_types::dimension::ShapeError;
@@ -553,6 +554,15 @@ enum NewBound {
     UpdateExistingBound(Type),
     /// The new bound should be appended to the existing bounds.
     AddBound(Type),
+}
+
+/// Whether a bound is a placeholder for deferred generic callable structure.
+fn is_generic_callable_residual(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::CallableResidual(residual)
+            if matches!(&residual.kind, CallableResidualKind::Generic { .. })
+    )
 }
 
 /// Result of `with_snapshot`, which performs an `is_subset_eq` call with var snapshotting.
@@ -1628,19 +1638,24 @@ impl Solver {
                 kind,
             )
         });
-        let (first_bound, opposite_bound) = if is_upper {
-            (
-                bounds.upper.first().cloned(),
-                self.get_current_bound(bounds.lower.clone()),
-            )
+        let (first_bound, opposite_bounds) = if is_upper {
+            (bounds.upper.first().cloned(), bounds.lower.clone())
         } else {
-            (
-                bounds.lower.first().cloned(),
-                self.get_current_bound(bounds.upper.clone()),
-            )
+            (bounds.lower.first().cloned(), bounds.upper.clone())
         };
         drop(e);
         drop(lock);
+        // Generic residuals are fallback-only and cannot make a concrete bound inconsistent.
+        let opposite_bound = if is_generic_callable_residual(&bound) {
+            None
+        } else {
+            self.get_current_bound(
+                opposite_bounds
+                    .into_iter()
+                    .filter(|bound| !is_generic_callable_residual(bound))
+                    .collect(),
+            )
+        };
         let res = res.and_then(|_| {
             // The new bound must be consistent with the opposite-side bound via transitivity.
             let consistent = if is_upper {
@@ -1725,7 +1740,21 @@ impl Solver {
         Some(unions(bounds, &self.heap))
     }
 
-    fn solve_bounds(&self, bounds: Bounds) -> Option<Type> {
+    fn solve_bounds(&self, mut bounds: Bounds) -> Option<Type> {
+        // Generic callable residuals are fallback bounds across both polarities.
+        if bounds
+            .lower
+            .iter()
+            .chain(&bounds.upper)
+            .any(|bound| !bound.is_any() && !matches!(bound, Type::CallableResidual(_)))
+        {
+            bounds
+                .lower
+                .retain(|bound| !is_generic_callable_residual(bound));
+            bounds
+                .upper
+                .retain(|bound| !is_generic_callable_residual(bound));
+        }
         // Prefer non-Any lower bound > upper bound > Any lower bound.
         // TODO(https://github.com/facebook/pyrefly/issues/105): consider using polarity to
         // determine whether we use the lower or upper bound.
@@ -4194,7 +4223,15 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         let lower_bound = is_shape_extension_binding_source
                             .then(|| self.solver.get_current_bound(bounds.lower.clone()))
                             .flatten();
-                        let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
+                        // A fallback residual must not prevent ordinary implicit-literal promotion.
+                        let upper_bound = self.solver.get_current_bound(
+                            bounds
+                                .upper
+                                .iter()
+                                .filter(|bound| !is_generic_callable_residual(bound))
+                                .cloned()
+                                .collect(),
+                        );
                         drop(v2_ref);
                         drop(variables);
                         let (answer, specialization_error) = self.is_subset_eq_quantified(
