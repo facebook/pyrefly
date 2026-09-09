@@ -783,6 +783,26 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
     def tofile(self, fid: Any, sep: str = "", format: str = "%s") -> None: ...
     def tolist(self) -> Any: ...
 
+    # TODO(stroxler): Replace these placeholders with shape-aware declarations.
+    choose: Any
+    compress: Any
+    ctypes: Any
+    diagonal: Any
+    dot: Any
+    flags: Any
+    flat: Any
+    mT: Any
+    nonzero: Any
+    repeat: Any
+    reshape: Any
+    searchsorted: Any
+    squeeze: Any
+    swapaxes: Any
+    take: Any
+    trace: Any
+    transpose: Any
+    view: Any
+
 class ufunc:
     __name__: str
     nin: int
