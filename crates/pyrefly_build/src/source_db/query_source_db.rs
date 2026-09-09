@@ -446,7 +446,6 @@ impl LiveSourceDatabase for QuerySourceDatabase {
                 debug!("Not querying Buck source DB, since no inputs have changed");
                 return Ok(false);
             }
-            *includes = new_includes;
             info!("Querying Buck for source DB");
             let QueryResult {
                 db: raw_db,
@@ -455,13 +454,16 @@ impl LiveSourceDatabase for QuerySourceDatabase {
                 parse_duration,
                 stdout_size,
                 exit_reason,
-            } = self.querier.query_source_db(&includes, &self.repo_root);
+            } = self.querier.query_source_db(&new_includes, &self.repo_root);
             stats.build_id = build_id;
             stats.build_time = build_duration;
             stats.parse_time = parse_duration;
             stats.raw_size = stdout_size;
             stats.exit_reason = exit_reason.as_ref().map(|r| r.to_string());
             let raw_db = raw_db?;
+            // Commit only after a successful query, so a failure doesn't make the next
+            // rebuild believe its inputs are unchanged and skip the retry.
+            *includes = new_includes;
             info!("Finished querying Buck for source DB");
             let (changed, process_duration) = self.update_with_target_manifest(raw_db);
             stats.common.changed = changed;
@@ -515,6 +517,8 @@ impl LiveSourceDatabase for QuerySourceDatabase {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
 
     use pretty_assertions::assert_eq;
     use pyrefly_python::sys_info::PythonPlatform;
@@ -1279,6 +1283,70 @@ mod tests {
             Include::Target(Target::from_string("//catch:all".to_owned())),
         };
         assert_eq!(*includes, expected);
+    }
+
+    /// Fails every query, counting how many times it was asked.
+    #[derive(Debug)]
+    struct FailingQuerier {
+        calls: AtomicUsize,
+    }
+
+    impl SourceDbQuerier for FailingQuerier {
+        fn query_source_db(&self, _: &SmallSet<Include>, _: &Path) -> QueryResult {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            QueryResult {
+                db: Err(anyhow::anyhow!("buck2 exited with code 1")),
+                build_id: None,
+                build_duration: None,
+                parse_duration: None,
+                stdout_size: None,
+                exit_reason: None,
+            }
+        }
+
+        fn construct_command(&self, _: Option<&Path>) -> std::process::Command {
+            panic!("We shouldn't be calling this...");
+        }
+    }
+
+    /// A failed query must not record its include set. The next rebuild sees the same
+    /// open files, so recording them would make it short-circuit on the unchanged-inputs
+    /// check and report success without ever retrying — leaving the build system stuck
+    /// on the error it already surfaced.
+    #[test]
+    fn test_failed_query_retries_when_inputs_are_unchanged() {
+        let querier = Arc::new(FailingQuerier {
+            calls: AtomicUsize::new(0),
+        });
+        let db = QuerySourceDatabase {
+            inner: RwLock::new(Inner::new()),
+            includes: Mutex::new(SmallSet::new()),
+            repo_root: InternedPath::from_path(Path::new("/repo")),
+            querier: querier.dupe(),
+            cached_modules: ModulePathCache::new(),
+            catch_all_targets: vec![],
+            catch_all_targets_only: false,
+        };
+        let files = || smallset! { InternedPath::new(PathBuf::from("/repo/file.py")) };
+
+        let (first, _) = db.query_source_db(files(), false);
+        assert!(first.is_err(), "the querier fails every call");
+        assert_eq!(querier.calls.load(Ordering::SeqCst), 1);
+
+        let (second, _) = db.query_source_db(files(), false);
+        assert!(
+            second.is_err(),
+            "a retry after a failure must surface the error again, not a stale success"
+        );
+        assert_eq!(
+            querier.calls.load(Ordering::SeqCst),
+            2,
+            "the failed query must not have recorded its include set"
+        );
+        assert!(
+            db.includes.lock().is_empty(),
+            "includes should still be empty after two failed queries"
+        );
     }
 
     #[test]
