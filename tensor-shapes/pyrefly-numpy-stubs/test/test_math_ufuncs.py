@@ -58,6 +58,23 @@ def test_binary_ufuncs_preserve_matrix_shape() -> None:
     assert_shape(np.arctan2(a, b).shape, (3, 4))
 
 
+def test_binary_ufunc_objects_broadcast_arrays_and_scalars() -> None:
+    matrix = np.ones((3, 1))
+    row = np.full((1, 4), 2.0)
+
+    assert_shape(np.add(matrix, row).shape, (3, 4))
+    assert_shape(np.multiply(matrix, 2.0).shape, (3, 1))
+    assert_shape(np.power(matrix, row).shape, (3, 4))
+    assert_shape(np.equal(2.0, row).shape, (1, 4))
+    # @lint-ignore SPELL
+    assert np.add.nin == 2
+    assert np.add.nout == 1
+    # @lint-ignore SPELL
+    assert np.arctan2.nin == 2
+    # @lint-ignore SPELL
+    assert np.matmul.nin == 2
+
+
 def test_extrema_broadcast_row_vector_over_matrix() -> None:
     matrix = np.ones((3, 4))
     row = np.full(4, 2.0)
@@ -123,9 +140,9 @@ def test_binary_ufuncs_remain_positional_only() -> None:
 
     assert_shape(np.minimum(a, b).shape, (3, 4))
     try:
-        np.minimum(
-            x1=a,  # E: Expected argument `x1` to be positional
-            x2=b,  # E: Expected argument `x2` to be positional
+        np.minimum(  # E: No matching overload found
+            x1=a,
+            x2=b,
         )
     except TypeError:
         pass

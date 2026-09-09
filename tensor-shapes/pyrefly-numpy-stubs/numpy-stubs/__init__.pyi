@@ -593,6 +593,39 @@ class _UnaryUFunc(ufunc):
     @overload
     def __call__(self, x: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
 
+class _BinaryUFunc(ufunc):
+    @overload
+    def __call__[Shape1: _Shape, Shape2: _Shape](
+        self,
+        x1: ndarray[Shape1],
+        x2: ndarray[Shape2],
+        /,
+        out: Any = None,
+        **kwargs: Any,
+    ) -> ndarray[broadcast(Shape1, Shape2)]: ...
+    @overload
+    def __call__[Shape: _Shape](
+        self, x1: ndarray[Shape], x2: Any, /, out: Any = None, **kwargs: Any
+    ) -> ndarray[Shape]: ...
+    @overload
+    def __call__[Shape: _Shape](
+        self, x1: Any, x2: ndarray[Shape], /, out: Any = None, **kwargs: Any
+    ) -> ndarray[Shape]: ...
+    @overload
+    def __call__(self, x1: Any, x2: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
+
+# The result dtype stays gradual because dtype promotion is not modeled, while
+# `ndarray.__matmul__` carries the left operand's dtype.
+class _MatmulUFunc(ufunc):
+    def __call__[LeftShape: _Shape, RightShape: _Shape](
+        self,
+        a: ndarray[LeftShape],
+        b: ndarray[RightShape],
+        /,
+        out: Any = None,
+        **kwargs: Any,
+    ) -> ndarray[matmul_shape(LeftShape, RightShape), Any]: ...
+
 abs: _UnaryUFunc
 absolute: _UnaryUFunc
 acos: _UnaryUFunc
@@ -650,16 +683,51 @@ tan: _UnaryUFunc
 tanh: _UnaryUFunc
 trunc: _UnaryUFunc
 
-def power[Shape: _Shape](x1: ndarray[Shape], x2: int | float, /) -> ndarray[Shape]: ...
-def minimum[Shape1: _Shape, Shape2: _Shape](
-    x1: ndarray[Shape1, Any], x2: ndarray[Shape2, Any], /
-) -> ndarray[broadcast(Shape1, Shape2)]: ...
-def maximum[Shape1: _Shape, Shape2: _Shape](
-    x1: ndarray[Shape1, Any], x2: ndarray[Shape2, Any], /
-) -> ndarray[broadcast(Shape1, Shape2)]: ...
-def arctan2[Shape1: _Shape, Shape2: _Shape](
-    x1: ndarray[Shape1, Any], x2: ndarray[Shape2, Any], /
-) -> ndarray[broadcast(Shape1, Shape2)]: ...
+add: _BinaryUFunc
+arctan2: _BinaryUFunc
+atan2: _BinaryUFunc
+bitwise_and: _BinaryUFunc
+bitwise_left_shift: _BinaryUFunc
+bitwise_or: _BinaryUFunc
+bitwise_right_shift: _BinaryUFunc
+bitwise_xor: _BinaryUFunc
+copysign: _BinaryUFunc
+divide: _BinaryUFunc
+equal: _BinaryUFunc
+float_power: _BinaryUFunc
+floor_divide: _BinaryUFunc
+fmax: _BinaryUFunc
+fmin: _BinaryUFunc
+fmod: _BinaryUFunc
+gcd: _BinaryUFunc
+greater: _BinaryUFunc
+greater_equal: _BinaryUFunc
+heaviside: _BinaryUFunc
+hypot: _BinaryUFunc
+lcm: _BinaryUFunc
+ldexp: _BinaryUFunc
+left_shift: _BinaryUFunc
+less: _BinaryUFunc
+less_equal: _BinaryUFunc
+logaddexp: _BinaryUFunc
+logaddexp2: _BinaryUFunc
+logical_and: _BinaryUFunc
+logical_or: _BinaryUFunc
+logical_xor: _BinaryUFunc
+matmul: _MatmulUFunc
+maximum: _BinaryUFunc
+minimum: _BinaryUFunc
+mod: _BinaryUFunc
+multiply: _BinaryUFunc
+nextafter: _BinaryUFunc
+not_equal: _BinaryUFunc
+pow: _BinaryUFunc
+power: _BinaryUFunc
+remainder: _BinaryUFunc
+right_shift: _BinaryUFunc
+subtract: _BinaryUFunc
+true_divide: _BinaryUFunc
+
 def round[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 def clip[Shape: _Shape](
     a: ndarray[Shape], a_min: int | float, a_max: int | float
@@ -752,12 +820,6 @@ def argmin[N: IntVar, M: IntVar](
     *,
     keepdims: Literal[False] = False,
 ) -> ndarray[[N], dtype[intp]]: ...
-
-# The result dtype stays gradual because dtype promotion is not modeled, while
-# `ndarray.__matmul__` carries the left operand's dtype.
-def matmul[LeftShape: _Shape, RightShape: _Shape](
-    a: ndarray[LeftShape], b: ndarray[RightShape], /
-) -> ndarray[matmul_shape(LeftShape, RightShape), Any]: ...
 
 # TODO(stroxler): Replace these finite tuple-shape constructor overloads with a
 # generic `Shape: tuple[int, ...]` overload once whole-shape parameters flow
