@@ -1228,12 +1228,6 @@ async fn get_watcher_events(watcher: &mut Watcher) -> anyhow::Result<Categorized
         if !events.is_empty() {
             return Ok(events);
         }
-        if !events.unknown.is_empty() {
-            return Err(anyhow::anyhow!(
-                "Cannot handle uncategorized watcher event on paths [{}]",
-                display::commas_iter(|| events.unknown.iter().map(|x| x.display()))
-            ));
-        }
     }
 }
 
@@ -1476,6 +1470,32 @@ impl IncrementalChecker {
         events: &CategorizedEvents,
         additional_files: &[PathBuf],
     ) -> IncrementalCheckTransaction<'_> {
+        let resolved_events;
+        let events = if events.unknown.is_empty() {
+            events
+        } else {
+            // Handles need explicit creation and removal events. Classifying an existing
+            // file as modified also avoids invalidating module lookup unnecessarily.
+            let mut resolved = CategorizedEvents {
+                created: events.created.clone(),
+                modified: events.modified.clone(),
+                removed: events.removed.clone(),
+                unknown: Vec::new(),
+            };
+            for path in &events.unknown {
+                let module_path = ModulePath::filesystem(path.clone());
+                if !path.exists() {
+                    resolved.removed.push(path.clone());
+                } else if self.handles.path_data.contains(&module_path) {
+                    resolved.modified.push(path.clone());
+                } else {
+                    resolved.created.push(path.clone());
+                }
+            }
+            resolved_events = resolved;
+            &resolved_events
+        };
+
         let mut transaction = self
             .state
             .new_committable_transaction(self.require_levels.default, None);
@@ -2469,6 +2489,125 @@ def go(w: Widget) -> int:
         )
         .diagnostics;
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn incremental_checker_resolves_unknown_events() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let initial = root.join("initial.py");
+        fs::write(&initial, "x: int = 1\n").unwrap();
+        let mut checker = incremental_checker(&root, vec![initial.clone()]);
+
+        fs::write(&initial, "x: int = 'bad'\n").unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                unknown: vec![initial.clone()],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert_eq!(errors.len(), 1, "the existing file should be rechecked");
+
+        let created = root.join("created.py");
+        fs::write(&created, "y: int = 'bad'\n").unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                unknown: vec![created.clone()],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert_eq!(errors.len(), 2, "the new file should be added");
+        assert!(
+            checker.all_files_are_configured(std::slice::from_ref(&created)),
+            "the new file should be configured"
+        );
+
+        fs::remove_file(&initial).unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                unknown: vec![initial.clone()],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert_eq!(errors.len(), 1, "the missing file should be removed");
+        assert!(
+            !checker.all_files_are_configured(std::slice::from_ref(&initial)),
+            "the missing file should not remain configured"
+        );
+
+        let renamed = root.join("renamed.py");
+        fs::rename(&created, &renamed).unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                unknown: vec![created.clone(), renamed.clone()],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert_eq!(errors.len(), 1, "the renamed file should be checked");
+        assert_eq!(errors[0].path().as_path(), renamed);
+        assert!(
+            !checker.all_files_are_configured(std::slice::from_ref(&created)),
+            "the old rename path should not remain configured"
+        );
+        assert!(
+            checker.all_files_are_configured(std::slice::from_ref(&renamed)),
+            "the new rename path should be configured"
+        );
+
+        let transient = root.join("transient.py");
+        fs::write(&transient, "z: int = 'bad'\n").unwrap();
+        fs::remove_file(&transient).unwrap();
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                unknown: vec![transient.clone()],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+        assert_eq!(
+            errors.len(),
+            1,
+            "a file created and removed before the check should remain absent"
+        );
+        assert!(
+            !checker.all_files_are_configured(std::slice::from_ref(&transient)),
+            "the transient file should not be configured"
+        );
+    }
+
+    #[test]
+    fn incremental_checker_does_not_configure_unknown_files_outside_includes() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let outside = temp.path().join("outside.py");
+        fs::write(&outside, "x: int = 'bad'\n").unwrap();
+        let mut checker = incremental_checker(&root, Vec::new());
+
+        let errors = check(
+            &mut checker,
+            &CategorizedEvents {
+                unknown: vec![outside.clone()],
+                ..Default::default()
+            },
+        )
+        .diagnostics;
+
+        assert!(errors.is_empty(), "the excluded file should not be checked");
+        assert!(
+            !checker.all_files_are_configured(std::slice::from_ref(&outside)),
+            "the excluded file should not be configured"
+        );
     }
 
     #[test]
