@@ -7,3 +7,4 @@
 
 #![cfg(test)]
 mod dataframe;
+mod nested_dtype;

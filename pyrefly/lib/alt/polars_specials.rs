@@ -10,6 +10,7 @@
 use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::data_frame::DataFrameSchema;
 use pyrefly_types::data_frame::SchemaCompleteness;
+use pyrefly_types::polars_dtype::PolarsArrayShape;
 use pyrefly_types::polars_dtype::PolarsDType;
 use pyrefly_types::series::SeriesSchema;
 use pyrefly_types::types::CalleeKind;
@@ -18,6 +19,7 @@ use ruff_python_ast::Arguments;
 use ruff_python_ast::CmpOp;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
+use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprList;
 use ruff_python_ast::ExprNumberLiteral;
@@ -31,6 +33,7 @@ use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
@@ -1058,8 +1061,92 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn polars_dtype_from_expr(&self, e: &Expr) -> Option<PolarsDType> {
+        if let Expr::Call(call) = e
+            && let Some(dtype) = self.polars_nested_dtype_from_call(call)
+        {
+            return Some(dtype);
+        }
         let ty = self.expr_infer(e, &self.error_swallower());
         polars_dtype_from_type(&ty)
+    }
+
+    fn polars_nested_dtype_from_call(&self, call: &ExprCall) -> Option<PolarsDType> {
+        let callee = self.expr_infer(&call.func, &self.error_swallower());
+        let Type::ClassDef(cls) = callee else {
+            return None;
+        };
+        let module = cls.module_name();
+        if module.as_str() != POLARS_MODULE && !module.as_str().starts_with(POLARS_MODULE_PREFIX) {
+            return None;
+        }
+        match cls.name().as_str() {
+            "Array" => {
+                if !arguments_are_valid(&call.arguments, 2, Some(&["inner", "shape"])) {
+                    return None;
+                }
+                let inner = extract_argument(&call.arguments, 0, "inner")?.into_option()?;
+                let shape = extract_argument(&call.arguments, 1, "shape")?.into_option()?;
+                let dimensions = match shape {
+                    Expr::Tuple(tuple) => &tuple.elts,
+                    _ => std::slice::from_ref(shape),
+                };
+                let mut shape = Vec1::try_from_vec(
+                    dimensions
+                        .iter()
+                        .map(|dimension| usize::try_from(self.polars_int_literal(dimension)?).ok())
+                        .collect::<Option<Vec<_>>>()?,
+                )
+                .ok()?;
+                let inner = self.polars_dtype_from_expr(inner)?;
+                let element = match inner {
+                    PolarsDType::Array {
+                        element,
+                        shape: PolarsArrayShape::Known(inner_shape),
+                    } => {
+                        shape.extend(inner_shape);
+                        element
+                    }
+                    PolarsDType::Array {
+                        shape: PolarsArrayShape::Unknown,
+                        ..
+                    } => return None,
+                    inner => Box::new(inner),
+                };
+                Some(PolarsDType::Array {
+                    element,
+                    shape: PolarsArrayShape::Known(shape),
+                })
+            }
+            "List" => {
+                if !arguments_are_valid(&call.arguments, 1, Some(&["inner"])) {
+                    return None;
+                }
+                let inner = extract_argument(&call.arguments, 0, "inner")?.into_option()?;
+                Some(PolarsDType::List(Box::new(
+                    self.polars_dtype_from_expr(inner)?,
+                )))
+            }
+            "Struct" => {
+                if !arguments_are_valid(&call.arguments, 1, Some(&["fields"])) {
+                    return None;
+                }
+                let fields = extract_argument(&call.arguments, 0, "fields")?.into_option()?;
+                let Expr::Dict(fields) = fields else {
+                    return None;
+                };
+                let mut parsed = Vec::with_capacity(fields.items.len());
+                let mut seen = SmallSet::new();
+                for field in &fields.items {
+                    let name = self.polars_column_name(field.key.as_ref()?)?;
+                    if !seen.insert(name.clone()) {
+                        return None;
+                    }
+                    parsed.push((name, self.polars_dtype_from_expr(&field.value)?));
+                }
+                Some(PolarsDType::Struct(parsed))
+            }
+            _ => None,
+        }
     }
 
     fn polars_column_arg(&self, expr: &Expr) -> ColumnArg {
