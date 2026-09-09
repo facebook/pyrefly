@@ -412,3 +412,21 @@ from shape_extensions import assert_shape
 
 def test_reexports_available() -> None:
     assert_shape(np.zeros(1).shape, (1,))
+    assert not np.False_
+    assert np.True_
+    assert isinstance(np.__version__, str)
+    assert np.e > 2.0
+    assert np.euler_gamma > 0.0
+    assert np.inf > 0.0
+    assert isinstance(np.little_endian, bool)
+    assert np.isnan(np.nan)
+    assert np.newaxis is None
+    assert np.pi > 3.0
+    assert_shape(np.permute_dims(np.zeros((2, 3)), (0, 1)).shape, (2, 3))
+
+    # These checks cover runtime behavior that the stubs do not model precisely.
+    assert np.permute_dims(np.zeros((2, 3)), (1, 0)).shape == (3, 2)
+    assert np.concat((np.zeros(1), np.zeros(1))).shape == (2,)
+    assert np.from_dlpack(np.zeros(1)).shape == (1,)
+    assert callable(np.test)
+    assert issubclass(np.linalg.LinAlgError, ValueError)

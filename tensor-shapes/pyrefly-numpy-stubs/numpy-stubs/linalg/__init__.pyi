@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Literal, overload
+from typing import Any, Literal, overload
 
 from numpy._shapes import int_min
 
@@ -41,6 +41,8 @@ from shape_extensions import Int, IntVar
 
 from .. import ndarray
 
+class LinAlgError(ValueError): ...
+
 # MVP shape surface only; NumPy dtype promotion is intentionally not modeled.
 @overload
 def solve[N: IntVar, DType](
@@ -52,11 +54,29 @@ def solve[N: IntVar, K: IntVar, DType](
     a: ndarray[[N, N], DType],
     b: ndarray[[N, K]],
 ) -> ndarray[[N, K], DType]: ...
+@overload
 def norm[N: IntVar, M: IntVar, DType](
     x: ndarray[[N, M, 3], DType],
+    ord: None,
     axis: Literal[-1],
     keepdims: Literal[True],
 ) -> ndarray[[N, M, 1], DType]: ...
+@overload
+def norm[N: IntVar, M: IntVar, DType](
+    x: ndarray[[N, M, 3], DType],
+    ord: None = None,
+    *,
+    axis: Literal[-1],
+    keepdims: Literal[True],
+) -> ndarray[[N, M, 1], DType]: ...
+@overload
+def norm(
+    x: Any,
+    ord: Any = None,
+    axis: Any = None,
+    keepdims: bool = False,
+    **kwargs: Any,
+) -> Any: ...
 def eigh[N: IntVar, DType](
     a: ndarray[[N, N], DType],
 ) -> tuple[ndarray[[N], DType], ndarray[[N, N], DType]]: ...

@@ -269,6 +269,11 @@ def test_norm_3d_axis_keepdims_for_nbody() -> None:
     assert_shape(
         np.linalg.norm(pairwise_deltas, axis=-1, keepdims=True).shape, (5, 5, 1)
     )
+    assert_shape(np.linalg.norm(pairwise_deltas, None, -1, True).shape, (5, 5, 1))
+    assert_shape(
+        np.linalg.norm(pairwise_deltas, ord=None, axis=-1, keepdims=True).shape,
+        (5, 5, 1),
+    )
 
 
 def gravitational_force_shape_path(

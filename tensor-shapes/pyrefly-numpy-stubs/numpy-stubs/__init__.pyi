@@ -5,7 +5,7 @@
 
 from collections.abc import Sequence
 from types import EllipsisType
-from typing import Any, Literal, overload
+from typing import Any, Final, Literal, overload
 
 import shape_extensions
 from numpy.__config__ import (
@@ -180,6 +180,7 @@ from numpy._core.shape_base import (
     unstack as unstack,
     vstack as vstack,
 )
+from numpy._pytesttester import PytestTester
 from numpy._shapes import (
     diag_extent,
     matmul_shape,
@@ -407,6 +408,18 @@ class intp(generic): ...
 
 type _IndexScalar = int | bool_ | int32 | int64 | intp
 type _IndexSequence = Sequence[_IndexScalar] | Sequence[Sequence[_IndexScalar]]
+
+__version__: Final[str]
+e: Final[float]
+euler_gamma: Final[float]
+pi: Final[float]
+inf: Final[float]
+nan: Final[float]
+little_endian: Final[bool]
+False_: Final[bool_]
+True_: Final[bool_]
+newaxis: Final[None] = None
+test: Final[PytestTester]
 
 class dtype[Scalar = Any]:
     @overload
@@ -820,6 +833,19 @@ class ufunc:
     ) -> Any: ...
     def outer(self, a: Any, b: Any, /, **kwargs: Any) -> Any: ...
     def at(self, a: ndarray, indices: Any, b: Any = None, /) -> None: ...
+
+permute_dims = transpose
+# TODO(stroxler): Make this precise when `concatenate` accepts overlay ndarrays.
+concat: Any = concatenate
+
+# The output shape depends on the external object's DLPack representation.
+def from_dlpack(
+    x: Any,
+    /,
+    *,
+    device: Literal["cpu"] | None = None,
+    copy: bool | None = None,
+) -> ndarray: ...
 
 class _UnaryUFunc(ufunc):
     @overload
