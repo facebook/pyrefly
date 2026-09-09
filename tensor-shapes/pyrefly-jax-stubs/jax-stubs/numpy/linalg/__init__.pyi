@@ -12,6 +12,7 @@ from jax._shapes import (
     matmul_shape,
     reduce_shape,
 )
+from jax.typing import DTypeLike
 from shape_extensions import broadcast, Elements, Flag, Int, IntTuple, IntVar
 
 type _Shape = IntTuple
@@ -280,7 +281,7 @@ def trace[Shape: _Shape](
     /,
     *,
     offset: int = 0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 def vecdot[Shape1: _Shape, Shape2: _Shape](
     x1: Array[Shape1],

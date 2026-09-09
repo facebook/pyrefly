@@ -131,7 +131,7 @@ def main() -> int:
                 command.extend(["--pyrefly", pyrefly[0]])
             else:
                 command.append("--buck")
-            if package in {"pyrefly-torch-stubs", "pyrefly-numpy-stubs"}:
+            if package in PACKAGES:
                 command.extend(["--python", str(python)])
             if args.nocapture:
                 command.append("--nocapture")

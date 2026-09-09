@@ -29,6 +29,7 @@ from jax._shapes import (
     stack_shape,
     top_k_shape,
 )
+from jax.typing import DTypeLike
 from shape_extensions import (
     Elements,
     Flag,
@@ -238,7 +239,7 @@ def mul[Shape: _Shape](
     y: _Scalar,
     /,
     *,
-    out_dtype: Any = None,
+    out_dtype: DTypeLike | None = None,
 ) -> Array[Shape]: ...
 @overload
 def mul[Shape: _Shape](
@@ -246,7 +247,7 @@ def mul[Shape: _Shape](
     y: Array[Shape],
     /,
     *,
-    out_dtype: Any = None,
+    out_dtype: DTypeLike | None = None,
 ) -> Array[Shape]: ...
 @overload
 def mul[Shape1: _Shape, Shape2: _Shape](
@@ -254,7 +255,7 @@ def mul[Shape1: _Shape, Shape2: _Shape](
     y: Array[Shape2],
     /,
     *,
-    out_dtype: Any = None,
+    out_dtype: DTypeLike | None = None,
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
 @overload
 def mulhi[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
@@ -359,7 +360,7 @@ def zeta[Shape1: _Shape, Shape2: _Shape](
 
 @overload
 def broadcasted_iota[Shape: _Shape](
-    dtype: Any,
+    dtype: DTypeLike,
     shape: Shape,
     dimension: int,
     *,
@@ -367,31 +368,33 @@ def broadcasted_iota[Shape: _Shape](
 ) -> Array[Shape]: ...
 @overload
 def broadcasted_iota(
-    dtype: Any,
+    dtype: DTypeLike,
     shape: Sequence[int] | int,
     dimension: int,
     *,
     out_sharding: Any = None,
 ) -> Array[IntTuple]: ...
 @overload
-def empty(shape: tuple[()], dtype: Any, *, out_sharding: Any = None) -> Array[[]]: ...
+def empty(
+    shape: tuple[()], dtype: DTypeLike, *, out_sharding: Any = None
+) -> Array[[]]: ...
 @overload
 def empty[N: IntVar](
-    shape: Int[N], dtype: Any, *, out_sharding: Any = None
+    shape: Int[N], dtype: DTypeLike, *, out_sharding: Any = None
 ) -> Array[[N]]: ...
 @overload
 def empty[Shape: _Shape](
-    shape: Shape, dtype: Any, *, out_sharding: Any = None
+    shape: Shape, dtype: DTypeLike, *, out_sharding: Any = None
 ) -> Array[Shape]: ...
 @overload
 def empty(
-    shape: Sequence[int] | int, dtype: Any, *, out_sharding: Any = None
+    shape: Sequence[int] | int, dtype: DTypeLike, *, out_sharding: Any = None
 ) -> Array[IntTuple]: ...
 @overload
 def full(
     shape: tuple[()],
     fill_value: Any,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     *,
     sharding: Any = None,
 ) -> Array[[]]: ...
@@ -399,7 +402,7 @@ def full(
 def full[N: IntVar](
     shape: Int[N],
     fill_value: Any,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     *,
     sharding: Any = None,
 ) -> Array[[N]]: ...
@@ -407,7 +410,7 @@ def full[N: IntVar](
 def full[Shape: _Shape](
     shape: Shape,
     fill_value: Any,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     *,
     sharding: Any = None,
 ) -> Array[Shape]: ...
@@ -415,7 +418,7 @@ def full[Shape: _Shape](
 def full(
     shape: Sequence[int] | int,
     fill_value: Any,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     *,
     sharding: Any = None,
 ) -> Array[IntTuple]: ...
@@ -423,7 +426,7 @@ def full(
 def full_like[Shape: _Shape](
     x: Array[Shape],
     fill_value: Any,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     shape: None = None,
     *,
     sharding: Any = None,
@@ -432,7 +435,7 @@ def full_like[Shape: _Shape](
 def full_like[N: IntVar](
     x: Any,
     fill_value: Any,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     shape: Int[N] = ...,
     *,
     sharding: Any = None,
@@ -441,7 +444,7 @@ def full_like[N: IntVar](
 def full_like[Shape: _Shape](
     x: Any,
     fill_value: Any,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     shape: Shape = ...,
     *,
     sharding: Any = None,
@@ -450,15 +453,15 @@ def full_like[Shape: _Shape](
 def full_like(
     x: Any,
     fill_value: Any,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     shape: Sequence[int] | int | None = None,
     *,
     sharding: Any = None,
 ) -> Array[IntTuple]: ...
 @overload
-def iota[N: IntVar](dtype: Any, size: Int[N]) -> Array[[N]]: ...
+def iota[N: IntVar](dtype: DTypeLike, size: Int[N]) -> Array[[N]]: ...
 @overload
-def iota(dtype: Any, size: int) -> Array[IntTuple]: ...
+def iota(dtype: DTypeLike, size: int) -> Array[IntTuple]: ...
 
 # -----------------------------------------------------------------------------
 # Shape Manipulation, Slicing & Reshaping
@@ -659,22 +662,22 @@ def unstack(
 # Data types & bitcasting
 def bitcast_convert_type(
     operand: Any,
-    new_dtype: Any,
+    new_dtype: DTypeLike,
 ) -> Array[IntTuple]: ...
 @overload
 def convert_element_type[Shape: _Shape](
     operand: Array[Shape],
-    new_dtype: Any,
+    new_dtype: DTypeLike,
 ) -> Array[Shape]: ...
 @overload
 def convert_element_type(
     operand: _Scalar | bool,
-    new_dtype: Any,
+    new_dtype: DTypeLike,
 ) -> Array[[]]: ...
 @overload
 def convert_element_type(
     operand: Any,
-    new_dtype: Any,
+    new_dtype: DTypeLike,
 ) -> Array[IntTuple]: ...
 
 # Reductions, Scans & Window Operations
@@ -682,25 +685,25 @@ def convert_element_type(
 def argmax[Shape: _Shape, Axis: Flag[int]](
     operand: Array[Shape],
     axis: Axis,
-    index_dtype: Any = ...,
+    index_dtype: DTypeLike = ...,
 ) -> Array[lax_axis_reduce_shape(Shape, Axis)]: ...
 @overload
 def argmax(
     operand: Any,
     axis: int,
-    index_dtype: Any = ...,
+    index_dtype: DTypeLike = ...,
 ) -> Array[IntTuple]: ...
 @overload
 def argmin[Shape: _Shape, Axis: Flag[int]](
     operand: Array[Shape],
     axis: Axis,
-    index_dtype: Any = ...,
+    index_dtype: DTypeLike = ...,
 ) -> Array[lax_axis_reduce_shape(Shape, Axis)]: ...
 @overload
 def argmin(
     operand: Any,
     axis: int,
-    index_dtype: Any = ...,
+    index_dtype: DTypeLike = ...,
 ) -> Array[IntTuple]: ...
 @overload
 def associative_scan[Shape: _Shape, Axis: Flag[int] = 0](

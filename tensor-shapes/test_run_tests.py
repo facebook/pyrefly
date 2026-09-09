@@ -82,6 +82,8 @@ class ShapedArrayCorpusGuardTest(unittest.TestCase):
                         ),
                         "--pyrefly",
                         "pyrefly",
+                        "--python",
+                        "/venv/bin/python",
                     ]
                 ),
             ],
