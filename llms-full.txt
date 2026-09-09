@@ -884,7 +884,9 @@ versioned via `initializationOptions.pyrefly.typeErrorDisplayStatusVersion`:
     "version": "v2",
     "label": "Basic" | "Legacy" | "Default" | "Errors Off" | null,
     "tooltip": "markdown string",
-    "docsUrl": "https://pyrefly.org/..."
+    "docsUrl": "https://pyrefly.org/...",
+    "pyreflyVersion": "1.2.3" | null,
+    "buildSystem": "building" | "ready" | "error: <message>" | null
   }
   ```
   `Basic` / `Legacy` / `Default` are emitted when Pyrefly synthesized
@@ -897,6 +899,11 @@ versioned via `initializationOptions.pyrefly.typeErrorDisplayStatusVersion`:
   render plain `Pyrefly` with no parenthetical. The Pyrefly VS Code
   extension uses V2 to render the status-bar parenthetical (e.g.
   `Pyrefly (Basic)` or `Pyrefly (Errors Off)`).
+
+  `buildSystem` reports the state of the most recent source-database
+  query if any open files have an IDE-compatible one configured. If
+  no open projects have a configured build system, it will be set to
+  `null`, and clients should not render it.
 
 Clients should dispatch on response shape (`typeof resp === 'string'`
 for V1, `resp.version` for V2+) so they can transparently support
@@ -2271,13 +2278,15 @@ resolution, after [`search-path`](#search-path) and `typeshed`.
 See more on [how Pyrefly does import resolution](import-resolution.mdx).
 
 - Type: list of directories
-- Default: `./typings` + the result from [Environment Autoconfiguration](#environment-autoconfiguration), or
-  `[]` if the Python interpreter cannot be queried
+- Default: Pyrefly adds the `typings/` directory in the project root if it exists.
+  Pyrefly then adds entries from
+  [Environment Autoconfiguration](#environment-autoconfiguration) if the query succeeds.
 - Flag equivalent: `--site-package-path`
 - Equivalent configs: none
 - Notes:
-    - The queried interpreter's site package paths will always be included in addition to any user-specified value,
-      unless environment auto-configuration is turned off.
+    - When environment auto-configuration is on, Pyrefly adds entries from the interpreter
+      after user-specified `site-package-path` entries. The interpreter entries can include
+      paths that `PYTHONPATH` adds to `sys.path`.
     - Ideally, this should not be set manually, unless you're using a venv, running one-off tests,
       testing specific behavior, or having trouble with [Environment Autoconfiguration](#environment-autoconfiguration).
       Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
@@ -3214,10 +3223,9 @@ can fit under a single config option description.
 
 Unless `skip-interpreter-query` is set, we'll attempt to query a Python interpreter to
 determine your [`python-platform`](#python-platform) or
-[`python-version`](#python-version) if they're unset. We also get a
-[`site-package-path`](#site-package-path) from your interpreter to determine which
-packages you have installed and append those to the end of any `site-package-path`
-you've configured yourself, either through CLI flags or a config file.
+[`python-version`](#python-version) if they're unset. We also use the interpreter's
+`sys.path` to get additional [`site-package-path`](#site-package-path) entries. We
+search these entries after entries that you configure with CLI flags or a config file.
 
 We look for an interpreter with the following logic:
 
@@ -3250,7 +3258,9 @@ The config options we query the interpreter for are:
 
 - `python-platform`: `sys.platform`
 - `python-version`: `sys.version_info[:3]`
-- `site-package-path`: `site.getsitepackages() + [site.getusersitepackages()]`
+- `site-package-path`: entries from `sys.path`. Pyrefly removes the entry that is an empty
+  string, entries that contain `.zip`, entries that end in `/lib-dynload`, and any entry
+  that is equal to `sysconfig.get_path('stdlib')`.
 
 :::info
 You can run `pyrefly dump-config` and pass in your file or configuration like you would
@@ -7252,10 +7262,11 @@ a given file to the root of your filesystem. For example, if you have the follow
 
 The site package path
 ([see `site-package-path` in configuration docs](configuration.mdx#site-package-path))
-consists of several entries representing third-party packages.
+contains roots from the configuration and the interpreter. Pyrefly uses these roots to
+resolve imports.
 
-1. Site package path from a config file (if no CLI override is present) or CLI args.
-2. A site package path queried from a Python interpreter, if one could be found.
+1. Site package paths from a config file (if no CLI override is present) or CLI args.
+2. Filtered entries from a Python interpreter's `sys.path`, if Pyrefly finds an interpreter.
    See [Environment Autoconfiguration](configuration.mdx#environment-autoconfiguration)
    for more information on finding interpreters.
 

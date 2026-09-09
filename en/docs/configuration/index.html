@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.caa578e5.css">
-<script src="/assets/js/runtime~main.d5810273.js" defer="defer"></script>
-<script src="/assets/js/main.9fd94b80.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.9b6f46ec.js" defer="defer"></script>
+<script src="/assets/js/main.79795bee.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -343,14 +343,16 @@ resolution, after <a href="#search-path"><code>search-path</code></a> and <code>
 <p>See more on <a href="/en/docs/import-resolution/">how Pyrefly does import resolution</a>.</p>
 <ul>
 <li>Type: list of directories</li>
-<li>Default: <code>./typings</code> + the result from <a href="#environment-autoconfiguration">Environment Autoconfiguration</a>, or
-<code>[]</code> if the Python interpreter cannot be queried</li>
+<li>Default: Pyrefly adds the <code>typings/</code> directory in the project root if it exists.
+Pyrefly then adds entries from
+<a href="#environment-autoconfiguration">Environment Autoconfiguration</a> if the query succeeds.</li>
 <li>Flag equivalent: <code>--site-package-path</code></li>
 <li>Equivalent configs: none</li>
 <li>Notes:<!-- -->
 <ul>
-<li>The queried interpreter&#x27;s site package paths will always be included in addition to any user-specified value,
-unless environment auto-configuration is turned off.</li>
+<li>When environment auto-configuration is on, Pyrefly adds entries from the interpreter
+after user-specified <code>site-package-path</code> entries. The interpreter entries can include
+paths that <code>PYTHONPATH</code> adds to <code>sys.path</code>.</li>
 <li>Ideally, this should not be set manually, unless you&#x27;re using a venv, running one-off tests,
 testing specific behavior, or having trouble with <a href="#environment-autoconfiguration">Environment Autoconfiguration</a>.
 Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
@@ -1107,10 +1109,9 @@ can fit under a single config option description.</p>
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="environment-autoconfiguration">Environment Autoconfiguration<a href="#environment-autoconfiguration" class="hash-link" aria-label="Direct link to Environment Autoconfiguration" title="Direct link to Environment Autoconfiguration">​</a></h3>
 <p>Unless <code>skip-interpreter-query</code> is set, we&#x27;ll attempt to query a Python interpreter to
 determine your <a href="#python-platform"><code>python-platform</code></a> or
-<a href="#python-version"><code>python-version</code></a> if they&#x27;re unset. We also get a
-<a href="#site-package-path"><code>site-package-path</code></a> from your interpreter to determine which
-packages you have installed and append those to the end of any <code>site-package-path</code>
-you&#x27;ve configured yourself, either through CLI flags or a config file.</p>
+<a href="#python-version"><code>python-version</code></a> if they&#x27;re unset. We also use the interpreter&#x27;s
+<code>sys.path</code> to get additional <a href="#site-package-path"><code>site-package-path</code></a> entries. We
+search these entries after entries that you configure with CLI flags or a config file.</p>
 <p>We look for an interpreter with the following logic:</p>
 <ol>
 <li>Use <a href="#python-interpreter-path"><code>python-interpreter-path</code></a>,
@@ -1142,12 +1143,14 @@ a system-installed interpreter.</li>
 <ul>
 <li><code>python-platform</code>: <code>sys.platform</code></li>
 <li><code>python-version</code>: <code>sys.version_info[:3]</code></li>
-<li><code>site-package-path</code>: <code>site.getsitepackages() + [site.getusersitepackages()]</code></li>
+<li><code>site-package-path</code>: entries from <code>sys.path</code>. Pyrefly removes the entry that is an empty
+string, entries that contain <code>.zip</code>, entries that end in <code>/lib-dynload</code>, and any entry
+that is equal to <code>sysconfig.get_path(&#x27;stdlib&#x27;)</code>.</li>
 </ul>
 <div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>info</div><div class="admonitionContent_BuS1"><p>You can run <code>pyrefly dump-config</code> and pass in your file or configuration like you would
 with <code>pyrefly check</code> to see what Pyrefly finds for your Python interpreter and
 <code>site-package-path</code>, along with other useful config-debugging features.</p></div></div>
-<h3 class="anchor anchorWithStickyNavbar_LWe7" id="filesystem-globbing">Filesystem Globbing<a href="#filesystem-globbing" class="hash-link" aria-label="Direct link to Filesystem Globbing" title="Direct link to Filesystem Globbing">  ​</a></h3>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="filesystem-globbing">Filesystem Globbing<a href="#filesystem-globbing" class="hash-link" aria-label="Direct link to Filesystem Globbing" title="Direct link to Filesystem Globbing">​</a></h3>
 <p>We use a standard Unix-style glob, which allows for wildcard matching when specifying a fileset. It is similar
 to regex, but more restricted given the subset of allowed syntax for paths on a filesystem. We currently only
 allow matching files with a <code>.py</code>, <code>.pyi</code>, or <code>.pyw</code> suffix.</p>

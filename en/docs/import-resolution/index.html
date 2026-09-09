@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.caa578e5.css">
-<script src="/assets/js/runtime~main.d5810273.js" defer="defer"></script>
-<script src="/assets/js/main.9fd94b80.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.9b6f46ec.js" defer="defer"></script>
+<script src="/assets/js/main.79795bee.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -122,10 +122,11 @@ a given file to the root of your filesystem. For example, if you have the follow
 <h3 class="anchor anchorWithStickyNavbar_LWe7" id="site-package-path">Site Package Path<a href="#site-package-path" class="hash-link" aria-label="Direct link to Site Package Path" title="Direct link to Site Package Path">​</a></h3>
 <p>The site package path
 (<a href="/en/docs/configuration/#site-package-path">see <code>site-package-path</code> in configuration docs</a>)
-consists of several entries representing third-party packages.</p>
+contains roots from the configuration and the interpreter. Pyrefly uses these roots to
+resolve imports.</p>
 <ol>
-<li>Site package path from a config file (if no CLI override is present) or CLI args.</li>
-<li>A site package path queried from a Python interpreter, if one could be found.
+<li>Site package paths from a config file (if no CLI override is present) or CLI args.</li>
+<li>Filtered entries from a Python interpreter&#x27;s <code>sys.path</code>, if Pyrefly finds an interpreter.
 See <a href="/en/docs/configuration/#environment-autoconfiguration">Environment Autoconfiguration</a>
 for more information on finding interpreters.</li>
 </ol>
