@@ -3642,8 +3642,11 @@ impl Server {
     /// lock the query itself holds.
     fn set_build_system_status(&self, status: BuildSystemStatus) {
         *self.build_system_status.lock() = Some(status);
+        // Every shape but V1 carries `buildSystem`, so a client on one can act on the
+        // notification. Spelling this as "not V1" rather than "is V2" keeps it correct
+        // when a V3 is added.
         if self.push_type_error_display_status
-            && self.type_error_display_status_version == TypeErrorDisplayStatusVersion::V2
+            && self.type_error_display_status_version != TypeErrorDisplayStatusVersion::V1
         {
             self.connection
                 .send(Message::Notification(new_notification::<
