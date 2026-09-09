@@ -192,9 +192,8 @@ class CargoExecutor(Executor):
         )
 
     def tensor_shapes(self) -> None:
-        # Static only, so that `test.py` needs no virtualenv. The runner builds
-        # the debug pyrefly itself, so we neither build here nor pass
-        # `--pyrefly`.
+        # The runner builds the debug pyrefly itself, so we neither build here
+        # nor pass `--pyrefly`.
         run([sys.executable, "tensor-shapes/run_tests.py", "--static-only"])
 
     def conformance(self) -> None:
@@ -261,8 +260,7 @@ class BuckExecutor(Executor):
             )
             return
         # Same runner and same scope as the Cargo path; `--buck` only changes
-        # where the Pyrefly binary comes from. Runtime tests are left to CI so
-        # that `test.py` does not require a bootstrapped virtualenv.
+        # where the Pyrefly binary comes from. Runtime tests are left to CI.
         run([sys.executable, "tensor-shapes/run_tests.py", "--static-only", "--buck"])
 
     def conformance(self) -> None:

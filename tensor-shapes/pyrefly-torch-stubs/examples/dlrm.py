@@ -377,10 +377,8 @@ class QuantizedEmbeddingBag[D: IntVar](nn.Module):
 
         Uses torch.quantization.quantize_dynamic, same as original.
         Shape-wise this is a no-op — the output dimensions are unchanged.
-        quantize_dynamic returns Module (not EmbeddingBag), so we need
-        a type: ignore for the assignment.
         """
-        self.emb = torch.quantization.quantize_dynamic(  # type: ignore[bad-assignment]
+        self.emb = torch.quantization.quantize_dynamic(
             self.emb, {nn.EmbeddingBag}, dtype=torch.qint8
         )
 

@@ -12,8 +12,8 @@ per-package `run_pyrefly.py` and `run_runtime_tests.py` remain the things to
 reach for while iterating on a single library.
 
 Builds Pyrefly before checking, and needs the shared virtualenv from
-bootstrap_venv.py for runtime tests and NumPy static checks. Nothing here
-downloads anything.
+bootstrap_venv.py for runtime tests and Torch and NumPy static checks. Nothing
+here downloads anything.
 """
 
 from __future__ import annotations
@@ -76,12 +76,15 @@ def main() -> int:
         "--python",
         type=Path,
         default=None,
-        help="virtualenv interpreter with torch/numpy/jax installed (default: shared virtualenv)",
+        help=(
+            "virtualenv interpreter used by runtime tests and Torch/NumPy static fallback "
+            "(default: shared virtualenv)"
+        ),
     )
     parser.add_argument(
         "--static-only",
         action="store_true",
-        help="only type check; NumPy checking still requires a virtualenv",
+        help="only type check; still needs the virtualenv for Torch/NumPy fallback",
     )
     parser.add_argument(
         "--runtime-only",
@@ -128,7 +131,7 @@ def main() -> int:
                 command.extend(["--pyrefly", pyrefly[0]])
             else:
                 command.append("--buck")
-            if package == "pyrefly-numpy-stubs":
+            if package in {"pyrefly-torch-stubs", "pyrefly-numpy-stubs"}:
                 command.extend(["--python", str(python)])
             if args.nocapture:
                 command.append("--nocapture")

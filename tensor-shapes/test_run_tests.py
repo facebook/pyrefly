@@ -29,7 +29,7 @@ class ShapedArrayCorpusGuardTest(unittest.TestCase):
     @patch.object(run_tests, "run", return_value=True)
     @patch.object(run_tests, "venv_python", return_value=Path("/venv/bin/python"))
     @patch.object(run_tests, "pyrefly_command", return_value=["pyrefly"])
-    def test_static_only_forwards_python_to_numpy(
+    def test_static_only_forwards_python_to_partial_stub_packages(
         self,
         _pyrefly_command: Mock,
         venv_python: Mock,
@@ -56,6 +56,8 @@ class ShapedArrayCorpusGuardTest(unittest.TestCase):
                         ),
                         "--pyrefly",
                         "pyrefly",
+                        "--python",
+                        "/venv/bin/python",
                     ]
                 ),
                 call(
