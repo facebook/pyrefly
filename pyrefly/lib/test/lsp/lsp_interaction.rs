@@ -10,6 +10,7 @@
 // can share it; the modules below import it directly from there.
 
 mod basic;
+mod build_system_status;
 mod call_hierarchy;
 mod code_action_markdown_diagnostic;
 mod code_lens;
