@@ -111,3 +111,67 @@ def test_diag_matrix_runtime_shape() -> None:
     result = np.diag(np.ones((2, 3)))
     assert_type(result, np.ndarray[[int], np.dtype[np.float64]])
     assert result.shape == (2,)
+
+
+def test_stack_axis0() -> None:
+    x = np.zeros(3)
+    stacked = np.stack([x, x])
+    assert_type(stacked, np.ndarray[[2, 3], Any])
+    assert_shape(stacked.shape, (2, 3))
+
+
+def test_stack_axis1() -> None:
+    x = np.zeros((2, 3))
+    stacked = np.stack([x, x, x], axis=1)
+    assert_type(stacked, np.ndarray[[2, 3, 3], Any])
+    assert_shape(stacked.shape, (2, 3, 3))
+
+
+def test_stack_negative_axis() -> None:
+    x = np.zeros(4)
+    stacked = np.stack([x, x], axis=-1)
+    assert_type(stacked, np.ndarray[[4, 2], Any])
+    assert_shape(stacked.shape, (4, 2))
+
+
+def test_stack_rejects_mismatched_shapes() -> None:
+    assert_shape(np.stack([np.zeros(2)]).shape, (1, 2))
+    try:
+        np.stack([np.zeros(2), np.zeros(3)])  # E: same shape
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected NumPy to reject mismatched shapes")
+
+
+def test_stack_rejects_out_of_range_axis() -> None:
+    assert_shape(np.stack([np.zeros(2)]).shape, (1, 2))
+    try:
+        np.stack([np.zeros(2)], axis=2)  # E: axis out of range
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected NumPy to reject an out-of-range axis")
+
+
+def check_stack_symbolic[N: IntVar](x: np.ndarray[[N], Any]) -> None:
+    assert_type(np.stack([x, x, x]), np.ndarray[[3, N], Any])
+
+
+class Axis:
+    def __index__(self) -> int:
+        return 0
+
+
+def test_stack_array_like_fallback() -> None:
+    stacked = np.stack([[1, 2], [3, 4]], axis=Axis(), dtype=np.float64, casting="safe")
+    assert_type(stacked, np.ndarray)
+    assert_shape(stacked.shape, (2, 2))
+
+
+def test_stack_out_fallback() -> None:
+    out = np.empty((2, 2))
+    stacked = np.stack([[1, 2], [3, 4]], out=out, casting="unsafe")
+    assert_type(stacked, np.ndarray[[2, 2], np.dtype[np.float64]])
+    assert_shape(stacked.shape, (2, 2))
+    assert stacked is out

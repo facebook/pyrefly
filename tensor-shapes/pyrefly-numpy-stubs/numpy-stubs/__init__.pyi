@@ -6,7 +6,7 @@
 from builtins import bool as py_bool
 from collections.abc import Sequence
 from types import EllipsisType
-from typing import Any, Final, Literal, overload
+from typing import Any, Final, Literal, overload, SupportsIndex
 
 import shape_extensions
 from numpy.__config__ import (
@@ -177,7 +177,6 @@ from numpy._core.shape_base import (
     atleast_3d as atleast_3d,
     block as block,
     hstack as hstack,
-    stack as stack,
     unstack as unstack,
     vstack as vstack,
 )
@@ -187,9 +186,11 @@ from numpy._shapes import (
     matmul_shape,
     matvec_shape,
     reduce_shape,
+    stack_shape,
     vecdot_shape,
     vecmat_shape,
 )
+from numpy._typing import ArrayLike
 from numpy._typing._extended_precision import (
     complex256 as complex256,
     float128 as float128,
@@ -380,7 +381,9 @@ from shape_extensions import (
     index_shape,
     Int,
     IntTuple,
+    IntTuples,
     IntVar,
+    MapIntTuples,
 )
 
 # Preserve NumPy's canonical re-exports before local shape-aware declarations.
@@ -441,9 +444,13 @@ class dtype[Scalar = Any]:
 # its body. Annotations inside the class reach the class through this alias.
 _dtype = dtype
 
+class _Flags:
+    f_contiguous: py_bool
+
 class ndarray[Shape: _Shape = _Shape, DType = Any]:
     shape: Shape
     dtype: DType
+    flags: _Flags
     strides: tuple[int, ...]
     @property
     def __array_interface__(self) -> Any: ...
@@ -811,7 +818,6 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
     ctypes: Any
     diagonal: Any
     dot: Any
-    flags: Any
     flat: Any
     mT: Any
     nonzero: Any
@@ -846,6 +852,38 @@ class ufunc:
 permute_dims = transpose
 # TODO(stroxler): Make this precise when `concatenate` accepts overlay ndarrays.
 concat: Any = concatenate
+
+@overload
+def stack[Shapes: IntTuples, Axis: Flag[int]](
+    arrays: MapIntTuples[lambda S: ndarray[S], Shapes], axis: Axis = 0
+) -> ndarray[stack_shape(Shapes, Axis), Any]: ...
+@overload
+def stack(
+    arrays: Sequence[ArrayLike],
+    axis: SupportsIndex = 0,
+    out: None = None,
+    *,
+    dtype: Any = None,
+    casting: str = "same_kind",
+) -> ndarray: ...
+@overload
+def stack[Out: ndarray](
+    arrays: Sequence[ArrayLike],
+    axis: SupportsIndex,
+    out: Out,
+    *,
+    dtype: Any = None,
+    casting: str = "same_kind",
+) -> Out: ...
+@overload
+def stack[Out: ndarray](
+    arrays: Sequence[ArrayLike],
+    axis: SupportsIndex = 0,
+    *,
+    out: Out,
+    dtype: Any = None,
+    casting: str = "same_kind",
+) -> Out: ...
 
 # The output shape depends on the external object's DLPack representation.
 def from_dlpack(

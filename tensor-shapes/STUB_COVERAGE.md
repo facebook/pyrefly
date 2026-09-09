@@ -66,6 +66,14 @@ The default output gives counts by module and class. Add `--show-names` for a
 human-readable inventory or `--json` for machine-readable analysis. Replace
 `torch` with `numpy` or `jax` for the other packages.
 
+The stable internal NumPy v0 overlay has its own inventory because it is a
+deliberately smaller, self-contained surface for Buck type checking:
+
+```bash
+~/.tensor-shapes-venv/bin/python tensor-shapes/stub_coverage.py \
+  ../python/tensor-shapes/v0/numpy_stub_coverage.toml
+```
+
 This is currently an inspection tool rather than a CI ratchet: it does not
 compare against checked-in snapshots or fail based on the number of gaps. The
 checker reports the installed library version but does not enforce it; the

@@ -47,11 +47,13 @@ def test_ndarray_properties_and_shape_preserving_methods() -> None:
     assert_type(a.item(0), Any)
     assert_type(a.dumps(), bytes)
     assert_type(a.tobytes(), bytes)
+    assert_type(a.flags.f_contiguous, bool)
 
     if TYPE_CHECKING:
         assert_type(a.__array_interface__, Any)
         a.__array__(copy="yes")  # E: Argument `Literal['yes']` is not assignable
         a.__array_interface__ = {}  # E: read-only property
+        assert_type(a.tofile(object()), None)
         a.base = None  # E: read-only property
         a.data = memoryview(b"")  # E: read-only property
         a.device = "cpu"  # E: read-only property

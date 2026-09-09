@@ -90,6 +90,13 @@ def test_matmul_preserves_shapes_and_accepts_array_like_inputs() -> None:
     assert_type(np.matmul(unknown, right), Any)
 
 
+def test_binary_ufunc_at_is_in_place() -> None:
+    values = np.zeros(3)
+
+    assert_type(np.maximum.at(values, [0, 1], 1.0), None)
+    assert_shape(values.shape, (3,))
+
+
 def test_multi_output_ufuncs_preserve_shapes() -> None:
     matrix = np.ones((2, 3))
     row = np.full((1, 3), 2.0)
