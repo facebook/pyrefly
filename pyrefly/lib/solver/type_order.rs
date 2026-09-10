@@ -66,6 +66,11 @@ impl<'solver, Ans: LookupAnswer> TypeOrder<'solver, Ans> {
         self.0.stdlib
     }
 
+    /// Expand inference variables without exposing the solver through the type-order API.
+    pub(crate) fn expand_with_bounds(self, ty: &mut Type) {
+        self.0.solver().expand_with_bounds(ty);
+    }
+
     pub fn has_superclass(self, got: &Class, want: &Class) -> bool {
         self.0.has_superclass(got, want)
     }

@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+from typing import assert_type, TYPE_CHECKING
+
 import jax.numpy as jnp
-from shape_extensions import assert_shape
+from shape_extensions import assert_shape, IntTuple
 
 # A multi-argument `arange` has a length the DSL cannot compute, and a shape
 # outside the exact ranks is gradual, so `assert_shape` cannot be used for
@@ -15,6 +17,34 @@ GRADUAL_SHAPE_RUNTIME_TESTS = {
     "test_multi_argument_arange_length_is_gradual",
     "test_shapes_outside_the_exact_ranks_are_gradual",
 }
+
+
+def check_array_and_asarray_list_literal_types() -> None:
+    assert_type(jnp.array(1), jnp.Array[[]])
+    assert_type(jnp.array([1, 2, 3]), jnp.Array[[3]])
+    assert_type(jnp.asarray([[1, 2], [3, 4]]), jnp.Array[[2, 2]])
+    assert_type(jnp.asarray([[], []]), jnp.Array[[2, 0]])
+    assert_type(jnp.array([1, 2], dtype=jnp.float32), jnp.Array[[2]])
+
+
+def test_array_and_asarray_list_literals() -> None:
+    assert_shape(jnp.array([1, 2, 3]).shape, (3,))
+    assert_shape(jnp.array([[1, 2], [3, 4]]).shape, (2, 2))
+    assert_shape(jnp.array([[], []]).shape, (2, 0))
+    assert_shape(jnp.asarray([1, 2, 3]).shape, (3,))
+    assert_shape(jnp.asarray([[1, 2], [3, 4]]).shape, (2, 2))
+    assert_shape(jnp.asarray([[], []]).shape, (2, 0))
+
+
+def check_array_compatibility(array: jnp.Array[[2, 3]], raw: list[int]) -> None:
+    assert_type(jnp.array(array), jnp.Array[[2, 3]])
+    assert_type(jnp.array(raw), jnp.Array[IntTuple])
+    assert_type(jnp.array([1, 2], ndmin=2), jnp.Array[IntTuple])
+
+
+if TYPE_CHECKING:
+    assert_type(jnp.array([[1], [2, 3]]), jnp.Array[IntTuple])
+    assert_type(jnp.asarray(["not", "numeric"]), jnp.Array[IntTuple])
 
 
 def test_zeros_ones_and_empty() -> None:

@@ -784,40 +784,44 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 )
             }
             Expr::Tuple(x) => self.tuple_infer(x, hint, errors),
-            Expr::List(x) => self.infer_with_decomposed_hint(
-                hint,
-                |hint| self.decompose_list(hint),
-                |elt_hint, hint| {
-                    if x.is_empty() {
-                        let elem_ty = match elt_hint {
-                            Some(ListElementHint::Hint(elem_hint)) => elem_hint,
-                            Some(ListElementHint::UninformativeAny(_)) | None => self
-                                .solver()
-                                .fresh_partial_contained(self.uniques, x.range)
-                                .to_type(self.heap),
-                        };
-                        self.heap.mk_class_type(self.stdlib.list(elem_ty))
-                    } else {
-                        let (elt_hint, partial_fallback) = elt_hint
-                            .map(ListElementHint::into_parts)
-                            .unwrap_or_default();
-                        let elem_tys = self.elts_infer(
-                            &x.elts,
-                            HintRef::with_ty_opt(hint, elt_hint.as_ref()),
-                            errors,
-                        );
-                        let ty = self
-                            .heap
-                            .mk_class_type(self.stdlib.list(self.unions(elem_tys)));
-                        if let Some(partial_fallback) = partial_fallback {
-                            self.solver()
-                                .replace_unresolved_partials(ty, &partial_fallback)
-                        } else {
-                            ty
-                        }
-                    }
-                },
-            ),
+            Expr::List(x) => hint
+                .and_then(|hint| self.infer_array_coercible_list(x, hint, errors))
+                .unwrap_or_else(|| {
+                    self.infer_with_decomposed_hint(
+                        hint,
+                        |hint| self.decompose_list(hint),
+                        |elt_hint, hint| {
+                            if x.is_empty() {
+                                let elem_ty = match elt_hint {
+                                    Some(ListElementHint::Hint(elem_hint)) => elem_hint,
+                                    Some(ListElementHint::UninformativeAny(_)) | None => self
+                                        .solver()
+                                        .fresh_partial_contained(self.uniques, x.range)
+                                        .to_type(self.heap),
+                                };
+                                self.heap.mk_class_type(self.stdlib.list(elem_ty))
+                            } else {
+                                let (elt_hint, partial_fallback) = elt_hint
+                                    .map(ListElementHint::into_parts)
+                                    .unwrap_or_default();
+                                let elem_tys = self.elts_infer(
+                                    &x.elts,
+                                    HintRef::with_ty_opt(hint, elt_hint.as_ref()),
+                                    errors,
+                                );
+                                let ty = self
+                                    .heap
+                                    .mk_class_type(self.stdlib.list(self.unions(elem_tys)));
+                                if let Some(partial_fallback) = partial_fallback {
+                                    self.solver()
+                                        .replace_unresolved_partials(ty, &partial_fallback)
+                                } else {
+                                    ty
+                                }
+                            }
+                        },
+                    )
+                }),
             Expr::Dict(x) => self.dict_infer(&x.items, hint, x.range, errors),
             Expr::Set(x) => self.infer_with_decomposed_hint(
                 hint,
@@ -4529,7 +4533,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     expr.range(),
                     ErrorKind::InvalidAnnotation,
                     format!(
-                        "Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `{}`",
+                        "Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `{}`",
                         self.for_display(expr_type)
                     ),
                 );
@@ -4539,7 +4543,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     /// Parse a list of dimension expressions, simplifying and validating each one.
-    /// Returns None if any dimension fails to parse or is non-positive.
+    /// Returns None if any dimension fails to parse or is negative.
     pub(super) fn parse_dimension_list(
         &self,
         args: &[Expr],
@@ -4612,15 +4616,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             };
             let simplified = canonicalize(dim);
 
-            // Validate that literal dimensions are positive
+            // Array extents may be zero, but negative extents are invalid.
             if let Type::Int(Int::Literal(value)) = &simplified
-                && value <= &0
+                && value < &0
             {
                 self.error(
                     errors,
                     arg.range(),
                     ErrorKind::InvalidAnnotation,
-                    format!("Tensor shape dimension must be positive, got {}", value),
+                    format!("Tensor shape dimension must be non-negative, got {}", value),
                 );
                 return Err(DimensionExprError::Invalid);
             }

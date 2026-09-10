@@ -1263,7 +1263,7 @@ def direct_int_tuple_form[N: Int, M: IntVar](
     direct_literal: Array[IntTuple[5], int],
     direct_int_var: Array[IntTuple[M], int],
     direct_arithmetic: Array[IntTuple[M + 1], int],
-    direct_explicit_int: Array[IntTuple[Int[5]], int],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
+    direct_explicit_int: Array[IntTuple[Int[5]], int],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
     direct_ordinary: Array[IntTuple[N], int],  # E: `N` must be an `IntVar` to be used as a shape dimension
 ) -> None:
     assert_type(direct_literal, Array[[5], int])
@@ -1277,7 +1277,7 @@ def direct_int_tuple_form[N: Int, M: IntVar](
 def bare_list_form[N: Int, M: IntVar](
     raw: Array[[5, M], int],
     arithmetic: Array[[M + 1], int],
-    bare_explicit_int: Array[[Int[5]], int],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
+    bare_explicit_int: Array[[Int[5]], int],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
     bare_ordinary: Array[[N], int],  # E: `N` must be an `IntVar` to be used as a shape dimension
 ) -> None:
     assert_type(raw, Array[[5, M], int])
@@ -1313,7 +1313,7 @@ type Dim[N: IntVar] = Int[N]
 def explicit_class(bad: Box[str]) -> None:  # E: Tensor shape dimensions must be integer literals or type variables
     reveal_type(bad.dim)  # E: revealed type: Int[int]
 
-def explicit_class_non_shape_arg(bad: Box[list[int]]) -> None:  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions
+def explicit_class_non_shape_arg(bad: Box[list[int]]) -> None:  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions
     reveal_type(bad.dim)  # E: revealed type: Int[int]
 
 def explicit_alias(x: Dim[str]) -> None:  # E: Tensor shape dimensions must be integer literals or type variables
@@ -1951,9 +1951,9 @@ def check(two: Tensor[[2]], three: Tensor[[3]], gradual: Tensor[[int]], matrix: 
     assert_type(wrapped_two_symbols(two, three), Tensor[[5]])
     assert_type(svd_min(matrix), Tensor[[2]])
 
-def ordinary_shape[N: IntVar](x: Tensor[[Int[N] + 1]]) -> None: ...  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
+def ordinary_shape[N: IntVar](x: Tensor[[Int[N] + 1]]) -> None: ...  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
 def invalid_wrapper() -> Tensor[[identity(Int[str])]]: ...  # E: Tensor shape dimensions must be integer literals or type variables, got `type[str]`
-def invalid_nested_wrapper[N: IntVar]() -> Tensor[[identity(Int[Int[N]])]]: ...  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
+def invalid_nested_wrapper[N: IntVar]() -> Tensor[[identity(Int[Int[N]])]]: ...  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
 def invalid_bare_typevar[T]() -> Tensor[[identity(D[T])]]: ...  # E: `T` must be an `IntVar` to be used as a shape dimension
 "#,
 );
@@ -4521,6 +4521,8 @@ def int_identity(x: Int) -> Int:
 def shape_identity(x: IntTuple) -> IntTuple:
     return x
 
+zero_extent: Tensor[[0]]
+
 def missing[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity()]: ...  # E: Expected 1 argument for `shape_identity`, got 0
 def extra[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(S, S)]: ...  # E: Expected 1 argument for `shape_identity`, got 2
 def keyword[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(x=S)]: ...  # E: `shape_identity` does not accept keyword arguments
@@ -4531,7 +4533,7 @@ def nested_wrong_domain(x: Tensor[[2]]) -> Tensor[shape_identity(int_identity(In
 def malformed_int(x: Tensor[[2]]) -> Tensor[[int_identity("x")]]: ...  # E: String literals are not valid tensor dimensions
 def recovered_dimension[N: IntVar]() -> Tensor[[int_identity(Int[N + MissingDim])]]: ...  # E: Could not find name `MissingDim`
 def recovered_ordinary() -> Tensor[[int_identity(list[MissingType])]]: ...  # E: Could not find name `MissingType`  # E: Expected an `Int` argument for parameter `x` (position 1) of `int_identity`, got `list[Unknown]`
-def nonpositive_int(x: Tensor[[2]]) -> Tensor[[int_identity(-1)]]: ...  # E: Tensor shape dimension must be positive, got -1
+def negative_int(x: Tensor[[2]]) -> Tensor[[int_identity(-1)]]: ...  # E: Tensor shape dimension must be non-negative, got -1
 def malformed_shape(x: Tensor[[2]]) -> Tensor[shape_identity(IntTuple["x"])]: ...  # E: String literals are not valid tensor dimensions
 def unbound_shape(x: Tensor[[2]]) -> Tensor[shape_identity(MissingShape)]: ...  # E: Could not find name `MissingShape`
 
@@ -7215,8 +7217,8 @@ def f[N, M](
     no_arg: Tensor[[D()]],  # E: Expected 1 positional argument for `D`, got 0
     too_many: Tensor[[D(N, M)]],  # E: Expected 1 positional argument for `D`, got 2
     keyword: Tensor[[D(N, dim=M)]],  # E: `D` accepts exactly 1 positional argument and no keyword arguments, got 1 positional and 1 keyword
-    non_d_subscript: Tensor[[Box[N]]],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Box[N]]`
-    non_d_call: Tensor[[Factory(N)]],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `Factory`
+    non_d_subscript: Tensor[[Box[N]]],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Box[N]]`
+    non_d_call: Tensor[[Factory(N)]],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `Factory`
 ) -> None:
     pass
 "#,
@@ -14345,15 +14347,118 @@ def check(
 "#,
 );
 
-// Current inference pins the first compatible target arm and rejects later source arms; union
-// normalization means reversing the source spelling need not change that choice. The desired
-// behavior joins every compatible arm, widening differing ranks to gradual `IntTuple`.
+// Compatible arms contribute shape candidates to one gradual join. Equal dimensions remain
+// precise, differing dimensions widen to `Any`, and differing ranks widen to gradual `IntTuple`.
 testcase!(
-    bug = "union arms should share shape information",
     test_shape_parameter_shared_across_union_arms,
     shape_extensions_env(),
     r#"
-from typing import assert_type
+from typing import Any, assert_type
+from shape_extensions import IntTuple
+
+class Array[Shape: IntTuple]: ...
+class NdArray[Shape: IntTuple]: ...
+class BothA(Array[[2, 3]], NdArray[[2, 4]]): ...
+class BothB(Array[[2, 5]], NdArray[[2, 4]]): ...
+
+type ArrayLike[Shape: IntTuple] = Array[Shape] | NdArray[Shape]
+type ReversedArrayLike[Shape: IntTuple] = NdArray[Shape] | Array[Shape]
+type OptionalArrayLike[Shape: IntTuple] = Array[Shape] | NdArray[Shape] | None
+type TaggedArrayLike[Shape: IntTuple] = Array[Shape] | NdArray[Shape] | str
+
+def as_array[Shape: IntTuple](value: ArrayLike[Shape]) -> Array[Shape]: ...
+def as_reversed_array[Shape: IntTuple](
+    value: ReversedArrayLike[Shape],
+) -> Array[Shape]: ...
+def as_optional_array[Shape: IntTuple](
+    value: OptionalArrayLike[Shape],
+) -> Array[Shape]: ...
+def as_tagged_array[Shape: IntTuple](value: TaggedArrayLike[Shape]) -> Array[Shape]: ...
+
+def check(
+    value: Array[[2, 3]] | NdArray[[4, 3]],
+    reversed_value: NdArray[[4, 3]] | Array[[2, 3]],
+    different_ranks: Array[[2]] | NdArray[[3, 4]],
+    ambiguous: BothA | BothB,
+    optional: Array[[2, 3]] | NdArray[[4, 3]] | None,
+    tagged: Array[[2, 3]] | NdArray[[4, 3]] | str,
+) -> None:
+    assert_type(as_array(value), Array[[Any, 3]])
+    assert_type(as_array(reversed_value), Array[[Any, 3]])
+    assert_type(as_array(different_ranks), Array[IntTuple])
+    # Multiple inheritance lets each source arm match both target arms, so inference falls back
+    # to the fully gradual shape rather than selecting a dimension-wise join.
+    assert_type(as_array(ambiguous), Array[IntTuple])
+    assert_type(as_reversed_array(ambiguous), Array[IntTuple])
+    assert_type(as_optional_array(optional), Array[[Any, 3]])
+    assert_type(as_tagged_array(tagged), Array[[Any, 3]])
+"#,
+);
+
+// A single-spelled shape-generic parameter widens the same way as a union-spelled one: a
+// same-base union argument joins across arms instead of pinning the first arm's shape.
+testcase!(
+    test_shape_parameter_shared_across_single_spelled_param,
+    shape_extensions_env(),
+    r#"
+from typing import Any, assert_type
+from shape_extensions import IntTuple
+
+class Array[Shape: IntTuple]: ...
+class NdArray[Shape: IntTuple]: ...
+
+type ArrayLike[Shape: IntTuple] = Array[Shape] | NdArray[Shape]
+
+def as_array[Shape: IntTuple](value: ArrayLike[Shape]) -> Array[Shape]: ...
+def as_plain[Shape: IntTuple](value: Array[Shape]) -> Array[Shape]: ...
+
+def check(same_base: Array[[2, 3]] | Array[[4, 3]]) -> None:
+    assert_type(as_array(same_base), Array[[Any, 3]])
+    assert_type(as_plain(same_base), Array[[Any, 3]])
+
+def check_cross_base(cross_base: Array[[2, 3]] | NdArray[[4, 3]]) -> None:
+    as_plain(cross_base)  # E: is not assignable to parameter `value`
+"#,
+);
+
+// Probing stays bounded: 32 pairs (16 got arms times 2 want arms) retain their common
+// dimension, while a wider product uses a gradual shape and remains assignable.
+testcase!(
+    test_union_shape_join_probe_cap,
+    shape_extensions_env(),
+    r#"
+from typing import Any, assert_type
+from shape_extensions import IntTuple
+
+class Array[Shape: IntTuple]: ...
+class NdArray[Shape: IntTuple]: ...
+class Other[Shape: IntTuple]: ...
+
+type ArrayLike[Shape: IntTuple] = Array[Shape] | NdArray[Shape]
+type Triple[Shape: IntTuple] = Array[Shape] | NdArray[Shape] | Other[Shape]
+
+def as_array[Shape: IntTuple](value: ArrayLike[Shape]) -> Array[Shape]: ...
+def as_triple[Shape: IntTuple](value: Triple[Shape]) -> Array[Shape]: ...
+
+def check_capped(
+    wide: Array[[0, 3]] | Array[[1, 3]] | Array[[2, 3]] | Array[[3, 3]] | Array[[4, 3]] | Array[[5, 3]] | Array[[6, 3]] | Array[[7, 3]] | Array[[8, 3]] | Array[[9, 3]] | Array[[10, 3]] | Array[[11, 3]] | Array[[12, 3]] | Array[[13, 3]] | Array[[14, 3]] | Array[[15, 3]],
+) -> None:
+    assert_type(as_array(wide), Array[[Any, 3]])
+
+def check_over_cap(
+    too_wide: Array[[0, 7]] | Array[[1, 7]] | Array[[2, 7]] | Array[[3, 7]] | Array[[4, 7]] | Array[[5, 7]] | Array[[6, 7]] | Array[[7, 7]] | Array[[8, 7]] | Array[[9, 7]] | Array[[10, 7]],
+) -> None:
+    assert_type(as_triple(too_wide), Array[IntTuple])
+"#,
+);
+
+// Aborting the join commits nothing: a member matching no arm falls back to the ordinary
+// union check, which reports the mismatch instead of a partial join.
+testcase!(
+    test_union_shape_join_abort_falls_back,
+    shape_extensions_env(),
+    r#"
+from typing import Any, assert_type
 from shape_extensions import IntTuple
 
 class Array[Shape: IntTuple]: ...
@@ -14363,13 +14468,8 @@ type ArrayLike[Shape: IntTuple] = Array[Shape] | NdArray[Shape]
 
 def as_array[Shape: IntTuple](value: ArrayLike[Shape]) -> Array[Shape]: ...
 
-def check(
-    value: Array[[2, 3]] | NdArray[[4, 3]],
-    reversed_value: NdArray[[4, 3]] | Array[[2, 3]],
-    different_ranks: Array[[2]] | NdArray[[3, 4]],
-) -> None:
-    assert_type(as_array(value), Array[[2, 3]])  # E: is not assignable to parameter `value`
-    assert_type(as_array(reversed_value), Array[[2, 3]])  # E: is not assignable to parameter `value`
-    assert_type(as_array(different_ranks), Array[[2]])  # E: is not assignable to parameter `value`
+def check(value: Array[[2, 3]] | NdArray[[4, 3]], bad: Array[[2, 3]] | int) -> None:
+    assert_type(as_array(value), Array[[Any, 3]])
+    as_array(bad)  # E: is not assignable to parameter `value`
 "#,
 );

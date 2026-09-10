@@ -855,7 +855,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         }
 
-        let callable = if let Some(q) = &def.paramspec {
+        let mut callable = if let Some(q) = &def.paramspec {
             Callable::concatenate(
                 def.params
                     .iter()
@@ -905,6 +905,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // in the signature, and detect mixing of native and jaxtyping syntax.
         let tparams =
             self.collect_jaxtyping_tparams(&callable, &def.tparams, stmt.name.range, errors);
+
+        if self.solver().tensor_shapes {
+            let parameter_ranges = stmt
+                .parameters
+                .iter()
+                .map(|parameter| {
+                    parameter
+                        .annotation()
+                        .map_or_else(|| parameter.name().range(), Ranged::range)
+                })
+                .collect::<Vec<_>>();
+            self.simplify_redundant_scalar_unions(
+                &mut callable,
+                &tparams,
+                &parameter_ranges,
+                stmt.name.range,
+                errors,
+            );
+        }
 
         self.validate_shape_extension_function_parameters(stmt, &def.params, &tparams, errors);
 

@@ -10,6 +10,10 @@
 //! The generic solver remains responsible for variable state and subset traversal. This module
 //! isolates the shape-specific decisions it needs when admitting or simplifying solver values.
 
+use std::sync::Arc;
+
+use pyrefly_types::callable::Param;
+use pyrefly_types::callable::Params;
 use pyrefly_types::dimension::Int;
 use pyrefly_types::dimension::canonicalize;
 use pyrefly_types::dimension::gradual_size;
@@ -19,13 +23,169 @@ use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::shaped_array::IntTuple;
+use pyrefly_types::shaped_array::IntTupleView;
 use pyrefly_types::shaped_array::is_int_tuples_type;
 use pyrefly_types::shaped_array::tuple_carrier_to_shape;
 use pyrefly_types::simplify::unions;
 use pyrefly_types::stdlib::Stdlib;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_var::Restriction;
+use pyrefly_types::types::TParams;
 use pyrefly_types::types::Type;
+use pyrefly_types::types::Var;
+
+/// Join concrete equal-rank shapes dimension-wise; other differing shapes become gradual.
+pub(crate) fn join_int_tuples(left: &IntTuple, right: &IntTuple) -> IntTuple {
+    if left == right {
+        return left.clone();
+    }
+    match (left.view(), right.view()) {
+        (IntTupleView::Concrete(left), IntTupleView::Concrete(right))
+            if left.len() == right.len() =>
+        {
+            IntTuple::new(
+                left.iter()
+                    .zip(right)
+                    .map(|(left, right)| {
+                        if left == right {
+                            left.clone()
+                        } else {
+                            Int::Int
+                        }
+                    })
+                    .collect(),
+            )
+        }
+        _ => IntTuple::shapeless(),
+    }
+}
+
+fn contains_parameter(ty: &Type, parameter: Var) -> bool {
+    ty.any(|ty| matches!(ty, Type::Var(candidate) if *candidate == parameter))
+}
+
+/// Index of the unique `IntTuple`-bounded type parameter, if there is exactly one.
+fn unique_int_tuple_bound_index(tparams: &TParams) -> Option<usize> {
+    let mut indices = tparams
+        .iter()
+        .enumerate()
+        .filter_map(|(index, parameter)| has_int_tuple_bound(parameter).then_some(index));
+    let shape_index = indices.next()?;
+    indices.next().is_none().then_some(shape_index)
+}
+
+/// Extract the sole `IntTuple`-bounded argument when it is a solver variable used by no other
+/// argument of the same class.
+fn shape_parameter(ty: &Type) -> Option<Var> {
+    let (targs, shape_index) = match ty {
+        Type::ShapedArray(array) => (
+            array.base_class.targs().as_slice(),
+            array.tuple_carrier_shape_arg_index()?,
+        ),
+        Type::ClassType(cls) => (
+            cls.targs().as_slice(),
+            unique_int_tuple_bound_index(cls.tparams())?,
+        ),
+        _ => return None,
+    };
+    let Type::Var(parameter) = targs.get(shape_index)? else {
+        return None;
+    };
+    has_only_shape_argument_occurrences(targs, Some(shape_index), *parameter).then_some(*parameter)
+}
+
+/// Extract the sole eligible shape variable from a union or a single-spelled parameter.
+///
+/// Union arms that do not mention the variable are allowed so ordinary alternatives such as
+/// `None` do not disable shape joining. Any arm that mentions the variable must use it solely as
+/// its shape argument.
+fn union_shape_parameter(ty: &Type) -> Option<Var> {
+    match ty {
+        Type::Union(union) => {
+            let mut parameters = union.members.iter().filter_map(shape_parameter);
+            let parameter = parameters.next()?;
+            if parameters.any(|candidate| candidate != parameter) {
+                return None;
+            }
+            union
+                .members
+                .iter()
+                .all(|member| {
+                    shape_parameter(member) == Some(parameter)
+                        || !contains_parameter(member, parameter)
+                })
+                .then_some(parameter)
+        }
+        _ => shape_parameter(ty),
+    }
+}
+
+/// Check that every occurrence of a variable is an array-like shape argument in the return type.
+fn has_only_return_shape_occurrences(ty: &Type, parameter: Var) -> bool {
+    match ty {
+        Type::Union(union) => union.members.iter().all(|member| {
+            !contains_parameter(member, parameter)
+                || has_only_return_shape_occurrences(member, parameter)
+        }),
+        Type::ShapedArray(array) => has_only_shape_argument_occurrences(
+            array.base_class.targs().as_slice(),
+            array.tuple_carrier_shape_arg_index(),
+            parameter,
+        ),
+        Type::ClassType(cls) => has_only_shape_argument_occurrences(
+            cls.targs().as_slice(),
+            unique_int_tuple_bound_index(cls.tparams()),
+            parameter,
+        ),
+        _ => !contains_parameter(ty, parameter),
+    }
+}
+
+/// Check that a variable occurs in the unique shape argument and nowhere else in the arguments.
+fn has_only_shape_argument_occurrences(
+    targs: &[Type],
+    shape_index: Option<usize>,
+    parameter: Var,
+) -> bool {
+    let Some(shape_index) = shape_index else {
+        return false;
+    };
+    targs
+        .get(shape_index)
+        .is_some_and(|shape| contains_parameter(shape, parameter))
+        && !targs
+            .iter()
+            .enumerate()
+            .any(|(index, ty)| index != shape_index && contains_parameter(ty, parameter))
+}
+
+/// Return shape variables whose union-derived gradual solution cannot weaken another parameter or
+/// a non-shape return occurrence.
+pub(crate) fn union_shape_widening_vars(params: &Params, ret: &Type) -> Option<Arc<Vec<Var>>> {
+    // A partial signature omits already-bound parameters, so it cannot prove that the shape
+    // variable is owned solely by one remaining parameter.
+    let Params::List(params) = params else {
+        return None;
+    };
+    let vars = params
+        .items()
+        .iter()
+        .enumerate()
+        .filter(|(_, param)| !matches!(param, Param::Varargs(..) | Param::Kwargs(..)))
+        .filter_map(|(index, param)| {
+            union_shape_parameter(param.as_type()).map(|parameter| (index, parameter))
+        })
+        .filter_map(|(owner_index, parameter)| {
+            let solely_owned = !params.items().iter().enumerate().any(|(index, param)| {
+                index != owner_index && contains_parameter(param.as_type(), parameter)
+            });
+            let return_shaped_only = contains_parameter(ret, parameter)
+                && has_only_return_shape_occurrences(ret, parameter);
+            (solely_owned && return_shaped_only).then_some(parameter)
+        })
+        .collect::<Vec<_>>();
+    (!vars.is_empty()).then(|| Arc::new(vars))
+}
 
 /// Normalize a candidate answer for an `IntVar`.
 ///

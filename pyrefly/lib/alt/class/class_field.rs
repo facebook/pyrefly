@@ -3335,7 +3335,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     fn normalize_attr_ty(&self, mut ty: Type) -> Type {
         self.expand_mut(&mut ty);
-        ty.finalize_callable_residuals_at_boundary(self.heap, false)
+        self.normalize_scalar_type(ty.finalize_callable_residuals_at_boundary(self.heap, false))
     }
 
     /// Filter out overload signatures whose explicit `self:` annotation is not

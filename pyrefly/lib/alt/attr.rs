@@ -35,6 +35,7 @@ use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::class::class_field::ClassAttribute;
 use crate::alt::expr::TypeOrExpr;
+use crate::alt::scalar::scalar_upper_bound;
 use crate::binding::binding::ExprOrBinding;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -2468,6 +2469,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn as_attribute_base1(&self, ty: Type, acc: &mut Vec<AttributeBase1>) {
+        let ty = self.normalize_scalar_type(ty);
+        self.as_attribute_base1_normalized(ty, acc);
+    }
+
+    fn as_attribute_base1_normalized(&self, ty: Type, acc: &mut Vec<AttributeBase1>) {
+        if self.solver().tensor_shapes
+            && let Some(upper_bound) = scalar_upper_bound(self.solver(), &ty)
+        {
+            self.as_attribute_base1_normalized(upper_bound, acc);
+            return;
+        }
         match ty {
             Type::ClassType(class_type) => {
                 if let Some(shaped_array) =
@@ -2503,8 +2515,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // NNModule delegates attribute access to its underlying class
                 acc.push(AttributeBase1::ClassInstance(module.class.clone()))
             }
-            Type::DataFrame(schema) => self.as_attribute_base1(schema.underlying_type(), acc),
-            Type::Series(schema) => self.as_attribute_base1(schema.underlying_type(), acc),
+            Type::DataFrame(schema) => {
+                self.as_attribute_base1_normalized(schema.underlying_type(), acc)
+            }
+            Type::Series(schema) => {
+                self.as_attribute_base1_normalized(schema.underlying_type(), acc)
+            }
             Type::Int(_) => {
                 // Dimension values behave like int for attribute access
                 acc.push(AttributeBase1::ClassInstance(self.stdlib.int().clone()))
@@ -2594,7 +2610,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::Callable(_) | Type::CallableResidual(_) => acc.push(
                 AttributeBase1::ClassInstance(self.stdlib.function_type().clone()),
             ),
-            Type::KwCall(call) => self.as_attribute_base1(call.return_ty, acc),
+            Type::KwCall(call) => self.as_attribute_base1_normalized(call.return_ty, acc),
             Type::Function(f) => acc.push(AttributeBase1::ClassInstance(
                 if let FunctionKind::CallbackProtocol(cls) = f.metadata.kind {
                     *cls
@@ -2615,7 +2631,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::BoundMethod(bound_method) => {
                 acc.push(AttributeBase1::BoundMethod(bound_method.func.clone()));
             }
-            Type::Forall(forall) => self.as_attribute_base1(forall.body.as_type(), acc),
+            Type::Forall(forall) => self.as_attribute_base1_normalized(forall.body.as_type(), acc),
             Type::Var(v) => {
                 self.force_var_for_attribute_base(v, |ty| self.as_attribute_base1(ty, acc))
             }
@@ -2625,7 +2641,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Type::Union(f) => {
                 for ty in f.members {
-                    self.as_attribute_base1(ty, acc)
+                    self.as_attribute_base1_normalized(ty, acc)
                 }
             }
             Type::Quantified(quantified) => match quantified.restriction() {
@@ -2707,10 +2723,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::Intersect(x) => {
                 let mut acc_intersect = Vec::new();
                 for t in x.0 {
-                    self.as_attribute_base1(t, &mut acc_intersect);
+                    self.as_attribute_base1_normalized(t, &mut acc_intersect);
                 }
                 let mut acc_fallback = Vec::new();
-                self.as_attribute_base1(x.1, &mut acc_fallback);
+                self.as_attribute_base1_normalized(x.1, &mut acc_fallback);
                 acc.push(AttributeBase1::Intersect(acc_intersect, acc_fallback));
             }
             Type::ElementOfTypeVarTuple(_) => {

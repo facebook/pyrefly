@@ -7081,6 +7081,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
         let result = self.validate_type_form(result, x.range(), type_form_context, errors);
+        let result = self.normalize_scalar_type(result);
 
         self.interpret_map_int_tuples_at_annotation_root(result, type_form_context)
     }

@@ -170,7 +170,7 @@ pub struct OverloadBranchCapture {
 type OverloadWitnessCapturesByArgument = SmallMap<ArgumentKey, Vec<OverloadBranchCapture>>;
 
 /// Witness captures collected during subset checking and consumed at solve boundaries.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct WitnessCaptures {
     overload: OverloadWitnessCapturesByArgument,
     generic: Vec<GenericWitnessCapture>,
@@ -555,11 +555,11 @@ enum NewBound {
     AddBound(Type),
 }
 
-/// Result of `with_snapshot`, which performs an `is_subset_eq` call with var snapshotting.
+/// Outcome of a speculative subset transaction.
 pub enum SubsetWithSnapshotResult {
-    /// `is_subset_eq` call was successful.
+    /// The subset check succeeded without introducing inconsistent variable solutions.
     Ok,
-    /// `is_subset_eq` call failed.
+    /// The subset check failed or introduced an inconsistent variable solution.
     Err(SubsetError),
 }
 
@@ -938,6 +938,16 @@ impl Solver {
                 }
             }
         }
+    }
+
+    /// Whether `var` is an unsolved type variable bounded by `IntTuple`.
+    pub(crate) fn has_int_tuple_bound_var(&self, var: Var) -> bool {
+        let variables = self.variables.lock();
+        matches!(
+            &*variables.get(var),
+            Variable::Quantified { quantified, .. } | Variable::PartialQuantified(quantified)
+                if has_int_tuple_bound(quantified)
+        )
     }
 
     /// Snapshots the given vars, calls `f`, and rolls back the vars if the call fails.
@@ -3020,14 +3030,11 @@ impl ArgumentSide {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
-pub(crate) enum SubsetCacheContext {
-    #[default]
-    Default,
-    Witness {
-        argument: ArgumentKey,
-        argument_side: ArgumentSide,
-    },
+/// Context that can change either subset results or the side effects required on success.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct SubsetCacheContext {
+    witness: Option<(ArgumentKey, ArgumentSide)>,
+    union_shape_widening_vars: Option<Arc<Vec<Var>>>,
 }
 
 // The context in which we are collecting residuals.
@@ -3111,6 +3118,11 @@ struct CallBoundaryState {
     witness_captures: WitnessCaptures,
 }
 
+struct CallBoundarySnapshot {
+    quantified_handle_count: usize,
+    witness_captures: WitnessCaptures,
+}
+
 /// The unique owner of quantified vars and residual captures deferred to a call boundary.
 #[derive(Debug)]
 #[must_use = "Call boundaries must be passed to finish_call_boundary."]
@@ -3133,6 +3145,7 @@ impl CallBoundary {
             boundary: Some(self),
             shape_extension_vars: None,
             shape_extension_binding_source: None,
+            union_shape_widening_vars: None,
         }
     }
 
@@ -3146,6 +3159,29 @@ impl CallBoundary {
         if !handle.0.is_empty() {
             self.state().lock().quantified_handles.push(handle);
         }
+    }
+
+    fn snapshot_for_speculative_subset(&self) -> CallBoundarySnapshot {
+        let state = self.state().lock();
+        CallBoundarySnapshot {
+            quantified_handle_count: state.quantified_handles.len(),
+            witness_captures: state.witness_captures.clone(),
+        }
+    }
+
+    /// Restore captures and detach handles created after the snapshot.
+    ///
+    /// Callers must finish the returned handles before restoring solver variables they may own.
+    fn restore_after_speculative_subset(
+        &self,
+        snapshot: CallBoundarySnapshot,
+    ) -> Vec<QuantifiedHandle> {
+        let mut state = self.state().lock();
+        let handles = state
+            .quantified_handles
+            .split_off(snapshot.quantified_handle_count);
+        state.witness_captures = snapshot.witness_captures;
+        handles
     }
 
     fn persist_overload_witness_captures(
@@ -3222,6 +3258,7 @@ pub struct CallContext<'subset> {
     boundary: Option<&'subset CallBoundary>,
     shape_extension_vars: Option<Arc<SmallSet<Var>>>,
     shape_extension_binding_source: Option<Var>,
+    union_shape_widening_vars: Option<Arc<Vec<Var>>>,
 }
 
 impl<'subset> CallContext<'subset> {
@@ -3273,6 +3310,24 @@ impl<'subset> CallContext<'subset> {
         )
     }
 
+    /// Authorize call-local union joining for shape-only variables from this signature.
+    pub(crate) fn with_union_shape_widening_vars(mut self, vars: Option<Arc<Vec<Var>>>) -> Self {
+        self.union_shape_widening_vars = vars;
+        self
+    }
+
+    /// Whether this call authorizes union joining for any shape-only variable.
+    pub(crate) fn has_union_shape_widening_vars(&self) -> bool {
+        self.union_shape_widening_vars.is_some()
+    }
+
+    /// Whether this call permits gradual union joining for `var`.
+    pub(crate) fn allows_union_shape_widening(&self, var: Var) -> bool {
+        self.union_shape_widening_vars
+            .as_ref()
+            .is_some_and(|vars| vars.contains(&var))
+    }
+
     pub(crate) fn for_shape_extension_binding_source(&self, ty: &Type) -> Option<Self> {
         let Type::Var(var) = ty else {
             return None;
@@ -3298,6 +3353,7 @@ impl<'subset> CallContext<'subset> {
         self.argument_side = Default::default();
         self.shape_extension_vars = Default::default();
         self.shape_extension_binding_source = None;
+        self.union_shape_widening_vars = None;
         self
     }
 
@@ -3333,16 +3389,12 @@ impl<'subset> CallContext<'subset> {
     }
 
     pub(crate) fn subset_cache_context(&self) -> SubsetCacheContext {
-        if let Some(witness) = &self.witness {
-            // Context-scoped cache keying preserves memoization while keeping
-            // witness/polarity-sensitive side effects isolated. Most checks run
-            // under Default context and keep prior cache behavior.
-            SubsetCacheContext::Witness {
-                argument: witness.argument,
-                argument_side: self.argument_side,
-            }
-        } else {
-            SubsetCacheContext::Default
+        SubsetCacheContext {
+            witness: self
+                .witness
+                .as_ref()
+                .map(|witness| (witness.argument, self.argument_side)),
+            union_shape_widening_vars: self.union_shape_widening_vars.clone(),
         }
     }
 
@@ -3440,6 +3492,102 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         deferred_vars: SmallMap<ArgumentKey, SmallSet<Var>>,
     ) {
         self.witness_deferred_vars = deferred_vars;
+    }
+
+    /// Run a speculative subset branch and retain its value and state only on consistent success.
+    ///
+    /// `types` identifies the variables whose solutions are snapshotted. Rollback also restores
+    /// subset caches, protocol assumptions, deferred witnesses, call-boundary captures,
+    /// recursion gas, and coinductive-use flags.
+    pub(crate) fn with_speculative_subset_branch_result<T>(
+        &mut self,
+        types: &[&Type],
+        check: impl FnOnce(&mut Self) -> Result<T, SubsetError>,
+    ) -> Result<T, SubsetError> {
+        self.speculative_subset_branch(types, check, OverloadPruningSubsetMode::Commit)
+    }
+
+    /// Run a speculative subset branch, return its value, and discard its inference side effects.
+    ///
+    /// `types` identifies the variables whose solutions are snapshotted. The probe also restores
+    /// subset caches, protocol assumptions, deferred witnesses, call-boundary captures,
+    /// recursion gas, and coinductive-use flags.
+    pub(crate) fn probe_speculative_subset_branch_result<T>(
+        &mut self,
+        types: &[&Type],
+        check: impl FnOnce(&mut Self) -> Result<T, SubsetError>,
+    ) -> Result<T, SubsetError> {
+        self.speculative_subset_branch(types, check, OverloadPruningSubsetMode::Probe)
+    }
+
+    fn speculative_subset_branch<T>(
+        &mut self,
+        types: &[&Type],
+        check: impl FnOnce(&mut Self) -> Result<T, SubsetError>,
+        mode: OverloadPruningSubsetMode,
+    ) -> Result<T, SubsetError> {
+        let vars = self.solver.snapshot_for_speculative_inference(types);
+        let gas = self.gas.clone();
+        let subset_cache = self.subset_cache.clone();
+        // Isolate the branch from pre-existing cache entries: a stale `Ok` (in particular one
+        // recorded under a coinductive assumption) must not rescue a check the branch
+        // re-derives, and branch entries must not survive a rollback. This mirrors
+        // `check_subset_constraints_for_pruning`.
+        self.subset_cache.clear();
+        let class_protocol_assumptions = self.class_protocol_assumptions.clone();
+        let witness_deferred_vars = self.snapshot_witness_deferred_vars();
+        let coinductive_assumptions_used = self.coinductive_assumptions_used;
+        let type_order_coinductive = self.type_order.coinductive_assumptions_used();
+        let call_boundary = self.active_call_context.boundary;
+        let call_boundary_snapshot =
+            call_boundary.map(CallBoundary::snapshot_for_speculative_subset);
+        let result = check(self).and_then(|value| {
+            if self.solver.has_new_instantiation_errors(&vars) {
+                Err(SubsetError::Other)
+            } else {
+                Ok(value)
+            }
+        });
+        if mode == OverloadPruningSubsetMode::Probe || result.is_err() {
+            let abandoned_handles = call_boundary
+                .zip(call_boundary_snapshot)
+                .map_or_else(Vec::new, |(boundary, snapshot)| {
+                    boundary.restore_after_speculative_subset(snapshot)
+                });
+            // Finish abandoned handles before restoring variables. Handles deferred during the
+            // branch own either snapshot-covered variables (pre-existing variables reachable
+            // from the branch inputs, such as a call's shape variable solved and deferred by
+            // the branch) or branch-created variables the snapshot predates. Restoring after
+            // finishing resets the covered variables to pre-branch state exactly, erasing
+            // whatever finishing did, while branch-created variables are unreachable once the
+            // boundary, captures, and caches are restored. Finishing after the restore would
+            // instead solve the restored-but-unsolved covered variables and persist solutions
+            // the rollback was supposed to erase, so this order is load-bearing.
+            for handle in abandoned_handles {
+                let _ = self.solver.finish_quantified(
+                    handle,
+                    self.solver.infer_with_first_use,
+                    self.type_order,
+                );
+            }
+            self.solver.restore_vars(vars);
+            self.gas = gas;
+            self.subset_cache = subset_cache;
+            self.class_protocol_assumptions = class_protocol_assumptions;
+            self.restore_witness_deferred_vars(witness_deferred_vars);
+            self.coinductive_assumptions_used = coinductive_assumptions_used;
+            self.type_order
+                .set_coinductive_assumptions_used(type_order_coinductive);
+        } else {
+            // Restore the pre-branch insertion order before overlaying newly derived entries.
+            // Outer recursive checks roll back by truncating this map, so moving an older entry
+            // behind branch entries would make a later rollback remove the wrong keys.
+            let branch_cache = mem::replace(&mut self.subset_cache, subset_cache);
+            for (key, entry) in branch_cache {
+                self.subset_cache.insert(key, entry);
+            }
+        }
+        result
     }
 
     /// Check one overload branch's constraints as a transaction during quantified finishing.

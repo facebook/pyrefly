@@ -26,6 +26,7 @@ from typing import Any, Generic, Never, TypedDict
 
 import torch
 from shape_extensions import (
+    ArrayCoercible,
     assert_shape,
     D,
     defines_assert_shape,
@@ -34,6 +35,7 @@ from shape_extensions import (
     IntTuple,
     IntVar,
     MapIntTuples,
+    Scalar,
     TypeVarTuple,
 )
 
@@ -64,6 +66,12 @@ class TestSubscriptRuntime(unittest.TestCase):
             return x
 
         self.assertTrue(callable(f))
+
+    def test_scalar_shape_subscript_erases_to_scalar(self):
+        self.assertIs(Scalar[[], int], Scalar)
+
+    def test_array_coercible_shape_subscript_erases_to_marker(self):
+        self.assertIs(ArrayCoercible[[2], int], ArrayCoercible)
 
 
 class TestTorchScriptRuntimeCompat(unittest.TestCase):

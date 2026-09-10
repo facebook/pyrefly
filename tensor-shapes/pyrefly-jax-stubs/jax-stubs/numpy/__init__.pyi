@@ -54,6 +54,7 @@ from jax._shapes import (
 )
 from jax.typing import DTypeLike
 from shape_extensions import (
+    ArrayCoercible,
     broadcast,
     Elements,
     Flag,
@@ -75,8 +76,8 @@ type _NewShape = int | tuple[int, ...] | None
 type _Scalar = bool | int | float | complex
 
 @overload
-def array(
-    object: _Scalar,
+def array[Shape: _Shape](
+    object: Array[Shape],
     dtype: DTypeLike | None = ...,
     copy: bool | None = ...,
     order: str | None = ...,
@@ -84,10 +85,10 @@ def array(
     *,
     device: Any = ...,
     out_sharding: Any = ...,
-) -> Array[[]]: ...
+) -> Array[Shape]: ...
 @overload
 def array[Shape: _Shape](
-    object: Array[Shape],
+    object: ArrayCoercible[Shape, _Scalar],
     dtype: DTypeLike | None = ...,
     copy: bool | None = ...,
     order: str | None = ...,
@@ -108,18 +109,18 @@ def array(
     out_sharding: Any = ...,
 ) -> Array[IntTuple]: ...
 @overload
-def asarray(
-    a: _Scalar,
+def asarray[Shape: _Shape](
+    a: Array[Shape],
     dtype: DTypeLike | None = ...,
     order: str | None = ...,
     *,
     copy: bool | None = ...,
     device: Any = ...,
     out_sharding: Any = ...,
-) -> Array[[]]: ...
+) -> Array[Shape]: ...
 @overload
 def asarray[Shape: _Shape](
-    a: Array[Shape],
+    a: ArrayCoercible[Shape, _Scalar],
     dtype: DTypeLike | None = ...,
     order: str | None = ...,
     *,

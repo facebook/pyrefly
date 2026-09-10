@@ -7,6 +7,7 @@
 
 pub mod answers;
 pub mod answers_solver;
+pub mod array_coercible;
 pub mod attr;
 pub mod call;
 pub mod callable;
@@ -23,6 +24,7 @@ pub mod operators;
 pub mod overload;
 pub mod polars_specials;
 pub mod regex;
+pub mod scalar;
 pub mod shape_extension;
 pub mod shape_flag;
 pub mod shape_index;
