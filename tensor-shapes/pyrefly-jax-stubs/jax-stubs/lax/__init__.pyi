@@ -3,8 +3,9 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Callable, overload, Sequence
+from typing import Any, Callable, Hashable, overload, Sequence
 
+import numpy as np
 from jax._array import Array
 from jax._shapes import (
     broadcast_to_rank_shape,
@@ -379,6 +380,71 @@ def zeta[Shape: _Shape](x: _Scalar, q: Array[Shape], /) -> Array[Shape]: ...
 def zeta[Shape1: _Shape, Shape2: _Shape](
     x: Array[Shape1], q: Array[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
+@overload
+def betainc[Shape: _Shape](
+    a: Array[Shape],
+    b: Array[Shape] | _Scalar,
+    x: Array[Shape] | _Scalar,
+    /,
+) -> Array[Shape]: ...
+@overload
+def betainc[Shape: _Shape](
+    a: _Scalar,
+    b: Array[Shape],
+    x: Array[Shape] | _Scalar,
+    /,
+) -> Array[Shape]: ...
+@overload
+def betainc[Shape: _Shape](
+    a: _Scalar,
+    b: _Scalar,
+    x: Array[Shape],
+    /,
+) -> Array[Shape]: ...
+@overload
+def betainc(
+    a: _Scalar,
+    b: _Scalar,
+    x: _Scalar,
+    /,
+) -> Array[[]]: ...
+@overload
+def betainc(
+    a: Any,
+    b: Any,
+    x: Any,
+    /,
+) -> Array[IntTuple]: ...
+@overload
+def fft[Shape: _Shape](
+    x: Array[Shape],
+    fft_type: FftType | str,
+    fft_lengths: Sequence[int],
+) -> Array[IntTuple]: ...
+@overload
+def fft(
+    x: Any,
+    fft_type: FftType | str,
+    fft_lengths: Sequence[int],
+) -> Array[IntTuple]: ...
+@overload
+def random_gamma_grad[Shape: _Shape](
+    a: Array[Shape],
+    x: Array[Shape],
+    /,
+) -> Array[Shape]: ...
+@overload
+def random_gamma_grad[Shape1: _Shape, Shape2: _Shape](
+    a: Array[Shape1],
+    x: Array[Shape2],
+    /,
+) -> Array[lax_broadcast(Shape1, Shape2)]: ...
+@overload
+def random_gamma_grad(
+    a: Any,
+    x: Any,
+    /,
+) -> Array[IntTuple]: ...
 
 # -----------------------------------------------------------------------------
 # Array Creation & Constants
@@ -1629,3 +1695,394 @@ def top_k(
     axis: int = -1,
     is_stable: bool = True,
 ) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+
+# -----------------------------------------------------------------------------
+# Control Flow & Higher-Order Functions
+# -----------------------------------------------------------------------------
+
+@overload
+def cond[InVal, OutVal](
+    pred: bool | Array[[]],
+    true_fun: Callable[[InVal], OutVal],
+    false_fun: Callable[[InVal], OutVal],
+    *,
+    operand: InVal,
+) -> OutVal: ...
+@overload
+def cond[*InVals, OutVal](
+    pred: bool | Array[[]],
+    true_fun: Callable[[*InVals], OutVal],
+    false_fun: Callable[[*InVals], OutVal],
+    *operands: *InVals,
+) -> OutVal: ...
+def fori_loop[T](
+    lower: int | Array[[]],
+    upper: int | Array[[]],
+    body_fun: Callable[[int | Array[[]], T], T],
+    init_val: T,
+    *,
+    unroll: int | bool | None = None,
+) -> T: ...
+@overload
+def map[N: IntVar, InShape: _Shape, OutShape: _Shape](
+    f: Callable[[Array[InShape]], Array[OutShape]],
+    xs: Array[[N, *Elements[InShape]]],
+    *,
+    batch_size: int | None = None,
+) -> Array[[N, *Elements[OutShape]]]: ...
+@overload
+def map(
+    f: Callable[..., Any],
+    xs: Any,
+    *,
+    batch_size: int | None = None,
+) -> Any: ...
+@overload
+def scan[Carry, N: IntVar, InShape: _Shape, OutShape: _Shape](
+    f: Callable[[Carry, Array[InShape]], tuple[Carry, Array[OutShape]]],
+    init: Carry,
+    xs: Array[[N, *Elements[InShape]]],
+    length: int | None = None,
+    reverse: bool = False,
+    unroll: int | bool = 1,
+    _split_transpose: bool = False,
+) -> tuple[Carry, Array[[N, *Elements[OutShape]]]]: ...
+@overload
+def scan[Carry, X, Y](
+    f: Callable[[Carry, X], tuple[Carry, Y]],
+    init: Carry,
+    xs: X,
+    length: int | None = None,
+    reverse: bool = False,
+    unroll: int | bool = 1,
+    _split_transpose: bool = False,
+) -> tuple[Carry, Y]: ...
+@overload
+def scan[Carry, Y](
+    f: Callable[[Carry, Any], tuple[Carry, Y]],
+    init: Carry,
+    xs: None = None,
+    *,
+    length: int,
+    reverse: bool = False,
+    unroll: int | bool = 1,
+    _split_transpose: bool = False,
+) -> tuple[Carry, Y]: ...
+@overload
+def scan(
+    f: Callable[..., Any],
+    init: Any,
+    xs: Any = None,
+    length: int | None = None,
+    reverse: bool = False,
+    unroll: int | bool = 1,
+    _split_transpose: bool = False,
+) -> tuple[Any, Any]: ...
+@overload
+def switch[InVal, OutVal](
+    index: int | Array[[]],
+    branches: Sequence[Callable[[InVal], OutVal]],
+    *,
+    operand: InVal,
+) -> OutVal: ...
+@overload
+def switch[*InVals, OutVal](
+    index: int | Array[[]],
+    branches: Sequence[Callable[[*InVals], OutVal]],
+    *operands: *InVals,
+) -> OutVal: ...
+def while_loop[T](
+    cond_fun: Callable[[T], bool | Array[[]]],
+    body_fun: Callable[[T], T],
+    init_val: T,
+) -> T: ...
+
+# -----------------------------------------------------------------------------
+# Parallel & Collective Operations
+# -----------------------------------------------------------------------------
+
+@overload
+def all_gather[Shape: _Shape](
+    x: Array[Shape],
+    axis_name: Hashable,
+    *,
+    axis_index_groups: Any = None,
+    axis: int = 0,
+    tiled: bool = False,
+    to: str = "varying",
+) -> Array[IntTuple]: ...
+@overload
+def all_gather[T](
+    x: T,
+    axis_name: Hashable,
+    *,
+    axis_index_groups: Any = None,
+    axis: int = 0,
+    tiled: bool = False,
+    to: str = "varying",
+) -> T: ...
+@overload
+def all_to_all[Shape: _Shape](
+    x: Array[Shape],
+    axis_name: Hashable,
+    split_axis: int,
+    concat_axis: int,
+    *,
+    axis_index_groups: Any = None,
+    tiled: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def all_to_all[T](
+    x: T,
+    axis_name: Hashable,
+    split_axis: int,
+    concat_axis: int,
+    *,
+    axis_index_groups: Any = None,
+    tiled: bool = False,
+) -> T: ...
+def axis_index(axis_name: Hashable) -> Array[[]]: ...
+def axis_size(axis_name: Hashable) -> int: ...
+@overload
+def pbroadcast[Shape: _Shape](
+    x: Array[Shape],
+    axis_name: Hashable,
+    source: int,
+) -> Array[Shape]: ...
+@overload
+def pbroadcast[T](
+    x: T,
+    axis_name: Hashable,
+    source: int,
+) -> T: ...
+@overload
+def pcast[Shape: _Shape](
+    x: Array[Shape],
+    axis_name: Hashable,
+    *,
+    to: str,
+) -> Array[Shape]: ...
+@overload
+def pcast[T](
+    x: T,
+    axis_name: Hashable,
+    *,
+    to: str,
+) -> T: ...
+@overload
+def pmax[Shape: _Shape](
+    x: Array[Shape],
+    axis_name: Hashable,
+    *,
+    axis_index_groups: Any = None,
+) -> Array[Shape]: ...
+@overload
+def pmax[T](
+    x: T,
+    axis_name: Hashable,
+    *,
+    axis_index_groups: Any = None,
+) -> T: ...
+@overload
+def pmean[Shape: _Shape](
+    x: Array[Shape],
+    axis_name: Hashable,
+    *,
+    axis_index_groups: Any = None,
+) -> Array[Shape]: ...
+@overload
+def pmean[T](
+    x: T,
+    axis_name: Hashable,
+    *,
+    axis_index_groups: Any = None,
+) -> T: ...
+@overload
+def pmin[Shape: _Shape](
+    x: Array[Shape],
+    axis_name: Hashable,
+    *,
+    axis_index_groups: Any = None,
+) -> Array[Shape]: ...
+@overload
+def pmin[T](
+    x: T,
+    axis_name: Hashable,
+    *,
+    axis_index_groups: Any = None,
+) -> T: ...
+@overload
+def ppermute[Shape: _Shape](
+    x: Array[Shape],
+    axis_name: Hashable,
+    perm: Sequence[tuple[int, int]],
+) -> Array[Shape]: ...
+@overload
+def ppermute[T](
+    x: T,
+    axis_name: Hashable,
+    perm: Sequence[tuple[int, int]],
+) -> T: ...
+def precv(
+    token: Any,
+    out_shape: Any,
+    axis_name: Hashable,
+    perm: Sequence[tuple[int, int]],
+) -> Any: ...
+def psend(
+    x: Any,
+    axis_name: Hashable,
+    perm: Sequence[tuple[int, int]],
+) -> Any: ...
+@overload
+def pshuffle[Shape: _Shape](
+    x: Array[Shape],
+    axis_name: Hashable,
+    perm: Sequence[int],
+) -> Array[Shape]: ...
+@overload
+def pshuffle[T](
+    x: T,
+    axis_name: Hashable,
+    perm: Sequence[int],
+) -> T: ...
+@overload
+def psum[Shape: _Shape](
+    x: Array[Shape],
+    axis_name: Hashable,
+    *,
+    axis_index_groups: Any = None,
+) -> Array[Shape]: ...
+@overload
+def psum[T](
+    x: T,
+    axis_name: Hashable,
+    *,
+    axis_index_groups: Any = None,
+) -> T: ...
+@overload
+def psum_scatter[Shape: _Shape](
+    x: Array[Shape],
+    axis_name: Hashable,
+    *,
+    scatter_dimension: int = 0,
+    axis_index_groups: Any = None,
+    tiled: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def psum_scatter[T](
+    x: T,
+    axis_name: Hashable,
+    *,
+    scatter_dimension: int = 0,
+    axis_index_groups: Any = None,
+    tiled: bool = False,
+) -> T: ...
+@overload
+def pswapaxes[Shape: _Shape](
+    x: Array[Shape],
+    axis_name: Hashable,
+    axis: int,
+    *,
+    axis_index_groups: Any = None,
+) -> Array[Shape]: ...
+@overload
+def pswapaxes[T](
+    x: T,
+    axis_name: Hashable,
+    axis: int,
+    *,
+    axis_index_groups: Any = None,
+) -> T: ...
+@overload
+def ragged_all_to_all[OutputShape: _Shape](
+    operand: Any,
+    output: Array[OutputShape],
+    input_offsets: Any,
+    send_sizes: Any,
+    output_offsets: Any,
+    recv_sizes: Any,
+    *,
+    axis_name: Hashable,
+    axis_index_groups: Any = None,
+) -> Array[OutputShape]: ...
+@overload
+def ragged_all_to_all(
+    operand: Any,
+    output: Any,
+    input_offsets: Any,
+    send_sizes: Any,
+    output_offsets: Any,
+    recv_sizes: Any,
+    *,
+    axis_name: Hashable,
+    axis_index_groups: Any = None,
+) -> Array[IntTuple]: ...
+
+# -----------------------------------------------------------------------------
+# Data Types, Bitcasting & RNG
+# -----------------------------------------------------------------------------
+
+def dtype(x: Any) -> np.dtype: ...
+@overload
+def rng_bit_generator[KeyShape: _Shape, Shape: _Shape](
+    key: Array[KeyShape],
+    shape: Shape,
+    dtype: DTypeLike = ...,
+    algorithm: RandomAlgorithm = ...,
+    *,
+    out_sharding: Any = None,
+) -> tuple[Array[KeyShape], Array[Shape]]: ...
+@overload
+def rng_bit_generator[KeyShape: _Shape](
+    key: Array[KeyShape],
+    shape: Sequence[int] | int,
+    dtype: DTypeLike = ...,
+    algorithm: RandomAlgorithm = ...,
+    *,
+    out_sharding: Any = None,
+) -> tuple[Array[KeyShape], Array[IntTuple]]: ...
+@overload
+def rng_bit_generator(
+    key: Any,
+    shape: Any,
+    dtype: DTypeLike = ...,
+    algorithm: RandomAlgorithm = ...,
+    *,
+    out_sharding: Any = None,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+@overload
+def rng_uniform[Shape: _Shape](
+    a: float | Array[[]],
+    b: float | Array[[]],
+    shape: Shape,
+) -> Array[Shape]: ...
+@overload
+def rng_uniform(
+    a: float | Array[[]],
+    b: float | Array[[]],
+    shape: Sequence[int] | int,
+) -> Array[IntTuple]: ...
+
+# -----------------------------------------------------------------------------
+# Compiler, Token & Miscellaneous
+# -----------------------------------------------------------------------------
+
+def after_all(*operands: Any) -> Any: ...
+def composite[F: Callable[..., Any]](
+    decomposition: F,
+    name: str,
+    version: int = 0,
+) -> F: ...
+def create_token(_: Any = None) -> Any: ...
+def dce_sink(val: Any, *, prevent_mlir_dce: bool = False) -> None: ...
+def optimization_barrier[T](operand: T, /) -> T: ...
+def platform_dependent[*Args, T](
+    *args: *Args,
+    default: Callable[[*Args], T] | None = None,
+    **per_platform: Callable[[*Args], T],
+) -> T: ...
+def shape_as_value(shape: Any) -> Array[IntTuple]: ...
+def stage[Shape: _Shape](x: Array[Shape], /) -> Array[Shape]: ...
+def stop_gradient[T](x: T) -> T: ...
+def with_sharding_constraint[T](x: T, shardings: Any) -> T: ...

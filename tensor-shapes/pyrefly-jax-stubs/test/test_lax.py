@@ -5,9 +5,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import jax
 import jax.lax as lax
 import jax.numpy as jnp
+import numpy as np
 from shape_extensions import assert_shape, IntTuple
 
 
@@ -907,3 +910,295 @@ def test_lax_linear_algebra_contractions() -> None:
     assert lax.RoundingMethod is not None
     assert lax.ScatterDimensionNumbers is not None
     assert lax.Tolerance is not None
+
+
+def generic_control_flow[Shape: IntTuple](
+    x: jax.Array[Shape],
+    pred_scalar: jax.Array[[]],
+) -> tuple[
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+]:
+    c = lax.cond(True, lambda v: v, lambda v: v, x)
+    c2 = lax.cond(pred_scalar, lambda v: v, lambda v: v, x)
+    fl = lax.fori_loop(0, 10, lambda i, v: v, x)
+    sw = lax.switch(0, [lambda v: v], x)
+    sw2 = lax.switch(0, [lambda v: v], operand=x)
+    sw3 = lax.switch(pred_scalar, [lambda v: v], x)
+    wl = lax.while_loop(lambda v: True, lambda v: v, x)
+    return c, c2, fl, sw, sw2, sw3, wl
+
+
+def test_control_flow_and_higher_order() -> None:
+    # cond with bool scalar, 0-D array, and keyword operand
+    c1 = lax.cond(True, lambda x: x + 1, lambda x: x - 1, jnp.ones((2, 3)))
+    assert_shape(c1.shape, (2, 3))
+
+    c2 = lax.cond(jnp.array(True), lambda x: x + 1, lambda x: x - 1, jnp.ones((2, 3)))
+    assert_shape(c2.shape, (2, 3))
+
+    c3 = lax.cond(False, lambda x: x, lambda x: x, operand=jnp.ones((2, 3)))
+    assert_shape(c3.shape, (2, 3))
+
+    c4 = lax.cond(True, lambda: jnp.ones(4), lambda: jnp.zeros(4))
+    assert_shape(c4.shape, (4,))
+
+    c5 = lax.cond(
+        True,
+        lambda a, b: a + b,
+        lambda a, b: a - b,
+        jnp.ones((2, 3)),
+        jnp.ones((2, 3)),
+    )
+    assert_shape(c5.shape, (2, 3))
+
+    # fori_loop
+    fl = lax.fori_loop(0, 5, lambda i, x: x + 1, jnp.zeros((2, 3)))
+    assert_shape(fl.shape, (2, 3))
+
+    fl2 = lax.fori_loop(
+        jnp.array(0), jnp.array(5), lambda i, x: x + 1, jnp.zeros((2, 3))
+    )
+    assert_shape(fl2.shape, (2, 3))
+
+    # map
+    m = lax.map(lambda x: x * 2, jnp.ones((4, 3)))
+    assert_shape(m.shape, (4, 3))
+
+    # scan
+    carry, ys = lax.scan(lambda c, x: (c + x, c * x), jnp.zeros(3), jnp.ones((5, 3)))
+    assert_shape(carry.shape, (3,))
+    assert_shape(ys.shape, (5, 3))
+
+    # switch
+    sw1 = lax.switch(1, [lambda x: x, lambda x: x * 2], jnp.ones((2, 3)))
+    assert_shape(sw1.shape, (2, 3))
+
+    sw2 = lax.switch(1, [lambda x: x, lambda x: x * 2], operand=jnp.ones((2, 3)))
+    assert_shape(sw2.shape, (2, 3))
+
+    sw3 = lax.switch(jnp.array(0), [lambda x: x, lambda x: x * 2], jnp.ones((2, 3)))
+    assert_shape(sw3.shape, (2, 3))
+
+    sw4 = lax.switch(0, [lambda: jnp.ones((2, 3)), lambda: jnp.zeros((2, 3))])
+    assert_shape(sw4.shape, (2, 3))
+
+    sw5 = lax.switch(
+        0,
+        [lambda a, b: a + b, lambda a, b: a - b],
+        jnp.ones((2, 3)),
+        jnp.ones((2, 3)),
+    )
+    assert_shape(sw5.shape, (2, 3))
+
+    # while_loop
+    wl = lax.while_loop(lambda x: x[0, 0] < 5, lambda x: x + 1, jnp.zeros((2, 3)))
+    assert_shape(wl.shape, (2, 3))
+
+
+def generic_parallel_ops[Shape: IntTuple](
+    x: jax.Array[Shape],
+) -> tuple[
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[IntTuple],
+    jax.Array[IntTuple],
+    jax.Array[IntTuple],
+    jax.Array[Shape],
+    jax.Array[[]],
+    int,
+]:
+    p1 = lax.pbroadcast(x, "i", 0)
+    p2 = lax.pcast(x, "i", to="varying")
+    p3 = lax.pmax(x, "i")
+    p4 = lax.pmean(x, "i")
+    p5 = lax.pmin(x, "i")
+    p6 = lax.ppermute(x, "i", [(0, 0)])
+    p7 = lax.pshuffle(x, "i", [0])
+    p8 = lax.psum(x, "i")
+    p9 = lax.pswapaxes(x, "i", 0)
+    p10 = lax.all_gather(x, "i")
+    p11 = lax.all_to_all(x, "i", 0, 0)
+    p12 = lax.psum_scatter(x, "i")
+    p13 = lax.ragged_all_to_all(
+        x,
+        x,
+        jnp.array([0]),
+        jnp.array([1]),
+        jnp.array([0]),
+        jnp.array([1]),
+        axis_name="i",
+    )
+    p14 = lax.axis_index("i")
+    p15 = lax.axis_size("i")
+    tok = lax.psend(x, "i", [(0, 0)])
+    _ = lax.precv(tok, x, "i", [(0, 0)])
+    return (
+        p1,
+        p2,
+        p3,
+        p4,
+        p5,
+        p6,
+        p7,
+        p8,
+        p9,
+        p10,
+        p11,
+        p12,
+        p13,
+        p14,
+        p15,
+    )
+
+
+def test_parallel_operations() -> None:
+    # Section 10 APIs: callable / existence
+    assert callable(lax.all_gather)
+    assert callable(lax.all_to_all)
+    assert callable(lax.axis_index)
+    assert callable(lax.axis_size)
+    assert callable(lax.pbroadcast)
+    assert callable(lax.pcast)
+    assert callable(lax.pmax)
+    assert callable(lax.pmean)
+    assert callable(lax.pmin)
+    assert callable(lax.ppermute)
+    assert callable(lax.precv)
+    assert callable(lax.psend)
+    assert callable(lax.pshuffle)
+    assert callable(lax.psum)
+    assert callable(lax.psum_scatter)
+    assert callable(lax.pswapaxes)
+    assert callable(lax.ragged_all_to_all)
+
+    # Static helper verification
+    x = jnp.ones((2, 3))
+    assert_shape(x.shape, (2, 3))
+
+
+def generic_special_math[Shape: IntTuple](
+    a: jax.Array[Shape],
+    b: jax.Array[Shape],
+    x: jax.Array[Shape],
+) -> tuple[
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[[]],
+    jax.Array[Shape],
+    jax.Array[IntTuple],
+]:
+    b1 = lax.betainc(a, b, x)
+    b2 = lax.betainc(1.0, 2.0, x)
+    b3 = lax.betainc(1.0, 2.0, 0.5)
+    r1 = lax.random_gamma_grad(a, x)
+    f1 = lax.fft(a, lax.FftType.FFT, (3,))
+    return b1, b2, b3, r1, f1
+
+
+def test_special_math() -> None:
+    a = jnp.ones((2, 3))
+    x = jnp.ones((2, 3)) * 0.5
+    assert_shape(lax.betainc(a, a, x).shape, (2, 3))
+    assert_shape(lax.betainc(1.0, 2.0, x).shape, (2, 3))
+    assert_shape(lax.betainc(1.0, 2.0, 0.5).shape, ())
+    assert_shape(lax.random_gamma_grad(a, x).shape, (2, 3))
+    assert_shape(lax.fft(lax.complex(a, a), lax.FftType.FFT, (3,)).shape, (2, 3))
+
+
+def generic_rng_and_data_types[KeyShape: IntTuple, Shape: IntTuple](
+    key: jax.Array[KeyShape],
+    shape: Shape,
+    zero_dim: jax.Array[[]],
+) -> tuple[
+    np.dtype,
+    jax.Array[KeyShape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+]:
+    dt = lax.dtype(key)
+    k_out, bits = lax.rng_bit_generator(key, shape)
+    u1 = lax.rng_uniform(0.0, 1.0, shape)
+    u2 = lax.rng_uniform(zero_dim, zero_dim, shape)
+    return dt, k_out, bits, u1, u2
+
+
+def test_rng_and_data_types() -> None:
+    k = jnp.zeros((4,), dtype="uint32")
+    k_out, bits = lax.rng_bit_generator(
+        k, (2, 3), algorithm=lax.RandomAlgorithm.RNG_THREE_FRY
+    )
+    assert_shape(k_out.shape, (4,))
+    assert_shape(bits.shape, (2, 3))
+    u1 = lax.rng_uniform(0.0, 1.0, (2, 3))
+    assert_shape(u1.shape, (2, 3))
+    u2 = lax.rng_uniform(jnp.array(0.0), jnp.array(1.0), (2, 3))
+    assert_shape(u2.shape, (2, 3))
+    assert lax.dtype(jnp.ones(3)) == jnp.float32
+
+
+def generic_compiler_and_misc[Shape: IntTuple](
+    x: jax.Array[Shape],
+    sharding: Any,
+) -> tuple[
+    Any,
+    Any,
+    jax.Array[Shape],
+    jax.Array[IntTuple],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+]:
+    tok = lax.create_token()
+    tok2 = lax.after_all(tok)
+    lax.dce_sink(x)
+    ob = lax.optimization_barrier(x)
+    sav = lax.shape_as_value((2, 3))
+    st = lax.stage(x)
+    sg = lax.stop_gradient(x)
+    wsc = lax.with_sharding_constraint(x, sharding)
+    comp = lax.composite(lambda v: v, "comp")(x)
+    pd = lax.platform_dependent(x, default=lambda v: v)
+    return tok, tok2, ob, sav, st, sg, wsc, comp, pd
+
+
+def test_compiler_and_misc() -> None:
+    x = jnp.ones((2, 3))
+    tok = lax.create_token()
+    tok2 = lax.after_all(tok)
+    assert tok is not None and tok2 is not None
+    lax.dce_sink(x)
+    ob = lax.optimization_barrier(x)
+    assert_shape(ob.shape, (2, 3))
+    sav = lax.shape_as_value((2, 3))
+    assert_shape(sav.shape, (2,))
+    st = lax.stage(x)
+    assert_shape(st.shape, (2, 3))
+    sg = lax.stop_gradient(x)
+    assert_shape(sg.shape, (2, 3))
+    shd = getattr(jax, "sharding").SingleDeviceSharding(getattr(jax, "devices")()[0])
+    wsc = lax.with_sharding_constraint(x, shd)
+    assert_shape(wsc.shape, (2, 3))
+    comp_fn = lax.composite(lambda v: v * 2, "double")
+    assert_shape(comp_fn(x).shape, (2, 3))
+    pd1 = lax.platform_dependent(x, default=lambda v: v + 1, cpu=lambda v: v * 2)
+    assert_shape(pd1.shape, (2, 3))
+    pd2 = lax.platform_dependent(
+        x, x, default=lambda a, b: a + b, cpu=lambda a, b: a - b
+    )
+    assert_shape(pd2.shape, (2, 3))
