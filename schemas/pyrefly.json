@@ -113,6 +113,10 @@
     {
       "type": "object",
       "properties": {
+        "extends": {
+          "description": "Path to a pyrefly.toml or pyproject.toml [tool.pyrefly] configuration to inherit. The current file's explicit settings override inherited settings, and paths in each file are resolved relative to that file.",
+          "type": "string"
+        },
         "required-version": {
           "description": "A PEP 440 version specifier that the running version of Pyrefly must satisfy.",
           "type": "string",

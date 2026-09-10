@@ -4,6 +4,9 @@
 # Preset (named collection of defaults applied as the base config)
 preset = "legacy"
 
+# Configuration inheritance
+extends = "base.toml"
+
 # Runtime version requirement
 required-version = ">=0.0.0.dev0"
 
