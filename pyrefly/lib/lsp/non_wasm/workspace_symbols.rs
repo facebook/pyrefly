@@ -17,6 +17,8 @@ pub struct WorkspaceSymbol {
     pub name: String,
     pub kind: SymbolKind,
     pub location: TextRangeWithModule,
+    /// The immediate parent for a nested definition.
+    pub container_name: Option<String>,
 }
 
 impl Transaction<'_> {
@@ -45,6 +47,7 @@ impl Transaction<'_> {
                             module: self.get_module_info(&m.handle)?,
                             range: m.range,
                         },
+                        container_name: m.immediate_parent.map(|parent| parent.name.to_string()),
                     })
                 })
                 .collect(),

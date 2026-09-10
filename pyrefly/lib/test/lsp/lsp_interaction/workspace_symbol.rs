@@ -191,19 +191,10 @@ fn test_workspace_symbol_deduplicates_reexported_definitions() {
     interaction.shutdown().unwrap();
 }
 
-// Methods live inside a `ClassDef`, so they are not module exports and never
-// appear via the export-table path that backs `workspace/symbol`. D90689263
-// only relabeled methods in `textDocument/documentSymbol` (the per-file
-// outline); it did not touch `workspace/symbol` (Cmd+T), which is a separate
-// implementation, so methods are still missing there.
-//
-// TODO(pyrefly): unify workspace symbols with document symbols by caching
-// per-module document symbols (a memoized artifact on the `Solutions` step,
-// gated by `Require::keep_index`, mirroring the find-refs `Index`) and scanning
-// them in `search_exports`, filtered to first-party modules via
-// `should_skip_module_for_indexing`. This mirrors ty's `symbols_for_file`
-// (a salsa-tracked query shared by both providers). Ignored until then.
-#[ignore = "workspace/symbol does not yet include class methods; see TODO above"]
+// Methods live inside a `ClassDef`, so they are not module exports and do not
+// appear via the export-table path that backs `workspace/symbol`. They are
+// surfaced from the cached per-module symbol tables (`Exports::symbols`),
+// scanned by `search_workspace_symbols_fuzzy`.
 #[test]
 fn test_workspace_symbol_includes_methods_of_open_files() {
     let root = get_test_files_root();
@@ -243,14 +234,33 @@ fn test_workspace_symbol_includes_methods_of_open_files() {
         })
         .unwrap();
 
+    interaction
+        .client
+        .send_workspace_symbol("workspace_symbol_class_attribute_deterministic_name")
+        .expect_response_with(|result| {
+            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                panic!("Unexpected workspace symbol response: {result:?}");
+            };
+            let attribute = symbols
+                .iter()
+                .find(|s| s.name == "workspace_symbol_class_attribute_deterministic_name")
+                .expect("expected the class attribute to appear in workspace symbols");
+            assert_eq!(attribute.kind, lsp_types::SymbolKind::FIELD);
+            assert_eq!(attribute.location.uri, uri);
+            assert_eq!(
+                attribute.container_name.as_deref(),
+                Some("WorkspaceSymbolMethodHost")
+            );
+            true
+        })
+        .unwrap();
+
     interaction.shutdown().unwrap();
 }
 
-// The same gap as the test above, for the case that matters most: a method in a
-// file the user never opened, which project indexing has loaded on their behalf.
-// Ignored alongside its sibling until `workspace/symbol` looks beyond the export
-// table.
-#[ignore = "workspace/symbol does not yet include class methods; see TODO above"]
+// The same coverage as the test above, for a file the user never opened, which
+// project indexing has loaded on their behalf. The symbol table is built during
+// indexing, so it is populated for these files too.
 #[test]
 fn test_workspace_symbol_includes_methods_of_indexed_files() {
     let root = get_test_files_root();
@@ -333,6 +343,29 @@ fn test_workspace_symbol_multibyte_no_panic() {
             assert!(
                 !symbols.is_empty(),
                 "Expected at least one result for workspace_symbol_multibyte_repro"
+            );
+            true
+        })
+        .unwrap();
+
+    let path = root_path.join("workspace_symbol_multibyte/impl_mod.py");
+    let uri = Url::from_file_path(path).unwrap();
+    interaction
+        .client
+        .send_workspace_symbol("workspace_symbol_multibyte_nested_method")
+        .expect_response_with(|result| {
+            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                panic!("Unexpected workspace symbol response: {result:?}");
+            };
+            let method = symbols
+                .iter()
+                .find(|s| s.name == "workspace_symbol_multibyte_nested_method")
+                .expect("expected the nested symbol after multibyte text");
+            assert_eq!(method.kind, lsp_types::SymbolKind::METHOD);
+            assert_eq!(method.location.uri, uri);
+            assert_eq!(
+                method.container_name.as_deref(),
+                Some("WorkspaceSymbolMultibyteHost")
             );
             true
         })

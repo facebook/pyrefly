@@ -1605,6 +1605,12 @@ impl From<HandleError> for EmptyResponseReason {
     }
 }
 
+/// Upper bound on the symbols returned for one query. Fuzzy matching is
+/// subsequence-based, so a short query like `init` matches a large fraction of
+/// a project's methods. Local matches are ranked and take priority. Unscored
+/// external matches fill any remaining capacity in provider order.
+const MAX_WORKSPACE_SYMBOLS: usize = 1000;
+
 impl Server {
     const FILEWATCHER_ID: &str = "FILEWATCHER";
 
@@ -5543,7 +5549,7 @@ impl Server {
                             location,
                             tags: None,
                             deprecated: None,
-                            container_name: None,
+                            container_name: symbol.container_name,
                         })
                 })
                 .collect();
@@ -5554,17 +5560,22 @@ impl Server {
 
         let external_results = external_results.transpose()?.unwrap_or_default();
 
-        // Local results take priority; skip external results for files already covered.
+        // Local results are ranked and take priority. External results have no
+        // comparable score, so they fill only the remaining capacity. Coverage
+        // uses the full local set, so its truncation cannot let a duplicate in.
         let local_uris: HashSet<Url> = local_results
             .iter()
             .map(|s| s.location.uri.clone())
             .collect();
         let mut merged = local_results;
-        for sym in external_results {
-            if !local_uris.contains(&sym.location.uri) {
-                merged.push(sym);
-            }
-        }
+        merged.truncate(MAX_WORKSPACE_SYMBOLS);
+        let remaining = MAX_WORKSPACE_SYMBOLS - merged.len();
+        merged.extend(
+            external_results
+                .into_iter()
+                .filter(|sym| !local_uris.contains(&sym.location.uri))
+                .take(remaining),
+        );
         Ok(merged)
     }
 

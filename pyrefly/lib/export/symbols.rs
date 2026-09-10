@@ -5,11 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//! A flat, source-order table of definitions surfaced by `workspace/symbol`:
-//! functions, classes, methods, type aliases, and simple module/class
+//! A flat, source-order table of definitions used to find nested workspace
+//! symbols: functions, classes, methods, type aliases, and simple module/class
 //! assignments. It is cached on `Exports` for first-party modules because the
 //! export table itself contains only top-level names and therefore cannot
-//! surface methods.
+//! provide nested definitions.
 //!
 //! The table lists source declarations, not logical bindings, so a name that is
 //! declared several times is recorded once per declaration and never merged.

@@ -4826,16 +4826,17 @@ impl<'a> Transaction<'a> {
         }))
     }
 
-    /// Fuzzy-search module exports for names that match `pattern` for `workspace/symbol`.
+    /// Fuzzy-search module exports and cached nested symbols for names that match `pattern`.
     pub fn search_workspace_symbols_fuzzy(
         &self,
         pattern: &str,
         custom_thread_pool: Option<&ThreadPool>,
     ) -> Result<Vec<SymbolMatch>, Cancelled> {
-        let mut results = self.search_exports(
+        let module_results = self.search_exports(
             |handle, exports_data, exports| {
                 let matcher = SkimMatcherV2::default().smart_case();
-                self.fuzzy_match_exports(handle, exports_data, exports, &matcher, pattern)
+                let mut results = self
+                    .fuzzy_match_exports(handle, exports_data, exports, &matcher, pattern)
                     .into_iter()
                     .map(|result| SymbolMatch {
                         score: result.score,
@@ -4843,12 +4844,49 @@ impl<'a> Transaction<'a> {
                         name: result.name,
                         kind: result.export.symbol_kind,
                         range: result.export.location,
+                        immediate_parent: None,
                     })
-                    .collect()
+                    .collect::<Vec<_>>();
+                // A `FlatSymbol` stores only the range of its name, so the text
+                // is read back from the module that owns it.
+                if let Some(symbols) = exports_data.symbols()
+                    && let Some(module) = self.get_module_info(handle)
+                {
+                    // Only nested definitions. A name at module level is either
+                    // an export, and so already matched above with its re-exports
+                    // resolved, or is guarded by `if __name__ == "__main__"`,
+                    // which `workspace/symbol` does not surface from either source.
+                    results.extend(symbols.iter().filter_map(|(sym, parent)| {
+                        let parent = parent?;
+                        let name = module.code_at(sym.name.range());
+                        let score = matcher.fuzzy_match(name, pattern)?;
+                        Some(SymbolMatch {
+                            score,
+                            handle: handle.dupe(),
+                            name: Name::new(name),
+                            kind: Some(sym.kind),
+                            range: sym.name.range(),
+                            immediate_parent: Some(ImmediateParent {
+                                name: Name::new(module.code_at(parent.name.range())),
+                                range: parent.name.range(),
+                            }),
+                        })
+                    }));
+                }
+                vec![(handle.path().dupe(), results)]
             },
             custom_thread_pool,
         )?;
-        reduce_symbol_matches(&mut results);
+        let memory_paths = module_results
+            .iter()
+            .filter(|(path, _)| path.is_memory())
+            .map(|(path, _)| path.to_key_eq())
+            .collect::<HashSet<_>>();
+        let mut results = module_results
+            .into_iter()
+            .flat_map(|(_, results)| results)
+            .collect();
+        reduce_symbol_matches(&mut results, &memory_paths);
         Ok(results)
     }
 }
@@ -4861,7 +4899,14 @@ struct ExportMatch {
     export: Export,
 }
 
-/// One fuzzy match for `workspace/symbol`.
+/// The immediate parent of a nested workspace symbol.
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct ImmediateParent {
+    pub name: Name,
+    pub range: TextRange,
+}
+
+/// One fuzzy match for `workspace/symbol`. Export and nested matches share one ranking.
 #[derive(Clone)]
 pub struct SymbolMatch {
     pub score: i64,
@@ -4871,6 +4916,7 @@ pub struct SymbolMatch {
     pub kind: Option<SymbolKind>,
     /// The range of the name, used as the navigation target.
     pub range: TextRange,
+    pub immediate_parent: Option<ImmediateParent>,
 }
 
 fn compare_symbol_matches(left: &SymbolMatch, right: &SymbolMatch) -> Ordering {
@@ -4893,24 +4939,33 @@ fn compare_symbol_matches(left: &SymbolMatch, right: &SymbolMatch) -> Ordering {
         .then_with(|| left.name.cmp(&right.name))
         .then_with(|| left.kind.cmp(&right.kind))
         .then_with(|| {
-            right
-                .handle
-                .path()
-                .is_memory()
-                .cmp(&left.handle.path().is_memory())
+            left.immediate_parent
+                .as_ref()
+                .map(|parent| (&parent.name, parent.range.start(), parent.range.end()))
+                .cmp(
+                    &right
+                        .immediate_parent
+                        .as_ref()
+                        .map(|parent| (&parent.name, parent.range.start(), parent.range.end())),
+                )
         })
         .then_with(|| left.handle.cmp(&right.handle))
 }
 
-fn reduce_symbol_matches(results: &mut Vec<SymbolMatch>) {
+fn reduce_symbol_matches(results: &mut Vec<SymbolMatch>, memory_paths: &HashSet<ModulePath>) {
+    results.retain(|result| {
+        result.handle.path().is_memory()
+            || !memory_paths.contains(&result.handle.path().to_key_eq())
+    });
+
     results.sort_by(compare_symbol_matches);
     let mut seen = HashSet::new();
     results.retain(|result| {
         seen.insert((
             result.handle.path().to_key_eq(),
-            result.range,
             result.name.clone(),
             result.kind,
+            result.immediate_parent.clone(),
         ))
     });
 }
@@ -5319,6 +5374,7 @@ impl<'a> CancellableTransaction<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -5337,6 +5393,7 @@ mod tests {
     use ruff_text_size::TextRange;
     use ruff_text_size::TextSize;
 
+    use super::ImmediateParent;
     use super::SymbolMatch;
     use super::Transaction;
     use super::attribute_symbol_kind_from_type;
@@ -5357,6 +5414,7 @@ mod tests {
             name: Name::new(module),
             kind: Some(SymbolKind::Function),
             range: TextRange::new(TextSize::new(start), TextSize::new(start + 1)),
+            immediate_parent: None,
         }
     }
 
@@ -5376,7 +5434,7 @@ mod tests {
             symbol_match(100, "exact", "pkg/__init__.py", 0),
         ];
 
-        reduce_symbol_matches(&mut matches);
+        reduce_symbol_matches(&mut matches, &HashSet::new());
 
         assert_eq!(matches[0].name.as_str(), "exact");
     }
@@ -5392,8 +5450,8 @@ mod tests {
             symbol_match(10, "b", "b.py", 0),
         ];
 
-        reduce_symbol_matches(&mut forward);
-        reduce_symbol_matches(&mut reverse);
+        reduce_symbol_matches(&mut forward, &HashSet::new());
+        reduce_symbol_matches(&mut reverse, &HashSet::new());
 
         for matches in [forward, reverse] {
             assert_eq!(
@@ -5406,32 +5464,109 @@ mod tests {
         }
     }
 
+    fn nested_symbol_match(
+        start: u32,
+        immediate_parent: &str,
+        immediate_parent_start: u32,
+    ) -> SymbolMatch {
+        let mut result = symbol_match(10, "method", "symbols.py", start);
+        result.kind = Some(SymbolKind::Method);
+        result.immediate_parent = Some(ImmediateParent {
+            name: Name::new(immediate_parent),
+            range: TextRange::new(
+                TextSize::new(immediate_parent_start),
+                TextSize::new(immediate_parent_start + 1),
+            ),
+        });
+        result
+    }
+
     #[test]
-    fn workspace_symbol_reduction_removes_only_identical_results() {
+    fn workspace_symbol_reduction_preserves_reexport_result() {
         let mut matches = vec![
             symbol_match(10, "target", "implementation.py", 4),
             symbol_match(10, "target", "implementation.py", 4),
             symbol_match(10, "target", "pkg/__init__.py", 0),
         ];
 
-        reduce_symbol_matches(&mut matches);
+        reduce_symbol_matches(&mut matches, &HashSet::new());
 
         assert_eq!(matches.len(), 2);
         assert!(matches.iter().any(|result| result.handle.path().is_init()));
     }
 
     #[test]
-    fn workspace_symbol_reduction_prefers_memory_counterpart() {
-        let path = PathBuf::from("target.py");
+    fn workspace_symbol_reduction_collapses_declarations_with_different_ranges() {
         let mut matches = vec![
-            symbol_match_with_path(10, "target", ModulePath::filesystem(path.clone()), 4),
-            symbol_match_with_path(10, "target", ModulePath::memory(path), 4),
+            nested_symbol_match(4, "Host", 0),
+            nested_symbol_match(8, "Host", 0),
+            nested_symbol_match(12, "Host", 0),
         ];
 
-        reduce_symbol_matches(&mut matches);
+        reduce_symbol_matches(&mut matches, &HashSet::new());
+
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn workspace_symbol_reduction_preserves_different_immediate_parents() {
+        let mut matches = vec![
+            nested_symbol_match(4, "Host", 0),
+            nested_symbol_match(8, "Host", 20),
+        ];
+
+        reduce_symbol_matches(&mut matches, &HashSet::new());
+
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn workspace_symbol_reduction_discards_saved_snapshot() {
+        let path = PathBuf::from("target.py");
+        let mut saved_method =
+            symbol_match_with_path(10, "target", ModulePath::filesystem(path.clone()), 4);
+        saved_method.name = Name::new("method");
+        saved_method.immediate_parent = Some(ImmediateParent {
+            name: Name::new("OldHost"),
+            range: TextRange::new(TextSize::new(0), TextSize::new(1)),
+        });
+        let mut unsaved_method =
+            symbol_match_with_path(10, "target", ModulePath::memory(path.clone()), 8);
+        unsaved_method.name = Name::new("method");
+        unsaved_method.immediate_parent = Some(ImmediateParent {
+            name: Name::new("NewHost"),
+            range: TextRange::new(TextSize::new(2), TextSize::new(3)),
+        });
+        let mut matches = vec![saved_method, unsaved_method];
+        let memory_paths = HashSet::from([ModulePath::memory(path).to_key_eq()]);
+
+        reduce_symbol_matches(&mut matches, &memory_paths);
 
         assert_eq!(matches.len(), 1);
         assert!(matches[0].handle.path().is_memory());
+        assert_eq!(
+            matches[0]
+                .immediate_parent
+                .as_ref()
+                .map(|parent| parent.name.as_str()),
+            Some("NewHost")
+        );
+    }
+
+    #[test]
+    fn workspace_symbol_reduction_discards_saved_snapshot_without_memory_match() {
+        let path = PathBuf::from("target.py");
+        let mut matches = vec![symbol_match_with_path(
+            10,
+            "deleted",
+            ModulePath::filesystem(path.clone()),
+            4,
+        )];
+        let memory_paths = HashSet::from([ModulePath::memory(path).to_key_eq()]);
+
+        reduce_symbol_matches(&mut matches, &memory_paths);
+
+        assert!(matches.is_empty());
     }
 
     fn any_type() -> Type {

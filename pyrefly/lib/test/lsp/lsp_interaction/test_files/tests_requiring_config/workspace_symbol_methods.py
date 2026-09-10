@@ -5,5 +5,7 @@
 
 
 class WorkspaceSymbolMethodHost:
+    workspace_symbol_class_attribute_deterministic_name = 1
+
     def workspace_symbol_method_deterministic_name(self) -> None:
         return
