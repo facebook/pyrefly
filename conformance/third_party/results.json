@@ -3,7 +3,7 @@
   "pass": 139,
   "fail": 5,
   "pass_rate": 0.97,
-  "differences": 42,
+  "differences": 29,
   "passing": [
     "aliases_explicit.py",
     "aliases_implicit.py",
@@ -147,8 +147,8 @@
   ],
   "failing": {
     "annotations_forward_refs.py": 2,
-    "generics_mixed_variance_inference.py": 3,
-    "generics_paramspec_variance.py": 20,
+    "generics_mixed_variance_inference.py": 1,
+    "generics_paramspec_variance.py": 9,
     "generics_typevartuple_variance.py": 16,
     "protocols_variance.py": 1
   },
