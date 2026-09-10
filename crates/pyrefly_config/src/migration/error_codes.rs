@@ -75,7 +75,6 @@ impl ConfigOptionMigrater for ErrorCodes {
             // and "recommended" the same way.
             Some(TypeCheckingMode::All) | Some(TypeCheckingMode::Recommended) | None => {
                 if basedpyright {
-                    // should also be treated the same as
                     Some(Preset::All)
                 } else {
                     None
