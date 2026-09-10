@@ -1724,11 +1724,13 @@ impl Solver {
     }
 
     fn solve_bounds(&self, bounds: Bounds) -> Option<Type> {
-        // Prefer non-Any lower bound > upper bound > Any lower bound.
+        // Prefer the lower bound, including Any: an upper bound constrains which
+        // values are accepted, but does not narrow the type of an input value.
+        // For an error placeholder, prefer the upper bound to preserve useful diagnostics.
         // TODO(https://github.com/facebook/pyrefly/issues/105): consider using polarity to
         // determine whether we use the lower or upper bound.
         let lower_bound = self.solve_one_bounds(bounds.lower);
-        if lower_bound.as_ref().is_none_or(|b| b.is_any()) {
+        if lower_bound.as_ref().is_none_or(|b| b.is_error()) {
             self.solve_one_bounds(bounds.upper).or(lower_bound)
         } else {
             lower_bound
