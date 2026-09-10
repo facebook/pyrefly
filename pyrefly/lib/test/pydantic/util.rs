@@ -5,8 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use crate::test::util::TestEnv;
 use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
+
+use crate::test::util::TestEnv;
 
 pub fn pydantic_env() -> TestEnv {
     let path = std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");

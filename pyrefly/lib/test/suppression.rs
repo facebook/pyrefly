@@ -5,10 +5,11 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior as UnknownTagBehavior;
+
 use crate::state::require::Require;
 use crate::test::util::TestEnv;
 use crate::testcase;
-use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior as UnknownTagBehavior;
 
 testcase!(
     test_pyrefly_suppression,

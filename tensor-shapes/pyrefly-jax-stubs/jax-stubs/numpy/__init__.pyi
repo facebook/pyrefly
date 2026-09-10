@@ -1656,16 +1656,16 @@ def roll[Shape: _Shape](
     axis: Sequence[int] | None = None,
 ) -> Array[Shape]: ...
 @overload
-def rot90[Shape: _Shape, K: Flag[int] = 1](
+def rot90[Shape: _Shape, K: Flag[int] = 1, Axes: Flag[tuple[int, int]] = (0, 1)](
     m: Array[Shape],
     k: K = 1,
-    axes: tuple[int, int] = (0, 1),
-) -> Array[rot90_shape(Shape, K)]: ...
+    axes: Axes = (0, 1),
+) -> Array[rot90_shape(Shape, K, Axes)]: ...
 @overload
 def rot90(
     m: Array[Any],
     k: int = 1,
-    axes: tuple[int, int] | Sequence[int] = (0, 1),
+    axes: tuple[int, int] = (0, 1),
 ) -> Array[IntTuple]: ...
 @overload
 def atleast_1d(ary: _Scalar, /) -> Array[[1]]: ...

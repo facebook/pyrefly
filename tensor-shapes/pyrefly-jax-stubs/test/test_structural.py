@@ -363,7 +363,7 @@ def test_tile() -> None:
 
 def test_rot90() -> None:
     x = jnp.ones((2, 3))
-    # Default k=1 (odd: transposed last two dimensions)
+    # Default k=1 (odd: transposed axes (0, 1))
     assert_shape(jnp.rot90(x).shape, (3, 2))
     # Even k: same shape
     assert_shape(jnp.rot90(x, 0).shape, (2, 3))
@@ -375,10 +375,24 @@ def test_rot90() -> None:
     assert_shape(jnp.rot90(x, 3).shape, (3, 2))
     assert_shape(jnp.rot90(x, -1).shape, (3, 2))
 
-    # Higher rank array with axes=(-2, -1)
+    # Higher rank array with default axes=(0, 1)
     x3 = jnp.ones((2, 3, 4))
+    assert_shape(jnp.rot90(x3).shape, (3, 2, 4))
+    assert_shape(jnp.rot90(x3, 2).shape, (2, 3, 4))
+
+    # Higher rank array with axes=(-2, -1)
+    assert_shape(jnp.rot90(x3, axes=(-2, -1)).shape, (2, 4, 3))
     assert_shape(jnp.rot90(x3, 1, axes=(-2, -1)).shape, (2, 4, 3))
     assert_shape(jnp.rot90(x3, 2, axes=(-2, -1)).shape, (2, 3, 4))
+
+    # Other axes
+    assert_shape(jnp.rot90(x3, 1, axes=(1, 2)).shape, (2, 4, 3))
+    assert_shape(jnp.rot90(x3, 1, axes=(0, 2)).shape, (4, 3, 2))
+
+    # 4D array with arbitrary axes
+    x4 = jnp.ones((2, 3, 4, 5))
+    assert_shape(jnp.rot90(x4, 1, axes=(1, 3)).shape, (2, 5, 4, 3))
+    assert_shape(jnp.rot90(x4, 1, (0, 2)).shape, (4, 3, 2, 5))
 
     # Rejection of 1-D array
     try:
@@ -388,6 +402,24 @@ def test_rot90() -> None:
         pass
     else:
         raise AssertionError("expected JAX to reject rot90 with < 2 dimensions")
+
+    # Rejection of duplicate axes
+    try:
+        # E: Cannot evaluate type-level shape DSL call: Axes must be different
+        jnp.rot90(x, axes=(1, 1))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject duplicate axes")
+
+    # Rejection of out of bounds axis
+    try:
+        # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+        jnp.rot90(x, axes=(0, 5))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject out of bounds axis")
 
 
 def test_broadcast_arrays_and_shapes() -> None:
