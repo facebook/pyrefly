@@ -3,7 +3,16 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Callable, Literal, NamedTuple, overload, Sequence, Unpack
+from typing import (
+    Any,
+    Callable,
+    ContextManager,
+    Literal,
+    NamedTuple,
+    overload,
+    Sequence,
+    Unpack,
+)
 
 from jax._array import Array as Array, Array as ndarray
 from jax._shapes import (
@@ -54,6 +63,31 @@ from jax._shapes import (
     vstack_shape,
 )
 from jax.typing import DTypeLike
+from numpy import (
+    array_repr as array_repr,
+    array_str as array_str,
+    character as character,
+    complexfloating as complexfloating,
+    dtype as dtype,
+    e as e,
+    euler_gamma as euler_gamma,
+    flexible as flexible,
+    floating as floating,
+    generic as generic,
+    inexact as inexact,
+    inf as inf,
+    integer as integer,
+    iterable as iterable,
+    nan as nan,
+    newaxis as newaxis,
+    number as number,
+    object_ as object_,
+    pi as pi,
+    save as save,
+    savez as savez,
+    signedinteger as signedinteger,
+    unsignedinteger as unsignedinteger,
+)
 from shape_extensions import (
     broadcast,
     Elements,
@@ -3564,10 +3598,234 @@ def ix_[Shapes: IntTuples](
 @overload
 def ix_(*args: Array[Any]) -> tuple[Array[IntTuple], ...]: ...
 
-float32: Any
-float64: Any
+class finfo:
+    bits: int
+    dtype: Any
+    eps: float
+    epsneg: float
+    iexp: int
+    machep: int
+    max: float
+    maxexp: int
+    min: float
+    minexp: int
+    negep: int
+    nexp: int
+    nmant: int
+    precision: int
+    resolution: float
+    smallest_normal: float
+    smallest_subnormal: float
+    tiny: float
+    def __init__(self, dtype: DTypeLike) -> None: ...
+
+class iinfo:
+    bits: int
+    dtype: Any
+    kind: str
+    max: int
+    min: int
+    def __init__(self, dtype: DTypeLike) -> None: ...
+
+class ufunc:
+    @property
+    def nin(self) -> int: ...
+    @property
+    def nout(self) -> int: ...
+    @property
+    def nargs(self) -> int: ...
+    @property
+    def ntypes(self) -> int: ...
+    @property
+    def types(self) -> list[str]: ...
+    @property
+    def identity(self) -> Any: ...
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+    def reduce(
+        self,
+        a: Any,
+        axis: int = 0,
+        dtype: Any = None,
+        out: Any = None,
+        keepdims: bool = False,
+    ) -> Any: ...
+    def accumulate(
+        self,
+        a: Any,
+        axis: int = 0,
+        dtype: Any = None,
+        out: Any = None,
+    ) -> Any: ...
+    def reduceat(
+        self,
+        a: Any,
+        indices: Sequence[int],
+        axis: int = 0,
+        dtype: Any = None,
+        out: Any = None,
+    ) -> Any: ...
+    def outer(self, A: Any, B: Any, /, **kwargs: Any) -> Any: ...
+
+class ComplexWarning(UserWarning): ...
+
+@overload
+def astype[Shape: _Shape](
+    x: Array[Shape],
+    dtype: DTypeLike | None,
+    /,
+    *,
+    copy: bool = False,
+    device: Any = None,
+) -> Array[Shape]: ...
+@overload
+def astype(
+    x: _Scalar,
+    dtype: DTypeLike | None,
+    /,
+    *,
+    copy: bool = False,
+    device: Any = None,
+) -> Array[()]: ...
+@overload
+def astype(
+    x: Any,
+    dtype: DTypeLike | None,
+    /,
+    *,
+    copy: bool = False,
+    device: Any = None,
+) -> Array[IntTuple]: ...
+def can_cast(from_: Any, to: DTypeLike, casting: str = "safe") -> bool: ...
+def isdtype(
+    dtype: DTypeLike, kind: str | DTypeLike | tuple[str | DTypeLike, ...]
+) -> bool: ...
+def issubdtype(arg1: DTypeLike, arg2: DTypeLike) -> bool: ...
+def promote_types(a: DTypeLike, b: DTypeLike) -> Any: ...
+def result_type(*args: Any) -> Any: ...
+
+class _Mgrid:
+    @overload
+    def __getitem__(self, key: slice) -> Array[[Any]]: ...
+    @overload
+    def __getitem__(self, key: tuple[slice, slice]) -> Array[[2, Any, Any]]: ...
+    @overload
+    def __getitem__(
+        self, key: tuple[slice, slice, slice]
+    ) -> Array[[3, Any, Any, Any]]: ...
+    @overload
+    def __getitem__(self, key: tuple[slice, ...]) -> Array[IntTuple]: ...
+    @overload
+    def __getitem__(self, key: Any) -> Array[IntTuple]: ...
+
+class _Ogrid:
+    @overload
+    def __getitem__(self, key: slice) -> Array[[Any]]: ...
+    @overload
+    def __getitem__(self, key: tuple[slice, slice]) -> list[Array[IntTuple]]: ...
+    @overload
+    def __getitem__(self, key: tuple[slice, slice, slice]) -> list[Array[IntTuple]]: ...
+    @overload
+    def __getitem__(self, key: tuple[slice, ...]) -> list[Array[IntTuple]]: ...
+    @overload
+    def __getitem__(self, key: Any) -> Array[IntTuple] | list[Array[IntTuple]]: ...
+
+mgrid: _Mgrid
+ogrid: _Ogrid
+
+class _CClass:
+    def __getitem__(self, key: Any) -> Array[IntTuple]: ...
+
+class _RClass:
+    def __getitem__(self, key: Any) -> Array[IntTuple]: ...
+
+c_: _CClass
+r_: _RClass
+
+class _IndexExpression:
+    @overload
+    def __getitem__[TupleT: tuple[Any, ...]](self, item: TupleT) -> TupleT: ...
+    @overload
+    def __getitem__[T](self, item: T) -> tuple[T]: ...
+
+class _SClass:
+    def __getitem__[T](self, item: T) -> T: ...
+
+index_exp: _IndexExpression
+s_: _SClass
+
+def ndim(a: Any) -> int: ...
+@overload
+def shape[Shape: _Shape](a: Array[Shape]) -> Shape: ...
+@overload
+def shape(a: Any) -> tuple[int, ...]: ...
+def size(a: Any, axis: int | Sequence[int] | None = None) -> int: ...
+def get_printoptions() -> dict[str, Any]: ...
+def set_printoptions(
+    precision: int | None = None,
+    threshold: int | None = None,
+    edgeitems: int | None = None,
+    linewidth: int | None = None,
+    suppress: bool | None = None,
+    nanstr: str | None = None,
+    infstr: str | None = None,
+    formatter: dict[str, Callable[..., str]] | None = None,
+    sign: str | None = None,
+    floatmode: str | None = None,
+    **kwarg: Any,
+) -> None: ...
+def printoptions(*args: Any, **kwargs: Any) -> ContextManager[dict[str, Any]]: ...
+def apply_along_axis(
+    func1d: Callable[..., Any], axis: int, arr: Any, *args: Any, **kwargs: Any
+) -> Array[IntTuple]: ...
+def apply_over_axes(
+    func: Callable[[Any, int], Any], a: Any, axes: Sequence[int]
+) -> Array[IntTuple]: ...
+def frompyfunc(
+    func: Callable[..., Any], /, nin: int, nout: int, *, identity: Any = None
+) -> ufunc: ...
+def vectorize(pyfunc: Any, *, excluded: Any = ..., signature: Any = None) -> Any: ...
+def load(file: Any, *args: Any, **kwargs: Any) -> Any: ...
+
+# Scalar constructors
+
+bool: Any
+bool_: Any
+int_: Any
+int8: Any
+int16: Any
 int32: Any
 int64: Any
+uint: Any
+uint8: Any
+uint16: Any
+uint32: Any
+uint64: Any
+int1: Any
+int2: Any
+int4: Any
+uint1: Any
+uint2: Any
+uint4: Any
+float_: Any
+float16: Any
+float32: Any
+float64: Any
+bfloat16: Any
+single: Any
+double: Any
+csingle: Any
+cdouble: Any
+complex_: Any
 complex64: Any
 complex128: Any
-bool_: Any
+float4_e2m1fn: Any
+float6_e2m3fn: Any
+float6_e3m2fn: Any
+float8_e3m4: Any
+float8_e4m3: Any
+float8_e4m3b11fnuz: Any
+float8_e4m3fn: Any
+float8_e4m3fnuz: Any
+float8_e5m2: Any
+float8_e5m2fnuz: Any
+float8_e8m0fnu: Any

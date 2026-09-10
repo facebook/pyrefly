@@ -365,3 +365,26 @@ def test_delete_and_insert() -> None:
 def test_trim_zeros() -> None:
     a = jnp.array([0, 0, 1, 2, 0])
     assert_shape(jnp.trim_zeros(a).shape, (2,))
+
+
+def test_mgrid_and_ogrid() -> None:
+    assert_shape(jnp.mgrid[0:5].shape, (5,))
+    assert_shape(jnp.mgrid[0:5, 0:3].shape, (2, 5, 3))
+    assert_shape(jnp.mgrid[0:5, 0:3, 0:2].shape, (3, 5, 3, 2))
+
+    assert_shape(jnp.ogrid[0:5].shape, (5,))
+    o1, o2 = jnp.ogrid[0:5, 0:3]
+    assert_shape(o1.shape, (5, 1))
+    assert_shape(o2.shape, (1, 3))
+
+
+def test_index_concatenation_and_slice_objects() -> None:
+    a = jnp.array([1, 2, 3])
+    b = jnp.array([4, 5, 6])
+    assert_shape(jnp.c_[a, b].shape, (3, 2))
+    assert_shape(jnp.r_[a, b].shape, (6,))
+
+    s = jnp.s_[0:5]
+    assert s == slice(0, 5, None)
+    idx = jnp.index_exp[0:5, 1]
+    assert idx == (slice(0, 5, None), 1)
