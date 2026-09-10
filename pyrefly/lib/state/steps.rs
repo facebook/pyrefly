@@ -460,7 +460,14 @@ impl Step {
         load: Arc<Load>,
         ast: Arc<ModModule>,
     ) -> Arc<Exports> {
-        Arc::new(Exports::new(&ast.body, &load.module_info, *ctx.sys_info))
+        let build_symbols =
+            ctx.require.keep_index() && load.module_info.path().is_first_party_for_indexing();
+        Arc::new(Exports::new(
+            &ast.body,
+            &load.module_info,
+            *ctx.sys_info,
+            build_symbols,
+        ))
     }
 
     #[inline(never)]
