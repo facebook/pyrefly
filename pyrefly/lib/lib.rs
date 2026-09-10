@@ -67,6 +67,7 @@ pub mod library {
     pub mod library {
         pub mod library {
             pub mod library {
+                pub use crate::commands::all::Args;
                 pub use crate::commands::all::Command;
                 pub use crate::commands::check::CheckArgs;
                 pub use crate::commands::check::CheckResult;
