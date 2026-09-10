@@ -28,26 +28,26 @@ impl Transaction<'_> {
         if query.len() < MIN_CHARACTERS_TYPED_AUTOIMPORT {
             return None;
         }
-        let mut result = Vec::new();
-        for (definition, _, name, export) in self
-            .search_exports_fuzzy(query, custom_thread_pool)
-            .unwrap_or_default()
-        {
-            if let Some(module) = self.get_module_info(&definition) {
-                result.push(WorkspaceSymbol {
-                    name: name.to_string(),
-                    kind: export
-                        .symbol_kind
-                        .map_or(SymbolKind::VARIABLE, |k| k.to_lsp_symbol_kind()),
-                    location: TextRangeWithModule {
-                        module,
-                        range: export.location,
-                    },
-                });
-            }
-        }
-        // Keep shared fuzzy ordering intact while preferring non-`__init__.py` matches here.
-        result.sort_by_key(|symbol| symbol.location.module.path().is_init());
-        Some(result)
+        let matches = self
+            .search_workspace_symbols_fuzzy(query, custom_thread_pool)
+            .unwrap_or_default();
+
+        Some(
+            matches
+                .into_iter()
+                .filter_map(|m| {
+                    Some(WorkspaceSymbol {
+                        name: m.name.to_string(),
+                        kind: m
+                            .kind
+                            .map_or(SymbolKind::VARIABLE, |kind| kind.to_lsp_symbol_kind()),
+                        location: TextRangeWithModule {
+                            module: self.get_module_info(&m.handle)?,
+                            range: m.range,
+                        },
+                    })
+                })
+                .collect(),
+        )
     }
 }

@@ -54,8 +54,10 @@ fn test_workspace_symbol() {
     interaction.shutdown().unwrap();
 }
 
+// Score outranks the `__init__.py` preference. This test's two candidates tie
+// on score, so the preference is what decides between them.
 #[test]
-fn test_workspace_symbol_prefers_non_init_result() {
+fn test_workspace_symbol_prefers_non_init_result_on_equal_score() {
     let root = get_test_files_root();
     let root_path = root.path().join("tests_requiring_config");
     let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
@@ -106,6 +108,82 @@ fn test_workspace_symbol_prefers_non_init_result() {
                 .expect("expected at least one non-__init__.py result");
 
             assert!(last_non_init_index < first_init_index);
+            true
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+// Re-export paths may resolve the same canonical declaration several times.
+// Collapse those byte-identical rows without removing the distinct local
+// re-export in `__init__.py`.
+#[test]
+fn test_workspace_symbol_deduplicates_reexported_definitions() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("tests_requiring_config");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(Some(json!([{ "indexing_mode": "lazy_blocking"}]))),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("workspace_symbol_prefer_non_init/implementation.py");
+    interaction
+        .client
+        .did_open("workspace_symbol_prefer_non_init/__init__.py");
+
+    let implementation_uri =
+        Url::from_file_path(root_path.join("workspace_symbol_prefer_non_init/implementation.py"))
+            .unwrap();
+    let init_uri =
+        Url::from_file_path(root_path.join("workspace_symbol_prefer_non_init/__init__.py"))
+            .unwrap();
+    let symbol_name = "workspace_symbol_prefers_non_init_over_init_reexport";
+
+    interaction
+        .client
+        .send_workspace_symbol(symbol_name)
+        .expect_response_with(|result| {
+            let Some(WorkspaceSymbolResponse::Flat(symbols)) = result else {
+                panic!("Unexpected workspace symbol response: {result:?}");
+            };
+
+            let canonical: Vec<_> = symbols
+                .iter()
+                .filter(|s| s.location.uri == implementation_uri)
+                .collect();
+            let reexport: Vec<_> = symbols
+                .iter()
+                .filter(|s| s.location.uri == init_uri)
+                .collect();
+
+            assert_eq!(
+                symbols.len(),
+                canonical.len() + reexport.len(),
+                "every result should come from one of the package's two files"
+            );
+
+            assert_eq!(canonical.len(), 1);
+            assert_eq!(canonical[0].name, symbol_name);
+            assert_ne!(
+                canonical[0].location.range,
+                lsp_types::Range::default(),
+                "the canonical row should point at the definition, not the file start"
+            );
+
+            // The re-export row is distinct: a zero range, because it stands for
+            // the re-exporting module rather than a definition within it.
+            assert_eq!(reexport.len(), 1);
+            assert_eq!(reexport[0].name, symbol_name);
+            assert_eq!(reexport[0].location.range, lsp_types::Range::default());
             true
         })
         .unwrap();

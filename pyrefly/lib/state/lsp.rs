@@ -4825,6 +4825,32 @@ impl<'a> Transaction<'a> {
             )
         }))
     }
+
+    /// Fuzzy-search module exports for names that match `pattern` for `workspace/symbol`.
+    pub fn search_workspace_symbols_fuzzy(
+        &self,
+        pattern: &str,
+        custom_thread_pool: Option<&ThreadPool>,
+    ) -> Result<Vec<SymbolMatch>, Cancelled> {
+        let mut results = self.search_exports(
+            |handle, exports_data, exports| {
+                let matcher = SkimMatcherV2::default().smart_case();
+                self.fuzzy_match_exports(handle, exports_data, exports, &matcher, pattern)
+                    .into_iter()
+                    .map(|result| SymbolMatch {
+                        score: result.score,
+                        handle: result.definition,
+                        name: result.name,
+                        kind: result.export.symbol_kind,
+                        range: result.export.location,
+                    })
+                    .collect()
+            },
+            custom_thread_pool,
+        )?;
+        reduce_symbol_matches(&mut results);
+        Ok(results)
+    }
 }
 
 struct ExportMatch {
@@ -4833,6 +4859,60 @@ struct ExportMatch {
     import_from: Handle,
     name: Name,
     export: Export,
+}
+
+/// One fuzzy match for `workspace/symbol`.
+#[derive(Clone)]
+pub struct SymbolMatch {
+    pub score: i64,
+    /// The module that the name resolves to, where `range` points.
+    pub handle: Handle,
+    pub name: Name,
+    pub kind: Option<SymbolKind>,
+    /// The range of the name, used as the navigation target.
+    pub range: TextRange,
+}
+
+fn compare_symbol_matches(left: &SymbolMatch, right: &SymbolMatch) -> Ordering {
+    Reverse(left.score)
+        .cmp(&Reverse(right.score))
+        .then_with(|| {
+            left.handle
+                .path()
+                .is_init()
+                .cmp(&right.handle.path().is_init())
+        })
+        .then_with(|| {
+            left.handle
+                .path()
+                .as_path()
+                .cmp(right.handle.path().as_path())
+        })
+        .then_with(|| left.range.start().cmp(&right.range.start()))
+        .then_with(|| left.range.end().cmp(&right.range.end()))
+        .then_with(|| left.name.cmp(&right.name))
+        .then_with(|| left.kind.cmp(&right.kind))
+        .then_with(|| {
+            right
+                .handle
+                .path()
+                .is_memory()
+                .cmp(&left.handle.path().is_memory())
+        })
+        .then_with(|| left.handle.cmp(&right.handle))
+}
+
+fn reduce_symbol_matches(results: &mut Vec<SymbolMatch>) {
+    results.sort_by(compare_symbol_matches);
+    let mut seen = HashSet::new();
+    results.retain(|result| {
+        seen.insert((
+            result.handle.path().to_key_eq(),
+            result.range,
+            result.name.clone(),
+            result.kind,
+        ))
+    });
 }
 
 trait RdepTransaction {
@@ -5243,21 +5323,116 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use pyrefly_build::handle::Handle;
     use pyrefly_python::module::Module;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::symbol_kind::SymbolKind;
+    use pyrefly_python::sys_info::SysInfo;
     use pyrefly_types::callable::Callable;
     use pyrefly_types::function::FuncMetadata;
     use pyrefly_types::function::Function;
     use pyrefly_types::heap::TypeHeap;
     use ruff_python_ast::name::Name;
+    use ruff_text_size::TextRange;
+    use ruff_text_size::TextSize;
 
+    use super::SymbolMatch;
     use super::Transaction;
     use super::attribute_symbol_kind_from_type;
+    use super::reduce_symbol_matches;
     use crate::types::callable::Param;
     use crate::types::callable::Required;
     use crate::types::types::Type;
+
+    fn symbol_match_with_path(
+        score: i64,
+        module: &str,
+        path: ModulePath,
+        start: u32,
+    ) -> SymbolMatch {
+        SymbolMatch {
+            score,
+            handle: Handle::new(ModuleName::from_str(module), path, SysInfo::default()),
+            name: Name::new(module),
+            kind: Some(SymbolKind::Function),
+            range: TextRange::new(TextSize::new(start), TextSize::new(start + 1)),
+        }
+    }
+
+    fn symbol_match(score: i64, module: &str, path: &str, start: u32) -> SymbolMatch {
+        symbol_match_with_path(
+            score,
+            module,
+            ModulePath::memory(PathBuf::from(path)),
+            start,
+        )
+    }
+
+    #[test]
+    fn workspace_symbol_reduction_prioritizes_score_over_init_path() {
+        let mut matches = vec![
+            symbol_match(1, "weak", "weak.py", 0),
+            symbol_match(100, "exact", "pkg/__init__.py", 0),
+        ];
+
+        reduce_symbol_matches(&mut matches);
+
+        assert_eq!(matches[0].name.as_str(), "exact");
+    }
+
+    #[test]
+    fn workspace_symbol_reduction_orders_equal_scores_by_path() {
+        let mut forward = vec![
+            symbol_match(10, "b", "b.py", 0),
+            symbol_match(10, "a", "a.py", 0),
+        ];
+        let mut reverse = vec![
+            symbol_match(10, "a", "a.py", 0),
+            symbol_match(10, "b", "b.py", 0),
+        ];
+
+        reduce_symbol_matches(&mut forward);
+        reduce_symbol_matches(&mut reverse);
+
+        for matches in [forward, reverse] {
+            assert_eq!(
+                matches
+                    .iter()
+                    .map(|result| result.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["a", "b"]
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_symbol_reduction_removes_only_identical_results() {
+        let mut matches = vec![
+            symbol_match(10, "target", "implementation.py", 4),
+            symbol_match(10, "target", "implementation.py", 4),
+            symbol_match(10, "target", "pkg/__init__.py", 0),
+        ];
+
+        reduce_symbol_matches(&mut matches);
+
+        assert_eq!(matches.len(), 2);
+        assert!(matches.iter().any(|result| result.handle.path().is_init()));
+    }
+
+    #[test]
+    fn workspace_symbol_reduction_prefers_memory_counterpart() {
+        let path = PathBuf::from("target.py");
+        let mut matches = vec![
+            symbol_match_with_path(10, "target", ModulePath::filesystem(path.clone()), 4),
+            symbol_match_with_path(10, "target", ModulePath::memory(path), 4),
+        ];
+
+        reduce_symbol_matches(&mut matches);
+
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].handle.path().is_memory());
+    }
 
     fn any_type() -> Type {
         TypeHeap::new().mk_any_explicit()
