@@ -1453,4 +1453,300 @@ mod tests {
             result_path
         );
     }
+
+    /// Integration test modelling a real-world project with a flat `py_library`,
+    /// a `py_package`, and a test target. The build system JSON response names
+    /// shared `configs`, omits `buildfile_path` on every target, and omits
+    /// `deps` on `//Project:MyLib`.
+    /// Every target here relies on the top-level `root`; per-target `root` is
+    /// covered by `test_per_target_root_overrides_path_resolution` below.
+    ///
+    /// Project layout:
+    /// ```text
+    /// /src/Project
+    /// ├── Foo.py
+    /// ├── MyPkg
+    /// │   ├── __init__.py
+    /// │   └── Utils.py
+    /// ├── sub1
+    /// │   └── Bar.py
+    /// └── test
+    ///     ├── lib.py
+    ///     └── test.py
+    /// ```
+    #[test]
+    fn test_json_integration_with_named_configs() {
+        let json = r#"
+{
+  "root": "/src/Project",
+  "db": {
+    "//Project:MyLib": {
+      "srcs": {
+        "Foo": ["Foo.py"],
+        "Bar": ["sub1/Bar.py"]
+      },
+      "config": "lenient",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//Project:MyPkg": {
+      "srcs": {
+        "MyPkg": ["MyPkg/__init__.py"],
+        "MyPkg.Utils": ["MyPkg/Utils.py"]
+      },
+      "deps": ["//Project:MyLib"],
+      "config": "strict",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//Project/test:test": {
+      "srcs": {
+        "test.lib": ["test/lib.py"],
+        "test.test": ["test/test.py"]
+      },
+      "deps": ["//Project:MyLib", "//Project:MyPkg"],
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "configs": {
+    "lenient": { "errors": { "missing-import": "warn" } },
+    "strict": { "check-unannotated-defs": true }
+  }
+}
+        "#;
+
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let root = parsed.root.clone();
+        let db = QuerySourceDatabase::from_target_manifest_db(
+            parsed,
+            &root,
+            &smallset! {
+                PathBuf::from("/src/Project/Foo.py"),
+                PathBuf::from("/src/Project/sub1/Bar.py"),
+                PathBuf::from("/src/Project/test/test.py"),
+            },
+        );
+
+        // --- Within-target lookup: srcs are absolutized against the top-level root ---
+
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("Foo"),
+                Some(Path::new("/src/Project/sub1/Bar.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(PathBuf::from("/src/Project/Foo.py"))),
+            "Foo should resolve from within the same target",
+        );
+
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("Bar"),
+                Some(Path::new("/src/Project/Foo.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(PathBuf::from(
+                "/src/Project/sub1/Bar.py"
+            ))),
+            "Bar should resolve from within the same target",
+        );
+
+        // --- Cross-target dep resolution ---
+
+        // From test.py (in //Project/test:test which deps on //Project:MyLib),
+        // we should be able to find Foo
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("Foo"),
+                Some(Path::new("/src/Project/test/test.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(PathBuf::from("/src/Project/Foo.py"))),
+            "test target should resolve Foo via dep on MyLib",
+        );
+
+        // From test.py, we should also find MyPkg.Utils via dep on MyPkg
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("MyPkg.Utils"),
+                Some(Path::new("/src/Project/test/test.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(PathBuf::from(
+                "/src/Project/MyPkg/Utils.py"
+            ))),
+            "test target should resolve MyPkg.Utils via dep on MyPkg",
+        );
+
+        // Within-target lookup: test.lib from test.test
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("test.lib"),
+                Some(Path::new("/src/Project/test/test.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(PathBuf::from(
+                "/src/Project/test/lib.py"
+            ))),
+            "test.lib should be resolvable within the test target",
+        );
+
+        // --- Per-target config ---
+
+        let lookup_config = |path: &str| {
+            let name = db.get_target_config_name(Some(Path::new(path)))?;
+            Some(db.get_config(&name).expect("named config must exist"))
+        };
+
+        assert_eq!(
+            lookup_config("/src/Project/Foo.py").unwrap()["errors"]["missing-import"],
+            serde_json::json!("warn"),
+            "MyLib should resolve to the lenient config",
+        );
+
+        assert_eq!(
+            lookup_config("/src/Project/MyPkg/__init__.py").unwrap()["check-unannotated-defs"],
+            serde_json::json!(true),
+            "MyPkg should resolve to the strict config",
+        );
+
+        // The absence assertions below only mean what they say while this path
+        // still belongs to the test target, since an unowned path is also absent.
+        assert_eq!(
+            db.get_target(Some(Path::new("/src/Project/test/test.py"))),
+            Some(Target::from_string("//Project/test:test".to_owned())),
+            "test.py should belong to the test target",
+        );
+
+        assert!(
+            lookup_config("/src/Project/test/test.py").is_none(),
+            "test target should have no config override",
+        );
+
+        // --- Falling back to the top-level root ---
+
+        assert!(
+            db.get_target_root(Some(Path::new("/src/Project/test/test.py")))
+                .is_none(),
+            "test target has no per-target root override",
+        );
+
+        // --- Optional deps/buildfile_path ---
+
+        // MyLib omits deps and buildfile_path in JSON; they should default
+        let mylib_manifest = db
+            .inner
+            .read()
+            .db
+            .get(&Target::from_string("//Project:MyLib".to_owned()))
+            .unwrap()
+            .clone();
+        assert!(
+            mylib_manifest.deps.is_empty(),
+            "MyLib should have empty deps when omitted from JSON",
+        );
+        assert_eq!(
+            mylib_manifest.buildfile_path,
+            PathBuf::from("/src/Project"),
+            "MyLib's buildfile_path should default to the root when omitted from JSON",
+        );
+
+        // --- Unknown file returns None ---
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("Foo"),
+                Some(Path::new("/src/Project/nonexistent.py")),
+                None,
+            ),
+            None,
+            "lookup from an unknown origin should return None",
+        );
+    }
+
+    /// Tests per-target root overrides: library and test targets use different
+    /// `root` values so their source paths are absolutized independently.
+    #[test]
+    fn test_per_target_root_overrides_path_resolution() {
+        let json = r#"
+{
+  "root": "/repo",
+  "db": {
+    "//lib:mylib": {
+      "srcs": {
+        "mylib.core": ["core.py"]
+      },
+      "root": "/repo/lib",
+      "config": "lenient",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//tests:mytest": {
+      "srcs": {
+        "tests.test_core": ["test_core.py"]
+      },
+      "deps": ["//lib:mylib"],
+      "root": "/repo/tests",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "configs": {
+    "lenient": { "errors": { "missing-import": "warn" } }
+  }
+}
+        "#;
+
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let root = parsed.root.clone();
+        let db = QuerySourceDatabase::from_target_manifest_db(
+            parsed,
+            &root,
+            &smallset! {
+                PathBuf::from("/repo/tests/test_core.py"),
+            },
+        );
+
+        // Per-target root: lib srcs absolutized against /repo/lib
+        assert_eq!(
+            db.lookup(
+                ModuleName::from_str("mylib.core"),
+                Some(Path::new("/repo/tests/test_core.py")),
+                None,
+            ),
+            Some(ModulePath::filesystem(PathBuf::from("/repo/lib/core.py"))),
+            "test target should resolve mylib.core via dep, absolutized against lib root",
+        );
+
+        // Per-target root retrieval
+        assert_eq!(
+            db.get_target_root(Some(Path::new("/repo/lib/core.py"))),
+            Some(PathBuf::from("/repo/lib")),
+            "lib target's per-target root should be /repo/lib",
+        );
+        assert_eq!(
+            db.get_target_root(Some(Path::new("/repo/tests/test_core.py"))),
+            Some(PathBuf::from("/repo/tests")),
+            "test target's per-target root should be /repo/tests",
+        );
+
+        // Config retrieval
+        let lib_config = db
+            .get_target_config_name(Some(Path::new("/repo/lib/core.py")))
+            .and_then(|name| db.get_config(&name));
+        assert_eq!(
+            lib_config.unwrap()["errors"]["missing-import"],
+            serde_json::json!("warn"),
+            "lib target should resolve to the lenient config",
+        );
+
+        // The assertion above that this path has a per-target root already
+        // proves it belongs to the test target, so an absent config here can
+        // only mean the target sets none.
+        assert!(
+            db.get_target_config_name(Some(Path::new("/repo/tests/test_core.py")))
+                .is_none(),
+            "test target should have no config override",
+        );
+    }
 }
