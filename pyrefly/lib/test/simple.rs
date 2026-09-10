@@ -1289,6 +1289,22 @@ def f(
 );
 
 testcase!(
+    test_annotated_metadata_starred,
+    r#"
+from typing import Annotated, Any
+
+metadata_items: list[object] = []
+Static = Annotated[int, *metadata_items]
+
+def metadata_factory() -> tuple[object, ...]: ...
+StaticCall = Annotated[int, *metadata_factory()]
+
+runtime_type: Any = int
+runtime_annotated = Annotated[(runtime_type, *metadata_items)]
+    "#,
+);
+
+testcase!(
     test_annotated_dunder_doc,
     r#"
 from typing import Annotated, assert_type

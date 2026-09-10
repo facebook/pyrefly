@@ -458,6 +458,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .into_ty()
     }
 
+    /// Infer an `Annotated` metadata item as a runtime expression.
+    pub fn expr_infer_annotated_metadata(&self, x: &Expr, errors: &ErrorCollector) -> Type {
+        // A starred metadata item unpacks runtime values, not type arguments.
+        let x = match x {
+            Expr::Starred(x) => &x.value,
+            _ => x,
+        };
+        self.expr_infer(x, errors)
+    }
+
     /// Infer a type for an expression, with an optional type hint that influences the inferred type.
     /// Convenience wrapper around `expr_with_options`.
     pub fn expr_infer_with_hint(
