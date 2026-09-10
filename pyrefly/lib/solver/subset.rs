@@ -1868,52 +1868,6 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             {
                 Ok(())
             }
-            // Given `A | B <: C | D` we must always split the LHS first, but a quantified might be hiding a LHS union in its bounds.
-            // Given (Quantified(bounds = A | B), A | B), we need to examine the bound _before_ splitting up the RHS union.
-            // But given (T@Quantified(bounds = ...), T | Something), we need to split the union.
-            // Therefore try these quantified cases, but only pick them if they work.
-            (Type::Quantified(q), u)
-                if let Restriction::Bound(bound) = q.restriction()
-                    // A bare inference variable can preserve the quantified type itself. Expanding
-                    // it to its bound here would make inference depend on which argument is checked
-                    // first (https://github.com/facebook/pyrefly/issues/4187).
-                    && !matches!(u, Type::Union(union) if union.members.iter().any(|t| matches!(t, Type::Var(_))))
-                    && self
-                        .solver
-                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
-                            self.is_subset_eq(bound, u)
-                        })
-                        .is_ok() =>
-            {
-                Ok(())
-            }
-            (Type::Quantified(q), u)
-                if let Restriction::ShapeExtension(extension) = q.restriction()
-                    && self
-                        .solver
-                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
-                            self.is_subset_eq(
-                                &extension.upper_bound(self.type_order.stdlib(), &self.solver.heap),
-                                u,
-                            )
-                        })
-                        .is_ok() =>
-            {
-                Ok(())
-            }
-            (Type::Quantified(q), u)
-                if let Restriction::Constraints(constraints) = q.restriction()
-                    && self
-                        .solver
-                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
-                            all(constraints.iter(), |constraint| {
-                                self.is_subset_eq(constraint, u)
-                            })
-                        })
-                        .is_ok() =>
-            {
-                Ok(())
-            }
             (Type::Quantified(q), u @ Type::Tuple(_)) if q.is_type_var_tuple() => self
                 .is_subset_eq(
                     &self.solver.heap.mk_unbounded_tuple(
@@ -2085,6 +2039,25 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     all(members.iter(), |m| {
                         self.is_subset_eq(&Type::type_of(m.clone()), want)
                     })
+                } else if let Type::Quantified(q) = l {
+                    // A quantified type parameter may hide a union in its bound or constraints
+                    // (e.g. `T: (A, B)` or `T: A | B`). If per-member matching against the RHS
+                    // union failed, check whether the bound or all constraints as a whole satisfy
+                    // the RHS union.
+                    match q.restriction() {
+                        Restriction::Bound(bound) => self.is_subset_eq(bound, want),
+                        Restriction::Constraints(constraints) => {
+                            all(constraints.iter(), |constraint| {
+                                self.is_subset_eq(constraint, want)
+                            })
+                        }
+                        Restriction::ShapeExtension(extension) => {
+                            let upper =
+                                extension.upper_bound(self.type_order.stdlib(), &self.solver.heap);
+                            self.is_subset_eq(&upper, want)
+                        }
+                        Restriction::Unrestricted => Err(error.unwrap_or(SubsetError::Other)),
+                    }
                 } else {
                     Err(error.unwrap_or(SubsetError::Other))
                 }
@@ -2099,13 +2072,21 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     _ => result,
                 }
             }
-            (Type::Quantified(q), u) if !q.restriction().is_restricted() => self.is_subset_eq(
-                &self
-                    .solver
-                    .heap
-                    .mk_class_type(self.type_order.stdlib().object().clone()),
-                u,
-            ),
+            (Type::Quantified(q), u) => match q.restriction() {
+                Restriction::Bound(bound) => self.is_subset_eq(bound, u),
+                Restriction::Constraints(constraints) => all(constraints.iter(), |constraint| {
+                    self.is_subset_eq(constraint, u)
+                }),
+                Restriction::ShapeExtension(extension) => {
+                    let upper = extension.upper_bound(self.type_order.stdlib(), &self.solver.heap);
+                    self.is_subset_eq(&upper, u)
+                }
+                Restriction::Unrestricted => {
+                    let upper = q.upper_bound(self.type_order.stdlib(), &self.solver.heap);
+                    self.is_subset_eq(&upper, u)
+                }
+            },
+
             (Type::Module(_), Type::ClassType(cls)) if cls.has_qname("types", "ModuleType") => {
                 Ok(())
             }
@@ -2669,12 +2650,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             {
                 self.is_subset_literal_int_size(n, got, false)
             }
-            (Type::Int(_) | Type::Quantified(_), Type::ClassType(cls))
-                if is_int_class_type(cls) =>
-            {
-                Ok(())
-            }
+            (Type::Int(_), Type::ClassType(cls)) if is_int_class_type(cls) => Ok(()),
             (Type::QuantifiedValue(_), Type::ClassType(cls)) if is_int_class_type(cls) => Ok(()),
+
             (Type::Literal(l_lit), Type::Literal(u_lit)) => {
                 ok_or(l_lit.value == u_lit.value, SubsetError::Other)
             }
