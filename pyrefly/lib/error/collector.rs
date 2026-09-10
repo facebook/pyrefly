@@ -67,7 +67,10 @@ impl ModuleErrors {
                 previous_range = x.range();
                 previous_start = self.items.len();
                 self.items.push(x);
-            } else if !self.items[previous_start..].contains(&x) {
+            } else if !self.items[previous_start..]
+                .iter_mut()
+                .any(|existing| existing.merge_if_same_diagnostic(&x))
+            {
                 self.items.push(x);
             }
         }
@@ -149,6 +152,19 @@ impl ErrorCollector {
         }
     }
 
+    /// Add the errors from another collector that satisfy `keep`.
+    pub(crate) fn extend_filtered(
+        &self,
+        other: ErrorCollector,
+        mut keep: impl FnMut(&Error) -> bool,
+    ) {
+        if self.is_active() {
+            let mut other = other.errors.into_inner();
+            other.items.retain(|error| keep(error));
+            self.errors.lock().extend(other);
+        }
+    }
+
     /// Start building an error. Returns a no-op builder if style is Never.
     pub fn error_builder(
         &self,
@@ -166,6 +182,7 @@ impl ErrorCollector {
             context: None,
             annotations: Vec::new(),
             quick_fixes: Vec::new(),
+            deprecated_tag: true,
         }
     }
 
@@ -373,12 +390,25 @@ pub struct ErrorBuilder<'a> {
     context: Option<ErrorContext>,
     annotations: Vec<(TextRange, String)>,
     quick_fixes: Vec<ErrorQuickFix>,
+    deprecated_tag: bool,
 }
 
 impl ErrorBuilder<'_> {
     /// Append a detail line (shown indented below the header).
     pub fn with_detail(mut self, msg: String) -> Self {
         if self.active {
+            self.details.push(msg);
+        }
+        self
+    }
+
+    /// Append a detail line that is only worth working out if the error will be
+    /// kept. Modules loaded below `Require::Errors` collect with
+    /// [`ErrorStyle::Never`], so for them this never runs at all.
+    pub fn with_detail_from(mut self, msg: impl FnOnce() -> Option<String>) -> Self {
+        if self.active
+            && let Some(msg) = msg()
+        {
             self.details.push(msg);
         }
         self
@@ -405,6 +435,13 @@ impl ErrorBuilder<'_> {
         if self.active {
             self.annotations.push((range, label));
         }
+        self
+    }
+
+    /// Report the deprecation without marking the range as deprecated in editors. See
+    /// [`Error::without_deprecated_tag`].
+    pub fn without_deprecated_tag(mut self) -> Self {
+        self.deprecated_tag = false;
         self
     }
 
@@ -455,12 +492,16 @@ impl ErrorBuilder<'_> {
         for fix in self.quick_fixes {
             err = err.with_quick_fix(fix);
         }
+        if !self.deprecated_tag {
+            err = err.without_deprecated_tag();
+        }
         self.collector.errors.lock().push(err);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::collections::HashMap;
     use std::path::Path;
     use std::path::PathBuf;
@@ -523,7 +564,7 @@ mod tests {
         assert_eq!(
             errors
                 .collect(&ErrorConfig::new(
-                    &ErrorDisplayConfig::default(),
+                    Cow::Owned(ErrorDisplayConfig::default()),
                     false,
                     Tool::default_enabled(),
                 ))
@@ -577,7 +618,7 @@ mod tests {
             (ErrorKind::BadAssignment, Severity::Ignore),
             (ErrorKind::NotIterable, Severity::Ignore),
         ]));
-        let config = ErrorConfig::new(&display_config, false, Tool::default_enabled());
+        let config = ErrorConfig::new(Cow::Owned(display_config), false, Tool::default_enabled());
 
         assert_eq!(
             errors.collect(&config).ordinary.map(|x| x.msg()),
@@ -601,13 +642,17 @@ mod tests {
         );
 
         let display_config = ErrorDisplayConfig::default();
-        let config0 = ErrorConfig::new(&display_config, false, Tool::default_enabled());
+        let config0 = ErrorConfig::new(
+            Cow::Borrowed(&display_config),
+            false,
+            Tool::default_enabled(),
+        );
         assert_eq!(
             errors.collect(&config0).ordinary.map(|x| x.msg()),
             vec!["a"]
         );
 
-        let config1 = ErrorConfig::new(&display_config, true, Tool::default_enabled());
+        let config1 = ErrorConfig::new(Cow::Owned(display_config), true, Tool::default_enabled());
         assert!(
             errors
                 .collect(&config1)
@@ -640,7 +685,7 @@ mod tests {
         assert_eq!(
             errors
                 .collect(&ErrorConfig::new(
-                    &ErrorDisplayConfig::default(),
+                    Cow::Owned(ErrorDisplayConfig::default()),
                     false,
                     Tool::default_enabled(),
                 ))

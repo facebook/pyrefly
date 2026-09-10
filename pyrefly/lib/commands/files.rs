@@ -28,6 +28,7 @@ use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::config_finder::apply_unconfigured_resolver_if_applicable;
 use crate::commands::config_finder::default_config_finder_with_overrides;
 use crate::config::config::ConfigFile;
+use crate::config::config::ConfigScope;
 use crate::config::config::ConfigSource;
 use crate::config::config::ProjectLayout;
 use crate::config::config::SynthesizedPresetReason;
@@ -139,7 +140,7 @@ pub fn get_project_config_for_current_dir(
             Some(&current_dir),
             UnconfiguredOverride::Auto,
         );
-        let (config, errors) = args.override_config(synthesized);
+        let (config, errors) = args.override_config_at(synthesized, Some(&current_dir));
         // Since this is a config we generated, these are likely internal errors.
         debug_log(errors);
         config
@@ -158,7 +159,7 @@ pub fn get_config_finder_for_snippet(
             let finder = default_config_finder_with_overrides(args.clone(), false, None);
             match finder.directory(&current_dir) {
                 Some(config) => (config, finder.errors()),
-                None => args.override_config(ConfigFile::default()),
+                None => args.override_config_at(ConfigFile::default(), Some(&current_dir)),
             }
         }
     };
@@ -179,6 +180,7 @@ fn get_globs_and_config_for_project(
     project_excludes: Option<Globs>,
     args: ConfigOverrideArgs,
     wrapper: Option<ConfigConfigurerWrapper>,
+    scope: ConfigScope,
 ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder, UpsellDecision)> {
     let (config, mut errors) = match config {
         Some(explicit) => get_explicit_config(&explicit, args),
@@ -200,15 +202,15 @@ fn get_globs_and_config_for_project(
                 path.display(),
             );
         }
-        ConfigSource::Synthetic => {
+        ConfigSource::Synthetic(_) => {
             info!("Checking current directory with auto configuration");
         }
     }
     let current_dir = std::env::current_dir().ok();
-    if let Some(project_dir) = config.source.root().or(current_dir.as_deref())
+    if let Some(project_dir) = config.source.root_from_file().or(current_dir.as_deref())
         && let Some(home_dir) = std::env::home_dir()
         && home_dir.starts_with(project_dir)
-        && config.project_includes == ConfigFile::default_project_includes().from_root(project_dir)
+        && *config.includes(scope) == ConfigFile::default_project_includes().from_root(project_dir)
     {
         // Trying to type-check your entire home directory doesn't usually end well.
         warn!(
@@ -227,7 +229,7 @@ fn get_globs_and_config_for_project(
 
     debug!("Config is: {}", config);
 
-    let mut filtered_globs = config.get_filtered_globs(project_excludes);
+    let mut filtered_globs = config.get_filtered_globs(project_excludes, scope);
     filtered_globs
         .errors()
         .into_iter()
@@ -333,6 +335,16 @@ impl FilesArgs {
         config_override: ConfigOverrideArgs,
         wrapper: Option<ConfigConfigurerWrapper>,
     ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder, UpsellDecision)> {
+        self.resolve_scoped(config_override, wrapper, ConfigScope::Default)
+    }
+
+    /// [`FilesArgs::resolve`], reading the project-mode globs from `scope`.
+    pub fn resolve_scoped(
+        self,
+        config_override: ConfigOverrideArgs,
+        wrapper: Option<ConfigConfigurerWrapper>,
+        scope: ConfigScope,
+    ) -> anyhow::Result<(Box<dyn Includes>, ConfigFinder, UpsellDecision)> {
         let project_excludes = if let Some(project_excludes) = self.project_excludes {
             Some(absolutize(Globs::new(project_excludes)?))
         } else {
@@ -344,8 +356,10 @@ impl FilesArgs {
                 project_excludes,
                 config_override,
                 wrapper,
+                scope,
             )
         } else {
+            // File mode bypasses the config's globs, so `scope` is intentionally unused.
             get_globs_and_config_for_files(
                 self.config,
                 Globs::new(self.files)?,

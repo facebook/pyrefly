@@ -14,3 +14,8 @@ if TYPE_CHECKING:
 def test_comparison(x: Tensor[[2, 3]]):
     y = x == 0
     assert_type(y, Tensor[[2, 3]])
+
+
+def test_tensor_comparison_broadcast(x: Tensor[[2, 1]], y: Tensor[[1, 3]]) -> None:
+    assert_type(x == y, Tensor[[2, 3]])
+    assert_type(x != y, Tensor[[2, 3]])

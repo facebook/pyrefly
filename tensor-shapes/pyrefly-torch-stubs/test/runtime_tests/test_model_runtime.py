@@ -10,7 +10,7 @@
 Verifies that the runnable models (with assert_type stripped) can be
 instantiated and run forward passes at Python runtime. Tests both the
 future_annotations variants (which use PEP 563 to defer annotation
-evaluation) and the sym_var variants (which use shape_extensions.SymVar for
+evaluation) and the sym_int_var variants (which use shape_extensions.IntVar for
 runtime-safe arithmetic without future annotations).
 """
 
@@ -68,7 +68,7 @@ class TestNanoGPTFutureAnnotationsRuntime(unittest.TestCase):
             logits, loss = model(idx)
 
         # Inference mode: only last position
-        assert_shape(logits, (batch_size, 1, config.vocab_size))
+        assert_shape(logits.shape, (batch_size, 1, config.vocab_size))
         self.assertIsNone(loss)
 
     def test_forward_training(self):
@@ -83,9 +83,9 @@ class TestNanoGPTFutureAnnotationsRuntime(unittest.TestCase):
         targets = torch.randint(0, config.vocab_size, (batch_size, seq_len))
         logits, loss = model(idx, targets)
 
-        assert_shape(logits, (batch_size, seq_len, config.vocab_size))
+        assert_shape(logits.shape, (batch_size, seq_len, config.vocab_size))
         self.assertIsNotNone(loss)
-        assert_shape(loss, ())
+        assert_shape(loss.shape, ())
 
     def test_generate(self):
         """Generate method produces tokens."""
@@ -100,7 +100,7 @@ class TestNanoGPTFutureAnnotationsRuntime(unittest.TestCase):
         with torch.no_grad():
             generated = model.generate(idx, max_new_tokens=3)
 
-        assert_shape(generated, (batch_size, 4 + 3))
+        assert_shape(generated.shape, (batch_size, 4 + 3))
 
 
 class TestGPTFastFutureAnnotationsRuntime(unittest.TestCase):
@@ -145,7 +145,7 @@ class TestGPTFastFutureAnnotationsRuntime(unittest.TestCase):
         norm = RMSNorm(32)
         x = torch.randn(2, 16, 32)
         out = norm(x)
-        assert_shape(out, (2, 16, 32))
+        assert_shape(out.shape, (2, 16, 32))
 
     def test_feed_forward(self):
         """FeedForward forward pass works."""
@@ -155,7 +155,7 @@ class TestGPTFastFutureAnnotationsRuntime(unittest.TestCase):
         ff = FeedForward(config)
         x = torch.randn(2, 16, 32)
         out = ff(x)
-        assert_shape(out, (2, 16, 32))
+        assert_shape(out.shape, (2, 16, 32))
 
     def test_precompute_freqs_cis(self):
         """precompute_freqs_cis produces correct shape."""
@@ -163,7 +163,7 @@ class TestGPTFastFutureAnnotationsRuntime(unittest.TestCase):
 
         # head_dim=8, seq_len=64
         cache = precompute_freqs_cis(seq_len=64, n_elem=8)
-        assert_shape(cache, (64, 4, 2))
+        assert_shape(cache.shape, (64, 4, 2))
 
     def test_apply_rotary_emb(self):
         """apply_rotary_emb works on a tensor."""
@@ -176,7 +176,7 @@ class TestGPTFastFutureAnnotationsRuntime(unittest.TestCase):
         x = torch.randn(batch, seq_len, n_heads, head_dim)
         freqs_cis = precompute_freqs_cis(seq_len=seq_len, n_elem=head_dim)
         out = apply_rotary_emb(x, freqs_cis)
-        assert_shape(out, (batch, seq_len, n_heads, head_dim))
+        assert_shape(out.shape, (batch, seq_len, n_heads, head_dim))
 
     def test_kv_cache(self):
         """KVCache can be created and updated."""
@@ -192,15 +192,15 @@ class TestGPTFastFutureAnnotationsRuntime(unittest.TestCase):
         k_val = torch.randn(2, 4, 16, 8, dtype=torch.bfloat16)
         v_val = torch.randn(2, 4, 16, 8, dtype=torch.bfloat16)
         k_out, v_out = cache.update(input_pos, k_val, v_val)
-        assert_shape(k_out, (2, 4, 64, 8))
-        assert_shape(v_out, (2, 4, 64, 8))
+        assert_shape(k_out.shape, (2, 4, 64, 8))
+        assert_shape(v_out.shape, (2, 4, 64, 8))
 
 
-class TestNanoGPTSymVarRuntime(unittest.TestCase):
-    """Test that nanogpt_sym_var_runnable.py can be imported, instantiated, and run."""
+class TestNanoGPTIntVarRuntime(unittest.TestCase):
+    """Test that nanogpt_sym_int_var_runnable.py can be imported, instantiated, and run."""
 
     def _make_config(self):
-        from nanogpt_sym_var_runnable import GPTConfig
+        from nanogpt_sym_int_var_runnable import GPTConfig
 
         return GPTConfig(
             block_size=64,
@@ -214,7 +214,7 @@ class TestNanoGPTSymVarRuntime(unittest.TestCase):
 
     def test_import(self):
         """Module can be imported without errors."""
-        import nanogpt_sym_var_runnable  # noqa: F401
+        import nanogpt_sym_int_var_runnable  # noqa: F401
 
     def test_instantiate_config(self):
         """GPTConfig dataclass can be created."""
@@ -224,7 +224,7 @@ class TestNanoGPTSymVarRuntime(unittest.TestCase):
 
     def test_instantiate_model(self):
         """GPT model can be instantiated."""
-        from nanogpt_sym_var_runnable import GPT
+        from nanogpt_sym_int_var_runnable import GPT
 
         config = self._make_config()
         model = GPT(config)
@@ -232,7 +232,7 @@ class TestNanoGPTSymVarRuntime(unittest.TestCase):
 
     def test_forward_inference(self):
         """Forward pass without targets (inference mode)."""
-        from nanogpt_sym_var_runnable import GPT
+        from nanogpt_sym_int_var_runnable import GPT
 
         config = self._make_config()
         model = GPT(config)
@@ -243,12 +243,12 @@ class TestNanoGPTSymVarRuntime(unittest.TestCase):
         with torch.no_grad():
             logits, loss = model(idx)
 
-        assert_shape(logits, (batch_size, 1, config.vocab_size))
+        assert_shape(logits.shape, (batch_size, 1, config.vocab_size))
         self.assertIsNone(loss)
 
     def test_forward_training(self):
         """Forward pass with targets (training mode)."""
-        from nanogpt_sym_var_runnable import GPT
+        from nanogpt_sym_int_var_runnable import GPT
 
         config = self._make_config()
         model = GPT(config)
@@ -258,13 +258,13 @@ class TestNanoGPTSymVarRuntime(unittest.TestCase):
         targets = torch.randint(0, config.vocab_size, (batch_size, seq_len))
         logits, loss = model(idx, targets)
 
-        assert_shape(logits, (batch_size, seq_len, config.vocab_size))
+        assert_shape(logits.shape, (batch_size, seq_len, config.vocab_size))
         self.assertIsNotNone(loss)
-        assert_shape(loss, ())
+        assert_shape(loss.shape, ())
 
     def test_generate(self):
         """Generate method produces tokens."""
-        from nanogpt_sym_var_runnable import GPT
+        from nanogpt_sym_int_var_runnable import GPT
 
         config = self._make_config()
         model = GPT(config)
@@ -275,14 +275,14 @@ class TestNanoGPTSymVarRuntime(unittest.TestCase):
         with torch.no_grad():
             generated = model.generate(idx, max_new_tokens=3)
 
-        assert_shape(generated, (batch_size, 4 + 3))
+        assert_shape(generated.shape, (batch_size, 4 + 3))
 
 
-class TestGPTFastSymVarRuntime(unittest.TestCase):
-    """Test that gptfast_sym_var_runnable.py can be imported and sub-modules can run."""
+class TestGPTFastIntVarRuntime(unittest.TestCase):
+    """Test that gptfast_sym_int_var_runnable.py can be imported and sub-modules can run."""
 
     def _make_config(self):
-        from gptfast_sym_var_runnable import ModelArgs
+        from gptfast_sym_int_var_runnable import ModelArgs
 
         return ModelArgs(
             block_size=64,
@@ -296,7 +296,7 @@ class TestGPTFastSymVarRuntime(unittest.TestCase):
 
     def test_import(self):
         """Module can be imported without errors."""
-        import gptfast_sym_var_runnable  # noqa: F401
+        import gptfast_sym_int_var_runnable  # noqa: F401
 
     def test_instantiate_config(self):
         """ModelArgs dataclass can be created."""
@@ -307,7 +307,7 @@ class TestGPTFastSymVarRuntime(unittest.TestCase):
 
     def test_instantiate_transformer(self):
         """Transformer model can be instantiated."""
-        from gptfast_sym_var_runnable import Transformer
+        from gptfast_sym_int_var_runnable import Transformer
 
         config = self._make_config()
         model = Transformer(config)
@@ -315,43 +315,43 @@ class TestGPTFastSymVarRuntime(unittest.TestCase):
 
     def test_rms_norm_forward(self):
         """RMSNorm forward pass works."""
-        from gptfast_sym_var_runnable import RMSNorm
+        from gptfast_sym_int_var_runnable import RMSNorm
 
         norm = RMSNorm(32)
         x = torch.randn(2, 16, 32)
         out = norm(x)
-        assert_shape(out, (2, 16, 32))
+        assert_shape(out.shape, (2, 16, 32))
 
     def test_feed_forward(self):
         """FeedForward forward pass works."""
-        from gptfast_sym_var_runnable import FeedForward
+        from gptfast_sym_int_var_runnable import FeedForward
 
         config = self._make_config()
         ff = FeedForward(config)
         x = torch.randn(2, 16, 32)
         out = ff(x)
-        assert_shape(out, (2, 16, 32))
+        assert_shape(out.shape, (2, 16, 32))
 
     def test_precompute_freqs_cis(self):
         """precompute_freqs_cis produces correct shape."""
-        from gptfast_sym_var_runnable import precompute_freqs_cis
+        from gptfast_sym_int_var_runnable import precompute_freqs_cis
 
         cache = precompute_freqs_cis(seq_len=64, n_elem=8)
-        assert_shape(cache, (64, 4, 2))
+        assert_shape(cache.shape, (64, 4, 2))
 
     def test_apply_rotary_emb(self):
         """apply_rotary_emb works on a tensor."""
-        from gptfast_sym_var_runnable import apply_rotary_emb, precompute_freqs_cis
+        from gptfast_sym_int_var_runnable import apply_rotary_emb, precompute_freqs_cis
 
         batch, seq_len, n_heads, head_dim = 2, 16, 4, 8
         x = torch.randn(batch, seq_len, n_heads, head_dim)
         freqs_cis = precompute_freqs_cis(seq_len=seq_len, n_elem=head_dim)
         out = apply_rotary_emb(x, freqs_cis)
-        assert_shape(out, (batch, seq_len, n_heads, head_dim))
+        assert_shape(out.shape, (batch, seq_len, n_heads, head_dim))
 
     def test_kv_cache(self):
         """KVCache can be created and updated."""
-        from gptfast_sym_var_runnable import KVCache
+        from gptfast_sym_int_var_runnable import KVCache
 
         cache = KVCache(
             max_batch_size=2,
@@ -363,8 +363,8 @@ class TestGPTFastSymVarRuntime(unittest.TestCase):
         k_val = torch.randn(2, 4, 16, 8, dtype=torch.bfloat16)
         v_val = torch.randn(2, 4, 16, 8, dtype=torch.bfloat16)
         k_out, v_out = cache.update(input_pos, k_val, v_val)
-        assert_shape(k_out, (2, 4, 64, 8))
-        assert_shape(v_out, (2, 4, 64, 8))
+        assert_shape(k_out.shape, (2, 4, 64, 8))
+        assert_shape(v_out.shape, (2, 4, 64, 8))
 
 
 if __name__ == "__main__":

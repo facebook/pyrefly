@@ -18,6 +18,17 @@ jobs:
       pull-requests: write
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            scripts/primer_presets.py
+            scripts/error_presets.json
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
       - name: Download diffs
         uses: actions/github-script@v8
         with:
@@ -42,6 +53,9 @@ jobs:
       - run: unzip diff.zip
       - run: |
           cat diff_*.txt | tee fulldiff.txt
+      - name: Break the diff down by preset
+        run: |
+          python scripts/primer_presets.py fulldiff.txt | tee preset_summary.txt
 
       - name: Post comment
         id: post-comment
@@ -54,6 +68,7 @@ jobs:
 
             const fs = require('fs')
             let data = fs.readFileSync('fulldiff.txt', { encoding: 'utf8' })
+            const hasDiff = Boolean(data.trim())
 
             function truncateIfNeeded(original, maxLength) {
               if (original.length <= maxLength) {
@@ -66,18 +81,45 @@ jobs:
               return `${truncated}\n\n... (truncated ${lines_truncated} lines) ...`
             }
 
-            const projects = data.split('\n\n')
+            const projects = hasDiff ? data.trim().split(/\n\n+/) : []
+            const projectSummaries = projects.map(project => {
+              const lines = project.split('\n')
+              return {
+                name: lines[0].replace(/\s+\(https?:\/\/[^)]+\)$/, ''),
+                added: lines.filter(line => line.startsWith('+')).length,
+                removed: lines.filter(line => line.startsWith('-')).length,
+              }
+            }).filter(project => project.added || project.removed)
+
+            const totalAdded = projectSummaries.reduce((total, project) => total + project.added, 0)
+            const totalRemoved = projectSummaries.reduce((total, project) => total + project.removed, 0)
+            const summary = [
+              '='.repeat(60),
+              'SUMMARY',
+              '='.repeat(60),
+              `Total: +${totalAdded} new errors, -${totalRemoved} fixed errors`,
+              `By preset: ${fs.readFileSync('preset_summary.txt', { encoding: 'utf8' }).trim()}`,
+              '',
+              `Projects with changes (${projectSummaries.length}):`,
+              ...projectSummaries.map(project => `  ${project.name}: +${project.added} -${project.removed}`),
+              '='.repeat(60),
+              '',
+              'FULL DIFF DETAILS',
+              '-'.repeat(60),
+              '',
+            ].join('\n')
+
             // don't let one project dominate
             data = projects.map(project => truncateIfNeeded(project, MAX_CHARACTERS_PER_PROJECT)).join('\n\n')
             // posting comment fails if too long, so truncate
-            data = truncateIfNeeded(data, MAX_CHARACTERS)
+            data = hasDiff ? truncateIfNeeded(`${summary}\n${data}`, MAX_CHARACTERS) : ''
 
             console.log("Diff from mypy_primer:")
             console.log(data)
 
             let body
             if (data.trim()) {
-              body = 'Diff from [mypy_primer](https://github.com/hauntsaninja/mypy_primer), showing the effect of this PR on open source code:\n```diff\n' + data + '```'
+              body = 'Diff from [mypy_primer](https://github.com/hauntsaninja/mypy_primer), showing the effect of this PR on open source code:\n```diff\n' + data + '\n```'
             } else {
               body = "According to [mypy_primer](https://github.com/hauntsaninja/mypy_primer), this change doesn't affect type check results on a corpus of open source code. ✅"
             }

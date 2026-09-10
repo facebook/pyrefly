@@ -29,7 +29,7 @@ testcase!(
     test_abstract_method_implicit_return,
     r#"
 import abc
-class Foo:
+class Foo(abc.ABC):
     @abc.abstractmethod
     def foo(self) -> str:
         """
@@ -108,14 +108,14 @@ assert_type(y, Literal["bar"])
 testcase!(
     test_parameter_type_inferred_from_decorator,
     r#"
-from typing import Callable, reveal_type
+from typing import Callable, assert_type
 
 def enforce_int_arg(func: Callable[[int], None]) -> Callable[[int], None]:
     return func
 
 @enforce_int_arg
 def takes_inferred(i) -> None:
-    reveal_type(i)  # E: revealed type: int
+    assert_type(i, int)
     "#,
 );
 
@@ -476,6 +476,45 @@ g(f)
 );
 
 testcase!(
+    test_decorator_missing_concatenate_parameters,
+    r#"
+from typing import Callable, Concatenate
+
+def inject_one[T, **P, R](
+    view: Callable[Concatenate[T, str, P], R],
+) -> Callable[Concatenate[T, P], R]: ...
+
+class C:
+    @inject_one  # E: Callable is missing a positional parameter with type `str`
+    def one(self) -> int:
+        return 0
+
+def inject_two[**P, R](
+    view: Callable[Concatenate[str, bool, P], R],
+) -> Callable[P, R]: ...
+
+@inject_two  # E: Callable is missing 2 positional parameters with types `str` and `bool`
+def two() -> int:
+    return 0
+    "#,
+);
+
+testcase!(
+    test_decorator_concatenate_parameter_mismatch_is_not_missing,
+    r#"
+from typing import Callable, Concatenate
+
+def inject[**P, R](
+    view: Callable[Concatenate[str, int, P], R],
+) -> Callable[P, R]: ...
+
+@inject  # E: Argument `(x: bool) -> None` is not assignable
+         # N: Callable is missing
+def f(x: bool) -> None: ...
+    "#,
+);
+
+testcase!(
     bug = "This error message is confusing, I think we need to be clearer when we are printing the *type* of an argument",
     test_decorator_error_message,
     r#"
@@ -526,6 +565,23 @@ class A:
     def __init__(self, x: int) -> None:
         self.x = x
 "#,
+);
+
+testcase!(
+    test_total_ordering_inherited_rich_cmp,
+    r#"
+from functools import total_ordering
+from typing import reveal_type
+
+class Base:
+    def __lt__(self, other: "Base") -> bool: ...
+
+@total_ordering
+class Child(Base):
+    pass
+
+reveal_type(Child.__gt__)  # E: revealed type: (self: Child, other: Base) -> bool
+    "#,
 );
 
 testcase!(
@@ -587,9 +643,9 @@ reveal_type(A.__ge__)  # E: revealed type: (self: A, other: object) -> bool
 testcase!(
     test_abstract_method_skip_return,
     r#"
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 
-class C:
+class C(ABC):
         @abstractmethod
         def m1(self) -> int:
             return NotImplemented
@@ -1127,5 +1183,34 @@ my_decorator: Any = lambda f: f
 @my_decorator  # pyrefly: ignore[untyped-function-decorator]
 def g() -> int:
     return 1
+"#,
+);
+
+// A decorator with no definition after it parses as a nameless function, whose
+// decorators still have to be bound: a walrus in one defines a real name.
+testcase!(
+    test_decorator_with_no_definition,
+    r#"
+from typing import Literal, assert_type
+@x := 1
+assert_type(x, Literal[1])  # E: Parse error: Expected class, function definition or async function definition after decorator
+"#,
+);
+
+testcase!(
+    test_decorator_with_incomplete_walrus,
+    r#"
+@x :=  # E: Parse error: Expected an expression
+y = 1  # E: Parse error: Expected class, function definition or async function definition after decorator
+"#,
+);
+
+testcase!(
+    test_decorator_on_nameless_class,
+    r#"
+from typing import Literal, assert_type
+@y := 2
+class  # E: Parse error: Expected an identifier
+assert_type(y, Literal[2])  # E: Parse error: Expected an indented block after `class` definition
 "#,
 );

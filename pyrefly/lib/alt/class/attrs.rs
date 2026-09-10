@@ -13,8 +13,6 @@
 //! `converters.optional`/`converters.pipe` handling, `@x.default` decorator return-type checks, `@x.converter`
 //! decorator input types, and the `assoc`/`fields`/`fields_dict` runtime helpers.
 
-use std::sync::Arc;
-
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -39,14 +37,13 @@ use crate::alt::types::class_metadata::DataclassMetadata;
 use crate::alt::unwrap::HintRef;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyDecorator;
-use crate::binding::binding::KeyExport;
 use crate::binding::binding::KeyUndecoratedFunction;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
-use crate::types::callable::FunctionKind;
 use crate::types::callable::Param;
 use crate::types::class::Class;
 use crate::types::class::ClassType;
+use crate::types::function::FunctionKind;
 use crate::types::keywords::DataclassFieldKeywords;
 use crate::types::keywords::DataclassKeywords;
 use crate::types::keywords::TypeMap;
@@ -72,8 +69,11 @@ pub(crate) fn is_attrs_setters_frozen(ty: &Type) -> bool {
     if let Type::Function(f) = ty
         && let FunctionKind::Def(id) = &f.metadata.kind
     {
-        id.name.as_str() == "frozen"
-            && matches!(id.module.name().as_str(), "attr.setters" | "attrs.setters")
+        id.qname.id().as_str() == "frozen"
+            && matches!(
+                id.qname.module_name().as_str(),
+                "attr.setters" | "attrs.setters"
+            )
     } else {
         false
     }
@@ -86,8 +86,11 @@ pub(crate) fn is_attrs_setters_pipe(ty: &Type) -> bool {
     if let Type::Function(f) = ty
         && let FunctionKind::Def(id) = &f.metadata.kind
     {
-        id.name.as_str() == "pipe"
-            && matches!(id.module.name().as_str(), "attr.setters" | "attrs.setters")
+        id.qname.id().as_str() == "pipe"
+            && matches!(
+                id.qname.module_name().as_str(),
+                "attr.setters" | "attrs.setters"
+            )
     } else {
         false
     }
@@ -103,7 +106,7 @@ fn attrs_type_is_frozen_setter(ty: &Type) -> bool {
         Type::Tuple(Tuple::Concrete(elts)) => elts.iter().any(attrs_type_is_frozen_setter),
         Type::Tuple(Tuple::Unbounded(elt)) => attrs_type_is_frozen_setter(elt),
         Type::Tuple(Tuple::Unpacked(unpacked)) => {
-            let (prefix, middle, suffix) = &**unpacked;
+            let (prefix, middle, suffix) = unpacked.parts();
             prefix.iter().any(attrs_type_is_frozen_setter)
                 || attrs_type_is_frozen_setter(middle)
                 || suffix.iter().any(attrs_type_is_frozen_setter)
@@ -129,7 +132,7 @@ pub(crate) enum AttrsInitName {
     Unchanged,
 }
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub(crate) fn attrs_init_param_name(
         &self,
         cls: &Class,
@@ -164,7 +167,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     pub(crate) fn is_attrs_class(
         &self,
         dataclass_from_dataclass_transform: &Option<TransformDataclass>,
-        bases_with_metadata: &[(Class, Arc<ClassMetadata>)],
+        bases_with_metadata: &[(Class, &ClassMetadata)],
     ) -> bool {
         let has_attrs_field_specifiers = dataclass_from_dataclass_transform
             .as_ref()
@@ -179,8 +182,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
         field_specifiers.iter().any(|callee| {
             matches!(callee,
                 CalleeKind::Function(FunctionKind::Def(id))
-                    if id.module.name() == ModuleName::attr()
-                        || id.module.name() == ModuleName::attrs()
+                    if id.qname.module_name() == ModuleName::attr()
+                        || id.qname.module_name() == ModuleName::attrs()
             )
         })
     }
@@ -243,7 +246,8 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
                 .get(&Key::ReturnType(ShortIdentifier::from_text_range(
                     method_range,
                 )))
-                .arc_clone_ty();
+                .ty()
+                .clone();
             let field_ty = field.value.ty();
             if !self.is_subset_eq(&return_ty, &field_ty) {
                 let range = fields
@@ -473,11 +477,7 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
     fn attrs_attribute_class(&self) -> Option<Class> {
         let name = Name::new_static("Attribute");
         for module in [ModuleName::attr(), ModuleName::attrs()] {
-            if self.exports.export_exists(module, &name)
-                && let Type::ClassDef(cls) = self
-                    .get_from_export(module, None, &KeyExport(name.clone()))
-                    .as_ref()
-            {
+            if let Some(Type::ClassDef(cls)) = self.try_get_from_export(module, name.clone()) {
                 return Some(cls.clone());
             }
         }
@@ -531,17 +531,25 @@ impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
             return None;
         };
         if !matches!(
-            id.module.name().as_str(),
+            id.qname.module_name().as_str(),
             "attr.converters" | "attrs.converters"
         ) {
             return None;
         }
-        let first_input = || {
-            Some(self.get_converter_param(&self.expr_infer(call.arguments.args.first()?, errors)))
-        };
-        match id.name.as_str() {
-            "optional" => Some(self.union(first_input()?, self.heap.mk_none())),
-            "pipe" => first_input(),
+        let first_input =
+            |hint| {
+                Some(self.get_converter_param(
+                    &self.expr_infer(call.arguments.args.first()?, errors),
+                    hint,
+                ))
+            };
+        match id.qname.id().as_str() {
+            // `optional(c)` feeds `c`'s output straight to the field, so its type parameters solve
+            // against the annotation.
+            "optional" => Some(self.union(first_input(annotated_field_ty)?, self.heap.mk_none())),
+            // In `pipe(c1, ...)`, `c1`'s output feeds the next converter, not the field, so the
+            // annotation must not solve `c1`'s type parameters (only the last output must match it).
+            "pipe" => first_input(None),
             "default_if_none" => Some(self.union(annotated_field_ty?.clone(), self.heap.mk_none())),
             _ => None,
         }

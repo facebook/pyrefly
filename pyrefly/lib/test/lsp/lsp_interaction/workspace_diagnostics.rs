@@ -10,15 +10,15 @@ use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Url;
 use lsp_types::notification::Notification as _;
 use lsp_types::notification::PublishDiagnostics;
-use pyrefly::commands::lsp::IndexingMode;
-use pyrefly::commands::lsp::LspArgs;
-use pyrefly::lsp::non_wasm::protocol::Message;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::object_model::LspInteractionArgs;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 /// Non-open file gets diagnostics in workspace mode.
 ///
@@ -116,12 +116,14 @@ fn test_workspace_diagnostics_skip_clean_non_open_file() {
                         serde_json::from_value(n.params.clone()).unwrap();
                     let path = params.uri.to_file_path().unwrap();
                     if path == clean_path {
-                        return Some(Err(crate::object_model::LspMessageError::Custom {
-                            description: format!(
-                                "Did not expect publishDiagnostics for clean non-open file {}",
-                                clean_path.display()
-                            ),
-                        }));
+                        return Some(Err(
+                            pyrefly_lsp_test::object_model::LspMessageError::Custom {
+                                description: format!(
+                                    "Did not expect publishDiagnostics for clean non-open file {}",
+                                    clean_path.display()
+                                ),
+                            },
+                        ));
                     }
                     if path == error_path && params.diagnostics.len() == 1 {
                         return Some(Ok(()));
@@ -133,7 +135,7 @@ fn test_workspace_diagnostics_skip_clean_non_open_file() {
         .unwrap();
 
     let shutdown_handle = interaction.client.send_shutdown();
-    let shutdown_id = shutdown_handle.id.clone();
+    let shutdown_id = shutdown_handle.id().clone();
     interaction
         .client
         .expect_message(
@@ -145,7 +147,7 @@ fn test_workspace_diagnostics_skip_clean_non_open_file() {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params.clone()).unwrap();
                     if params.uri.to_file_path().unwrap() == clean_path {
-                        return Some(Err(crate::object_model::LspMessageError::Custom {
+                        return Some(Err(pyrefly_lsp_test::object_model::LspMessageError::Custom {
                             description: format!(
                                 "Did not expect a later publishDiagnostics for clean non-open file {}",
                                 clean_path.display()
@@ -656,7 +658,7 @@ fn test_did_close_no_stale_memory_path_errors() {
     // shutdown. Drain all messages until the shutdown response, checking every
     // publishDiagnostics notification for the stale error.
     let shutdown_handle = interaction.client.send_shutdown();
-    let shutdown_id = shutdown_handle.id.clone();
+    let shutdown_id = shutdown_handle.id().clone();
     let saw_stale_error = interaction
         .client
         .expect_message(
@@ -949,7 +951,7 @@ fn test_workspace_baseline_non_open_file_stays_error() {
                 if params.diagnostics.len() == 2 && errors == 2 && hints == 0 {
                     Some(Ok(()))
                 } else {
-                    Some(Err(crate::object_model::LspMessageError::Custom {
+                    Some(Err(pyrefly_lsp_test::object_model::LspMessageError::Custom {
                         description: format!(
                             "Expected 2 ERROR and 0 HINT for non-open bad.py, got {errors} ERROR and {hints} HINT ({} total)",
                             params.diagnostics.len()

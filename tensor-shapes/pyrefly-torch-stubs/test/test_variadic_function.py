@@ -8,14 +8,14 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import SizeTuple
+from shape_extensions import IntTuple
 
 if TYPE_CHECKING:
     from torch import Tensor
 
 
 # Test case 1: Generic function with TypeVarTuple
-def identity[Ts: SizeTuple](x: Tensor[Ts]) -> Tensor[Ts]:
+def identity[Ts: IntTuple](x: Tensor[Ts]) -> Tensor[Ts]:
     assert_type(x, Tensor[Ts])
     return x
 

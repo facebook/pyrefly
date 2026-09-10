@@ -12,7 +12,6 @@ arithmetic (dim+1, n-1), parenthesized arithmetic, scalar, leading space.
 from jaxtyping import Shaped
 from torch import Tensor
 
-
 # --- Anonymous dim: _ ---
 
 

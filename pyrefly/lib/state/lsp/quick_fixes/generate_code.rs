@@ -166,18 +166,11 @@ pub(crate) fn generate_code_actions(
     let insert_range = TextRange::at(insert_position, TextSize::new(0));
     let inferred_params =
         infer_params_from_call(transaction, handle, &stdlib, ast, selection, name);
-    let variable_text = match infer_annotation(transaction, handle, selection).map(|ty| {
-        let ty = ty.promote_implicit_literals(&stdlib);
-        if ty.is_any() {
-            None
-        } else {
-            let ty = Type::optional(ty);
-            let parts = ty.get_types_with_locations(Some(&stdlib));
-            Some(parts.into_iter().map(|(part, _)| part).collect::<String>())
-        }
-    }) {
-        Some(Some(annotation)) => format!("{statement_indent}{name}: {annotation} = None\n"),
-        _ => format!("{statement_indent}{name} = None\n"),
+    let variable_text = match infer_annotation(transaction, handle, selection)
+        .and_then(|ty| type_to_annotation(Type::optional(ty), &stdlib))
+    {
+        Some(annotation) => format!("{statement_indent}{name}: {annotation} = None\n"),
+        None => format!("{statement_indent}{name} = None\n"),
     };
     let params_text = format_params(&inferred_params);
     let function_text = if params_text.is_empty() {

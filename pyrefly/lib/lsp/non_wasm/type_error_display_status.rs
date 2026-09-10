@@ -95,6 +95,29 @@ pub fn negotiate_type_error_display_status_version(
         .unwrap_or_default()
 }
 
+/// What's the current status of the build state that we want to publish to the status
+/// bar?
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BuildSystemStatus {
+    /// A source database query is in flight. A previously built database may
+    /// still be serving results while this is the case.
+    Building,
+    /// The last query succeeded.
+    Ready,
+    /// The last query failed, holding the error rendered for display.
+    Failed(String),
+}
+
+impl BuildSystemStatus {
+    pub fn display(&self) -> String {
+        match self {
+            Self::Building => "building".to_owned(),
+            Self::Ready => "ready".to_owned(),
+            Self::Failed(error) => format!("error: {error}"),
+        }
+    }
+}
+
 /// V2 wire shape for the status-bar response. `label` drives the
 /// status-bar parenthetical (`Pyrefly (Basic)`, `Pyrefly (Legacy)`,
 /// …); `null` means show plain `Pyrefly`. `tooltip` is markdown.
@@ -115,6 +138,10 @@ pub struct TypeErrorDisplayStatusV2 {
     /// URL referenced from the tooltip — the IDE typically renders this
     /// as the trailing "Docs" link in the hover.
     pub docs_url: String,
+    /// The version of Pyrefly that's currently running.
+    pub pyrefly_version: Option<String>,
+    /// The current status of the build system.
+    pub build_system: Option<String>,
 }
 
 /// Internal sum type covering both wire shapes. `#[serde(untagged)]`
@@ -141,6 +168,32 @@ impl lsp_types::request::Request for TypeErrorDisplayStatusRequest {
     const METHOD: &'static str = "pyrefly/textDocument/typeErrorDisplayStatus";
 }
 
+/// Parameters of [`TypeErrorDisplayStatusChangedNotification`]. we have an
+/// empty struct here, since JSONRPC requires this to be an object or array.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct TypeErrorDisplayStatusChangedParams {}
+
+/// Tells the client that its cached [`TypeErrorDisplayStatusRequest`] response
+/// may be stale and should be re-requested.
+pub enum TypeErrorDisplayStatusChangedNotification {}
+
+impl lsp_types::notification::Notification for TypeErrorDisplayStatusChangedNotification {
+    type Params = TypeErrorDisplayStatusChangedParams;
+    const METHOD: &'static str = "pyrefly/typeErrorDisplayStatusChanged";
+}
+
+/// Resolve `initializationOptions.pyrefly.pushTypeErrorDisplayStatus`, which
+/// declares that the client handles
+/// [`TypeErrorDisplayStatusChangedNotification`]. Defaults to `false`: a client
+/// that didn't opt in would log every unrecognized notification as a warning.
+pub fn should_push_type_error_display_status(initialization_options: Option<&Value>) -> bool {
+    initialization_options
+        .and_then(|opts| opts.get("pyrefly"))
+        .and_then(|pyrefly| pyrefly.get("pushTypeErrorDisplayStatus"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 /// URL referenced from the V2 tooltip / docs link. Module-level so the
 /// derivation logic and tests share the exact string the user sees.
 const STATUS_BAR_DOCS_URL: &str = "https://pyrefly.org/en/docs/IDE/";
@@ -154,12 +207,14 @@ const STATUS_BAR_DOCS_URL: &str = "https://pyrefly.org/en/docs/IDE/";
 /// The onboarding nudge for genuine no-config states lives in the
 /// `Some(SynthesizedPresetReason::NoNearbyConfig)` branch of
 /// `derive_v2_response` (with `Basic` label + `pyrefly init` tooltip).
-pub fn default_v2_response() -> TypeErrorDisplayStatusV2 {
+pub fn default_v2_response(pyrefly_version: Option<String>) -> TypeErrorDisplayStatusV2 {
     TypeErrorDisplayStatusV2 {
         version: "v2".to_owned(),
         label: None,
         tooltip: String::new(),
         docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+        pyrefly_version,
+        build_system: None,
     }
 }
 
@@ -178,103 +233,99 @@ pub fn derive_v2_response(
     disable_type_errors_in_ide: bool,
     workspace_disable_type_errors: bool,
     workspace_type_checking_mode: Option<TypeCheckingMode>,
+    pyrefly_version: Option<String>,
+    build_system: Option<String>,
 ) -> TypeErrorDisplayStatusV2 {
-    if workspace_disable_type_errors {
-        return TypeErrorDisplayStatusV2 {
-            version: "v2".to_owned(),
-            label: Some("Errors Off".to_owned()),
-            tooltip:
-                "Pyrefly diagnostics are suppressed by [`python.pyrefly.disableTypeErrors`](command:workbench.action.openSettings?[\"python.pyrefly.disableTypeErrors\"]).\n\nUnset this setting to re-enable diagnostics."
-                    .to_owned(),
-            docs_url: STATUS_BAR_DOCS_URL.to_owned(),
-        };
-    }
-    match reason {
-        Some(SynthesizedPresetReason::UserOverride) => {
-            // In the LSP this is produced by the unconfigured resolver
-            // when the user chose a non-`Auto` `typeCheckingMode`. On the
-            // CLI it comes from `--preset`. Either way the user made a
-            // deliberate choice, so we just surface the current value.
-            let value = workspace_type_checking_mode
-                .map(type_checking_mode_kebab)
-                .unwrap_or("<unknown>");
-            TypeErrorDisplayStatusV2 {
-                version: "v2".to_owned(),
-                label: None,
-                tooltip: format!(
-                    "Pyrefly is using the [`python.pyrefly.typeCheckingMode`](command:workbench.action.openSettings?[\"python.pyrefly.typeCheckingMode\"]) setting (currently: `{value}`) because no `pyrefly.toml` was found.\n\nRun `pyrefly init` to continue setting up Pyrefly.",
-                ),
-                docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+    let (label, tooltip) = if workspace_disable_type_errors {
+        (
+            Some("Errors Off".to_owned()),
+            "Pyrefly diagnostics are suppressed by [`python.pyrefly.disableTypeErrors`](command:workbench.action.openSettings?[\"python.pyrefly.disableTypeErrors\"]).\n\nUnset this setting to re-enable diagnostics."
+                .to_owned(),
+        )
+    } else {
+        match reason {
+            Some(SynthesizedPresetReason::UserOverride) => {
+                // In the LSP this is produced by the unconfigured resolver
+                // when the user chose a non-`Auto` `typeCheckingMode`. On the
+                // CLI it comes from `--preset`. Either way the user made a
+                // deliberate choice, so we just surface the current value.
+                let value = workspace_type_checking_mode
+                    .map(type_checking_mode_kebab)
+                    .unwrap_or("<unknown>");
+                (
+                    None,
+                    format!(
+                        "Pyrefly is using the [`python.pyrefly.typeCheckingMode`](command:workbench.action.openSettings?[\"python.pyrefly.typeCheckingMode\"]) setting (currently: `{value}`) because no `pyrefly.toml` was found.\n\nRun `pyrefly init` to continue setting up Pyrefly.",
+                    ),
+                )
             }
-        }
-        Some(SynthesizedPresetReason::Migrated(kind)) => {
-            let (location, label, preset) = match kind {
-                MigratedFromKind::Mypy(MigratedConfigSource::DedicatedFile) => {
-                    ("your `mypy.ini`", "Legacy", "legacy")
-                }
-                MigratedFromKind::Mypy(MigratedConfigSource::PyprojectToml) => (
-                    "`[tool.mypy]` in your `pyproject.toml`",
-                    "Legacy",
-                    "legacy",
-                ),
-                MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile) => {
-                    ("your `pyrightconfig.json`", "Default", "default")
-                }
-                MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml) => (
-                    "`[tool.pyright]` in your `pyproject.toml`",
-                    "Default",
-                    "default",
-                ),
-            };
-            TypeErrorDisplayStatusV2 {
-                version: "v2".to_owned(),
-                label: Some(label.to_owned()),
-                tooltip: format!(
-                    "Pyrefly is using settings imported from {location} (preset: {preset}).\n\nRun `pyrefly init` to continue setting up Pyrefly.",
-                ),
-                docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+            Some(SynthesizedPresetReason::Migrated(kind)) => {
+                let (location, preset_label, preset) = match kind {
+                    MigratedFromKind::Mypy(MigratedConfigSource::DedicatedFile) => {
+                        ("your `mypy.ini`", "Legacy", "legacy")
+                    }
+                    MigratedFromKind::Mypy(MigratedConfigSource::PyprojectToml) => (
+                        "`[tool.mypy]` in your `pyproject.toml`",
+                        "Legacy",
+                        "legacy",
+                    ),
+                    MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile) => {
+                        ("your `pyrightconfig.json`", "Default", "default")
+                    }
+                    MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml) => (
+                        "`[tool.pyright]` in your `pyproject.toml`",
+                        "Default",
+                        "default",
+                    ),
+                };
+                (
+                    Some(preset_label.to_owned()),
+                    format!(
+                        "Pyrefly is using settings imported from {location} (preset: {preset}).\n\nRun `pyrefly init` to continue setting up Pyrefly.",
+                    ),
+                )
             }
-        }
-        Some(SynthesizedPresetReason::NoNearbyConfig) => TypeErrorDisplayStatusV2 {
-            version: "v2".to_owned(),
-            label: Some("Basic".to_owned()),
-            tooltip:
+            Some(SynthesizedPresetReason::NoNearbyConfig) => (
+                Some("Basic".to_owned()),
                 "Pyrefly is running with the `basic` preset because no `pyrefly.toml` was found.\n\nRun `pyrefly init` to continue setting up Pyrefly."
                     .to_owned(),
-            docs_url: STATUS_BAR_DOCS_URL.to_owned(),
-        },
-        None => match source {
-            ConfigSource::File(path) if disable_type_errors_in_ide => {
-                // The in-config disable lives at one of two paths: a
-                // dedicated `pyrefly.toml` (the `disable-type-errors-in-ide`
-                // key sits at the top level), or `[tool.pyrefly]` inside
-                // a `pyproject.toml` (the key sits inside that section).
-                // Tooltip distinguishes so users know what file to open.
-                let location = if path
-                    .file_name()
-                    .is_some_and(|n| n == ConfigFile::PYPROJECT_FILE_NAME)
-                {
-                    "`[tool.pyrefly]` in this project's `pyproject.toml`"
-                } else {
-                    "this project's `pyrefly.toml`"
-                };
-                TypeErrorDisplayStatusV2 {
-                    version: "v2".to_owned(),
-                    label: Some("Errors Off".to_owned()),
-                    tooltip: format!(
-                        "Pyrefly diagnostics are suppressed by `disable-type-errors-in-ide` in {location}.\n\nRemove this config to re-enable diagnostics.",
-                    ),
-                    docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+            ),
+            // No synthesized preset means the project resolved a real config
+            // and is already set up, so the only thing worth surfacing is an
+            // explicit in-config disable. Everything else stays silent.
+            None => match source {
+                ConfigSource::File(path) if disable_type_errors_in_ide => {
+                    // The in-config disable lives at one of two paths: a
+                    // dedicated `pyrefly.toml` (the `disable-type-errors-in-ide`
+                    // key sits at the top level), or `[tool.pyrefly]` inside
+                    // a `pyproject.toml` (the key sits inside that section).
+                    // Tooltip distinguishes so users know what file to open.
+                    let location = if path
+                        .file_name()
+                        .is_some_and(|n| n == ConfigFile::PYPROJECT_FILE_NAME)
+                    {
+                        "`[tool.pyrefly]` in this project's `pyproject.toml`"
+                    } else {
+                        "this project's `pyrefly.toml`"
+                    };
+                    (
+                        Some("Errors Off".to_owned()),
+                        format!(
+                            "Pyrefly diagnostics are suppressed by `disable-type-errors-in-ide` in {location}.\n\nRemove this config to re-enable diagnostics.",
+                        ),
+                    )
                 }
-            }
-            ConfigSource::File(_) => TypeErrorDisplayStatusV2 {
-                version: "v2".to_owned(),
-                label: None,
-                tooltip: String::new(),
-                docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+                _ => (None, String::new()),
             },
-            _ => default_v2_response(),
-        },
+        }
+    };
+    TypeErrorDisplayStatusV2 {
+        version: "v2".to_owned(),
+        label,
+        tooltip,
+        docs_url: STATUS_BAR_DOCS_URL.to_owned(),
+        pyrefly_version,
+        build_system,
     }
 }
 
@@ -321,18 +372,59 @@ mod tests {
         use pyrefly_config::migration::run::MigratedConfigSource;
         use pyrefly_config::migration::run::MigratedFromKind;
 
+        use super::super::BuildSystemStatus;
         use super::super::TypeErrorDisplayStatusVersion;
         use super::super::derive_v2_response;
         use crate::state::lsp::TypeCheckingMode;
 
         #[test]
+        fn no_build_system_yields_null_build_system() {
+            let r = derive_v2_response(
+                None,
+                &ConfigSource::File(PathBuf::from("/proj/pyrefly.toml")),
+                false,
+                false,
+                None,
+                None,
+                None,
+            );
+            assert_eq!(r.build_system, None);
+        }
+
+        #[test]
+        fn build_system_status_survives_workspace_kill_switch() {
+            let r = derive_v2_response(
+                None,
+                &ConfigSource::Synthetic(None),
+                false,
+                true,
+                None,
+                None,
+                Some(BuildSystemStatus::Building.display()),
+            );
+            assert_eq!(r.label.as_deref(), Some("Errors Off"));
+            assert_eq!(r.build_system.as_deref(), Some("building"));
+        }
+
+        #[test]
+        fn failed_build_system_renders_the_error() {
+            assert_eq!(BuildSystemStatus::Ready.display(), "ready");
+            assert_eq!(
+                BuildSystemStatus::Failed("buck2 exited with code 1".to_owned()).display(),
+                "error: buck2 exited with code 1"
+            );
+        }
+
+        #[test]
         fn user_override_yields_null_label() {
             let r = derive_v2_response(
                 Some(SynthesizedPresetReason::UserOverride),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
                 Some(TypeCheckingMode::Strict),
+                None,
+                None,
             );
             assert_eq!(r.label, None);
             assert!(r.tooltip.contains("typeCheckingMode"));
@@ -351,9 +443,11 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(MigratedFromKind::Mypy(
                     MigratedConfigSource::DedicatedFile,
                 ))),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Legacy"));
@@ -367,9 +461,11 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(MigratedFromKind::Mypy(
                     MigratedConfigSource::PyprojectToml,
                 ))),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Legacy"));
@@ -383,9 +479,11 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(
                     MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile),
                 )),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Default"));
@@ -398,9 +496,11 @@ mod tests {
                 Some(SynthesizedPresetReason::Migrated(
                     MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml),
                 )),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Default"));
@@ -415,9 +515,11 @@ mod tests {
         fn no_nearby_config_yields_basic_label() {
             let r = derive_v2_response(
                 Some(SynthesizedPresetReason::NoNearbyConfig),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Basic"));
@@ -436,6 +538,8 @@ mod tests {
                 false,
                 false,
                 None,
+                None,
+                None,
             );
             assert_eq!(r.label, None);
             assert!(r.tooltip.is_empty());
@@ -452,6 +556,8 @@ mod tests {
                 &ConfigSource::File(PathBuf::from("/proj/pyrefly.toml")),
                 true,
                 false,
+                None,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
@@ -475,6 +581,8 @@ mod tests {
                 true,
                 false,
                 None,
+                None,
+                None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
             assert!(r.tooltip.contains("disable-type-errors-in-ide"));
@@ -492,7 +600,15 @@ mod tests {
         /// know which knob to flip.
         #[test]
         fn workspace_kill_switch_yields_errors_off_label() {
-            let r = derive_v2_response(None, &ConfigSource::Synthetic, false, true, None);
+            let r = derive_v2_response(
+                None,
+                &ConfigSource::Synthetic(None),
+                false,
+                true,
+                None,
+                None,
+                None,
+            );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
             assert!(r.tooltip.contains("python.pyrefly.disableTypeErrors"));
         }
@@ -505,9 +621,11 @@ mod tests {
         fn workspace_kill_switch_wins_over_preset_reason() {
             let r = derive_v2_response(
                 Some(SynthesizedPresetReason::NoNearbyConfig),
-                &ConfigSource::Synthetic,
+                &ConfigSource::Synthetic(None),
                 false,
                 true,
+                None,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
@@ -521,6 +639,8 @@ mod tests {
                 &ConfigSource::File(PathBuf::from("/proj/pyrefly.toml")),
                 true,
                 true,
+                None,
+                None,
                 None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
@@ -645,6 +765,26 @@ mod tests {
                     negotiate_type_error_display_status_version(Some(&opts)),
                     TypeErrorDisplayStatusVersion::LATEST
                 );
+            }
+
+            #[test]
+            fn push_defaults_to_disabled() {
+                use super::super::super::should_push_type_error_display_status;
+                assert!(!should_push_type_error_display_status(None));
+                let opts = serde_json::json!({ "pyrefly": {} });
+                assert!(!should_push_type_error_display_status(Some(&opts)));
+                let opts = serde_json::json!({ "pyrefly": { "pushTypeErrorDisplayStatus": null } });
+                assert!(!should_push_type_error_display_status(Some(&opts)));
+            }
+
+            #[test]
+            fn push_honors_explicit_opt_in() {
+                use super::super::super::should_push_type_error_display_status;
+                let opts = serde_json::json!({ "pyrefly": { "pushTypeErrorDisplayStatus": true } });
+                assert!(should_push_type_error_display_status(Some(&opts)));
+                let opts =
+                    serde_json::json!({ "pyrefly": { "pushTypeErrorDisplayStatus": false } });
+                assert!(!should_push_type_error_display_status(Some(&opts)));
             }
         }
     }

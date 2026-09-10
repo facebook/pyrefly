@@ -6,7 +6,7 @@
  */
 
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::function::FunctionKind;
 
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckKind;
@@ -171,6 +171,16 @@ impl TypeCheckKind {
                 param,
                 ctx.display(want),
             ),
+            Self::DictKey => format!(
+                "`{}` is not assignable to dict key type `{}`",
+                ctx.display(got),
+                ctx.display(want),
+            ),
+            Self::DictValue => format!(
+                "`{}` is not assignable to dict value type `{}`",
+                ctx.display(got),
+                ctx.display(want),
+            ),
             Self::TypedDictKey(key, is_anonymous) => {
                 let key_str = if let Some(key) = key {
                     format!(" `{key}`")
@@ -245,11 +255,14 @@ impl TypeCheckKind {
                 ctx.display(got),
                 ctx.display(want),
             ),
-            Self::OverloadReturn => format!(
-                "Overload return type `{}` is not assignable to implementation return type `{}`",
-                ctx.display(got),
-                ctx.display(want),
-            ),
+            Self::OverloadReturn(overload_return) => {
+                ctx.add(overload_return);
+                format!(
+                    "Overload return type `{}` is not assignable to implementation return type `{}`",
+                    ctx.display(overload_return),
+                    ctx.display(want),
+                )
+            }
             Self::OverloadInput(overload_sig, impl_sig) => {
                 format!(
                     "Implementation signature `{impl_sig}` does not accept all arguments that overload signature `{overload_sig}` accepts"

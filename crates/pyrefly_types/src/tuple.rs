@@ -15,14 +15,31 @@ use pyrefly_python::qname::QName;
 use crate::type_output::TypeOutput;
 use crate::types::Type;
 
-/*
-Eventually this will have to be generalized enough to handle at least four cases:
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Visit, VisitMut, TypeEq)]
+pub struct UnpackedTupleParts(Vec<Type>, Type, Vec<Type>); // deliberately opaque to force construction through `Tuple::unpacked`
 
-1. the gradually-typed tuple tuple[Any, ...]
-2. normal tuples as are handled here
-3. variadic tuples with a splatted typevartuple variable
-4. indefinite-length tuples tuple[int, ...] (whose length is supposed to be treated soundly, not gradually, IIRC)
-*/
+impl UnpackedTupleParts {
+    pub fn prefix(&self) -> &[Type] {
+        &self.0
+    }
+
+    pub fn middle(&self) -> &Type {
+        &self.1
+    }
+
+    pub fn suffix(&self) -> &[Type] {
+        &self.2
+    }
+
+    pub fn parts(&self) -> (&[Type], &Type, &[Type]) {
+        (&self.0, &self.1, &self.2)
+    }
+
+    pub fn into_parts(self) -> (Vec<Type>, Type, Vec<Type>) {
+        (self.0, self.1, self.2)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
@@ -31,8 +48,8 @@ pub enum Tuple {
     Concrete(Vec<Type>),
     // tuple[t1, ...]
     Unbounded(Box<Type>),
-    // tuple[t1, t2, *t3, t4, t5], where t3 must be a type var tuple or unbounded tuple
-    Unpacked(Box<(Vec<Type>, Type, Vec<Type>)>),
+    // tuple[t1, t2, *t3, t4, t5]
+    Unpacked(Box<UnpackedTupleParts>),
 }
 
 impl Default for Tuple {
@@ -57,7 +74,7 @@ impl Tuple {
         {
             return tuple;
         }
-        Self::Unpacked(Box::new((prefix, middle, suffix)))
+        Self::Unpacked(Box::new(UnpackedTupleParts(prefix, middle, suffix)))
     }
 
     pub fn fmt_with_type<O: TypeOutput>(
@@ -86,7 +103,7 @@ impl Tuple {
                 output.write_str(", ...")?;
             }
             Self::Unpacked(unpacked_box) => {
-                let (prefix, unpacked, suffix) = &**unpacked_box;
+                let (prefix, unpacked, suffix) = unpacked_box.parts();
                 for (i, ty) in prefix.iter().enumerate() {
                     if i > 0 {
                         output.write_str(", ")?;

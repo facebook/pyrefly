@@ -3,17 +3,412 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Literal, overload
+from builtins import bool as py_bool
+from collections.abc import Sequence
+from types import EllipsisType
+from typing import Any, Final, Literal, overload, SupportsIndex
 
 import shape_extensions
-from numpy._shapes import binary_ufunc_ir, diag_1d_ir, matmul_2d_ir, reduce_ir
-from shape_extensions import Dim, SizeTuple, SymVar, uses_shape_dsl
+from numpy.__config__ import (
+    show as show_config,
+)
+from numpy._array_api_info import (
+    __array_namespace_info__ as __array_namespace_info__,
+)
+from numpy._core._asarray import (
+    require as require,
+)
+from numpy._core._type_aliases import (
+    sctypeDict as sctypeDict,
+)
+from numpy._core._ufunc_config import (
+    errstate as errstate,
+    getbufsize as getbufsize,
+    geterr as geterr,
+    geterrcall as geterrcall,
+    setbufsize as setbufsize,
+    seterr as seterr,
+    seterrcall as seterrcall,
+)
+from numpy._core.arrayprint import (
+    array2string as array2string,
+    array_repr as array_repr,
+    array_str as array_str,
+    format_float_positional as format_float_positional,
+    format_float_scientific as format_float_scientific,
+    get_printoptions as get_printoptions,
+    printoptions as printoptions,
+    set_printoptions as set_printoptions,
+)
+from numpy._core.einsumfunc import (
+    einsum as einsum,
+    einsum_path as einsum_path,
+)
+from numpy._core.fromnumeric import (
+    all as all,
+    amax as amax,
+    amin as amin,
+    any as any,
+    argmax as argmax,
+    argpartition as argpartition,
+    argsort as argsort,
+    around as around,
+    choose as choose,
+    compress as compress,
+    cumprod as cumprod,
+    cumsum as cumsum,
+    cumulative_prod as cumulative_prod,
+    cumulative_sum as cumulative_sum,
+    diagonal as diagonal,
+    matrix_transpose as matrix_transpose,
+    ndim as ndim,
+    nonzero as nonzero,
+    partition as partition,
+    prod as prod,
+    ptp as ptp,
+    put as put,
+    ravel as ravel,
+    repeat as repeat,
+    reshape as reshape,
+    resize as resize,
+    searchsorted as searchsorted,
+    shape as shape,
+    size as size,
+    sort as sort,
+    squeeze as squeeze,
+    std as std,
+    swapaxes as swapaxes,
+    take as take,
+    trace as trace,
+    transpose as transpose,
+    var as var,
+)
+from numpy._core.function_base import (
+    geomspace as geomspace,
+    linspace as linspace,
+    logspace as logspace,
+)
+from numpy._core.getlimits import (
+    finfo as finfo,
+    iinfo as iinfo,
+)
+from numpy._core.memmap import (
+    memmap as memmap,
+)
+from numpy._core.multiarray import (
+    array as array,
+    asanyarray as asanyarray,
+    asarray as asarray,
+    ascontiguousarray as ascontiguousarray,
+    asfortranarray as asfortranarray,
+    bincount as bincount,
+    busday_count as busday_count,
+    busday_offset as busday_offset,
+    busdaycalendar as busdaycalendar,
+    can_cast as can_cast,
+    concatenate as concatenate,
+    copyto as copyto,
+    datetime_as_string as datetime_as_string,
+    datetime_data as datetime_data,
+    dot as dot,
+    empty_like as empty_like,
+    flatiter as flatiter,
+    frombuffer as frombuffer,
+    fromfile as fromfile,
+    fromiter as fromiter,
+    frompyfunc as frompyfunc,
+    fromstring as fromstring,
+    inner as inner,
+    is_busday as is_busday,
+    lexsort as lexsort,
+    may_share_memory as may_share_memory,
+    min_scalar_type as min_scalar_type,
+    nditer as nditer,
+    nested_iters as nested_iters,
+    packbits as packbits,
+    promote_types as promote_types,
+    putmask as putmask,
+    result_type as result_type,
+    shares_memory as shares_memory,
+    unpackbits as unpackbits,
+    vdot as vdot,
+    where as where,
+)
+from numpy._core.numeric import (
+    allclose as allclose,
+    argwhere as argwhere,
+    array_equal as array_equal,
+    array_equiv as array_equiv,
+    astype as astype,
+    base_repr as base_repr,
+    binary_repr as binary_repr,
+    convolve as convolve,
+    correlate as correlate,
+    count_nonzero as count_nonzero,
+    cross as cross,
+    flatnonzero as flatnonzero,
+    fromfunction as fromfunction,
+    full_like as full_like,
+    indices as indices,
+    isclose as isclose,
+    isfortran as isfortran,
+    isscalar as isscalar,
+    moveaxis as moveaxis,
+    ones_like as ones_like,
+    outer as outer,
+    roll as roll,
+    rollaxis as rollaxis,
+    tensordot as tensordot,
+    zeros_like as zeros_like,
+)
+from numpy._core.numerictypes import (
+    isdtype as isdtype,
+    issubdtype as issubdtype,
+    ScalarType as ScalarType,
+    typecodes as typecodes,
+)
+from numpy._core.records import (
+    recarray as recarray,
+    record as record,
+)
+from numpy._core.shape_base import (
+    atleast_1d as atleast_1d,
+    atleast_2d as atleast_2d,
+    atleast_3d as atleast_3d,
+    block as block,
+    hstack as hstack,
+    unstack as unstack,
+    vstack as vstack,
+)
+from numpy._pytesttester import PytestTester
+from numpy._shapes import (
+    diag_extent,
+    matmul_shape,
+    matvec_shape,
+    reduce_shape,
+    stack_shape,
+    vecdot_shape,
+    vecmat_shape,
+)
+from numpy._typing import ArrayLike
+from numpy._typing._extended_precision import (
+    complex256 as complex256,
+    float128 as float128,
+)
+from numpy.lib import (
+    scimath as emath,
+)
+from numpy.lib._arraypad_impl import (
+    pad as pad,
+)
+from numpy.lib._arraysetops_impl import (
+    ediff1d as ediff1d,
+    intersect1d as intersect1d,
+    isin as isin,
+    setdiff1d as setdiff1d,
+    setxor1d as setxor1d,
+    union1d as union1d,
+    unique as unique,
+    unique_all as unique_all,
+    unique_counts as unique_counts,
+    unique_inverse as unique_inverse,
+    unique_values as unique_values,
+)
+from numpy.lib._function_base_impl import (
+    angle as angle,
+    append as append,
+    asarray_chkfinite as asarray_chkfinite,
+    average as average,
+    bartlett as bartlett,
+    blackman as blackman,
+    copy as copy,
+    corrcoef as corrcoef,
+    cov as cov,
+    delete as delete,
+    diff as diff,
+    digitize as digitize,
+    extract as extract,
+    flip as flip,
+    gradient as gradient,
+    hamming as hamming,
+    hanning as hanning,
+    i0 as i0,
+    insert as insert,
+    interp as interp,
+    iterable as iterable,
+    kaiser as kaiser,
+    median as median,
+    meshgrid as meshgrid,
+    percentile as percentile,
+    piecewise as piecewise,
+    place as place,
+    quantile as quantile,
+    rot90 as rot90,
+    select as select,
+    sinc as sinc,
+    sort_complex as sort_complex,
+    trapezoid as trapezoid,
+    trim_zeros as trim_zeros,
+    unwrap as unwrap,
+    vectorize as vectorize,
+)
+from numpy.lib._histograms_impl import (
+    histogram as histogram,
+    histogram_bin_edges as histogram_bin_edges,
+    histogramdd as histogramdd,
+)
+from numpy.lib._index_tricks_impl import (
+    c_ as c_,
+    diag_indices as diag_indices,
+    diag_indices_from as diag_indices_from,
+    index_exp as index_exp,
+    ix_ as ix_,
+    mgrid as mgrid,
+    ndenumerate as ndenumerate,
+    ndindex as ndindex,
+    ogrid as ogrid,
+    r_ as r_,
+    ravel_multi_index as ravel_multi_index,
+    s_ as s_,
+    unravel_index as unravel_index,
+)
+from numpy.lib._nanfunctions_impl import (
+    nanargmax as nanargmax,
+    nanargmin as nanargmin,
+    nancumprod as nancumprod,
+    nancumsum as nancumsum,
+    nanmax as nanmax,
+    nanmean as nanmean,
+    nanmedian as nanmedian,
+    nanmin as nanmin,
+    nanpercentile as nanpercentile,
+    nanprod as nanprod,
+    nanquantile as nanquantile,
+    nanstd as nanstd,
+    nansum as nansum,
+    nanvar as nanvar,
+)
+from numpy.lib._npyio_impl import (
+    fromregex as fromregex,
+    genfromtxt as genfromtxt,
+    load as load,
+    loadtxt as loadtxt,
+    save as save,
+    savetxt as savetxt,
+    savez as savez,
+    savez_compressed as savez_compressed,
+)
+from numpy.lib._polynomial_impl import (
+    poly as poly,
+    poly1d as poly1d,
+    polyadd as polyadd,
+    polyder as polyder,
+    polydiv as polydiv,
+    polyfit as polyfit,
+    polyint as polyint,
+    polymul as polymul,
+    polysub as polysub,
+    polyval as polyval,
+    roots as roots,
+)
+from numpy.lib._shape_base_impl import (
+    apply_along_axis as apply_along_axis,
+    apply_over_axes as apply_over_axes,
+    array_split as array_split,
+    column_stack as column_stack,
+    dsplit as dsplit,
+    dstack as dstack,
+    hsplit as hsplit,
+    kron as kron,
+    put_along_axis as put_along_axis,
+    split as split,
+    take_along_axis as take_along_axis,
+    tile as tile,
+    vsplit as vsplit,
+)
+from numpy.lib._stride_tricks_impl import (
+    broadcast_arrays as broadcast_arrays,
+    broadcast_shapes as broadcast_shapes,
+    broadcast_to as broadcast_to,
+)
+from numpy.lib._twodim_base_impl import (
+    diagflat as diagflat,
+    fliplr as fliplr,
+    flipud as flipud,
+    histogram2d as histogram2d,
+    mask_indices as mask_indices,
+    tri as tri,
+    tril as tril,
+    tril_indices as tril_indices,
+    tril_indices_from as tril_indices_from,
+    triu as triu,
+    triu_indices as triu_indices,
+    triu_indices_from as triu_indices_from,
+    vander as vander,
+)
+from numpy.lib._type_check_impl import (
+    common_type as common_type,
+    imag as imag,
+    iscomplex as iscomplex,
+    iscomplexobj as iscomplexobj,
+    isreal as isreal,
+    isrealobj as isrealobj,
+    mintypecode as mintypecode,
+    nan_to_num as nan_to_num,
+    real as real,
+    real_if_close as real_if_close,
+    typename as typename,
+)
+from numpy.lib._ufunclike_impl import (
+    fix as fix,
+    isneginf as isneginf,
+    isposinf as isposinf,
+)
+from numpy.lib._utils_impl import (
+    get_include as get_include,
+    info as info,
+    show_runtime as show_runtime,
+)
+from numpy.matrixlib import (
+    asmatrix as asmatrix,
+    bmat as bmat,
+    matrix as matrix,
+)
+from shape_extensions import (
+    broadcast as _broadcast_shape,
+    Flag,
+    Index,
+    index_shape,
+    Int,
+    IntTuple,
+    IntTuples,
+    IntVar,
+    MapIntTuples,
+)
 
-from . import linalg as linalg, random as random
+# Preserve NumPy's canonical re-exports before local shape-aware declarations.
+from . import (
+    char as char,
+    core as core,
+    ctypeslib as ctypeslib,
+    dtypes as dtypes,
+    exceptions as exceptions,
+    f2py as f2py,
+    fft as fft,
+    lib as lib,
+    linalg as linalg,
+    ma as ma,
+    polynomial as polynomial,
+    random as random,
+    rec as rec,
+    strings as strings,
+    testing as testing,
+    typing as typing,
+)
 
-type _Shape = SizeTuple
-type _AnyShape = tuple[Any, ...]
+type _Shape = IntTuple
 type _Axis = int | tuple[int, ...] | None
+type _BasicIndex = int | slice | list[int] | None | EllipsisType
 
 class generic: ...
 class bool_(generic): ...
@@ -23,6 +418,21 @@ class int32(generic): ...
 class int64(generic): ...
 class intp(generic): ...
 
+type _IndexScalar = int | bool_ | int32 | int64 | intp
+type _IndexSequence = Sequence[_IndexScalar] | Sequence[Sequence[_IndexScalar]]
+
+__version__: Final[str]
+e: Final[float]
+euler_gamma: Final[float]
+pi: Final[float]
+inf: Final[float]
+nan: Final[float]
+little_endian: Final[py_bool]
+False_: Final[bool_]
+True_: Final[bool_]
+newaxis: Final[None] = None
+test: Final[PytestTester]
+
 class dtype[Scalar = Any]:
     @overload
     def __new__[ScalarT: generic](cls, dtype: type[ScalarT]) -> dtype[ScalarT]: ...
@@ -30,405 +440,1088 @@ class dtype[Scalar = Any]:
     def __new__(cls, dtype: Any = ...) -> dtype: ...
     def __init__(self, dtype: Any = ...) -> None: ...
 
-@shape_extensions.shaped_array(shape="Shape")
-class ndarray[Shape: _Shape = _AnyShape, DType = Any]:
+# `ndarray` declares a `dtype` attribute, which shadows the class above throughout
+# its body. Annotations inside the class reach the class through this alias.
+_dtype = dtype
+
+class _Flags:
+    f_contiguous: py_bool
+
+class ndarray[Shape: _Shape = _Shape, DType = Any]:
     shape: Shape
     dtype: DType
+    flags: _Flags
+    strides: tuple[int, ...]
+    @property
+    def __array_interface__(self) -> Any: ...
+    def __array__(
+        self, dtype: Any = None, copy: py_bool | None = None
+    ) -> ndarray[Shape]: ...
+    def __buffer__(self, flags: int, /) -> memoryview: ...
+    @property
+    def base(self) -> Any: ...
+    @property
+    def data(self) -> memoryview: ...
+    @property
+    def device(self) -> Literal["cpu"]: ...
+    @property
+    def itemsize(self) -> int: ...
+    @property
+    def nbytes(self) -> int: ...
+    @property
+    def ndim(self) -> int: ...
+    @property
+    def size(self) -> int: ...
+    @property
+    def imag(self) -> ndarray[Shape]: ...
+    @imag.setter
+    def imag(self, value: Any) -> None: ...
+    @property
+    def real(self) -> ndarray[Shape]: ...
+    @real.setter
+    def real(self, value: Any) -> None: ...
     @overload
-    def __len__[N: SymVar](self: ndarray[[N]]) -> Dim[N]: ...
+    def __len__[N: IntVar](self: ndarray[[N]]) -> Int[N]: ...
     @overload
-    def __len__[N: SymVar, M: SymVar](self: ndarray[[N, M]]) -> Dim[N]: ...
+    def __len__[N: IntVar, M: IntVar](self: ndarray[[N, M]]) -> Int[N]: ...
+    @overload
     def __getitem__[
-        N: SymVar,
-        M: SymVar,
-        I: SymVar,
+        N: IntVar,
+        M: IntVar,
+        I: IntVar,
         RowIndexScalar: (int32, int64, intp),
         ColumnIndexScalar: (int32, int64, intp),
     ](
         self: ndarray[[N, M], DType],
         key: tuple[
-            ndarray[[I], dtype[RowIndexScalar]],
-            ndarray[[I], dtype[ColumnIndexScalar]],
+            ndarray[[I], _dtype[RowIndexScalar]],
+            ndarray[[I], _dtype[ColumnIndexScalar]],
         ],
     ) -> ndarray[[I], DType]: ...
+    @overload
+    def __getitem__[I: Index](
+        self: ndarray[Shape, DType], key: I
+    ) -> ndarray[index_shape(Shape, I), DType]: ...
+    # TODO(stroxler): Model general array-valued indices precisely enough to
+    # reject non-integer dtypes and incompatible advanced-index shapes.
+    @overload
+    def __getitem__(
+        self: ndarray[Shape, DType],
+        key: _BasicIndex
+        | _IndexScalar
+        | _IndexSequence
+        | ndarray
+        | tuple[_BasicIndex | _IndexScalar | _IndexSequence | ndarray, ...],
+    ) -> ndarray[IntTuple, DType]: ...
     # Only 2-D transpose is modeled for the NumPy shape-stub MVP.
     @property
-    def T[N: SymVar, P: SymVar](
+    def T[N: IntVar, P: IntVar](
         self: ndarray[[N, P], DType],
     ) -> ndarray[[P, N], DType]: ...
     @overload
     def __add__(self, other: int | float) -> ndarray[Shape, DType]: ...
-    @uses_shape_dsl(binary_ufunc_ir)
     @overload
-    def __add__(self, other: ndarray) -> ndarray[_AnyShape, DType]: ...
+    def __add__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __radd__(self, other: int | float) -> ndarray[Shape, DType]: ...
-    @uses_shape_dsl(binary_ufunc_ir)
     @overload
-    def __radd__(self, other: ndarray) -> ndarray[_AnyShape, DType]: ...
-    @uses_shape_dsl(binary_ufunc_ir)
-    @overload
-    def __sub__(self, other: ndarray) -> ndarray[_AnyShape, DType]: ...
+    def __radd__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __sub__(self, other: int | float) -> ndarray[Shape, DType]: ...
-    @uses_shape_dsl(binary_ufunc_ir)
     @overload
-    def __rsub__(self, other: ndarray) -> ndarray[_AnyShape, DType]: ...
+    def __sub__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
     def __rsub__(self, other: int | float) -> ndarray[Shape, DType]: ...
+    @overload
+    def __rsub__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
+    @overload
     def __truediv__(self, other: int | float) -> ndarray[Shape, DType]: ...
+    @overload
+    def __truediv__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
+    @overload
     def __rtruediv__(self, other: int | float) -> ndarray[Shape, DType]: ...
+    @overload
+    def __rtruediv__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
+    @overload
     def __mul__(self, other: int | float) -> ndarray[Shape, DType]: ...
+    @overload
+    def __mul__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
+    @overload
     def __rmul__(self, other: int | float) -> ndarray[Shape, DType]: ...
+    @overload
+    def __rmul__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
+    @overload
+    def __floordiv__(self, other: int | float) -> ndarray[Shape, DType]: ...
+    @overload
+    def __floordiv__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
+    @overload
+    def __rfloordiv__(self, other: int | float) -> ndarray[Shape, DType]: ...
+    @overload
+    def __rfloordiv__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
+    @overload
+    def __mod__(self, other: int | float) -> ndarray[Shape, DType]: ...
+    @overload
+    def __mod__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
+    @overload
+    def __rmod__(self, other: int | float) -> ndarray[Shape, DType]: ...
+    @overload
+    def __rmod__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     def __neg__(self) -> ndarray[Shape, DType]: ...
     def __pos__(self) -> ndarray[Shape, DType]: ...
+    @overload
     def __pow__(self, other: int | float) -> ndarray[Shape, DType]: ...
-    # TODO: Bridge until operator dunders/bound methods can share the DSL-backed
-    # `np.matmul` rule and diagnostics.
-    def __matmul__[N: SymVar, M: SymVar, P: SymVar](
-        self: ndarray[[N, M], DType],
-        other: ndarray[[M, P]],
-    ) -> ndarray[[N, P], DType]: ...
-    # Narrow method bridge for PCA demos; the free `np.mean` covers general reductions.
     @overload
-    def mean[N: SymVar, M: SymVar](
-        self: ndarray[[N, M], DType],
-        axis: Literal[0],
-        *,
-        keepdims: Literal[False] = False,
-    ) -> ndarray[[M], DType]: ...
+    def __pow__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
     @overload
-    def mean[N: SymVar](
-        self: ndarray[[N], DType],
-    ) -> ndarray[tuple[()], DType]: ...
+    def __rpow__(self, other: int | float) -> ndarray[Shape, DType]: ...
     @overload
-    def sum[N: SymVar, M: SymVar](
-        self: ndarray[[N, M], DType],
-        axis: Literal[1],
+    def __rpow__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
+    def __matmul__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape]
+    ) -> ndarray[matmul_shape(Shape, OtherShape), DType]: ...
+    def mean[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+        self,
+        axis: Axis = None,
         *,
-        keepdims: Literal[True],
-    ) -> ndarray[[N, 1], DType]: ...
+        keepdims: KeepDims = False,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), DType]: ...
+    def sum[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+        self,
+        axis: Axis = None,
+        *,
+        keepdims: KeepDims = False,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), DType]: ...
+    def min[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+        self,
+        axis: Axis = None,
+        *,
+        keepdims: KeepDims = False,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), DType]: ...
+    def max[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+        self,
+        axis: Axis = None,
+        *,
+        keepdims: KeepDims = False,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), DType]: ...
+    def all[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+        *,
+        where: Any = True,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[bool_]]: ...
+    def any[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        keepdims: KeepDims = False,
+        *,
+        where: Any = True,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[bool_]]: ...
+    def argmax[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        *,
+        keepdims: KeepDims = False,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[intp]]: ...
+    def argmin[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+        self,
+        axis: Axis = None,
+        out: Any = None,
+        *,
+        keepdims: KeepDims = False,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), _dtype[intp]]: ...
+    def prod[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+        self,
+        axis: Axis = None,
+        dtype: Any = None,
+        out: Any = None,
+        *,
+        keepdims: KeepDims = False,
+        initial: Any = None,
+        where: Any = True,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims)]: ...
+    def std[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+        self,
+        axis: Axis = None,
+        dtype: Any = None,
+        out: Any = None,
+        ddof: float = 0,
+        *,
+        keepdims: KeepDims = False,
+        where: Any = True,
+        mean: Any = None,
+        correction: Any = None,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims)]: ...
+    def var[Axis: Flag[_Axis], KeepDims: Flag[py_bool]](
+        self,
+        axis: Axis = None,
+        dtype: Any = None,
+        out: Any = None,
+        ddof: float = 0,
+        *,
+        keepdims: KeepDims = False,
+        where: Any = True,
+        mean: Any = None,
+        correction: Any = None,
+    ) -> ndarray[reduce_shape(Shape, Axis, KeepDims)]: ...
     @overload
-    def sum[N: SymVar, M: SymVar, K: SymVar](
-        self: ndarray[[N, M, K], DType],
-        axis: Literal[1],
+    def argpartition(
+        self,
+        kth: Any,
+        axis: None,
+        kind: str = "introselect",
+        order: Any = None,
+    ) -> ndarray[[int], _dtype[intp]]: ...
+    @overload
+    def argpartition(
+        self,
+        kth: Any,
+        axis: int = -1,
+        kind: str = "introselect",
+        order: Any = None,
+    ) -> ndarray[Shape, _dtype[intp]]: ...
+    @overload
+    def argsort(
+        self,
+        axis: None,
+        kind: str | None = None,
+        order: Any = None,
         *,
-        keepdims: Literal[False] = False,
-    ) -> ndarray[[N, K], DType]: ...
-    def max[N: SymVar, M: SymVar](
-        self: ndarray[[N, M], DType],
-        axis: Literal[1],
+        stable: py_bool | None = None,
+        descending: py_bool | None = None,
+    ) -> ndarray[[int], _dtype[intp]]: ...
+    @overload
+    def argsort(
+        self,
+        axis: int = -1,
+        kind: str | None = None,
+        order: Any = None,
         *,
-        keepdims: Literal[True],
-    ) -> ndarray[[N, 1], DType]: ...
+        stable: py_bool | None = None,
+        descending: py_bool | None = None,
+    ) -> ndarray[Shape, _dtype[intp]]: ...
+    @overload
+    def astype[ScalarT: generic](
+        self,
+        dtype: type[ScalarT] | _dtype[ScalarT],
+        order: str = "K",
+        casting: str = "unsafe",
+        subok: py_bool = True,
+        copy: py_bool = True,
+    ) -> ndarray[Shape, _dtype[ScalarT]]: ...
+    @overload
+    def astype(
+        self,
+        dtype: Any,
+        order: str = "K",
+        casting: str = "unsafe",
+        subok: py_bool = True,
+        copy: py_bool = True,
+    ) -> ndarray[Shape]: ...
+    def byteswap(self, inplace: py_bool = False) -> ndarray[Shape, DType]: ...
+    def clip(
+        self, min: Any = None, max: Any = None, out: Any = None, **kwargs: Any
+    ) -> ndarray[Shape, DType]: ...
+    def conj(self) -> ndarray[Shape, DType]: ...
+    def conjugate(self) -> ndarray[Shape, DType]: ...
+    def copy(self, order: str = "C") -> ndarray[Shape, DType]: ...
+    @overload
+    def cumprod(
+        self, axis: None = None, dtype: Any = None, out: Any = None
+    ) -> ndarray[[int]]: ...
+    @overload
+    def cumprod(
+        self, axis: int, dtype: Any = None, out: Any = None
+    ) -> ndarray[Shape]: ...
+    @overload
+    def cumsum(
+        self, axis: None = None, dtype: Any = None, out: Any = None
+    ) -> ndarray[[int]]: ...
+    @overload
+    def cumsum(
+        self, axis: int, dtype: Any = None, out: Any = None
+    ) -> ndarray[Shape]: ...
+    def dump(self, file: Any) -> None: ...
+    def dumps(self) -> bytes: ...
+    def fill(self, value: Any, /) -> None: ...
+    def flatten(self, order: str = "C") -> ndarray[[int], DType]: ...
+    def getfield(self, dtype: Any, offset: int = 0) -> ndarray[Shape]: ...
+    def item(self, *args: Any) -> Any: ...
+    def partition(
+        self,
+        kth: Any,
+        axis: int = -1,
+        kind: str = "introselect",
+        order: Any = None,
+    ) -> None: ...
+    def put(self, indices: Any, values: Any, mode: str = "raise") -> None: ...
+    def ravel(self, order: str = "C") -> ndarray[[int], DType]: ...
+    # TODO(stroxler): Model receiver invalidation for shape-changing mutation.
+    resize: Any
+    def round(self, decimals: int = 0, out: Any = None) -> ndarray[Shape, DType]: ...
+    def setfield(self, val: Any, dtype: Any, offset: int = 0) -> None: ...
+    def setflags(
+        self,
+        write: py_bool | None = None,
+        align: py_bool | None = None,
+        uic: py_bool | None = None,
+    ) -> None: ...
+    def sort(
+        self,
+        axis: int = -1,
+        kind: str | None = None,
+        order: Any = None,
+        *,
+        stable: py_bool | None = None,
+    ) -> None: ...
+    def to_device(
+        self, device: Literal["cpu"], /, *, stream: Any = None
+    ) -> ndarray[Shape, DType]: ...
+    def tobytes(self, order: str = "C") -> bytes: ...
+    def tofile(self, fid: Any, sep: str = "", format: str = "%s") -> None: ...
+    def tolist(self) -> Any: ...
 
-def abs[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def exp[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def log[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def log2[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def log10[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def sqrt[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def power[Shape: _Shape](x1: ndarray[Shape], x2: int | float, /) -> ndarray[Shape]: ...
-@uses_shape_dsl(binary_ufunc_ir)
-def minimum(x1: ndarray, x2: ndarray, /) -> ndarray: ...
-@uses_shape_dsl(binary_ufunc_ir)
-def maximum(x1: ndarray, x2: ndarray, /) -> ndarray: ...
-@uses_shape_dsl(binary_ufunc_ir)
-def arctan2(x1: ndarray, x2: ndarray, /) -> ndarray: ...
-def sin[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def cos[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def tan[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def arcsin[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def floor[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def ceil[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
+    # TODO(stroxler): Replace these placeholders with shape-aware declarations.
+    choose: Any
+    compress: Any
+    ctypes: Any
+    diagonal: Any
+    dot: Any
+    flat: Any
+    mT: Any
+    nonzero: Any
+    repeat: Any
+    reshape: Any
+    searchsorted: Any
+    squeeze: Any
+    swapaxes: Any
+    take: Any
+    trace: Any
+    transpose: Any
+    view: Any
+
+class ufunc:
+    __name__: str
+    nin: int
+    nout: int
+    nargs: int
+    ntypes: int
+    types: list[str]
+    identity: Any
+    signature: str | None
+    def __call__(self, /, *args: Any, **kwargs: Any) -> Any: ...
+    def accumulate(self, array: Any, /, *args: Any, **kwargs: Any) -> Any: ...
+    def reduce(self, array: Any, /, *args: Any, **kwargs: Any) -> Any: ...
+    def reduceat(
+        self, array: Any, indices: Any, /, *args: Any, **kwargs: Any
+    ) -> Any: ...
+    def outer(self, a: Any, b: Any, /, **kwargs: Any) -> Any: ...
+    def at(self, a: ndarray, indices: Any, b: Any = None, /) -> None: ...
+
+permute_dims = transpose
+# TODO(stroxler): Make this precise when `concatenate` accepts overlay ndarrays.
+concat: Any = concatenate
+
+@overload
+def stack[Shapes: IntTuples, Axis: Flag[int]](
+    arrays: MapIntTuples[lambda S: ndarray[S], Shapes], axis: Axis = 0
+) -> ndarray[stack_shape(Shapes, Axis), Any]: ...
+@overload
+def stack(
+    arrays: Sequence[ArrayLike],
+    axis: SupportsIndex = 0,
+    out: None = None,
+    *,
+    dtype: Any = None,
+    casting: str = "same_kind",
+) -> ndarray: ...
+@overload
+def stack[Out: ndarray](
+    arrays: Sequence[ArrayLike],
+    axis: SupportsIndex,
+    out: Out,
+    *,
+    dtype: Any = None,
+    casting: str = "same_kind",
+) -> Out: ...
+@overload
+def stack[Out: ndarray](
+    arrays: Sequence[ArrayLike],
+    axis: SupportsIndex = 0,
+    *,
+    out: Out,
+    dtype: Any = None,
+    casting: str = "same_kind",
+) -> Out: ...
+
+# The output shape depends on the external object's DLPack representation.
+def from_dlpack(
+    x: Any,
+    /,
+    *,
+    device: Literal["cpu"] | None = None,
+    copy: py_bool | None = None,
+) -> ndarray: ...
+
+class _UnaryUFunc(ufunc):
+    @overload
+    def __call__[Shape: _Shape](
+        self, x: ndarray[Shape], /, out: Any = None, **kwargs: Any
+    ) -> ndarray[Shape]: ...
+    @overload
+    def __call__(self, x: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
+
+class _BinaryUFunc(ufunc):
+    @overload
+    def __call__[Shape1: _Shape, Shape2: _Shape](
+        self,
+        x1: ndarray[Shape1],
+        x2: ndarray[Shape2],
+        /,
+        out: Any = None,
+        **kwargs: Any,
+    ) -> ndarray[_broadcast_shape(Shape1, Shape2)]: ...
+    @overload
+    def __call__[Shape: _Shape](
+        self, x1: ndarray[Shape], x2: Any, /, out: Any = None, **kwargs: Any
+    ) -> ndarray[Shape]: ...
+    @overload
+    def __call__[Shape: _Shape](
+        self, x1: Any, x2: ndarray[Shape], /, out: Any = None, **kwargs: Any
+    ) -> ndarray[Shape]: ...
+    @overload
+    def __call__(self, x1: Any, x2: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
+
+# The result dtype stays gradual because dtype promotion is not modeled, while
+# `ndarray.__matmul__` carries the left operand's dtype.
+class _MatmulUFunc(ufunc):
+    @overload
+    def __call__[LeftShape: _Shape, RightShape: _Shape](
+        self,
+        a: ndarray[LeftShape],
+        b: ndarray[RightShape],
+        /,
+        out: Any = None,
+        **kwargs: Any,
+    ) -> ndarray[matmul_shape(LeftShape, RightShape), Any]: ...
+    @overload
+    def __call__(self, a: Any, b: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
+
+class _UnaryTwoOutputUFunc(ufunc):
+    @overload
+    def __call__[Shape: _Shape](
+        self, x: ndarray[Shape], /, out: Any = None, *outputs: Any, **kwargs: Any
+    ) -> tuple[ndarray[Shape], ndarray[Shape]]: ...
+    @overload
+    def __call__(
+        self, x: Any, /, out: Any = None, *outputs: Any, **kwargs: Any
+    ) -> tuple[Any, Any]: ...
+
+class _BinaryTwoOutputUFunc(ufunc):
+    @overload
+    def __call__[Shape1: _Shape, Shape2: _Shape](
+        self,
+        x1: ndarray[Shape1],
+        x2: ndarray[Shape2],
+        /,
+        out: Any = None,
+        *outputs: Any,
+        **kwargs: Any,
+    ) -> tuple[
+        ndarray[_broadcast_shape(Shape1, Shape2)],
+        ndarray[_broadcast_shape(Shape1, Shape2)],
+    ]: ...
+    @overload
+    def __call__[Shape: _Shape](
+        self,
+        x1: ndarray[Shape],
+        x2: Any,
+        /,
+        out: Any = None,
+        *outputs: Any,
+        **kwargs: Any,
+    ) -> tuple[ndarray[Shape], ndarray[Shape]]: ...
+    @overload
+    def __call__[Shape: _Shape](
+        self,
+        x1: Any,
+        x2: ndarray[Shape],
+        /,
+        out: Any = None,
+        *outputs: Any,
+        **kwargs: Any,
+    ) -> tuple[ndarray[Shape], ndarray[Shape]]: ...
+    @overload
+    def __call__(
+        self,
+        x1: Any,
+        x2: Any,
+        /,
+        out: Any = None,
+        *outputs: Any,
+        **kwargs: Any,
+    ) -> tuple[Any, Any]: ...
+
+class _MatvecUFunc(ufunc):
+    @overload
+    def __call__[Shape1: _Shape, Shape2: _Shape](
+        self,
+        x1: ndarray[Shape1],
+        x2: ndarray[Shape2],
+        /,
+        out: Any = None,
+        **kwargs: Any,
+    ) -> ndarray[matvec_shape(Shape1, Shape2)]: ...
+    @overload
+    def __call__(self, x1: Any, x2: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
+
+class _VecdotUFunc(ufunc):
+    @overload
+    def __call__[Shape1: _Shape, Shape2: _Shape](
+        self,
+        x1: ndarray[Shape1],
+        x2: ndarray[Shape2],
+        /,
+        out: Any = None,
+        **kwargs: Any,
+    ) -> ndarray[vecdot_shape(Shape1, Shape2)]: ...
+    @overload
+    def __call__(self, x1: Any, x2: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
+
+class _VecmatUFunc(ufunc):
+    @overload
+    def __call__[Shape1: _Shape, Shape2: _Shape](
+        self,
+        x1: ndarray[Shape1],
+        x2: ndarray[Shape2],
+        /,
+        out: Any = None,
+        **kwargs: Any,
+    ) -> ndarray[vecmat_shape(Shape1, Shape2)]: ...
+    @overload
+    def __call__(self, x1: Any, x2: Any, /, out: Any = None, **kwargs: Any) -> Any: ...
+
+abs: _UnaryUFunc
+absolute: _UnaryUFunc
+acos: _UnaryUFunc
+acosh: _UnaryUFunc
+arccos: _UnaryUFunc
+arccosh: _UnaryUFunc
+arcsin: _UnaryUFunc
+arcsinh: _UnaryUFunc
+arctan: _UnaryUFunc
+arctanh: _UnaryUFunc
+asin: _UnaryUFunc
+asinh: _UnaryUFunc
+atan: _UnaryUFunc
+atanh: _UnaryUFunc
+bitwise_count: _UnaryUFunc
+bitwise_invert: _UnaryUFunc
+bitwise_not: _UnaryUFunc
+cbrt: _UnaryUFunc
+ceil: _UnaryUFunc
+conj: _UnaryUFunc
+conjugate: _UnaryUFunc
+cos: _UnaryUFunc
+cosh: _UnaryUFunc
+deg2rad: _UnaryUFunc
+degrees: _UnaryUFunc
+exp: _UnaryUFunc
+exp2: _UnaryUFunc
+expm1: _UnaryUFunc
+fabs: _UnaryUFunc
+floor: _UnaryUFunc
+invert: _UnaryUFunc
+isfinite: _UnaryUFunc
+isinf: _UnaryUFunc
+isnan: _UnaryUFunc
+isnat: _UnaryUFunc
+log: _UnaryUFunc
+log10: _UnaryUFunc
+log1p: _UnaryUFunc
+log2: _UnaryUFunc
+logical_not: _UnaryUFunc
+negative: _UnaryUFunc
+positive: _UnaryUFunc
+rad2deg: _UnaryUFunc
+radians: _UnaryUFunc
+reciprocal: _UnaryUFunc
+rint: _UnaryUFunc
+sign: _UnaryUFunc
+signbit: _UnaryUFunc
+sin: _UnaryUFunc
+sinh: _UnaryUFunc
+spacing: _UnaryUFunc
+sqrt: _UnaryUFunc
+square: _UnaryUFunc
+tan: _UnaryUFunc
+tanh: _UnaryUFunc
+trunc: _UnaryUFunc
+
+add: _BinaryUFunc
+arctan2: _BinaryUFunc
+atan2: _BinaryUFunc
+bitwise_and: _BinaryUFunc
+bitwise_left_shift: _BinaryUFunc
+bitwise_or: _BinaryUFunc
+bitwise_right_shift: _BinaryUFunc
+bitwise_xor: _BinaryUFunc
+copysign: _BinaryUFunc
+divide: _BinaryUFunc
+equal: _BinaryUFunc
+float_power: _BinaryUFunc
+floor_divide: _BinaryUFunc
+fmax: _BinaryUFunc
+fmin: _BinaryUFunc
+fmod: _BinaryUFunc
+gcd: _BinaryUFunc
+greater: _BinaryUFunc
+greater_equal: _BinaryUFunc
+heaviside: _BinaryUFunc
+hypot: _BinaryUFunc
+lcm: _BinaryUFunc
+ldexp: _BinaryUFunc
+left_shift: _BinaryUFunc
+less: _BinaryUFunc
+less_equal: _BinaryUFunc
+logaddexp: _BinaryUFunc
+logaddexp2: _BinaryUFunc
+logical_and: _BinaryUFunc
+logical_or: _BinaryUFunc
+logical_xor: _BinaryUFunc
+matmul: _MatmulUFunc
+maximum: _BinaryUFunc
+minimum: _BinaryUFunc
+mod: _BinaryUFunc
+multiply: _BinaryUFunc
+nextafter: _BinaryUFunc
+not_equal: _BinaryUFunc
+pow: _BinaryUFunc
+power: _BinaryUFunc
+remainder: _BinaryUFunc
+right_shift: _BinaryUFunc
+subtract: _BinaryUFunc
+true_divide: _BinaryUFunc
+
+frexp: _UnaryTwoOutputUFunc
+modf: _UnaryTwoOutputUFunc
+divmod: _BinaryTwoOutputUFunc
+matvec: _MatvecUFunc
+vecdot: _VecdotUFunc
+vecmat: _VecmatUFunc
+
 def round[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def trunc[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
 def clip[Shape: _Shape](
     a: ndarray[Shape], a_min: int | float, a_max: int | float
 ) -> ndarray[Shape]: ...
-def negative[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
-def fill_diagonal[N: SymVar, DType](
+def fill_diagonal[N: IntVar, DType](
     a: ndarray[[N, N], DType],
     val: Any,
-    wrap: bool = False,
+    wrap: py_bool = False,
 ) -> None: ...
-@uses_shape_dsl(diag_1d_ir)
-def diag[DType](
-    v: ndarray[_AnyShape, DType], k: int = 0
-) -> ndarray[_AnyShape, DType]: ...
-def arange[N: SymVar](stop: Dim[N], /) -> ndarray[[N], dtype[intp]]: ...
 @overload
-def expand_dims[N: SymVar, M: SymVar, DType](
+def diag[N: IntVar, DType, K: Flag[int] = 0](
+    v: ndarray[[N], DType], k: K = 0
+) -> ndarray[[diag_extent(Int[N], K), diag_extent(Int[N], K)], DType]: ...
+
+# TODO(stroxler): Model the shape arithmetic here; we can do better than `int`.
+@overload
+def diag[M: IntVar, N: IntVar, DType](
+    v: ndarray[[M, N], DType], k: int = 0
+) -> ndarray[[int], DType]: ...
+
+# Trailing fallback for ranks the precise overloads do not model, so their dtype survives
+# instead of degrading to `Any`. The parameter shape is a type variable rather than
+# `IntTuple`: a gradual parameter shape would also match known-rank arguments whose dtype is
+# gradual, and that ambiguity collapses their precise result to a gradual shape.
+@overload
+def diag[S: _Shape, DType](
+    v: ndarray[S, DType], k: int = 0
+) -> ndarray[IntTuple, DType]: ...
+def arange[N: IntVar](stop: Int[N], /) -> ndarray[[N], dtype[intp]]: ...
+@overload
+def expand_dims[N: IntVar, M: IntVar, DType](
     a: ndarray[[N, M], DType],
     axis: Literal[0, -3],
 ) -> ndarray[[1, N, M], DType]: ...
 @overload
-def expand_dims[N: SymVar, M: SymVar, DType](
+def expand_dims[N: IntVar, M: IntVar, DType](
     a: ndarray[[N, M], DType],
     axis: Literal[1, -2],
 ) -> ndarray[[N, 1, M], DType]: ...
 @overload
-def expand_dims[N: SymVar, M: SymVar, DType](
+def expand_dims[N: IntVar, M: IntVar, DType](
     a: ndarray[[N, M], DType],
     axis: Literal[2, -1],
 ) -> ndarray[[N, M, 1], DType]: ...
-@uses_shape_dsl(reduce_ir)
-def sum(a: ndarray, axis: _Axis = None, *, keepdims: bool = False) -> ndarray: ...
-@uses_shape_dsl(reduce_ir)
-def mean(a: ndarray, axis: _Axis = None, *, keepdims: bool = False) -> ndarray: ...
-@uses_shape_dsl(reduce_ir)
-def min(a: ndarray, axis: _Axis = None, *, keepdims: bool = False) -> ndarray: ...
-@uses_shape_dsl(reduce_ir)
-def max(a: ndarray, axis: _Axis = None, *, keepdims: bool = False) -> ndarray: ...
+
+# These stubs track reduction shapes but leave reduction dtype gradual.
+def sum[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_Axis],
+    KeepDims: Flag[py_bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+def mean[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_Axis],
+    KeepDims: Flag[py_bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+def min[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_Axis],
+    KeepDims: Flag[py_bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+def max[
+    Shape: _Shape,
+    DType,
+    Axis: Flag[_Axis],
+    KeepDims: Flag[py_bool],
+](
+    a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
+) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
 @overload
-def argmin[N: SymVar, M: SymVar](
+def argmin[N: IntVar, M: IntVar](
     a: ndarray[[N, M]],
     axis: Literal[0, -2],
     *,
     keepdims: Literal[False] = False,
 ) -> ndarray[[M], dtype[intp]]: ...
 @overload
-def argmin[N: SymVar, M: SymVar](
+def argmin[N: IntVar, M: IntVar](
     a: ndarray[[N, M]],
     axis: Literal[1, -1],
     *,
     keepdims: Literal[False] = False,
 ) -> ndarray[[N], dtype[intp]]: ...
-@uses_shape_dsl(matmul_2d_ir)
-def matmul(a: ndarray, b: ndarray, /) -> ndarray: ...
 
 # TODO(stroxler): Replace these finite tuple-shape constructor overloads with a
-# generic `Shape: tuple[int, ...]` overload once carrier shapes flow through
-# downstream shaped-array operations without degrading to unknown.
+# generic `Shape: tuple[int, ...]` overload once whole-shape parameters flow
+# through downstream array operations without degrading to unknown.
 @overload
-def zeros[N: SymVar, ScalarT: generic](
-    shape: Dim[N], dtype: type[ScalarT], order: str = ...
+def zeros[N: IntVar, ScalarT: generic](
+    shape: Int[N], dtype: type[ScalarT], order: str = ...
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def zeros[N: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N]], dtype: type[ScalarT], order: str = ...
+def zeros[N: IntVar, ScalarT: generic](
+    shape: IntTuple[N], dtype: type[ScalarT], order: str = ...
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def zeros[N: SymVar, M: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N], Dim[M]], dtype: type[ScalarT], order: str = ...
+def zeros[N: IntVar, M: IntVar, ScalarT: generic](
+    shape: IntTuple[N, M], dtype: type[ScalarT], order: str = ...
 ) -> ndarray[[N, M], dtype[ScalarT]]: ...
 @overload
-def zeros[N: SymVar, ScalarT: generic](
-    shape: Dim[N], dtype: dtype[ScalarT], order: str = ...
+def zeros[N: IntVar, ScalarT: generic](
+    shape: Int[N], dtype: dtype[ScalarT], order: str = ...
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def zeros[N: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N]], dtype: dtype[ScalarT], order: str = ...
+def zeros[N: IntVar, ScalarT: generic](
+    shape: IntTuple[N], dtype: dtype[ScalarT], order: str = ...
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def zeros[N: SymVar, M: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N], Dim[M]], dtype: dtype[ScalarT], order: str = ...
+def zeros[N: IntVar, M: IntVar, ScalarT: generic](
+    shape: IntTuple[N, M], dtype: dtype[ScalarT], order: str = ...
 ) -> ndarray[[N, M], dtype[ScalarT]]: ...
 @overload
-def zeros[N: SymVar](
-    shape: Dim[N], dtype: None = ..., order: str = ...
+def zeros[N: IntVar](
+    shape: Int[N], dtype: None = ..., order: str = ...
 ) -> ndarray[[N], dtype[float64]]: ...
 @overload
-def zeros[N: SymVar](
-    shape: tuple[Dim[N]], dtype: None = ..., order: str = ...
+def zeros[N: IntVar](
+    shape: IntTuple[N], dtype: None = ..., order: str = ...
 ) -> ndarray[[N], dtype[float64]]: ...
 @overload
-def zeros[N: SymVar, M: SymVar](
-    shape: tuple[Dim[N], Dim[M]], dtype: None = ..., order: str = ...
+def zeros[N: IntVar, M: IntVar](
+    shape: IntTuple[N, M], dtype: None = ..., order: str = ...
 ) -> ndarray[[N, M], dtype[float64]]: ...
 @overload
-def zeros[N: SymVar](shape: Dim[N], dtype: Any, order: str = ...) -> ndarray[[N]]: ...
+def zeros[N: IntVar](shape: Int[N], dtype: Any, order: str = ...) -> ndarray[[N]]: ...
 @overload
-def zeros[N: SymVar](
-    shape: tuple[Dim[N]], dtype: Any, order: str = ...
+def zeros[N: IntVar](
+    shape: IntTuple[N], dtype: Any, order: str = ...
 ) -> ndarray[[N]]: ...
 @overload
-def zeros[N: SymVar, M: SymVar](
-    shape: tuple[Dim[N], Dim[M]], dtype: Any, order: str = ...
+def zeros[N: IntVar, M: IntVar](
+    shape: IntTuple[N, M], dtype: Any, order: str = ...
 ) -> ndarray[[N, M]]: ...
 @overload
-def ones[N: SymVar, ScalarT: generic](
-    shape: Dim[N], dtype: type[ScalarT], order: str = ...
+def ones[N: IntVar, ScalarT: generic](
+    shape: Int[N], dtype: type[ScalarT], order: str = ...
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def ones[N: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N]], dtype: type[ScalarT], order: str = ...
+def ones[N: IntVar, ScalarT: generic](
+    shape: IntTuple[N], dtype: type[ScalarT], order: str = ...
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def ones[N: SymVar, M: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N], Dim[M]], dtype: type[ScalarT], order: str = ...
+def ones[N: IntVar, M: IntVar, ScalarT: generic](
+    shape: IntTuple[N, M], dtype: type[ScalarT], order: str = ...
 ) -> ndarray[[N, M], dtype[ScalarT]]: ...
 @overload
-def ones[N: SymVar, ScalarT: generic](
-    shape: Dim[N], dtype: dtype[ScalarT], order: str = ...
+def ones[N: IntVar, ScalarT: generic](
+    shape: Int[N], dtype: dtype[ScalarT], order: str = ...
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def ones[N: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N]], dtype: dtype[ScalarT], order: str = ...
+def ones[N: IntVar, ScalarT: generic](
+    shape: IntTuple[N], dtype: dtype[ScalarT], order: str = ...
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def ones[N: SymVar, M: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N], Dim[M]], dtype: dtype[ScalarT], order: str = ...
+def ones[N: IntVar, M: IntVar, ScalarT: generic](
+    shape: IntTuple[N, M], dtype: dtype[ScalarT], order: str = ...
 ) -> ndarray[[N, M], dtype[ScalarT]]: ...
 @overload
-def ones[N: SymVar](
-    shape: Dim[N], dtype: None = ..., order: str = ...
+def ones[N: IntVar](
+    shape: Int[N], dtype: None = ..., order: str = ...
 ) -> ndarray[[N], dtype[float64]]: ...
 @overload
-def ones[N: SymVar](
-    shape: tuple[Dim[N]], dtype: None = ..., order: str = ...
+def ones[N: IntVar](
+    shape: IntTuple[N], dtype: None = ..., order: str = ...
 ) -> ndarray[[N], dtype[float64]]: ...
 @overload
-def ones[N: SymVar, M: SymVar](
-    shape: tuple[Dim[N], Dim[M]], dtype: None = ..., order: str = ...
+def ones[N: IntVar, M: IntVar](
+    shape: IntTuple[N, M], dtype: None = ..., order: str = ...
 ) -> ndarray[[N, M], dtype[float64]]: ...
 @overload
-def ones[N: SymVar](shape: Dim[N], dtype: Any, order: str = ...) -> ndarray[[N]]: ...
+def ones[N: IntVar](shape: Int[N], dtype: Any, order: str = ...) -> ndarray[[N]]: ...
 @overload
-def ones[N: SymVar](
-    shape: tuple[Dim[N]], dtype: Any, order: str = ...
+def ones[N: IntVar](
+    shape: IntTuple[N], dtype: Any, order: str = ...
 ) -> ndarray[[N]]: ...
 @overload
-def ones[N: SymVar, M: SymVar](
-    shape: tuple[Dim[N], Dim[M]], dtype: Any, order: str = ...
+def ones[N: IntVar, M: IntVar](
+    shape: IntTuple[N, M], dtype: Any, order: str = ...
 ) -> ndarray[[N, M]]: ...
 @overload
-def full[N: SymVar, ScalarT: generic](
-    shape: Dim[N],
+def full[N: IntVar, ScalarT: generic](
+    shape: Int[N],
     fill_value: Any,
     dtype: type[ScalarT],
     order: str = ...,
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def full[N: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N]],
+def full[N: IntVar, ScalarT: generic](
+    shape: IntTuple[N],
     fill_value: Any,
     dtype: type[ScalarT],
     order: str = ...,
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def full[N: SymVar, M: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N], Dim[M]],
+def full[N: IntVar, M: IntVar, ScalarT: generic](
+    shape: IntTuple[N, M],
     fill_value: Any,
     dtype: type[ScalarT],
     order: str = ...,
 ) -> ndarray[[N, M], dtype[ScalarT]]: ...
 @overload
-def full[N: SymVar, ScalarT: generic](
-    shape: Dim[N],
+def full[N: IntVar, ScalarT: generic](
+    shape: Int[N],
     fill_value: Any,
     dtype: dtype[ScalarT],
     order: str = ...,
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def full[N: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N]],
+def full[N: IntVar, ScalarT: generic](
+    shape: IntTuple[N],
     fill_value: Any,
     dtype: dtype[ScalarT],
     order: str = ...,
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def full[N: SymVar, M: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N], Dim[M]],
+def full[N: IntVar, M: IntVar, ScalarT: generic](
+    shape: IntTuple[N, M],
     fill_value: Any,
     dtype: dtype[ScalarT],
     order: str = ...,
 ) -> ndarray[[N, M], dtype[ScalarT]]: ...
 @overload
-def full[N: SymVar](
-    shape: Dim[N], fill_value: Any, dtype: Any = ..., order: str = ...
+def full[N: IntVar](
+    shape: Int[N], fill_value: Any, dtype: Any = ..., order: str = ...
 ) -> ndarray[[N]]: ...
 @overload
-def full[N: SymVar](
-    shape: tuple[Dim[N]], fill_value: Any, dtype: Any = ..., order: str = ...
+def full[N: IntVar](
+    shape: IntTuple[N], fill_value: Any, dtype: Any = ..., order: str = ...
 ) -> ndarray[[N]]: ...
 @overload
-def full[N: SymVar, M: SymVar](
-    shape: tuple[Dim[N], Dim[M]], fill_value: Any, dtype: Any = ..., order: str = ...
+def full[N: IntVar, M: IntVar](
+    shape: IntTuple[N, M],
+    fill_value: Any,
+    dtype: Any = ...,
+    order: str = ...,
 ) -> ndarray[[N, M]]: ...
 @overload
-def empty[N: SymVar, ScalarT: generic](
-    shape: Dim[N], dtype: type[ScalarT], order: str = ...
+def empty[N: IntVar, ScalarT: generic](
+    shape: Int[N], dtype: type[ScalarT], order: str = ...
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def empty[N: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N]], dtype: type[ScalarT], order: str = ...
+def empty[N: IntVar, ScalarT: generic](
+    shape: IntTuple[N], dtype: type[ScalarT], order: str = ...
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def empty[N: SymVar, M: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N], Dim[M]], dtype: type[ScalarT], order: str = ...
+def empty[N: IntVar, M: IntVar, ScalarT: generic](
+    shape: IntTuple[N, M], dtype: type[ScalarT], order: str = ...
 ) -> ndarray[[N, M], dtype[ScalarT]]: ...
 @overload
-def empty[N: SymVar, ScalarT: generic](
-    shape: Dim[N], dtype: dtype[ScalarT], order: str = ...
+def empty[N: IntVar, ScalarT: generic](
+    shape: Int[N], dtype: dtype[ScalarT], order: str = ...
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def empty[N: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N]], dtype: dtype[ScalarT], order: str = ...
+def empty[N: IntVar, ScalarT: generic](
+    shape: IntTuple[N], dtype: dtype[ScalarT], order: str = ...
 ) -> ndarray[[N], dtype[ScalarT]]: ...
 @overload
-def empty[N: SymVar, M: SymVar, ScalarT: generic](
-    shape: tuple[Dim[N], Dim[M]], dtype: dtype[ScalarT], order: str = ...
+def empty[N: IntVar, M: IntVar, ScalarT: generic](
+    shape: IntTuple[N, M], dtype: dtype[ScalarT], order: str = ...
 ) -> ndarray[[N, M], dtype[ScalarT]]: ...
 @overload
-def empty[N: SymVar](
-    shape: Dim[N], dtype: None = ..., order: str = ...
+def empty[N: IntVar](
+    shape: Int[N], dtype: None = ..., order: str = ...
 ) -> ndarray[[N], dtype[float64]]: ...
 @overload
-def empty[N: SymVar](
-    shape: tuple[Dim[N]], dtype: None = ..., order: str = ...
+def empty[N: IntVar](
+    shape: IntTuple[N], dtype: None = ..., order: str = ...
 ) -> ndarray[[N], dtype[float64]]: ...
 @overload
-def empty[N: SymVar, M: SymVar](
-    shape: tuple[Dim[N], Dim[M]], dtype: None = ..., order: str = ...
+def empty[N: IntVar, M: IntVar](
+    shape: IntTuple[N, M], dtype: None = ..., order: str = ...
 ) -> ndarray[[N, M], dtype[float64]]: ...
 @overload
-def empty[N: SymVar](shape: Dim[N], dtype: Any, order: str = ...) -> ndarray[[N]]: ...
+def empty[N: IntVar](shape: Int[N], dtype: Any, order: str = ...) -> ndarray[[N]]: ...
 @overload
-def empty[N: SymVar](
-    shape: tuple[Dim[N]], dtype: Any, order: str = ...
+def empty[N: IntVar](
+    shape: IntTuple[N], dtype: Any, order: str = ...
 ) -> ndarray[[N]]: ...
 @overload
-def empty[N: SymVar, M: SymVar](
-    shape: tuple[Dim[N], Dim[M]], dtype: Any, order: str = ...
+def empty[N: IntVar, M: IntVar](
+    shape: IntTuple[N, M], dtype: Any, order: str = ...
 ) -> ndarray[[N, M]]: ...
 @overload
-def eye[N: SymVar, ScalarT: generic](
-    N: Dim[N], M: None = ..., k: int = ..., *, dtype: type[ScalarT], order: str = ...
+def eye[N: IntVar, ScalarT: generic](
+    N: Int[N], M: None = ..., k: int = ..., *, dtype: type[ScalarT], order: str = ...
 ) -> ndarray[[N, N], dtype[ScalarT]]: ...
 @overload
-def eye[N: SymVar, ScalarT: generic](
-    N: Dim[N], M: None, k: int, dtype: type[ScalarT], order: str = ...
+def eye[N: IntVar, ScalarT: generic](
+    N: Int[N], M: None, k: int, dtype: type[ScalarT], order: str = ...
 ) -> ndarray[[N, N], dtype[ScalarT]]: ...
 @overload
-def eye[N: SymVar, ScalarT: generic](
-    N: Dim[N], M: None = ..., k: int = ..., *, dtype: dtype[ScalarT], order: str = ...
+def eye[N: IntVar, ScalarT: generic](
+    N: Int[N],
+    M: None = ...,
+    k: int = ...,
+    *,
+    dtype: dtype[ScalarT],
+    order: str = ...,
 ) -> ndarray[[N, N], dtype[ScalarT]]: ...
 @overload
-def eye[N: SymVar, ScalarT: generic](
-    N: Dim[N], M: None, k: int, dtype: dtype[ScalarT], order: str = ...
+def eye[N: IntVar, ScalarT: generic](
+    N: Int[N], M: None, k: int, dtype: dtype[ScalarT], order: str = ...
 ) -> ndarray[[N, N], dtype[ScalarT]]: ...
 @overload
-def eye[N: SymVar](
-    N: Dim[N], M: None = ..., k: int = ..., dtype: None = ..., order: str = ...
+def eye[N: IntVar](
+    N: Int[N], M: None = ..., k: int = ..., dtype: None = ..., order: str = ...
 ) -> ndarray[[N, N], dtype[float64]]: ...
 @overload
-def eye[N: SymVar](
-    N: Dim[N], M: None = ..., k: int = ..., dtype: Any = ..., order: str = ...
+def eye[N: IntVar](
+    N: Int[N], M: None = ..., k: int = ..., dtype: Any = ..., order: str = ...
 ) -> ndarray[[N, N]]: ...
 @overload
-def identity[N: SymVar, ScalarT: generic](
-    n: Dim[N], dtype: type[ScalarT], *, like: Any = ...
+def identity[N: IntVar, ScalarT: generic](
+    n: Int[N], dtype: type[ScalarT], *, like: Any = ...
 ) -> ndarray[[N, N], dtype[ScalarT]]: ...
 @overload
-def identity[N: SymVar, ScalarT: generic](
-    n: Dim[N], dtype: dtype[ScalarT], *, like: Any = ...
+def identity[N: IntVar, ScalarT: generic](
+    n: Int[N], dtype: dtype[ScalarT], *, like: Any = ...
 ) -> ndarray[[N, N], dtype[ScalarT]]: ...
 @overload
-def identity[N: SymVar](
-    n: Dim[N], dtype: None = ..., *, like: Any = ...
+def identity[N: IntVar](
+    n: Int[N], dtype: None = ..., *, like: Any = ...
 ) -> ndarray[[N, N], dtype[float64]]: ...
 @overload
-def identity[N: SymVar](
-    n: Dim[N], dtype: Any, *, like: Any = ...
+def identity[N: IntVar](
+    n: Int[N], dtype: Any, *, like: Any = ...
 ) -> ndarray[[N, N]]: ...
+
+# TODO(stroxler): Replace these placeholders with NumPy's scalar type hierarchy.
+bool: Any
+broadcast: Any
+byte: Any
+bytes_: Any
+cdouble: Any
+character: Any
+clongdouble: Any
+complex128: Any
+complex64: Any
+complexfloating: Any
+csingle: Any
+datetime64: Any
+double: Any
+flexible: Any
+float16: Any
+floating: Any
+half: Any
+inexact: Any
+int16: Any
+int8: Any
+int_: Any
+intc: Any
+integer: Any
+long: Any
+longdouble: Any
+longlong: Any
+number: Any
+object_: Any
+short: Any
+signedinteger: Any
+single: Any
+str_: Any
+timedelta64: Any
+ubyte: Any
+uint: Any
+uint16: Any
+uint32: Any
+uint64: Any
+uint8: Any
+uintc: Any
+uintp: Any
+ulong: Any
+ulonglong: Any
+unsignedinteger: Any
+ushort: Any
+void: Any

@@ -6,14 +6,61 @@
  */
 
 use lsp_types::Url;
-use pyrefly::commands::lsp::IndexingMode;
-use pyrefly::commands::lsp::LspArgs;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::object_model::LspInteractionArgs;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
+
+#[test]
+fn test_parameter_references_in_unopened_file() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("rename_kwargs_across_files");
+    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let defs = root_path.join("defs.py");
+    let uses = root_path.join("uses.py");
+    interaction.client.did_open("defs.py");
+
+    interaction
+        .client
+        .references("defs.py", 6, 16, true)
+        .expect_response(json!([
+            {
+                "range": {"start":{"line":13,"character":31},"end":{"line":13,"character":38}},
+                "uri": Url::from_file_path(&uses).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":6,"character":16},"end":{"line":6,"character":23}},
+                "uri": Url::from_file_path(&defs).unwrap().to_string()
+            },
+            {
+                "range": {"start":{"line":7,"character":14},"end":{"line":7,"character":21}},
+                "uri": Url::from_file_path(&defs).unwrap().to_string()
+            },
+        ]))
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
 
 #[test]
 fn test_references_for_usage_with_config() {

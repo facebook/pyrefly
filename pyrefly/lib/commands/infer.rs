@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -23,6 +24,7 @@ use ruff_python_ast::helpers::is_docstring_stmt;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextSize;
 
+use crate::annotation::format_annotation;
 use crate::commands::check::Handles;
 use crate::commands::config_finder::ConfigConfigurerWrapper;
 use crate::commands::files::FilesArgs;
@@ -32,7 +34,6 @@ use crate::state::lsp::AnnotationKind;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::types::class::Class;
-use crate::types::display::TypeDisplayContext;
 use crate::types::heap::TypeHeap;
 use crate::types::simplify::unions_with_literals;
 use crate::types::stdlib::Stdlib;
@@ -204,7 +205,13 @@ fn format_hints(
             if matches!(sub_type, Type::SelfType(_)) {
                 return;
             }
-            if let Some(qname) = sub_type.qname() {
+            // A DataFrame/Series renders as its underlying class, which `universe` does not visit.
+            let qname = match sub_type {
+                Type::DataFrame(schema) => Some(schema.underlying.qname()),
+                Type::Series(schema) => Some(schema.underlying.qname()),
+                _ => sub_type.qname(),
+            };
+            if let Some(qname) = qname {
                 let module_name = qname.module_name();
                 if module_name != ModuleName::builtins() && module_name != current_module_name {
                     hint_imports.push((module_name, importable_name_for_qname(qname)));
@@ -214,7 +221,16 @@ fn format_hints(
         if contains_self_type {
             hint_imports.push((ModuleName::typing(), "Self".to_owned()));
         }
-        let formatted_hint = hint_to_string(hint, stdlib, enum_members, heap);
+        let mut typing_imports = BTreeSet::new();
+        let mut uses_incomplete = false;
+        let formatted_hint = hint_to_string(
+            hint,
+            stdlib,
+            enum_members,
+            heap,
+            &mut typing_imports,
+            &mut uses_incomplete,
+        );
         // TODO: Put these behind a flag
         if formatted_hint.contains("Any") {
             continue;
@@ -231,12 +247,20 @@ fn format_hints(
         if formatted_hint.contains("Overload") {
             continue;
         }
+        if uses_incomplete {
+            continue;
+        }
         if formatted_hint == "None" && kind == AnnotationKind::Parameter {
             continue;
         }
         if !is_container && kind == AnnotationKind::Variable {
             continue;
         }
+        needed_imports.extend(
+            typing_imports
+                .into_iter()
+                .map(|name| (ModuleName::typing(), name.to_owned())),
+        );
         // Only record imports for types that pass all filters above
         needed_imports.extend(hint_imports);
         match kind {
@@ -268,6 +292,8 @@ fn hint_to_string(
     stdlib: &Stdlib,
     enum_members: &dyn Fn(&Class) -> Option<usize>,
     heap: &TypeHeap,
+    typing_imports: &mut BTreeSet<&'static str>,
+    uses_incomplete: &mut bool,
 ) -> String {
     let hint = hint.promote_implicit_literals(stdlib);
     let hint = hint.explicit_any().clean_var();
@@ -275,9 +301,7 @@ fn hint_to_string(
         Type::Union(u) => unions_with_literals(u.members, stdlib, enum_members, heap),
         _ => hint,
     };
-    let mut ctx = TypeDisplayContext::new(&[&hint]);
-    ctx.render_self_type_as_self();
-    ctx.display(&hint).to_string()
+    format_annotation(&hint, typing_imports, uses_incomplete)
 }
 
 impl InferArgs {
@@ -523,6 +547,51 @@ mod test {
     }
 
     #[test]
+    fn infer_dataframe_return_uses_plain_class() -> anyhow::Result<()> {
+        let tdir = tempfile::TempDir::with_prefix("pyrefly_infer_df").unwrap();
+        let frame_dir = tdir.path().join("polars").join("dataframe");
+        fs_anyhow::create_dir_all(&frame_dir)?;
+        fs_anyhow::write(
+            &tdir.path().join("polars").join("__init__.py"),
+            "from polars.dataframe.frame import DataFrame as DataFrame\n",
+        )?;
+        fs_anyhow::write(&frame_dir.join("__init__.py"), "")?;
+        fs_anyhow::write(
+            &frame_dir.join("frame.py"),
+            "class DataFrame:\n    def __init__(self, data: object = None) -> None: ...\n",
+        )?;
+
+        let input = "import polars as pl\ndef make():\n    return pl.DataFrame({\"a\": [1]})\n";
+        let test_path = tdir.path().join("test.py");
+        fs_anyhow::write(&test_path, input)?;
+        let config_path = tdir.path().join("pyrefly.toml");
+        fs_anyhow::write(
+            &config_path,
+            "project_includes = [\"test.py\"]\nproject_excludes = []\n",
+        )?;
+
+        let args = InferArgs::parse_from(["infer", "--config", &config_path.display().to_string()]);
+        let result = args.run(None, TEST_THREAD_COUNT);
+        assert!(result.is_ok(), "infer command failed: {:?}", result.err());
+
+        let got = fs_anyhow::read_to_string(&test_path)?;
+        // Emits the plain class and adds its import, discovered from the stripped class QName.
+        assert!(
+            got.contains("-> DataFrame:"),
+            "expected a plain class return annotation, got:\n{got}"
+        );
+        assert!(
+            !got.contains("DataFrame["),
+            "the schema display form is not legal annotation syntax, got:\n{got}"
+        );
+        assert!(
+            got.contains("from polars.dataframe.frame import DataFrame"),
+            "the plain class import must be added, got:\n{got}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_literal() -> anyhow::Result<()> {
         // Test return type annotation for integer literal
         assert_annotations(
@@ -588,6 +657,30 @@ def foo() -> str:
     example(1, 2, 3)
     "#,
             None,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_constructor_parameter() -> anyhow::Result<()> {
+        let mut flags = InferFlags::default();
+        flags.return_types = Some(false);
+        assert_annotations(
+            r#"
+class Example:
+    def __init__(self, value):
+        self.value = value
+
+Example(42)
+"#,
+            r#"
+class Example:
+    def __init__(self, value: int):
+        self.value = value
+
+Example(42)
+"#,
+            Some(flags),
         );
         Ok(())
     }
@@ -866,6 +959,69 @@ class C:
         return super().__new__(cls)
 "#,
             Some(flags),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_callable_annotations_use_python_syntax() -> anyhow::Result<()> {
+        assert_annotations(
+            r#"def call_it(fn):
+    return fn()
+
+call_it(lambda: 0)
+
+def make_formatter():
+    def format_one(n: int) -> str:
+        return str(n)
+    return format_one
+
+class Runner:
+    def run(self) -> None:
+        pass
+
+def swallow(fn):
+    fn()
+
+swallow(Runner().run)
+
+def maybe_callback(flag: bool):
+    if flag:
+        return lambda: 1
+    return None
+
+def callbacks():
+    return [lambda: 1]
+"#,
+            r#"from typing import Callable
+def call_it(fn: Callable[[], int]):
+    return fn()
+
+call_it(lambda: 0)
+
+def make_formatter() -> Callable[[int], str]:
+    def format_one(n: int) -> str:
+        return str(n)
+    return format_one
+
+class Runner:
+    def run(self) -> None:
+        pass
+
+def swallow(fn: Callable[[], None]) -> None:
+    fn()
+
+swallow(Runner().run)
+
+def maybe_callback(flag: bool):
+    if flag:
+        return lambda: 1
+    return None
+
+def callbacks():
+    return [lambda: 1]
+"#,
+            None,
         );
         Ok(())
     }

@@ -8,7 +8,7 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
-from shape_extensions import SymVar
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -30,7 +30,7 @@ def test_reshape_with_partial_minus_one():
     assert_type(y, Tensor[[2, 100]])
 
 
-def test_reshape_1d_to_4d[C: SymVar](x: Tensor[[C]]) -> Tensor[[1, C, 1, 1]]:
+def test_reshape_1d_to_4d[C: IntVar](x: Tensor[[C]]) -> Tensor[[1, C, 1, 1]]:
     """Test reshaping 1D to 4D with -1"""
     y = x.reshape(1, -1, 1, 1)  # Should be [1, C, 1, 1]
     assert_type(y, Tensor[[1, C, 1, 1]])

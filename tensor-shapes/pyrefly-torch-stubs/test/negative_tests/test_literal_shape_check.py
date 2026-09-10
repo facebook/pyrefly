@@ -18,8 +18,8 @@ def test_literal_shape_mismatch() -> Tensor[[4, 3]]:
     x: Tensor[[2, 3]] = torch.randn(2, 3)
     assert_type(x, Tensor[[2, 3]])
 
-    # E: Returned type `Tensor[[2, 3]]` is not assignable
-    #    to declared return type `Tensor[[4, 3]]`
+    # E: Returned type `Tensor[IntTuple[2, 3]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[4, 3]]`
     return x
 
 

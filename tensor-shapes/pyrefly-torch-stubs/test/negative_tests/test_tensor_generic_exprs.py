@@ -11,8 +11,7 @@ should be substituted and expressions should be evaluated.
 
 from typing import TYPE_CHECKING
 
-from shape_extensions import SymVar
-
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -23,22 +22,22 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-def sum_dims[N: SymVar, M: SymVar](x: Tensor[[N, M]]) -> Tensor[[N + M]]:
+def sum_dims[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[N + M]]:
     """Returns 1D tensor with dimension N + M"""
     ...
 
 
-def product_dims[N: SymVar, M: SymVar](x: Tensor[[N, M]]) -> Tensor[[N * M]]:
+def product_dims[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[N * M]]:
     """Returns 1D tensor with dimension N * M"""
     ...
 
 
-def double_first[N: SymVar, M: SymVar](x: Tensor[[N, M]]) -> Tensor[[N * 2, M]]:
+def double_first[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[N * 2, M]]:
     """Returns tensor with first dimension doubled"""
     ...
 
 
-def add_one[N: SymVar, M: SymVar](x: Tensor[[N, M]]) -> Tensor[[N + 1, M + 1]]:
+def add_one[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[N + 1, M + 1]]:
     """Returns tensor with both dimensions increased by 1"""
     ...
 
@@ -73,19 +72,21 @@ def test_add_one_concrete(x: Tensor[[3, 4]]) -> Tensor[[4, 5]]:
 # ============================================================================
 
 
-def test_sum_dims_symbolic[A: SymVar, B: SymVar](x: Tensor[[A, B]]) -> Tensor[[A + B]]:
+def test_sum_dims_symbolic[A: IntVar, B: IntVar](
+    x: Tensor[[A, B]],
+) -> Tensor[[A + B]]:
     """Symbolic input -> symbolic output with expression"""
     return sum_dims(x)
 
 
-def test_product_dims_symbolic[A: SymVar, B: SymVar](
+def test_product_dims_symbolic[A: IntVar, B: IntVar](
     x: Tensor[[A, B]],
 ) -> Tensor[[A * B]]:
     """Symbolic input -> symbolic output with expression"""
     return product_dims(x)
 
 
-def test_double_first_symbolic[A: SymVar, B: SymVar](
+def test_double_first_symbolic[A: IntVar, B: IntVar](
     x: Tensor[[A, B]],
 ) -> Tensor[[A * 2, B]]:
     """Symbolic input -> symbolic output with expression"""
@@ -97,12 +98,12 @@ def test_double_first_symbolic[A: SymVar, B: SymVar](
 # ============================================================================
 
 
-def flatten_to_1d[N: SymVar, M: SymVar](x: Tensor[[N, M]]) -> Tensor[[N * M]]:
+def flatten_to_1d[N: IntVar, M: IntVar](x: Tensor[[N, M]]) -> Tensor[[N * M]]:
     """Flatten 2D to 1D"""
     ...
 
 
-def duplicate[K: SymVar](x: Tensor[[K]]) -> Tensor[[K * 2]]:
+def duplicate[K: IntVar](x: Tensor[[K]]) -> Tensor[[K * 2]]:
     """Duplicate the dimension"""
     ...
 
@@ -113,7 +114,7 @@ def test_chained_concrete(x: Tensor[[3, 4]]) -> Tensor[[24]]:
     return duplicate(flat)
 
 
-def test_chained_symbolic[N: SymVar, M: SymVar](
+def test_chained_symbolic[N: IntVar, M: IntVar](
     x: Tensor[[N, M]],
 ) -> Tensor[[N * M * 2]]:
     """N*M -> (N*M)*2"""
@@ -128,20 +129,20 @@ def test_chained_symbolic[N: SymVar, M: SymVar](
 
 def test_sum_dims_wrong(x: Tensor[[2, 3]]) -> Tensor[[6]]:
     """N+M=5, not 6."""
-    # E: Returned type `Tensor[[5]]` is not assignable
-    #    to declared return type `Tensor[[6]]`
+    # E: Returned type `Tensor[IntTuple[5]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[6]]`
     return sum_dims(x)
 
 
 def test_product_dims_wrong(x: Tensor[[2, 3]]) -> Tensor[[5]]:
     """N*M=6, not 5."""
-    # E: Returned type `Tensor[[6]]` is not assignable
-    #    to declared return type `Tensor[[5]]`
+    # E: Returned type `Tensor[IntTuple[6]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[5]]`
     return product_dims(x)
 
 
 def test_double_first_wrong(x: Tensor[[4, 5]]) -> Tensor[[4, 5]]:
     """First dim should be 8, not 4."""
-    # E: Returned type `Tensor[[8, 5]]` is not assignable
-    #    to declared return type `Tensor[[4, 5]]`
+    # E: Returned type `Tensor[IntTuple[8, 5]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[4, 5]]`
     return double_first(x)

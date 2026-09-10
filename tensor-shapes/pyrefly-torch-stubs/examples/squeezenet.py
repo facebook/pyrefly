@@ -11,24 +11,23 @@ SqueezeNet 1.0 from torchvision with shape annotations.
 
 Original: pytorch/vision/torchvision/models/squeezenet.py
 
-MaxPool2d ceil_mode=True is not captured by DSL (uses floor formula),
-but spatial dims collapse to 1x1 via AdaptiveAvgPool2d so the
-off-by-one in intermediate spatial dims does not affect the output; the
-gap is in the typing of `features`.
+MaxPool2d ceil_mode=True is captured by the DSL. Pooling a symbolic extent
+cannot be validated, so each pool recovers gradually rather than nesting a
+ceil correction per stage; the classifier restores the exact output shape.
 """
 
-from typing import assert_type, TYPE_CHECKING
+from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 import torch.nn.init as init
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim, SymVar
+    from shape_extensions import Int, IntVar
     from torch import Tensor
 
 
-class Fire[InC: SymVar, SQ: SymVar, E1: SymVar, E3: SymVar](nn.Module):
+class Fire[InC: IntVar, SQ: IntVar, E1: IntVar, E3: IntVar](nn.Module):
     """Fire module: squeeze (1x1 conv) then expand (parallel 1x1 + 3x3 convs).
 
     Input:  Tensor[[B, InC, H, W]]
@@ -40,10 +39,10 @@ class Fire[InC: SymVar, SQ: SymVar, E1: SymVar, E3: SymVar](nn.Module):
 
     def __init__(
         self,
-        inplanes: Dim[InC],
-        squeeze_planes: Dim[SQ],
-        expand1x1_planes: Dim[E1],
-        expand3x3_planes: Dim[E3],
+        inplanes: Int[InC],
+        squeeze_planes: Int[SQ],
+        expand1x1_planes: Int[E1],
+        expand3x3_planes: Int[E3],
     ) -> None:
         super().__init__()
         self.inplanes = inplanes
@@ -56,7 +55,7 @@ class Fire[InC: SymVar, SQ: SymVar, E1: SymVar, E3: SymVar](nn.Module):
         )
         self.expand3x3_activation = nn.ReLU(inplace=True)
 
-    def forward[B: SymVar, H: SymVar, W: SymVar](
+    def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, InC, H, W]]
     ) -> Tensor[[B, E1 + E3, H, W]]:
         x1 = self.squeeze_activation(self.squeeze(x))
@@ -70,7 +69,7 @@ class Fire[InC: SymVar, SQ: SymVar, E1: SymVar, E3: SymVar](nn.Module):
         return result
 
 
-class SqueezeNet[NC: SymVar = 1000](nn.Module):
+class SqueezeNet[NC: IntVar = 1000](nn.Module):
     """SqueezeNet 1.0 architecture.
 
     Input:  Tensor[[B, 3, H, W]]
@@ -80,7 +79,7 @@ class SqueezeNet[NC: SymVar = 1000](nn.Module):
     channel progression is fixed by architecture design.
     """
 
-    def __init__(self, num_classes: Dim[NC] = 1000, dropout: float = 0.5) -> None:
+    def __init__(self, num_classes: Int[NC] = 1000, dropout: float = 0.5) -> None:
         super().__init__()
         self.num_classes = num_classes
         self.features = nn.Sequential(
@@ -116,21 +115,17 @@ class SqueezeNet[NC: SymVar = 1000](nn.Module):
                 if m.bias is not None:
                     init.constant_(m.bias, 0)
 
-    def forward[B: SymVar, H: SymVar, W: SymVar](
+    def forward[B: IntVar, H: IntVar, W: IntVar](
         self, x: Tensor[[B, 3, H, W]]
     ) -> Tensor[[B, NC]]:
-        x1 = self.features(x)
-        assert_type(
-            x1,
-            Tensor[
-                [
-                    B,
-                    512,
-                    ((-3 + ((-7 + H) // 4)) // 4),
-                    ((-3 + ((-7 + W) // 4)) // 4),
-                ]
-            ],
-        )
+        pooled = self.features(x)
+        # `features` pools three times with `ceil_mode=True`. Each pool of a
+        # symbolic extent is undecidable, so the whole shape computation recovers
+        # gradually: the extents stay a compact `int` instead of carrying a ceil
+        # correction that nests once per stage, and the batch dimension is
+        # recovered from the trailing convolutions rather than from `B`.
+        assert_type(pooled, Tensor[[B, 512, int, int]])
+        x1: Tensor[[B, 512, Any, Any]] = pooled
         x2 = self.classifier(x1)
         assert_type(x2, Tensor[[B, NC, 1, 1]])
         result = torch.flatten(x2, 1)
