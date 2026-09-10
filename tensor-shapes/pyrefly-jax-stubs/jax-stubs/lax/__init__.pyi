@@ -746,8 +746,8 @@ def transpose(
     operand: Any,
     permutation: Sequence[int],
 ) -> Array[IntTuple]: ...
-def unstack(
-    x: Any,
+def unstack[Batch: IntTuple, M: IntVar](
+    x: Array[[*Elements[Batch], M]],
     axis: int = 0,
 ) -> tuple[Array[IntTuple], ...]: ...
 

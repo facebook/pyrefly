@@ -919,6 +919,28 @@ def roll_shape(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
     return shape
 
 @type_shape_dsl_function
+def rot90_shape(shape: IntTuple, k: int, axes: tuple[int, int]) -> IntTuple:
+    rank = len(shape)
+    if rank < 2:
+        return dsl.Invalid("rot90 requires array of at least 2 dimensions")
+    if any(item < 0 - rank or item >= rank for item in axes):
+        return dsl.Invalid("axis out of bounds")
+    normalized = tuple(item + rank if item < 0 else item for item in axes)
+    if any(normalized.count(item) > 1 for item in normalized):
+        return dsl.Invalid("Axes must be different")
+    if k % 2 == 0:
+        return shape
+    axis_dims = dsl.IntTuple(shape[item] for item in normalized)
+    return dsl.IntTuple(
+        (
+            axis_dims[1 - normalized.index(index)]
+            if index in normalized
+            else shape[index]
+        )
+        for index in range(rank)
+    )
+
+@type_shape_dsl_function
 def atleast_1d_shape(shape: IntTuple) -> IntTuple:
     if len(shape) == 0:
         return dsl.IntTuple((1,))
