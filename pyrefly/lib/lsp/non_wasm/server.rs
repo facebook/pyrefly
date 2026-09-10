@@ -304,6 +304,7 @@ use crate::lsp::non_wasm::module_helpers::module_info_to_uri;
 use crate::lsp::non_wasm::move_symbol_new_file::move_symbol_to_new_file_code_action;
 use crate::lsp::non_wasm::mru::CompletionMru;
 use crate::lsp::non_wasm::protocol::Message;
+use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::HeavyTaskQueue;
@@ -3441,7 +3442,12 @@ impl Server {
         // Run transaction prioritizing currently-open files, sending diagnostics as soon as they are available via the subscriber
         server.validate_in_memory_for_transaction(transaction.as_mut(), telemetry_event, None);
 
-        if has_f {
+        if has_f && server.do_not_commit_recheck.load(Ordering::SeqCst) {
+            server.connection.send(Message::Notification(Notification {
+                method: "testing/recheckBlocked".to_owned(),
+                params: Value::Null,
+                activity_key: None,
+            }));
             // Wait in a loop while do_not_commit_recheck flag is set (testing only)
             while server.do_not_commit_recheck.load(Ordering::SeqCst) {
                 std::thread::sleep(std::time::Duration::from_millis(100));

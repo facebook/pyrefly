@@ -203,7 +203,7 @@ fn definition_on_import_module_while_recheck_is_blocked() {
     interaction
         .initialize(InitializeSettings {
             configuration: Some(Some(
-                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+                json!([{"pyrefly": {"displayTypeErrors": "force-on", "streamDiagnostics": false}}]),
             )),
             workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
             file_watch: true,
@@ -213,7 +213,7 @@ fn definition_on_import_module_while_recheck_is_blocked() {
     interaction.client.did_open("bar.py");
     interaction
         .client
-        .expect_publish_diagnostics_eventual_error_count(bar_path.clone(), 0)
+        .expect_publish_diagnostics_eventual_error_count(bar_path, 0)
         .expect("Failed to receive initial diagnostics for bar");
     interaction.client.did_open("foo.py");
     interaction
@@ -225,19 +225,28 @@ fn definition_on_import_module_while_recheck_is_blocked() {
     interaction
         .client
         .edit_file("bar.py", &bar_contents.replace("foo = 3", "foo = 4"));
+    // Unchanged diagnostics cannot tell us when the recheck is blocked.
     interaction
         .client
-        .expect_publish_diagnostics_eventual_error_count(bar_path, 0)
-        .expect("Failed to receive diagnostics while the recheck was blocked");
+        .expect_message("Recheck reached the commit barrier", |msg| {
+            if let Message::Notification(notification) = msg
+                && notification.method == "testing/recheckBlocked"
+            {
+                Some(Ok(()))
+            } else {
+                None
+            }
+        })
+        .unwrap();
 
-    interaction
+    let definition = interaction
         .client
         .definition("foo.py", 5, 7)
-        .expect_definition_response_from_root("bar.py", 0, 0, 0, 0)
-        .unwrap();
+        .expect_definition_response_from_root("bar.py", 0, 0, 0, 0);
 
     interaction.continue_recheck();
     interaction.shutdown().unwrap();
+    definition.unwrap();
 }
 
 #[test]
