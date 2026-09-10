@@ -2691,6 +2691,23 @@ def f(x: float):
 );
 
 testcase!(
+    test_min_max_any_with_key,
+    r#"
+from typing import Any, assert_type
+
+def f(found: list[Any]) -> None:
+    prefix = min(found, key=len)
+    assert_type(prefix, Any)
+    print(prefix + "!")
+    assert_type(max(found, key=len), Any)
+
+def g(found: list[str]) -> None:
+    assert_type(min(found, key=len), str)
+    assert_type(max(found, key=len), str)
+    "#,
+);
+
+testcase!(
     test_open_return_type,
     r#"
 from io import BufferedReader, TextIOWrapper

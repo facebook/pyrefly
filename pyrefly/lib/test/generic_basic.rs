@@ -859,6 +859,27 @@ def g(x: Any):
 );
 
 testcase!(
+    test_any_lower_bound_with_callable_upper_bound,
+    r#"
+from typing import Any, Callable, assert_type
+
+def apply[T](value: T, callback: Callable[[T], object]) -> T: ...
+def apply_reversed[T](callback: Callable[[T], object], value: T) -> T: ...
+def consume(value: str) -> None: ...
+def infer_upper[T](callback: Callable[[T], object]) -> T: ...
+def merge[T](x: T, y: T, callback: Callable[[T], object]) -> T: ...
+
+def test(value: Any, text: str) -> None:
+    assert_type(apply(value, consume), Any)
+    assert_type(apply_reversed(consume, value), Any)
+    assert_type(apply(text, consume), str)
+    assert_type(infer_upper(consume), str)
+    assert_type(merge(value, text, consume), str)
+    assert_type(merge(text, value, consume), str)
+    "#,
+);
+
+testcase!(
     test_lists_of_different_element_types,
     r#"
 from typing import assert_type
