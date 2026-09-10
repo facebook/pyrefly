@@ -22,6 +22,7 @@ use pyrefly_build::source_db::map_db::MapDatabase;
 use pyrefly_config::error::ErrorDisplayConfig;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
@@ -174,6 +175,7 @@ pub struct TestEnv {
     spec_compliant_overloads: bool,
     legacy_overload_expansion: bool,
     treat_all_caps_as_final: bool,
+    type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
     no_any_return_error: bool,
     no_any_return_explicit_error: bool,
     no_any_return_implicit_error: bool,
@@ -230,6 +232,7 @@ impl TestEnv {
             spec_compliant_overloads: false,
             legacy_overload_expansion: false,
             treat_all_caps_as_final: false,
+            type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior::Suppress,
             no_any_return_error: false,
             no_any_return_explicit_error: false,
             no_any_return_implicit_error: false,
@@ -471,6 +474,14 @@ impl TestEnv {
         self
     }
 
+    pub fn with_type_ignore_unknown_tag_behavior(
+        mut self,
+        behavior: TypeIgnoreUnknownTagBehavior,
+    ) -> Self {
+        self.type_ignore_unknown_tag_behavior = behavior;
+        self
+    }
+
     pub fn enable_no_any_return_error(mut self) -> Self {
         self.no_any_return_error = true;
         self
@@ -611,6 +622,8 @@ impl TestEnv {
         config.root.spec_compliant_overloads = Some(self.spec_compliant_overloads);
         config.root.legacy_overload_expansion = Some(self.legacy_overload_expansion);
         config.root.treat_all_caps_as_final = Some(self.treat_all_caps_as_final);
+        let unknown_tag_behavior = self.type_ignore_unknown_tag_behavior;
+        config.root.type_ignore_unknown_tag_behavior = Some(unknown_tag_behavior);
         if config.root.errors.is_none() {
             config.root.errors = Some(ErrorDisplayConfig::new(HashMap::new()));
         };

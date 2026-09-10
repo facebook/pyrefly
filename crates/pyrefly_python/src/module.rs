@@ -21,7 +21,9 @@ use ruff_text_size::TextSize;
 use starlark_map::small_set::SmallSet;
 
 use crate::ignore::Ignore;
+use crate::ignore::SuppressionEffect;
 use crate::ignore::Tool;
+use crate::ignore::TypeIgnoreUnknownTagBehavior;
 use crate::module_name::ModuleName;
 use crate::module_path::ModulePath;
 
@@ -196,16 +198,18 @@ impl Module {
         self.0.name
     }
 
-    pub fn is_ignored(
+    pub fn suppression_effect(
         &self,
         source_range: &DisplayRange,
         error_kind: &str,
         enabled_ignores: &SmallSet<Tool>,
-    ) -> bool {
-        self.0.ignore.is_ignored(
+        type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
+    ) -> SuppressionEffect {
+        self.0.ignore.suppression_effect(
             source_range.start.line_within_file(),
             error_kind,
             enabled_ignores,
+            type_ignore_unknown_tag_behavior,
         )
     }
 

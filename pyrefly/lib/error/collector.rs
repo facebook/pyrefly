@@ -11,6 +11,7 @@ use std::mem;
 use dupe::Dupe;
 use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_python::ignore::Suppression;
+use pyrefly_python::ignore::SuppressionEffect;
 use pyrefly_python::ignore::Tool;
 use pyrefly_util::lined_buffer::LineNumber;
 use pyrefly_util::lock::Mutex;
@@ -234,12 +235,12 @@ impl ErrorCollector {
     /// Checks whether an error is suppressed, considering ignore-all directives,
     /// per-line suppressions, and (for errors inside multi-line f/t-strings)
     /// suppressions on the f-string's start or end lines.
-    fn is_error_suppressed(
+    fn suppression_effect(
         err: &Error,
         fstring_ranges: &[(LineNumber, LineNumber)],
         ignore_all: &[Suppression],
         error_config: &ErrorConfig,
-    ) -> bool {
+    ) -> SuppressionEffect {
         // Check whole-file ignore-all directives first.
         // UnusedIgnore errors cannot be suppressed to prevent infinite loops.
         if err.error_kind() != ErrorKind::UnusedIgnore
@@ -256,10 +257,14 @@ impl ErrorCollector {
                 })
             })
         {
-            return true;
+            return SuppressionEffect::Suppress;
         }
-        if err.is_ignored(&error_config.enabled_ignores) {
-            return true;
+        let mut effect = err.suppression_effect(
+            &error_config.enabled_ignores,
+            error_config.type_ignore_unknown_tag_behavior,
+        );
+        if effect == SuppressionEffect::Suppress {
+            return effect;
         }
         // Check if the error is inside a multi-line f/t-string. If so, a
         // suppression that covers the f-string's start or end line should also apply.
@@ -269,15 +274,25 @@ impl ErrorCollector {
             let enabled = &error_config.enabled_ignores;
             // Check both this kind's name and any parent kind's name.
             for kind in err.error_kind().suppression_names() {
-                if fs_start != line && ignore.is_ignored(fs_start, kind, enabled) {
-                    return true;
+                if fs_start != line {
+                    effect = effect.max(ignore.suppression_effect(
+                        fs_start,
+                        kind,
+                        enabled,
+                        error_config.type_ignore_unknown_tag_behavior,
+                    ));
                 }
-                if fs_end != line && ignore.is_ignored(fs_end, kind, enabled) {
-                    return true;
+                if fs_end != line {
+                    effect = effect.max(ignore.suppression_effect(
+                        fs_end,
+                        kind,
+                        enabled,
+                        error_config.type_ignore_unknown_tag_behavior,
+                    ));
                 }
             }
         }
-        false
+        effect
     }
 
     pub fn collect_into(
@@ -301,10 +316,18 @@ impl ErrorCollector {
                     } else {
                         result.directives.push(err.with_severity(severity));
                     }
-                } else if Self::is_error_suppressed(err, fstring_ranges, ignore_all, error_config) {
-                    result.suppressed.push(err.clone());
                 } else {
-                    match error_config.display_config.severity(err.error_kind()) {
+                    let effect =
+                        Self::suppression_effect(err, fstring_ranges, ignore_all, error_config);
+                    if effect == SuppressionEffect::Suppress {
+                        result.suppressed.push(err.clone());
+                        continue;
+                    }
+                    let mut severity = error_config.display_config.severity(err.error_kind());
+                    if effect == SuppressionEffect::DowngradeToWarning {
+                        severity = severity.min(Severity::Warn);
+                    }
+                    match severity {
                         Severity::Error => result.ordinary.push(err.with_severity(Severity::Error)),
                         Severity::Warn => result.ordinary.push(err.with_severity(Severity::Warn)),
                         Severity::Info => result.ordinary.push(err.with_severity(Severity::Info)),
@@ -508,6 +531,7 @@ mod tests {
     use std::sync::Arc;
 
     use pyrefly_python::ignore::Tool;
+    use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_util::prelude::SliceExt;
@@ -567,6 +591,7 @@ mod tests {
                     Cow::Owned(ErrorDisplayConfig::default()),
                     false,
                     Tool::default_enabled(),
+                    TypeIgnoreUnknownTagBehavior::NoEffect,
                 ))
                 .ordinary
                 .map(|x| x.msg()),
@@ -618,7 +643,12 @@ mod tests {
             (ErrorKind::BadAssignment, Severity::Ignore),
             (ErrorKind::NotIterable, Severity::Ignore),
         ]));
-        let config = ErrorConfig::new(Cow::Owned(display_config), false, Tool::default_enabled());
+        let config = ErrorConfig::new(
+            Cow::Owned(display_config),
+            false,
+            Tool::default_enabled(),
+            TypeIgnoreUnknownTagBehavior::NoEffect,
+        );
 
         assert_eq!(
             errors.collect(&config).ordinary.map(|x| x.msg()),
@@ -646,13 +676,19 @@ mod tests {
             Cow::Borrowed(&display_config),
             false,
             Tool::default_enabled(),
+            TypeIgnoreUnknownTagBehavior::NoEffect,
         );
         assert_eq!(
             errors.collect(&config0).ordinary.map(|x| x.msg()),
             vec!["a"]
         );
 
-        let config1 = ErrorConfig::new(Cow::Owned(display_config), true, Tool::default_enabled());
+        let config1 = ErrorConfig::new(
+            Cow::Owned(display_config),
+            true,
+            Tool::default_enabled(),
+            TypeIgnoreUnknownTagBehavior::NoEffect,
+        );
         assert!(
             errors
                 .collect(&config1)
@@ -688,6 +724,7 @@ mod tests {
                     Cow::Owned(ErrorDisplayConfig::default()),
                     false,
                     Tool::default_enabled(),
+                    TypeIgnoreUnknownTagBehavior::NoEffect,
                 ))
                 .ordinary
                 .map(|x| x.msg()),

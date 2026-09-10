@@ -145,7 +145,7 @@ class Generator[CDim: IntVar](nn.Module):
         assert_type(x_c, Tensor[[B, 3 + CDim, S, S]])
         out = self.main(x_c)
         # A1: conv chain produces 4*(S//4), can't prove = S
-        return out  # type: ignore[bad-return]
+        return out  # type: ignore[pyrefly:bad-return]
 
 
 # ============================================================================

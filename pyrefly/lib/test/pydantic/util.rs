@@ -6,10 +6,13 @@
  */
 
 use crate::test::util::TestEnv;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 
 pub fn pydantic_env() -> TestEnv {
     let path = std::env::var("PYDANTIC_TEST_PATH").expect("PYDANTIC_TEST_PATH must be set");
-    TestEnv::new_with_site_package_paths(&[&path])
+    let env = TestEnv::new_with_site_package_paths(&[&path]);
+    let behavior = TypeIgnoreUnknownTagBehavior::Suppress;
+    env.with_type_ignore_unknown_tag_behavior(behavior)
 }
 
 #[macro_export]

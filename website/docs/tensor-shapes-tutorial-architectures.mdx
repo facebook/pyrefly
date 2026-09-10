@@ -91,10 +91,10 @@ it for each use.
 
 Some algebraic equivalences can't be automatically proven. For example,
 `((H - 2) // 2 + 1) * 2` does not simplify back to `H`. When you hit this,
-use `type: ignore` with a comment explaining the gap:
+use `pyrefly: ignore` with a comment explaining the gap:
 
 ```python
-return up(deep, skip)  # type: ignore[bad-argument-type]  # ((H-2)//2+1)*2 = H
+return up(deep, skip)  # pyrefly: ignore[bad-argument-type]  # ((H-2)//2+1)*2 = H
 ```
 
 Keep these to an absolute minimum and document each one.
@@ -170,7 +170,7 @@ def forward[B: IntVar](self, input: Tensor[[B, 100, 1, 1]]) -> Tensor[[B, 3, 64,
   heterogeneous `ModuleList`s.
 - **`@overload`** separates base and recursive cases for exponential shape
   chains.
-- **`type: ignore`** is a last resort for algebraic gaps the checker can't
+- **`pyrefly: ignore`** is a last resort for algebraic gaps the checker can't
   prove. Always document the specific equivalence.
 
 ## Next steps

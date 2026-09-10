@@ -693,6 +693,7 @@ A minimal-checking preset used when automatic configuration selection finds no m
 A looser, less-strict preset intended for codebases migrating from mypy. This is the preset `pyrefly init` writes when it detects an existing mypy configuration. Pyrefly does not aim to mimic mypy precisely, but the preset preserves selected defaults that would otherwise produce new migration errors.
 
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`legacy-overload-expansion`](#legacy-overload-expansion) `= true`, [`replace-untyped-imports-with-any`](#replace-untyped-imports-with-any) `= ["*"]`
+- Sets [`type-ignore-unknown-tag-behavior`](#type-ignore-unknown-tag-behavior) `= "suppress"` so existing mypy-coded ignores retain their legacy blanket-suppression behavior.
 - Disables: [`bad-override-mutable-attribute`](./error-kinds.mdx#bad-override-mutable-attribute), [`bad-override-param-name`](./error-kinds.mdx#bad-override-param-name), [`unbound-name`](./error-kinds.mdx#unbound-name)
 
 #### Preset: `default`
@@ -1238,6 +1239,23 @@ Passing the names of all tools is equivalent to enabling `permissive-ignores`.
 - Type: list of tools
 - Default: `["type", "pyrefly"]`
 - Flag equivalent: `--enabled-ignores`
+
+### `type-ignore-unknown-tag-behavior`
+
+Controls how a coded `# type: ignore[...]` comment affects Pyrefly diagnostics
+when it contains a tag without the `pyrefly:` prefix. Explicit
+`pyrefly:<error-code>` tags remain selective in every mode; unknown tags in the
+same comment independently use the configured behavior.
+
+- `no-effect`: The unknown tag has no effect on Pyrefly diagnostics.
+- `downgrade-to-warning`: Caps diagnostics on the comment's line at warning severity
+  without raising diagnostics that already have a lower severity.
+- `suppress`: The comment suppresses all Pyrefly diagnostics on the line, matching
+  Pyrefly's legacy behavior.
+
+- Type: `"no-effect" | "downgrade-to-warning" | "suppress"`
+- Default: `"suppress"`
+- Flag equivalent: `--type-ignore-unknown-tag-behavior`
 
 ### `sub-config`
 

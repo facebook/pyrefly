@@ -78,9 +78,9 @@ The fix is to separate the first iteration:
 x = input_embs
 for layer in self.layers:
     x = layer(x)
-out: Tensor[[B, K, D]] = x  # type: ignore[bad-assignment]
+out: Tensor[[B, K, D]] = x  # pyrefly: ignore[bad-assignment]
 
-# Solution: no union, no type: ignore
+# Solution: no union, no pyrefly: ignore
 x = self.layers[0](input_embs)        # [B, F, D] -> [B, K, D]
 assert_type(x, Tensor[[B, K, D]])
 for i in range(1, len(self.layers)):

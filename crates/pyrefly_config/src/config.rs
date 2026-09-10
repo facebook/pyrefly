@@ -31,6 +31,7 @@ use pyrefly_build::source_db::Target;
 use pyrefly_python::COMPILED_FILE_SUFFIXES;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_name::ModuleNameWithKind;
 use pyrefly_python::module_path::ModulePath;
@@ -1182,6 +1183,15 @@ impl ConfigFile {
                  Cow::Borrowed(self.root.enabled_ignores.as_ref().unwrap()))
     }
 
+    pub fn type_ignore_unknown_tag_behavior(&self, path: &Path) -> TypeIgnoreUnknownTagBehavior {
+        self.get_from_sub_configs(ConfigBase::get_type_ignore_unknown_tag_behavior, path)
+            .unwrap_or_else(|| {
+                self.root
+                    .type_ignore_unknown_tag_behavior
+                    .expect("the value in the root config must be set in `ConfigFile::configure()`")
+            })
+    }
+
     /// Get the recursion limit configuration.
     /// Returns None if not set (disabled).
     pub fn recursion_limit_config(&self) -> Option<RecursionLimitConfig> {
@@ -1193,6 +1203,7 @@ impl ConfigFile {
             self.errors(path),
             self.ignore_errors_in_generated_code(path),
             self.enabled_ignores(path).into_owned(),
+            self.type_ignore_unknown_tag_behavior(path),
         )
     }
 
@@ -1609,6 +1620,7 @@ impl ConfigFile {
             apply_preset_default!(legacy_overload_expansion);
             apply_preset_default!(ignore_errors_in_generated_code);
             apply_preset_default!(permissive_ignores);
+            apply_preset_default!(type_ignore_unknown_tag_behavior);
             apply_preset_default!(replace_untyped_imports_with_any);
             apply_preset_default!(treat_all_caps_as_final);
         }
@@ -1679,6 +1691,11 @@ impl ConfigFile {
 
         if self.root.treat_all_caps_as_final.is_none() {
             self.root.treat_all_caps_as_final = Some(false);
+        }
+
+        if self.root.type_ignore_unknown_tag_behavior.is_none() {
+            self.root.type_ignore_unknown_tag_behavior =
+                Some(TypeIgnoreUnknownTagBehavior::Suppress);
         }
 
         let tools_from_permissive_ignores = match self.root.permissive_ignores {
@@ -2282,6 +2299,7 @@ mod tests {
                     infer_return_types: None,
                     permissive_ignores: None,
                     enabled_ignores: None,
+                    type_ignore_unknown_tag_behavior: None,
                     recursion_depth_limit: None,
                     recursion_overflow_handler: None,
                     spec_compliant_overloads: None,
@@ -2312,6 +2330,7 @@ mod tests {
                         infer_return_types: None,
                         permissive_ignores: None,
                         enabled_ignores: None,
+                        type_ignore_unknown_tag_behavior: None,
                         recursion_depth_limit: None,
                         recursion_overflow_handler: None,
                         spec_compliant_overloads: None,
@@ -2960,6 +2979,7 @@ output-format = "omit-errors"
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
+                type_ignore_unknown_tag_behavior: None,
                 recursion_depth_limit: None,
                 recursion_overflow_handler: None,
                 spec_compliant_overloads: None,
@@ -4025,6 +4045,7 @@ output-format = "omit-errors"
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
+                type_ignore_unknown_tag_behavior: None,
                 recursion_depth_limit: None,
                 recursion_overflow_handler: None,
                 spec_compliant_overloads: None,
@@ -4068,6 +4089,7 @@ output-format = "omit-errors"
                 extras: Default::default(),
                 permissive_ignores: Some(false),
                 enabled_ignores: None,
+                type_ignore_unknown_tag_behavior: None,
                 recursion_depth_limit: None,
                 recursion_overflow_handler: None,
                 spec_compliant_overloads: None,

@@ -16,7 +16,9 @@ use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
 use lsp_types::DiagnosticTag;
 use lsp_types::Url;
+use pyrefly_python::ignore::SuppressionEffect;
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::number_thousands;
@@ -767,18 +769,30 @@ impl Error {
         }
     }
 
-    pub fn is_ignored(&self, enabled_ignores: &SmallSet<Tool>) -> bool {
+    pub fn suppression_effect(
+        &self,
+        enabled_ignores: &SmallSet<Tool>,
+        type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
+    ) -> SuppressionEffect {
         // UnusedIgnore errors cannot be suppressed - this prevents infinite loops
         // where suppressing an unused-ignore creates another unused-ignore.
         if self.error_kind == ErrorKind::UnusedIgnore {
-            return false;
+            return SuppressionEffect::None;
         }
         // Check both this kind's name and any parent kind's name, so that e.g.
         // `# pyrefly: ignore[bad-override]` also suppresses `bad-override-mutable-attribute`.
-        self.error_kind.suppression_names().any(|name| {
-            self.module
-                .is_ignored(&self.display_range, name, enabled_ignores)
-        })
+        self.error_kind
+            .suppression_names()
+            .map(|name| {
+                self.module.suppression_effect(
+                    &self.display_range,
+                    name,
+                    enabled_ignores,
+                    type_ignore_unknown_tag_behavior,
+                )
+            })
+            .max()
+            .unwrap_or(SuppressionEffect::None)
     }
 
     pub fn error_kind(&self) -> ErrorKind {

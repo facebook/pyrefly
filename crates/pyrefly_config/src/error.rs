@@ -9,6 +9,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -161,6 +162,7 @@ pub struct ErrorConfig<'a> {
     pub display_config: Cow<'a, ErrorDisplayConfig>,
     pub ignore_errors_in_generated_code: bool,
     pub enabled_ignores: SmallSet<Tool>,
+    pub type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
 }
 
 impl<'a> ErrorConfig<'a> {
@@ -168,11 +170,13 @@ impl<'a> ErrorConfig<'a> {
         display_config: Cow<'a, ErrorDisplayConfig>,
         ignore_errors_in_generated_code: bool,
         enabled_ignores: SmallSet<Tool>,
+        type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
     ) -> Self {
         Self {
             display_config,
             ignore_errors_in_generated_code,
             enabled_ignores,
+            type_ignore_unknown_tag_behavior,
         }
     }
 }

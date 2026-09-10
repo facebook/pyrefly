@@ -13,7 +13,13 @@
 //! You can also use the name of the linter, e.g. `# pyright: ignore`,
 //! `# pyrefly: ignore`.
 //!
-//! You can specify a specific error code, e.g. `# type: ignore[invalid-type]`.
+//! You can specify a specific error code, e.g. `# pyrefly: ignore[bad-return]`.
+//! Within a `# type: ignore[...]` comment, Pyrefly always treats codes prefixed
+//! with `pyrefly:` selectively, e.g. `# type: ignore[pyrefly:bad-return]` only
+//! suppresses `bad-return`. How other (unknown) codes are treated depends on the
+//! `type-ignore-unknown-tag-behavior` config: by default (`suppress`) they blanket
+//! suppress every Pyrefly diagnostic on the line, `downgrade-to-warning` caps
+//! their severity at warning, and `no-effect` leaves Pyrefly diagnostics unchanged.
 //! Note that Pyright will only honor such codes after `# pyright: ignore[code]`.
 //!
 //! You can also use `# mypy: ignore-errors`, `# pyrefly: ignore-errors`
@@ -158,6 +164,40 @@ pub enum Tool {
     Zuban,
 }
 
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Deserialize,
+    Serialize,
+    ValueEnum,
+    Default
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum TypeIgnoreUnknownTagBehavior {
+    /// Unknown tags have no effect on Pyrefly diagnostics.
+    NoEffect,
+    /// Unknown tags cap Pyrefly diagnostics on the same line at warning severity.
+    DowngradeToWarning,
+    /// Unknown tags suppress all Pyrefly diagnostics on the line.
+    #[default]
+    Suppress,
+}
+
+/// The effect a suppression has on a diagnostic. The derived `Ord` ordering
+/// (`None` < `DowngradeToWarning` < `Suppress`) encodes suppression precedence:
+/// call sites combine the effects of multiple applicable suppressions with
+/// `.max()` to pick the strongest one, so the variant order here is load-bearing
+/// and must remain weakest-to-strongest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SuppressionEffect {
+    None,
+    DowngradeToWarning,
+    Suppress,
+}
+
 impl Tool {
     /// The maximum length of any tool.
     const MAX_LEN: usize = 7;
@@ -285,10 +325,46 @@ impl Suppression {
     pub fn tool(&self) -> Tool {
         self.tool
     }
+
+    fn effect(
+        &self,
+        kind: &str,
+        type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
+    ) -> SuppressionEffect {
+        match self.tool {
+            Tool::Pyrefly => {
+                if self.kind.is_empty() || self.kind.iter().any(|x| x == kind) {
+                    SuppressionEffect::Suppress
+                } else {
+                    SuppressionEffect::None
+                }
+            }
+            Tool::Type => {
+                if self.kind.is_empty()
+                    || self
+                        .kind
+                        .iter()
+                        .any(|x| x.strip_prefix("pyrefly:") == Some(kind))
+                {
+                    SuppressionEffect::Suppress
+                } else if self.kind.iter().any(|x| !x.starts_with("pyrefly:")) {
+                    match type_ignore_unknown_tag_behavior {
+                        TypeIgnoreUnknownTagBehavior::NoEffect => SuppressionEffect::None,
+                        TypeIgnoreUnknownTagBehavior::DowngradeToWarning => {
+                            SuppressionEffect::DowngradeToWarning
+                        }
+                        TypeIgnoreUnknownTagBehavior::Suppress => SuppressionEffect::Suppress,
+                    }
+                } else {
+                    SuppressionEffect::None
+                }
+            }
+            _ => SuppressionEffect::Suppress,
+        }
+    }
 }
 
-/// Record the position of lines affected by `# type: ignore[valid-type]` suppressions.
-/// For now we don't record the content of the ignore, but we could.
+/// Record the position of lines affected by ignore suppressions.
 #[derive(Debug, Clone, Default)]
 pub struct Ignore {
     /// The line number here represents the line that the suppression applies to,
@@ -385,21 +461,31 @@ impl Ignore {
         kind: &str,
         enabled_ignores: &SmallSet<Tool>,
     ) -> bool {
+        self.suppression_effect(
+            start_line,
+            kind,
+            enabled_ignores,
+            TypeIgnoreUnknownTagBehavior::default(),
+        ) == SuppressionEffect::Suppress
+    }
+
+    pub fn suppression_effect(
+        &self,
+        start_line: LineNumber,
+        kind: &str,
+        enabled_ignores: &SmallSet<Tool>,
+        type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
+    ) -> SuppressionEffect {
         if let Some(suppressions) = self.ignores.get(&start_line)
-            && suppressions.iter().any(|supp| {
-                enabled_ignores.contains(&supp.tool)
-                    && match supp.tool {
-                        // We only check the subkind if they do `# pyrefly: ignore`
-                        Tool::Pyrefly => {
-                            supp.kind.is_empty() || supp.kind.iter().any(|x| x == kind)
-                        }
-                        _ => true,
-                    }
-            })
+            && let Some(effect) = suppressions
+                .iter()
+                .filter(|supp| enabled_ignores.contains(&supp.tool))
+                .map(|supp| supp.effect(kind, type_ignore_unknown_tag_behavior))
+                .max()
         {
-            return true;
+            return effect;
         }
-        false
+        SuppressionEffect::None
     }
 
     /// Similar to `is_ignored`, but it only returns true if the error is ignored
@@ -411,6 +497,7 @@ impl Ignore {
         end_line: LineNumber,
         kind: &str,
         enabled_ignores: &SmallSet<Tool>,
+        type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
     ) -> bool {
         // If the error does not overlap the range, skip the more expensive check
         if start_line > suppression_line || end_line < suppression_line {
@@ -421,11 +508,8 @@ impl Ignore {
         };
         if suppressions.iter().any(|supp| {
             enabled_ignores.contains(&supp.tool)
-                && match supp.tool {
-                    // We only check the subkind if they do `# pyrefly: ignore`
-                    Tool::Pyrefly => supp.kind.is_empty() || supp.kind.iter().any(|x| x == kind),
-                    _ => true,
-                }
+                && supp.effect(kind, type_ignore_unknown_tag_behavior)
+                    == SuppressionEffect::Suppress
         }) {
             return true;
         }
@@ -827,6 +911,69 @@ x = """
 
         // For a malformed comment, at least do something with it (works well incrementally)
         f("type: ignore[hello", Some(Tool::Type), &["hello"]);
+    }
+
+    #[test]
+    fn test_type_ignore_specific_codes_require_pyrefly_prefix() {
+        let enabled = Tool::default_enabled();
+        let line = LineNumber::from_zero_indexed(0);
+
+        let blanket = Ignore::new("x: int = ''  # type: ignore");
+        assert!(blanket.is_ignored(line, "bad-assignment", &enabled));
+
+        let mypy_code = Ignore::new("x: int = ''  # type: ignore[assignment]");
+        assert!(mypy_code.is_ignored(line, "bad-assignment", &enabled));
+
+        let pyrefly_code = Ignore::new("x: int = ''  # type: ignore[pyrefly:bad-assignment]");
+        assert!(pyrefly_code.is_ignored(line, "bad-assignment", &enabled));
+        assert!(!pyrefly_code.is_ignored(line, "bad-return", &enabled));
+
+        let mixed_codes =
+            Ignore::new("x: int = ''  # type: ignore[assignment, pyrefly:bad-assignment]");
+        assert!(mixed_codes.is_ignored(line, "bad-assignment", &enabled));
+
+        assert_eq!(
+            mypy_code.suppression_effect(
+                line,
+                "bad-assignment",
+                &enabled,
+                TypeIgnoreUnknownTagBehavior::DowngradeToWarning,
+            ),
+            SuppressionEffect::DowngradeToWarning
+        );
+        assert_eq!(
+            mypy_code.suppression_effect(
+                line,
+                "bad-assignment",
+                &enabled,
+                TypeIgnoreUnknownTagBehavior::Suppress,
+            ),
+            SuppressionEffect::Suppress
+        );
+
+        let mismatched_pyrefly_code =
+            Ignore::new("x: int = ''  # type: ignore[pyrefly:bad-return]");
+        assert_eq!(
+            mismatched_pyrefly_code.suppression_effect(
+                line,
+                "bad-assignment",
+                &enabled,
+                TypeIgnoreUnknownTagBehavior::Suppress,
+            ),
+            SuppressionEffect::None
+        );
+
+        let mixed_mismatched_codes =
+            Ignore::new("x: int = ''  # type: ignore[assignment, pyrefly:bad-return]");
+        assert_eq!(
+            mixed_mismatched_codes.suppression_effect(
+                line,
+                "bad-assignment",
+                &enabled,
+                TypeIgnoreUnknownTagBehavior::Suppress,
+            ),
+            SuppressionEffect::Suppress
+        );
     }
 
     #[test]

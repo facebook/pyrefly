@@ -160,7 +160,7 @@ class Config[K: IntVar, MlpOut: IntVar]:
 
 When none of the above restructurings can recover shape tracking, the last
 resort is a **typed interface**: the module's `forward` signature provides
-the shape contract, and `type: ignore` narrows the internal result:
+the shape contract, and `pyrefly: ignore` narrows the internal result:
 
 ```python
 class DynamicMLP[InDim: IntVar, OutDim: IntVar](nn.Module):
@@ -179,12 +179,12 @@ class DynamicMLP[InDim: IntVar, OutDim: IntVar](nn.Module):
         h = x
         for layer in self.layers:
             h = layer(h)
-        result: Tensor[[B, OutDim]] = h  # type: ignore[bad-assignment]
+        result: Tensor[[B, OutDim]] = h  # pyrefly: ignore[bad-assignment]
         return result
 ```
 
 The caller sees a clean `Tensor[[B, InDim]] -> Tensor[[B, OutDim]]` contract.
-The `type: ignore` is localized to the module's internals.
+The `pyrefly: ignore` is localized to the module's internals.
 
 Use typed interfaces only after exhausting all restructuring options —
 they're the fallback, not the first move.
