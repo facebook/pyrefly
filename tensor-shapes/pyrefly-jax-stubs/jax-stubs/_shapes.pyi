@@ -919,6 +919,16 @@ def roll_shape(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
     return shape
 
 @type_shape_dsl_function
+def rot90_shape(shape: IntTuple, k: int) -> IntTuple:
+    rank = len(shape)
+    if rank < 2:
+        return dsl.Invalid("rot90 requires array of at least 2 dimensions")
+    if k % 2 == 0:
+        return shape
+    prefix = shape[: rank - 2]
+    return dsl.concat(prefix, dsl.IntTuple((shape[rank - 1], shape[rank - 2])))
+
+@type_shape_dsl_function
 def atleast_1d_shape(shape: IntTuple) -> IntTuple:
     if len(shape) == 0:
         return dsl.IntTuple((1,))

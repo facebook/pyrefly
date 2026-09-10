@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import assert_type
+
 import jax.numpy as jnp
 from shape_extensions import assert_shape
 
@@ -301,3 +303,112 @@ def test_set_operations() -> None:
     u_inv = jnp.unique_inverse(a)
     assert hasattr(u_inv, "values")
     assert hasattr(u_inv, "inverse_indices")
+
+
+def test_logic_and_comparison() -> None:
+    a = jnp.ones((2, 3))
+    b = jnp.zeros((3,))
+    c = jnp.ones((2, 3))
+
+    # Allclose, array_equal, array_equiv
+    assert_shape(jnp.allclose(a, c).shape, ())
+    assert_shape(jnp.allclose(a, 1.0).shape, ())
+    assert_shape(jnp.allclose(1.0, a).shape, ())
+    assert_shape(jnp.allclose(1.0, 2.0).shape, ())
+    assert_shape(jnp.array_equal(a, c).shape, ())
+    assert_shape(jnp.array_equal(a, 1.0).shape, ())
+    assert_shape(jnp.array_equal(1.0, a).shape, ())
+    assert_shape(jnp.array_equal(1.0, 2.0).shape, ())
+    assert_shape(jnp.array_equiv(a, b).shape, ())
+    assert_shape(jnp.array_equiv(a, 1.0).shape, ())
+    assert_shape(jnp.array_equiv(1.0, a).shape, ())
+    assert_shape(jnp.array_equiv(1.0, 2.0).shape, ())
+
+    # Comparisons with broadcasting & scalars
+    assert_shape(jnp.equal(a, c).shape, (2, 3))
+    assert_shape(jnp.equal(a, b).shape, (2, 3))
+    assert_shape(jnp.equal(a, 1.0).shape, (2, 3))
+    assert_shape(jnp.equal(1.0, a).shape, (2, 3))
+    assert_shape(jnp.equal(1.0, 2.0).shape, ())
+
+    assert_shape(jnp.not_equal(a, c).shape, (2, 3))
+    assert_shape(jnp.not_equal(a, b).shape, (2, 3))
+    assert_shape(jnp.not_equal(a, 1.0).shape, (2, 3))
+    assert_shape(jnp.not_equal(1.0, a).shape, (2, 3))
+    assert_shape(jnp.not_equal(1.0, 2.0).shape, ())
+
+    assert_shape(jnp.greater(a, b).shape, (2, 3))
+    assert_shape(jnp.greater(a, 0.0).shape, (2, 3))
+    assert_shape(jnp.greater(0.0, a).shape, (2, 3))
+    assert_shape(jnp.greater(1.0, 2.0).shape, ())
+
+    assert_shape(jnp.greater_equal(a, b).shape, (2, 3))
+    assert_shape(jnp.greater_equal(a, 0.0).shape, (2, 3))
+    assert_shape(jnp.greater_equal(0.0, a).shape, (2, 3))
+    assert_shape(jnp.greater_equal(1.0, 2.0).shape, ())
+
+    assert_shape(jnp.less(a, b).shape, (2, 3))
+    assert_shape(jnp.less(a, 0.0).shape, (2, 3))
+    assert_shape(jnp.less(0.0, a).shape, (2, 3))
+    assert_shape(jnp.less(1.0, 2.0).shape, ())
+
+    assert_shape(jnp.less_equal(a, b).shape, (2, 3))
+    assert_shape(jnp.less_equal(a, 0.0).shape, (2, 3))
+    assert_shape(jnp.less_equal(0.0, a).shape, (2, 3))
+    assert_shape(jnp.less_equal(1.0, 2.0).shape, ())
+
+    assert_shape(jnp.isclose(a, b).shape, (2, 3))
+    assert_shape(jnp.isclose(a, 1.0).shape, (2, 3))
+    assert_shape(jnp.isclose(1.0, a).shape, (2, 3))
+    assert_shape(jnp.isclose(1.0, 1.0).shape, ())
+
+    # Logical operations
+    assert_shape(jnp.logical_and(a, b).shape, (2, 3))
+    assert_shape(jnp.logical_and(a, True).shape, (2, 3))
+    assert_shape(jnp.logical_and(True, a).shape, (2, 3))
+    assert_shape(jnp.logical_and(True, False).shape, ())
+
+    assert_shape(jnp.logical_or(a, b).shape, (2, 3))
+    assert_shape(jnp.logical_or(a, True).shape, (2, 3))
+    assert_shape(jnp.logical_or(True, a).shape, (2, 3))
+    assert_shape(jnp.logical_or(True, False).shape, ())
+
+    assert_shape(jnp.logical_xor(a, b).shape, (2, 3))
+    assert_shape(jnp.logical_xor(a, True).shape, (2, 3))
+    assert_shape(jnp.logical_xor(True, a).shape, (2, 3))
+    assert_shape(jnp.logical_xor(True, False).shape, ())
+
+    assert_shape(jnp.logical_not(a).shape, (2, 3))
+    assert_shape(jnp.logical_not(True).shape, ())
+
+    # Elementwise predicates
+    assert_shape(jnp.iscomplex(a).shape, (2, 3))
+    assert_shape(jnp.iscomplex(1j).shape, ())
+
+    assert_shape(jnp.isfinite(a).shape, (2, 3))
+    assert_shape(jnp.isfinite(1.0).shape, ())
+
+    assert_shape(jnp.isinf(a).shape, (2, 3))
+    assert_shape(jnp.isinf(1.0).shape, ())
+
+    assert_shape(jnp.isnan(a).shape, (2, 3))
+    assert_shape(jnp.isnan(1.0).shape, ())
+
+    assert_shape(jnp.isneginf(a).shape, (2, 3))
+    assert_shape(jnp.isneginf(-1.0).shape, ())
+
+    assert_shape(jnp.isposinf(a).shape, (2, 3))
+    assert_shape(jnp.isposinf(1.0).shape, ())
+
+    assert_shape(jnp.isreal(a).shape, (2, 3))
+    assert_shape(jnp.isreal(1.0).shape, ())
+
+    # Python boolean metadata functions
+    assert_type(jnp.iscomplexobj(a), bool)
+    assert_type(jnp.isrealobj(a), bool)
+    assert_type(jnp.isscalar(1), bool)
+    assert_type(jnp.iterable([1, 2]), bool)
+    assert not jnp.iscomplexobj(a)
+    assert jnp.isrealobj(a)
+    assert jnp.isscalar(1)
+    assert jnp.iterable([1, 2])

@@ -410,6 +410,16 @@ def test_lax_shape_manipulation() -> None:
     # unstack
     u0, u1 = lax.unstack(x, axis=0)
     assert u0.shape == (3,) and u1.shape == (3,)
+    try:
+        # E: Argument `Literal[1]` is not assignable to parameter `x`
+        lax.unstack(1)
+    except ValueError:
+        pass
+    try:
+        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `x`
+        lax.unstack(jnp.ones(()))
+    except ValueError:
+        pass
 
 
 def test_lax_dtype_bitcast():

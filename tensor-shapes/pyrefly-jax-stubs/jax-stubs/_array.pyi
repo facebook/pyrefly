@@ -234,6 +234,13 @@ class Array[Shape: _Shape = _Shape]:
     ) -> Array[swapaxes_shape(Shape, Axis1, Axis2)]: ...
     @overload
     def swapaxes(self, axis1: int, axis2: int) -> Array[IntTuple]: ...
+    def repeat(
+        self,
+        repeats: Array[Any] | int | Sequence[int],
+        axis: int | None = None,
+        *,
+        total_repeat_length: int | None = None,
+    ) -> Array[IntTuple]: ...
     @overload
     # Any non-tuple sequence axis is gradual; see `jax/numpy/__init__.pyi`.
     def sum[Axis: Flag[_Axis], KeepDims: Flag[bool]](
