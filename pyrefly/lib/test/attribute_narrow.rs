@@ -256,6 +256,83 @@ def test_invalidate_narrow_with_assignment(c0: C, c1: C):
 );
 
 testcase!(
+    test_attr_assignment_uses_declared_type_after_impossible_narrow,
+    r#"
+from typing import assert_type
+
+class Container: pass
+
+class Env:
+    def __init__(self) -> None:
+        self.domains: Container = Container()
+
+    def setup(self) -> None:
+        if self.domains is None:
+            self.domains = Container()
+            assert_type(self.domains, Container)
+
+    def rejects_incompatible_write(self) -> None:
+        if self.domains is None:
+            self.domains = 1  # E: `Literal[1]` is not assignable to attribute `domains` with type `Container`
+"#,
+);
+
+testcase!(
+    test_module_global_attr_assignment_uses_declared_type_after_impossible_narrow,
+    r#"
+from typing import assert_type
+
+class Container: pass
+
+class Env:
+    def __init__(self) -> None:
+        self.container: Container = Container()
+
+env = Env()
+
+def update() -> None:
+    if env.container is None:
+        env.container = Container()
+        assert_type(env.container, Container)
+
+def rejects_incompatible_write() -> None:
+    if env.container is None:
+        env.container = 1  # E: `Literal[1]` is not assignable to attribute `container` with type `Container`
+"#,
+);
+
+testcase!(
+    test_attr_assignment_preserves_isinstance_narrow,
+    r#"
+class UIElement: pass
+
+class LayoutDOM(UIElement):
+    sizing_mode: str | None = None
+
+def set_sizing_mode(item: UIElement, sizing_mode: str) -> None:
+    if isinstance(item, UIElement):
+        return
+    if not isinstance(item, LayoutDOM):
+        raise ValueError
+    item.sizing_mode = sizing_mode
+"#,
+);
+
+testcase!(
+    test_attr_assignment_preserves_typeis_narrow,
+    r#"
+import inspect
+from types import FunctionType
+from typing import Any
+
+def set_annotations(function: FunctionType) -> None:
+    annotations: dict[str, Any] = {}
+    if inspect.ismethod(function):
+        function.__func__.__annotations__ = annotations
+"#,
+);
+
+testcase!(
     bug = "TODO(stroxler) We should fine-tune descriptor narrowing more; this is not high-priority",
     test_descriptor_narrowing,
     r#"
