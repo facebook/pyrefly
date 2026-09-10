@@ -852,7 +852,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 if qualifier == Qualifier::Annotated {
                     let metadata: Vec<Type> = unpacked_slice[1..]
                         .iter()
-                        .map(|e| self.expr_infer(e, &self.error_swallower()))
+                        .map(|e| self.expr_infer(e, errors))
                         .collect();
                     if let Some(inner) = ann.ty.as_ref()
                         && let Some(dataframe) =

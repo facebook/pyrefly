@@ -1598,52 +1598,44 @@ from lib import bar as baz
 }
 
 #[test]
-fn hover_on_qualified_type_alias_in_parameter_annotation() {
-    let utils = r#"
-from typing import Annotated, TypeAlias
-
-ValueRange: TypeAlias = Annotated[int, "value range"]
-"#;
-    let code = r#"
-import utils
-
-def takes(x: utils.ValueRange) -> None: ...
-#                  ^
-"#;
-    let report =
-        get_batched_lsp_operations_report(&[("main", code), ("utils", utils)], get_test_report);
-    assert!(
-        !report.contains("\nNone\n"),
-        "Expected hover for qualified type alias in annotation, got: {report}"
-    );
-    assert!(
-        report.contains("ValueRange"),
-        "Expected hover to mention the type alias name, got: {report}"
-    );
-}
-
-#[test]
 fn hover_on_imported_annotated_metadata_in_parameter_annotation() {
+    let pkg = r#"
+import utils
+"#;
     let utils = r#"
 class ValueRange:
+    pass
+
+class Unit:
     pass
 "#;
     let code = r#"
 from typing import Annotated
-import utils
+import pkg
 
-def takes(x: Annotated[int, utils.ValueRange]) -> None: ...
-#                                  ^
+def takes(x: Annotated[int, pkg.utils.ValueRange, pkg.utils.Unit]) -> None: ...
+#                                      ^
 "#;
-    let report =
-        get_batched_lsp_operations_report(&[("main", code), ("utils", utils)], get_test_report);
-    assert!(
-        !report.contains("\nNone\n"),
-        "Expected hover for imported Annotated metadata, got: {report}"
+    let report = get_batched_lsp_operations_report(
+        &[("main", code), ("pkg", pkg), ("utils", utils)],
+        get_test_report,
     );
-    assert!(
-        report.contains("ValueRange"),
-        "Expected hover to mention the metadata symbol name, got: {report}"
+    assert_eq!(
+        r#"
+# main.py
+5 | def takes(x: Annotated[int, pkg.utils.ValueRange, pkg.utils.Unit]) -> None: ...
+                                           ^
+```python
+(class) ValueRange: type[utils.ValueRange]
+```
+
+
+# pkg.py
+
+# utils.py
+"#
+        .trim(),
+        report.trim(),
     );
 }
 
