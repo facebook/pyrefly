@@ -1752,10 +1752,14 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     pub fn is_subset_eq_impl(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         let context_key = self.active_call_context.subset_cache_context();
         let cache_key = if self.can_be_recursive(got, want) {
-            // Cache keys include residual context identity so witness-scoped
-            // comparisons do not suppress context-sensitive side effects.
-            // The vast majority of checks run under `Default` context.
-            let key = (got.clone(), want.clone(), context_key);
+            // Residual context and bound validation affect inference side effects,
+            // so checks in different contexts must not share cached results.
+            let key = (
+                got.clone(),
+                want.clone(),
+                context_key,
+                self.checking_typevar_bound,
+            );
             if let Some(entry) = self.subset_cache.get(&key) {
                 return match entry {
                     SubsetCacheEntry::InProgress => {
@@ -1809,6 +1813,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         match (got, want) {
             (Type::Any(_), _) => {
                 all(want.collect_maybe_placeholder_vars().iter(), |var| {
+                    // Bound validation leaves decomposition variables unconstrained,
+                    // but still resolves actual empty-container partials to `Any`.
+                    if self.checking_typevar_bound {
+                        return self.is_subset_eq(got, &var.to_type(&self.solver.heap));
+                    }
                     // Variables in `want` now have `Any` as a lower bound.
                     // TODO(https://github.com/facebook/pyrefly/issues/105): whether to add a lower
                     // or upper bound should depend on variance.
@@ -1820,6 +1829,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             }
             (_, Type::Any(_)) => {
                 all(got.collect_maybe_placeholder_vars().iter(), |var| {
+                    if self.checking_typevar_bound {
+                        return self.is_subset_eq(&var.to_type(&self.solver.heap), want);
+                    }
                     // Variables in `got` now have `Any` as an upper bound.
                     // TODO(https://github.com/facebook/pyrefly/issues/105): whether to add a lower
                     // or upper bound should depend on variance.

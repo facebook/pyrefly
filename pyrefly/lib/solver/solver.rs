@@ -761,30 +761,6 @@ impl Solver {
         )
     }
 
-    /// Replace unresolved empty-container element types with `fallback` in a copy of `ty`.
-    pub(crate) fn replace_unresolved_partials(&self, mut ty: Type, fallback: &Type) -> Type {
-        self.expand_mut(&mut ty);
-        let partials: SmallSet<_> = {
-            let variables = self.variables.lock();
-            ty.collect_maybe_placeholder_vars()
-                .into_iter()
-                .filter(|var| {
-                    matches!(
-                        &*variables.get(*var),
-                        Variable::PartialQuantified(_) | Variable::PartialContained(_)
-                    )
-                })
-                .collect()
-        };
-        ty.transform_mut(&mut |ty| {
-            if matches!(ty, Type::Var(var) if partials.contains(var)) {
-                *ty = fallback.clone();
-            }
-        });
-        self.simplify_mut(&mut ty);
-        ty
-    }
-
     /// Returns true if the given type is a Var that points to a partial variable.
     pub fn is_partial(&self, ty: &Type) -> bool {
         if let Type::Var(v) = ty {
@@ -2661,6 +2637,7 @@ impl Solver {
             solver: self,
             type_order,
             gas: INITIAL_GAS,
+            checking_typevar_bound: false,
             active_call_context: CallContext::outside(),
             subset_cache: SmallMap::new(),
             class_protocol_assumptions: SmallSet::new(),
@@ -3393,6 +3370,10 @@ pub struct Subset<'solver, 'subset, Ans: LookupAnswer> {
     pub(crate) solver: &'solver Solver,
     pub type_order: TypeOrder<'solver, Ans>,
     gas: Gas,
+    /// Bound validation must not use `Any` to solve decomposition variables.
+    /// These variables represent contextual hints, and `Any` in a generic bound
+    /// permits arbitrary element types rather than requiring an `Any` hint.
+    pub(crate) checking_typevar_bound: bool,
     /// Invariant: there is a single active call context for a subset query.
     /// Nested work is recursive subset checking inside the same call, not a
     /// nested full call pipeline with independent call-scoped solving.
@@ -3416,7 +3397,7 @@ pub struct Subset<'solver, 'subset, Ans: LookupAnswer> {
     /// must be discarded. Only entries added during the failing computation are
     /// removed; entries from earlier (independent) computations are preserved.
     /// This works because `SmallMap` preserves insertion order.
-    pub subset_cache: SmallMap<(Type, Type, SubsetCacheContext), SubsetCacheEntry>,
+    pub subset_cache: SmallMap<(Type, Type, SubsetCacheContext, bool), SubsetCacheEntry>,
     /// Class-level recursive assumptions for protocol checks.
     /// When checking `got <: protocol` where got's type arguments contain Vars
     /// (indicating we're in a recursive pattern), we track (got_class, protocol_class)
@@ -3766,10 +3747,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 (answer, specialization_error)
             }
             Restriction::ShapeExtension(_) | Restriction::Bound(_) | Restriction::Unrestricted => {
-                if self.is_subset_eq(&t1_p, &bound).is_err() {
+                if self.is_subset_eq_typevar_bound(&t1_p, &bound).is_err() {
                     // If the promoted type fails, try again with the original type, in case the bound itself is literal.
                     // This could be more optimized, but errors are rare, so this code path should not be hot.
-                    if self.is_subset_eq(t1, &bound).is_err() {
+                    if self.is_subset_eq_typevar_bound(t1, &bound).is_err() {
                         // If the original type is also an error, use the promoted type.
                         let specialization_error =
                             TypeVarSpecializationError::BadBoundSpecialization {
@@ -3795,6 +3776,14 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 .is_shape_extension_binding_source(v)
     }
 
+    /// Validate a type variable's bound without deriving contextual `Any` hints.
+    fn is_subset_eq_typevar_bound(&mut self, got: &Type, bound: &Type) -> Result<(), SubsetError> {
+        let previous = mem::replace(&mut self.checking_typevar_bound, true);
+        let result = self.is_subset_eq(got, bound);
+        self.checking_typevar_bound = previous;
+        result
+    }
+
     /// Implementation of Var subset cases, calling onward to solve non-Var cases.
     ///
     /// This function does two things: it checks that got <: want, and it solves free variables assuming that
@@ -3808,6 +3797,15 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     fn is_subset_eq_var(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         match (got, want) {
             _ if got == want => Ok(()),
+            (Type::Var(var), Type::Any(_)) | (Type::Any(_), Type::Var(var))
+                if self.checking_typevar_bound
+                    && matches!(
+                        &*self.solver.variables.lock().get(*var),
+                        Variable::Unwrap(_)
+                    ) =>
+            {
+                Ok(())
+            }
             (Type::Var(v1), Type::Var(v2)) => {
                 self.record_deferred_residual_target_vars(*v1, want);
                 self.record_deferred_residual_target_vars(*v2, got);

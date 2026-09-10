@@ -325,11 +325,16 @@ reduce(max, [1,2])
 );
 
 testcase!(
-    test_iter_list_literal,
+    test_iter_container_literal,
     r#"
 from typing import Iterator, assert_type
 
 assert_type(iter([0]), Iterator[int])
+assert_type(iter({0}), Iterator[int])
+assert_type(iter({0: 0}), Iterator[int])
+assert_type(iter([x for x in [0]]), Iterator[int])
+assert_type(iter({x for x in [0]}), Iterator[int])
+assert_type(iter({x: x for x in [0]}), Iterator[int])
     "#,
 );
 
