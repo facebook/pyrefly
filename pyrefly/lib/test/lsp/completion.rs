@@ -4615,19 +4615,20 @@ x = """
 }
 
 #[test]
-fn completion_expands_partial_quotes_to_triple_quoted_string() {
+fn completion_skips_partial_quotes_inside_open_string() {
     let code = r#"
 x = "
 #    ^
+y = ""
+#     ^
 "#;
     let report = get_batched_lsp_operations_report_allow_error(
         &[("main", code)],
         get_triple_quoted_string_report(true),
     );
-    let trimmed = report.trim();
     assert!(
-        trimmed.contains("new_text: \"\\\"\\\"\\\"$0"),
-        "expected expansion to a triple-quoted pair:\n{trimmed}"
+        !report.contains("triple-quoted string"),
+        "single/double quotes are already-open strings, not a triple-quoted opener:\n{report}"
     );
 }
 

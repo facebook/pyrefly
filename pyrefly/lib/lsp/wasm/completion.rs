@@ -351,7 +351,11 @@ impl Transaction<'_> {
         }
     }
 
-    /// Offers to close (or expand into) a triple-quoted string after the opening quotes.
+    /// Offers to insert the closer after an opening triple-quoted string.
+    ///
+    /// Only a run of exactly three quotes is treated as that opener. A single or
+    /// double quote is already an open string (Literal values, dict keys, kwargs),
+    /// so expanding those would steal the completions that belong in that context.
     fn add_triple_quoted_string_completions(
         &self,
         handle: &Handle,
@@ -382,7 +386,7 @@ impl Transaction<'_> {
                 break;
             }
         }
-        if count == 0 {
+        if count != 3 {
             return;
         }
         let quote_start = pos - count;
@@ -415,22 +419,12 @@ impl Transaction<'_> {
         if source[pos..].starts_with(&closer) {
             return;
         }
-        let (edit_start, new_text) = if count < 3 {
-            let opener_and_closer = if supports_snippets {
-                format!("{closer}$0{closer}")
-            } else {
-                format!("{closer}{closer}")
-            };
-            (quote_start, opener_and_closer)
-        } else if supports_snippets {
-            (pos, format!("$0{closer}"))
+        let new_text = if supports_snippets {
+            format!("$0{closer}")
         } else {
-            (pos, closer.clone())
+            closer.clone()
         };
-        let Some(start) = TextSize::try_from(edit_start).ok() else {
-            return;
-        };
-        let range = module_info.to_lsp_range(TextRange::new(start, position));
+        let range = module_info.to_lsp_range(TextRange::new(position, position));
         completions.push(RankedCompletion::new(CompletionItem {
             label: closer,
             detail: Some("triple-quoted string".to_owned()),
