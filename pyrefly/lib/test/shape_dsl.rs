@@ -6325,6 +6325,56 @@ def check(default: Array, explicit: Array[IntTuple]) -> None:
 );
 
 testcase!(
+    test_empty_int_tuple_defaults_for_array_like_unions,
+    shape_extensions_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import IntTuple
+from typing_extensions import TypeVar
+
+class Array[Shape: IntTuple]: ...
+class ndarray[Shape: IntTuple]: ...
+
+type ArrayLike[Shape: IntTuple = []] = ndarray[Shape] | Array[Shape] | float
+
+LegacyShape = TypeVar("LegacyShape", bound=IntTuple, default=[])
+
+def direct[Shape: IntTuple = []](
+    value: ndarray[Shape] | Array[Shape] | float,
+) -> Array[Shape]: ...
+
+def through_alias[Shape: IntTuple = []](value: ArrayLike[Shape]) -> Array[Shape]: ...
+
+def concrete_default[Shape: IntTuple = [2, 3]]() -> Array[Shape]: ...
+
+def alias_without_function_default[Shape: IntTuple](
+    value: ArrayLike[Shape],
+) -> Array[Shape]: ...
+
+def legacy(value: ndarray[LegacyShape] | Array[LegacyShape] | float) -> Array[LegacyShape]: ...
+
+def bare_alias(value: ArrayLike) -> ArrayLike: ...
+
+# Function type parameter defaults provide the useful scalar fallback.
+assert_type(direct(1.0), Array[[]])
+assert_type(through_alias(1.0), Array[[]])
+assert_type(legacy(1.0), Array[[]])
+assert_type(concrete_default(), Array[[2, 3]])
+
+# The alias default only specializes a bare alias to ArrayLike[[]]. It does not
+# provide a fallback for a separate function type parameter.
+assert_type(bare_alias(1.0), ArrayLike[[]])
+assert_type(alias_without_function_default(1.0), Array[IntTuple])
+
+def preserve_shape(array: Array[[2, 3]], nd: ndarray[[4]]) -> None:
+    assert_type(direct(array), Array[[2, 3]])
+    assert_type(through_alias(nd), Array[[4]])
+    assert_type(legacy(array), Array[[2, 3]])
+    bare_alias(array)  # E: is not assignable to parameter `value`
+"#,
+);
+
+testcase!(
     test_tensor_shapes_gradual_size,
     legacy_shaped_array_env(),
     r#"
