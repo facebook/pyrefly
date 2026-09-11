@@ -17,9 +17,21 @@ import {PythonEnvironment} from './python-environment';
 
 const execFileAsync = promisify(execFile);
 
+function requireSettingOrUndefined<T>(path: string): T | undefined {
+  return vscode.workspace.getConfiguration().get(path);
+}
+
+function requireSettingOrDefault<T>(path: string, default: T): T {
+  const ret: T | undefined = requireSettingOrUndefined(path);
+  if (ret == undefined) {
+    return default;
+  }
+  return ret;
+}
+
 /// Get a setting at the path, or throw an error if it's not set.
 export function requireSetting<T>(path: string): T {
-  const ret: T | undefined = vscode.workspace.getConfiguration().get(path);
+  const ret: T | undefined = requireSettingOrUndefined(path);
   if (ret == undefined) {
     throw new Error(`Setting "${path}" was not configured`);
   }
@@ -110,7 +122,7 @@ async function selectBinary(
   pythonEnv: PythonEnvironment,
   globalCwd: vscode.Uri | undefined,
 ): Promise<BinarySelection> {
-  const lspPath: string = requireSetting('pyrefly.lspPath');
+  const lspPath: string = requireSettingOrDefault('pyrefly.lspPath', '');
   if (lspPath !== '') {
     return {
       mode: 'pyrefly.lspPath',
@@ -126,7 +138,7 @@ async function selectBinary(
     process.platform === 'win32' ? 'pyrefly.exe' : 'pyrefly',
   ).fsPath;
 
-  const mode: string = requireSetting('pyrefly.pyreflyExecutable');
+  const mode: string = requireSettingOrDefault('pyrefly.pyreflyExecutable', 'from-environment');
   if (mode !== '' && mode !== 'from-environment') {
     return {
       mode,
@@ -232,7 +244,7 @@ export async function resolveExecutable(
   // pyrefly print its help text and exit, which the client only sees as a
   // `write EPIPE` when it writes the `initialize` request. Fall back to the
   // `lsp` subcommand so the server always starts.
-  const configuredArgs: string[] = requireSetting('pyrefly.lspArguments');
+  const configuredArgs: string[] = requireSettingOrDefault('pyrefly.lspArguments', ['lsp']);
   const args: string[] = configuredArgs.length > 0 ? configuredArgs : ['lsp'];
 
   const selection = await selectBinary(extensionUri, pythonEnv, globalCwd);

@@ -508,14 +508,21 @@ export async function activate(
     }
   });
 
-  // Start the client. This will also launch the server
-  try {
-    await client.start();
-  } finally {
-    // Even a failed start hands responsibility to the listeners above, which
-    // can bring a server up once a setting is corrected.
-    activated = true;
-  }
+  // Start the client. This will also launch the server.
+  //
+  // Through the restart queue, so that a change arriving while the server is
+  // spawning waits behind this rather than racing it. Every start and restart
+  // now re-resolves under the same lock, which is what lets the listeners
+  // compare against what is actually running.
+  await queueRestart(async () => {
+    try {
+      await client.start();
+    } finally {
+      // Even a failed start hands responsibility to the listeners above, which
+      // can bring a server up once a setting is corrected.
+      activated = true;
+    }
+  });
   logServerVersion();
 
   await updateStatusBar(client);
