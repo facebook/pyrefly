@@ -2356,6 +2356,10 @@ impl<'a> Transaction<'a> {
 
     /// Invalidate based on what a watcher told you.
     pub fn invalidate_events(&mut self, events: &CategorizedEvents) {
+        let watched_metadata_changed = events
+            .iter()
+            .any(|path| ConfigFile::is_watched_metadata(path));
+
         // If any files were added or removed, we need to invalidate the find step.
         if !events.created.is_empty() || !events.removed.is_empty() || !events.unknown.is_empty() {
             self.invalidate_find();
@@ -2365,12 +2369,8 @@ impl<'a> Transaction<'a> {
         let files = events.iter().cloned().collect::<Vec<_>>();
         self.invalidate_disk(&files);
 
-        // If any config files changed, we need to invalidate the config step.
-        if events.iter().any(|x| {
-            x.file_name()
-                .and_then(|x| x.to_str())
-                .is_some_and(|x| ConfigFile::CONFIG_FILE_NAMES.contains(&x))
-        }) {
+        // Config and dependency metadata changes can change interpreter-derived settings.
+        if watched_metadata_changed {
             self.invalidate_config();
         }
     }

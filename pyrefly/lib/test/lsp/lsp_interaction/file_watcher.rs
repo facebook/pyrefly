@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashSet;
+use std::fs;
 
 use lsp_types::RegistrationParams;
 use lsp_types::Url;
@@ -179,4 +180,62 @@ fn test_consecutive_file_watcher_events() {
         .expect("Failed to receive diagnostics after file watcher events");
 
     interaction.shutdown().unwrap();
+}
+
+/// A modified dependency lockfile invalidates cached missing-import results.
+#[test]
+fn test_uv_lock_modification_refreshes_import_resolution() {
+    let root = TempDir::new().expect("create test directory");
+    let site_packages = root.path().join("site-packages");
+    fs::create_dir(&site_packages).expect("create site-packages");
+    fs::write(
+        root.path().join("pyrefly.toml"),
+        "skip-interpreter-query = true\nsite-package-path = [\"site-packages\"]\n",
+    )
+    .expect("write config");
+    fs::write(
+        root.path().join("main.py"),
+        "from dependency import value\nanswer: int = value\n",
+    )
+    .expect("write source");
+    fs::write(root.path().join("uv.lock"), "revision = 1\n").expect("write lockfile");
+
+    let root_path = root.path().to_path_buf();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            workspace_folders: Some(vec![(
+                "uv-project".to_owned(),
+                Url::from_file_path(&root_path).unwrap(),
+            )]),
+            file_watch: true,
+            ..Default::default()
+        })
+        .expect("initialize");
+
+    interaction.client.did_open("main.py");
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(root_path.join("main.py"), 1)
+        .expect("missing dependency should produce a diagnostic");
+    interaction
+        .client
+        .expect_file_watcher_register()
+        .expect("register site-package watcher")
+        .send_response(json!(null));
+
+    fs::write(site_packages.join("dependency.py"), "value: int = 1\n").expect("install dependency");
+    fs::write(root.path().join("uv.lock"), "revision = 2\n").expect("update lockfile");
+    interaction.client.file_modified("uv.lock");
+
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(root_path.join("main.py"), 0)
+        .expect("modified uv.lock should refresh import resolution");
+
+    interaction.shutdown().expect("shutdown");
 }

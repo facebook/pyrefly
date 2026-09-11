@@ -915,9 +915,24 @@ impl ConfigFile {
         Self::PYREFLY_HIDDEN_FILE_NAME,
         Self::PYPROJECT_FILE_NAME,
     ];
+
+    /// Dependency metadata whose changes require configuration and import resolution to be
+    /// refreshed.
+    const DEPENDENCY_METADATA_FILE_NAMES: &[&str] = &["uv.lock"];
+
     /// Files that don't contain pyrefly-specific config information but indicate that we're at the
     /// root of a Python project, which should be added to the search path.
     pub const ADDITIONAL_ROOT_FILE_NAMES: &[&str] = &["mypy.ini", "pyrightconfig.json"];
+
+    /// Whether this path contains metadata that can change project configuration or dependencies.
+    pub fn is_watched_metadata(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                Self::CONFIG_FILE_NAMES.contains(&name)
+                    || Self::DEPENDENCY_METADATA_FILE_NAMES.contains(&name)
+            })
+    }
 
     /// Writes the configuration to a file in the specified directory.
     pub fn write_to_toml_in_directory(&self, directory: &Path) -> Result<()> {
@@ -1350,9 +1365,12 @@ impl ConfigFile {
             }
             if let Some(config_root) = config.source.root_from_file() {
                 let config_root = InternedPath::from_path(config_root);
-                ConfigFile::CONFIG_FILE_NAMES.iter().for_each(|config| {
-                    result.insert(WatchPattern::root(config_root, format!("**/{config}")));
-                });
+                result.extend(
+                    Self::CONFIG_FILE_NAMES
+                        .iter()
+                        .chain(Self::DEPENDENCY_METADATA_FILE_NAMES)
+                        .map(|file| WatchPattern::root(config_root, format!("**/{file}"))),
+                );
             }
             config
                 .search_path()
@@ -2133,6 +2151,7 @@ mod tests {
     use pyrefly_python::module_path::ModuleStyle;
     use pyrefly_util::includes::Includes;
     use pyrefly_util::test_path::TestPath;
+    use starlark_map::smallset;
     use tempfile::TempDir;
     use toml::Table;
     use toml::Value;
@@ -4722,5 +4741,26 @@ output-format = "omit-errors"
             Severity::Ignore,
             "without pytorch-efficiency-lints flag, lints should default to Ignore"
         );
+    }
+
+    #[test]
+    fn test_dependency_metadata_paths_to_watch() {
+        let root = TempDir::new().unwrap();
+        let mut config = ConfigFile {
+            source: ConfigSource::File(root.path().join(ConfigFile::PYPROJECT_FILE_NAME)),
+            interpreters: Interpreters {
+                skip_interpreter_query: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.configure();
+        let configs = smallset! {ArcId::new(config)};
+        let paths = ConfigFile::get_paths_to_watch(&configs);
+
+        assert!(paths.contains(&WatchPattern::root(
+            InternedPath::from_path(root.path()),
+            "**/uv.lock".to_owned(),
+        )));
     }
 }
