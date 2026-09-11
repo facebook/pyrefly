@@ -1140,6 +1140,24 @@ def f(extra_int: ExtraInt) -> None:
 );
 
 testcase!(
+    test_unpacking_generic_typed_dict_extra_items_into_call,
+    r#"
+from typing import Never, TypedDict
+class Extra[T](TypedDict, extra_items=T):
+    name: str
+class IntExtra(Extra[int]):
+    pass
+def takes_name(name: str) -> None: ...
+def takes_str_kwargs(name: str, **kwargs: str) -> None: ...
+def f(strings: Extra[str], ints: Extra[int], inherited: IntExtra, closed: Extra[Never]) -> None:
+    takes_str_kwargs(**strings)  # OK
+    takes_str_kwargs(**ints)  # E: Extra items of type `int` are not assignable to parameter `kwargs` with type `str`
+    takes_str_kwargs(**inherited)  # E: Extra items of type `int` are not assignable to parameter `kwargs` with type `str`
+    takes_name(**closed)  # OK: the instantiated extra-items type is `Never`
+    "#,
+);
+
+testcase!(
     test_function_vs_callable,
     r#"
 from typing import assert_type, Callable

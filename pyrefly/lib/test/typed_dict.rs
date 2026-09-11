@@ -2924,3 +2924,22 @@ def test(x: T) -> object:
     return x.get("name")
     "#,
 );
+
+testcase!(
+    test_ancestor_with_generic_extra_items,
+    r#"
+from typing import assert_type, TypedDict
+
+class Base[T](TypedDict, extra_items=T):
+    pass
+
+class Middle[S](Base[list[S]]):
+    pass
+
+class Leaf(Middle[int]):
+    pass
+
+def f(leaf: Leaf):
+    assert_type(leaf["extra"], list[int])
+    "#,
+);

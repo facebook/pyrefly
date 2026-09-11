@@ -236,7 +236,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn typed_dict_extra_items(&self, typed_dict: &TypedDict) -> ExtraItems {
         match typed_dict {
             TypedDict::TypedDict(inner) => {
-                self.typed_dict_extra_items_for_cls(inner.class_object())
+                let mut extra_items = self.typed_dict_extra_items_for_cls(inner.class_object());
+                if let ExtraItems::Extra(extra) = &mut extra_items {
+                    for ancestor in self
+                        .get_mro_for_class(inner.class_object())
+                        .ancestors_no_object()
+                    {
+                        ancestor.targs().substitute_into_mut(&mut extra.ty);
+                    }
+                    inner.targs().substitute_into_mut(&mut extra.ty);
+                    if extra.ty.is_never() {
+                        return ExtraItems::Closed;
+                    }
+                }
+                extra_items
             }
             TypedDict::Anonymous(_) => ExtraItems::Extra(ExtraItem {
                 ty: self.get_typed_dict_value_type(typed_dict),
