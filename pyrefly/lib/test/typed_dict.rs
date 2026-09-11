@@ -1368,12 +1368,142 @@ d: TD[str] = {"a": 1}
 assert_type(d["b"], str)
 d2: TD[str] = {"a": 1, "b": "b"}
 assert_type(d2["b"], str)
+d2["b"] = 5  # E: `Literal[5]` is not assignable to TypedDict key `b` with type `str`
+assert_type(d2.pop("b"), int | str)
 
 class Foo[T]:
     def __init__(self, b: T):
         self.td: TD[T] = {"a": 1, "b": b}
 
 assert_type(Foo("b").td["b"], str)
+    "#,
+);
+
+testcase!(
+    test_generic_extra_items_inheritance,
+    r#"
+from typing import NotRequired, ReadOnly, TypedDict, assert_type
+
+class Parent[T](TypedDict, extra_items=T):
+    pass
+class Child(Parent[str]):
+    b: NotRequired[str]
+class BadChild(Parent[str]):
+    b: NotRequired[int]  # E: `int` is not consistent with `extra_items` type `str`
+class Same(Parent[str], extra_items=str):
+    pass
+class Changed(Parent[str], extra_items=int):  # E: Cannot change the non-read-only extra items type
+    pass
+
+child: Child = {"extra": "ok"}
+assert_type(child["extra"], str)
+assert_type(child.pop("extra"), str)
+child["extra"] = 5  # E: `Literal[5]` is not assignable to TypedDict key `extra` with type `str`
+assert_type(Child(extra="ok")["extra"], str)
+
+class Middle[U](Parent[list[U]]):
+    pass
+class Leaf(Middle[str]):
+    pass
+leaf: Leaf = {"extra": ["ok"]}
+assert_type(leaf["extra"], list[str])
+
+class Recursive(Parent["Recursive"]):
+    pass
+recursive: Recursive = {}
+assert_type(recursive["extra"], Recursive)
+
+class ReadOnlyParent[T](TypedDict, extra_items=ReadOnly[T]):
+    pass
+class ReadOnlyChild(ReadOnlyParent[str]):
+    field: str
+class BadReadOnlyChild(ReadOnlyParent[str]):
+    field: int  # E: `int` is not assignable to `extra_items` type `str`
+
+readonly: ReadOnlyParent[str] = {"extra": "ok"}
+assert_type(readonly["extra"], str)
+readonly["extra"] = "ok"  # E: Key `extra` in TypedDict `ReadOnlyParent` is read-only
+inherited_readonly: ReadOnlyChild = {"field": "ok", "extra": "ok"}
+assert_type(inherited_readonly["extra"], str)
+    "#,
+);
+
+testcase!(
+    test_generic_extra_items_legacy_scope,
+    r#"
+from typing import Any, Generic, ReadOnly, TypeVar, TypedDict, assert_type
+
+T = TypeVar("T")
+class TD(TypedDict, Generic[T], extra_items=list[T]):
+    pass
+d: TD[str] = {"extra": ["ok"]}
+assert_type(d["extra"], list[str])
+
+class ReadOnlyTD(TypedDict, Generic[T], extra_items=ReadOnly[T]):
+    pass
+readonly: ReadOnlyTD[str] = {"extra": "ok"}
+assert_type(readonly["extra"], str)
+readonly["extra"] = "ok"  # E: Key `extra` in TypedDict `ReadOnlyTD` is read-only
+
+# Class keywords do not declare legacy type parameters; Generic[T] is required.
+class Unbound(TypedDict, extra_items=T):  # E: Type variable `T` is not in scope
+    pass
+unbound: Unbound = {"extra": 1}
+assert_type(unbound["extra"], Any)
+
+# Functional TypedDict definitions cannot declare type parameters.
+Functional = TypedDict("Functional", {"a": int}, extra_items=T)  # E: Type variable `T` is not in scope
+functional: Functional = {"a": 1, "extra": "ok"}
+assert_type(functional["extra"], Any)
+    "#,
+);
+
+testcase!(
+    test_generic_extra_items_imported,
+    TestEnv::one(
+        "lib",
+        "from typing import TypeVar\nT = TypeVar('T')\nU = TypeVar('U')"
+    ),
+    r#"
+from typing import Generic, TypedDict, assert_type
+import lib
+
+class Parent(TypedDict, Generic[lib.T, lib.U], extra_items=tuple[lib.T, lib.U]):
+    pass
+class Child(Parent[str, int]):
+    pass
+child: Child = {"extra": ("ok", 1)}
+assert_type(child["extra"], tuple[str, int])
+    "#,
+);
+
+testcase!(
+    test_extra_items_ordinary_class_keyword,
+    r#"
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+class Base:
+    def __init_subclass__(cls, *, extra_items: TypeVar) -> None:
+        pass
+class C(Base, extra_items=T):
+    pass
+class G(Base, Generic[T], extra_items=T):
+    pass
+c: C[int]  # E: Expected 0 type arguments
+    "#,
+);
+
+testcase!(
+    test_extra_items_runtime_forward_reference,
+    r#"
+from __future__ import annotations
+from typing import TypedDict
+
+class TD(TypedDict, extra_items=Later):  # E: `Later` is uninitialized
+    pass
+class Later:
+    pass
     "#,
 );
 

@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use dupe::Dupe;
 use pyrefly_python::dunder;
 use pyrefly_types::simplify::unions_with_literals;
 use pyrefly_types::typed_dict::ExtraItem;
@@ -228,9 +229,105 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn typed_dict_extra_items_for_cls(&self, cls: &Class) -> ExtraItems {
-        self.get_metadata_for_class(cls)
-            .typed_dict_metadata()
-            .map_or(ExtraItems::Default, |m| m.extra_items.clone())
+        let metadata = self.get_metadata_for_class(cls);
+        let Some(td) = metadata.typed_dict_metadata() else {
+            return ExtraItems::Default;
+        };
+        let mut extra_items = td.extra_items.clone();
+        if let ExtraItems::Extra(extra) = &mut extra_items
+            && td.extra_items_from != *cls
+        {
+            if let Some(ancestor) = self
+                .get_mro_for_class(cls)
+                .ancestors(self.stdlib)
+                .find(|base| *base.class_object() == td.extra_items_from)
+            {
+                ancestor.targs().substitute_into_mut(&mut extra.ty);
+            } else {
+                // Cyclic or inconsistent inheritance can omit the defining class from the MRO.
+                extra.ty = self.heap.mk_any_error();
+            }
+        }
+        extra_items
+    }
+
+    /// Return the first TypedDict base's extra items specialized for this subclass.
+    fn inherited_typed_dict_extra_items(&self, cls: &Class) -> Option<(Class, ExtraItems)> {
+        self.get_base_types_for_class(cls).iter().find_map(|base| {
+            if !self
+                .get_metadata_for_class(base.class_object())
+                .is_typed_dict()
+            {
+                return None;
+            }
+            let typed_dict = TypedDict::new(base.class_object().dupe(), base.targs().clone());
+            Some((
+                base.class_object().dupe(),
+                self.typed_dict_extra_items(&typed_dict),
+            ))
+        })
+    }
+
+    /// Check extra-item overrides after base type arguments have been resolved.
+    pub fn check_typed_dict_extra_items(&self, cls: &Class, errors: &ErrorCollector) {
+        let metadata = self.get_metadata_for_class(cls);
+        let Some(td) = metadata.typed_dict_metadata() else {
+            return;
+        };
+        if td.extra_items_from != *cls {
+            return;
+        }
+        let Some((base_typed_dict, inherited_extra_items)) =
+            self.inherited_typed_dict_extra_items(cls)
+        else {
+            return;
+        };
+        match (&td.extra_items, &inherited_extra_items) {
+            (ExtraItems::Default, ExtraItems::Closed | ExtraItems::Extra(_)) => {
+                let base = if inherited_extra_items == ExtraItems::Closed {
+                    format!("closed TypedDict `{}`", base_typed_dict.name())
+                } else {
+                    format!("TypedDict `{}` with extra items", base_typed_dict.name())
+                };
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorKind::BadTypedDict,
+                    format!("Non-closed TypedDict cannot inherit from {base}"),
+                );
+            }
+            (
+                ExtraItems::Closed,
+                ExtraItems::Extra(ExtraItem {
+                    read_only: false, ..
+                }),
+            ) => {
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorKind::BadTypedDict,
+                    format!("Closed TypedDict cannot inherit from TypedDict `{}` with non-read-only extra items", base_typed_dict.name()),
+                );
+            }
+            (
+                ExtraItems::Extra(ExtraItem { ty: cur_ty, .. }),
+                ExtraItems::Extra(ExtraItem {
+                    ty: inherited_ty,
+                    read_only: false,
+                }),
+            ) if cur_ty != inherited_ty => {
+                self.error(
+                    errors,
+                    cls.range(),
+                    ErrorKind::BadTypedDict,
+                    format!(
+                        "Cannot change the non-read-only extra items type of TypedDict `{}`",
+                        base_typed_dict.name()
+                    ),
+                );
+            }
+            _ => {}
+        }
     }
 
     pub fn typed_dict_extra_items(&self, typed_dict: &TypedDict) -> ExtraItems {
@@ -981,6 +1078,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     pub fn calculate_typed_dict_field(
         &self,
+        cls: &Class,
         metadata: &ClassMetadata,
         name: &Name,
         range: TextRange,
@@ -1041,11 +1139,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         {
             // If this is a TypedDict field, make sure it is compatible with any inherited metadata
             // restricting extra items.
-            let inherited_extra = metadata.base_class_objects().iter().find_map(|base| {
-                self.get_metadata_for_class(base)
-                    .typed_dict_metadata()
-                    .map(|m| (base, m.extra_items.clone()))
-            });
+            let inherited_extra = self.inherited_typed_dict_extra_items(cls);
             match inherited_extra {
                 Some((base, ExtraItems::Closed)) => {
                     self.error(

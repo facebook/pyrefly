@@ -647,6 +647,9 @@ pub struct TypedDictMetadata {
     /// Field name to the value of the `total` keyword in the defining class.
     pub fields: SmallMap<Name, bool>,
     pub extra_items: ExtraItems,
+    /// The class whose type parameters occur in `extra_items`. Specialization is deferred
+    /// until the MRO is available, since metadata cannot depend on base type arguments.
+    pub extra_items_from: Class,
 }
 
 #[derive(Clone, Debug, TypeEq, PartialEq, Eq)]

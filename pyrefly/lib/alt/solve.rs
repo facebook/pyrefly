@@ -374,24 +374,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         binding: &BindingLegacyTypeParam,
         scope_anchor: TextRange,
     ) -> LegacyTypeParameterLookup {
-        let maybe_parameter = match binding {
-            BindingLegacyTypeParam::ParamKeyed(k) => self.get_idx(*k).clone(),
-            BindingLegacyTypeParam::ModuleKeyed(module) => {
-                // Errors in attribute lookup are reported elsewhere.
-                module
-                    .attrs
-                    .iter()
-                    .fold(self.get_idx(module.base).clone(), |acc, attr| {
-                        self.attr_infer(
-                            &acc,
-                            attr,
-                            TextRange::default(),
-                            &self.error_swallower(),
-                            None,
-                        )
-                    })
-            }
-        };
+        let maybe_parameter = self.legacy_tparam_value(binding);
         // Use the scope_anchor (the KeyLegacyTypeParam's own range, i.e. the first occurrence
         // of this TypeVar name in the enclosing function/class/alias scope) as the identity
         // anchor. This gives each (scope, TypeVar) pair a distinct Quantified even when multiple
@@ -431,6 +414,28 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 LegacyTypeParameterLookup::Parameter(q)
             }
             ty => LegacyTypeParameterLookup::NotParameter(ty.clone()),
+        }
+    }
+
+    /// Resolve the runtime value underlying a possible legacy type parameter.
+    pub(crate) fn legacy_tparam_value(&self, binding: &BindingLegacyTypeParam) -> TypeInfo {
+        match binding {
+            BindingLegacyTypeParam::ParamKeyed(k) => self.get_idx(*k).clone(),
+            BindingLegacyTypeParam::ModuleKeyed(module) => {
+                // Errors in attribute lookup are reported elsewhere.
+                module
+                    .attrs
+                    .iter()
+                    .fold(self.get_idx(module.base).clone(), |acc, attr| {
+                        self.attr_infer(
+                            &acc,
+                            attr,
+                            TextRange::default(),
+                            &self.error_swallower(),
+                            None,
+                        )
+                    })
+            }
         }
     }
 
@@ -2965,6 +2970,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             self.check_variance_for_class(cls, class_bases, &class_field_map, errors);
             self.check_shape_flag_constructor_sources(cls, errors);
             self.check_self_in_typed_dict(cls, &class_field_map, errors);
+            self.check_typed_dict_extra_items(cls, errors);
             self.check_invalid_abstract_methods(cls, &class_field_map, errors);
         }
         EmptyAnswer

@@ -16,10 +16,10 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_types::annotation::Annotation;
 use pyrefly_types::callable::Params;
+use pyrefly_types::class::PrecomputedTParams;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::type_var::Restriction;
-use pyrefly_types::typed_dict::ExtraItem;
 use pyrefly_types::typed_dict::ExtraItems;
 use pyrefly_types::typed_dict::TypedDict;
 use pyrefly_types::types::Forallable;
@@ -74,6 +74,7 @@ use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClassField;
 use crate::binding::binding::KeyDecorator;
+use crate::binding::binding::KeyTParams;
 use crate::binding::binding::ShapedArrayMetadata as ShapedArrayDecoratorMetadata;
 use crate::binding::django::DjangoFieldInfo;
 use crate::binding::pydantic::EXTRA;
@@ -213,6 +214,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .map(|x| self.parse_base_class(x, is_new_type))
             .collect::<Vec<_>>();
         let contains_base_class_any = parsed_results.iter().any(|x| x.is_any());
+        let is_typed_dict = has_typed_dict_base_class
+            || parsed_results.iter().any(|base| {
+                matches!(base, BaseClassParseResult::Parsed(base) if base.metadata.is_typed_dict())
+            });
         let protocol_metadata = self.final_protocol_metadata(
             initial_protocol_metadata,
             &decorators,
@@ -254,7 +259,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Some(name) if name.id == "metaclass" => metaclasses.push(&keyword.value),
                 Some(name) => keyword_annotations.push((
                     name.id.clone(),
-                    self.expr_class_keyword(&keyword.value, errors),
+                    if is_typed_dict && name.id == "extra_items" {
+                        self.expr_class_keyword(&keyword.value, errors)
+                    } else {
+                        Annotation::new_type(self.expr_infer(&keyword.value, errors))
+                    },
                 )),
                 None => {
                     self.extend_unpacked_class_keywords(keyword, &mut keyword_annotations, errors)
@@ -439,10 +448,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             cls.range(),
         );
 
-        let is_typed_dict = has_typed_dict_base_class
-            || bases_with_metadata
-                .iter()
-                .any(|(_, metadata)| metadata.is_typed_dict());
         if is_typed_dict
             && let Some(bad) = bases_with_metadata.iter().find(|x| !x.1.is_typed_dict())
         {
@@ -954,7 +959,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         extra_items = Some(ExtraItems::Default);
                     }
                     ("extra_items", value_ty) => {
-                        let ty = self.untype_opt(value_ty.clone(), cls.range(), errors).unwrap_or_else(|| {
+                        let mut ty = self.untype_opt(value_ty.clone(), cls.range(), errors).unwrap_or_else(|| {
                             self.error(
                                 errors,
                                 cls.range(),
@@ -962,6 +967,30 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 format!("Expected `extra_items` to be a type form, got instance of `{}`", self.for_display(value_ty.clone())),
                             )
                         });
+                        // Class keywords are evaluated as runtime expressions. Only TypedDict
+                        // extra items reinterpret references to already-declared legacy parameters.
+                        if matches!(cls.precomputed_tparams(), PrecomputedTParams::FromBinding)
+                            && ty.any(|ty| ty.is_raw_legacy_type_variable())
+                        {
+                            let binding = self
+                                .bindings()
+                                .get(self.bindings().key_to_idx(&KeyTParams(cls.index())));
+                            let parameters: SmallMap<_, _> = binding
+                                .legacy_tparams
+                                .iter()
+                                .filter_map(|key| {
+                                    let parameter = self.get_idx(*key).parameter()?;
+                                    let value = self.legacy_tparam_value(self.bindings().get(*key));
+                                    Some((value.into_ty(), parameter.clone().to_type(self.heap)))
+                                })
+                                .collect();
+                            ty.transform_types_in_type_variable_positions(&mut |ty| {
+                                if let Some(parameter) = parameters.get(ty) {
+                                    *ty = parameter.clone();
+                                }
+                            });
+                        }
+                        self.check_legacy_typevar_scoping(&mut ty, cls.range(), errors);
                         extra_items = Some(ExtraItems::extra(ty, &value.qualifiers));
                     }
                     ("total", Type::Literal(lit)) if matches!(lit.value, Lit::Bool(_)) => {}
@@ -992,87 +1021,25 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             let fields =
                 self.calculate_typed_dict_metadata_fields(cls, bases_with_metadata, is_total);
-            let extra_items = self.calculate_typed_dict_extra_items(
-                extra_items,
-                bases_with_metadata,
-                cls.range(),
-                errors,
-            );
+            let (extra_items, extra_items_from) = match extra_items {
+                Some(extra_items) => (extra_items, cls.dupe()),
+                None => bases_with_metadata
+                    .iter()
+                    .find_map(|(_, metadata)| {
+                        metadata
+                            .typed_dict_metadata()
+                            .map(|td| (td.extra_items.clone(), td.extra_items_from.dupe()))
+                    })
+                    .unwrap_or_else(|| (ExtraItems::Default, cls.dupe())),
+            };
             Some(TypedDictMetadata {
                 fields,
                 extra_items,
+                extra_items_from,
             })
         } else {
             None
         }
-    }
-
-    fn calculate_typed_dict_extra_items(
-        &self,
-        cur_extra_items: Option<ExtraItems>,
-        bases_with_metadata: &[(Class, &ClassMetadata)],
-        range: TextRange,
-        errors: &ErrorCollector,
-    ) -> ExtraItems {
-        let inherited_extra_items = bases_with_metadata.iter().find_map(|(base, metadata)| {
-            metadata
-                .typed_dict_metadata()
-                .map(|td| (base, &td.extra_items))
-        });
-        if cur_extra_items.is_none() || inherited_extra_items.is_none() {
-            return cur_extra_items.unwrap_or_else(|| {
-                inherited_extra_items.map_or(ExtraItems::Default, |(_, extra)| extra.clone())
-            });
-        }
-        let cur_extra_items = cur_extra_items.unwrap();
-        let (base_typed_dict, inherited_extra_items) = inherited_extra_items.unwrap();
-        match (&cur_extra_items, inherited_extra_items) {
-            (ExtraItems::Default, ExtraItems::Closed | ExtraItems::Extra(_)) => {
-                let base = if *inherited_extra_items == ExtraItems::Closed {
-                    format!("closed TypedDict `{}`", base_typed_dict.name())
-                } else {
-                    format!("TypedDict `{}` with extra items", base_typed_dict.name())
-                };
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::BadTypedDict,
-                    format!("Non-closed TypedDict cannot inherit from {base}"),
-                );
-            }
-            (
-                ExtraItems::Closed,
-                ExtraItems::Extra(ExtraItem {
-                    read_only: false, ..
-                }),
-            ) => {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::BadTypedDict,
-                    format!("Closed TypedDict cannot inherit from TypedDict `{}` with non-read-only extra items", base_typed_dict.name()),
-                );
-            }
-            (
-                ExtraItems::Extra(ExtraItem { ty: cur_ty, .. }),
-                ExtraItems::Extra(ExtraItem {
-                    ty: inherited_ty,
-                    read_only: false,
-                }),
-            ) if cur_ty != inherited_ty => {
-                self.error(
-                    errors,
-                    range,
-                    ErrorKind::BadTypedDict,
-                    format!(
-                        "Cannot change the non-read-only extra items type of TypedDict `{}`",
-                        base_typed_dict.name()
-                    ),
-                );
-            }
-            _ => {}
-        }
-        cur_extra_items
     }
 
     fn enum_metadata(

@@ -1511,6 +1511,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let metadata = self.get_metadata_for_class(class);
         if metadata.is_typed_dict() {
             return self.calculate_typed_dict_field(
+                class,
                 metadata,
                 name,
                 range,
