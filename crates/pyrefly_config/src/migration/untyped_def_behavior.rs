@@ -51,7 +51,6 @@ impl ConfigOptionMigrater for UntypedDefBehaviorConfig {
         &self,
         _pyright_cfg: &PyrightConfig,
         _pyrefly_cfg: &mut ConfigFile,
-        _basedpyright: bool,
     ) -> anyhow::Result<()> {
         // Pyright doesn't have a direct equivalent to check_untyped_defs
         // We'll return an error to indicate this
@@ -140,7 +139,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let config = UntypedDefBehaviorConfig;
-        let result = config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
+        let result = config.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
 
         // Pyright doesn't have a direct equivalent to check_untyped_defs, so we expect an error
         assert!(result.is_err());

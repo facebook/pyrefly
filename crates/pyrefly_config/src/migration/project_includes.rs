@@ -47,7 +47,6 @@ impl ConfigOptionMigrater for ProjectIncludes {
         &self,
         pyright_cfg: &PyrightConfig,
         pyrefly_cfg: &mut ConfigFile,
-        _basedpyright: bool,
     ) -> anyhow::Result<()> {
         // In pyright, project includes are specified in the "include" field
         let includes = match &pyright_cfg.project_includes {
@@ -144,7 +143,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let project_includes = ProjectIncludes;
-        let result = project_includes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
+        let result = project_includes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
 
         assert!(result.is_ok());
         assert_eq!(pyrefly_cfg.project_includes, project_includes_globs);
@@ -158,7 +157,7 @@ mod tests {
         let default_includes = pyrefly_cfg.project_includes.clone();
 
         let project_includes = ProjectIncludes;
-        let result = project_includes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
+        let result = project_includes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
 
         assert!(result.is_err());
         assert_eq!(pyrefly_cfg.project_includes, default_includes);
@@ -173,7 +172,7 @@ mod tests {
         let default_includes = pyrefly_cfg.project_includes.clone();
 
         let project_includes = ProjectIncludes;
-        let result = project_includes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
+        let result = project_includes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
 
         assert!(result.is_err());
         assert_eq!(pyrefly_cfg.project_includes, default_includes);

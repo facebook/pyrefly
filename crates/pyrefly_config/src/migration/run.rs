@@ -108,7 +108,7 @@ pub fn find_and_migrate_in_memory(
         Ok(Some((
             // unlike with pyproject.toml we have no easy way to tell whether a pyrightconfig.json
             // is supposed to be for pyright or basedpyright, so we just assume regular pyright
-            pyr.convert(false),
+            pyr.convert(),
             MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile),
         )))
     } else if path.file_name() == Some("mypy.ini".as_ref()) {
@@ -334,7 +334,7 @@ impl Args {
             let raw_file = fs_anyhow::read_to_string(&original_config_path)?;
             let pyr = PyrightConfig::parse(&raw_file)?;
             // assume pyrightconfig.json is for pyright, not basedpyright
-            pyr.convert(false)
+            pyr.convert()
         } else if original_config_path.file_name() == Some("mypy.ini".as_ref()) {
             info!(
                 "Migrating mypy config file from: `{}`",

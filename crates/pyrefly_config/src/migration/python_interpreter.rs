@@ -42,7 +42,6 @@ impl ConfigOptionMigrater for PythonInterpreter {
         &self,
         _pyright_cfg: &PyrightConfig,
         _pyrefly_cfg: &mut ConfigFile,
-        _basedpyright: bool,
     ) -> anyhow::Result<()> {
         Err(anyhow::anyhow!(
             "Pyright does not have a direct equivalent for python_interpreter_path"
@@ -120,8 +119,7 @@ mod tests {
         let default_interpreter = pyrefly_cfg.interpreters.python_interpreter_path.clone();
 
         let python_interpreter_path = PythonInterpreter;
-        let result =
-            python_interpreter_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
+        let result = python_interpreter_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
 
         assert!(result.is_err());
         assert_eq!(

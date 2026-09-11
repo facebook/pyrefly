@@ -79,6 +79,8 @@ pub struct PyrightConfig {
     pub errors: RuleOverrides,
     #[serde(default, rename = "executionEnvironments")]
     pub execution_environments: Vec<ExecEnv>,
+    #[serde(skip, default)]
+    pub is_basedpyright: bool,
 }
 
 use crate::migration::config_option_migrater::ConfigOptionMigrater;
@@ -98,7 +100,7 @@ impl PyrightConfig {
         Ok(serde_jsonrc::from_str::<Self>(text)?)
     }
 
-    pub fn convert(self, basedpyright: bool) -> ConfigFile {
+    pub fn convert(self) -> ConfigFile {
         let mut cfg = ConfigFile::default();
 
         // Create a list of all config options
@@ -118,7 +120,7 @@ impl PyrightConfig {
         // Iterate through all config options and apply them to the config
         for option in config_options {
             // Ignore errors for now, we can use this in the future if we want to print out error messages or use for logging purpose
-            let _ = option.migrate_from_pyright(&self, &mut cfg, basedpyright);
+            let _ = option.migrate_from_pyright(&self, &mut cfg);
         }
 
         // Pyright does not infer empty container types and unsolved type variables based on their first use.
@@ -600,17 +602,22 @@ pub fn parse_pyproject_toml(raw_file: &str) -> anyhow::Result<ConfigFile> {
         .tool
         .ok_or(anyhow::anyhow!(PyrightNotFoundError {}))?;
 
-    match tool {
+    let config = match tool {
         Tool {
             pyright: Some(pyright),
             ..
-        } => Ok(PyrightConfig::convert(pyright, false)),
+        } => Ok(pyright),
         Tool {
-            basedpyright: Some(basedpyright),
+            basedpyright: Some(mut basedpyright),
             ..
-        } => Ok(PyrightConfig::convert(basedpyright, true)),
+        } => {
+            basedpyright.is_basedpyright = true;
+            Ok(basedpyright)
+        }
         _ => Err(anyhow::anyhow!(PyrightNotFoundError {})),
-    }
+    }?;
+
+    Ok(PyrightConfig::convert(config))
 }
 
 #[cfg(test)]
@@ -641,7 +648,7 @@ mod tests {
             }
             "#;
         let pyr = serde_json::from_str::<PyrightConfig>(raw_file)?;
-        let config = pyr.convert(false);
+        let config = pyr.convert();
         assert_eq!(
             config,
             ConfigFile {
@@ -687,7 +694,7 @@ mod tests {
             }
             "#;
         let pyr = serde_json::from_str::<PyrightConfig>(raw_file)?;
-        let config = pyr.convert(false);
+        let config = pyr.convert();
         assert_eq!(
             config,
             ConfigFile {
@@ -780,7 +787,7 @@ typeCheckingMode = "basic"
             }
             "#;
         let pyr = serde_jsonrc::from_str::<PyrightConfig>(raw_file)?;
-        let config = pyr.convert(false);
+        let config = pyr.convert();
         assert!(!config.project_includes.is_empty());
         Ok(())
     }

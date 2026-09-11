@@ -27,7 +27,6 @@ impl ConfigOptionMigrater for SitePackagePath {
         &self,
         pyright_cfg: &PyrightConfig,
         pyrefly_cfg: &mut ConfigFile,
-        _basedpyright: bool,
     ) -> anyhow::Result<()> {
         // In pyright, stub path is specified in the "stubPath" field
         let stub_path = match &pyright_cfg.stub_path {
@@ -57,7 +56,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let site_package_path = SitePackagePath;
-        let result = site_package_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
+        let result = site_package_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
 
         assert!(result.is_ok());
         assert_eq!(
@@ -74,7 +73,7 @@ mod tests {
         let default_site_package_path = pyrefly_cfg.python_environment.site_package_path.clone();
 
         let site_package_path = SitePackagePath;
-        let result = site_package_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
+        let result = site_package_path.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
 
         assert!(result.is_err());
         assert_eq!(
