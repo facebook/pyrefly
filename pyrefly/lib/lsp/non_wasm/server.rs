@@ -813,11 +813,15 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use lsp_types::CodeActionKind;
     use lsp_types::InitializeParams;
+    use pyrefly_util::events::CategorizedEvents;
     use serde_json::json;
 
     use super::SOURCE_FIX_ALL_PYREFLY;
+    use super::Server;
     use super::client_uses_custom_hover_provider;
     use super::format_diagnostic_message_for_markdown;
     use super::matches_fix_all_kind;
@@ -890,6 +894,56 @@ mod tests {
             "pyrefly": {"customHoverProvider": true}
         }));
         assert!(client_uses_custom_hover_provider(&params));
+    }
+
+    #[test]
+    fn test_should_rewatch() {
+        let cases = [
+            (
+                "dependency metadata",
+                CategorizedEvents {
+                    modified: vec![PathBuf::from("uv.lock")],
+                    ..Default::default()
+                },
+                true,
+            ),
+            (
+                "configuration metadata",
+                CategorizedEvents {
+                    modified: vec![PathBuf::from("pyrefly.toml")],
+                    ..Default::default()
+                },
+                true,
+            ),
+            (
+                "created source",
+                CategorizedEvents {
+                    created: vec![PathBuf::from("module.py")],
+                    ..Default::default()
+                },
+                true,
+            ),
+            (
+                "removed source",
+                CategorizedEvents {
+                    removed: vec![PathBuf::from("module.py")],
+                    ..Default::default()
+                },
+                true,
+            ),
+            (
+                "modified source",
+                CategorizedEvents {
+                    modified: vec![PathBuf::from("module.py")],
+                    ..Default::default()
+                },
+                false,
+            ),
+        ];
+
+        for (name, events, expected) in cases {
+            assert_eq!(Server::should_rewatch(&events), expected, "{name}");
+        }
     }
 }
 
@@ -3273,6 +3327,7 @@ impl Server {
         self.invalidate(
             TelemetryEventKind::InvalidateFind,
             Some(TelemetryInvalidateFindReason::SourceDbConfigChanged),
+            false,
             |t| t.invalidate_find_for_configs(invalidated_configs),
         );
     }
@@ -3445,6 +3500,7 @@ impl Server {
         &self,
         kind: TelemetryEventKind,
         invalidate_find_reason: Option<TelemetryInvalidateFindReason>,
+        rewatch: bool,
         f: impl FnOnce(&mut Transaction) + Send + Sync + 'static,
     ) {
         let open_handles = self.get_open_file_handles();
@@ -3456,6 +3512,11 @@ impl Server {
                 }
 
                 Self::invalidate_queue(server, telemetry_event, open_handles, Some(f));
+
+                if rewatch {
+                    info!("[Pyrefly] Re-registering file watchers");
+                    server.setup_file_watcher_if_necessary(Some(telemetry_event));
+                }
 
                 // After we finished a recheck asynchronously, we immediately send `RecheckFinished` to
                 // the main event loop of the server. As a result, the server can do a revalidation of
@@ -3730,7 +3791,7 @@ impl Server {
 
     fn did_save(&self, url: Url) {
         if let Some(path) = self.path_for_uri(&url) {
-            self.invalidate(TelemetryEventKind::InvalidateDisk, None, move |t| {
+            self.invalidate(TelemetryEventKind::InvalidateDisk, None, false, move |t| {
                 t.invalidate_disk(&[path])
             })
         }
@@ -4016,22 +4077,13 @@ impl Server {
         Ok(())
     }
 
-    /// Determines whether file watchers should be re-registered based on event types.
-    /// Returns true if config files changed or files were created/removed/unknown.
     fn should_rewatch(events: &CategorizedEvents) -> bool {
-        let config_changed = events.iter().any(|x| {
-            x.file_name()
-                .and_then(|x| x.to_str())
-                .is_some_and(|x| ConfigFile::CONFIG_FILE_NAMES.contains(&x))
-        });
-
-        // Re-register watchers if files were created/removed (pip install, new files, etc.)
-        // or if unknown events occurred. This ensures we discover new files while avoiding
-        // unnecessary re-registration on simple file modifications.
-        let files_added_or_removed =
-            !events.created.is_empty() || !events.removed.is_empty() || !events.unknown.is_empty();
-
-        config_changed || files_added_or_removed
+        events
+            .iter()
+            .any(|path| ConfigFile::is_watched_metadata(path))
+            || !events.created.is_empty()
+            || !events.removed.is_empty()
+            || !events.unknown.is_empty()
     }
 
     fn did_change_watched_files(
@@ -4073,11 +4125,7 @@ impl Server {
 
         let should_requery_build_system = should_requery_build_system(&events);
 
-        // Rewatch files if necessary (config changed, files added/removed, etc.)
-        if Self::should_rewatch(&events) {
-            info!("[Pyrefly] Re-registering file watchers");
-            self.setup_file_watcher_if_necessary(Some(telemetry_event));
-        }
+        let rewatch = Self::should_rewatch(&events);
 
         // Accumulate events in the pending buffer. The heavy task drains this
         // buffer at execution time, so consecutive DrainWatchedFileChanges events
@@ -4088,6 +4136,7 @@ impl Server {
         self.invalidate(
             TelemetryEventKind::InvalidateFind,
             Some(TelemetryInvalidateFindReason::WatcherEvents),
+            rewatch,
             move |t| {
                 let events = std::mem::take(&mut *pending.lock());
                 if !events.is_empty() {
@@ -5923,9 +5972,7 @@ impl Server {
                         glob_patterns
                             .insert(WatchPattern::root(root.dupe(), format!("**/*.{suffix}")));
                     });
-                    ConfigFile::CONFIG_FILE_NAMES.iter().for_each(|config| {
-                        glob_patterns.insert(WatchPattern::root(root, format!("**/{config}")));
-                    });
+                    glob_patterns.extend(ConfigFile::metadata_watch_patterns(root));
                 }
                 glob_patterns.extend(ConfigFile::get_paths_to_watch(&configs));
                 let mut watched_patterns = self.watched_patterns.lock();

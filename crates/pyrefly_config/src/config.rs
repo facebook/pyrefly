@@ -934,6 +934,14 @@ impl ConfigFile {
             })
     }
 
+    /// Patterns for metadata files that affect a project rooted at `root`.
+    pub fn metadata_watch_patterns(root: InternedPath) -> impl Iterator<Item = WatchPattern> {
+        Self::CONFIG_FILE_NAMES
+            .iter()
+            .chain(Self::DEPENDENCY_METADATA_FILE_NAMES)
+            .map(move |file| WatchPattern::root(root.dupe(), format!("**/{file}")))
+    }
+
     /// Writes the configuration to a file in the specified directory.
     pub fn write_to_toml_in_directory(&self, directory: &Path) -> Result<()> {
         let config_str =
@@ -1365,12 +1373,7 @@ impl ConfigFile {
             }
             if let Some(config_root) = config.source.root_from_file() {
                 let config_root = InternedPath::from_path(config_root);
-                result.extend(
-                    Self::CONFIG_FILE_NAMES
-                        .iter()
-                        .chain(Self::DEPENDENCY_METADATA_FILE_NAMES)
-                        .map(|file| WatchPattern::root(config_root, format!("**/{file}"))),
-                );
+                result.extend(Self::metadata_watch_patterns(config_root));
             }
             config
                 .search_path()
