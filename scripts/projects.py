@@ -548,8 +548,26 @@ def get_mypy_primer_projects() -> list[Project]:
             mypy_cmd="{mypy} pydantic",
             pyright_cmd="{pyright}",
             pyrefly_cmd="{pyrefly} pydantic",
-            deps=["types-toml"],
+            deps=[
+                "typing-extensions",
+                "annotated-types",
+                "pydantic-core",
+                "pydantic-settings",
+                "typing-inspection",
+            ],
             expected_mypy_success=True,
+        ),
+        Project(
+            location="https://github.com/pydantic/pydantic",
+            pyrefly_cmd="{pyrefly} tests/typechecking",
+            deps=[
+                "typing-extensions",
+                "annotated-types",
+                "pydantic-core",
+                "pydantic-settings",
+                "typing-inspection",
+            ],
+            name_override="pydantic-tests",
         ),
         Project(
             location="https://github.com/encode/starlette",
