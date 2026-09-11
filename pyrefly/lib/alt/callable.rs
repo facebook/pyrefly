@@ -999,7 +999,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut num_positional_params = 0;
         let mut extra_positional_args = Vec::new();
         // Map from seen parameter name to (Type, NameOrigin, definitely_seen).
-        // NotRequired fields of unpacked typed dicts are not definitely seen.
+        // NotRequired fields of unpacked typed dicts are not definitely seen: the field may be
+        // absent at runtime, so something else may still supply the parameter. A later source
+        // that does definitely supply the name upgrades the entry.
         let mut seen_names = SmallMap::new();
         let mut extra_arg_pos = None;
         let mut unpacked_vararg = None;
@@ -1571,7 +1573,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         for (name, field) in self.typed_dict_fields(&typed_dict).into_iter() {
                             let name = name_owner.push(name);
                             let mut hint = kwargs.as_ref().and_then(|(_, ty)| *ty);
-                            if let Some((ty, _, definitely_seen)) = seen_names.get(name) {
+                            if let Some((ty, _, definitely_seen)) = seen_names.get_mut(name) {
                                 // For Required fields, the conflict is guaranteed, so report
                                 // BadKeywordArgument. For NotRequired fields, the conflict is
                                 // only potential (field may be absent at runtime), so report
@@ -1589,6 +1591,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                     error_kind,
                                     format!("Multiple values for argument `{name}`"),
                                 );
+                                *definitely_seen |= field.required;
                                 hint = Some(*ty);
                             } else if let Some((ty, origin, _)) = kwparams.get(name) {
                                 seen_names.insert(name, (*ty, origin.clone(), field.required));
@@ -1669,7 +1672,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         ty.map(|ty| (NameOrigin::UnpackedKwargs(*name), ty))
                     });
                     let mut has_matching_param = false;
-                    if let Some((ty, origin, definitely_seen)) = seen_names.get(&id.id) {
+                    if let Some((ty, origin, definitely_seen)) = seen_names.get_mut(&id.id) {
                         // Use PotentialBadKeywordArgument when the prior entry came from a
                         // NotRequired TypedDict field — the conflict is only potential.
                         let error_kind = if !*definitely_seen {
@@ -1683,11 +1686,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             error_kind,
                             format!("Multiple values for argument `{}`", id.id),
                         );
+                        *definitely_seen = true;
                         hint = Some((origin.clone(), *ty));
                         has_matching_param = true;
-                    } else if let Some((ty, origin, req)) = kwparams.get(&id.id) {
-                        seen_names
-                            .insert(&id.id, (*ty, origin.clone(), **req == Required::Required));
+                    } else if let Some((ty, origin, _)) = kwparams.get(&id.id) {
+                        seen_names.insert(&id.id, (*ty, origin.clone(), true));
                         hint = Some((origin.clone(), *ty));
                         has_matching_param = true;
                     } else if matches!(callable_name, Some(FunctionKind::DataclassTransform))
