@@ -31,6 +31,8 @@ pub mod binding;
 #[doc(hidden)]
 pub mod commands;
 mod compat;
+#[doc(hidden)]
+pub mod embed;
 mod error;
 mod export;
 #[doc(hidden)]
