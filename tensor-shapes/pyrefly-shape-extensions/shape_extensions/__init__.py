@@ -88,6 +88,19 @@ def _patch_torch_if_available() -> None:
 _patch_torch_if_available()
 
 
+def _patch_jax_if_available() -> None:
+    try:
+        import jax  # @manual
+    except ImportError:
+        return
+
+    if hasattr(jax, "Array") and not hasattr(jax.Array, "__class_getitem__"):
+        jax.Array.__class_getitem__ = classmethod(_return_class)
+
+
+_patch_jax_if_available()
+
+
 class IntTuple:
     """Tuple-valued shape annotation surface.
 
@@ -380,6 +393,9 @@ class IntVar:
     def __typing_subst__(self, arg):
         return arg
 
+    def has_default(self):
+        return False
+
 
 class TypeVarTuple:
     """TypeVarTuple with support for integer shape dimensions.
@@ -417,3 +433,6 @@ class TypeVarTuple:
     @property
     def __typing_is_unpacked_typevartuple__(self):
         return True
+
+    def has_default(self):
+        return False

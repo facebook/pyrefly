@@ -29,6 +29,7 @@ use crate::export::definitions::Definitions;
 use crate::export::definitions::DunderAllEntry;
 use crate::export::definitions::DunderAllKind;
 use crate::export::special::SpecialExport;
+use crate::export::symbols::FlatSymbols;
 use crate::module::module_info::ModuleInfo;
 use crate::state::loader::FindingOrError;
 use crate::state::state::ModuleChanges;
@@ -125,6 +126,10 @@ pub struct Exports {
     /// The range of this module's docstring, if it has one. Docstrings for the
     /// exports themselves are stored in `exports`.
     docstring_range: Option<TextRange>,
+    /// Flat table of supported source declarations, including nested ones such
+    /// as methods, backing IDE symbol features. Built only while indexing a
+    /// first-party module; `None` everywhere else.
+    symbols: Option<FlatSymbols>,
 }
 
 impl Display for Exports {
@@ -141,7 +146,14 @@ impl Display for Exports {
 }
 
 impl Exports {
-    pub fn new(x: &[Stmt], module_info: &ModuleInfo, sys_info: SysInfo) -> Self {
+    /// When `build_symbols` is true, retain the flat table of supported source
+    /// declarations used by IDE symbol features; exports are always built.
+    pub fn new(
+        x: &[Stmt],
+        module_info: &ModuleInfo,
+        sys_info: SysInfo,
+        build_symbols: bool,
+    ) -> Self {
         let mut definitions = Definitions::new(
             x,
             module_info.name(),
@@ -165,6 +177,8 @@ impl Exports {
             ]);
         }
 
+        let symbols = build_symbols.then(|| FlatSymbols::new(x));
+
         Self {
             module_name: module_info.name(),
             is_init: module_info.path().is_init(),
@@ -174,7 +188,13 @@ impl Exports {
             wildcard: Calculation::new(),
             exports: Calculation::new(),
             docstring_range: Docstring::range_from_stmts(x),
+            symbols,
         }
+    }
+
+    /// The flat symbol table, if one was built for this module.
+    pub fn symbols(&self) -> Option<&FlatSymbols> {
+        self.symbols.as_ref()
     }
 
     /// What symbols will I get if I do `from <this_module> import *`?
@@ -623,7 +643,33 @@ mod tests {
             path,
             Arc::new(contents.to_owned()),
         );
-        Arc::new(Exports::new(&ast.body, &module_info, SysInfo::default()))
+        Arc::new(Exports::new(
+            &ast.body,
+            &module_info,
+            SysInfo::default(),
+            true,
+        ))
+    }
+
+    #[test]
+    fn test_build_symbols_gate() {
+        let ast = Ast::parse("class C:\n  def method(self): pass\n", PySourceType::Python).0;
+        let module_info = ModuleInfo::new(
+            ModuleName::from_str("foo"),
+            ModulePath::filesystem(PathBuf::from("foo.py")),
+            Arc::new("class C:\n  def method(self): pass\n".to_owned()),
+        );
+
+        assert!(
+            Exports::new(&ast.body, &module_info, SysInfo::default(), false)
+                .symbols()
+                .is_none()
+        );
+        assert!(
+            Exports::new(&ast.body, &module_info, SysInfo::default(), true)
+                .symbols()
+                .is_some()
+        );
     }
 
     fn eq_wildcards(exports: &Exports, lookup: &dyn LookupExport, all: &[&str]) {

@@ -57,7 +57,8 @@ def check_invalid_cat_stack_controls() -> None:
 
     torch.cat((x, 1))  # E: is not assignable to parameter `tensors`
     torch.concat([x, "not a tensor"])  # E: is not assignable to parameter `tensors`
-    torch.stack((x, object()))  # E: is not assignable to parameter `tensors`
+    # The gradual fallback intentionally accepts heterogeneous sequences.
+    assert_type(torch.stack((x, object())), Tensor)
 
 
 def check_invalid_structural_controls(

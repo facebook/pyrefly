@@ -1045,14 +1045,13 @@ impl<'a> Transaction<'a> {
             let dispatch_nanos = search_start.elapsed().as_nanos() as u64;
             max_dispatch_nanos.fetch_max(dispatch_nanos, Ordering::Relaxed);
             let _ = tasks.work(|_, modules| {
-                // Propagate transaction-level cancellation to the local TaskHeap
-                // so `work()` will stop popping chunks.
-                if transaction_cancelled.is_cancelled() {
-                    local_cancelled.cancel();
-                    return;
-                }
                 let mut thread_local_results = Vec::new();
                 for (handle, module_data) in modules {
+                    // Propagate transaction cancellation so `work()` stops taking chunks.
+                    if transaction_cancelled.is_cancelled() {
+                        local_cancelled.cancel();
+                        return;
+                    }
                     let exports_data = self.lookup_export(module_data);
                     let exports = exports_data.exports(&self.lookup(module_data));
                     thread_local_results.extend(searcher(handle, &exports_data, &exports));

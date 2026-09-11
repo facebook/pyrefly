@@ -127,7 +127,7 @@ fn pytorch_root() -> Option<PathBuf> {
     if let Some(root) = override_root
         && root.join(SENTINEL).exists()
     {
-        return Some(root);
+        return fs::canonicalize(&root).ok();
     }
 
     if let Some(root) = buck_resource_root() {

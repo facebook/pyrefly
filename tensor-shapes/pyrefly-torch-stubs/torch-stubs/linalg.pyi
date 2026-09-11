@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 # Type stubs for torch.linalg module (Phase 4: Advanced Linear Algebra)
-from typing import overload
+from typing import Any, overload
 
 from shape_extensions import Elements, IntTuple, IntVar
 from torch import Tensor
@@ -88,3 +88,21 @@ def matrix_exp[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]: ...
 def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
     input: Tensor[[*Elements[Batch], M, N]], tol: float = None, hermitian: bool = False
 ) -> Tensor[Batch]: ...
+
+# Vector/matrix norm
+def norm(
+    A: Tensor,
+    ord: int | float | str | None = None,
+    dim: int | tuple[int, ...] | None = None,
+    keepdim: bool = False,
+) -> Tensor: ...
+def vector_norm(
+    x: Tensor,
+    ord: int | float = 2,
+    dim: int | tuple[int, ...] | None = None,
+    keepdim: bool = False,
+    *,
+    dtype: Any = None,
+    out: Tensor | None = None,
+) -> Tensor: ...
+def __getattr__(name: str) -> Any: ...

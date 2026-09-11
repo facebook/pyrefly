@@ -5,9 +5,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import jax
 import jax.lax as lax
 import jax.numpy as jnp
+import numpy as np
 from shape_extensions import assert_shape, IntTuple
 
 
@@ -407,6 +410,16 @@ def test_lax_shape_manipulation() -> None:
     # unstack
     u0, u1 = lax.unstack(x, axis=0)
     assert u0.shape == (3,) and u1.shape == (3,)
+    try:
+        # E: Argument `Literal[1]` is not assignable to parameter `x`
+        lax.unstack(1)
+    except ValueError:
+        pass
+    try:
+        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `x`
+        lax.unstack(jnp.ones(()))
+    except ValueError:
+        pass
 
 
 def test_lax_dtype_bitcast():
@@ -420,3 +433,782 @@ def test_lax_dtype_bitcast():
     # bitcast_convert_type
     res_bitcast = lax.bitcast_convert_type(x, jnp.int32)
     assert res_bitcast.shape == (2, 3)
+
+
+def reject_lax_argmax_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.argmax(x, axis=3, index_dtype=jnp.int32)
+
+
+def reject_lax_argmax_negative_axis(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.argmax(x, axis=-1, index_dtype=jnp.int32)
+
+
+def reject_lax_argmin_negative_axis(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.argmin(x, axis=-1, index_dtype=jnp.int32)
+
+
+def reject_lax_cumsum_negative_axis(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.cumsum(x, axis=-1)
+
+
+def reject_lax_cummax_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.cummax(x, axis=3)
+
+
+def reject_lax_associative_scan_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.associative_scan(lax.add, x, axis=3)
+
+
+def reject_lax_associative_scan_negative_out_of_bounds(
+    x: jax.Array[[2, 3, 4]],
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.associative_scan(lax.add, x, axis=-4)
+
+
+def reject_lax_reduce_sum_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.reduce_sum(x, (3,))
+
+
+def reject_lax_reduce_sum_negative_axis(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.reduce_sum(x, (-1,))
+
+
+def reject_lax_reduce_sum_duplicate_axis(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: duplicate axis
+    lax.reduce_sum(x, (0, 0))
+
+
+def reject_lax_approx_max_k_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.approx_max_k(x, 2, reduction_dimension=3)
+
+
+def reject_lax_approx_min_k_negative_k(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: k must be non-negative
+    lax.approx_min_k(x, -1)
+
+
+def reject_lax_clamp_mismatched_min(
+    x: jax.Array[[2, 3, 4]], bad_min: jax.Array[[3, 4]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: clamp requires min.shape == operand.shape or min.shape == ()
+    lax.clamp(bad_min, x, 1.0)
+
+
+def reject_lax_clamp_mismatched_max(
+    x: jax.Array[[2, 3, 4]], bad_max: jax.Array[[3, 4]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: clamp requires max.shape == operand.shape or max.shape == ()
+    lax.clamp(0.0, x, bad_max)
+
+
+def reject_lax_select_mismatched_cases(
+    x: jax.Array[[2, 3, 4]], y: jax.Array[[2, 3]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: select cases must have the same shapes
+    lax.select(True, x, y)
+
+
+def reject_lax_select_mismatched_pred(
+    pred: jax.Array[[4]], x: jax.Array[[2, 3, 4]], y: jax.Array[[2, 3, 4]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: select `which` must be scalar or have the same shape as cases
+    lax.select(pred, x, y)
+
+
+def reject_lax_select_n_mismatched_which(
+    which: jax.Array[[4]], x: jax.Array[[2, 3, 4]], y: jax.Array[[2, 3, 4]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: select `which` must be scalar or have the same shape as cases
+    lax.select_n(which, x, y)
+
+
+def reject_lax_sort_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.sort(x, dimension=3)
+
+
+def reject_lax_sort_key_val_mismatched(
+    x: jax.Array[[2, 3, 4]], bad_val: jax.Array[[2, 3]]
+) -> None:
+    # E: Cannot evaluate type-level shape DSL call: Arguments to sort must have equal shapes
+    lax.sort_key_val(x, bad_val)
+
+
+def reject_lax_top_k_out_of_bounds(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+    lax.top_k(x, 2, axis=3)
+
+
+def reject_lax_top_k_negative_k(x: jax.Array[[2, 3, 4]]) -> None:
+    # E: Cannot evaluate type-level shape DSL call: k must be non-negative
+    lax.top_k(x, -1)
+
+
+def test_lax_argmax_argmin() -> None:
+    x = jnp.ones((2, 3, 4))
+    assert_shape(lax.argmax(x, axis=0, index_dtype=jnp.int32).shape, (3, 4))
+    assert_shape(lax.argmax(x, axis=1, index_dtype=jnp.int32).shape, (2, 4))
+    assert_shape(lax.argmax(x, axis=2, index_dtype=jnp.int32).shape, (2, 3))
+    assert_shape(lax.argmin(x, axis=0, index_dtype=jnp.int32).shape, (3, 4))
+    assert_shape(lax.argmin(x, axis=1, index_dtype=jnp.int32).shape, (2, 4))
+    assert_shape(lax.argmin(x, axis=2, index_dtype=jnp.int32).shape, (2, 3))
+
+
+def test_lax_scans() -> None:
+    x = jnp.ones((2, 3, 4))
+    # associative_scan
+    assert_shape(lax.associative_scan(lax.add, x, axis=0).shape, (2, 3, 4))
+    assert_shape(
+        lax.associative_scan(lax.add, x, axis=1, reverse=True).shape, (2, 3, 4)
+    )
+    assert_shape(lax.associative_scan(lax.add, x, axis=-1).shape, (2, 3, 4))
+    assert_shape(lax.associative_scan(lax.add, x).shape, (2, 3, 4))
+
+    # cumlogsumexp
+    assert_shape(lax.cumlogsumexp(x, axis=0).shape, (2, 3, 4))
+    assert_shape(lax.cumlogsumexp(x, axis=1, reverse=True).shape, (2, 3, 4))
+    assert_shape(lax.cumlogsumexp(x).shape, (2, 3, 4))
+
+    # cummax, cummin, cumprod, cumsum
+    assert_shape(lax.cummax(x, axis=0).shape, (2, 3, 4))
+    assert_shape(lax.cummax(x).shape, (2, 3, 4))
+    assert_shape(lax.cummin(x, axis=1).shape, (2, 3, 4))
+    assert_shape(lax.cummin(x).shape, (2, 3, 4))
+    assert_shape(lax.cumprod(x, axis=2).shape, (2, 3, 4))
+    assert_shape(lax.cumprod(x).shape, (2, 3, 4))
+    assert_shape(lax.cumsum(x, axis=0).shape, (2, 3, 4))
+    assert_shape(lax.cumsum(x).shape, (2, 3, 4))
+
+
+def test_lax_reductions() -> None:
+    x = jnp.ones((2, 3, 4))
+    b = jnp.array([[[True, False, True, False]] * 3] * 2)
+
+    # reduce
+    assert_shape(lax.reduce(x, 0.0, lax.add, (0, 2)).shape, (3,))
+    assert_shape(lax.reduce(x, 0.0, lax.add, ()).shape, (2, 3, 4))
+    assert_shape(lax.reduce(x, 0.0, lax.add, (0, 1, 2)).shape, ())
+
+    # reduce_sum, reduce_prod, reduce_max, reduce_min
+    assert_shape(lax.reduce_sum(x, (1,)).shape, (2, 4))
+    assert_shape(lax.reduce_sum(x, (0, 1, 2)).shape, ())
+    assert_shape(lax.reduce_prod(x, ()).shape, (2, 3, 4))
+    assert_shape(lax.reduce_prod(x, (0, 2)).shape, (3,))
+    assert_shape(lax.reduce_max(x, (2,)).shape, (2, 3))
+    assert_shape(lax.reduce_min(x, (0,)).shape, (3, 4))
+
+    # reduce_and, reduce_or, reduce_xor
+    assert_shape(lax.reduce_and(b, (0,)).shape, (3, 4))
+    assert_shape(lax.reduce_or(b, (1, 2)).shape, (2,))
+    assert_shape(lax.reduce_xor(b, (2,)).shape, (2, 3))
+
+
+def test_lax_reduce_precision() -> None:
+    x = jnp.ones((2, 3, 4))
+    assert_shape(lax.reduce_precision(x, 8, 7).shape, (2, 3, 4))
+    assert_shape(lax.reduce_precision(3.14, 8, 7).shape, ())
+
+
+def test_lax_reduce_window() -> None:
+    x = jnp.ones((2, 4, 6))
+    res_window = lax.reduce_window(x, 0.0, lax.add, (1, 2, 2), (1, 1, 1), "VALID")
+    assert res_window.shape == (2, 3, 5)
+
+    res_tuple = lax.reduce_window_shape_tuple(
+        (2, 4, 6), (1, 2, 2), (1, 1, 1), ((0, 0), (0, 0), (0, 0))
+    )
+    assert res_tuple == (2, 3, 5)
+    # Satisfy assert_shape requirement for the test
+    assert_shape(x.shape, (2, 4, 6))
+
+
+def test_lax_approx_max_min_k() -> None:
+    x = jnp.ones((2, 3, 4))
+    val_max, idx_max = lax.approx_max_k(x, 2, reduction_dimension=1)
+    assert_shape(val_max.shape, (2, 2, 4))
+    assert_shape(idx_max.shape, (2, 2, 4))
+
+    val_min, idx_min = lax.approx_min_k(x, 3, reduction_dimension=-1)
+    assert_shape(val_min.shape, (2, 3, 3))
+    assert_shape(idx_min.shape, (2, 3, 3))
+
+
+def test_lax_clamp() -> None:
+    x = jnp.ones((2, 3, 4))
+    assert_shape(lax.clamp(0.0, x, 1.0).shape, (2, 3, 4))
+    assert_shape(lax.clamp(jnp.zeros((2, 3, 4)), x, 1.0).shape, (2, 3, 4))
+    assert_shape(lax.clamp(0.0, x, jnp.ones((2, 3, 4))).shape, (2, 3, 4))
+    assert_shape(
+        lax.clamp(jnp.zeros((2, 3, 4)), x, jnp.ones((2, 3, 4))).shape, (2, 3, 4)
+    )
+    assert_shape(lax.clamp(0.0, 5.0, 1.0).shape, ())
+
+
+def test_lax_select() -> None:
+    x = jnp.ones((2, 3, 4))
+    y = jnp.zeros((2, 3, 4))
+    pred_0d = jnp.array(True)
+    pred_3d = jnp.ones((2, 3, 4), dtype=bool)
+
+    assert_shape(lax.select(True, x, y).shape, (2, 3, 4))
+    assert_shape(lax.select(pred_0d, x, y).shape, (2, 3, 4))
+    assert_shape(lax.select(pred_3d, x, y).shape, (2, 3, 4))
+    assert_shape(lax.select(True, 1.0, 2.0).shape, ())
+
+
+def test_lax_select_n() -> None:
+    x = jnp.ones((2, 3, 4))
+    y = jnp.zeros((2, 3, 4))
+    which_0d = jnp.array(0)
+    which_3d = jnp.zeros((2, 3, 4), dtype=jnp.int32)
+
+    assert_shape(lax.select_n(0, x, y).shape, (2, 3, 4))
+    assert_shape(lax.select_n(which_0d, x, y).shape, (2, 3, 4))
+    assert_shape(lax.select_n(which_3d, x, y, x).shape, (2, 3, 4))
+    assert_shape(lax.select_n(0, 1.0, 2.0).shape, ())
+
+
+def test_lax_sort() -> None:
+    x = jnp.ones((2, 3, 4))
+    y = jnp.ones((2, 3, 4))
+
+    assert_shape(lax.sort(x).shape, (2, 3, 4))
+    assert_shape(lax.sort(x, dimension=0).shape, (2, 3, 4))
+    assert_shape(lax.sort(x, dimension=-1).shape, (2, 3, 4))
+
+    s1, s2 = lax.sort((x, y), dimension=1)
+    assert_shape(s1.shape, (2, 3, 4))
+    assert_shape(s2.shape, (2, 3, 4))
+
+
+def test_lax_sort_key_val() -> None:
+    x = jnp.ones((2, 3, 4))
+    y = jnp.ones((2, 3, 4))
+
+    sk, sv = lax.sort_key_val(x, y, dimension=-1)
+    assert_shape(sk.shape, (2, 3, 4))
+    assert_shape(sv.shape, (2, 3, 4))
+
+
+def test_lax_top_k() -> None:
+    x = jnp.ones((2, 3, 4))
+
+    top_v, top_i = lax.top_k(x, 2)
+    assert_shape(top_v.shape, (2, 3, 2))
+    assert_shape(top_i.shape, (2, 3, 2))
+
+    top_v0, top_i0 = lax.top_k(x, 1, axis=0)
+    assert_shape(top_v0.shape, (1, 3, 4))
+    assert_shape(top_i0.shape, (1, 3, 4))
+
+
+def test_lax_dynamic_slicing() -> None:
+    x = jnp.ones((3, 4, 5))
+    assert_shape(lax.dynamic_index_in_dim(x, 1, axis=1, keepdims=True).shape, (3, 1, 5))
+    assert_shape(lax.dynamic_index_in_dim(x, 1, axis=1, keepdims=False).shape, (3, 5))
+    assert_shape(
+        lax.dynamic_index_in_dim(x, 0, axis=-1, keepdims=True).shape, (3, 4, 1)
+    )
+    assert_shape(lax.dynamic_index_in_dim(x, 0, axis=-1, keepdims=False).shape, (3, 4))
+
+    assert_shape(lax.dynamic_slice(x, (1, 1, 1), (2, 2, 3)).shape, (2, 2, 3))
+
+    assert_shape(lax.dynamic_slice_in_dim(x, 1, 2, axis=1).shape, (3, 2, 5))
+    assert_shape(lax.dynamic_slice_in_dim(x, 0, 2, axis=-1).shape, (3, 4, 2))
+    assert_shape(
+        lax.dynamic_slice_in_dim(x, 0, 2, axis=-1, allow_negative_indices=False).shape,
+        (3, 4, 2),
+    )
+    assert_shape(
+        lax.dynamic_slice_in_dim(x, 0, 2, axis=-1, allow_negative_indices=True).shape,
+        (3, 4, 2),
+    )
+
+    up1 = jnp.zeros((3, 1, 5))
+    assert_shape(lax.dynamic_update_index_in_dim(x, up1, 1, axis=1).shape, (3, 4, 5))
+
+    up2 = jnp.zeros((2, 2, 3))
+    assert_shape(lax.dynamic_update_slice(x, up2, (1, 1, 1)).shape, (3, 4, 5))
+
+    up3 = jnp.zeros((3, 2, 5))
+    assert_shape(lax.dynamic_update_slice_in_dim(x, up3, 1, axis=1).shape, (3, 4, 5))
+
+    assert_shape(lax.index_in_dim(x, 1, axis=1, keepdims=True).shape, (3, 1, 5))
+    assert_shape(lax.index_in_dim(x, 1, axis=1, keepdims=False).shape, (3, 5))
+
+    src = jnp.ones((5, 4))
+    idxs = jnp.array([[0, 1, 2]])
+    res_it = lax.index_take(src, idxs, (0,))
+    assert isinstance(res_it, jax.Array)
+
+
+def test_lax_gather_scatter() -> None:
+    operand = jnp.ones((5, 3))
+    indices = jnp.array([[1], [2]])
+    g_dnums = lax.GatherDimensionNumbers(
+        offset_dims=(1,),
+        collapsed_slice_dims=(0,),
+        start_index_map=(0,),
+        operand_batching_dims=(),
+        start_indices_batching_dims=(),
+    )
+    res_g = lax.gather(operand, indices, dimension_numbers=g_dnums, slice_sizes=(1, 3))
+    assert isinstance(res_g, jax.Array)
+    res_g_clip = lax.gather(
+        operand,
+        indices,
+        dimension_numbers=g_dnums,
+        slice_sizes=(1, 3),
+        mode=lax.GatherScatterMode.CLIP,
+    )
+    assert isinstance(res_g_clip, jax.Array)
+
+    s_dnums = lax.ScatterDimensionNumbers(
+        update_window_dims=(1,),
+        inserted_window_dims=(0,),
+        scatter_dims_to_operand_dims=(0,),
+        operand_batching_dims=(),
+        scatter_indices_batching_dims=(),
+    )
+    updates = jnp.ones((2, 3))
+    assert_shape(lax.scatter(operand, indices, updates, s_dnums).shape, (5, 3))
+    assert_shape(
+        lax.scatter(
+            operand, indices, updates, s_dnums, mode=lax.GatherScatterMode.FILL_OR_DROP
+        ).shape,
+        (5, 3),
+    )
+    assert_shape(lax.scatter_add(operand, indices, updates, s_dnums).shape, (5, 3))
+    assert_shape(
+        lax.scatter_apply(
+            operand, indices, lambda u: u * 2, s_dnums, update_shape=(2, 3)
+        ).shape,
+        (5, 3),
+    )
+    assert_shape(lax.scatter_max(operand, indices, updates, s_dnums).shape, (5, 3))
+    assert_shape(lax.scatter_min(operand, indices, updates, s_dnums).shape, (5, 3))
+    assert_shape(lax.scatter_mul(operand, indices, updates, s_dnums).shape, (5, 3))
+    assert_shape(lax.scatter_sub(operand, indices, updates, s_dnums).shape, (5, 3))
+
+
+def test_lax_linear_algebra_contractions() -> None:
+    # batch_matmul
+    a = jnp.ones((2, 3, 4))
+    b = jnp.ones((2, 4, 5))
+    assert_shape(lax.batch_matmul(a, b).shape, (2, 3, 5))
+    assert_shape(
+        lax.batch_matmul(a, b, precision=lax.Precision.HIGHEST).shape, (2, 3, 5)
+    )
+    a4 = jnp.ones((7, 2, 3, 4))
+    b4 = jnp.ones((7, 2, 4, 5))
+    assert_shape(lax.batch_matmul(a4, b4).shape, (7, 2, 3, 5))
+
+    # dot
+    v1 = jnp.ones(3)
+    v2 = jnp.ones(3)
+    mat23 = jnp.ones((2, 3))
+    mat34 = jnp.ones((3, 4))
+    assert_shape(lax.dot(v1, v2).shape, ())
+    assert_shape(lax.dot(mat23, v1).shape, (2,))
+    assert_shape(lax.dot(v1, mat34).shape, (4,))
+    assert_shape(lax.dot(mat23, mat34).shape, (2, 4))
+    assert_shape(lax.dot(mat23, mat34, precision=lax.Precision.DEFAULT).shape, (2, 4))
+
+    # dot_general
+    dg_res = lax.dot_general(mat23, mat34, (((1,), (0,)), ((), ())))
+    assert_shape(dg_res.shape, (2, 4))
+
+    # conv & friends
+    lhs = jnp.ones((1, 1, 8, 8))
+    rhs = jnp.ones((1, 1, 3, 3))
+    conv_res = lax.conv(lhs, rhs, (1, 1), "SAME")
+    assert isinstance(conv_res, jax.Array)
+
+    cdnums = lax.conv_dimension_numbers(
+        (1, 1, 8, 8), (1, 1, 3, 3), ("NCHW", "OIHW", "NCHW")
+    )
+    assert cdnums is not None
+
+    cgd_res = lax.conv_general_dilated(lhs, rhs, (1, 1), "SAME")
+    assert isinstance(cgd_res, jax.Array)
+
+    cgdp_res = lax.conv_general_dilated_patches(lhs, (3, 3), (1, 1), "SAME")
+    assert isinstance(cgdp_res, jax.Array)
+
+    cgdl_lhs = jnp.ones((1, 8, 8, 1))
+    cgdl_rhs = jnp.ones((8, 8, 9, 1))
+    cgdl_res = lax.conv_general_dilated_local(
+        cgdl_lhs,
+        cgdl_rhs,
+        (1, 1),
+        "SAME",
+        (3, 3),
+        dimension_numbers=("NHWC", "HWIO", "NHWC"),
+    )
+    assert isinstance(cgdl_res, jax.Array)
+
+    perms = lax.conv_general_permutations(("NCHW", "OIHW", "NCHW"))
+    assert len(perms) == 3
+
+    st1 = lax.conv_general_shape_tuple(
+        (1, 1, 8, 8), (1, 1, 3, 3), (1, 1), "SAME", ("NCHW", "OIHW", "NCHW")
+    )
+    assert len(st1) == 4
+
+    st2 = lax.conv_shape_tuple((1, 1, 8, 8), (1, 1, 3, 3), (1, 1), [(1, 1), (1, 1)])
+    assert len(st2) == 4
+
+    ct_lhs = jnp.ones((1, 8, 8, 1))
+    ct_rhs = jnp.ones((3, 3, 1, 1))
+    ct_res = lax.conv_transpose(ct_lhs, ct_rhs, (1, 1), "SAME")
+    assert isinstance(ct_res, jax.Array)
+
+    st3 = lax.conv_transpose_shape_tuple(
+        (1, 1, 8, 8), (1, 1, 3, 3), (1, 1), "SAME", ("NCHW", "OIHW", "NCHW")
+    )
+    assert len(st3) == 4
+
+    cwgp_res = lax.conv_with_general_padding(lhs, rhs, (1, 1), "SAME", None, None)
+    assert isinstance(cwgp_res, jax.Array)
+
+    # custom_linear_solve & custom_root
+    b_vec = jnp.ones(3)
+    sol_cls = lax.custom_linear_solve(lambda x: x, b_vec, lambda f, x: x)
+    assert sol_cls is not None
+
+    sol_cr = lax.custom_root(lambda x: x, b_vec, lambda f, x: x, lambda f, x: x)
+    assert sol_cr is not None
+
+    # ragged_dot
+    rlhs = jnp.ones((6, 4))
+    rrhs = jnp.ones((2, 4, 5))
+    group_sizes = jnp.array([3, 3])
+    rd_res = lax.ragged_dot(rlhs, rrhs, group_sizes)
+    assert_shape(rd_res.shape, (6, 5))
+
+    rddnums = lax.RaggedDotDimensionNumbers(
+        dot_dimension_numbers=(((1,), (1,)), ((), ())),
+        lhs_ragged_dimensions=(0,),
+        rhs_group_dimensions=(0,),
+    )
+    rdg_res = lax.ragged_dot_general(rlhs, rrhs, group_sizes, rddnums)
+    assert isinstance(rdg_res, jax.Array)
+
+    # scaled_dot
+    sd_res = lax.scaled_dot(mat23, mat34)
+    assert isinstance(sd_res, jax.Array)
+
+    # Section 13: Types, Enums & Dimension Descriptors
+    assert lax.AccuracyMode is not None
+    assert lax.DotAlgorithm is not None
+    assert lax.DotAlgorithmPreset is not None
+    assert lax.FftType is not None
+    assert lax.GatherDimensionNumbers is not None
+    assert lax.GatherScatterMode is not None
+    assert lax.Precision is not None
+    assert lax.RandomAlgorithm is not None
+    assert lax.RoundingMethod is not None
+    assert lax.ScatterDimensionNumbers is not None
+    assert lax.Tolerance is not None
+
+
+def generic_control_flow[Shape: IntTuple](
+    x: jax.Array[Shape],
+    pred_scalar: jax.Array[[]],
+) -> tuple[
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+]:
+    c = lax.cond(True, lambda v: v, lambda v: v, x)
+    c2 = lax.cond(pred_scalar, lambda v: v, lambda v: v, x)
+    fl = lax.fori_loop(0, 10, lambda i, v: v, x)
+    sw = lax.switch(0, [lambda v: v], x)
+    sw2 = lax.switch(0, [lambda v: v], operand=x)
+    sw3 = lax.switch(pred_scalar, [lambda v: v], x)
+    wl = lax.while_loop(lambda v: True, lambda v: v, x)
+    return c, c2, fl, sw, sw2, sw3, wl
+
+
+def test_control_flow_and_higher_order() -> None:
+    # cond with bool scalar, 0-D array, and keyword operand
+    c1 = lax.cond(True, lambda x: x + 1, lambda x: x - 1, jnp.ones((2, 3)))
+    assert_shape(c1.shape, (2, 3))
+
+    c2 = lax.cond(jnp.array(True), lambda x: x + 1, lambda x: x - 1, jnp.ones((2, 3)))
+    assert_shape(c2.shape, (2, 3))
+
+    c3 = lax.cond(False, lambda x: x, lambda x: x, operand=jnp.ones((2, 3)))
+    assert_shape(c3.shape, (2, 3))
+
+    c4 = lax.cond(True, lambda: jnp.ones(4), lambda: jnp.zeros(4))
+    assert_shape(c4.shape, (4,))
+
+    c5 = lax.cond(
+        True,
+        lambda a, b: a + b,
+        lambda a, b: a - b,
+        jnp.ones((2, 3)),
+        jnp.ones((2, 3)),
+    )
+    assert_shape(c5.shape, (2, 3))
+
+    # fori_loop
+    fl = lax.fori_loop(0, 5, lambda i, x: x + 1, jnp.zeros((2, 3)))
+    assert_shape(fl.shape, (2, 3))
+
+    fl2 = lax.fori_loop(
+        jnp.array(0), jnp.array(5), lambda i, x: x + 1, jnp.zeros((2, 3))
+    )
+    assert_shape(fl2.shape, (2, 3))
+
+    # map
+    m = lax.map(lambda x: x * 2, jnp.ones((4, 3)))
+    assert_shape(m.shape, (4, 3))
+
+    # scan
+    carry, ys = lax.scan(lambda c, x: (c + x, c * x), jnp.zeros(3), jnp.ones((5, 3)))
+    assert_shape(carry.shape, (3,))
+    assert_shape(ys.shape, (5, 3))
+
+    # switch
+    sw1 = lax.switch(1, [lambda x: x, lambda x: x * 2], jnp.ones((2, 3)))
+    assert_shape(sw1.shape, (2, 3))
+
+    sw2 = lax.switch(1, [lambda x: x, lambda x: x * 2], operand=jnp.ones((2, 3)))
+    assert_shape(sw2.shape, (2, 3))
+
+    sw3 = lax.switch(jnp.array(0), [lambda x: x, lambda x: x * 2], jnp.ones((2, 3)))
+    assert_shape(sw3.shape, (2, 3))
+
+    sw4 = lax.switch(0, [lambda: jnp.ones((2, 3)), lambda: jnp.zeros((2, 3))])
+    assert_shape(sw4.shape, (2, 3))
+
+    sw5 = lax.switch(
+        0,
+        [lambda a, b: a + b, lambda a, b: a - b],
+        jnp.ones((2, 3)),
+        jnp.ones((2, 3)),
+    )
+    assert_shape(sw5.shape, (2, 3))
+
+    # while_loop
+    wl = lax.while_loop(lambda x: x[0, 0] < 5, lambda x: x + 1, jnp.zeros((2, 3)))
+    assert_shape(wl.shape, (2, 3))
+
+
+def generic_parallel_ops[Shape: IntTuple](
+    x: jax.Array[Shape],
+) -> tuple[
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[IntTuple],
+    jax.Array[IntTuple],
+    jax.Array[IntTuple],
+    jax.Array[Shape],
+    jax.Array[[]],
+    int,
+]:
+    p1 = lax.pbroadcast(x, "i", 0)
+    p2 = lax.pcast(x, "i", to="varying")
+    p3 = lax.pmax(x, "i")
+    p4 = lax.pmean(x, "i")
+    p5 = lax.pmin(x, "i")
+    p6 = lax.ppermute(x, "i", [(0, 0)])
+    p7 = lax.pshuffle(x, "i", [0])
+    p8 = lax.psum(x, "i")
+    p9 = lax.pswapaxes(x, "i", 0)
+    p10 = lax.all_gather(x, "i")
+    p11 = lax.all_to_all(x, "i", 0, 0)
+    p12 = lax.psum_scatter(x, "i")
+    p13 = lax.ragged_all_to_all(
+        x,
+        x,
+        jnp.array([0]),
+        jnp.array([1]),
+        jnp.array([0]),
+        jnp.array([1]),
+        axis_name="i",
+    )
+    p14 = lax.axis_index("i")
+    p15 = lax.axis_size("i")
+    tok = lax.psend(x, "i", [(0, 0)])
+    _ = lax.precv(tok, x, "i", [(0, 0)])
+    return (
+        p1,
+        p2,
+        p3,
+        p4,
+        p5,
+        p6,
+        p7,
+        p8,
+        p9,
+        p10,
+        p11,
+        p12,
+        p13,
+        p14,
+        p15,
+    )
+
+
+def test_parallel_operations() -> None:
+    # Section 10 APIs: callable / existence
+    assert callable(lax.all_gather)
+    assert callable(lax.all_to_all)
+    assert callable(lax.axis_index)
+    assert callable(lax.axis_size)
+    assert callable(lax.pbroadcast)
+    assert callable(lax.pcast)
+    assert callable(lax.pmax)
+    assert callable(lax.pmean)
+    assert callable(lax.pmin)
+    assert callable(lax.ppermute)
+    assert callable(lax.precv)
+    assert callable(lax.psend)
+    assert callable(lax.pshuffle)
+    assert callable(lax.psum)
+    assert callable(lax.psum_scatter)
+    assert callable(lax.pswapaxes)
+    assert callable(lax.ragged_all_to_all)
+
+    # Static helper verification
+    x = jnp.ones((2, 3))
+    assert_shape(x.shape, (2, 3))
+
+
+def generic_special_math[Shape: IntTuple](
+    a: jax.Array[Shape],
+    b: jax.Array[Shape],
+    x: jax.Array[Shape],
+) -> tuple[
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[[]],
+    jax.Array[Shape],
+    jax.Array[IntTuple],
+]:
+    b1 = lax.betainc(a, b, x)
+    b2 = lax.betainc(1.0, 2.0, x)
+    b3 = lax.betainc(1.0, 2.0, 0.5)
+    r1 = lax.random_gamma_grad(a, x)
+    f1 = lax.fft(a, lax.FftType.FFT, (3,))
+    return b1, b2, b3, r1, f1
+
+
+def test_special_math() -> None:
+    a = jnp.ones((2, 3))
+    x = jnp.ones((2, 3)) * 0.5
+    assert_shape(lax.betainc(a, a, x).shape, (2, 3))
+    assert_shape(lax.betainc(1.0, 2.0, x).shape, (2, 3))
+    assert_shape(lax.betainc(1.0, 2.0, 0.5).shape, ())
+    assert_shape(lax.random_gamma_grad(a, x).shape, (2, 3))
+    assert_shape(lax.fft(lax.complex(a, a), lax.FftType.FFT, (3,)).shape, (2, 3))
+
+
+def generic_rng_and_data_types[KeyShape: IntTuple, Shape: IntTuple](
+    key: jax.Array[KeyShape],
+    shape: Shape,
+    zero_dim: jax.Array[[]],
+) -> tuple[
+    np.dtype,
+    jax.Array[KeyShape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+]:
+    dt = lax.dtype(key)
+    k_out, bits = lax.rng_bit_generator(key, shape)
+    u1 = lax.rng_uniform(0.0, 1.0, shape)
+    u2 = lax.rng_uniform(zero_dim, zero_dim, shape)
+    return dt, k_out, bits, u1, u2
+
+
+def test_rng_and_data_types() -> None:
+    k = jnp.zeros((4,), dtype="uint32")
+    k_out, bits = lax.rng_bit_generator(
+        k, (2, 3), algorithm=lax.RandomAlgorithm.RNG_THREE_FRY
+    )
+    assert_shape(k_out.shape, (4,))
+    assert_shape(bits.shape, (2, 3))
+    u1 = lax.rng_uniform(0.0, 1.0, (2, 3))
+    assert_shape(u1.shape, (2, 3))
+    u2 = lax.rng_uniform(jnp.array(0.0), jnp.array(1.0), (2, 3))
+    assert_shape(u2.shape, (2, 3))
+    assert lax.dtype(jnp.ones(3)) == jnp.float32
+
+
+def generic_compiler_and_misc[Shape: IntTuple](
+    x: jax.Array[Shape],
+    sharding: Any,
+) -> tuple[
+    Any,
+    Any,
+    jax.Array[Shape],
+    jax.Array[IntTuple],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+    jax.Array[Shape],
+]:
+    tok = lax.create_token()
+    tok2 = lax.after_all(tok)
+    lax.dce_sink(x)
+    ob = lax.optimization_barrier(x)
+    sav = lax.shape_as_value((2, 3))
+    st = lax.stage(x)
+    sg = lax.stop_gradient(x)
+    wsc = lax.with_sharding_constraint(x, sharding)
+    comp = lax.composite(lambda v: v, "comp")(x)
+    pd = lax.platform_dependent(x, default=lambda v: v)
+    return tok, tok2, ob, sav, st, sg, wsc, comp, pd
+
+
+def test_compiler_and_misc() -> None:
+    x = jnp.ones((2, 3))
+    tok = lax.create_token()
+    tok2 = lax.after_all(tok)
+    assert tok is not None and tok2 is not None
+    lax.dce_sink(x)
+    ob = lax.optimization_barrier(x)
+    assert_shape(ob.shape, (2, 3))
+    sav = lax.shape_as_value((2, 3))
+    assert_shape(sav.shape, (2,))
+    st = lax.stage(x)
+    assert_shape(st.shape, (2, 3))
+    sg = lax.stop_gradient(x)
+    assert_shape(sg.shape, (2, 3))
+    shd = getattr(jax, "sharding").SingleDeviceSharding(getattr(jax, "devices")()[0])
+    wsc = lax.with_sharding_constraint(x, shd)
+    assert_shape(wsc.shape, (2, 3))
+    comp_fn = lax.composite(lambda v: v * 2, "double")
+    assert_shape(comp_fn(x).shape, (2, 3))
+    pd1 = lax.platform_dependent(x, default=lambda v: v + 1, cpu=lambda v: v * 2)
+    assert_shape(pd1.shape, (2, 3))
+    pd2 = lax.platform_dependent(
+        x, x, default=lambda a, b: a + b, cpu=lambda a, b: a - b
+    )
+    assert_shape(pd2.shape, (2, 3))

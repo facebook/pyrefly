@@ -13,6 +13,7 @@ use lsp_types::CompletionItemKind;
 use pyrefly_build::handle::Handle;
 use pyrefly_python::ast::Ast;
 use pyrefly_python::short_identifier::ShortIdentifier;
+use pyrefly_types::data_frame::DataFrameKind;
 use pyrefly_types::facet::FacetKind;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Expr;
@@ -20,13 +21,14 @@ use ruff_python_ast::ExprCall;
 use ruff_python_ast::ExprDict;
 use ruff_python_ast::ExprStringLiteral;
 use ruff_python_ast::Identifier;
+use ruff_python_ast::Keyword;
 use ruff_python_ast::ModModule;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::alt::answers_solver::AnswersSolver;
-use crate::alt::polars_specials::is_dataframe_column_method;
+use crate::alt::polars_specials::polars_function_treats_strings_as_columns;
 use crate::binding::binding::Key;
 use crate::binding::narrow::int_from_slice;
 use crate::lsp::wasm::completion::RankedCompletion;
@@ -58,6 +60,13 @@ enum DictKeyLiteralContext {
     /// Example: `cfg[|]`. Completions insert a quoted key since there is no
     /// surrounding string.
     BareSubscript { base_expr: Expr },
+}
+
+#[derive(Clone, Copy)]
+enum ArgumentSlot<'a> {
+    Positional,
+    Keyword(&'a str),
+    UnpackedKeyword,
 }
 
 impl DictKeyLiteralContext {
@@ -267,17 +276,156 @@ impl<'a> Transaction<'a> {
             .collect()
     }
 
-    fn type_is_dataframe(ty: &Type) -> bool {
+    /// `None` means no union member is a DataFrame; `Some(false)` means a DataFrame is involved but
+    /// this slot is not eligible, so an enclosing DataFrame call must not claim the literal.
+    fn dataframe_slot_permitted(
+        ty: &Type,
+        method: &str,
+        slot: ArgumentSlot<'_>,
+        inside_column_helper: bool,
+    ) -> Option<bool> {
         match ty {
-            Type::DataFrame(_) => true,
+            Type::DataFrame(schema) => Some(match (schema.kind, method, slot) {
+                (DataFrameKind::Polars, "select" | "with_columns", _) => true,
+                (DataFrameKind::Polars, "drop" | "filter", ArgumentSlot::Positional) => true,
+                (
+                    DataFrameKind::Polars,
+                    "filter",
+                    ArgumentSlot::Keyword(_) | ArgumentSlot::UnpackedKeyword,
+                ) => inside_column_helper,
+                (
+                    DataFrameKind::Polars,
+                    "sort",
+                    ArgumentSlot::Positional | ArgumentSlot::Keyword("by"),
+                ) => true,
+                (DataFrameKind::Polars, "group_by" | "groupby", ArgumentSlot::Positional) => true,
+                (DataFrameKind::Polars, "group_by" | "groupby", ArgumentSlot::Keyword(name)) => {
+                    name != "maintain_order"
+                }
+                (
+                    DataFrameKind::Pandas,
+                    "drop",
+                    ArgumentSlot::Positional | ArgumentSlot::Keyword("columns"),
+                )
+                | (
+                    DataFrameKind::Pandas,
+                    "filter",
+                    ArgumentSlot::Positional | ArgumentSlot::Keyword("items"),
+                )
+                | (
+                    DataFrameKind::Pandas,
+                    "groupby",
+                    ArgumentSlot::Positional | ArgumentSlot::Keyword("by"),
+                ) => true,
+                _ => false,
+            }),
             Type::Union(u) => {
                 let (first, rest) = u
                     .members
                     .split_first()
                     .expect("a union must contain at least one member");
-                Self::type_is_dataframe(first) && rest.iter().all(Self::type_is_dataframe)
+                let mut result =
+                    Self::dataframe_slot_permitted(first, method, slot, inside_column_helper);
+                for member in rest {
+                    let member_result =
+                        Self::dataframe_slot_permitted(member, method, slot, inside_column_helper);
+                    result = match (result, member_result) {
+                        (None, None) => None,
+                        (Some(left), Some(right)) => Some(left && right),
+                        _ => Some(false),
+                    };
+                }
+                result
             }
-            _ => false,
+            _ => None,
+        }
+    }
+
+    /// Visits an explicit keyword or the entries of a supported unpacked mapping in source order.
+    /// A `None` name is an unknown key or unpack that may override preceding entries.
+    fn visit_keyword_entries<'b>(
+        &self,
+        handle: &Handle,
+        keyword: &'b Keyword,
+        mut visit: impl FnMut(Option<&'b str>, &'b Expr),
+    ) {
+        match (&keyword.arg, &keyword.value) {
+            (Some(name), value) => visit(Some(name.id.as_str()), value),
+            (None, Expr::Dict(dict)) => {
+                for item in &dict.items {
+                    let name = match item.key.as_ref() {
+                        Some(Expr::StringLiteral(key)) => Some(key.value.to_str()),
+                        _ => None,
+                    };
+                    visit(name, &item.value);
+                }
+            }
+            (None, Expr::Call(unpacked))
+                if unpacked.arguments.args.is_empty()
+                    && matches!(
+                        self.get_type_trace(handle, unpacked.func.range()),
+                        Some(Type::ClassDef(class)) if class.is_builtin("dict")
+                    ) =>
+            {
+                for keyword in &unpacked.arguments.keywords {
+                    visit(
+                        keyword.arg.as_ref().map(|name| name.id.as_str()),
+                        &keyword.value,
+                    );
+                }
+            }
+            (None, value) => visit(None, value),
+        }
+    }
+
+    /// Finds the argument containing the literal, resolving inline keyword mappings.
+    fn dataframe_call_argument_slot<'b>(
+        &self,
+        handle: &Handle,
+        call: &'b ExprCall,
+        literal_range: TextRange,
+    ) -> Option<ArgumentSlot<'b>> {
+        let mut slot = None;
+        let mut axis = None;
+        for keyword in &call.arguments.keywords {
+            let mut unpacked_slot = None;
+            self.visit_keyword_entries(handle, keyword, |name, value| {
+                if value.range().contains_range(literal_range) {
+                    unpacked_slot = Some(
+                        name.map(ArgumentSlot::Keyword)
+                            .unwrap_or(ArgumentSlot::UnpackedKeyword),
+                    );
+                } else if let Some(ArgumentSlot::Keyword(current)) = unpacked_slot
+                    && name.is_none_or(|name| name == current)
+                {
+                    // A later duplicate or unknown key can replace the value containing the cursor.
+                    unpacked_slot = Some(ArgumentSlot::UnpackedKeyword);
+                }
+                match name {
+                    Some("axis") => axis = Some(value),
+                    None => axis = None,
+                    _ => {}
+                }
+            });
+            if unpacked_slot.is_some() {
+                slot = unpacked_slot;
+            }
+        }
+        let slot = slot.or_else(|| {
+            call.arguments
+                .args
+                .iter()
+                .any(|arg| arg.range().contains_range(literal_range))
+                .then_some(ArgumentSlot::Positional)
+        })?;
+        if matches!(call.func.as_ref(), Expr::Attribute(attr) if attr.attr.id.as_str() == "drop")
+            && matches!(slot, ArgumentSlot::Keyword("labels"))
+            && (matches!(axis, Some(Expr::StringLiteral(axis)) if axis.value.to_str() == "columns")
+                || matches!(axis, Some(Expr::NumberLiteral(axis)) if axis.value.as_int().and_then(|axis| axis.as_i64()) == Some(1)))
+        {
+            Some(ArgumentSlot::Keyword("columns"))
+        } else {
+            Some(slot)
         }
     }
 
@@ -285,11 +433,6 @@ impl<'a> Transaction<'a> {
         self.get_type_trace(handle, expr.range())
             .map(|ty| Self::type_contains_typed_dict(&ty))
             .unwrap_or(false)
-    }
-
-    fn expr_has_dataframe_type(&self, handle: &Handle, expr: &Expr) -> bool {
-        self.get_type_trace(handle, expr.range())
-            .is_some_and(|ty| Self::type_is_dataframe(&ty))
     }
 
     /// Extracts typed dict access from `.get()` method calls.
@@ -426,35 +569,47 @@ impl<'a> Transaction<'a> {
             _ => None,
         })?;
         let literal_range = literal.range();
-        let mut best: Option<(TextSize, Expr)> = None;
+        let mut inside_column_helper = false;
 
         for node in nodes {
             let AnyNodeRef::ExprCall(call) = node else {
                 continue;
             };
-            if !(call.range().start() <= literal_range.start()
-                && literal_range.end() <= call.range().end())
+            let Some(slot) = self.dataframe_call_argument_slot(handle, call, literal_range) else {
+                continue;
+            };
+            if let Some(treats_strings_as_columns) = self
+                .get_type_trace(handle, call.func.range())
+                .and_then(|ty| polars_function_treats_strings_as_columns(&ty))
             {
+                if !treats_strings_as_columns && !inside_column_helper {
+                    return None;
+                }
+                inside_column_helper = true;
                 continue;
             }
             let Expr::Attribute(attr) = call.func.as_ref() else {
                 continue;
             };
-            if !is_dataframe_column_method(attr.attr.id.as_str())
-                || !self.expr_has_dataframe_type(handle, attr.value.as_ref())
-            {
+            let Some(permitted) = self
+                .get_type_trace(handle, attr.value.range())
+                .and_then(|ty| {
+                    Self::dataframe_slot_permitted(
+                        &ty,
+                        attr.attr.id.as_str(),
+                        slot,
+                        inside_column_helper,
+                    )
+                })
+            else {
                 continue;
-            }
-            let call_len = call.range().len();
-            if best
-                .as_ref()
-                .is_none_or(|(best_len, _)| call_len < *best_len)
-            {
-                best = Some((call_len, attr.value.as_ref().clone()));
-            }
+            };
+            // `locate_node` is innermost-first, so this DataFrame call owns the literal even when
+            // its argument slot does not accept a column.
+            return permitted.then(|| (attr.value.as_ref().clone(), literal));
         }
 
-        best.map(|(_, source_expr)| (source_expr, literal))
+        None
     }
 
     fn dict_literal_string_literal_at(
@@ -467,6 +622,13 @@ impl<'a> Transaction<'a> {
             let AnyNodeRef::ExprDict(dict) = node else {
                 continue;
             };
+            if dict
+                .items
+                .iter()
+                .any(|item| item.value.range().contains(position))
+            {
+                continue;
+            }
             let mut best_in_dict: Option<(u8, TextSize, ExprStringLiteral)> = None;
             for item in &dict.items {
                 let Some(key_expr) = item.key.as_ref() else {

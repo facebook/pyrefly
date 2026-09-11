@@ -268,9 +268,10 @@ impl InitArgs {
         // 1. Check for mypy or pyright configuration
         let found_mypy = ConfigFileKind::MyPy.check_for_existing_config(&path)?;
         let found_pyright = ConfigFileKind::Pyright.check_for_existing_config(&path)?;
+        let found_basedpyright = ConfigFileKind::BasedPyright.check_for_existing_config(&path)?;
 
         // 2. Migrate existing configuration to Pyrefly configuration
-        if found_mypy || found_pyright {
+        if found_mypy || found_pyright || found_basedpyright {
             info!("Found an existing type checking configuration - setting up pyrefly ...");
             return Ok((
                 CommandExitStatus::Success,

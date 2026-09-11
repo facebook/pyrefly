@@ -3,7 +3,16 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Any, Callable, Literal, NamedTuple, overload, Sequence, Unpack
+from typing import (
+    Any,
+    Callable,
+    ContextManager,
+    Literal,
+    NamedTuple,
+    overload,
+    Sequence,
+    Unpack,
+)
 
 from jax._array import Array as Array, Array as ndarray
 from jax._shapes import (
@@ -12,18 +21,22 @@ from jax._shapes import (
     atleast_3d_shape,
     broadcast_to_shape,
     column_stack_shape,
+    compress_shape,
     concatenate_shape,
     cross_axes_shape,
     cross_axis_shape,
+    diag_indices_from_shape,
     diagonal_shape,
     dot_shape,
     dstack_shape,
     einsum_shape,
     expand_dims_shape,
+    fill_diagonal_shape,
     flip_shape,
     hstack_shape,
     inner_shape,
     int_min,
+    ix_shapes,
     kron_shape,
     matmul_shape,
     matvec_shape,
@@ -35,15 +48,45 @@ from jax._shapes import (
     reverse_shape,
     roll_shape,
     rollaxis_shape,
+    rot90_shape,
     sort_shape,
     squeeze_shape,
     stack_shape,
     swapaxes_shape,
+    take_along_axis_shape,
+    take_scalar_idx_shape,
+    take_shape,
     tensordot_shape,
     top_k_shape,
     trace_shape,
     vecmat_shape,
     vstack_shape,
+)
+from jax.typing import DTypeLike
+from numpy import (
+    array_repr as array_repr,
+    array_str as array_str,
+    character as character,
+    complexfloating as complexfloating,
+    dtype as dtype,
+    e as e,
+    euler_gamma as euler_gamma,
+    flexible as flexible,
+    floating as floating,
+    generic as generic,
+    inexact as inexact,
+    inf as inf,
+    integer as integer,
+    iterable as iterable,
+    nan as nan,
+    newaxis as newaxis,
+    number as number,
+    object_ as object_,
+    pi as pi,
+    save as save,
+    savez as savez,
+    signedinteger as signedinteger,
+    unsignedinteger as unsignedinteger,
 )
 from shape_extensions import (
     broadcast,
@@ -69,7 +112,7 @@ type _Scalar = bool | int | float | complex
 @overload
 def array(
     object: _Scalar,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     copy: bool | None = ...,
     order: str | None = ...,
     ndmin: Literal[0] = 0,
@@ -80,7 +123,7 @@ def array(
 @overload
 def array[Shape: _Shape](
     object: Array[Shape],
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     copy: bool | None = ...,
     order: str | None = ...,
     ndmin: Literal[0] = 0,
@@ -91,7 +134,7 @@ def array[Shape: _Shape](
 @overload
 def array(
     object: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     copy: bool | None = ...,
     order: str | None = ...,
     ndmin: int = 0,
@@ -102,7 +145,7 @@ def array(
 @overload
 def asarray(
     a: _Scalar,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     order: str | None = ...,
     *,
     copy: bool | None = ...,
@@ -112,7 +155,7 @@ def asarray(
 @overload
 def asarray[Shape: _Shape](
     a: Array[Shape],
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     order: str | None = ...,
     *,
     copy: bool | None = ...,
@@ -122,7 +165,7 @@ def asarray[Shape: _Shape](
 @overload
 def asarray(
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     order: str | None = ...,
     *,
     copy: bool | None = ...,
@@ -137,37 +180,41 @@ def asarray(
 # through downstream array operations without degrading to unknown. The NumPy
 # stubs carry the same limitation.
 @overload
-def zeros(shape: tuple[()], dtype: Any = ..., *, device: Any = ...) -> Array[[]]: ...
+def zeros(
+    shape: tuple[()], dtype: DTypeLike | None = ..., *, device: Any = ...
+) -> Array[[]]: ...
 @overload
 def zeros[N: IntVar](
-    shape: Int[N], dtype: Any = ..., *, device: Any = ...
+    shape: Int[N], dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
 @overload
 def zeros[Shape: _Shape](
-    shape: Shape, dtype: Any = ..., *, device: Any = ...
+    shape: Shape, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[Shape]: ...
 @overload
 def zeros(
-    shape: Sequence[int] | int, dtype: Any = ..., *, device: Any = ...
+    shape: Sequence[int] | int, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[IntTuple]: ...
 @overload
-def ones(shape: tuple[()], dtype: Any = ..., *, device: Any = ...) -> Array[[]]: ...
+def ones(
+    shape: tuple[()], dtype: DTypeLike | None = ..., *, device: Any = ...
+) -> Array[[]]: ...
 @overload
 def ones[N: IntVar](
-    shape: Int[N], dtype: Any = ..., *, device: Any = ...
+    shape: Int[N], dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
 @overload
 def ones[Shape: _Shape](
-    shape: Shape, dtype: Any = ..., *, device: Any = ...
+    shape: Shape, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[Shape]: ...
 @overload
 def ones(
-    shape: Sequence[int] | int, dtype: Any = ..., *, device: Any = ...
+    shape: Sequence[int] | int, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[IntTuple]: ...
 @overload
 def empty[N: IntVar](
     shape: Int[N],
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
@@ -175,7 +222,7 @@ def empty[N: IntVar](
 @overload
 def empty[Shape: _Shape](
     shape: Shape,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
@@ -183,28 +230,32 @@ def empty[Shape: _Shape](
 @overload
 def empty(
     shape: Sequence[int] | int,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     *,
     device: Any = ...,
     out_sharding: Any = ...,
 ) -> Array[IntTuple]: ...
 @overload
 def full(
-    shape: tuple[()], fill_value: Any, dtype: Any = ..., *, device: Any = ...
+    shape: tuple[()],
+    fill_value: Any,
+    dtype: DTypeLike | None = ...,
+    *,
+    device: Any = ...,
 ) -> Array[[]]: ...
 @overload
 def full[N: IntVar](
-    shape: Int[N], fill_value: Any, dtype: Any = ..., *, device: Any = ...
+    shape: Int[N], fill_value: Any, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[[N]]: ...
 @overload
 def full[Shape: _Shape](
-    shape: Shape, fill_value: Any, dtype: Any = ..., *, device: Any = ...
+    shape: Shape, fill_value: Any, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[Shape]: ...
 @overload
 def full(
     shape: Sequence[int] | int,
     fill_value: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     *,
     device: Any = ...,
 ) -> Array[IntTuple]: ...
@@ -213,7 +264,7 @@ def full(
 @overload
 def empty_like[Shape: _Shape](
     prototype: Array[Shape],
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: None = None,
     *,
     device: Any = ...,
@@ -221,7 +272,7 @@ def empty_like[Shape: _Shape](
 @overload
 def empty_like[N: IntVar](
     prototype: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Int[N] = ...,
     *,
     device: Any = ...,
@@ -229,7 +280,7 @@ def empty_like[N: IntVar](
 @overload
 def empty_like[Shape: _Shape](
     prototype: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Shape = ...,
     *,
     device: Any = ...,
@@ -237,7 +288,7 @@ def empty_like[Shape: _Shape](
 @overload
 def empty_like(
     prototype: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Sequence[int] | int | None = None,
     *,
     device: Any = ...,
@@ -245,7 +296,7 @@ def empty_like(
 @overload
 def zeros_like[Shape: _Shape](
     a: Array[Shape],
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: None = None,
     *,
     device: Any = ...,
@@ -254,7 +305,7 @@ def zeros_like[Shape: _Shape](
 @overload
 def zeros_like[N: IntVar](
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Int[N] = ...,
     *,
     device: Any = ...,
@@ -263,7 +314,7 @@ def zeros_like[N: IntVar](
 @overload
 def zeros_like[Shape: _Shape](
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Shape = ...,
     *,
     device: Any = ...,
@@ -272,7 +323,7 @@ def zeros_like[Shape: _Shape](
 @overload
 def zeros_like(
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Sequence[int] | int | None = None,
     *,
     device: Any = ...,
@@ -281,7 +332,7 @@ def zeros_like(
 @overload
 def ones_like[Shape: _Shape](
     a: Array[Shape],
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: None = None,
     *,
     device: Any = ...,
@@ -290,7 +341,7 @@ def ones_like[Shape: _Shape](
 @overload
 def ones_like[N: IntVar](
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Int[N] = ...,
     *,
     device: Any = ...,
@@ -299,7 +350,7 @@ def ones_like[N: IntVar](
 @overload
 def ones_like[Shape: _Shape](
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Shape = ...,
     *,
     device: Any = ...,
@@ -308,7 +359,7 @@ def ones_like[Shape: _Shape](
 @overload
 def ones_like(
     a: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Sequence[int] | int | None = None,
     *,
     device: Any = ...,
@@ -318,7 +369,7 @@ def ones_like(
 def full_like[Shape: _Shape](
     a: Array[Shape],
     fill_value: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: None = None,
     *,
     device: Any = ...,
@@ -328,7 +379,7 @@ def full_like[Shape: _Shape](
 def full_like[N: IntVar](
     a: Any,
     fill_value: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Int[N] = ...,
     *,
     device: Any = ...,
@@ -338,7 +389,7 @@ def full_like[N: IntVar](
 def full_like[Shape: _Shape](
     a: Any,
     fill_value: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Shape = ...,
     *,
     device: Any = ...,
@@ -348,7 +399,7 @@ def full_like[Shape: _Shape](
 def full_like(
     a: Any,
     fill_value: Any,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     shape: Sequence[int] | int | None = None,
     *,
     device: Any = ...,
@@ -358,16 +409,18 @@ def full_like(
 # `arange`, `linspace`, `logspace`, `geomspace`
 @overload
 def arange[N: IntVar](
-    start: Int[N], *, dtype: Any = ..., device: Any = ...
+    start: Int[N], *, dtype: DTypeLike | None = ..., device: Any = ...
 ) -> Array[[N]]: ...
 @overload
-def arange(start: float, *, dtype: Any = ..., device: Any = ...) -> Array[[int]]: ...
+def arange(
+    start: float, *, dtype: DTypeLike | None = ..., device: Any = ...
+) -> Array[[int]]: ...
 @overload
 def arange(
     start: int | float,
     stop: int | float,
     step: int | float = ...,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
 ) -> Array[[int]]: ...
 @overload
 def linspace[N: IntVar](
@@ -376,7 +429,7 @@ def linspace[N: IntVar](
     num: Int[N],
     endpoint: bool = True,
     retstep: Literal[False] = False,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
     *,
     device: Any = None,
@@ -388,7 +441,7 @@ def linspace[N: IntVar](
     num: Int[N],
     endpoint: bool,
     retstep: Literal[True],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
     *,
     device: Any = None,
@@ -400,7 +453,7 @@ def linspace(
     num: int = 50,
     endpoint: bool = True,
     retstep: Literal[False] = False,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
     *,
     device: Any = None,
@@ -412,7 +465,7 @@ def linspace(
     num: int,
     endpoint: bool,
     retstep: Literal[True],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
     *,
     device: Any = None,
@@ -424,7 +477,7 @@ def linspace(
     num: int = 50,
     endpoint: bool = True,
     retstep: bool = False,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
     *,
     device: Any = None,
@@ -436,7 +489,7 @@ def logspace[N: IntVar](
     num: Int[N],
     endpoint: bool = True,
     base: Any = 10.0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
 ) -> Array[[N]]: ...
 @overload
@@ -446,7 +499,7 @@ def logspace(
     num: int = 50,
     endpoint: bool = True,
     base: Any = 10.0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
 ) -> Array[[int]]: ...
 @overload
@@ -455,7 +508,7 @@ def geomspace[N: IntVar](
     stop: Any,
     num: Int[N],
     endpoint: bool = True,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
 ) -> Array[[N]]: ...
 @overload
@@ -464,21 +517,31 @@ def geomspace(
     stop: Any,
     num: int = 50,
     endpoint: bool = True,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     axis: int = 0,
 ) -> Array[[int]]: ...
 
 # `eye`, `identity`, `diag`, `diagflat`, `tri`, `tril`, `triu`, `vander`
 @overload
 def eye[N: IntVar](
-    N: Int[N], M: None = ..., k: int = ..., dtype: Any = ..., *, device: Any = ...
+    N: Int[N],
+    M: None = ...,
+    k: int = ...,
+    dtype: DTypeLike | None = ...,
+    *,
+    device: Any = ...,
 ) -> Array[[N, N]]: ...
 @overload
 def eye[N: IntVar, M: IntVar](
-    N: Int[N], M: Int[M], k: int = ..., dtype: Any = ..., *, device: Any = ...
+    N: Int[N],
+    M: Int[M],
+    k: int = ...,
+    dtype: DTypeLike | None = ...,
+    *,
+    device: Any = ...,
 ) -> Array[[N, M]]: ...
 def identity[N: IntVar](
-    n: Int[N], dtype: Any = ..., *, device: Any = ...
+    n: Int[N], dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> Array[[N, N]]: ...
 @overload
 def diag[N: IntVar](v: Array[[N]], k: int = 0) -> Array[[N, N]]: ...
@@ -494,15 +557,15 @@ def diagflat[N: IntVar](v: Array[[N]], k: int = 0) -> Array[[N, N]]: ...
 def diagflat(v: Any, k: int = 0) -> Array[IntTuple]: ...
 @overload
 def tri[N: IntVar](
-    N: Int[N], M: None = None, k: int = 0, dtype: Any = None
+    N: Int[N], M: None = None, k: int = 0, dtype: DTypeLike | None = None
 ) -> Array[[N, N]]: ...
 @overload
 def tri[N: IntVar, M: IntVar](
-    N: Int[N], M: Int[M], k: int = 0, dtype: Any = None
+    N: Int[N], M: Int[M], k: int = 0, dtype: DTypeLike | None = None
 ) -> Array[[N, M]]: ...
 @overload
 def tri(
-    N: int, M: int | None = None, k: int = 0, dtype: Any = None
+    N: int, M: int | None = None, k: int = 0, dtype: DTypeLike | None = None
 ) -> Array[IntTuple]: ...
 def tril[Shape: _Shape](m: Array[Shape], k: int = 0) -> Array[Shape]: ...
 def triu[Shape: _Shape](m: Array[Shape], k: int = 0) -> Array[Shape]: ...
@@ -523,24 +586,24 @@ def vander(
 @overload
 def indices[N: IntVar](
     dimensions: IntTuple[N],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     sparse: Literal[False] = False,
 ) -> Array[[1, N]]: ...
 @overload
 def indices[N: IntVar, M: IntVar](
     dimensions: IntTuple[N, M],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     sparse: Literal[False] = False,
 ) -> Array[[2, N, M]]: ...
 @overload
 def indices[N: IntVar, M: IntVar, K: IntVar](
     dimensions: IntTuple[N, M, K],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     sparse: Literal[False] = False,
 ) -> Array[[3, N, M, K]]: ...
 @overload
 def indices(
-    dimensions: Sequence[int], dtype: Any = None, sparse: bool = False
+    dimensions: Sequence[int], dtype: DTypeLike | None = None, sparse: bool = False
 ) -> Array[IntTuple] | tuple[Array[IntTuple], ...]: ...
 @overload
 def meshgrid[N: IntVar, M: IntVar](
@@ -594,7 +657,7 @@ def from_dlpack(
     x: Any, /, *, device: Any = None, copy: bool | None = None
 ) -> Array[IntTuple]: ...
 def frombuffer(
-    buffer: Any, dtype: Any = float, count: int = -1, offset: int = 0
+    buffer: Any, dtype: DTypeLike = float, count: int = -1, offset: int = 0
 ) -> Array[IntTuple]: ...
 def fromfile(*args: Any, **kwargs: Any) -> Array[IntTuple]: ...
 @overload
@@ -602,7 +665,7 @@ def fromfunction[N: IntVar](
     function: Callable[..., Any],
     shape: IntTuple[N],
     *,
-    dtype: Any = float,
+    dtype: DTypeLike = float,
     **kwargs: Any,
 ) -> Array[[N]]: ...
 @overload
@@ -610,7 +673,7 @@ def fromfunction[N: IntVar, M: IntVar](
     function: Callable[..., Any],
     shape: IntTuple[N, M],
     *,
-    dtype: Any = float,
+    dtype: DTypeLike = float,
     **kwargs: Any,
 ) -> Array[[N, M]]: ...
 @overload
@@ -618,7 +681,7 @@ def fromfunction[N: IntVar, M: IntVar, K: IntVar](
     function: Callable[..., Any],
     shape: IntTuple[N, M, K],
     *,
-    dtype: Any = float,
+    dtype: DTypeLike = float,
     **kwargs: Any,
 ) -> Array[[N, M, K]]: ...
 @overload
@@ -626,12 +689,12 @@ def fromfunction(
     function: Callable[..., Any],
     shape: Sequence[int],
     *,
-    dtype: Any = float,
+    dtype: DTypeLike = float,
     **kwargs: Any,
 ) -> Array[IntTuple]: ...
 def fromiter(*args: Any, **kwargs: Any) -> Array[IntTuple]: ...
 def fromstring(
-    string: str, dtype: Any = float, count: int = -1, *, sep: str
+    string: str, dtype: DTypeLike = float, count: int = -1, *, sep: str
 ) -> Array[IntTuple]: ...
 
 # Window functions
@@ -1150,7 +1213,7 @@ def trace[
     offset: Offset = 0,
     axis1: Axis1 = 0,
     axis2: Axis2 = 1,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: None = None,
 ) -> Array[trace_shape(Shape, Offset, Axis1, Axis2)]: ...
 @overload
@@ -1159,7 +1222,7 @@ def trace(
     offset: int = 0,
     axis1: int = 0,
     axis2: int = 1,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: None = None,
 ) -> Array[IntTuple]: ...
 def vdot[Shape1: _Shape, Shape2: _Shape](
@@ -1352,6 +1415,15 @@ def reshape[Shape: _Shape, NewShape: Flag[_NewShape]](
     out_sharding: Any = ...,
 ) -> Array[reshape_shape(Shape, NewShape)]: ...
 @overload
+def reshape[NewShape: _Shape](
+    a: Array[Any],
+    shape: NewShape,
+    order: str = ...,
+    *,
+    copy: bool | None = ...,
+    out_sharding: Any = ...,
+) -> Array[NewShape]: ...
+@overload
 def reshape(
     a: Array[Any],
     shape: Sequence[int],
@@ -1395,16 +1467,42 @@ def broadcast_to(
     shape: Sequence[int] | int,
 ) -> Array[IntTuple]: ...
 @overload
+def broadcast_arrays[Shape: _Shape](
+    a: Array[Shape],
+    /,
+) -> tuple[Array[Shape]]: ...
+@overload
+def broadcast_arrays[Shape: _Shape](
+    a1: Array[Shape],
+    a2: _Scalar,
+    /,
+) -> tuple[Array[Shape], Array[Shape]]: ...
+@overload
+def broadcast_arrays[Shape: _Shape](
+    a1: _Scalar,
+    a2: Array[Shape],
+    /,
+) -> tuple[Array[Shape], Array[Shape]]: ...
+@overload
+def broadcast_arrays[Shape1: _Shape, Shape2: _Shape](
+    a1: Array[Shape1],
+    a2: Array[Shape2],
+    /,
+) -> tuple[Array[broadcast(Shape1, Shape2)], Array[broadcast(Shape1, Shape2)]]: ...
+@overload
+def broadcast_arrays(*args: Any) -> tuple[Array[IntTuple], ...]: ...
+def broadcast_shapes(*shapes: Sequence[int]) -> tuple[int, ...]: ...
+@overload
 def concatenate[Shapes: IntTuples, Axis: Flag[int] = 0](
     arrays: MapIntTuples[lambda S: Array[S], Shapes],
     axis: Axis = 0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[concatenate_shape(Shapes, Axis)]: ...
 @overload
 def concatenate(
     arrays: Any,
     axis: int | None = 0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 
 concat = concatenate
@@ -1413,7 +1511,7 @@ concat = concatenate
 def stack[Shapes: IntTuples, Axis: Flag[int] = 0](
     arrays: MapIntTuples[lambda S: Array[S], Shapes],
     axis: Axis = 0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     *,
     out: Any = None,
 ) -> Array[stack_shape(Shapes, Axis)]: ...
@@ -1421,7 +1519,7 @@ def stack[Shapes: IntTuples, Axis: Flag[int] = 0](
 def stack(
     arrays: Any,
     axis: int = 0,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     *,
     out: Any = None,
 ) -> Array[IntTuple]: ...
@@ -1429,25 +1527,25 @@ def stack(
 def vstack[Shapes: IntTuples](
     tup: MapIntTuples[lambda S: Array[S], Shapes],
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[vstack_shape(Shapes)]: ...
 @overload
 def vstack(
     tup: Any,
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 @overload
 def hstack[Shapes: IntTuples](
     tup: MapIntTuples[lambda S: Array[S], Shapes],
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[hstack_shape(Shapes)]: ...
 @overload
 def hstack(
     tup: Any,
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 @overload
 def column_stack[Shapes: IntTuples](
@@ -1461,13 +1559,71 @@ def column_stack(
 def dstack[Shapes: IntTuples](
     tup: MapIntTuples[lambda S: Array[S], Shapes],
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[dstack_shape(Shapes)]: ...
 @overload
 def dstack(
     tup: Any,
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
+) -> Array[IntTuple]: ...
+def block(arrays: Any) -> Array[IntTuple]: ...
+def array_split[Batch: IntTuple, M: IntVar](
+    ary: Array[[*Elements[Batch], M]],
+    indices_or_sections: int | Sequence[int] | Array[Any],
+    axis: int = 0,
+) -> list[Array[IntTuple]]: ...
+def split[Batch: IntTuple, M: IntVar](
+    ary: Array[[*Elements[Batch], M]],
+    indices_or_sections: int | Sequence[int] | Array[Any],
+    axis: int = 0,
+) -> list[Array[IntTuple]]: ...
+def dsplit[Batch: IntTuple, M: IntVar, N: IntVar, P: IntVar](
+    ary: Array[[*Elements[Batch], M, N, P]],
+    indices_or_sections: int | Sequence[int] | Array[Any],
+) -> list[Array[IntTuple]]: ...
+def hsplit[Batch: IntTuple, M: IntVar](
+    ary: Array[[*Elements[Batch], M]],
+    indices_or_sections: int | Sequence[int] | Array[Any],
+) -> list[Array[IntTuple]]: ...
+def vsplit[Batch: IntTuple, M: IntVar](
+    ary: Array[[*Elements[Batch], M]],
+    indices_or_sections: int | Sequence[int] | Array[Any],
+) -> list[Array[IntTuple]]: ...
+def unstack[Batch: IntTuple, M: IntVar](
+    x: Array[[*Elements[Batch], M]],
+    /,
+    *,
+    axis: int = 0,
+) -> tuple[Array[IntTuple], ...]: ...
+def pad(
+    array: Array[Any] | _Scalar,
+    pad_width: Any,
+    mode: str | Callable[..., Any] = "constant",
+    **kwargs: Any,
+) -> Array[IntTuple]: ...
+def repeat(
+    a: Array[Any] | _Scalar,
+    repeats: Array[Any] | int | Sequence[int],
+    axis: int | None = None,
+    *,
+    total_repeat_length: int | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def resize(a: Array[Any] | _Scalar, new_shape: tuple[()]) -> Array[[]]: ...
+@overload
+def resize[N: IntVar](a: Array[Any] | _Scalar, new_shape: Int[N]) -> Array[[N]]: ...
+@overload
+def resize[Shape: _Shape](
+    a: Array[Any] | _Scalar, new_shape: Shape
+) -> Array[Shape]: ...
+@overload
+def resize(
+    a: Array[Any] | _Scalar, new_shape: Sequence[int] | int
+) -> Array[IntTuple]: ...
+def tile(
+    A: Array[Any] | _Scalar,
+    reps: int | Sequence[int],
 ) -> Array[IntTuple]: ...
 @overload
 def swapaxes[Shape: _Shape, Axis1: Flag[int], Axis2: Flag[int]](
@@ -1534,6 +1690,18 @@ def roll[Shape: _Shape](
     axis: Sequence[int] | None = None,
 ) -> Array[Shape]: ...
 @overload
+def rot90[Shape: _Shape, K: Flag[int] = 1, Axes: Flag[tuple[int, int]] = (0, 1)](
+    m: Array[Shape],
+    k: K = 1,
+    axes: Axes = (0, 1),
+) -> Array[rot90_shape(Shape, K, Axes)]: ...
+@overload
+def rot90(
+    m: Array[Any],
+    k: int = 1,
+    axes: tuple[int, int] = (0, 1),
+) -> Array[IntTuple]: ...
+@overload
 def atleast_1d(ary: _Scalar, /) -> Array[[1]]: ...
 @overload
 def atleast_1d[Shape: _Shape](
@@ -1574,7 +1742,7 @@ def sum[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     axis: Axis = None,
     *,
     keepdims: KeepDims = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1586,7 +1754,7 @@ def sum[Shape: _Shape](
     axis: Sequence[int],
     *,
     keepdims: bool = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1598,7 +1766,7 @@ def prod[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     axis: Axis = None,
     *,
     keepdims: KeepDims = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1610,7 +1778,7 @@ def prod[Shape: _Shape](
     axis: Sequence[int],
     *,
     keepdims: bool = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1622,7 +1790,7 @@ def mean[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     axis: Axis = None,
     *,
     keepdims: KeepDims = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1634,7 +1802,7 @@ def mean[Shape: _Shape](
     axis: Sequence[int],
     *,
     keepdims: bool = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1646,7 +1814,7 @@ def max[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     axis: Axis = None,
     *,
     keepdims: KeepDims = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1658,7 +1826,7 @@ def max[Shape: _Shape](
     axis: Sequence[int],
     *,
     keepdims: bool = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1670,7 +1838,7 @@ def min[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     axis: Axis = None,
     *,
     keepdims: KeepDims = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1682,7 +1850,7 @@ def min[Shape: _Shape](
     axis: Sequence[int],
     *,
     keepdims: bool = False,
-    dtype: Any = ...,
+    dtype: DTypeLike | None = ...,
     out: Any = ...,
     initial: Any = ...,
     where: Any = ...,
@@ -1784,7 +1952,7 @@ def amin[Shape: _Shape](
 def std[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: KeepDims = False,
@@ -1797,7 +1965,7 @@ def std[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def std[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: bool = False,
@@ -1810,7 +1978,7 @@ def std[Shape: _Shape](
 def var[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: KeepDims = False,
@@ -1823,7 +1991,7 @@ def var[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def var[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: bool = False,
@@ -1908,7 +2076,7 @@ def nanmin[Shape: _Shape](
 def nansum[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     keepdims: KeepDims = False,
     initial: Any = None,
@@ -1918,7 +2086,7 @@ def nansum[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def nansum[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     keepdims: bool = False,
     initial: Any = None,
@@ -1928,7 +2096,7 @@ def nansum[Shape: _Shape](
 def nanprod[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     keepdims: KeepDims = False,
     initial: Any = None,
@@ -1938,7 +2106,7 @@ def nanprod[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def nanprod[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     keepdims: bool = False,
     initial: Any = None,
@@ -1948,7 +2116,7 @@ def nanprod[Shape: _Shape](
 def nanmean[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     keepdims: KeepDims = False,
     where: Any = None,
@@ -1957,7 +2125,7 @@ def nanmean[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def nanmean[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     keepdims: bool = False,
     where: Any = None,
@@ -1966,7 +2134,7 @@ def nanmean[Shape: _Shape](
 def nanstd[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: KeepDims = False,
@@ -1977,7 +2145,7 @@ def nanstd[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def nanstd[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: bool = False,
@@ -1988,7 +2156,7 @@ def nanstd[Shape: _Shape](
 def nanvar[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
     a: Array[Shape],
     axis: Axis = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: KeepDims = False,
@@ -1999,7 +2167,7 @@ def nanvar[Shape: _Shape, Axis: Flag[_Axis], KeepDims: Flag[bool]](
 def nanvar[Shape: _Shape](
     a: Array[Shape],
     axis: Sequence[int],
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
     ddof: int = 0,
     keepdims: bool = False,
@@ -2115,28 +2283,28 @@ def nanargmin(
 def cumsum[Shape: _Shape](
     a: Array[Shape],
     axis: int,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[Shape]: ...
 @overload
 def cumsum(
     a: Array[Any],
     axis: None = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[IntTuple]: ...
 @overload
 def cumprod[Shape: _Shape](
     a: Array[Shape],
     axis: int,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[Shape]: ...
 @overload
 def cumprod(
     a: Array[Any],
     axis: None = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[IntTuple]: ...
 @overload
@@ -2145,7 +2313,7 @@ def cumulative_sum[Shape: _Shape](
     /,
     *,
     axis: int,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     include_initial: Literal[False] = False,
 ) -> Array[Shape]: ...
 @overload
@@ -2154,7 +2322,7 @@ def cumulative_sum(
     /,
     *,
     axis: int | None = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     include_initial: bool = False,
 ) -> Array[IntTuple]: ...
 @overload
@@ -2163,7 +2331,7 @@ def cumulative_prod[Shape: _Shape](
     /,
     *,
     axis: int,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     include_initial: Literal[False] = False,
 ) -> Array[Shape]: ...
 @overload
@@ -2172,35 +2340,35 @@ def cumulative_prod(
     /,
     *,
     axis: int | None = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     include_initial: bool = False,
 ) -> Array[IntTuple]: ...
 @overload
 def nancumsum[Shape: _Shape](
     a: Array[Shape],
     axis: int,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[Shape]: ...
 @overload
 def nancumsum(
     a: Array[Any],
     axis: None = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[IntTuple]: ...
 @overload
 def nancumprod[Shape: _Shape](
     a: Array[Shape],
     axis: int,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[Shape]: ...
 @overload
 def nancumprod(
     a: Array[Any],
     axis: None = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     out: Any = None,
 ) -> Array[IntTuple]: ...
 
@@ -2349,7 +2517,7 @@ def corrcoef(
     x: Array[Any],
     y: Any = None,
     rowvar: bool = True,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 def cov(
     m: Array[Any],
@@ -2359,8 +2527,221 @@ def cov(
     ddof: int | None = None,
     fweights: Any = None,
     aweights: Any = None,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
+
+# Logic and Comparison
+def allclose(
+    a: Array | _Scalar,
+    b: Array | _Scalar,
+    rtol: Any = 1e-05,
+    atol: Any = 1e-08,
+    equal_nan: bool = False,
+) -> Array[[]]: ...
+def array_equal(
+    a1: Array | _Scalar, a2: Array | _Scalar, equal_nan: bool = False
+) -> Array[[]]: ...
+def array_equiv(a1: Array | _Scalar, a2: Array | _Scalar) -> Array[[]]: ...
+@overload
+def equal[Shape: _Shape](x1: Array[Shape], x2: _Scalar, /) -> Array[Shape]: ...
+@overload
+def equal[Shape: _Shape](x1: _Scalar, x2: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def equal[Shape1: _Shape, Shape2: _Shape](
+    x1: Array[Shape1], x2: Array[Shape2], /
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def equal(x1: _Scalar, x2: _Scalar, /) -> Array[[]]: ...
+@overload
+def equal(x1: Any, x2: Any, /) -> Array[IntTuple]: ...
+@overload
+def greater[Shape: _Shape](x1: Array[Shape], x2: _Scalar, /) -> Array[Shape]: ...
+@overload
+def greater[Shape: _Shape](x1: _Scalar, x2: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def greater[Shape1: _Shape, Shape2: _Shape](
+    x1: Array[Shape1], x2: Array[Shape2], /
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def greater(x1: _Scalar, x2: _Scalar, /) -> Array[[]]: ...
+@overload
+def greater(x1: Any, x2: Any, /) -> Array[IntTuple]: ...
+@overload
+def greater_equal[Shape: _Shape](x1: Array[Shape], x2: _Scalar, /) -> Array[Shape]: ...
+@overload
+def greater_equal[Shape: _Shape](x1: _Scalar, x2: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def greater_equal[Shape1: _Shape, Shape2: _Shape](
+    x1: Array[Shape1], x2: Array[Shape2], /
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def greater_equal(x1: _Scalar, x2: _Scalar, /) -> Array[[]]: ...
+@overload
+def greater_equal(x1: Any, x2: Any, /) -> Array[IntTuple]: ...
+@overload
+def isclose[Shape: _Shape](
+    a: Array[Shape],
+    b: _Scalar,
+    rtol: Any = 1e-05,
+    atol: Any = 1e-08,
+    equal_nan: bool = False,
+) -> Array[Shape]: ...
+@overload
+def isclose[Shape: _Shape](
+    a: _Scalar,
+    b: Array[Shape],
+    rtol: Any = 1e-05,
+    atol: Any = 1e-08,
+    equal_nan: bool = False,
+) -> Array[Shape]: ...
+@overload
+def isclose[Shape1: _Shape, Shape2: _Shape](
+    a: Array[Shape1],
+    b: Array[Shape2],
+    rtol: Any = 1e-05,
+    atol: Any = 1e-08,
+    equal_nan: bool = False,
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def isclose(
+    a: _Scalar,
+    b: _Scalar,
+    rtol: Any = 1e-05,
+    atol: Any = 1e-08,
+    equal_nan: bool = False,
+) -> Array[[]]: ...
+@overload
+def isclose(
+    a: Any,
+    b: Any,
+    rtol: Any = 1e-05,
+    atol: Any = 1e-08,
+    equal_nan: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def iscomplex[Shape: _Shape](x: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def iscomplex(x: _Scalar, /) -> Array[[]]: ...
+@overload
+def iscomplex(x: Any, /) -> Array[IntTuple]: ...
+def iscomplexobj(x: Any) -> bool: ...
+@overload
+def isfinite[Shape: _Shape](x: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def isfinite(x: _Scalar, /) -> Array[[]]: ...
+@overload
+def isfinite(x: Any, /) -> Array[IntTuple]: ...
+@overload
+def isinf[Shape: _Shape](x: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def isinf(x: _Scalar, /) -> Array[[]]: ...
+@overload
+def isinf(x: Any, /) -> Array[IntTuple]: ...
+@overload
+def isnan[Shape: _Shape](x: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def isnan(x: _Scalar, /) -> Array[[]]: ...
+@overload
+def isnan(x: Any, /) -> Array[IntTuple]: ...
+@overload
+def isneginf[Shape: _Shape](x: Array[Shape], /, out: Any = None) -> Array[Shape]: ...
+@overload
+def isneginf(x: _Scalar, /, out: Any = None) -> Array[[]]: ...
+@overload
+def isneginf(x: Any, /, out: Any = None) -> Array[IntTuple]: ...
+@overload
+def isposinf[Shape: _Shape](x: Array[Shape], /, out: Any = None) -> Array[Shape]: ...
+@overload
+def isposinf(x: _Scalar, /, out: Any = None) -> Array[[]]: ...
+@overload
+def isposinf(x: Any, /, out: Any = None) -> Array[IntTuple]: ...
+@overload
+def isreal[Shape: _Shape](x: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def isreal(x: _Scalar, /) -> Array[[]]: ...
+@overload
+def isreal(x: Any, /) -> Array[IntTuple]: ...
+def isrealobj(x: Any) -> bool: ...
+def isscalar(element: Any) -> bool: ...
+def iterable(y: Any) -> bool: ...
+@overload
+def less[Shape: _Shape](x1: Array[Shape], x2: _Scalar, /) -> Array[Shape]: ...
+@overload
+def less[Shape: _Shape](x1: _Scalar, x2: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def less[Shape1: _Shape, Shape2: _Shape](
+    x1: Array[Shape1], x2: Array[Shape2], /
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def less(x1: _Scalar, x2: _Scalar, /) -> Array[[]]: ...
+@overload
+def less(x1: Any, x2: Any, /) -> Array[IntTuple]: ...
+@overload
+def less_equal[Shape: _Shape](x1: Array[Shape], x2: _Scalar, /) -> Array[Shape]: ...
+@overload
+def less_equal[Shape: _Shape](x1: _Scalar, x2: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def less_equal[Shape1: _Shape, Shape2: _Shape](
+    x1: Array[Shape1], x2: Array[Shape2], /
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def less_equal(x1: _Scalar, x2: _Scalar, /) -> Array[[]]: ...
+@overload
+def less_equal(x1: Any, x2: Any, /) -> Array[IntTuple]: ...
+@overload
+def logical_and[Shape: _Shape](x1: Array[Shape], x2: _Scalar, /) -> Array[Shape]: ...
+@overload
+def logical_and[Shape: _Shape](x1: _Scalar, x2: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def logical_and[Shape1: _Shape, Shape2: _Shape](
+    x1: Array[Shape1], x2: Array[Shape2], /
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def logical_and(x1: _Scalar, x2: _Scalar, /) -> Array[[]]: ...
+@overload
+def logical_and(x1: Any, x2: Any, /) -> Array[IntTuple]: ...
+@overload
+def logical_not[Shape: _Shape](x: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def logical_not(x: _Scalar, /) -> Array[[]]: ...
+@overload
+def logical_not(x: Any, /) -> Array[IntTuple]: ...
+@overload
+def logical_or[Shape: _Shape](x1: Array[Shape], x2: _Scalar, /) -> Array[Shape]: ...
+@overload
+def logical_or[Shape: _Shape](x1: _Scalar, x2: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def logical_or[Shape1: _Shape, Shape2: _Shape](
+    x1: Array[Shape1], x2: Array[Shape2], /
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def logical_or(x1: _Scalar, x2: _Scalar, /) -> Array[[]]: ...
+@overload
+def logical_or(x1: Any, x2: Any, /) -> Array[IntTuple]: ...
+@overload
+def logical_xor[Shape: _Shape](x1: Array[Shape], x2: _Scalar, /) -> Array[Shape]: ...
+@overload
+def logical_xor[Shape: _Shape](x1: _Scalar, x2: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def logical_xor[Shape1: _Shape, Shape2: _Shape](
+    x1: Array[Shape1], x2: Array[Shape2], /
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def logical_xor(x1: _Scalar, x2: _Scalar, /) -> Array[[]]: ...
+@overload
+def logical_xor(x1: Any, x2: Any, /) -> Array[IntTuple]: ...
+@overload
+def not_equal[Shape: _Shape](x1: Array[Shape], x2: _Scalar, /) -> Array[Shape]: ...
+@overload
+def not_equal[Shape: _Shape](x1: _Scalar, x2: Array[Shape], /) -> Array[Shape]: ...
+@overload
+def not_equal[Shape1: _Shape, Shape2: _Shape](
+    x1: Array[Shape1], x2: Array[Shape2], /
+) -> Array[broadcast(Shape1, Shape2)]: ...
+@overload
+def not_equal(x1: _Scalar, x2: _Scalar, /) -> Array[[]]: ...
+@overload
+def not_equal(x1: Any, x2: Any, /) -> Array[IntTuple]: ...
 
 # Sorting and Partitioning
 @overload
@@ -2392,7 +2773,7 @@ def argsort[Shape: _Shape, Axis: Flag[int | None] = -1](
     order: None = None,
     stable: bool = True,
     descending: bool = False,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[sort_shape(Shape, Axis)]: ...
 @overload
 def argsort(
@@ -2403,7 +2784,7 @@ def argsort(
     order: None = None,
     stable: bool = True,
     descending: bool = False,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
 ) -> Array[IntTuple]: ...
 @overload
 def sort_complex[Shape: _Shape](a: Array[Shape]) -> Array[Shape]: ...
@@ -2952,10 +3333,499 @@ def unique_values(
     fill_value: Any = None,
 ) -> Array[IntTuple]: ...
 
-float32: Any
-float64: Any
+# Indexing, Slicing & Masking
+@overload
+def compress[Shape: _Shape, Size: Flag[int], Axis: Flag[int | None] = None](
+    condition: Any,
+    a: Array[Shape],
+    axis: Axis = None,
+    *,
+    size: Size,
+    fill_value: Any = 0,
+    out: None = None,
+) -> Array[compress_shape(Shape, Size, Axis)]: ...
+@overload
+def compress[Shape: _Shape, Axis: Flag[int | None] = None](
+    condition: Any,
+    a: Array[Shape],
+    axis: Axis = None,
+    *,
+    size: int | None = None,
+    fill_value: Any = 0,
+    out: None = None,
+) -> Array[IntTuple]: ...
+@overload
+def compress(
+    condition: Any,
+    a: Any,
+    axis: int | None = None,
+    *,
+    size: int | None = None,
+    fill_value: Any = 0,
+    out: None = None,
+) -> Array[IntTuple]: ...
+def delete(
+    arr: Any,
+    obj: Any,
+    axis: int | None = None,
+    *,
+    assume_unique_indices: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def extract[Size: IntVar](
+    condition: Any,
+    arr: Any,
+    *,
+    size: Int[Size],
+    fill_value: Any = 0,
+) -> Array[[Size]]: ...
+@overload
+def extract(
+    condition: Any,
+    arr: Any,
+    *,
+    size: int | None = None,
+    fill_value: Any = 0,
+) -> Array[IntTuple]: ...
+@overload
+def fill_diagonal[Shape: _Shape](
+    a: Array[Shape],
+    val: Any,
+    wrap: bool = False,
+    *,
+    inplace: bool = True,
+) -> Array[fill_diagonal_shape(Shape)]: ...
+@overload
+def fill_diagonal(
+    a: Any,
+    val: Any,
+    wrap: bool = False,
+    *,
+    inplace: bool = True,
+) -> Array[IntTuple]: ...
+def insert(
+    arr: Any,
+    obj: Any,
+    values: Any,
+    axis: int | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def place[Shape: _Shape](
+    arr: Array[Shape],
+    mask: Any,
+    vals: Any,
+    *,
+    inplace: bool = True,
+) -> Array[Shape]: ...
+@overload
+def place(
+    arr: Any,
+    mask: Any,
+    vals: Any,
+    *,
+    inplace: bool = True,
+) -> Array[IntTuple]: ...
+@overload
+def put[Shape: _Shape](
+    a: Array[Shape],
+    ind: Any,
+    v: Any,
+    mode: str | None = None,
+    *,
+    inplace: bool = True,
+) -> Array[Shape]: ...
+@overload
+def put(
+    a: Any,
+    ind: Any,
+    v: Any,
+    mode: str | None = None,
+    *,
+    inplace: bool = True,
+) -> Array[IntTuple]: ...
+@overload
+def put_along_axis[Shape: _Shape](
+    arr: Array[Shape],
+    indices: Any,
+    values: Any,
+    axis: int | None,
+    inplace: bool = True,
+    *,
+    mode: str | None = None,
+) -> Array[Shape]: ...
+@overload
+def put_along_axis(
+    arr: Any,
+    indices: Any,
+    values: Any,
+    axis: int | None,
+    inplace: bool = True,
+    *,
+    mode: str | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def take[Shape: _Shape, IdxShape: _Shape, Axis: Flag[int | None] = None](
+    a: Array[Shape],
+    indices: Array[IdxShape],
+    axis: Axis = None,
+    out: None = None,
+    mode: str | None = None,
+    unique_indices: bool = False,
+    indices_are_sorted: bool = False,
+    fill_value: Any = None,
+) -> Array[take_shape(Shape, IdxShape, Axis)]: ...
+@overload
+def take[Shape: _Shape, Axis: Flag[int | None] = None](
+    a: Array[Shape],
+    indices: int,
+    axis: Axis = None,
+    out: None = None,
+    mode: str | None = None,
+    unique_indices: bool = False,
+    indices_are_sorted: bool = False,
+    fill_value: Any = None,
+) -> Array[take_scalar_idx_shape(Shape, Axis)]: ...
+@overload
+def take(
+    a: Any,
+    indices: Any,
+    axis: int | None = None,
+    out: None = None,
+    mode: str | None = None,
+    unique_indices: bool = False,
+    indices_are_sorted: bool = False,
+    fill_value: Any = None,
+) -> Array[IntTuple]: ...
+@overload
+def take_along_axis[ArrShape: _Shape, IdxShape: _Shape, Axis: Flag[int | None] = -1](
+    arr: Array[ArrShape],
+    indices: Array[IdxShape],
+    axis: Axis = -1,
+    mode: str | None = None,
+    fill_value: Any = None,
+    *,
+    wrap_negative_indices: bool = True,
+) -> Array[take_along_axis_shape(ArrShape, IdxShape, Axis)]: ...
+@overload
+def take_along_axis(
+    arr: Any,
+    indices: Any,
+    axis: int | None = -1,
+    mode: str | None = None,
+    fill_value: Any = None,
+    *,
+    wrap_negative_indices: bool = True,
+) -> Array[IntTuple]: ...
+def trim_zeros(
+    filt: Any,
+    trim: str = "fb",
+    axis: int | Sequence[int] | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def diag_indices[N: IntVar](
+    n: Int[N],
+    ndim: int = 2,
+) -> tuple[Array[[N]], ...]: ...
+@overload
+def diag_indices(
+    n: int,
+    ndim: int = 2,
+) -> tuple[Array[IntTuple], ...]: ...
+@overload
+def diag_indices_from[Shape: _Shape](
+    arr: Array[Shape],
+) -> tuple[Array[diag_indices_from_shape(Shape)], ...]: ...
+@overload
+def diag_indices_from(
+    arr: Any,
+) -> tuple[Array[IntTuple], ...]: ...
+@overload
+def mask_indices[Size: IntVar](
+    n: int,
+    mask_func: Callable[..., Any],
+    k: int = 0,
+    *,
+    size: Int[Size],
+) -> tuple[Array[[Size]], Array[[Size]]]: ...
+@overload
+def mask_indices(
+    n: int,
+    mask_func: Callable[..., Any],
+    k: int = 0,
+    *,
+    size: int | None = None,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+def ravel_multi_index(
+    multi_index: Sequence[Any],
+    dims: Sequence[int],
+    mode: str = "raise",
+    order: str = "C",
+    *,
+    dtype: Any = None,
+) -> Array[IntTuple]: ...
+def tril_indices(
+    n: int,
+    k: int = 0,
+    m: int | None = None,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+def tril_indices_from(
+    arr: Any,
+    k: int = 0,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+def triu_indices(
+    n: int,
+    k: int = 0,
+    m: int | None = None,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+def triu_indices_from(
+    arr: Any,
+    k: int = 0,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+@overload
+def unravel_index[Shape: _Shape](
+    indices: Array[Shape],
+    shape: Any,
+) -> tuple[Array[Shape], ...]: ...
+@overload
+def unravel_index(
+    indices: int,
+    shape: Any,
+) -> tuple[Array[[]], ...]: ...
+@overload
+def ix_[Shapes: IntTuples](
+    *args: Unpack[MapIntTuples[lambda S: Array[S], Shapes]],
+) -> MapIntTuples[lambda S: Array[S], ix_shapes(Shapes)]: ...
+@overload
+def ix_(*args: Array[Any]) -> tuple[Array[IntTuple], ...]: ...
+
+class finfo:
+    bits: int
+    dtype: Any
+    eps: float
+    epsneg: float
+    iexp: int
+    machep: int
+    max: float
+    maxexp: int
+    min: float
+    minexp: int
+    negep: int
+    nexp: int
+    nmant: int
+    precision: int
+    resolution: float
+    smallest_normal: float
+    smallest_subnormal: float
+    tiny: float
+    def __init__(self, dtype: DTypeLike) -> None: ...
+
+class iinfo:
+    bits: int
+    dtype: Any
+    kind: str
+    max: int
+    min: int
+    def __init__(self, dtype: DTypeLike) -> None: ...
+
+class ufunc:
+    @property
+    def nin(self) -> int: ...
+    @property
+    def nout(self) -> int: ...
+    @property
+    def nargs(self) -> int: ...
+    @property
+    def ntypes(self) -> int: ...
+    @property
+    def types(self) -> list[str]: ...
+    @property
+    def identity(self) -> Any: ...
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
+    def reduce(
+        self,
+        a: Any,
+        axis: int = 0,
+        dtype: Any = None,
+        out: Any = None,
+        keepdims: bool = False,
+    ) -> Any: ...
+    def accumulate(
+        self,
+        a: Any,
+        axis: int = 0,
+        dtype: Any = None,
+        out: Any = None,
+    ) -> Any: ...
+    def reduceat(
+        self,
+        a: Any,
+        indices: Sequence[int],
+        axis: int = 0,
+        dtype: Any = None,
+        out: Any = None,
+    ) -> Any: ...
+    def outer(self, A: Any, B: Any, /, **kwargs: Any) -> Any: ...
+
+class ComplexWarning(UserWarning): ...
+
+@overload
+def astype[Shape: _Shape](
+    x: Array[Shape],
+    dtype: DTypeLike | None,
+    /,
+    *,
+    copy: bool = False,
+    device: Any = None,
+) -> Array[Shape]: ...
+@overload
+def astype(
+    x: _Scalar,
+    dtype: DTypeLike | None,
+    /,
+    *,
+    copy: bool = False,
+    device: Any = None,
+) -> Array[()]: ...
+@overload
+def astype(
+    x: Any,
+    dtype: DTypeLike | None,
+    /,
+    *,
+    copy: bool = False,
+    device: Any = None,
+) -> Array[IntTuple]: ...
+def can_cast(from_: Any, to: DTypeLike, casting: str = "safe") -> bool: ...
+def isdtype(
+    dtype: DTypeLike, kind: str | DTypeLike | tuple[str | DTypeLike, ...]
+) -> bool: ...
+def issubdtype(arg1: DTypeLike, arg2: DTypeLike) -> bool: ...
+def promote_types(a: DTypeLike, b: DTypeLike) -> Any: ...
+def result_type(*args: Any) -> Any: ...
+
+class _Mgrid:
+    @overload
+    def __getitem__(self, key: slice) -> Array[[Any]]: ...
+    @overload
+    def __getitem__(self, key: tuple[slice, slice]) -> Array[[2, Any, Any]]: ...
+    @overload
+    def __getitem__(
+        self, key: tuple[slice, slice, slice]
+    ) -> Array[[3, Any, Any, Any]]: ...
+    @overload
+    def __getitem__(self, key: tuple[slice, ...]) -> Array[IntTuple]: ...
+    @overload
+    def __getitem__(self, key: Any) -> Array[IntTuple]: ...
+
+class _Ogrid:
+    @overload
+    def __getitem__(self, key: slice) -> Array[[Any]]: ...
+    @overload
+    def __getitem__(self, key: tuple[slice, slice]) -> list[Array[IntTuple]]: ...
+    @overload
+    def __getitem__(self, key: tuple[slice, slice, slice]) -> list[Array[IntTuple]]: ...
+    @overload
+    def __getitem__(self, key: tuple[slice, ...]) -> list[Array[IntTuple]]: ...
+    @overload
+    def __getitem__(self, key: Any) -> Array[IntTuple] | list[Array[IntTuple]]: ...
+
+mgrid: _Mgrid
+ogrid: _Ogrid
+
+class _CClass:
+    def __getitem__(self, key: Any) -> Array[IntTuple]: ...
+
+class _RClass:
+    def __getitem__(self, key: Any) -> Array[IntTuple]: ...
+
+c_: _CClass
+r_: _RClass
+
+class _IndexExpression:
+    @overload
+    def __getitem__[TupleT: tuple[Any, ...]](self, item: TupleT) -> TupleT: ...
+    @overload
+    def __getitem__[T](self, item: T) -> tuple[T]: ...
+
+class _SClass:
+    def __getitem__[T](self, item: T) -> T: ...
+
+index_exp: _IndexExpression
+s_: _SClass
+
+def ndim(a: Any) -> int: ...
+@overload
+def shape[Shape: _Shape](a: Array[Shape]) -> Shape: ...
+@overload
+def shape(a: Any) -> tuple[int, ...]: ...
+def size(a: Any, axis: int | Sequence[int] | None = None) -> int: ...
+def get_printoptions() -> dict[str, Any]: ...
+def set_printoptions(
+    precision: int | None = None,
+    threshold: int | None = None,
+    edgeitems: int | None = None,
+    linewidth: int | None = None,
+    suppress: bool | None = None,
+    nanstr: str | None = None,
+    infstr: str | None = None,
+    formatter: dict[str, Callable[..., str]] | None = None,
+    sign: str | None = None,
+    floatmode: str | None = None,
+    **kwarg: Any,
+) -> None: ...
+def printoptions(*args: Any, **kwargs: Any) -> ContextManager[dict[str, Any]]: ...
+def apply_along_axis(
+    func1d: Callable[..., Any], axis: int, arr: Any, *args: Any, **kwargs: Any
+) -> Array[IntTuple]: ...
+def apply_over_axes(
+    func: Callable[[Any, int], Any], a: Any, axes: Sequence[int]
+) -> Array[IntTuple]: ...
+def frompyfunc(
+    func: Callable[..., Any], /, nin: int, nout: int, *, identity: Any = None
+) -> ufunc: ...
+def vectorize(pyfunc: Any, *, excluded: Any = ..., signature: Any = None) -> Any: ...
+def load(file: Any, *args: Any, **kwargs: Any) -> Any: ...
+
+# Scalar constructors
+
+bool: Any
+bool_: Any
+int_: Any
+int8: Any
+int16: Any
 int32: Any
 int64: Any
+uint: Any
+uint8: Any
+uint16: Any
+uint32: Any
+uint64: Any
+int1: Any
+int2: Any
+int4: Any
+uint1: Any
+uint2: Any
+uint4: Any
+float_: Any
+float16: Any
+float32: Any
+float64: Any
+bfloat16: Any
+single: Any
+double: Any
+csingle: Any
+cdouble: Any
+complex_: Any
 complex64: Any
 complex128: Any
-bool_: Any
+float4_e2m1fn: Any
+float6_e2m3fn: Any
+float6_e3m2fn: Any
+float8_e3m4: Any
+float8_e4m3: Any
+float8_e4m3b11fnuz: Any
+float8_e4m3fn: Any
+float8_e4m3fnuz: Any
+float8_e5m2: Any
+float8_e5m2fnuz: Any
+float8_e8m0fnu: Any

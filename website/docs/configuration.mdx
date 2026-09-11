@@ -35,7 +35,7 @@ configure its aspect instead.
 
 On the command line, when no `pyrefly.toml` or `[tool.pyrefly]` section governs the file being checked, Pyrefly automatically selects a synthesized configuration:
 
-- If a `mypy.ini`, `pyrightconfig.json`, or `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml` is found nearby, Pyrefly migrates it in memory and uses the resulting settings (the same migration `pyrefly init` would commit to disk).
+- If a `mypy.ini`, `pyrightconfig.json`, or `[tool.mypy]` / `[tool.pyright]` / `[tool.basedpyright]` section in `pyproject.toml` is found nearby, Pyrefly migrates it in memory and uses the resulting settings (the same migration `pyrefly init` would commit to disk).
 - If no migratable configuration is found, or migration fails, Pyrefly uses the [**basic preset**](#preset-basic). This enables only high-confidence error kinds (syntax errors, missing imports, division by zero, etc.); other diagnostics are silenced.
 
 This automatic selection behavior is not a preset, so `auto` is not a valid value for [`preset`](#preset) or `--preset`. For the IDE equivalent, including how to override automatic selection, see [`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode).
@@ -123,7 +123,7 @@ we find the config for each file matched by the pattern provided.
 If a `pyrefly.toml` is found, it is parsed and used for type checking, and will
 return an error to the user on invalid types, syntax, values, or unknown config options.
 
-If a `pyproject.toml` with `[tool.pyrefly]` is found, Pyrefly parses and uses that section. The same errors are returned as when loading an invalid `pyrefly.toml`. Without `[tool.pyrefly]`, Pyrefly migrates `[tool.mypy]` or `[tool.pyright]` in memory if present; otherwise it uses the [`basic` preset](#preset-basic).
+If a `pyproject.toml` with `[tool.pyrefly]` is found, Pyrefly parses and uses that section. The same errors are returned as when loading an invalid `pyrefly.toml`. Without `[tool.pyrefly]`, Pyrefly migrates `[tool.mypy]`, `[tool.pyright]` or `[tool.basedpyright]` in memory if present; otherwise it uses the [`basic` preset](#preset-basic).
 
 ### Providing a Config in Single-File Mode
 
@@ -333,13 +333,15 @@ resolution, after [`search-path`](#search-path) and `typeshed`.
 See more on [how Pyrefly does import resolution](import-resolution.mdx).
 
 - Type: list of directories
-- Default: `./typings` + the result from [Environment Autoconfiguration](#environment-autoconfiguration), or
-  `[]` if the Python interpreter cannot be queried
+- Default: Pyrefly adds the `typings/` directory in the project root if it exists.
+  Pyrefly then adds entries from
+  [Environment Autoconfiguration](#environment-autoconfiguration) if the query succeeds.
 - Flag equivalent: `--site-package-path`
 - Equivalent configs: none
 - Notes:
-    - The queried interpreter's site package paths will always be included in addition to any user-specified value,
-      unless environment auto-configuration is turned off.
+    - When environment auto-configuration is on, Pyrefly adds entries from the interpreter
+      after user-specified `site-package-path` entries. The interpreter entries can include
+      paths that `PYTHONPATH` adds to `sys.path`.
     - Ideally, this should not be set manually, unless you're using a venv, running one-off tests,
       testing specific behavior, or having trouble with [Environment Autoconfiguration](#environment-autoconfiguration).
       Setting this explicitly, especially when not using a venv, will make it difficult for your configuration
@@ -527,7 +529,46 @@ more details on how baseline files work.
     - `baseline` is a **project-level setting** and cannot be overridden in
       [`sub-config`](#sub-configs) sections.
     - Errors suppressed by the baseline file are still shown in the IDE.
-    - Errors are matched with the baseline by file, error code, and column number.
+
+### `baseline-matching-mode`
+
+Controls how diagnostics are matched against baseline entries. `"column"`
+matches the file, error kind, and starting column. `"concise-description"`
+matches the file, error kind, and concise description.
+
+```toml
+baseline-matching-mode = "concise-description"
+```
+
+- Type: `"column"` | `"concise-description"`
+- Default: `"column"`
+- Flag equivalent: none
+- Notes:
+    - `baseline-matching-mode` is a **project-level setting** and cannot be
+      overridden in [`sub-config`](#sub-configs) sections.
+    - There is intentionally no CLI equivalent because the matching mode is a
+      property of the checked-in baseline and must be consistent for all users.
+    - After changing modes, regenerate a baseline that does not contain the new
+      mode's required field with `pyrefly check --update-baseline`.
+
+### `baseline-format`
+
+Controls how much information `--update-baseline` writes for each baseline
+entry. `"full"` writes all baseline metadata. `"minimal"` writes only the file,
+error kind, and the field required by `baseline-matching-mode`.
+
+```toml
+baseline-format = "minimal"
+```
+
+- Type: `"full"` | `"minimal"`
+- Default: `"full"`
+- Flag equivalent: none
+- Notes:
+    - `baseline-format` is a **project-level setting** and cannot be overridden
+      in [`sub-config`](#sub-configs) sections.
+    - There is intentionally no CLI equivalent so every baseline update uses
+      the same format, avoiding conflicting rewrites.
 
 ### `baseline-error-level`
 
@@ -652,6 +693,7 @@ A minimal-checking preset used when automatic configuration selection finds no m
 A looser, less-strict preset intended for codebases migrating from mypy. This is the preset `pyrefly init` writes when it detects an existing mypy configuration. Pyrefly does not aim to mimic mypy precisely, but the preset preserves selected defaults that would otherwise produce new migration errors.
 
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`legacy-overload-expansion`](#legacy-overload-expansion) `= true`, [`replace-untyped-imports-with-any`](#replace-untyped-imports-with-any) `= ["*"]`
+- Sets [`type-ignore-unknown-tag-behavior`](#type-ignore-unknown-tag-behavior) `= "suppress"` so existing mypy-coded ignores retain their legacy blanket-suppression behavior.
 - Disables: [`bad-override-mutable-attribute`](./error-kinds.mdx#bad-override-mutable-attribute), [`bad-override-param-name`](./error-kinds.mdx#bad-override-param-name), [`unbound-name`](./error-kinds.mdx#unbound-name)
 
 #### Preset: `default`
@@ -771,9 +813,13 @@ will always, unconditionally replace the import with `typing.Any`.
 ### `replace-untyped-imports-with-any`
 
 Instruct Pyrefly to replace the given [`ModuleGlob`](#module-globbing)s from
-installed third-party packages with `typing.Any` if the package provides neither
-stubs nor a `py.typed` marker. Stubs and `py.typed` packages are analyzed
-normally, and first-party modules are not affected.
+installed third-party packages with `typing.Any` if the module is untyped. Pyrefly considers a
+module untyped if it does not find any of:
+
+* A `py.typed` marker in the package.
+* A standalone stubs package.
+
+Note that Pyrefly's bundled stubs are ignored for this calculation.
 
 - Type: list of regex
 - Default: `[]`
@@ -1073,10 +1119,91 @@ The command should output a JSON file with the following structure:
 
 Where:
 
-- `root` is the absolute path the root of the repository.
+- `root` is the absolute path to the root of the repository. `srcs` and
+  `buildfile_path` are relative to this root (or to the per-target `root`, if
+  set).
 - `db` is a map from target names to either:
     - library target definitions (e.g. `//colorama:py` and `//colorama:py-stubs` here)
     - target aliases (e.g. `//colorama:colorama` here)
+- [`configs`](#per-target-configuration) is an optional map from a name to a set
+  of type checking settings that targets can select with their `config` field.
+
+Each library target definition has the following fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `srcs` | yes | Map from qualified module names to lists of relative source file paths. |
+| `python_version` | yes | The target's [`python-version`](#python-version). |
+| `python_platform` | yes | The target's [`python-platform`](#python-platform). |
+| `deps` | no | List of target names this target depends on. Defaults to `[]`. |
+| `buildfile_path` | no | Relative path to the build file that defines this target. Pyrefly treats any of the target's `srcs` outside this file's directory as generated, and does not watch generated files for changes by default. Defaults to `""`. |
+| `root` | no | Absolute path override for absolutizing this target's `srcs` and `buildfile_path`. When omitted, the top-level `root` is used. |
+| `relative_to` | no | Directory, itself resolved against the target's root, that this target's `srcs` resolve against instead of that root. A build system sets this when it materializes generated sources outside the source tree, such as the output directory of a Buck genrule. Every `src` of a target that sets this counts as generated. |
+| `config` | no | Name of an entry in the top-level [`configs`](#per-target-configuration) map, holding the type checking settings for this target. |
+
+#### Per-target configuration
+
+A target's `config` must match a name in the top-level `configs` map. The name
+has no meaning to Pyrefly beyond selecting that entry, so the build system can
+choose any names that are convenient. Naming configs rather than spelling their
+settings inline lets many targets share settings that are sent and parsed only
+once.
+
+Each entry in [`configs`](#per-target-configuration) accepts the settings a
+[sub-config](#subconfig-allowed-overrides) can override, for example
+[`errors`](#errors) and [`check-unannotated-defs`](#check-unannotated-defs).
+Target configs take precedence over matching sub-configs because they describe
+the most specific build-system scope. The full resolution chain is: target
+config → sub-config → top-level config → [preset](#preset) defaults. Settings
+that are absent at one level fall through to the next; `errors` maps are merged
+so each level only overrides the error kinds it names.
+
+```json
+{
+    "root": "/src",
+    "db": {
+        "//Project:MyLib": {
+            "srcs": {
+                "Foo": ["Foo.py"],
+                "Bar": ["sub1/Bar.py"]
+            },
+            "root": "/src/Project",
+            "config": "lenient",
+            "python_version": "3.12",
+            "python_platform": "linux"
+        },
+        "//Project:MyPkg": {
+            "srcs": {
+                "MyPkg": ["MyPkg/__init__.py"],
+                "MyPkg.Utils": ["MyPkg/Utils.py"]
+            },
+            "deps": ["//Project:MyLib"],
+            "root": "/src/Project",
+            "config": "lenient",
+            "python_version": "3.12",
+            "python_platform": "linux"
+        },
+        "//Project/test:test": {
+            "srcs": {
+                "test.lib": ["test/lib.py"],
+                "test.test": ["test/test.py"]
+            },
+            "deps": ["//Project:MyLib", "//Project:MyPkg"],
+            "python_version": "3.12",
+            "python_platform": "linux"
+        }
+    },
+    "configs": {
+        "lenient": {
+            "errors": { "missing-import": "warn" },
+            "check-unannotated-defs": false
+        }
+    }
+}
+```
+
+`MyLib` and `MyPkg` share the `lenient` config. The test target names no config,
+so it is checked with the top-level config.
 
 For reference, the command invoked as part of the Buck2 integration is:
 
@@ -1112,6 +1239,23 @@ Passing the names of all tools is equivalent to enabling `permissive-ignores`.
 - Type: list of tools
 - Default: `["type", "pyrefly"]`
 - Flag equivalent: `--enabled-ignores`
+
+### `type-ignore-unknown-tag-behavior`
+
+Controls how a coded `# type: ignore[...]` comment affects Pyrefly diagnostics
+when it contains a tag without the `pyrefly:` prefix. Explicit
+`pyrefly:<error-code>` tags remain selective in every mode; unknown tags in the
+same comment independently use the configured behavior.
+
+- `no-effect`: The unknown tag has no effect on Pyrefly diagnostics.
+- `downgrade-to-warning`: Caps diagnostics on the comment's line at warning severity
+  without raising diagnostics that already have a lower severity.
+- `suppress`: The comment suppresses all Pyrefly diagnostics on the line, matching
+  Pyrefly's legacy behavior.
+
+- Type: `"no-effect" | "downgrade-to-warning" | "suppress"`
+- Default: `"suppress"`
+- Flag equivalent: `--type-ignore-unknown-tag-behavior`
 
 ### `sub-config`
 
@@ -1237,10 +1381,9 @@ can fit under a single config option description.
 
 Unless `skip-interpreter-query` is set, we'll attempt to query a Python interpreter to
 determine your [`python-platform`](#python-platform) or
-[`python-version`](#python-version) if they're unset. We also get a
-[`site-package-path`](#site-package-path) from your interpreter to determine which
-packages you have installed and append those to the end of any `site-package-path`
-you've configured yourself, either through CLI flags or a config file.
+[`python-version`](#python-version) if they're unset. We also use the interpreter's
+`sys.path` to get additional [`site-package-path`](#site-package-path) entries. We
+search these entries after entries that you configure with CLI flags or a config file.
 
 We look for an interpreter with the following logic:
 
@@ -1273,7 +1416,9 @@ The config options we query the interpreter for are:
 
 - `python-platform`: `sys.platform`
 - `python-version`: `sys.version_info[:3]`
-- `site-package-path`: `site.getsitepackages() + [site.getusersitepackages()]`
+- `site-package-path`: entries from `sys.path`. Pyrefly removes the entry that is an empty
+  string, entries that contain `.zip`, entries that end in `/lib-dynload`, and any entry
+  that is equal to `sysconfig.get_path('stdlib')`.
 
 :::info
 You can run `pyrefly dump-config` and pass in your file or configuration like you would

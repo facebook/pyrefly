@@ -662,9 +662,9 @@ impl CalcStack {
                 }
                 // The target is now in the top SCC's iteration state.
                 // Determine the appropriate action based on iteration state.
-                // After merge, existing iteration states are preserved (Done/
-                // InProgress stay as-is) and new members are Fresh. The target
-                // will typically be Fresh or InProgress. Handle all cases.
+                // After merge, existing iteration states retain their
+                // advancement and members absorbed from the live stack are
+                // InProgress.
                 guard.action = self.binding_action_for_top_scc_member(answer_scope, current);
                 return guard;
             }
@@ -1348,30 +1348,17 @@ impl CalcStack {
         scc_stack.pop()
     }
 
-    /// Removes a CalcId from the top SCC's `node_state`.
-    ///
-    /// Used when `drive_member` was a no-op (e.g., the target module's
-    /// Answers were evicted by another thread). Removing the member from
-    /// node state prevents `next_fresh_member` from returning it
-    /// again, breaking what would otherwise be an infinite loop.
-    ///
-    /// If a merge or iteration restart rebuilds node states, the member
-    /// may be re-added as Fresh and re-detected on the next drive loop
-    /// (which is harmless — the eviction is persistent, so the member
-    /// is immediately removed again).
-    fn remove_from_iteration_state(&self, calc_id: &CalcId) {
+    /// Remove a Fresh member whose iterative drive returned before starting it.
+    fn remove_unstarted_iteration_member(&self, calc_id: &CalcId) {
         let mut scc_stack = self.scc_stack.borrow_mut();
-        if let Some(scc) = scc_stack.last_mut() {
-            scc.node_state.remove(calc_id);
-        } else {
-            // TODO(stroxler): Consider panicking here once we're confident this
-            // path is unreachable in the LSP. The silent no-op may mask bugs.
-            debug_assert!(
-                false,
-                "remove_from_iteration_state: no iterating SCC on the stack for {:?}",
-                calc_id
-            );
-        }
+        let top_scc = scc_stack
+            .last_mut()
+            .expect("no iterating SCC for a Fresh member after a no-op drive");
+        let removed = top_scc.node_state.remove(calc_id);
+        debug_assert!(
+            matches!(removed, Some(SccNodeState::Fresh)),
+            "only a Fresh SCC member may remain after a no-op drive",
+        );
     }
 }
 
@@ -1387,9 +1374,9 @@ impl CalcStack {
 /// The `advancement_rank()` method encodes this ordering for use during SCC merge.
 #[derive(Debug, Clone)]
 pub enum SccNodeState {
-    /// Node hasn't been processed yet as part of SCC handling.
+    /// Node is queued for the iterative driver and has no live calculation.
     Fresh,
-    /// Node is currently being processed (on the Rust call stack).
+    /// Node has a live calculation on the Rust call stack.
     InProgress,
     /// A placeholder has been recorded in SCC-local state for cycle breaking,
     /// but we haven't computed the real answer yet.
@@ -1598,11 +1585,12 @@ impl Scc {
     fn new(raw: Vec1<CalcId>, calc_stack_vec: &[CalcId], owner: SccOwner) -> Self {
         let detected_at = raw.first().dupe();
 
-        // Initialize all nodes as Fresh
+        // `raw` comes directly from the active calculation stack, so every
+        // newly detected cycle member already has a live frame.
         let node_state: BTreeMap<CalcId, SccNodeState> = raw
             .iter()
             .duped()
-            .map(|c| (c, SccNodeState::Fresh))
+            .map(|c| (c, SccNodeState::InProgress))
             .collect();
 
         // The anchor is the detected_at CalcId (the one pushed twice, triggering cycle
@@ -3191,16 +3179,14 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     fn drive_all_iteration_members(&self) {
         while let Some(id) = self.stack().next_fresh_member() {
             self.drive_member(&id);
-            // If the member is still Fresh after driving, the drive was a
-            // no-op. This happens when solve_idx_erased encounters an
-            // Evicted module (another thread ran Solutions and freed
-            // Answers). The member's answer is already committed globally,
-            // so remove it from iteration state to prevent infinite looping.
+            // If the member is still Fresh after driving, the drive returned
+            // before pushing a calculation frame. Since live members are
+            // InProgress by construction, this member cannot complete locally.
             if matches!(
                 self.stack().get_iteration_node_state(&id),
                 Some(SccNodeStateKind::Fresh)
             ) {
-                self.stack().remove_from_iteration_state(&id);
+                self.stack().remove_unstarted_iteration_member(&id);
             }
         }
     }
@@ -4244,6 +4230,73 @@ mod scc_tests {
             .pop_and_take_completed_scc()
             .expect("caller completion should release the SCC");
         assert_eq!(completed.start_driver(), SccDriver(0));
+    }
+
+    //   Driver / CalcStack                         Publisher
+    //   [caller, member]
+    //       member requests caller
+    //   [caller, member, caller]
+    //       detect and expand SCC
+    //                                              publish caller's answer
+    //       shared-answer hit; no placeholder
+    //   [caller], caller: InProgress
+    //       Driver ──> Caller ──> complete SCC
+    //
+    // If expansion marks the live caller Fresh, the driver's later shared-answer
+    // hit removes it as unstarted work and leaves the Caller-owned SCC orphaned.
+    #[test]
+    fn test_published_answer_during_cycle_expansion_preserves_live_caller() {
+        let caller = CalcId::for_test("m", 0);
+        let member = CalcId::for_test("m", 1);
+        let calc_stack = make_calc_stack(&[caller.dupe()]);
+        let mut scc = make_test_scc(fresh_nodes(&[member.dupe()]), member.dupe(), 1);
+        scc.iterative.iteration = 1;
+        scc.owner = SccOwner::Driver(0);
+        calc_stack.push_scc(scc);
+        calc_stack.next_scc_owner.set(1);
+
+        let answer_scope = AnswerScope::new();
+        let member_frame = calc_stack.push(&answer_scope, &member);
+        assert!(matches!(member_frame.action(), BindingAction::Calculate));
+
+        let recursive_frame = calc_stack.push(&answer_scope, &caller);
+        assert!(matches!(
+            recursive_frame.action(),
+            BindingAction::NeedsColdPlaceholder
+        ));
+        // A shared-answer hit returns without recording a placeholder.
+        assert!(recursive_frame.finish().is_none());
+
+        let answer = AnyAnswer::new::<Key>(AnswerBox::new(test_answer(42)));
+        calc_stack.set_iteration_node_done(&answer_scope, &member, answer, None, None);
+        assert!(member_frame.finish().is_none());
+
+        // Model the same shared-answer hit when the driver visits remaining work.
+        let unstarted = calc_stack.next_fresh_member();
+        if let Some(unstarted) = &unstarted {
+            assert_eq!(unstarted, &caller);
+            calc_stack.remove_unstarted_iteration_member(unstarted);
+        }
+        assert!(calc_stack.take_top_scc_for_driver(SccDriver(0)).is_none());
+        assert_eq!(calc_stack.scc_stack.borrow()[0].owner, SccOwner::Caller(0));
+
+        let caller_is_participant = calc_stack.is_scc_participant(&caller);
+        if caller_is_participant {
+            let answer = AnyAnswer::new::<Key>(AnswerBox::new(test_answer(43)));
+            calc_stack.on_calculation_finished(&answer_scope, &caller, answer, None, None);
+        }
+        let completed = calc_stack.pop_and_take_completed_scc();
+        assert!(
+            unstarted.is_none(),
+            "the live caller must not be queued as Fresh work",
+        );
+        assert!(
+            caller_is_participant,
+            "the expanded SCC must retain its live caller",
+        );
+        let mut completed = completed.expect("caller completion should release the expanded SCC");
+        assert_eq!(completed.start_driver(), SccDriver(0));
+        assert!(calc_stack.sccs_is_empty());
     }
 
     #[test]

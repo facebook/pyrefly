@@ -735,6 +735,7 @@ mod tests {
     use dupe::Dupe;
     use pyrefly_build::handle::Handle;
     use pyrefly_config::error_kind::Severity;
+    use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
     use pyrefly_python::module_name::ModuleName;
     use pyrefly_python::module_path::ModulePath;
     use pyrefly_python::sys_info::SysInfo;
@@ -811,10 +812,21 @@ mod tests {
     }
 
     fn get_errors(contents: &str) -> (Errors, TempDir) {
+        get_errors_with_type_ignore_unknown_tag_behavior(
+            contents,
+            TypeIgnoreUnknownTagBehavior::Suppress,
+        )
+    }
+
+    fn get_errors_with_type_ignore_unknown_tag_behavior(
+        contents: &str,
+        behavior: TypeIgnoreUnknownTagBehavior,
+    ) -> (Errors, TempDir) {
         let tdir = tempfile::tempdir().unwrap();
 
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
+        config.root.type_ignore_unknown_tag_behavior = Some(behavior);
         let name = "test";
         fs_anyhow::write(&get_path(&tdir), contents).unwrap();
         config.configure();
@@ -834,6 +846,21 @@ mod tests {
         )]);
         transaction.run(&[handle.dupe()], Require::Everything, None);
         (transaction.get_errors([handle.clone()].iter()), tdir)
+    }
+
+    fn assert_remove_type_ignores(
+        before: &str,
+        after: &str,
+        expected_removals: usize,
+        behavior: TypeIgnoreUnknownTagBehavior,
+    ) {
+        let (errors, tdir) = get_errors_with_type_ignore_unknown_tag_behavior(before, behavior);
+        let collected = errors.collect_errors();
+        let unused_errors = errors.collect_unused_ignore_errors(&collected);
+        let removals = suppress::remove_unused_ignores(unused_errors, UnusedIgnoreKind::Type);
+        let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
+        assert_eq!(after, got_file);
+        assert_eq!(removals, expected_removals);
     }
 
     #[test]
@@ -1206,6 +1233,94 @@ def f() -> int:
         let got_file = fs_anyhow::read_to_string(&get_path(&tdir)).unwrap();
         assert_eq!(want, got_file);
         assert_eq!(removals, 2);
+    }
+
+    #[test]
+    fn test_remove_only_type_ignores() {
+        let input = "a = 1  # pyrefly: ignore\nb = 2  # type: ignore\n";
+        let want = "a = 1  # pyrefly: ignore\nb = 2\n";
+
+        assert_remove_type_ignores(input, want, 1, TypeIgnoreUnknownTagBehavior::Suppress);
+    }
+
+    #[test]
+    fn test_remove_unknown_type_ignore_tags_with_default_behavior() {
+        let input = concat!(
+            "x: int = 'not an int'  # type: ignore[assignment]\n",
+            "y: int = 1  # type: ignore[assignment]\n",
+        );
+        let want = concat!(
+            "x: int = 'not an int'  # type: ignore[assignment]\n",
+            "y: int = 1\n",
+        );
+
+        assert_remove_type_ignores(input, want, 1, TypeIgnoreUnknownTagBehavior::Suppress);
+    }
+
+    #[test]
+    fn test_remove_unknown_type_ignore_tags_with_downgrade_behavior() {
+        let input = concat!(
+            "x: int = 'not an int'  # type: ignore[assignment]\n",
+            "y: int = 1  # type: ignore[assignment]\n",
+        );
+        let want = concat!(
+            "x: int = 'not an int'  # type: ignore[assignment]\n",
+            "y: int = 1\n",
+        );
+
+        assert_remove_type_ignores(
+            input,
+            want,
+            1,
+            TypeIgnoreUnknownTagBehavior::DowngradeToWarning,
+        );
+    }
+
+    #[test]
+    fn test_remove_unknown_type_ignore_tags_with_no_effect_behavior() {
+        let input = "x: int = 'not an int'  # type: ignore[assignment]\n";
+        let want = "x: int = 'not an int'\n";
+
+        assert_remove_type_ignores(input, want, 1, TypeIgnoreUnknownTagBehavior::NoEffect);
+    }
+
+    #[test]
+    fn test_remove_type_ignore_with_explicit_pyrefly_tags() {
+        let input = concat!(
+            "x: int = 'not an int'  # type: ignore[pyrefly:bad-assignment]\n",
+            "y: int = 'not an int'  # type: ignore[pyrefly:bad-return]\n",
+        );
+        let want = concat!(
+            "x: int = 'not an int'  # type: ignore[pyrefly:bad-assignment]\n",
+            "y: int = 'not an int'\n",
+        );
+
+        assert_remove_type_ignores(input, want, 1, TypeIgnoreUnknownTagBehavior::Suppress);
+    }
+
+    #[test]
+    fn test_remove_type_ignore_with_mixed_tags() {
+        let input = concat!(
+            "x: int = 'not an int'  # type: ignore[assignment, pyrefly:bad-assignment]\n",
+            "y: int = 'not an int'  # type: ignore[assignment, pyrefly:bad-return]\n",
+        );
+        let want = concat!(
+            "x: int = 'not an int'  # type: ignore[assignment, pyrefly:bad-assignment]\n",
+            "y: int = 'not an int'\n",
+        );
+
+        assert_remove_type_ignores(input, input, 0, TypeIgnoreUnknownTagBehavior::Suppress);
+        assert_remove_type_ignores(input, want, 1, TypeIgnoreUnknownTagBehavior::NoEffect);
+    }
+
+    #[test]
+    fn test_multiple_type_ignores_on_same_line_are_conservatively_retained() {
+        let input = concat!(
+            "x: int = 'not an int'  # type: ignore[assignment]  ",
+            "# type: ignore[pyrefly:bad-return]\n",
+        );
+
+        assert_remove_type_ignores(input, input, 0, TypeIgnoreUnknownTagBehavior::Suppress);
     }
 
     #[test]

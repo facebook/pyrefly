@@ -221,3 +221,39 @@ X: TypeForm[int] = int
 x: X = 0  # E: Expected a type form, got instance of `TypeForm[int]`
     "#,
 );
+
+testcase!(
+    test_typeform_attribute_access,
+    r#"
+import typing
+from typing import TypeVar
+from typing_extensions import TypeForm
+
+T = TypeVar("T")
+
+def field_names(tp: TypeForm[T]):
+    if typing.is_typeddict(tp):
+        return tp.__annotations__.keys()
+    return ()
+    "#,
+);
+
+testcase!(
+    test_typeform_attribute_access_unknown,
+    r#"
+from typing_extensions import TypeForm
+
+def f(tp: TypeForm[int]):
+    tp.not_a_real_attribute  # E: Object of class `object` has no attribute `not_a_real_attribute`
+    "#,
+);
+
+testcase!(
+    test_sentinel,
+    r#"
+from typing_extensions import TypeForm, sentinel
+MISSING = sentinel('MISSING')
+ok: TypeForm[MISSING] = MISSING
+err: TypeForm[int] = MISSING  # E: `MISSING` is not assignable to `TypeForm[int]`
+    "#,
+);

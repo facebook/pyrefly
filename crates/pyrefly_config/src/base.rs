@@ -11,6 +11,7 @@ use clap::ValueEnum;
 use enum_iterator::Sequence;
 use enum_iterator::all;
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_with::skip_serializing_none;
@@ -174,6 +175,7 @@ impl Preset {
                     check_unannotated_defs: Some(false),
                     infer_return_types: Some(InferReturnTypes::Never),
                     legacy_overload_expansion: Some(true),
+                    type_ignore_unknown_tag_behavior: Some(TypeIgnoreUnknownTagBehavior::Suppress),
                     ..Default::default()
                 }
             }
@@ -227,6 +229,9 @@ pub struct ConfigBase {
 
     /// Respect ignore directives from only these tools.
     pub enabled_ignores: Option<SmallSet<Tool>>,
+
+    /// How `# type: ignore[...]` comments with non-Pyrefly tags affect diagnostics.
+    pub type_ignore_unknown_tag_behavior: Option<TypeIgnoreUnknownTagBehavior>,
 
     /// Modules from which import errors should be ignored
     /// and the module should always be replaced with `typing.Any`
@@ -351,25 +356,28 @@ impl ConfigBase {
         }
     }
 
-    /// Resolve the deprecated `untyped_def_behavior` field into the two new fields
-    /// (`check_unannotated_defs` and `infer_return_types`).
-    /// New fields take precedence; the old field only fills in unset values.
-    pub fn resolve_legacy_untyped_def_behavior(&mut self) {
-        let Some(behavior) = self.untyped_def_behavior else {
-            return;
-        };
-        if self.check_unannotated_defs.is_none() {
-            self.check_unannotated_defs = Some(!matches!(
-                behavior,
-                UntypedDefBehavior::SkipAndInferReturnAny
-            ));
+    /// Resolve deprecated compatibility settings into their canonical fields.
+    pub fn resolve_legacy_settings(&mut self) {
+        if let Some(behavior) = self.untyped_def_behavior {
+            if self.check_unannotated_defs.is_none() {
+                self.check_unannotated_defs = Some(!matches!(
+                    behavior,
+                    UntypedDefBehavior::SkipAndInferReturnAny
+                ));
+            }
+            if self.infer_return_types.is_none() {
+                self.infer_return_types = Some(match behavior {
+                    UntypedDefBehavior::CheckAndInferReturnType => InferReturnTypes::Checked,
+                    UntypedDefBehavior::CheckAndInferReturnAny
+                    | UntypedDefBehavior::SkipAndInferReturnAny => InferReturnTypes::Never,
+                });
+            }
         }
-        if self.infer_return_types.is_none() {
-            self.infer_return_types = Some(match behavior {
-                UntypedDefBehavior::CheckAndInferReturnType => InferReturnTypes::Checked,
-                UntypedDefBehavior::CheckAndInferReturnAny
-                | UntypedDefBehavior::SkipAndInferReturnAny => InferReturnTypes::Never,
-            });
+
+        if self.pytorch_efficiency_lints == Some(true) {
+            self.errors
+                .get_or_insert_default()
+                .set_default_severity(ErrorKind::PytorchEfficiencyLints, Severity::Warn);
         }
     }
 
@@ -411,6 +419,12 @@ impl ConfigBase {
 
     pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {
         base.enabled_ignores.as_ref()
+    }
+
+    pub fn get_type_ignore_unknown_tag_behavior(
+        base: &Self,
+    ) -> Option<TypeIgnoreUnknownTagBehavior> {
+        base.type_ignore_unknown_tag_behavior
     }
 
     /// Get the recursion limit configuration, if enabled.

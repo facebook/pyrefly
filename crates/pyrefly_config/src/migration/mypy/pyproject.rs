@@ -22,6 +22,7 @@ use crate::migration::python_platform::PythonPlatformConfig;
 use crate::migration::python_version::PythonVersionConfig;
 use crate::migration::search_path::SearchPath;
 use crate::migration::sub_configs::SubConfigs;
+use crate::migration::type_checking_mode::TypeCheckingMode;
 use crate::migration::untyped_def_behavior::UntypedDefBehaviorConfig;
 
 // A pyproject.toml Mypy config differs a bit from the INI format:
@@ -318,6 +319,7 @@ pub fn parse_pyproject_config(raw_file: &str) -> anyhow::Result<ConfigFile> {
         Box::new(PythonVersionConfig),
         Box::new(IgnoreMissingImports),
         Box::new(SearchPath),
+        Box::new(TypeCheckingMode),
         Box::new(ErrorCodes),
         Box::new(SubConfigs),
         Box::new(UntypedDefBehaviorConfig),

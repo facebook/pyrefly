@@ -6,3 +6,12 @@
 # pad!
 def workspace_symbol_multibyte_repro() -> None:
     pass
+
+
+class WorkspaceSymbolMultibyteHost:
+    """
+    ═══
+    """
+
+    def workspace_symbol_multibyte_nested_method(self) -> None:
+        pass

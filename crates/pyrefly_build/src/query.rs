@@ -34,6 +34,7 @@ use vec1::Vec1;
 #[allow(unused_imports)]
 use vec1::vec1;
 
+use crate::source_db::ConfigName;
 use crate::source_db::Target;
 
 pub mod buck;
@@ -192,6 +193,7 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
                 db: Ok(TargetManifestDatabase {
                     db: SmallMap::new(),
                     root: cwd.to_path_buf(),
+                    configs: SmallMap::new(),
                     extra_filetypes: SmallSet::new(),
                 }),
                 build_id: None,
@@ -232,7 +234,15 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
             cmd.arg(format!("@{}", argfile.path().display()));
             cmd.current_dir(cwd);
 
-            let result = cmd.output()?;
+            // Spawn failures surface as a bare `NotFound`, which is ambiguous between a
+            // missing program and a missing working directory. Name both.
+            let program = cmd.get_program().to_string_lossy().into_owned();
+            let result = cmd.output().with_context(|| {
+                format!(
+                    "Failed to run source DB query command `{program}` with working directory `{}`",
+                    cwd.display(),
+                )
+            })?;
             let parse_start = Instant::now();
             build_duration = Some(parse_start - build_start);
             exit_reason = result.status.code().map(BuckExitReason::from_exit_code);
@@ -312,15 +322,25 @@ pub trait SourceDbQuerier: Send + Sync + fmt::Debug {
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Clone)]
 pub(crate) struct PythonLibraryManifest {
+    #[serde(default)]
     pub deps: SmallSet<Target>,
     pub srcs: SmallMap<ModuleName, Vec1<InternedPath>>,
     #[serde(default)]
     pub relative_to: Option<PathBuf>,
     #[serde(flatten)]
     pub sys_info: SysInfo,
+    #[serde(default)]
     pub buildfile_path: PathBuf,
     #[serde(default, skip)]
     pub packages: SmallMap<ModuleName, Vec1<InternedPath>>,
+    /// Per-target override of the top-level `root`, used to absolutize this
+    /// target's `srcs` and `buildfile_path`.
+    #[serde(default)]
+    pub root: Option<PathBuf>,
+    /// Name of the entry in [`TargetManifestDatabase::configs`] holding this
+    /// target's config overrides.
+    #[serde(default)]
+    pub config: Option<ConfigName>,
 }
 
 impl PythonLibraryManifest {
@@ -450,6 +470,11 @@ pub(crate) enum TargetManifest {
 pub(crate) struct TargetManifestDatabase {
     db: SmallMap<Target, TargetManifest>,
     pub root: PathBuf,
+    /// Config overrides shared by targets, stored as raw JSON to avoid a
+    /// circular dependency between `pyrefly_build` and `pyrefly_config`.
+    /// Targets select one by name through `PythonLibraryManifest::config`.
+    #[serde(default)]
+    pub configs: SmallMap<ConfigName, serde_json::Value>,
     /// Non-Python file suffixes discovered by the BXL script (e.g. ["thrift"]).
     /// Used to watch for changes to files with these extensions.
     #[serde(default)]
@@ -476,7 +501,8 @@ impl TargetManifestDatabase {
                 TargetManifest::Library(lib) => {
                     lib.replace_alias_deps(&aliases);
                     lib.strip_stubs_suffixes();
-                    lib.rewrite_relative_to_root(&self.root);
+                    let root = lib.root.clone().unwrap_or_else(|| self.root.clone());
+                    lib.rewrite_relative_to_root(&root);
                 }
             }
         }
@@ -508,6 +534,7 @@ mod tests {
             TargetManifestDatabase {
                 db,
                 root,
+                configs: SmallMap::new(),
                 extra_filetypes: SmallSet::new(),
             }
         }
@@ -794,6 +821,8 @@ mod tests {
                 sys_info: SysInfo::new(PythonVersion::new(3, 12, 0), PythonPlatform::linux()),
                 buildfile_path: PathBuf::from(buildfile),
                 packages: map_implicit_packages(implicit_packages, None),
+                root: None,
+                config: None,
             })
         }
     }
@@ -814,6 +843,8 @@ mod tests {
                 sys_info: SysInfo::new(PythonVersion::new(3, 12, 0), PythonPlatform::linux()),
                 buildfile_path: PathBuf::from(root).join(buildfile),
                 packages: map_implicit_packages(inits, Some(root)),
+                root: None,
+                config: None,
             }
         }
     }
@@ -1593,5 +1624,211 @@ mod tests {
             "Expected packages to contain 'foo', but got: {:?}",
             manifest.packages.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_optional_deps_and_buildfile_path() {
+        let json = r#"
+{
+  "db": {
+    "//pkg:minimal": {
+      "srcs": {
+        "main": ["main.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "root": "/src"
+}
+        "#;
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let (db, _) = parsed.produce_map();
+        let minimal = db
+            .get(&Target::from_string("//pkg:minimal".to_owned()))
+            .unwrap();
+        assert!(
+            minimal.deps.is_empty(),
+            "an omitted `deps` should leave the target with no dependencies"
+        );
+        assert_eq!(
+            minimal.buildfile_path,
+            PathBuf::from("/src"),
+            "an omitted `buildfile_path` defaults to empty, which resolves to the repository root"
+        );
+    }
+
+    /// A per-target `root` sits outside the top-level `root`, which is the case
+    /// a single repository-wide root cannot express.
+    #[test]
+    fn test_per_target_root() {
+        let json = r#"
+{
+  "db": {
+    "//pkg:rooted": {
+      "srcs": {
+        "pkg.foo": ["pkg/foo.py"]
+      },
+      "root": "/generated/Package",
+      "buildfile_path": "BUCK",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//pkg:materialized": {
+      "srcs": {
+        "gen.mod": ["gen/mod.py"]
+      },
+      "root": "/generated/Package",
+      "relative_to": "out",
+      "buildfile_path": "BUCK",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//pkg:default": {
+      "srcs": {
+        "baz": ["baz.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "root": "/src"
+}
+        "#;
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        let (db, _) = parsed.produce_map();
+
+        // The per-target root absolutizes `srcs`, `buildfile_path`, and the
+        // packages synthesized from those `srcs`.
+        let rooted = db
+            .get(&Target::from_string("//pkg:rooted".to_owned()))
+            .unwrap();
+        assert_eq!(rooted.root, Some(PathBuf::from("/generated/Package")));
+        assert_eq!(
+            rooted
+                .srcs
+                .get(&ModuleName::from_str("pkg.foo"))
+                .unwrap()
+                .first(),
+            &InternedPath::new(PathBuf::from("/generated/Package/pkg/foo.py")),
+            "srcs should be absolutized against the per-target root"
+        );
+        assert_eq!(
+            rooted.buildfile_path,
+            PathBuf::from("/generated/Package/BUCK"),
+            "buildfile_path should be absolutized against the per-target root"
+        );
+        assert_eq!(
+            rooted
+                .packages
+                .get(&ModuleName::from_str("pkg"))
+                .unwrap()
+                .first(),
+            &InternedPath::new(PathBuf::from("/generated/Package/pkg")),
+            "a synthesized package should sit under the per-target root"
+        );
+
+        // `relative_to` resolves against the per-target root, and `srcs`
+        // resolve against `relative_to` in turn. `buildfile_path` keeps
+        // resolving against the root itself.
+        let materialized = db
+            .get(&Target::from_string("//pkg:materialized".to_owned()))
+            .unwrap();
+        assert_eq!(
+            materialized.relative_to,
+            Some(PathBuf::from("/generated/Package/out")),
+            "relative_to should be resolved against the per-target root"
+        );
+        assert_eq!(
+            materialized
+                .srcs
+                .get(&ModuleName::from_str("gen.mod"))
+                .unwrap()
+                .first(),
+            &InternedPath::new(PathBuf::from("/generated/Package/out/gen/mod.py")),
+            "srcs should be absolutized against relative_to rather than the root"
+        );
+        assert_eq!(
+            materialized.buildfile_path,
+            PathBuf::from("/generated/Package/BUCK"),
+            "buildfile_path should ignore relative_to and use the root"
+        );
+        assert_eq!(
+            materialized
+                .packages
+                .get(&ModuleName::from_str("gen"))
+                .unwrap()
+                .first(),
+            &InternedPath::new(PathBuf::from("/generated/Package/out/gen")),
+            "a synthesized package should follow its srcs under relative_to"
+        );
+
+        // A target with no per-target root falls back to the top-level root.
+        let default = db
+            .get(&Target::from_string("//pkg:default".to_owned()))
+            .unwrap();
+        assert_eq!(default.root, None);
+        assert_eq!(
+            default
+                .srcs
+                .get(&ModuleName::from_str("baz"))
+                .unwrap()
+                .first(),
+            &InternedPath::new(PathBuf::from("/src/baz.py")),
+            "a target with no per-target root should use the top-level root"
+        );
+    }
+
+    #[test]
+    fn test_named_configs() {
+        let json = r#"
+{
+  "db": {
+    "//pkg:lenient": {
+      "srcs": {
+        "foo": ["foo.py"]
+      },
+      "config": "lenient",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//pkg:strict": {
+      "srcs": {
+        "bar": ["bar.py"]
+      },
+      "config": "strict",
+      "python_version": "3.12",
+      "python_platform": "linux"
+    },
+    "//pkg:unconfigured": {
+      "srcs": {
+        "baz": ["baz.py"]
+      },
+      "python_version": "3.12",
+      "python_platform": "linux"
+    }
+  },
+  "configs": {
+    "lenient": { "errors": { "missing-import": "warn" } },
+    "strict": { "check-unannotated-defs": true }
+  },
+  "root": "/src"
+}
+        "#;
+        let parsed: TargetManifestDatabase = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.configs.len(), 2);
+
+        let (db, _) = parsed.produce_map();
+        let config_of = |target: &str| {
+            db.get(&Target::from_string(target.to_owned()))
+                .unwrap()
+                .config
+                .as_ref()
+                .map(|c| c.to_string())
+        };
+
+        assert_eq!(config_of("//pkg:lenient").as_deref(), Some("lenient"));
+        assert_eq!(config_of("//pkg:strict").as_deref(), Some("strict"));
+        assert_eq!(config_of("//pkg:unconfigured"), None);
     }
 }

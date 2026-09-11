@@ -95,6 +95,29 @@ pub fn negotiate_type_error_display_status_version(
         .unwrap_or_default()
 }
 
+/// What's the current status of the build state that we want to publish to the status
+/// bar?
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BuildSystemStatus {
+    /// A source database query is in flight. A previously built database may
+    /// still be serving results while this is the case.
+    Building,
+    /// The last query succeeded.
+    Ready,
+    /// The last query failed, holding the error rendered for display.
+    Failed(String),
+}
+
+impl BuildSystemStatus {
+    pub fn display(&self) -> String {
+        match self {
+            Self::Building => "building".to_owned(),
+            Self::Ready => "ready".to_owned(),
+            Self::Failed(error) => format!("error: {error}"),
+        }
+    }
+}
+
 /// V2 wire shape for the status-bar response. `label` drives the
 /// status-bar parenthetical (`Pyrefly (Basic)`, `Pyrefly (Legacy)`,
 /// …); `null` means show plain `Pyrefly`. `tooltip` is markdown.
@@ -117,6 +140,8 @@ pub struct TypeErrorDisplayStatusV2 {
     pub docs_url: String,
     /// The version of Pyrefly that's currently running.
     pub pyrefly_version: Option<String>,
+    /// The current status of the build system.
+    pub build_system: Option<String>,
 }
 
 /// Internal sum type covering both wire shapes. `#[serde(untagged)]`
@@ -143,6 +168,32 @@ impl lsp_types::request::Request for TypeErrorDisplayStatusRequest {
     const METHOD: &'static str = "pyrefly/textDocument/typeErrorDisplayStatus";
 }
 
+/// Parameters of [`TypeErrorDisplayStatusChangedNotification`]. we have an
+/// empty struct here, since JSONRPC requires this to be an object or array.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct TypeErrorDisplayStatusChangedParams {}
+
+/// Tells the client that its cached [`TypeErrorDisplayStatusRequest`] response
+/// may be stale and should be re-requested.
+pub enum TypeErrorDisplayStatusChangedNotification {}
+
+impl lsp_types::notification::Notification for TypeErrorDisplayStatusChangedNotification {
+    type Params = TypeErrorDisplayStatusChangedParams;
+    const METHOD: &'static str = "pyrefly/typeErrorDisplayStatusChanged";
+}
+
+/// Resolve `initializationOptions.pyrefly.pushTypeErrorDisplayStatus`, which
+/// declares that the client handles
+/// [`TypeErrorDisplayStatusChangedNotification`]. Defaults to `false`: a client
+/// that didn't opt in would log every unrecognized notification as a warning.
+pub fn should_push_type_error_display_status(initialization_options: Option<&Value>) -> bool {
+    initialization_options
+        .and_then(|opts| opts.get("pyrefly"))
+        .and_then(|pyrefly| pyrefly.get("pushTypeErrorDisplayStatus"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 /// URL referenced from the V2 tooltip / docs link. Module-level so the
 /// derivation logic and tests share the exact string the user sees.
 const STATUS_BAR_DOCS_URL: &str = "https://pyrefly.org/en/docs/IDE/";
@@ -163,6 +214,7 @@ pub fn default_v2_response(pyrefly_version: Option<String>) -> TypeErrorDisplayS
         tooltip: String::new(),
         docs_url: STATUS_BAR_DOCS_URL.to_owned(),
         pyrefly_version,
+        build_system: None,
     }
 }
 
@@ -182,6 +234,7 @@ pub fn derive_v2_response(
     workspace_disable_type_errors: bool,
     workspace_type_checking_mode: Option<TypeCheckingMode>,
     pyrefly_version: Option<String>,
+    build_system: Option<String>,
 ) -> TypeErrorDisplayStatusV2 {
     let (label, tooltip) = if workspace_disable_type_errors {
         (
@@ -221,6 +274,12 @@ pub fn derive_v2_response(
                     }
                     MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml) => (
                         "`[tool.pyright]` in your `pyproject.toml`",
+                        "Default",
+                        "default",
+                    ),
+                    MigratedFromKind::BasedPyright(MigratedConfigSource::DedicatedFile) => unreachable!("no such thing as basedpyrightconfig.json"),
+                    MigratedFromKind::BasedPyright(MigratedConfigSource::PyprojectToml) => (
+                        "`[tool.basedpyright]` in your `pyproject.toml`",
                         "Default",
                         "default",
                     ),
@@ -272,6 +331,7 @@ pub fn derive_v2_response(
         tooltip,
         docs_url: STATUS_BAR_DOCS_URL.to_owned(),
         pyrefly_version,
+        build_system,
     }
 }
 
@@ -318,9 +378,48 @@ mod tests {
         use pyrefly_config::migration::run::MigratedConfigSource;
         use pyrefly_config::migration::run::MigratedFromKind;
 
+        use super::super::BuildSystemStatus;
         use super::super::TypeErrorDisplayStatusVersion;
         use super::super::derive_v2_response;
         use crate::state::lsp::TypeCheckingMode;
+
+        #[test]
+        fn no_build_system_yields_null_build_system() {
+            let r = derive_v2_response(
+                None,
+                &ConfigSource::File(PathBuf::from("/proj/pyrefly.toml")),
+                false,
+                false,
+                None,
+                None,
+                None,
+            );
+            assert_eq!(r.build_system, None);
+        }
+
+        #[test]
+        fn build_system_status_survives_workspace_kill_switch() {
+            let r = derive_v2_response(
+                None,
+                &ConfigSource::Synthetic(None),
+                false,
+                true,
+                None,
+                None,
+                Some(BuildSystemStatus::Building.display()),
+            );
+            assert_eq!(r.label.as_deref(), Some("Errors Off"));
+            assert_eq!(r.build_system.as_deref(), Some("building"));
+        }
+
+        #[test]
+        fn failed_build_system_renders_the_error() {
+            assert_eq!(BuildSystemStatus::Ready.display(), "ready");
+            assert_eq!(
+                BuildSystemStatus::Failed("buck2 exited with code 1".to_owned()).display(),
+                "error: buck2 exited with code 1"
+            );
+        }
 
         #[test]
         fn user_override_yields_null_label() {
@@ -330,6 +429,7 @@ mod tests {
                 false,
                 false,
                 Some(TypeCheckingMode::Strict),
+                None,
                 None,
             );
             assert_eq!(r.label, None);
@@ -354,6 +454,7 @@ mod tests {
                 false,
                 None,
                 None,
+                None,
             );
             assert_eq!(r.label.as_deref(), Some("Legacy"));
             assert!(r.tooltip.contains("your `mypy.ini`"));
@@ -369,6 +470,7 @@ mod tests {
                 &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
                 None,
                 None,
             );
@@ -388,6 +490,7 @@ mod tests {
                 false,
                 None,
                 None,
+                None,
             );
             assert_eq!(r.label.as_deref(), Some("Default"));
             assert!(r.tooltip.contains("your `pyrightconfig.json`"));
@@ -402,6 +505,7 @@ mod tests {
                 &ConfigSource::Synthetic(None),
                 false,
                 false,
+                None,
                 None,
                 None,
             );
@@ -422,6 +526,7 @@ mod tests {
                 false,
                 None,
                 None,
+                None,
             );
             assert_eq!(r.label.as_deref(), Some("Basic"));
             assert!(r.tooltip.contains("basic"));
@@ -440,6 +545,7 @@ mod tests {
                 false,
                 None,
                 None,
+                None,
             );
             assert_eq!(r.label, None);
             assert!(r.tooltip.is_empty());
@@ -456,6 +562,7 @@ mod tests {
                 &ConfigSource::File(PathBuf::from("/proj/pyrefly.toml")),
                 true,
                 false,
+                None,
                 None,
                 None,
             );
@@ -479,6 +586,7 @@ mod tests {
                 &ConfigSource::File(PathBuf::from("/proj/pyproject.toml")),
                 true,
                 false,
+                None,
                 None,
                 None,
             );
@@ -505,6 +613,7 @@ mod tests {
                 true,
                 None,
                 None,
+                None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
             assert!(r.tooltip.contains("python.pyrefly.disableTypeErrors"));
@@ -523,6 +632,7 @@ mod tests {
                 true,
                 None,
                 None,
+                None,
             );
             assert_eq!(r.label.as_deref(), Some("Errors Off"));
             assert!(r.tooltip.contains("python.pyrefly.disableTypeErrors"));
@@ -535,6 +645,7 @@ mod tests {
                 &ConfigSource::File(PathBuf::from("/proj/pyrefly.toml")),
                 true,
                 true,
+                None,
                 None,
                 None,
             );
@@ -660,6 +771,26 @@ mod tests {
                     negotiate_type_error_display_status_version(Some(&opts)),
                     TypeErrorDisplayStatusVersion::LATEST
                 );
+            }
+
+            #[test]
+            fn push_defaults_to_disabled() {
+                use super::super::super::should_push_type_error_display_status;
+                assert!(!should_push_type_error_display_status(None));
+                let opts = serde_json::json!({ "pyrefly": {} });
+                assert!(!should_push_type_error_display_status(Some(&opts)));
+                let opts = serde_json::json!({ "pyrefly": { "pushTypeErrorDisplayStatus": null } });
+                assert!(!should_push_type_error_display_status(Some(&opts)));
+            }
+
+            #[test]
+            fn push_honors_explicit_opt_in() {
+                use super::super::super::should_push_type_error_display_status;
+                let opts = serde_json::json!({ "pyrefly": { "pushTypeErrorDisplayStatus": true } });
+                assert!(should_push_type_error_display_status(Some(&opts)));
+                let opts =
+                    serde_json::json!({ "pyrefly": { "pushTypeErrorDisplayStatus": false } });
+                assert!(!should_push_type_error_display_status(Some(&opts)));
             }
         }
     }

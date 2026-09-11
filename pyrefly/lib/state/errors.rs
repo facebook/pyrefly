@@ -18,7 +18,9 @@ use pyrefly_config::error_kind::ErrorKind;
 use pyrefly_config::error_kind::Severity;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Suppression;
+use pyrefly_python::ignore::SuppressionEffect;
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::ignore::misplaced_ignore_errors;
 use pyrefly_python::ignore::parse_ignore_all;
@@ -37,6 +39,7 @@ use ruff_text_size::TextSize;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
 
+use crate::config::config::BaselineMatchingMode;
 use crate::config::config::ConfigFile;
 use crate::error::baseline::BaselineProcessor;
 use crate::error::baseline::TrackedBaselineProcessor;
@@ -379,6 +382,7 @@ impl Errors {
         errors: &mut CollectedErrors,
         baseline_path: Option<&Path>,
         relative_to: &Path,
+        matching_mode: BaselineMatchingMode,
         classify_stale_entries: bool,
     ) -> BaselineApplyResult {
         let Some(baseline_path) = baseline_path else {
@@ -403,12 +407,13 @@ impl Errors {
         };
 
         if classify_stale_entries {
-            let mut processor = match TrackedBaselineProcessor::from_json(&content, relative_to)
-                .with_context(fail_ctx)
-            {
-                Ok(p) => p,
-                Err(e) => return BaselineApplyResult::FailedToRead(e),
-            };
+            let mut processor =
+                match TrackedBaselineProcessor::from_json(&content, relative_to, matching_mode)
+                    .with_context(fail_ctx)
+                {
+                    Ok(p) => p,
+                    Err(e) => return BaselineApplyResult::FailedToRead(e),
+                };
             processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
             let checked_paths: HashSet<_> = self
                 .loads
@@ -424,11 +429,12 @@ impl Errors {
                 retained_entries: result.retained_entries,
             }
         } else {
-            let processor =
-                match BaselineProcessor::from_json(&content, relative_to).with_context(fail_ctx) {
-                    Ok(p) => p,
-                    Err(e) => return BaselineApplyResult::FailedToRead(e),
-                };
+            let processor = match BaselineProcessor::from_json(&content, relative_to, matching_mode)
+                .with_context(fail_ctx)
+            {
+                Ok(p) => p,
+                Err(e) => return BaselineApplyResult::FailedToRead(e),
+            };
             processor.process_errors(&mut errors.ordinary, &mut errors.baseline);
             BaselineApplyResult::Applied {
                 unused_entry_count: 0,
@@ -471,7 +477,8 @@ impl Errors {
                     .or_else(|| baseline_path.parent())
                     .unwrap_or_else(|| Path::new(""));
                 let content = fs::read_to_string(baseline_path).ok()?;
-                BaselineProcessor::from_json(&content, relative_to).ok()
+                BaselineProcessor::from_json(&content, relative_to, config.baseline_matching_mode)
+                    .ok()
             });
             if processor
                 .as_ref()
@@ -550,16 +557,35 @@ impl Errors {
             .iter()
             .map(|(load, _, config)| {
                 let path = load.module_info.path();
-                (path, config.enabled_ignores(path.as_path()).clone())
+                (path, config.enabled_ignores(path.as_path()).into_owned())
             })
             .collect();
 
-        for error in &collected.suppressed {
+        let type_ignore_unknown_tag_behavior_by_module: SmallMap<
+            &ModulePath,
+            TypeIgnoreUnknownTagBehavior,
+        > = self
+            .loads
+            .iter()
+            .map(|(load, _, config)| {
+                let path = load.module_info.path();
+                (
+                    path,
+                    config.type_ignore_unknown_tag_behavior(path.as_path()),
+                )
+            })
+            .collect();
+
+        for error in collected.suppressed.iter().chain(&collected.ordinary) {
             let module_path = error.path();
             let enabled_ignores = enabled_ignores_by_module
                 .get(&module_path)
                 .cloned()
                 .unwrap_or_else(Tool::default_enabled);
+            let type_ignore_unknown_tag_behavior = type_ignore_unknown_tag_behavior_by_module
+                .get(&module_path)
+                .copied()
+                .unwrap_or_default();
             let start_line = error.display_range().start.line_within_file();
             let end_line = error.display_range().end.line_within_file();
 
@@ -567,18 +593,30 @@ impl Errors {
                 .get(&module_path)
                 .and_then(|ranges| find_containing_range(ranges, start_line));
 
-            let is_ignored = error.is_ignored(&enabled_ignores)
+            let is_affected = error
+                .suppression_effect(&enabled_ignores, type_ignore_unknown_tag_behavior)
+                != SuppressionEffect::None
                 || containing_range.is_some_and(|(fs_start, fs_end)| {
                     let ignore = error.module().ignore();
                     error.error_kind().suppression_names().any(|kind| {
                         (fs_start != start_line
-                            && ignore.is_ignored(fs_start, kind, &enabled_ignores))
+                            && ignore.suppression_effect(
+                                fs_start,
+                                kind,
+                                &enabled_ignores,
+                                type_ignore_unknown_tag_behavior,
+                            ) != SuppressionEffect::None)
                             || (fs_end != start_line
-                                && ignore.is_ignored(fs_end, kind, &enabled_ignores))
+                                && ignore.suppression_effect(
+                                    fs_end,
+                                    kind,
+                                    &enabled_ignores,
+                                    type_ignore_unknown_tag_behavior,
+                                ) != SuppressionEffect::None)
                     })
                 });
 
-            if is_ignored {
+            if is_affected {
                 let module_codes = suppressed_codes_by_module.entry(module_path).or_default();
 
                 // Track both this kind's name and any parent kind's name, so that
@@ -667,7 +705,8 @@ impl Errors {
                         continue;
                     }
 
-                    // For `# type: ignore`, unused if no errors were suppressed on this line.
+                    // For `# type: ignore`, line-wide bookkeeping considers it unused
+                    // only if no suppression effect applies to any diagnostic on this line.
                     if tool == Tool::Type {
                         if !used_codes.is_empty() {
                             continue; // type: ignore is used

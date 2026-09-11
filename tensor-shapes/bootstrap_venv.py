@@ -28,7 +28,7 @@ from pathlib import Path
 
 from shape_testing import DEFAULT_VENV, TENSOR_SHAPES_ROOT
 
-PYTHON_VERSION = "3.12"
+PYTHON_VERSION = "3.13"
 REQUIREMENTS: Path = TENSOR_SHAPES_ROOT / "test-requirements.txt"
 
 # Meta hosts have no direct egress; `--fwdproxy` routes uv through the forward
@@ -95,9 +95,8 @@ def main() -> int:
     # Deliberately `install` rather than `sync`: this file pins direct
     # dependencies but is not a fully resolved lock, so `sync` would treat every
     # transitive dependency as extraneous and uninstall it.
-    python = venv / ("Scripts" if os.name == "nt" else "bin") / "python"
     run(
-        [uv, "pip", "install", "--python", str(python), "-r", str(REQUIREMENTS)],
+        [uv, "pip", "install", "--python", str(venv), "-r", str(REQUIREMENTS)],
         env=env,
     )
 

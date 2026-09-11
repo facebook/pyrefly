@@ -1599,10 +1599,8 @@ impl Solver {
     /// Shared core of [`Self::add_lower_bound`] (`is_upper == false`) and
     /// [`Self::add_upper_bound`] (`is_upper == true`).
     ///
-    /// Uses a two-phase lock pattern: read under the lock, drop the guard,
-    /// validate without the lock (the `is_subset` callback recurses into
-    /// `is_subset_eq` which re-locks `variables`), then re-lock to write.
-    /// Holding the lock across `is_subset` would deadlock.
+    /// `is_subset` is called without holding the `variables` lock, because it
+    /// recurses into `is_subset_eq` which re-locks `variables`.
     fn add_var_bound(
         &self,
         v: Var,

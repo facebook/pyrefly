@@ -16,7 +16,9 @@ use lsp_types::CodeDescription;
 use lsp_types::Diagnostic;
 use lsp_types::DiagnosticTag;
 use lsp_types::Url;
+use pyrefly_python::ignore::SuppressionEffect;
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use pyrefly_python::module::Module;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display::number_thousands;
@@ -105,6 +107,11 @@ pub struct Error {
     secondary_annotations: Vec<SecondaryAnnotation>,
     /// Structured fixes that can be exposed by editor integrations.
     quick_fixes: Vec<ErrorQuickFix>,
+    /// Whether to mark `range` with the LSP `DEPRECATED` tag, which editors render as a
+    /// strikethrough. This is only correct when `range` is the reference to the deprecated
+    /// symbol, so it is cleared for a deprecation reached through an implicit dunder call,
+    /// which is reported at the whole enclosing expression.
+    deprecated_tag: bool,
 }
 
 /// An error representation that preserves the data needed for supported CLI output formats.
@@ -595,7 +602,7 @@ impl Error {
             message: self.msg().to_owned().into(),
             code: Some(lsp_types::NumberOrString::String(code)),
             code_description,
-            tags: if self.error_kind() == ErrorKind::Deprecated {
+            tags: if self.deprecated_tag {
                 Some(vec![DiagnosticTag::DEPRECATED])
             } else {
                 None
@@ -686,7 +693,15 @@ impl Error {
             msg_details,
             secondary_annotations: Vec::new(),
             quick_fixes: Vec::new(),
+            deprecated_tag: error_kind == ErrorKind::Deprecated,
         }
+    }
+
+    /// Stop marking this error's range as deprecated in editors. Used when the range spans
+    /// more than the deprecated symbol, so striking it through would obscure unrelated code.
+    pub fn without_deprecated_tag(mut self) -> Self {
+        self.deprecated_tag = false;
+        self
     }
 
     /// Add a secondary labeled annotation to this error. These appear as additional
@@ -714,6 +729,7 @@ impl Error {
             || self.msg_header != other.msg_header
             || self.msg_details != other.msg_details
             || self.secondary_annotations != other.secondary_annotations
+            || self.deprecated_tag != other.deprecated_tag
         {
             return false;
         }
@@ -753,18 +769,30 @@ impl Error {
         }
     }
 
-    pub fn is_ignored(&self, enabled_ignores: &SmallSet<Tool>) -> bool {
+    pub fn suppression_effect(
+        &self,
+        enabled_ignores: &SmallSet<Tool>,
+        type_ignore_unknown_tag_behavior: TypeIgnoreUnknownTagBehavior,
+    ) -> SuppressionEffect {
         // UnusedIgnore errors cannot be suppressed - this prevents infinite loops
         // where suppressing an unused-ignore creates another unused-ignore.
         if self.error_kind == ErrorKind::UnusedIgnore {
-            return false;
+            return SuppressionEffect::None;
         }
         // Check both this kind's name and any parent kind's name, so that e.g.
         // `# pyrefly: ignore[bad-override]` also suppresses `bad-override-mutable-attribute`.
-        self.error_kind.suppression_names().any(|name| {
-            self.module
-                .is_ignored(&self.display_range, name, enabled_ignores)
-        })
+        self.error_kind
+            .suppression_names()
+            .map(|name| {
+                self.module.suppression_effect(
+                    &self.display_range,
+                    name,
+                    enabled_ignores,
+                    type_ignore_unknown_tag_behavior,
+                )
+            })
+            .max()
+            .unwrap_or(SuppressionEffect::None)
     }
 
     pub fn error_kind(&self) -> ErrorKind {

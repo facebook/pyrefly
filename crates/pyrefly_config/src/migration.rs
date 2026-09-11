@@ -19,6 +19,7 @@ pub mod run;
 pub(crate) mod search_path;
 pub(crate) mod site_package_path;
 pub(crate) mod sub_configs;
+pub(crate) mod type_checking_mode;
 pub(crate) mod untyped_def_behavior;
 
 #[cfg(test)]

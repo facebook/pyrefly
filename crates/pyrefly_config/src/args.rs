@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use anyhow::Context as _;
 use clap::Parser;
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use pyrefly_python::sys_info::PythonPlatform;
 use pyrefly_python::sys_info::PythonVersion;
 use pyrefly_util::absolutize::Absolutize as _;
@@ -339,6 +340,9 @@ pub struct ConfigOverrideArgs {
     /// Defaults to type,pyrefly. Passing the names of all tools is equivalent to `--permissive-ignores`.
     #[arg(long, value_delimiter = ',')]
     enabled_ignores: Option<Vec<Tool>>,
+    /// How `# type: ignore[...]` comments with non-Pyrefly tags affect diagnostics.
+    #[arg(long)]
+    type_ignore_unknown_tag_behavior: Option<TypeIgnoreUnknownTagBehavior>,
     /// Force this rule to emit an error. Can be passed multiple times or as a comma-separated list.
     #[arg(long, hide_possible_values = true, value_delimiter = ',')]
     error: Vec<ErrorKind>,
@@ -432,6 +436,7 @@ impl ConfigOverrideArgs {
             infer_return_types,
             permissive_ignores,
             enabled_ignores,
+            type_ignore_unknown_tag_behavior,
             error,
             warn,
             ignore,
@@ -459,6 +464,7 @@ impl ConfigOverrideArgs {
             || infer_return_types.is_some()
             || permissive_ignores.is_some()
             || enabled_ignores.is_some()
+            || type_ignore_unknown_tag_behavior.is_some()
             || !error.is_empty()
             || !warn.is_empty()
             || !ignore.is_empty()
@@ -589,6 +595,9 @@ impl ConfigOverrideArgs {
                     config.root.enabled_ignores = Some(x.iter().cloned().collect());
                 }
             }
+        }
+        if let Some(x) = self.type_ignore_unknown_tag_behavior {
+            config.root.type_ignore_unknown_tag_behavior = Some(x);
         }
         if let Some(wildcards) = &self.replace_imports_with_any {
             config.root.replace_imports_with_any = Some(

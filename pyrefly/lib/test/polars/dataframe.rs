@@ -9,7 +9,7 @@ use crate::test::util::TestEnv;
 use crate::testcase;
 
 /// Minimal stubs with the real Polars qualified names.
-fn env_with_polars_stubs() -> TestEnv {
+pub(super) fn env_with_polars_stubs() -> TestEnv {
     let mut env = TestEnv::new();
     env.add_with_path(
         "polars.series.series",
@@ -203,6 +203,12 @@ class Float32: ...
 class Float64: ...
 class String: ...
 class Boolean: ...
+class Array:
+    def __init__(self, inner: object, shape: int | tuple[int, ...] | None = None) -> None: ...
+class List:
+    def __init__(self, inner: object) -> None: ...
+class Struct:
+    def __init__(self, fields: dict[str, object]) -> None: ...
 "#,
     );
     env.add(
@@ -352,12 +358,12 @@ testcase!(
     TestEnv::new(),
     r#"
 import polars as pl  # E: Cannot find module `polars`
-from typing import reveal_type
+from typing import Annotated, reveal_type
 
 class InputSchema:
     a: pl.Int64
 
-def transform(df: pl.DataFrame[InputSchema]) -> pl.LazyFrame:
+def transform(df: Annotated[pl.DataFrame, InputSchema]) -> pl.LazyFrame:
     return df.lazy().select("missing")
 
 reveal_type(transform(pl.DataFrame({"a": [1]})))  # E: revealed type: Unknown
@@ -2113,7 +2119,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df[["a", "a"]])  # E: Projection produces duplicate column `a` # E: revealed type: DataFrame
+reveal_type(df[["a", "a"]])  # E: Operation produces duplicate column `a` # E: revealed type: DataFrame
 "#,
 );
 
@@ -2279,7 +2285,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.select("a", "a"))  # E: Projection produces duplicate column `a` # E: revealed type: DataFrame
+reveal_type(df.select("a", "a"))  # E: Operation produces duplicate column `a` # E: revealed type: DataFrame
 "#,
 );
 
@@ -2302,7 +2308,7 @@ from typing import reveal_type
 df = pl.DataFrame({"a": [1]})
 result = df.select(
     1,
-    2,  # E: Projection produces duplicate column `literal`
+    2,  # E: Operation produces duplicate column `literal`
     "d",  # E: Column `d` is not in the DataFrame schema
 )
 reveal_type(result)  # E: revealed type: DataFrame
@@ -2334,8 +2340,8 @@ import polars as pl
 df = pl.DataFrame({"a": [1]})
 df.select(
     1,
-    2,  # E: Projection produces duplicate column `literal`
-    3,  # E: Projection produces duplicate column `literal`
+    2,  # E: Operation produces duplicate column `literal`
+    3,  # E: Operation produces duplicate column `literal`
 )
 "#,
 );
@@ -2351,7 +2357,7 @@ expr = pl.col("a")
 result = df.select(
     expr,
     1,
-    2,  # E: Projection produces duplicate column `literal`
+    2,  # E: Operation produces duplicate column `literal`
     "missing",  # E: Column `missing` is not in the DataFrame schema
 )
 reveal_type(result)  # E: revealed type: DataFrame
@@ -2371,7 +2377,7 @@ td: Cols = {"a": [1]}
 df = pl.DataFrame(td)
 result = df.select(
     1,
-    2,  # E: Projection produces duplicate column `literal`
+    2,  # E: Operation produces duplicate column `literal`
     "missing",
 )
 reveal_type(result)  # E: revealed type: DataFrame
@@ -2752,7 +2758,7 @@ testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.select(pl.col("a"), pl.col("b").alias("a")))  # E: Projection produces duplicate column `a` # E: revealed type: DataFrame
+reveal_type(df.select(pl.col("a"), pl.col("b").alias("a")))  # E: Operation produces duplicate column `a` # E: revealed type: DataFrame
 "#,
 );
 
@@ -4418,43 +4424,55 @@ reveal_type(d1.join(d2, on="k", how="inner"))  # E: Column `k` is not in the Dat
 );
 
 testcase!(
-    test_join_coalesced_key_dtype_mismatch_falls_back,
+    test_join_key_dtype_mismatch_falls_back,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-# A coalesced key with differing dtypes is cast or rejected at runtime, so we fall back rather
-# than pick one side's dtype.
 d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
 d2 = pl.DataFrame(schema={"k": pl.Float64, "b": pl.Int64})
 reveal_type(d1.join(d2, on="k", how="inner"))  # E: revealed type: DataFrame
+reveal_type(d1.join(d2, on="k", how="full"))  # E: revealed type: DataFrame
+reveal_type(d1.join(d2, on="k", how="full", coalesce=False))  # E: revealed type: DataFrame
 "#,
 );
 
 testcase!(
-    test_join_full_dtype_mismatch_kept_separately,
+    test_join_suffix_collision_reported,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-# A full join keeps both keys, so differing key dtypes never coalesce and the schema stands.
-d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
-d2 = pl.DataFrame(schema={"k": pl.Float64, "b": pl.Int64})
-reveal_type(d1.join(d2, on="k", how="full"))  # E: revealed type: DataFrame[k: Int64, a: Int64, k_right: Float64, b: Int64]
-"#,
-);
-
-testcase!(
-    test_join_suffix_collision_falls_back,
-    env_with_polars_stubs(),
-    r#"
-import polars as pl
-from typing import reveal_type
-# The right `a` would become `a_right`, which already exists on the left, a runtime DuplicateError,
-# so we fall back rather than emit a schema with a duplicate column.
+# The right `a` becomes `a_right`, which already exists
+# on the left, so Polars raises a DuplicateError.
 d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64, "a_right": pl.Int64})
 d2 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
-reveal_type(d1.join(d2, on="k", how="inner"))  # E: revealed type: DataFrame
+reveal_type(d1.join(d2, on="k", how="inner"))  # E: Operation produces duplicate column `a_right` # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_join_rhs_internal_suffix_collision_reported,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import assert_type
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64, "a_right": pl.Int64})
+assert_type(d1.join(d2, on="k", how="inner"), pl.DataFrame)  # E: Operation produces duplicate column `a_right`
+"#,
+);
+
+testcase!(
+    test_join_semi_anti_accept_colliding_schemas,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64, "a_right": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
+reveal_type(d1.join(d2, on="k", how="semi"))  # E: revealed type: DataFrame[k: Int64, a: Int64, a_right: Int64]
+reveal_type(d1.join(d2, on="k", how="anti"))  # E: revealed type: DataFrame[k: Int64, a: Int64, a_right: Int64]
 "#,
 );
 
@@ -4562,15 +4580,57 @@ reveal_type(d1.join(d2, left_on="kl", right_on="kr", how="inner"))  # E: reveale
 );
 
 testcase!(
-    test_join_explicit_coalesce_falls_back,
+    test_join_coalesce_none_matches_default,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="inner", coalesce=None))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_coalesce_true_matches_default_for_inner,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="inner", coalesce=True))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_coalesce_false_keeps_secondary_key_suffixed,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="inner", coalesce=False))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, k_right: Int64, a_right: Int64, c: Boolean]
+reveal_type(left.join(right, on="k", how="right", coalesce=False))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, k_right: Int64, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_full_coalesce_overrides_default,
+    env_join(),
+    r#"
+from frames import left, right
+from typing import reveal_type
+reveal_type(left.join(right, on="k", how="full", coalesce=True))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, a_right: Int64, c: Boolean]
+reveal_type(left.join(right, on="k", how="full", coalesce=False))  # E: revealed type: DataFrame[k: Int64, a: Float64, b: String, k_right: Int64, a_right: Int64, c: Boolean]
+"#,
+);
+
+testcase!(
+    test_join_non_literal_coalesce_falls_back,
     env_with_polars_stubs(),
     r#"
 import polars as pl
 from typing import reveal_type
-# An explicit coalesce= is not yet modeled, so we fall back.
 d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
 d2 = pl.DataFrame(schema={"k": pl.Int64, "b": pl.Int64})
-reveal_type(d1.join(d2, on="k", how="inner", coalesce=False))  # E: revealed type: DataFrame
+def f(flag: bool) -> None:
+    reveal_type(d1.join(d2, on="k", how="inner", coalesce=flag))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -4584,6 +4644,22 @@ from typing import reveal_type
 d1 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
 d2 = pl.DataFrame(schema={"k": pl.Int64, "a": pl.Int64})
 reveal_type(d1.join(d2, on="k", how="inner", suffix="_r"))  # E: revealed type: DataFrame
+"#,
+);
+
+// A selector or pattern names a set of columns rather than one, so it cannot be matched against
+// either schema. Without this the names would be looked up literally and reported as missing.
+testcase!(
+    test_join_selector_keys_fall_back,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import reveal_type
+left = pl.DataFrame({"id": [1], "a": [2]})
+right = pl.DataFrame({"id": [1], "b": [3]})
+reveal_type(left.join(right, on="*"))  # E: revealed type: DataFrame
+reveal_type(left.join(right, on="^id$"))  # E: revealed type: DataFrame
+reveal_type(left.join(right, on=["id", "*"]))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -5839,7 +5915,7 @@ from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
 result = df.lazy().select(
     "a",
-    "a",  # E: Projection produces duplicate column `a`
+    "a",  # E: Operation produces duplicate column `a`
 )
 reveal_type(result)  # E: revealed type: LazyFrame
 "#,
@@ -5912,11 +5988,11 @@ testcase!(
     env_with_polars_stubs(),
     r#"
 import polars as pl
-from typing import reveal_type
+from typing import Annotated, reveal_type
 class MySchema:
     price: pl.Float64
     asset: pl.String
-def f(df: pl.DataFrame[MySchema]) -> None:
+def f(df: Annotated[pl.DataFrame, MySchema]) -> None:
     reveal_type(df)  # E: revealed type: DataFrame[price: Float64, asset: String]
 "#,
 );
@@ -5926,10 +6002,10 @@ testcase!(
     env_with_polars_stubs(),
     r#"
 import polars as pl
-from typing import reveal_type
+from typing import Annotated, reveal_type
 class MySchema:
     price: pl.Float64
-def f(df: pl.DataFrame[MySchema]) -> None:
+def f(df: Annotated[pl.DataFrame, MySchema]) -> None:
     reveal_type(df["price"])  # E: revealed type: Series[Float64]
     df["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
@@ -5940,11 +6016,11 @@ testcase!(
     env_with_polars_stubs(),
     r#"
 import polars as pl
-from typing import reveal_type
+from typing import Annotated, reveal_type
 class MySchema:
     price: pl.Float64
     asset: pl.String
-def load() -> pl.DataFrame[MySchema]: ...
+def load() -> Annotated[pl.DataFrame, MySchema]: ...
 reveal_type(load())  # E: revealed type: DataFrame[price: Float64, asset: String]
 load()["missing"]  # E: Column `missing` is not in the DataFrame schema
 "#,
@@ -5955,12 +6031,147 @@ testcase!(
     env_with_polars_stubs(),
     r#"
 import polars as pl
-from typing import reveal_type
+from typing import Annotated, reveal_type
 class MySchema:
     price: pl.Float64
-def use(df: pl.DataFrame[MySchema]) -> None:
+def use(df: Annotated[pl.DataFrame, MySchema]) -> None:
     reveal_type(df["price"])  # E: revealed type: Series[Float64]
     df["missing"]  # E: Column `missing` is not in the DataFrame schema
+"#,
+);
+
+testcase!(
+    test_dataframe_exact_schema_assignment,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Annotated
+
+class Schema:
+    asset: pl.String
+    price: pl.Float64
+
+ExactFrame = Annotated[pl.DataFrame, Schema]
+
+def take_exact(df: ExactFrame) -> None: ...
+
+take_exact(pl.DataFrame({"asset": ["A"], "price": [1.0]}))
+take_exact(pl.DataFrame({"price": [1.0], "asset": ["A"]}))  # E: is not assignable to parameter
+take_exact(pl.DataFrame({"asset": ["A"], "price": [1.0], "extra": [1]}))  # E: is not assignable to parameter
+take_exact(pl.DataFrame({"asset": ["A"]}))  # E: is not assignable to parameter
+take_exact(pl.DataFrame({"asset": ["A"], "price": [1]}))  # E: is not assignable to parameter
+
+bad_assignment: ExactFrame = pl.DataFrame({"asset": ["A"]})  # E: is not assignable to
+
+def bad_return() -> ExactFrame:
+    return pl.DataFrame({"asset": ["A"], "price": [1.0], "extra": [1]})  # E: is not assignable to declared return type
+
+def opaque() -> pl.DataFrame: ...
+take_exact(opaque())  # E: is not assignable to parameter
+"#,
+);
+
+testcase!(
+    test_dataframe_open_schema_assignment,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Annotated
+
+class Required:
+    asset: pl.String
+    price: pl.Float64
+
+class Other:
+    other: pl.Int64
+
+OpenFrame = Annotated[pl.DataFrame, Required, ...]
+OtherOpenFrame = Annotated[pl.DataFrame, Other, ...]
+ExactFrame = Annotated[pl.DataFrame, Required]
+
+def take_open(df: OpenFrame) -> None: ...
+def make_open() -> OpenFrame: ...
+def make_other_open() -> OtherOpenFrame: ...
+
+take_open(pl.DataFrame({"asset": ["A"], "price": [1.0]}))
+take_open(pl.DataFrame({"extra": [1], "price": [1.0], "asset": ["A"]}))
+take_open(make_open())
+take_open(make_other_open())  # E: is not assignable to parameter
+take_open(pl.DataFrame({"asset": ["A"]}))  # E: is not assignable to parameter
+take_open(pl.DataFrame({"asset": ["A"], "price": [1]}))  # E: is not assignable to parameter
+
+class Custom: ...
+take_open(pl.DataFrame({"asset": ["A"], "price": [Custom()]}))  # E: is not assignable to parameter
+
+def take_exact(df: ExactFrame) -> None: ...
+take_exact(make_open())  # E: is not assignable to parameter
+
+def opaque() -> pl.DataFrame: ...
+take_open(opaque())  # E: is not assignable to parameter
+"#,
+);
+
+testcase!(
+    test_pandas_annotated_metadata_remains_opaque,
+    env_with_pandas_stubs(),
+    r#"
+import pandas as pd
+from typing import Annotated, reveal_type
+
+class Schema: ...
+
+def use(df: Annotated[pd.DataFrame, Schema]) -> None:
+    reveal_type(df)  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_dataframe_annotated_alias_forms,
+    env_with_polars_stubs(),
+    r#"
+from __future__ import annotations
+import polars as pl
+from typing import Annotated, TypeAlias, reveal_type
+from typing_extensions import Annotated as ExtensionsAnnotated
+
+class Schema:
+    value: pl.Int64
+
+Implicit = Annotated[pl.DataFrame, Schema]
+Explicit: TypeAlias = Annotated[pl.DataFrame, Schema, ...]
+type Pep695 = Annotated[pl.DataFrame, Schema]
+
+def implicit(df: Implicit) -> None:
+    reveal_type(df)  # E: revealed type: DataFrame[value: Int64]
+
+def explicit(df: Explicit) -> None:
+    reveal_type(df)  # E: revealed type: DataFrame[value: Int64, ...]
+
+def pep695(df: Pep695) -> None:
+    reveal_type(df)  # E: revealed type: DataFrame[value: Int64]
+
+def extension(df: ExtensionsAnnotated[pl.DataFrame, Schema]) -> None:
+    reveal_type(df)  # E: revealed type: DataFrame[value: Int64]
+
+def deferred(df: "Annotated[pl.DataFrame, Schema, ...]") -> None:
+    reveal_type(df)  # E: revealed type: DataFrame[value: Int64, ...]
+
+ordinary: Annotated[int, Schema] = 1
+def unrecognized() -> Annotated[pl.DataFrame, "metadata"]: ...
+reveal_type(unrecognized())  # E: revealed type: DataFrame
+"#,
+);
+
+testcase!(
+    test_dataframe_type_arguments_are_rejected,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+
+class Schema:
+    value: pl.Int64
+
+frame: pl.DataFrame[Schema]  # E: Expected 0 type arguments for `DataFrame`, got 1
 "#,
 );
 
@@ -5973,6 +6184,21 @@ from typing import reveal_type
 def take(df: pl.DataFrame) -> None:
     reveal_type(df)  # E: revealed type: DataFrame
 take(pl.DataFrame({"a": [1]}))
+"#,
+);
+
+testcase!(
+    test_inferred_dataframe_schema_is_equivalent_to_plain_frame,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from polars.lazyframe.frame import LazyFrame
+from typing import assert_type
+
+frame = pl.DataFrame({"a": [1]})
+assert_type(frame, pl.DataFrame)
+assert_type(frame.lazy(), LazyFrame)
+assert_type([frame], list[pl.DataFrame])
 "#,
 );
 

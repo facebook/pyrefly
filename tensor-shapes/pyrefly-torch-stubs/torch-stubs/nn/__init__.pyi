@@ -52,6 +52,7 @@ class Module:
 
     def __init__(self) -> None: ...
     def __getattr__(self, name: str) -> Any: ...
+    def __setattr__(self, name: str, value: Any) -> None: ...
     __call__: ProxyMethod["forward"]
     def forward(self, *args: Any, **kwargs: Any) -> Any: ...
     def register_buffer(
@@ -87,30 +88,19 @@ class Module:
         """Register a hook to be called before loading state_dict."""
         ...
 
-# Parameter wrapper
-# In PyTorch, nn.Parameter is a class, but for type checking we model it as a function
-# that returns Tensor (not Parameter) to match runtime behavior where operations on
-# Parameters return Tensors. This makes the type system simpler and more accurate.
-def Parameter[Shape: IntTuple](
-    data: Tensor[Shape], requires_grad: bool = True
-) -> Tensor[Shape]:
-    """
-    Wraps a tensor as a module parameter.
-    Returns the tensor (for type purposes) since operations on Parameters return Tensors.
-    """
-    ...
+class Parameter[Shape: IntTuple = IntTuple](Tensor[Shape]):
+    @overload
+    def __new__(
+        cls, data: Tensor[Shape], requires_grad: bool = True
+    ) -> Tensor[Shape]: ...
+    @overload
+    def __new__(cls, data: None = None, requires_grad: bool = True) -> Tensor: ...
 
-# Buffer wrapper
-# Similar to Parameter, Buffer wraps a tensor that is not a parameter but should be
-# part of the module's state_dict. For type checking we model it as returning Tensor.
-def Buffer[Shape: IntTuple](
-    data: Tensor[Shape], persistent: bool = True
-) -> Tensor[Shape]:
-    """
-    Wraps a tensor as a module buffer.
-    Returns the tensor (for type purposes) since operations on Buffers return Tensors.
-    """
-    ...
+class Buffer[Shape: IntTuple = IntTuple](Tensor[Shape]):
+    @overload
+    def __new__(cls, data: Tensor[Shape], persistent: bool = True) -> Tensor[Shape]: ...
+    @overload
+    def __new__(cls, data: None = None, persistent: bool = True) -> Tensor: ...
 
 # Linear layer
 class Linear[IN: IntVar, OUT: IntVar](Module):
@@ -177,7 +167,7 @@ class Embedding[NUM_EMB: IntVar, EMB_DIM: IntVar](Module):
 # ModuleDict
 class ModuleDict[T](Module):
     """Holds submodules in a dictionary"""
-    def __init__(self, modules: T) -> None: ...
+    def __init__(self, modules: T | None = None) -> None: ...
     def __getitem__(self, key: str) -> T: ...
     def __setitem__(self, key: str, module: Module) -> None: ...
     def __getattr__(self, name: str) -> T: ...  # Support attribute access
@@ -195,6 +185,7 @@ class Sequential[*Ms](Module):
     """
     def __init__(self, *args: *Ms) -> None: ...
     def forward(self, input: Tensor) -> Tensor: ...
+    def __iter__(self) -> Iterator[Module]: ...
 
 # ModuleList container
 class ModuleList[T](Module):
@@ -202,7 +193,10 @@ class ModuleList[T](Module):
     Holds modules in a list.
     """
     def __init__(self, modules: Iterable[T] | None = None) -> None: ...
+    @overload
     def __getitem__(self, idx: int) -> T: ...
+    @overload
+    def __getitem__(self, idx: slice) -> ModuleList[T]: ...
     def __iter__(self) -> Iterator[T]: ...
     def __len__(self) -> int: ...
     def append(self, module: T) -> None: ...
@@ -574,15 +568,16 @@ class Conv2d[
 class Conv3d[
     InC: IntVar,
     OutC: IntVar,
-    K: IntVar,
-    S: IntVar = 1,
-    P: IntVar = 0,
-    D: IntVar = 1,
+    K: IntVar = int,
+    S: IntVar = int,
+    P: IntVar = int,
+    D: IntVar = int,
 ](Module):
-    """3D convolution. Tracks channel and spatial dimensions.
+    """3D convolution with precise scalar-argument shape tracking.
 
     Type parameters S, P, D are bound from constructor arguments via _Int[T].
-    PEP 696 defaults (S=1, P=0, D=1) apply when arguments are omitted.
+    Omitted arguments use their precise scalar defaults. Tuple-valued dimensions
+    and string padding leave the corresponding spatial output dimensions gradual.
     """
 
     weight: Tensor[[OutC, InC, K, K, K]]
@@ -591,10 +586,10 @@ class Conv3d[
         self,
         in_channels: _Int[InC],
         out_channels: _Int[OutC],
-        kernel_size: _Int[K],
-        stride: _Int[S] = 1,
-        padding: _Int[P] = 0,
-        dilation: _Int[D] = 1,
+        kernel_size: _Int[K] | tuple[int, int, int],
+        stride: _Int[S] | tuple[int, int, int] = 1,
+        padding: _Int[P] | tuple[int, int, int] | str = 0,
+        dilation: _Int[D] | tuple[int, int, int] = 1,
         groups: int = 1,
         bias: bool = True,
         padding_mode: str = "zeros",
@@ -1433,3 +1428,5 @@ __all__ = [
     "EmbeddingBag",
     "Upsample",
 ]
+
+def __getattr__(name: str) -> Any: ...

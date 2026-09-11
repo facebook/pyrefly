@@ -9,7 +9,9 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use derive_more::Display;
 use dupe::Dupe;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
@@ -73,6 +75,25 @@ impl Target {
 
     pub fn to_os_str(&self) -> &OsStr {
         OsStr::new(self.0.as_str())
+    }
+}
+
+/// The name of an entry in the top-level `configs` map of a build system
+/// response. Targets refer to their config by name so that a config shared by
+/// many targets is sent, stored, and parsed only once.
+#[derive(Clone, Display, Dupe, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ConfigName(Arc<str>);
+
+impl<'de> Deserialize<'de> for ConfigName {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s: String = Deserialize::deserialize(deserializer)?;
+        Ok(ConfigName(Arc::from(s)))
+    }
+}
+
+impl fmt::Debug for ConfigName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <Self as fmt::Display>::fmt(self, f)
     }
 }
 
@@ -158,4 +179,12 @@ pub trait LiveSourceDatabase: SourceDatabase {
     fn get_target(&self, origin: Option<&Path>) -> Option<Target>;
     /// Get any generated files for which we might have to override the config finder.
     fn get_generated_files(&self) -> SmallSet<InternedPath>;
+    /// Get the per-target root for the target that owns the given file.
+    fn get_target_root(&self, origin: Option<&Path>) -> Option<PathBuf>;
+    /// Get the name of the config that applies to the target owning the given file.
+    fn get_target_config_name(&self, origin: Option<&Path>) -> Option<ConfigName>;
+    /// Get the raw JSON for a named config. Callers are expected to deserialize
+    /// the result once and key their own cache on the [`ConfigName`], since
+    /// there may be many targets per config and many lookups per target.
+    fn get_config(&self, name: &ConfigName) -> Option<serde_json::Value>;
 }

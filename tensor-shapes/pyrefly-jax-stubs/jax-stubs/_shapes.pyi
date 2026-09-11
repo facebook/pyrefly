@@ -100,14 +100,14 @@ def reshape_shape(shape: IntTuple, newshape: int | tuple[int, ...] | None) -> In
         dims = (newshape,)
     else:
         dims = newshape
-    # The DSL does not support unary negation of a Flag integer, so the
-    # placeholder dimension is spelled `0 - 1` throughout.
-    if any(dim < 0 - 1 for dim in dims):
+    if any(dsl.is_concrete_int(dim) and dim < -1 for dim in dims):
         return dsl.Invalid("reshape sizes must be -1 or non-negative")
-    inferred = tuple(dim for dim in dims if dim == 0 - 1)
+    inferred = tuple(dim for dim in dims if dsl.is_concrete_int(dim) and dim == -1)
     if len(inferred) > 1:
         return dsl.Invalid("reshape accepts at most one -1")
-    known_shape = dsl.IntTuple((dim for dim in dims if dim != 0 - 1))
+    known_shape = dsl.IntTuple(
+        (dim for dim in dims if not (dsl.is_concrete_int(dim) and dim == -1))
+    )
     known = dsl.prod(known_shape)
     total = dsl.prod(shape)
     if len(inferred) == 0:
@@ -119,7 +119,12 @@ def reshape_shape(shape: IntTuple, newshape: int | tuple[int, ...] | None) -> In
             return dsl.Invalid("could not infer size for dimension -1")
         if dsl.is_concrete_int(total) and total % known != 0:
             return dsl.Invalid("could not infer size for dimension -1")
-    return dsl.IntTuple((total // known if dim == 0 - 1 else dim for dim in dims))
+    return dsl.IntTuple(
+        (
+            total // known if dsl.is_concrete_int(dim) and dim == -1 else dim
+            for dim in dims
+        )
+    )
 
 @type_shape_dsl_function
 def fft_n_shape(shape: IntTuple, n: int, dim: int) -> IntTuple:
@@ -914,6 +919,28 @@ def roll_shape(shape: IntTuple, axis: int | tuple[int, ...] | None) -> IntTuple:
     return shape
 
 @type_shape_dsl_function
+def rot90_shape(shape: IntTuple, k: int, axes: tuple[int, int]) -> IntTuple:
+    rank = len(shape)
+    if rank < 2:
+        return dsl.Invalid("rot90 requires array of at least 2 dimensions")
+    if any(item < 0 - rank or item >= rank for item in axes):
+        return dsl.Invalid("axis out of bounds")
+    normalized = tuple(item + rank if item < 0 else item for item in axes)
+    if any(normalized.count(item) > 1 for item in normalized):
+        return dsl.Invalid("Axes must be different")
+    if k % 2 == 0:
+        return shape
+    axis_dims = dsl.IntTuple(shape[item] for item in normalized)
+    return dsl.IntTuple(
+        (
+            axis_dims[1 - normalized.index(index)]
+            if index in normalized
+            else shape[index]
+        )
+        for index in range(rank)
+    )
+
+@type_shape_dsl_function
 def atleast_1d_shape(shape: IntTuple) -> IntTuple:
     if len(shape) == 0:
         return dsl.IntTuple((1,))
@@ -1022,4 +1049,311 @@ def top_k_shape(shape: IntTuple, k: int, axis: int) -> IntTuple:
     return dsl.concat(
         dsl.concat(shape[:norm_axis], dsl.IntTuple((extent,))),
         shape[norm_axis + 1 :],
+    )
+
+@type_shape_dsl_function
+def lax_reduce_shape(shape: IntTuple, axes: tuple[int, ...]) -> IntTuple:
+    rank = len(shape)
+    if any(axis < 0 or axis >= rank for axis in axes):
+        return dsl.Invalid("axis out of bounds")
+    if any(axes.count(axis) > 1 for axis in axes):
+        return dsl.Invalid("duplicate axis")
+    return dsl.IntTuple((shape[i] for i in range(rank) if i not in axes))
+
+@type_shape_dsl_function
+def lax_axis_reduce_shape(shape: IntTuple, axis: int) -> IntTuple:
+    rank = len(shape)
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    return dsl.concat(shape[:axis], shape[axis + 1 :])
+
+@type_shape_dsl_function
+def lax_scan_shape(shape: IntTuple, axis: int) -> IntTuple:
+    rank = len(shape)
+    if axis < 0 or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    return shape
+
+@type_shape_dsl_function
+def lax_associative_scan_shape(shape: IntTuple, axis: int) -> IntTuple:
+    rank = len(shape)
+    if axis < 0:
+        norm_axis = axis + rank
+    else:
+        norm_axis = axis + 0
+    if norm_axis < 0 or norm_axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    return shape
+
+@type_shape_dsl_function
+def lax_clamp_shape(
+    min_shape: IntTuple, x_shape: IntTuple, max_shape: IntTuple
+) -> IntTuple:
+    if len(min_shape) != 0:
+        if len(min_shape) != len(x_shape) or any(
+            min_shape[i] != x_shape[i] for i in range(len(x_shape))
+        ):
+            return dsl.Invalid(
+                "clamp requires min.shape == operand.shape or min.shape == ()"
+            )
+    if len(max_shape) != 0:
+        if len(max_shape) != len(x_shape) or any(
+            max_shape[i] != x_shape[i] for i in range(len(x_shape))
+        ):
+            return dsl.Invalid(
+                "clamp requires max.shape == operand.shape or max.shape == ()"
+            )
+    return x_shape
+
+@type_shape_dsl_function
+def lax_clamp_min_scalar_shape(x_shape: IntTuple, max_shape: IntTuple) -> IntTuple:
+    if len(max_shape) != 0:
+        if len(max_shape) != len(x_shape) or any(
+            max_shape[i] != x_shape[i] for i in range(len(x_shape))
+        ):
+            return dsl.Invalid(
+                "clamp requires max.shape == operand.shape or max.shape == ()"
+            )
+    return x_shape
+
+@type_shape_dsl_function
+def lax_clamp_max_scalar_shape(min_shape: IntTuple, x_shape: IntTuple) -> IntTuple:
+    if len(min_shape) != 0:
+        if len(min_shape) != len(x_shape) or any(
+            min_shape[i] != x_shape[i] for i in range(len(x_shape))
+        ):
+            return dsl.Invalid(
+                "clamp requires min.shape == operand.shape or min.shape == ()"
+            )
+    return x_shape
+
+@type_shape_dsl_function
+def lax_select_shape(
+    pred_shape: IntTuple, true_shape: IntTuple, false_shape: IntTuple
+) -> IntTuple:
+    if len(true_shape) != len(false_shape) or any(
+        true_shape[i] != false_shape[i] for i in range(len(true_shape))
+    ):
+        return dsl.Invalid("select cases must have the same shapes")
+    if len(pred_shape) != 0:
+        if len(pred_shape) != len(true_shape) or any(
+            pred_shape[i] != true_shape[i] for i in range(len(true_shape))
+        ):
+            return dsl.Invalid(
+                "select `which` must be scalar or have the same shape as cases"
+            )
+    return true_shape
+
+@type_shape_dsl_function
+def lax_select_scalar_pred_shape(
+    true_shape: IntTuple, false_shape: IntTuple
+) -> IntTuple:
+    if len(true_shape) != len(false_shape) or any(
+        true_shape[i] != false_shape[i] for i in range(len(true_shape))
+    ):
+        return dsl.Invalid("select cases must have the same shapes")
+    return true_shape
+
+@type_shape_dsl_function
+def lax_select_n_shape(which_shape: IntTuple, case_shape: IntTuple) -> IntTuple:
+    if len(which_shape) != 0:
+        if len(which_shape) != len(case_shape) or any(
+            which_shape[i] != case_shape[i] for i in range(len(case_shape))
+        ):
+            return dsl.Invalid(
+                "select `which` must be scalar or have the same shape as cases"
+            )
+    return case_shape
+
+@type_shape_dsl_function
+def lax_sort_shape(shape: IntTuple, dimension: int) -> IntTuple:
+    rank = len(shape)
+    if rank == 0:
+        return dsl.Invalid("axis out of bounds")
+    if dimension < 0 - rank or dimension >= rank:
+        return dsl.Invalid("axis out of bounds")
+    return shape
+
+@type_shape_dsl_function
+def lax_sort_key_val_shape(
+    keys_shape: IntTuple, values_shape: IntTuple, dimension: int
+) -> IntTuple:
+    if len(keys_shape) != len(values_shape) or any(
+        keys_shape[i] != values_shape[i] for i in range(len(keys_shape))
+    ):
+        return dsl.Invalid("Arguments to sort must have equal shapes")
+    rank = len(keys_shape)
+    if rank == 0:
+        return dsl.Invalid("axis out of bounds")
+    if dimension < 0 - rank or dimension >= rank:
+        return dsl.Invalid("axis out of bounds")
+    return keys_shape
+
+@type_shape_dsl_function
+def lax_dynamic_index_in_dim_shape(
+    shape: IntTuple, axis: int, keepdims: bool
+) -> IntTuple:
+    rank = len(shape)
+    if axis < 0 - rank or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + rank
+    else:
+        norm_axis = axis + 0
+    if keepdims:
+        return dsl.concat(
+            dsl.concat(shape[:norm_axis], dsl.IntTuple((1,))),
+            shape[norm_axis + 1 :],
+        )
+    return dsl.concat(shape[:norm_axis], shape[norm_axis + 1 :])
+
+@type_shape_dsl_function
+def lax_dynamic_slice_in_dim_shape(
+    shape: IntTuple, slice_size: int, axis: int
+) -> IntTuple:
+    rank = len(shape)
+    if axis < 0 - rank or axis >= rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + rank
+    else:
+        norm_axis = axis + 0
+    extent = slice_size + 0
+    return dsl.concat(
+        dsl.concat(shape[:norm_axis], dsl.IntTuple((extent,))),
+        shape[norm_axis + 1 :],
+    )
+
+@type_shape_dsl_function
+def lax_dynamic_slice_shape(shape: IntTuple, slice_sizes: IntTuple) -> IntTuple:
+    if len(shape) != len(slice_sizes):
+        return dsl.Invalid("slice_sizes must have the same length as operand rank")
+    return slice_sizes
+
+@type_shape_dsl_function
+def take_shape(
+    a_shape: IntTuple,
+    idx_shape: IntTuple,
+    axis: int | None,
+) -> IntTuple:
+    if axis is None:
+        return idx_shape
+    if dsl.is_int_value(axis):
+        rank = len(a_shape)
+        if rank == 0:
+            return dsl.Invalid("axis out of bounds")
+        if axis < 0:
+            norm_axis = axis + rank
+        else:
+            norm_axis = axis + 0
+        if norm_axis < 0 or norm_axis >= rank:
+            return dsl.Invalid("axis out of bounds")
+        return dsl.concat(
+            dsl.concat(a_shape[:norm_axis], idx_shape),
+            a_shape[norm_axis + 1 :],
+        )
+    return dsl.Invalid("axis must be an integer or None")
+
+@type_shape_dsl_function
+def take_scalar_idx_shape(
+    a_shape: IntTuple,
+    axis: int | None,
+) -> IntTuple:
+    if axis is None:
+        return dsl.IntTuple(())
+    if dsl.is_int_value(axis):
+        rank = len(a_shape)
+        if rank == 0:
+            return dsl.Invalid("axis out of bounds")
+        if axis < 0:
+            norm_axis = axis + rank
+        else:
+            norm_axis = axis + 0
+        if norm_axis < 0 or norm_axis >= rank:
+            return dsl.Invalid("axis out of bounds")
+        return dsl.concat(a_shape[:norm_axis], a_shape[norm_axis + 1 :])
+    return dsl.Invalid("axis must be an integer or None")
+
+@type_shape_dsl_function
+def take_along_axis_shape(
+    arr_shape: IntTuple,
+    idx_shape: IntTuple,
+    axis: int | None,
+) -> IntTuple:
+    if axis is None:
+        if len(idx_shape) != 1:
+            return dsl.Invalid("take_along_axis indices must be 1D if axis=None")
+        return idx_shape
+    if dsl.is_int_value(axis):
+        rank = len(arr_shape)
+        if rank == 0 or len(idx_shape) != rank:
+            return dsl.Invalid(
+                "indices and arr must have the same number of dimensions"
+            )
+        if axis < 0:
+            norm_axis = axis + rank
+        else:
+            norm_axis = axis + 0
+        if norm_axis < 0 or norm_axis >= rank:
+            return dsl.Invalid("axis out of bounds")
+        extent = idx_shape[norm_axis] + 0
+        return dsl.concat(
+            dsl.concat(arr_shape[:norm_axis], dsl.IntTuple((extent,))),
+            arr_shape[norm_axis + 1 :],
+        )
+    return dsl.Invalid("axis must be an integer or None")
+
+@type_shape_dsl_function
+def compress_shape(
+    a_shape: IntTuple,
+    size: int,
+    axis: int | None,
+) -> IntTuple:
+    if size < 0:
+        return dsl.Invalid("size must be non-negative")
+    extent = size + 0
+    if axis is None:
+        return dsl.IntTuple((extent,))
+    if dsl.is_int_value(axis):
+        rank = len(a_shape)
+        if rank == 0:
+            return dsl.Invalid("axis out of bounds")
+        if axis < 0:
+            norm_axis = axis + rank
+        else:
+            norm_axis = axis + 0
+        if norm_axis < 0 or norm_axis >= rank:
+            return dsl.Invalid("axis out of bounds")
+        return dsl.concat(
+            dsl.concat(a_shape[:norm_axis], dsl.IntTuple((extent,))),
+            a_shape[norm_axis + 1 :],
+        )
+    return dsl.Invalid("axis must be an integer or None")
+
+@type_shape_dsl_function
+def fill_diagonal_shape(shape: IntTuple) -> IntTuple:
+    if len(shape) < 2:
+        return dsl.Invalid("array must be at least 2-d")
+    return shape
+
+@type_shape_dsl_function
+def diag_indices_from_shape(shape: IntTuple) -> IntTuple:
+    rank = len(shape)
+    if rank < 2:
+        return dsl.Invalid("input array must be at least 2-d")
+    if any(shape[i] != shape[0] for i in range(rank)):
+        return dsl.Invalid("All dimensions of input must be of equal length")
+    extent = shape[0] + 0
+    return dsl.IntTuple((extent,))
+
+@type_shape_dsl_function
+def ix_shapes(shapes: IntTuples) -> IntTuples:
+    ranks = dsl.IntTuple((0 if len(shape) == 1 else 1 for shape in shapes))
+    if any(r == 1 for r in ranks):
+        return dsl.Invalid("Arguments to jax.numpy.ix_ must be 1-dimensional")
+    return dsl.IntTuples(
+        (
+            dsl.IntTuple((shape[0] if j == i else 1 for j in range(len(shapes))))
+            for shape, i in zip(shapes, range(len(shapes)))
+        )
     )

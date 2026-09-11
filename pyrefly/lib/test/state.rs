@@ -11,6 +11,8 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -31,6 +33,8 @@ use pyrefly_util::events::CategorizedEvents;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
 use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
+use pyrefly_util::thread_pool::ThreadCount;
+use pyrefly_util::thread_pool::ThreadPool;
 use ruff_python_ast::name::Name;
 use starlark_map::small_set::SmallSet;
 use tempfile::TempDir;
@@ -1003,6 +1007,47 @@ fn test_search_exports_cancellation() {
         t.search_exports_exact("x", None).is_err(),
         "search_exports_exact should return Err(Cancelled) when cancelled"
     );
+}
+
+#[test]
+fn test_search_exports_stops_at_the_next_module_when_cancelled() {
+    let mut t = TestEnv::new();
+    t.add("foo", "x = 1");
+    t.add("bar", "y = 1");
+    let (state, _) = t.to_state();
+
+    let pool = ThreadPool::new(ThreadCount::Inline);
+    let count_modules = |cancel: bool| {
+        let transaction = state.new_transaction(Require::Everything, None);
+        let cancellation = transaction.get_cancellation_handle();
+        let searched = AtomicUsize::new(0);
+        let result = transaction.search_exports(
+            |_, _, _| {
+                searched.fetch_add(1, Ordering::Relaxed);
+                if cancel {
+                    cancellation.cancel();
+                }
+                Vec::<()>::new()
+            },
+            Some(&pool),
+        );
+        (result, searched.load(Ordering::Relaxed))
+    };
+
+    let (uncancelled, total) = count_modules(false);
+    assert!(
+        uncancelled.is_ok(),
+        "an uncancelled export search should succeed"
+    );
+
+    assert!(total > 1, "the fixture must contain multiple modules");
+
+    let (cancelled, searched) = count_modules(true);
+    assert!(
+        cancelled.is_err(),
+        "a cancelled export search should return Err(Cancelled)"
+    );
+    assert_eq!(searched, 1, "the walk should stop at the next module");
 }
 
 #[test]

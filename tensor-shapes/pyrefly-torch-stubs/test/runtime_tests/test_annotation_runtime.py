@@ -138,7 +138,7 @@ class TestTypeVarArithmetic(unittest.TestCase):
             r"unsupported operand type\(s\) for \+: 'typing.TypeVar' and 'int'",
         ):
 
-            def f[N](x: N + 1) -> None:  # type: ignore[valid-type]
+            def f[N](x: N + 1) -> None:  # type: ignore[pyrefly:invalid-annotation]
                 pass
 
     def test_typevar_mul(self):
@@ -148,7 +148,7 @@ class TestTypeVarArithmetic(unittest.TestCase):
             r"unsupported operand type\(s\) for \*: 'typing.TypeVar' and 'int'",
         ):
 
-            def f[N](x: N * 2) -> None:  # type: ignore[valid-type]
+            def f[N](x: N * 2) -> None:  # type: ignore[pyrefly:invalid-annotation]
                 pass
 
     def test_typevar_sub(self):
@@ -158,7 +158,7 @@ class TestTypeVarArithmetic(unittest.TestCase):
             r"unsupported operand type\(s\) for -: 'typing.TypeVar' and 'int'",
         ):
 
-            def f[N](x: N - 1) -> None:  # type: ignore[valid-type]
+            def f[N](x: N - 1) -> None:  # type: ignore[pyrefly:invalid-annotation]
                 pass
 
     def test_typevar_floordiv(self):
@@ -168,7 +168,7 @@ class TestTypeVarArithmetic(unittest.TestCase):
             r"unsupported operand type\(s\) for //: 'typing.TypeVar' and 'int'",
         ):
 
-            def f[N](x: N // 2) -> None:  # type: ignore[valid-type]
+            def f[N](x: N // 2) -> None:  # type: ignore[pyrefly:invalid-annotation]
                 pass
 
     def test_two_typevars_add(self):
@@ -178,7 +178,7 @@ class TestTypeVarArithmetic(unittest.TestCase):
             r"unsupported operand type\(s\) for \+: 'typing.TypeVar' and 'typing.TypeVar'",
         ):
 
-            def f[N, M](x: N + M) -> None:  # type: ignore[valid-type]
+            def f[N, M](x: N + M) -> None:  # type: ignore[pyrefly:invalid-annotation]
                 pass
 
 
@@ -300,7 +300,7 @@ class TestClassAnnotationRuntime(unittest.TestCase):
 
         class Layer[N, M]:
             def forward[B](self, x: torch.Tensor[[B, N]]) -> torch.Tensor[[B, M]]:
-                return x  # type: ignore[return-value]
+                return x  # type: ignore[pyrefly:bad-return]
 
         self.assertTrue(hasattr(Layer, "forward"))
 
@@ -315,7 +315,7 @@ class TestClassAnnotationRuntime(unittest.TestCase):
 
             class PadLayer[N]:
                 def forward(self, x: torch.Tensor[[N, 3]]) -> torch.Tensor[[N + 1, 3]]:
-                    return x  # type: ignore[return-value]
+                    return x  # type: ignore[pyrefly:bad-return]
 
 
 class TestDimRuntime(unittest.TestCase):
@@ -424,6 +424,10 @@ class TestIntVarRuntime(unittest.TestCase):
         """shape_extensions.IntVar repr shows the name."""
         N = IntVar("N")
         self.assertEqual(repr(N), "N")
+
+    def test_has_no_default(self):
+        N = IntVar("N")
+        self.assertFalse(N.has_default())
 
     def test_in_dim(self):
         """Int[N] with shape_extensions.IntVar."""
@@ -555,6 +559,10 @@ class TestTypeVarTupleRuntime(unittest.TestCase):
         """shape_extensions.TypeVarTuple repr shows *name."""
         Ns = TypeVarTuple("Ns")
         self.assertEqual(repr(Ns), "*Ns")
+
+    def test_has_no_default(self):
+        Ns = TypeVarTuple("Ns")
+        self.assertFalse(Ns.has_default())
 
 
 if __name__ == "__main__":

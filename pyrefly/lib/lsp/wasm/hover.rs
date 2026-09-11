@@ -22,6 +22,7 @@ use pyrefly_python::docstring::Docstring;
 use pyrefly_python::docstring::parse_parameter_documentation;
 use pyrefly_python::ignore::Ignore;
 use pyrefly_python::ignore::Tool;
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior;
 use pyrefly_python::ignore::find_comment_start_in_line;
 use pyrefly_python::module::Module;
 use pyrefly_python::short_identifier::ShortIdentifier;
@@ -350,6 +351,7 @@ fn get_suppressed_errors_for_line(
                     range.end.line_within_file(),
                     name,
                     &Tool::default_enabled(),
+                    TypeIgnoreUnknownTagBehavior::Suppress,
                 )
             })
         })

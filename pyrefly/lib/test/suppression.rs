@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior as UnknownTagBehavior;
+
 use crate::state::require::Require;
 use crate::test::util::TestEnv;
 use crate::testcase;
@@ -217,6 +219,80 @@ x: int = "1"  # type: ignore
 y: int = "2"
 
 z: int = "3"  # E: `Literal['3']` is not assignable to `int`
+"#,
+);
+
+testcase!(
+    test_type_ignore_unrecognized_code_does_not_suppress,
+    TestEnv::new().with_type_ignore_unknown_tag_behavior(UnknownTagBehavior::NoEffect),
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[this-is-not-a-real-error]  # E: Argument `Literal['hello']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_type_ignore_unprefixed_pyrefly_code_does_not_suppress,
+    TestEnv::new().with_type_ignore_unknown_tag_behavior(UnknownTagBehavior::NoEffect),
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[bad-argument-type]  # E: Argument `Literal['hello']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_type_ignore_pyrefly_prefixed_code_suppresses,
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[pyrefly:bad-argument-type]
+"#,
+);
+
+testcase!(
+    test_type_ignore_mixed_tool_codes_suppresses_pyrefly_code,
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[arg-type, pyrefly:bad-argument-type]
+"#,
+);
+
+testcase!(
+    test_type_ignore_unknown_tag_downgrades_to_warning,
+    TestEnv::new().with_type_ignore_unknown_tag_behavior(UnknownTagBehavior::DowngradeToWarning),
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[arg-type]  # E: Argument `Literal['hello']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_type_ignore_unknown_tag_suppresses_by_default,
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[arg-type]
+"#,
+);
+
+testcase!(
+    test_type_ignore_mismatched_pyrefly_tag_is_not_affected_by_unknown_tag_behavior,
+    TestEnv::new().with_type_ignore_unknown_tag_behavior(UnknownTagBehavior::Suppress),
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[pyrefly:bad-return]  # E: Argument `Literal['hello']` is not assignable to parameter `x` with type `int`
 "#,
 );
 

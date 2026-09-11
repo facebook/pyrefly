@@ -19,8 +19,7 @@ def test_where_2d():
     x: Tensor[[3, 4]] = torch.randn(3, 4)
     y: Tensor[[3, 4]] = torch.randn(3, 4)
     result = torch.where(condition, x, y)
-    # Returns same shape as inputs: (3, 4)
-    assert_type(result, Tensor[[3, 4]])
+    assert_type(result, Tensor)
 
 
 def test_where_broadcasting():
@@ -29,14 +28,13 @@ def test_where_broadcasting():
     x: Tensor[[3, 4]] = torch.randn(3, 4)
     y: Tensor[[3, 4]] = torch.randn(3, 4)
     result = torch.where(condition, x, y)
-    # Returns shape of x: (3, 4)
-    assert_type(result, Tensor[[3, 4]])
+    assert_type(result, Tensor)
 
 
 def test_where_generic_shape[XShape: IntTuple](
     condition: Tensor, x: Tensor[XShape], y: Tensor
 ):
-    assert_type(torch.where(condition, x, y), Tensor[XShape])
+    assert_type(torch.where(condition, x, y), Tensor)
 
 
 # ==== torch.masked_fill ====

@@ -95,6 +95,21 @@ $ $PYREFLY check -c $TMPDIR/untyped_import/pyrefly.toml --replace-untyped-import
 [0]
 ```
 
+## `--replace-untyped-imports-with-any` ignores bundled stubs
+
+Pyrefly's bundled `pandas` stubs should not prevent `pandas` from being detected as untyped.
+
+```scrut {output_stream: stderr}
+$ mkdir -p $TMPDIR/untyped_import/site_packages/pandas && \
+> printf '' > $TMPDIR/untyped_import/site_packages/pandas/__init__.py && \
+> printf 'from pandas import missing\nmissing()\n' > $TMPDIR/untyped_import/main.py && \
+> printf 'project-includes = ["main.py"]\nsite-package-path = ["site_packages"]\nskip-interpreter-query = true\n' > $TMPDIR/untyped_import/pyrefly.toml && \
+> $PYREFLY check -c $TMPDIR/untyped_import/pyrefly.toml --output-format=min-text --replace-untyped-imports-with-any pandas
+ INFO Checking project configured at `*/pyrefly.toml` (glob)
+ INFO 0 errors
+[0]
+```
+
 ## Error in implicit config (project mode)
 
 ```scrut {output_stream: stderr}

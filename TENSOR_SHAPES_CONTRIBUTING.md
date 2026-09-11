@@ -362,8 +362,14 @@ To run every library at once, static and runtime, exactly as both CI systems do:
 
 ```bash
 python3 tensor-shapes/run_tests.py           # add --buck in an internal checkout
-python3 tensor-shapes/run_tests.py --static-only   # no virtualenv needed
+python3 tensor-shapes/run_tests.py --static-only
 ```
+
+The Torch and NumPy shape stubs fall back to definitions from the installed
+libraries, so even `--static-only` needs the shared virtualenv. Pass `--python`
+to select a different virtualenv interpreter with the required libraries installed; the
+root runner uses it for runtime tests and forwards it to Torch and NumPy static
+checking.
 
 The project-level `test.py` runner keeps tensor-shape validation separate from
 the default Pyrefly test loop. To run just these validations through `test.py`:
@@ -383,9 +389,10 @@ The tests live in:
 tensor-shapes/pyrefly-torch-stubs/test/runtime_tests/
 ```
 
-Runtime tests need the shared virtualenv, which serves torch, numpy and jax
-together. Bootstrapping is the only step that downloads anything, so it is also
-the only step that needs network access -- on a Meta machine, via fwdproxy:
+Runtime tests and static fallback checks need the shared virtualenv, which
+serves torch, numpy and jax together. Bootstrapping is the only step that
+downloads anything, so it is also the only step that needs network access -- on
+a Meta machine, via fwdproxy:
 
 ```bash
 python3 tensor-shapes/bootstrap_venv.py            # add --fwdproxy internally
@@ -393,9 +400,10 @@ python3 tensor-shapes/run_tests.py --runtime-only
 ```
 
 The virtualenv defaults to `~/.tensor-shapes-venv`; set `$TENSOR_SHAPES_VENV` to
-put it elsewhere. The runners never create it, and never reach the network: if it
-is missing they say so and print the bootstrap command. Type checking does not
-need it at all.
+put it elsewhere. The runners never create it, and never reach the network: if
+it is missing they say so and print the bootstrap command. Torch and NumPy
+static checking use installed library definitions; JAX static checking does not
+need the virtualenv.
 
 Run one suite while iterating:
 

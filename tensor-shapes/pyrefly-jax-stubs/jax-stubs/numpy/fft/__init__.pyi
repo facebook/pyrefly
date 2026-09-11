@@ -15,6 +15,7 @@ from jax._shapes import (
     rfft_shape,
     rfftfreq_shape,
 )
+from jax.typing import DTypeLike
 from shape_extensions import Flag, IntTuple
 
 # 1D FFT operations
@@ -267,7 +268,7 @@ def fftfreq[N: Flag[int]](
     n: N,
     d: Any = 1.0,
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     device: Any = None,
 ) -> Array[fftfreq_shape(N)]: ...
 @overload
@@ -275,7 +276,7 @@ def fftfreq(
     n: int,
     d: Any = 1.0,
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     device: Any = None,
 ) -> Array[IntTuple]: ...
 @overload
@@ -283,7 +284,7 @@ def rfftfreq[N: Flag[int]](
     n: N,
     d: Any = 1.0,
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     device: Any = None,
 ) -> Array[rfftfreq_shape(N)]: ...
 @overload
@@ -291,7 +292,7 @@ def rfftfreq(
     n: int,
     d: Any = 1.0,
     *,
-    dtype: Any = None,
+    dtype: DTypeLike | None = None,
     device: Any = None,
 ) -> Array[IntTuple]: ...
 

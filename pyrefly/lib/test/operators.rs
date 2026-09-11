@@ -760,6 +760,24 @@ assert_type(int() or NotBoolable(), int | NotBoolable)
 );
 
 testcase!(
+    test_generic_class_bool_context,
+    r#"
+from typing import Generic, TypeVar, assert_type
+
+_T = TypeVar("_T")
+
+class Foo(Generic[_T]):
+    def __bool__(self) -> bool:
+        return False
+
+def f(cls: type[Foo] | None = None):
+    x = cls or Foo
+    assert_type(x, type[Foo])
+    return x
+"#,
+);
+
+testcase!(
     test_tensor_type_lambda,
     r#"
 from typing import Callable, cast, assert_type

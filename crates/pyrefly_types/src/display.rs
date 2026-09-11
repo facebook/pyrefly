@@ -1894,6 +1894,7 @@ pub mod tests {
     use crate::class::PrecomputedTParams;
     use crate::data_frame::DataFrameKind;
     use crate::data_frame::DataFrameSchema;
+    use crate::data_frame::SchemaRole;
     use crate::dimension::Int;
     use crate::function::FuncMetadata;
     use crate::function::Function;
@@ -2286,6 +2287,7 @@ pub mod tests {
             columns,
             completeness,
             kind: DataFrameKind::Polars,
+            role: SchemaRole::Inferred,
         }))
     }
 

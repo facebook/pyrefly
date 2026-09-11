@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import math
+
 import jax.numpy as jnp
 from shape_extensions import assert_shape
 
@@ -192,3 +194,77 @@ def test_array_and_asarray() -> None:
     assert jnp.asarray([1, 2, 3]).shape == (3,)
     assert jnp.array([[1, 2], [3, 4]]).shape == (2, 2)
     assert jnp.asarray([[1, 2], [3, 4]]).shape == (2, 2)
+
+
+def test_astype() -> None:
+    x = jnp.ones((2, 3))
+    assert_shape(jnp.astype(x, jnp.int32).shape, (2, 3))
+    assert_shape(jnp.astype(x, None).shape, (2, 3))
+    assert_shape(jnp.astype(5, jnp.float32).shape, ())
+    assert_shape(jnp.astype(2.5, jnp.int32).shape, ())
+
+
+def test_shape_ndim_size() -> None:
+    x = jnp.ones((2, 3, 4))
+    assert_shape(jnp.shape(x), (2, 3, 4))
+    assert jnp.shape(x) == (2, 3, 4)
+    assert jnp.ndim(x) == 3
+    assert jnp.size(x) == 24
+    assert jnp.size(x, axis=0) == 2
+    assert jnp.size(x, axis=1) == 3
+    assert jnp.size(x, axis=2) == 4
+
+    # Scalars
+    assert jnp.shape(5) == ()
+    assert jnp.ndim(5) == 0
+    assert jnp.size(5) == 1
+
+    # Generic inputs
+    assert jnp.shape([[1, 2], [3, 4]]) == (2, 2)
+    assert jnp.ndim([[1, 2], [3, 4]]) == 2
+    assert jnp.size([[1, 2], [3, 4]]) == 4
+
+
+def test_constants() -> None:
+    assert jnp.pi > 3.14
+    assert jnp.e > 2.71
+    assert jnp.euler_gamma > 0.57
+    assert jnp.inf > 1e10
+    assert math.isnan(jnp.nan)
+    assert jnp.newaxis is None
+
+    x = jnp.array([jnp.pi, jnp.e])
+    assert_shape(x.shape, (2,))
+    assert_shape(x[:, jnp.newaxis].shape, (2, 1))
+
+
+def test_dtypes_and_type_inspection() -> None:
+    # Scalar classes and hierarchy
+    assert issubclass(jnp.floating, jnp.inexact)
+    assert issubclass(jnp.integer, jnp.number)
+    assert issubclass(jnp.number, jnp.generic)
+
+    # Dtype objects and info
+    fi = jnp.finfo(jnp.float32)
+    assert fi.bits == 32
+    assert fi.max > 1e30
+
+    ii = jnp.iinfo(jnp.int32)
+    assert ii.bits == 32
+    assert ii.max == 2147483647
+
+    # Casting & inspection
+    assert jnp.can_cast(jnp.int32, jnp.int64)
+    assert not jnp.can_cast(jnp.int64, jnp.int32)
+    assert jnp.isdtype(jnp.float32, "real floating")
+    assert jnp.isdtype(jnp.int32, "integral")
+    assert jnp.issubdtype(jnp.int32, jnp.integer)
+    assert jnp.promote_types(jnp.int32, jnp.float32) == jnp.float32
+    assert jnp.result_type(jnp.int32, jnp.float32) == jnp.float32
+
+    # Various dtype constants exist and can be used with array constructors
+    assert_shape(jnp.zeros(2, dtype=jnp.bfloat16).shape, (2,))
+    assert_shape(jnp.zeros(2, dtype=jnp.float8_e4m3fn).shape, (2,))
+    assert_shape(jnp.zeros(2, dtype=jnp.int8).shape, (2,))
+    assert_shape(jnp.zeros(2, dtype=jnp.uint32).shape, (2,))
+    assert_shape(jnp.zeros(2, dtype=jnp.complex64).shape, (2,))

@@ -646,6 +646,15 @@ checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "convert_case"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "convert_case"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1af709f1f33454bf52eadfc8c78b3b9ef9cb26fb54d16dc9cd9a7299f899fd1b"
@@ -742,9 +751,9 @@ dependencies = [
 
 [[package]]
 name = "ctor"
-version = "1.0.8"
+version = "1.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb22e947478ccf9dc44d8922042c677a63fbb88f2cb468521d1145816e5087cb"
+checksum = "914a755b7c2d4af2bdcff7ce1739e2db9a1b81a9b07123d8015786ae03c0980d"
 dependencies = [
  "link-section",
  "linktime-proc-macro",
@@ -866,6 +875,29 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "derive_more"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
+dependencies = [
+ "derive_more-impl",
+]
+
+[[package]]
+name = "derive_more-impl"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
+dependencies = [
+ "convert_case 0.10.0",
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "syn 2.0.119",
+ "unicode-xid",
 ]
 
 [[package]]
@@ -1528,9 +1560,9 @@ dependencies = [
 
 [[package]]
 name = "inotify"
-version = "0.11.4"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "153be1941a183ec9ccd095ddbe17a8b8d435ef6c76e9e02451b933c3999af2c8"
+checksum = "4cc00ea907cab49550b7da656f80ebb97be1b997d931fbcd28d39734e17ce592"
 dependencies = [
  "bitflags 2.13.1",
  "inotify-sys",
@@ -1716,9 +1748,9 @@ dependencies = [
 
 [[package]]
 name = "link-section"
-version = "0.19.0"
+version = "0.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e333fe507b738576d6da5bb3f1a7d7a1c80307ed9ef31624c057d844c19c93e9"
+checksum = "39c29a617ce3df32c08497bdc1ab6e2376e0b17948ac166a2fbe5977c5954cd9"
 
 [[package]]
 name = "linktime-proc-macro"
@@ -1759,9 +1791,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.33"
+version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lsp-server"
@@ -2144,7 +2176,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d"
 dependencies = [
  "phf_shared",
- "rand 0.8.7",
+ "rand 0.8.8",
 ]
 
 [[package]]
@@ -2306,7 +2338,7 @@ checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "pyrefly"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "anstream 0.6.21",
  "anyhow",
@@ -2374,7 +2406,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_bench_harness"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "pyrefly",
  "pyrefly_config",
@@ -2383,9 +2415,10 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_build"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "anyhow",
+ "derive_more",
  "dupe",
  "itertools 0.15.0",
  "pretty_assertions",
@@ -2404,7 +2437,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_bundled"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "sha2",
@@ -2415,12 +2448,12 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_config"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "clap",
  "configparser",
- "convert_case",
+ "convert_case 0.12.0",
  "derivative",
  "dupe",
  "enum-iterator",
@@ -2450,7 +2483,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_derive"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2459,7 +2492,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_glean_schema"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2468,7 +2501,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_graph"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "dupe",
  "pyrefly_util",
@@ -2477,7 +2510,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_lsp_test"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "anstream 0.6.21",
  "anyhow",
@@ -2492,7 +2525,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_python"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2521,7 +2554,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_types"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "compact_str",
  "dupe",
@@ -2541,7 +2574,7 @@ dependencies = [
 
 [[package]]
 name = "pyrefly_util"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "anstream 0.6.21",
  "anyhow",
@@ -2651,9 +2684,9 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
-version = "0.8.7"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
+checksum = "e058c7de0b26af77780c769414d6257830bb240f3c38477dbc2c16e5f54d6d4c"
 dependencies = [
  "libc",
  "rand_chacha",
@@ -2925,6 +2958,15 @@ name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
+
+[[package]]
+name = "rustc_version"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
+dependencies = [
+ "semver",
+]
 
 [[package]]
 name = "rustix"
@@ -3653,7 +3695,7 @@ dependencies = [
 
 [[package]]
 name = "tsp_types"
-version = "1.3.0-dev.4"
+version = "1.3.0"
 dependencies = [
  "lsp-server",
  "serde",
@@ -3725,7 +3767,7 @@ dependencies = [
  "getopts",
  "log",
  "phf_codegen",
- "rand 0.8.7",
+ "rand 0.8.8",
 ]
 
 [[package]]

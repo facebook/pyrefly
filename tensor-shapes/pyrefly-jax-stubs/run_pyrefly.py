@@ -14,7 +14,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from shape_testing import check_suites, pyrefly_command  # noqa: E402
+from shape_testing import (  # noqa: E402
+    check_suites,
+    pyrefly_command,
+    venv_python,
+    venv_site_packages,
+)
 from suites import SUITES  # noqa: E402
 
 PACKAGE_ROOT: Path = Path(__file__).resolve().parent
@@ -37,6 +42,12 @@ def main() -> int:
         "--release",
         action="store_true",
         help="build with the Cargo release profile instead of debug",
+    )
+    parser.add_argument(
+        "--python",
+        type=Path,
+        default=None,
+        help="interpreter providing JAX's fallback modules (default: shared virtualenv)",
     )
     parser.add_argument(
         "--suite",
@@ -64,6 +75,7 @@ def main() -> int:
         package_root=PACKAGE_ROOT,
         suites=selected,
         nocapture=args.nocapture,
+        site_package_paths=(venv_site_packages(venv_python(args.python)),),
     )
 
 

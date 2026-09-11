@@ -681,41 +681,6 @@ impl<K: Keyed> AnswerEntry<K> {
             .get(idx.idx())
             .unwrap_or_else(|| missing_answer_slot(idx))
     }
-
-    fn get(&self, idx: Idx<K>) -> Option<&K::Answer> {
-        self.answer_slot(idx).get()
-    }
-
-    fn record(&self, idx: Idx<K>, answer: AnswerBox<K::Answer>) -> (&K::Answer, bool) {
-        self.answer_slot(idx).record(answer)
-    }
-
-    fn record_alias(&self, idx: Idx<K>, target: Idx<K>) -> (&K::Answer, bool) {
-        let slot = self.answer_slot(idx);
-        let target = self.answer_slot(target);
-        // SAFETY: Both slots belong to this entry and are dropped together.
-        unsafe { slot.record_alias(target) }
-    }
-
-    fn reserve(&self, idx: Idx<K>, answer: AnswerBox<K::Answer>) -> bool {
-        self.answer_slot(idx).reserve(answer)
-    }
-
-    /// # Safety
-    ///
-    /// The caller must own the reservation for `idx`'s slot.
-    unsafe fn publish_reserved(&self, idx: Idx<K>) {
-        // SAFETY: Forwarded from the caller.
-        unsafe { self.answer_slot(idx).publish_reserved() }
-    }
-
-    /// # Safety
-    ///
-    /// The caller must own the reservation for `idx`'s slot.
-    unsafe fn rollback_reserved_if_pending(&self, idx: Idx<K>) -> bool {
-        // SAFETY: Forwarded from the caller.
-        unsafe { self.answer_slot(idx).rollback_reserved_if_pending() }
-    }
 }
 
 table!(
@@ -783,41 +748,6 @@ impl<K: Keyed> SolutionsEntry<K> {
         }
     }
 
-    fn get(&self, idx: Idx<K>) -> Option<&K::Answer> {
-        self.answer_slot(idx).get()
-    }
-
-    fn record(&self, idx: Idx<K>, answer: AnswerBox<K::Answer>) -> (&K::Answer, bool) {
-        self.answer_slot(idx).record(answer)
-    }
-
-    fn record_alias(&self, idx: Idx<K>, target: Idx<K>) -> (&K::Answer, bool) {
-        let slot = self.answer_slot(idx);
-        let target = self.answer_slot(target);
-        // SAFETY: Both slots belong to this entry and are dropped together.
-        unsafe { slot.record_alias(target) }
-    }
-
-    fn reserve(&self, idx: Idx<K>, answer: AnswerBox<K::Answer>) -> bool {
-        self.answer_slot(idx).reserve(answer)
-    }
-
-    /// # Safety
-    ///
-    /// The caller must own the reservation for `idx`'s slot.
-    unsafe fn publish_reserved(&self, idx: Idx<K>) {
-        // SAFETY: Forwarded from the caller.
-        unsafe { self.answer_slot(idx).publish_reserved() }
-    }
-
-    /// # Safety
-    ///
-    /// The caller must own the reservation for `idx`'s slot.
-    unsafe fn rollback_reserved_if_pending(&self, idx: Idx<K>) -> bool {
-        // SAFETY: Forwarded from the caller.
-        unsafe { self.answer_slot(idx).rollback_reserved_if_pending() }
-    }
-
     fn answer_slot_hashed(&self, key: Hashed<&K>) -> Option<SolutionSlot<'_, K::Answer>> {
         Some(SolutionSlot(self.0.get_hashed(key)?))
     }
@@ -868,60 +798,6 @@ impl SolutionsData {
         let mut table = SolutionsTable::default();
         table_mut_for_each!(&mut table, |items| presize(items, bindings));
         Self { table }
-    }
-
-    fn get_idx<K: Keyed>(&self, idx: Idx<K>) -> Option<&K::Answer>
-    where
-        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
-    {
-        self.table.get::<K>().get(idx)
-    }
-
-    pub(crate) fn record<K: Keyed>(
-        &self,
-        idx: Idx<K>,
-        answer: AnswerBox<K::Answer>,
-    ) -> (&K::Answer, bool)
-    where
-        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
-    {
-        self.table.get::<K>().record(idx, answer)
-    }
-
-    fn record_alias<K: Keyed>(&self, idx: Idx<K>, target: Idx<K>) -> (&K::Answer, bool)
-    where
-        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
-    {
-        self.table.get::<K>().record_alias(idx, target)
-    }
-
-    fn reserve<K: Keyed>(&self, idx: Idx<K>, answer: AnswerBox<K::Answer>) -> bool
-    where
-        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
-    {
-        self.table.get::<K>().reserve(idx, answer)
-    }
-
-    /// # Safety
-    ///
-    /// The caller must own the reservation for `idx`'s slot.
-    unsafe fn publish_reserved<K: Keyed>(&self, idx: Idx<K>)
-    where
-        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
-    {
-        // SAFETY: Forwarded from the caller.
-        unsafe { self.table.get::<K>().publish_reserved(idx) }
-    }
-
-    /// # Safety
-    ///
-    /// The caller must own the reservation for `idx`'s slot.
-    unsafe fn rollback_reserved_if_pending<K: Keyed>(&self, idx: Idx<K>) -> bool
-    where
-        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
-    {
-        // SAFETY: Forwarded from the caller.
-        unsafe { self.table.get::<K>().rollback_reserved_if_pending(idx) }
     }
 }
 
@@ -1398,6 +1274,18 @@ impl Answers {
         &self.table
     }
 
+    fn answer_slot<K: Keyed>(&self, idx: Idx<K>) -> &AnswerSlot<K::Answer>
+    where
+        AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
+        SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
+    {
+        if K::EXPORTED {
+            self.solutions.table.get::<K>().answer_slot(idx)
+        } else {
+            self.table.get::<K>().answer_slot(idx)
+        }
+    }
+
     pub(crate) fn record<K: Keyed>(
         &self,
         idx: Idx<K>,
@@ -1407,11 +1295,7 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        if K::EXPORTED {
-            self.solutions.record(idx, answer)
-        } else {
-            self.table.get::<K>().record(idx, answer)
-        }
+        self.answer_slot(idx).record(answer)
     }
 
     pub(crate) fn record_alias<K: Keyed>(&self, idx: Idx<K>, target: Idx<K>) -> (&K::Answer, bool)
@@ -1419,11 +1303,10 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        if K::EXPORTED {
-            self.solutions.record_alias(idx, target)
-        } else {
-            self.table.get::<K>().record_alias(idx, target)
-        }
+        let slot = self.answer_slot(idx);
+        let target = self.answer_slot(target);
+        // SAFETY: Both slots belong to this Answers table and are dropped together.
+        unsafe { slot.record_alias(target) }
     }
 
     pub(crate) fn reserve<K: Keyed>(&self, idx: Idx<K>, answer: AnswerBox<K::Answer>) -> bool
@@ -1431,11 +1314,7 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        if K::EXPORTED {
-            self.solutions.reserve(idx, answer)
-        } else {
-            self.table.get::<K>().reserve(idx, answer)
-        }
+        self.answer_slot(idx).reserve(answer)
     }
 
     /// # Safety
@@ -1446,13 +1325,8 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        if K::EXPORTED {
-            // SAFETY: Forwarded from the caller.
-            unsafe { self.solutions.publish_reserved(idx) }
-        } else {
-            // SAFETY: Forwarded from the caller.
-            unsafe { self.table.get::<K>().publish_reserved(idx) }
-        }
+        // SAFETY: Forwarded from the caller.
+        unsafe { self.answer_slot(idx).publish_reserved() }
     }
 
     /// # Safety
@@ -1463,13 +1337,8 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        if K::EXPORTED {
-            // SAFETY: Forwarded from the caller.
-            unsafe { self.solutions.rollback_reserved_if_pending(idx) }
-        } else {
-            // SAFETY: Forwarded from the caller.
-            unsafe { self.table.get::<K>().rollback_reserved_if_pending(idx) }
-        }
+        // SAFETY: Forwarded from the caller.
+        unsafe { self.answer_slot(idx).rollback_reserved_if_pending() }
     }
 
     pub fn heap(&self) -> &TypeHeap {
@@ -1651,11 +1520,7 @@ impl Answers {
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
         SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
     {
-        if K::EXPORTED {
-            self.solutions.get_idx(k)
-        } else {
-            self.table.get::<K>().get(k)
-        }
+        self.answer_slot(k).get()
     }
 
     /// Drive a cross-module iteration member by constructing a temporary
