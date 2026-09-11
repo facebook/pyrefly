@@ -135,6 +135,7 @@ impl ConfigOptionMigrater for IgnoreMissingImports {
         &self,
         _pyright_cfg: &PyrightConfig,
         _pyrefly_cfg: &mut ConfigFile,
+        _basedpyright: bool,
     ) -> anyhow::Result<()> {
         Err(anyhow::anyhow!(
             "Pyright does not have direct equivalents for mypy's import handling options"
@@ -456,7 +457,7 @@ mod tests {
         let default_ignore_imports = pyrefly_cfg.root.ignore_missing_imports.clone();
 
         let ignore_imports = IgnoreMissingImports;
-        let result = ignore_imports.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = ignore_imports.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_err());
         assert_eq!(

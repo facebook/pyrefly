@@ -44,6 +44,7 @@ impl ConfigOptionMigrater for ProjectExcludes {
         &self,
         pyright_cfg: &PyrightConfig,
         pyrefly_cfg: &mut ConfigFile,
+        _basedpyright: bool,
     ) -> anyhow::Result<()> {
         // In pyright, project excludes are specified in the "exclude" field
         if let Some(excludes) = &pyright_cfg.project_excludes {
@@ -99,7 +100,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let project_excludes = ProjectExcludes;
-        let result = project_excludes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = project_excludes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         assert_eq!(pyrefly_cfg.project_excludes, project_excludes_globs);
@@ -113,7 +114,7 @@ mod tests {
         let default_excludes = pyrefly_cfg.project_excludes.clone();
 
         let project_excludes = ProjectExcludes;
-        let result = project_excludes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = project_excludes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_err());
         assert_eq!(pyrefly_cfg.project_excludes, default_excludes);
@@ -128,7 +129,7 @@ mod tests {
         let default_excludes = pyrefly_cfg.project_excludes.clone();
 
         let project_excludes = ProjectExcludes;
-        let result = project_excludes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = project_excludes.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_err());
         assert_eq!(pyrefly_cfg.project_excludes, default_excludes);

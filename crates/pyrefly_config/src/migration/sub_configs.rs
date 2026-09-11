@@ -94,6 +94,7 @@ impl ConfigOptionMigrater for SubConfigs {
         &self,
         pyright_cfg: &PyrightConfig,
         pyrefly_cfg: &mut ConfigFile,
+        _basedpyright: bool,
     ) -> anyhow::Result<()> {
         // In pyright, sub configs are specified in the "executionEnvironments" field
         // Each execution environment has a root path and error settings
@@ -316,7 +317,7 @@ mod tests {
         let mut pyrefly_cfg = ConfigFile::default();
 
         let sub_configs = SubConfigs;
-        let result = sub_configs.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = sub_configs.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_ok());
         assert_eq!(pyrefly_cfg.sub_configs.len(), 2);
@@ -357,7 +358,7 @@ mod tests {
         let default_sub_configs = pyrefly_cfg.sub_configs.clone();
 
         let sub_configs = SubConfigs;
-        let result = sub_configs.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg);
+        let result = sub_configs.migrate_from_pyright(&pyright_cfg, &mut pyrefly_cfg, false);
 
         assert!(result.is_err());
         assert_eq!(pyrefly_cfg.sub_configs, default_sub_configs);
