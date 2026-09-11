@@ -30,10 +30,13 @@ GitHub bots help manage issues and pull requests.
 
 To pick up an issue, comment `#claim` on it and the bot will assign it to you. When you're done — or if you decide not to work on it after all — comment `#unclaim` to release it so someone else can take over.
 
+How it works:
 - `#claim` only works on **unassigned** issues. If the issue is already claimed by someone else, the bot leaves the existing assignee in place and tells you to coordinate with them — it won't reassign the issue to you. If it's already assigned to you, it just confirms that.
 - `#unclaim` only removes *your own* assignment, and only if you're currently assigned.
 - Both commands are case-insensitive and can appear anywhere in a comment (e.g. "I'd like to work on this, #claim").
 - If the bot can't assign you automatically (GitHub only allows assigning users with repository access), it leaves a comment so a maintainer can assign you manually.
+
+**Please note:** Claiming issues helps other contributors and maintainers see what is being worked on. If you do not claim an issue you're working on someone else might claim it, which can lead to multiple PRs opened for the same task and increases review burden on maintainers. In cases where multiple PRs are opened for the same task maintainers will prioritise reviewing the PR from the author who #claim-ed the issue. For issues marked with the `good-first-issues` tag, please only claim and work on one issue at a time to allow other newcomers to also work on issues.
 
 ## Developing Pyrefly
 
@@ -188,6 +191,8 @@ We aim to respond to all PRs in a timely manner, but please note we prioritise r
 We’re excited to see how AI is transforming the way people write code. We encourage contributors to use AI tools to explore, learn, and enhance the Pyrefly codebase. While we generally support the use of AI for creating PRs, please ensure you thoroughly review and understand any AI-generated code before submitting. This practice helps us maintain high code quality standards, facilitates meaningful review discussions with maintainers, and increases the likelihood that your submission will be accepted.
 
 If your PR is mostly or entirely driven by an AI agent, please disclose the manner of AI usage in the PR description and ensure you follow our guidelines and code of conduct carefully. This disclosure is required if AI is used to respond to review comments, regardless of whether the agent is operating autonomously or if you are copy-pasting its output. Disclosure is not required if your words are your own and simply translated or cleaned up using AI, but we still encourage it so that your PR is not mistaken for being agent-driven.
+
+We also ask that you refrain from using AI to one-shot "good first issues" (i.e. use AI to complete the issue without any input of your own). There are only a limited number of these issues available and they are intended to help newcomers learn about the codebase. By using AI to generate solutions to these issues you miss out on learning the basics of Pyrefly and take the opportunity away from other new contributors. Using AI as a learning aid, especially for researching the codebase, is fully acceptable.
 
 As with manually written code, low-quality or spam PRs written with AI may be rejected. Contributors or agents who repeatedly submit such PRs may be blocked from future contributions.
 
