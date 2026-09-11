@@ -3113,9 +3113,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             report_duplicate_column(name, other_expr.range(), errors);
             return None;
         }
-        self.expr_infer(other_expr, errors);
-        if let Some(on) = on {
-            self.expr_infer(on, errors);
+        for arg in &args.args {
+            self.expr_infer(arg, errors);
+        }
+        for kw in &args.keywords {
+            self.expr_infer(&kw.value, errors);
         }
         Some(dataframe_type_with_columns_and_completeness(
             schema,

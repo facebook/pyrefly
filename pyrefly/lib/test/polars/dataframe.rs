@@ -4567,6 +4567,32 @@ d1.join(d2, on=[name("s")], how="inner")  # E: Argument `Literal['s']` is not as
 );
 
 testcase!(
+    test_join_resolved_how_reports_argument_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Literal
+def how(x: int) -> Literal["inner"]: ...
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64})
+d1.join(d2, on="k", how=how("s"))  # E: Argument `Literal['s']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_join_resolved_coalesce_reports_argument_error,
+    env_with_polars_stubs(),
+    r#"
+import polars as pl
+from typing import Literal
+def coalesce(x: int) -> Literal[True]: ...
+d1 = pl.DataFrame(schema={"k": pl.Int64})
+d2 = pl.DataFrame(schema={"k": pl.Int64})
+d1.join(d2, on="k", coalesce=coalesce("s"))  # E: Argument `Literal['s']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
     test_join_left_on_right_on_falls_back,
     env_with_polars_stubs(),
     r#"
