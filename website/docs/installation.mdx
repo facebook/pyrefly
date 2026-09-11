@@ -75,6 +75,26 @@ To unlock full type checking and pin your configuration, run `pyrefly init`. Thi
 - `project-excludes` and `pyrefly suppress`: incremental rollout on existing
   codebases.
 
+## Basic usage
+
+Run Pyrefly from your project directory to type-check the whole project:
+
+```sh
+pyrefly check
+```
+
+You can also check specific files or directories:
+
+```sh
+pyrefly check src/ tests/ path/to/file.py
+```
+
+For feedback while you edit, install a [Pyrefly IDE extension](../IDE). It provides diagnostics, hover information, inlay hints, and navigation directly in the editor. For more details, run `pyrefly help`.
+
+## Configure
+
+You can set up a basic configuration file to type-check your project. You can add configuration options to a `pyproject.toml` file or create a `pyrefly.toml` file in your project directory. All [configuration options are documented here](../configuration).
+
 ```
 [tool.pyrefly]
 search_path = [
