@@ -1052,6 +1052,13 @@ impl ClassField {
         }
     }
 
+    pub(crate) fn is_method(&self) -> bool {
+        matches!(
+            &self.0,
+            ClassFieldInner::Method { .. } | ClassFieldInner::ProxyMethod { .. }
+        )
+    }
+
     pub fn is_final(&self) -> bool {
         match &self.0 {
             ClassFieldInner::Property { ty, .. } => ty.has_final_decoration(),

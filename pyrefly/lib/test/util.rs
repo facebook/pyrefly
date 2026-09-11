@@ -160,6 +160,7 @@ pub struct TestEnv {
     unknown_attribute_type_error: bool,
     implicit_abstract_class_error: bool,
     open_unpacking_error: bool,
+    method_assign_error: bool,
     missing_override_decorator_error: bool,
     missing_super_call_error: bool,
     not_required_key_access_error: bool,
@@ -218,6 +219,7 @@ impl TestEnv {
             unknown_attribute_type_error: false,
             implicit_abstract_class_error: false,
             open_unpacking_error: false,
+            method_assign_error: false,
             missing_override_decorator_error: false,
             missing_super_call_error: false,
             not_required_key_access_error: false,
@@ -392,6 +394,11 @@ impl TestEnv {
 
     pub fn enable_open_unpacking_error(mut self) -> Self {
         self.open_unpacking_error = true;
+        self
+    }
+
+    pub fn enable_method_assign_error(mut self) -> Self {
+        self.method_assign_error = true;
         self
     }
 
@@ -664,6 +671,9 @@ impl TestEnv {
         }
         if self.open_unpacking_error {
             errors.set_error_severity(ErrorKind::OpenUnpacking, Severity::Error);
+        }
+        if self.method_assign_error {
+            errors.set_error_severity(ErrorKind::MethodAssign, Severity::Error);
         }
         if self.missing_override_decorator_error {
             errors.set_error_severity(ErrorKind::MissingOverrideDecorator, Severity::Error);
