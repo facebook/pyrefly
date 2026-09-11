@@ -115,6 +115,15 @@ $ echo -e '[errors]\nimplicit-any = "ignore"' > $TMPDIR/pyrefly.toml && \
 [0]
 ```
 
+## Strict mode rejects assigning to methods
+
+```scrut {output_stream: stdout}
+$ echo -e 'class A:\n    def f(self) -> None: ...\n\ndef replacement(self: A) -> None: ...\n\nA.f = replacement' > $TMPDIR/method_assign.py && \
+> $PYREFLY check $TMPDIR/method_assign.py --preset strict --output-format=min-text --summary=none
+ERROR * Cannot assign to method `f` [method-assign] (glob)
+[1]
+```
+
 ## Scalar fields in the config file override `--preset`
 
 ```scrut {output_stream: stdout}
