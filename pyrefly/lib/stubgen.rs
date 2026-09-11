@@ -13,6 +13,7 @@ mod tests {
     use std::path::PathBuf;
 
     use dupe::Dupe;
+    use pyrefly_build::handle::Handle;
     use pyrefly_util::forgetter::Forgetter;
     use pyrefly_util::fs_anyhow;
     use pyrefly_util::globs::FilteredGlobs;
@@ -26,6 +27,7 @@ mod tests {
     use super::extract::extract_module_stub;
     use crate::state::require::Require;
     use crate::state::state::State;
+    use crate::state::state::Transaction;
     use crate::test::util::TestEnv;
 
     fn run_stubgen(input: &str) -> String {
@@ -109,8 +111,10 @@ class BaseModel:
         let holder = Forgetter::new(state, false);
 
         let handles_obj = crate::commands::check::Handles::new(expanded);
+        // Mirror the CLI: `Require::Exports` is the level for modules reached through
+        // imports, and each stubbed handle is raised to `Require::Everything` below.
         let mut forgetter = Forgetter::new(
-            holder.as_ref().new_transaction(Require::Everything, None),
+            holder.as_ref().new_transaction(Require::Exports, None),
             true,
         );
         let transaction = forgetter.as_mut();
@@ -124,7 +128,25 @@ class BaseModel:
                 result = emit_stub(&stub);
             }
         }
+        assert_dependency_asts_evicted(transaction, &handles);
         result
+    }
+
+    /// A module reached only through an import drops its AST as soon as its answers exist.
+    /// Holding both for the whole import closure makes stubgen's peak memory scale with the
+    /// project instead of the input, so every stubgen test checks this over what it loaded.
+    fn assert_dependency_asts_evicted(transaction: &Transaction, stubbed: &[Handle]) {
+        for handle in transaction.handles() {
+            if stubbed.contains(&handle) {
+                continue;
+            }
+            assert!(
+                transaction.get_bindings(&handle).is_none()
+                    || transaction.get_ast(&handle).is_none(),
+                "`{}` was only reached through an import, but kept its AST alongside its bindings",
+                handle.module()
+            );
+        }
     }
 
     /// Get the path to the stubgen test fixtures directory.
@@ -243,6 +265,42 @@ class BaseModel:
         assert!(
             !actual.contains("DataFrame["),
             "the schema display form must not appear in a stub, got:\n{actual}"
+        );
+    }
+
+    /// Dependencies are held at `Require::Exports`, which drops their ASTs and disables their
+    /// answer traces. Types that cross a module boundary must still resolve to the real class
+    /// rather than degrading to `Incomplete`.
+    #[test]
+    fn test_stubgen_dependency_types_survive_eviction() {
+        let config = ExtractConfig {
+            include_private: false,
+            include_docstrings: false,
+        };
+        let tdir = tempfile::tempdir().unwrap();
+
+        let dep = tdir.path().join("dep.py");
+        fs_anyhow::write(
+            &dep,
+            "class Widget:\n    pass\n\ndef make() -> Widget: ...\n",
+        )
+        .unwrap();
+
+        let input = "from dep import make\n\nwidget = make()\n";
+        let path = tdir.path().join("input.py");
+        fs_anyhow::write(&path, input).unwrap();
+
+        let mut t = TestEnv::new();
+        t.add(&path.display().to_string(), input);
+        t.add_real_path("dep", dep);
+
+        // Only stub the input file, so `dep` is reached purely as an import.
+        let includes = Globs::new(vec![path.display().to_string()]).unwrap();
+        let actual = run_stubgen_inner(&mut t, includes, &config);
+
+        assert!(
+            actual.contains("widget: Widget"),
+            "an inferred type from an imported module should name the class, got:\n{actual}"
         );
     }
 
