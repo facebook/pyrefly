@@ -31,6 +31,28 @@ What varies is the *deliverable*:
   invokes this one for corpus work will say so; absent that, assume the lighter
   deliverable.
 
+## Converting existing jaxtyping annotations
+
+Before editing, inventory every jaxtyping annotation and its intended shape,
+including annotations on local variables. After the conversion, compare that
+inventory against the native annotations: every removed annotation must have a
+native counterpart with equal or better precision, or a documented reason why
+that precision is not representable.
+
+- Never delete a local annotation merely because current inference appears
+  sufficient. Preserve it with native syntax and reuse any enclosing `IntVar`
+  or `IntTuple` parameters so it continues to document and check the intended
+  relationship.
+- Convert a variadic prefix such as `"*B D"` using `Bs: IntTuple` and
+  `Tensor[[*Elements[Bs], D]]`; do not collapse it to a bare `Tensor`.
+- When a dimension is known only from a runtime value and cannot be related to
+  a type parameter, preserve at least its rank with `int`, for example
+  `Tensor[[B, int, int]]`. Use bare `Tensor` only when even the rank is genuinely
+  unknown, and record that reason in the before/after audit.
+- Treat code that reads annotations at runtime—including schema validators—as
+  executable behavior. Adapt and test that consumer separately rather than
+  assuming a syntactically equivalent annotation preserves validation.
+
 # Before you start: two questions
 
 Resolve these with the user before Gate 0. In the common case these are the only
