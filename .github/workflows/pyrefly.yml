@@ -46,6 +46,14 @@ jobs:
         uv tool run --from ruff==0.14.3 ruff format --check --config ruff.toml .
         uv tool run --from ruff==0.14.3 ruff check --select I --config ruff.toml .
       if: ${{ matrix.os == 'ubuntu-latest' }}
+    # The VS Code extension's binary finder is a standalone stdlib script, run
+    # by the user's own interpreter rather than by the extension host, so it is
+    # tested here instead of in test_extension.yml: this workflow runs on pull
+    # requests, and its three operating systems are exactly the ones whose
+    # `sysconfig` install schemes differ. It needs nothing that Cargo builds, so
+    # it runs before the Rust steps.
+    - name: Test the Pyrefly binary finder
+      run: python -m unittest discover -s lsp/test
     - name: set windows cargo home
       # we need to set CARGO_HOME to a high-up directory on Windows machines, since some dependencies cloned
       # by Cargo have long paths and will cause builds/tests to fail
