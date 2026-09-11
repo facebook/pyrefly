@@ -93,6 +93,48 @@ pub(crate) fn direct_function_parameter_sources(
         .collect()
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TypeParameterCoverage {
+    None,
+    Partial,
+    Total,
+}
+
+fn type_mentions_parameter(ty: &Type, tparam: &Quantified) -> bool {
+    let mut found = false;
+    ty.for_each_quantified(&mut |candidate| found |= candidate == tparam);
+    found
+}
+
+/// Classify whether every top-level union arm mentions `tparam`.
+///
+/// Resolved signatures have already expanded ordinary aliases. Other nested type structure is
+/// intentionally treated as atomic because this shape-specific check does not model general
+/// generic inference.
+fn type_parameter_coverage(ty: &Type, tparam: &Quantified) -> TypeParameterCoverage {
+    match ty {
+        Type::Union(union) => {
+            if union
+                .members
+                .iter()
+                .all(|member| type_mentions_parameter(member, tparam))
+            {
+                TypeParameterCoverage::Total
+            } else if union
+                .members
+                .iter()
+                .any(|member| type_mentions_parameter(member, tparam))
+            {
+                TypeParameterCoverage::Partial
+            } else {
+                TypeParameterCoverage::None
+            }
+        }
+        _ if type_mentions_parameter(ty, tparam) => TypeParameterCoverage::Total,
+        _ => TypeParameterCoverage::None,
+    }
+}
+
 impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
     pub(crate) fn validate_shape_extension_type_parameter_default(
         &self,
@@ -118,11 +160,74 @@ impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
         &self,
         stmt: &FunctionDefData,
         params: &[Param],
+        ret: &Type,
         tparams: &TParams,
         errors: &ErrorCollector,
     ) {
         self.validate_shape_flag_function_parameters(stmt, params, tparams, errors);
         self.validate_shape_index_function_parameters(stmt, params, tparams, errors);
+        self.validate_int_tuple_function_parameters(stmt, params, ret, tparams, errors);
+    }
+
+    fn validate_int_tuple_function_parameters(
+        &self,
+        stmt: &FunctionDefData,
+        params: &[Param],
+        ret: &Type,
+        tparams: &TParams,
+        errors: &ErrorCollector,
+    ) {
+        if !self.solver().config.tensor_shapes {
+            return;
+        }
+        // `IntTuple` retains distinct provenance. A plain `tuple[int, ...]` bound may instead
+        // belong to ordinary typing or an implicit jaxtyping parameter, neither of which can use
+        // this shape-specific default.
+        for tparam in tparams.iter().filter(|tparam| {
+            tparam.default().is_none()
+                && matches!(tparam.restriction(), Restriction::Bound(Type::IntTuple(_)))
+        }) {
+            let mut appears_in_return = false;
+            ret.for_each_quantified(&mut |candidate| appears_in_return |= candidate == tparam);
+            if !appears_in_return {
+                continue;
+            }
+            let (has_required_source, has_partial_source) = params.iter().fold(
+                (false, false),
+                |(has_required_source, has_partial_source), param| {
+                    let coverage = type_parameter_coverage(param.as_type(), tparam);
+                    (
+                        has_required_source
+                            || param.is_required() && coverage == TypeParameterCoverage::Total,
+                        has_partial_source || coverage == TypeParameterCoverage::Partial,
+                    )
+                },
+            );
+            // This is intentionally a narrow lint for partially constraining unions. Optional
+            // and variadic sources can also be omitted, but overloads and runtime arity rules
+            // make broader definition-site analysis too noisy.
+            if has_partial_source && !has_required_source {
+                let range = stmt
+                    .type_params
+                    .as_ref()
+                    .and_then(|params| {
+                        params
+                            .type_params
+                            .iter()
+                            .find(|param| param.name().id == *tparam.name())
+                    })
+                    .map_or_else(|| stmt.name.range(), Ranged::range);
+                self.error(
+                    errors,
+                    range,
+                    ErrorKind::UnconstrainedTypeVar,
+                    format!(
+                        "`IntTuple` type parameter `{}` may be unconstrained for some calls; give it a default",
+                        tparam.name(),
+                    ),
+                );
+            }
+        }
     }
 
     pub(crate) fn reject_legacy_shape_extension_bound(

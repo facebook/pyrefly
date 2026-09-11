@@ -122,6 +122,7 @@
     "unannotated-protocol-member": ["legacy", "default", "strict", "all"],
     "unannotated-return": ["all"],
     "unbound-name": ["default", "strict", "all"],
+    "unconstrained-type-var": ["legacy", "default", "strict", "all"],
     "unexpected-keyword": ["basic", "legacy", "default", "strict", "all"],
     "unexpected-positional-argument": ["basic", "legacy", "default", "strict", "all"],
     "unimported-directive": ["legacy", "default", "strict", "all"],

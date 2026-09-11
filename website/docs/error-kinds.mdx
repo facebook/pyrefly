@@ -1964,6 +1964,32 @@ def f(check: bool):
 
 Compare this with [unknown-name](#unknown-name), which is reported when no definition at all is found for a name.
 
+## unconstrained-type-var
+
+This is a type-aware lint to make errors writing Pyrefly tensor shape stubs
+less likely. Pyrefly reports it when an `IntTuple`-bounded type parameter is
+used in the return type, has no default, and appears in only some arms of a
+top-level union in a function parameter (after expanding type alias). In that
+situation, some calls will fail to constrain the parameter which might lead to
+unexpended gradual shapes.
+
+Its main purpose is to catch a missing default in `ArrayLike`-style APIs, where
+a scalar argument is meant to imply an empty shape. In that situtation, the desired
+behavior requires setting the empty shape as a default:
+
+```python
+from shape_extensions import IntTuple
+
+class Array[Shape: IntTuple]: ...
+type ArrayLike[Shape: IntTuple] = Array[Shape] | float
+
+def as_array[Shape: IntTuple](  # error: `IntTuple` type parameter `Shape` may be unconstrained for some calls; give it a default
+    value: ArrayLike[Shape],
+) -> Array[Shape]: ...
+
+def fixed[Shape: IntTuple = []](value: ArrayLike[Shape]) -> Array[Shape]: ...
+```
+
 ## unexpected-keyword
 
 A function was called with an extra keyword argument.
