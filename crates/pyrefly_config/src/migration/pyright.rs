@@ -94,6 +94,7 @@ use crate::migration::python_version::PythonVersionConfig;
 use crate::migration::search_path::SearchPath;
 use crate::migration::site_package_path::SitePackagePath;
 use crate::migration::sub_configs::SubConfigs;
+use crate::migration::type_checking_mode;
 
 impl PyrightConfig {
     pub fn parse(text: &str) -> anyhow::Result<Self> {
@@ -113,6 +114,7 @@ impl PyrightConfig {
             Box::new(SearchPath),
             Box::new(SitePackagePath),
             Box::new(IgnoreMissingImports),
+            Box::new(type_checking_mode::TypeCheckingMode),
             Box::new(ErrorCodes),
             Box::new(SubConfigs),
         ];
