@@ -2126,6 +2126,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 && let Some(n) = i.as_i64()
             {
                 Type::Int(Int::Literal(n))
+            } else if let Some(default) =
+                self.parse_int_tuple_type_var_default(default_expr, &restriction, errors)
+            {
+                default
             } else {
                 self.expr_untype(
                     default_expr,
