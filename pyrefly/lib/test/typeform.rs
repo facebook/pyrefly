@@ -247,3 +247,13 @@ def f(tp: TypeForm[int]):
     tp.not_a_real_attribute  # E: Object of class `object` has no attribute `not_a_real_attribute`
     "#,
 );
+
+testcase!(
+    test_sentinel,
+    r#"
+from typing_extensions import TypeForm, sentinel
+MISSING = sentinel('MISSING')
+ok: TypeForm[MISSING] = MISSING
+err: TypeForm[int] = MISSING  # E: `MISSING` is not assignable to `TypeForm[int]`
+    "#,
+);

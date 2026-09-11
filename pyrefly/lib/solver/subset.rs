@@ -2510,6 +2510,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (Type::Annotated(inner, _), Type::TypeForm(u)) => self.is_subset_eq(inner, u),
             // None <: TypeForm[T] when None <: T — None is a valid type form (represents NoneType)
             (Type::None, Type::TypeForm(u)) => self.is_subset_eq(&Type::None, u),
+            // A sentinel represents itself in type expressions
+            (Type::Sentinel(_), Type::TypeForm(want)) => self.is_subset_eq(got, want),
             // TypeForm[T] is not a subtype of type[U]
             (Type::TypeForm(_), Type::Type(_)) => Err(SubsetError::Other),
             // TypeForm falls back to object for other subtype checks
