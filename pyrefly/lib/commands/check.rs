@@ -37,6 +37,7 @@ use percent_encoding::CONTROLS;
 use percent_encoding::utf8_percent_encode;
 use pyrefly_build::handle::Handle;
 use pyrefly_config::args::ConfigOverrideArgs;
+use pyrefly_config::base::Preset;
 use pyrefly_config::config::BaselineFormat;
 use pyrefly_config::config::BaselineMatchingMode;
 use pyrefly_config::config::ConfigFile;
@@ -1332,22 +1333,22 @@ fn write_unconfigured_upsell<W: Write>(
         SynthesizedPresetReason::Migrated(kind) => {
             let (location, preset) = match kind {
                 MigratedFromKind::Mypy(MigratedConfigSource::DedicatedFile) => {
-                    ("your `mypy.ini`", "legacy")
+                    ("your `mypy.ini`", Preset::Legacy)
                 }
                 MigratedFromKind::Mypy(MigratedConfigSource::PyprojectToml) => {
-                    ("`[tool.mypy]` in your `pyproject.toml`", "legacy")
+                    ("`[tool.mypy]` in your `pyproject.toml`", Preset::Legacy)
                 }
                 MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile) => {
-                    ("your `pyrightconfig.json`", "default")
+                    ("your `pyrightconfig.json`", Preset::Default)
                 }
                 MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml) => {
-                    ("`[tool.pyright]` in your `pyproject.toml`", "default")
+                    ("`[tool.pyright]` in your `pyproject.toml`", Preset::Default)
                 }
-                MigratedFromKind::BasedPyright(MigratedConfigSource::DedicatedFile) => {
+                MigratedFromKind::BasedPyright(MigratedConfigSource::DedicatedFile, _) => {
                     unreachable!("no such thing as basedpyrightconfig.json")
                 }
-                MigratedFromKind::BasedPyright(MigratedConfigSource::PyprojectToml) => {
-                    ("`[tool.basedpyright]` in your `pyproject.toml`", "default")
+                MigratedFromKind::BasedPyright(MigratedConfigSource::PyprojectToml, preset) => {
+                    ("`[tool.basedpyright]` in your `pyproject.toml`", preset)
                 }
             };
             writeln!(
@@ -3240,6 +3241,32 @@ def go(w: Widget) -> int:
         assert!(!s.contains("your `pyrightconfig.json`"), "{s}");
         assert!(s.contains("preset: default"), "{s}");
         assert!(s.contains("`pyrefly init`"), "{s}");
+    }
+
+    /// The basedpyright variant reports the preset the migration actually
+    /// produced, so a `[tool.basedpyright]` with no explicit
+    /// `typeCheckingMode` surfaces as `all`, not a hardcoded `default`.
+    #[test]
+    fn upsell_for_migrated_from_basedpyright_pyproject() {
+        let s = upsell_string(SynthesizedPresetReason::Migrated(
+            MigratedFromKind::BasedPyright(MigratedConfigSource::PyprojectToml, Preset::All),
+        ));
+        assert!(
+            s.contains("`[tool.basedpyright]` in your `pyproject.toml`"),
+            "{s}"
+        );
+        assert!(s.contains("preset: all"), "{s}");
+        assert!(s.contains("`pyrefly init`"), "{s}");
+    }
+
+    /// An explicit `typeCheckingMode` pins no preset, which the migration
+    /// records as `Default` — the same wording the plain pyright path uses.
+    #[test]
+    fn upsell_for_migrated_from_basedpyright_with_explicit_mode() {
+        let s = upsell_string(SynthesizedPresetReason::Migrated(
+            MigratedFromKind::BasedPyright(MigratedConfigSource::PyprojectToml, Preset::Default),
+        ));
+        assert!(s.contains("preset: default"), "{s}");
     }
 
     /// `UserOverride` is suppressed: the user explicitly chose a

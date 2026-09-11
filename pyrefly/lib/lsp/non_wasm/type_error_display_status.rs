@@ -10,6 +10,7 @@
 //! used by the current status-bar implementation.
 
 use lsp_types::TextDocumentIdentifier;
+use pyrefly_config::base::Preset;
 use pyrefly_config::config::ConfigFile;
 use pyrefly_config::config::ConfigSource;
 use pyrefly_config::config::SynthesizedPresetReason;
@@ -260,32 +261,28 @@ pub fn derive_v2_response(
                 )
             }
             Some(SynthesizedPresetReason::Migrated(kind)) => {
-                let (location, preset_label, preset) = match kind {
+                let (location, preset) = match kind {
                     MigratedFromKind::Mypy(MigratedConfigSource::DedicatedFile) => {
-                        ("your `mypy.ini`", "Legacy", "legacy")
+                        ("your `mypy.ini`", Preset::Legacy)
                     }
-                    MigratedFromKind::Mypy(MigratedConfigSource::PyprojectToml) => (
-                        "`[tool.mypy]` in your `pyproject.toml`",
-                        "Legacy",
-                        "legacy",
-                    ),
+                    MigratedFromKind::Mypy(MigratedConfigSource::PyprojectToml) => {
+                        ("`[tool.mypy]` in your `pyproject.toml`", Preset::Legacy)
+                    }
                     MigratedFromKind::Pyright(MigratedConfigSource::DedicatedFile) => {
-                        ("your `pyrightconfig.json`", "Default", "default")
+                        ("your `pyrightconfig.json`", Preset::Default)
                     }
-                    MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml) => (
-                        "`[tool.pyright]` in your `pyproject.toml`",
-                        "Default",
-                        "default",
-                    ),
-                    MigratedFromKind::BasedPyright(MigratedConfigSource::DedicatedFile) => unreachable!("no such thing as basedpyrightconfig.json"),
-                    MigratedFromKind::BasedPyright(MigratedConfigSource::PyprojectToml) => (
-                        "`[tool.basedpyright]` in your `pyproject.toml`",
-                        "Default",
-                        "default",
-                    ),
+                    MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml) => {
+                        ("`[tool.pyright]` in your `pyproject.toml`", Preset::Default)
+                    }
+                    MigratedFromKind::BasedPyright(MigratedConfigSource::DedicatedFile, _) => {
+                        unreachable!("no such thing as basedpyrightconfig.json")
+                    }
+                    MigratedFromKind::BasedPyright(MigratedConfigSource::PyprojectToml, preset) => {
+                        ("`[tool.basedpyright]` in your `pyproject.toml`", preset)
+                    }
                 };
                 (
-                    Some(preset_label.to_owned()),
+                    Some(preset.label().to_owned()),
                     format!(
                         "Pyrefly is using settings imported from {location} (preset: {preset}).\n\nRun `pyrefly init` to continue setting up Pyrefly.",
                     ),
@@ -373,6 +370,7 @@ mod tests {
     mod v2_response {
         use std::path::PathBuf;
 
+        use pyrefly_config::base::Preset;
         use pyrefly_config::config::ConfigSource;
         use pyrefly_config::config::SynthesizedPresetReason;
         use pyrefly_config::migration::run::MigratedConfigSource;
@@ -515,6 +513,33 @@ mod tests {
                     .contains("`[tool.pyright]` in your `pyproject.toml`")
             );
             assert!(!r.tooltip.contains("your `pyrightconfig.json`"));
+        }
+
+        /// basedpyright carries the preset the migration actually chose, rather
+        /// than a hardcoded one, so an unconfigured `typeCheckingMode` surfaces
+        /// as `all` instead of `default`.
+        #[test]
+        fn migrated_from_basedpyright_pyproject_reports_migrated_preset() {
+            let r = derive_v2_response(
+                Some(SynthesizedPresetReason::Migrated(
+                    MigratedFromKind::BasedPyright(
+                        MigratedConfigSource::PyprojectToml,
+                        Preset::All,
+                    ),
+                )),
+                &ConfigSource::Synthetic(None),
+                false,
+                false,
+                None,
+                None,
+                None,
+            );
+            assert_eq!(r.label.as_deref(), Some("All"));
+            assert!(
+                r.tooltip
+                    .contains("`[tool.basedpyright]` in your `pyproject.toml`")
+            );
+            assert!(r.tooltip.contains("preset: all"), "{}", r.tooltip);
         }
 
         #[test]

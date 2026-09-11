@@ -24,6 +24,7 @@ use pyrefly_util::upward_search::UpwardSearch;
 use tracing::info;
 use tracing::warn;
 
+use crate::base::Preset;
 use crate::config::ConfigFile;
 use crate::migration::mypy;
 use crate::migration::mypy::ini::parse_mypy_config;
@@ -39,7 +40,7 @@ use crate::pyproject::PyProject;
 pub enum MigratedFromKind {
     Mypy(MigratedConfigSource),
     Pyright(MigratedConfigSource),
-    BasedPyright(MigratedConfigSource),
+    BasedPyright(MigratedConfigSource, Preset),
 }
 
 /// Where the migrated mypy / pyright settings physically lived: a
@@ -141,10 +142,17 @@ pub fn find_and_migrate_in_memory(
                 pyright::parse_pyproject_toml(&raw_file).with_context(ctx)?,
                 MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml),
             ))),
-            (false, false, true) => Ok(Some((
-                pyright::parse_pyproject_toml(&raw_file).with_context(ctx)?,
-                MigratedFromKind::BasedPyright(MigratedConfigSource::PyprojectToml),
-            ))),
+            (false, false, true) => {
+                let cfg = pyright::parse_pyproject_toml(&raw_file).with_context(ctx)?;
+                // basedpyright's default type checking mode migrates to the
+                // `all` preset, while an explicit mode pins no preset at all —
+                // which is what `Preset::Default` means.
+                let preset = cfg.preset.unwrap_or(Preset::Default);
+                Ok(Some((
+                    cfg,
+                    MigratedFromKind::BasedPyright(MigratedConfigSource::PyprojectToml, preset),
+                )))
+            }
             // No tool sections at all — not a migrate-able config and not a
             // parse error. Treat as "nothing nearby."
             (false, false, false) => Ok(None),
@@ -424,7 +432,6 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
-    use crate::base::Preset;
     use crate::error_kind::ErrorKind;
     use crate::error_kind::Severity;
 
@@ -984,6 +991,33 @@ files = ["mypy.py"]
             result.is_none(),
             "bare pyproject.toml without tool sections is not migrate-able"
         );
+        Ok(())
+    }
+
+    /// The `BasedPyright` label carries the preset the migration chose. A
+    /// `[tool.basedpyright]` with no `typeCheckingMode` migrates to `all`;
+    /// pinning a mode explicitly leaves no preset, recorded as `Default`.
+    #[test]
+    fn test_in_memory_basedpyright_carries_migrated_preset() -> anyhow::Result<()> {
+        for (section, expected) in [
+            ("[tool.basedpyright]\n", Preset::All),
+            (
+                "[tool.basedpyright]\ntypeCheckingMode = \"basic\"\n",
+                Preset::Default,
+            ),
+        ] {
+            let tmp = tempfile::tempdir()?;
+            let bottom = tmp.path().join("a/b");
+            std::fs::create_dir_all(&bottom)?;
+            fs_anyhow::write(&tmp.path().join("a/pyproject.toml"), section.as_bytes())?;
+
+            let (_cfg, kind) = find_and_migrate_in_memory(&bottom)?.expect("should find pyproject");
+            assert_eq!(
+                kind,
+                MigratedFromKind::BasedPyright(MigratedConfigSource::PyprojectToml, expected),
+                "for section: {section}"
+            );
+        }
         Ok(())
     }
 
