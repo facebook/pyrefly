@@ -1197,7 +1197,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             //     f(A(), 0)  # T = A | int
             if let Some(self_qs) = self_qs.take() {
                 let specialization_errors =
-                    self.finish_quantified(self_qs, self.solver().infer_with_first_use);
+                    self.finish_quantified(self_qs, self.solver().config.infer_with_first_use);
                 if let Err(errors) = specialization_errors {
                     self.add_specialization_errors(errors, arg.range(), call_errors, context);
                 }
@@ -2144,7 +2144,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // By invariant, hint will be None if we are calling a constructor.
             if let Some(hint) = hint {
                 let (qs, callable_, extension_vars) = instantiate(callable.clone());
-                let contains_dsl_call = self.solver().tensor_shapes
+                let contains_dsl_call = self.solver().config.tensor_shapes
                     && callable_
                         .ret
                         .any(|ty| matches!(ty, Type::TypeLevelDslCall(_)));
@@ -2339,7 +2339,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let errors = self
             .solver()
             .finish_call_boundary(
-                self.solver().infer_with_first_use,
+                self.solver().config.infer_with_first_use,
                 self.type_order(),
                 call_boundary,
             )

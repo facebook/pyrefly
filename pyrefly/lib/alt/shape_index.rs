@@ -41,7 +41,7 @@ impl<Ans: LookupAnswer> AnswersSolver<'_, '_, Ans> {
         expr: &Expr,
         errors: &ErrorCollector,
     ) -> Type {
-        if !self.solver().tensor_shapes {
+        if !self.solver().config.tensor_shapes {
             return self.expr_infer(expr, errors);
         }
         let parse_errors = self.error_swallower();

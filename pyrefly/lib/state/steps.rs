@@ -34,6 +34,7 @@ use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::module::parse::module_parse;
 use crate::solver::solver::Solver;
+use crate::solver::solver::SolverConfig;
 use crate::state::load::Load;
 use crate::state::memory::MemoryFilesLookup;
 use crate::state::require::Require;
@@ -478,15 +479,15 @@ impl Step {
         ast: Arc<ModModule>,
         exports: Arc<Exports>,
     ) -> Arc<(Bindings, Arc<Answers>)> {
-        let solver = Solver::new(
-            ctx.infer_with_first_use,
-            ctx.tensor_shapes,
-            ctx.jaxtyping,
-            ctx.strict_callable_subtyping,
-            ctx.strict_partial_subtyping,
-            ctx.spec_compliant_overloads,
-            ctx.legacy_overload_expansion,
-        );
+        let solver = Solver::new(SolverConfig {
+            infer_with_first_use: ctx.infer_with_first_use,
+            tensor_shapes: ctx.tensor_shapes,
+            jaxtyping: ctx.jaxtyping,
+            strict_callable_subtyping: ctx.strict_callable_subtyping,
+            strict_partial_subtyping: ctx.strict_partial_subtyping,
+            spec_compliant_overloads: ctx.spec_compliant_overloads,
+            legacy_overload_expansion: ctx.legacy_overload_expansion,
+        });
         let enable_index = ctx.require.keep_index();
         let enable_trace =
             ctx.require.keep_answers_trace() || ctx.pysa_context.is_some() || ctx.cinderx_enabled;

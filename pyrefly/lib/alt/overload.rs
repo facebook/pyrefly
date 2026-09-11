@@ -330,7 +330,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // Step 3: argument type expansion. When the mypy-compatibility flag is on, we also
                 // use it to narrow an already-matched call to a more precise return type.
                 let refine = matched
-                    && self.solver().legacy_overload_expansion
+                    && self.solver().config.legacy_overload_expansion
                     && matches!(&closest_overload.res, Type::Union(_));
                 let mut args_expander = ArgsExpander::new(args.clone(), keywords.clone(), self);
                 let owner = Owner::new();
@@ -798,7 +798,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             // If there are multiple overloads, use steps 4-6 here to select one:
             // https://typing.python.org/en/latest/spec/overload.html#overload-call-evaluation.
-            let spec_compliant = self.solver().spec_compliant_overloads;
+            let spec_compliant = self.solver().config.spec_compliant_overloads;
             if matched_overloads.len() > 1 {
                 // Step 4: if any arguments supply an unknown number of args and at least one
                 // overload has a corresponding variadic parameter, eliminate overloads without

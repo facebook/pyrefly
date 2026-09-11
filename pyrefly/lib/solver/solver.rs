@@ -501,6 +501,17 @@ struct VarState {
     error: Option<TypeVarSpecializationError>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SolverConfig {
+    pub infer_with_first_use: bool,
+    pub tensor_shapes: bool,
+    pub jaxtyping: bool,
+    pub strict_callable_subtyping: bool,
+    pub strict_partial_subtyping: bool,
+    pub spec_compliant_overloads: bool,
+    pub legacy_overload_expansion: bool,
+}
+
 #[derive(Debug)]
 pub struct Solver {
     variables: Mutex<Variables>,
@@ -512,14 +523,8 @@ pub struct Solver {
     /// Cross-call cache for TypedDict subset results.
     /// Like protocol_cache, only caches Var-free types.
     typed_dict_cache: Mutex<HashMap<(TypedDict, TypedDict), Result<(), SubsetError>>>,
-    pub infer_with_first_use: bool,
     pub heap: TypeHeap,
-    pub tensor_shapes: bool,
-    pub jaxtyping: bool,
-    pub strict_callable_subtyping: bool,
-    pub strict_partial_subtyping: bool,
-    pub spec_compliant_overloads: bool,
-    pub legacy_overload_expansion: bool,
+    pub config: SolverConfig,
 }
 
 impl Display for Solver {
@@ -572,28 +577,14 @@ impl SubsetWithSnapshotResult {
 
 impl Solver {
     /// Create a new solver.
-    pub fn new(
-        infer_with_first_use: bool,
-        tensor_shapes: bool,
-        jaxtyping: bool,
-        strict_callable_subtyping: bool,
-        strict_partial_subtyping: bool,
-        spec_compliant_overloads: bool,
-        legacy_overload_expansion: bool,
-    ) -> Self {
+    pub fn new(config: SolverConfig) -> Self {
         Self {
             variables: Default::default(),
             instantiation_errors: Default::default(),
             protocol_cache: Default::default(),
             typed_dict_cache: Default::default(),
-            infer_with_first_use,
             heap: TypeHeap::new(),
-            tensor_shapes,
-            jaxtyping,
-            strict_callable_subtyping,
-            strict_partial_subtyping,
-            spec_compliant_overloads,
-            legacy_overload_expansion,
+            config,
         }
     }
 
@@ -2088,7 +2079,7 @@ impl Solver {
         type_order: TypeOrder<Ans>,
     ) -> Result<(), Vec1<TypeVarSpecializationError>> {
         let vs = QuantifiedHandle(ty.collect_maybe_placeholder_vars());
-        self.finish_quantified(vs, self.infer_with_first_use, type_order)
+        self.finish_quantified(vs, self.config.infer_with_first_use, type_order)
     }
 
     /// Find the unique generic witness capture whose `witness_vars` share a
@@ -2422,7 +2413,7 @@ impl Solver {
             let new_targ = if let Some(default) = param.default() {
                 // The default can refer to a tparam from earlier in the list.
                 Substitution::for_prefix(tparams, &args[..i]).substitute_into(default.clone())
-            } else if self.infer_with_first_use {
+            } else if self.config.infer_with_first_use {
                 let v = Var::new(uniques);
                 self.variables.lock().insert_fresh(v, Variable::finished(q));
                 v.to_type(&self.heap)
@@ -4364,7 +4355,10 @@ mod tests {
     use crate::types::class::PrecomputedTParams;
 
     fn solver_with_answer(answer: Type) -> (Solver, Var) {
-        let solver = Solver::new(false, true, false, false, false, false, false);
+        let solver = Solver::new(SolverConfig {
+            tensor_shapes: true,
+            ..Default::default()
+        });
         let uniques = UniqueFactory::new();
         let var = Var::new(&uniques);
         solver
@@ -4407,7 +4401,10 @@ mod tests {
 
     #[test]
     fn sanitize_type_vars_follows_answer_chains_without_rewriting() {
-        let solver = Solver::new(false, true, false, false, false, false, false);
+        let solver = Solver::new(SolverConfig {
+            tensor_shapes: true,
+            ..Default::default()
+        });
         let uniques = UniqueFactory::new();
         let range = TextRange::new(TextSize::new(1), TextSize::new(3));
         let partial = solver.fresh_partial_contained(&uniques, range);
@@ -4437,7 +4434,10 @@ mod tests {
 
     #[test]
     fn sanitize_type_vars_freezes_through_residual_answers() {
-        let solver = Solver::new(false, true, false, false, false, false, false);
+        let solver = Solver::new(SolverConfig {
+            tensor_shapes: true,
+            ..Default::default()
+        });
         let uniques = UniqueFactory::new();
         let range = TextRange::new(TextSize::new(1), TextSize::new(3));
         let partial = solver.fresh_partial_contained(&uniques, range);
@@ -4479,7 +4479,7 @@ mod tests {
 
     #[test]
     fn restore_vars_preserves_vars_outside_the_snapshot() {
-        let solver = Solver::new(false, false, false, false, false, false, false);
+        let solver = Solver::new(SolverConfig::default());
         let uniques = UniqueFactory::new();
         let inner = Var::new(&uniques);
         let root = Var::new(&uniques);
@@ -4532,7 +4532,7 @@ mod tests {
 
     #[test]
     fn speculative_inference_snapshot_restores_variables_referenced_only_by_bounds() {
-        let solver = Solver::new(false, false, false, false, false, false, false);
+        let solver = Solver::new(SolverConfig::default());
         let uniques = UniqueFactory::new();
         let inner = Var::new(&uniques);
         let inner_alias = Var::new(&uniques);
@@ -5051,7 +5051,10 @@ mod tests {
         ];
         for (index, (v1_quantified, k1, r1, v2_quantified, k2, r2)) in cases.into_iter().enumerate()
         {
-            let solver = Solver::new(false, true, false, false, false, false, false);
+            let solver = Solver::new(SolverConfig {
+                tensor_shapes: true,
+                ..Default::default()
+            });
             let uniques = UniqueFactory::new();
             let v1 = Var::new(&uniques);
             let v2 = Var::new(&uniques);

@@ -1172,7 +1172,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     ret
                 };
                 let specialization_errors = self
-                    .finish_quantified(vs, self.solver().infer_with_first_use)
+                    .finish_quantified(vs, self.solver().config.infer_with_first_use)
                     .err();
                 return ConstructedInstance {
                     ty,
@@ -1184,7 +1184,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             if !self.is_compatible_constructor_return(&ret, cls.class_object()) {
                 // Got something other than an instance of the class under construction.
                 let specialization_errors = self
-                    .finish_quantified(vs, self.solver().infer_with_first_use)
+                    .finish_quantified(vs, self.solver().config.infer_with_first_use)
                     .err();
                 return ConstructedInstance {
                     ty: ret,
@@ -1252,7 +1252,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     self.solver()
                         .finish_class_targs(cls.targs_mut(), self.uniques);
                     let specialization_errors = self
-                        .finish_quantified(vs, self.solver().infer_with_first_use)
+                        .finish_quantified(vs, self.solver().config.infer_with_first_use)
                         .err();
                     return ConstructedInstance {
                         ty: ret.subst(&cls.targs().substitution_map()),
@@ -1317,7 +1317,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.solver()
             .finish_class_targs(cls.targs_mut(), self.uniques);
         let specialization_errors = self
-            .finish_quantified(vs, self.solver().infer_with_first_use)
+            .finish_quantified(vs, self.solver().config.infer_with_first_use)
             .err();
         let result = if let Some(mut ret) = dunder_new_ret {
             ret.subst_mut(&cls.targs().substitution_map());
@@ -1492,7 +1492,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         self.solver()
             .finish_class_targs(typed_dict.targs_mut(), self.uniques);
         let specialization_errors = self
-            .finish_quantified(vs, self.solver().infer_with_first_use)
+            .finish_quantified(vs, self.solver().config.infer_with_first_use)
             .err();
         ConstructedInstance {
             ty: Type::TypedDict(TypedDict::TypedDict(typed_dict)),

@@ -2118,7 +2118,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Restriction::ShapeExtension(extension) if extension.infer_default_as_value()
             ) {
                 self.expr_infer(default_expr, errors)
-            } else if self.solver().tensor_shapes
+            } else if self.solver().config.tensor_shapes
                 && matches!(&restriction, Restriction::Bound(bound) if is_size_bound(bound))
                 && let Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral { value, .. }) =
                     default_expr
@@ -2327,7 +2327,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         // Inline first-use pinning for NameAssign.
         let mut type_info = if let Binding::NameAssign(na) = binding
-            && self.solver().infer_with_first_use
+            && self.solver().config.infer_with_first_use
             && na.def_idx.is_some()
             && na.annotation.is_none()
             && let FirstUse::UsedBy(first_use_idx) = &na.first_use

@@ -1088,7 +1088,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .finish_class_targs(class_type.targs_mut(), self.uniques);
         // Finalizing the fresh vars is required; its specialization errors are dropped because this
         // is best-effort param inference with no call site to report them against.
-        let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
+        let _ = self.finish_quantified(vs, self.solver().config.infer_with_first_use);
         matched.then(|| self.heap.mk_type_of(self.heap.mk_class_type(class_type)))
     }
 
@@ -1109,7 +1109,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if let Some(ret) = instantiated.callable_return_type(self.heap) {
             self.is_subset_eq(&ret, hint);
         }
-        let _ = self.finish_quantified(vs, self.solver().infer_with_first_use);
+        let _ = self.finish_quantified(vs, self.solver().config.infer_with_first_use);
         Some(self.solver().expand(instantiated))
     }
 

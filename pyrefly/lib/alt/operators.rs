@@ -92,7 +92,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Returns Some(result_type) if the operation was handled, None otherwise.
     fn try_int_binop(&self, op: Operator, lhs: &Type, rhs: &Type) -> Option<Type> {
         // Only handle if tensor shapes feature is enabled
-        if !self.solver().tensor_shapes {
+        if !self.solver().config.tensor_shapes {
             return None;
         }
 

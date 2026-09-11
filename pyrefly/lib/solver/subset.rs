@@ -243,7 +243,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         // Don't short-circuit because we may want to pin/solve variables
         let result = self.is_subset_param_list_impl(l_args, u_args);
         match result {
-            Err(_) if !self.solver.strict_callable_subtyping && (l_gradual || u_gradual) => Ok(()),
+            Err(_) if !self.solver.config.strict_callable_subtyping && (l_gradual || u_gradual) => {
+                Ok(())
+            }
             _ => result,
         }
     }
@@ -634,7 +636,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (Params::Ellipsis, _) | (_, Params::Ellipsis) => Ok(()),
             // `Partial` is gradual in parameter position by default, so any params match unless
             // `strict_partial_subtyping` is enabled.
-            _ if !self.solver.strict_partial_subtyping
+            _ if !self.solver.config.strict_partial_subtyping
                 && (matches!(l_params, Params::Partial(_))
                     || matches!(u_params, Params::Partial(_))) =>
             {
@@ -665,7 +667,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             }
         };
         match result {
-            Err(_) if !self.solver.strict_callable_subtyping && (l_gradual || u_gradual) => Ok(()),
+            Err(_) if !self.solver.config.strict_callable_subtyping && (l_gradual || u_gradual) => {
+                Ok(())
+            }
             _ => result,
         }
     }
@@ -1724,7 +1728,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         };
         let finish_result = self
             .solver
-            .finish_quantified(handle, self.solver.infer_with_first_use, self.type_order)
+            .finish_quantified(
+                handle,
+                self.solver.config.infer_with_first_use,
+                self.type_order,
+            )
             .map_err(SubsetError::TypeVarSpecialization);
         match result {
             Ok(()) => finish_result,
@@ -2095,7 +2103,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     self.is_subset_eq(l, &u.as_type())
                 });
                 match result {
-                    Err(_) if !self.solver.strict_callable_subtyping && l_gradual => Ok(()),
+                    Err(_) if !self.solver.config.strict_callable_subtyping && l_gradual => Ok(()),
                     _ => result,
                 }
             }
@@ -2934,7 +2942,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let got_arg = Self::intvar_targ_for_compare(got_arg)?;
                 let want_arg = Self::intvar_targ_for_compare(want_arg)?;
                 self.check_targ_variance(variances.get(param.name()), &got_arg, &want_arg)?;
-            } else if self.solver.tensor_shapes && has_int_tuple_bound(param) {
+            } else if self.solver.config.tensor_shapes && has_int_tuple_bound(param) {
                 match (
                     IntTuple::from_shape_arg_or_tuple_carrier(got_arg),
                     IntTuple::from_shape_arg_or_tuple_carrier(want_arg),

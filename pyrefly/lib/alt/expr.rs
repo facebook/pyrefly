@@ -4774,7 +4774,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> Vec<Type> {
         let type_argument_context = TypeFormContext::TypeArgument(&type_form_context);
-        if !self.solver().tensor_shapes {
+        if !self.solver().config.tensor_shapes {
             return args.map(|arg| self.expr_untype(arg, type_argument_context, errors));
         }
         let variadic_idx = tparams_vec

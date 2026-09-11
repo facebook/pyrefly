@@ -985,7 +985,7 @@ fn extract_new_defaults(stmt: &Stmt, name: &str) -> Option<Vec<Expr>> {
 impl<'a> BindingsBuilder<'a> {
     /// Whether to infer empty container types and unsolved type variables based on first use.
     pub fn infer_with_first_use(&self) -> bool {
-        self.solver.infer_with_first_use
+        self.solver.config.infer_with_first_use
     }
 
     /// Given a `key: K = impl Keyed`, get an `Idx<K>` for it. The intended use case
