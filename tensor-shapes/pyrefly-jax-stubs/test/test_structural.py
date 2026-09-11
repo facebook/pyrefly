@@ -435,3 +435,55 @@ def test_broadcast_arrays_and_shapes() -> None:
     assert_shape(c1.shape, (2, 3))
 
     assert jnp.broadcast_shapes((2, 1), (1, 3)) == (2, 3)
+
+
+def test_copy() -> None:
+    x = jnp.ones((2, 3))
+    assert_shape(jnp.copy(x).shape, (2, 3))
+    assert_shape(jnp.copy(x, order="K").shape, (2, 3))
+
+
+def test_append() -> None:
+    a = jnp.ones((2, 3))
+    b = jnp.ones((1, 3))
+    c = jnp.ones((2, 4))
+    assert_shape(jnp.append(a, b, axis=0).shape, (3, 3))
+    assert_shape(jnp.append(a, c, axis=1).shape, (2, 7))
+    assert_shape(jnp.append(a, b).shape, (9,))
+    assert_shape(jnp.append(jnp.ones(2), jnp.ones(3)).shape, (5,))
+
+    # Rejection of mismatched shapes along non-concatenation axis
+    try:
+        # E: Cannot evaluate type-level shape DSL call: all input array dimensions for the concatenation axis must match exactly
+        jnp.append(a, c, axis=0)
+    except (ValueError, TypeError):
+        pass
+    else:
+        raise AssertionError("expected JAX to reject mismatched append")
+
+    # Rejection of out of bounds axis
+    try:
+        # E: Cannot evaluate type-level shape DSL call: axis out of bounds
+        jnp.append(a, b, axis=5)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected JAX to reject out of bounds axis in append")
+
+
+def test_packbits_unpackbits() -> None:
+    a = jnp.ones((2, 8), dtype=jnp.uint8)
+    packed = jnp.packbits(a, axis=-1)
+    assert_shape(packed.shape, (2, 1))
+    unpacked = jnp.unpackbits(packed, axis=-1)
+    assert_shape(unpacked.shape, (2, 8))
+
+    # Flatted pack/unpack
+    packed_flat = jnp.packbits(a)
+    assert_shape(packed_flat.shape, (2,))
+    unpacked_flat = jnp.unpackbits(packed_flat)
+    assert_shape(unpacked_flat.shape, (16,))
+
+    # Unpackbits with count
+    assert_shape(jnp.unpackbits(packed, axis=-1, count=5).shape, (2, 5))
+    assert_shape(jnp.unpackbits(packed_flat, count=10).shape, (10,))

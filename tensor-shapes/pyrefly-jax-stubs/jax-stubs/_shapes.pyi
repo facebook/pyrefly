@@ -1357,3 +1357,211 @@ def ix_shapes(shapes: IntTuples) -> IntTuples:
             for shape, i in zip(shapes, range(len(shapes)))
         )
     )
+
+@type_shape_dsl_function
+def convolve_shape(a_shape: IntTuple, v_shape: IntTuple, mode: str) -> IntTuple:
+    if len(a_shape) != 1 or len(v_shape) != 1:
+        return dsl.Invalid("convolve and correlate only support 1-dimensional inputs")
+    n = a_shape[0]
+    m = v_shape[0]
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    if n == zero or m == zero:
+        return dsl.Invalid("inputs cannot be empty")
+    if mode == "full":
+        return dsl.IntTuple((n + m - 1,))
+    if mode == "same":
+        if n == m:
+            return dsl.IntTuple((n,))
+        if dsl.is_concrete_int(n) and dsl.is_concrete_int(m):
+            if n < m:
+                return dsl.IntTuple((m,))
+            return dsl.IntTuple((n,))
+        return dsl.IntTuple((dsl.Int.gradual(),))
+    if mode == "valid":
+        if n == m:
+            return dsl.IntTuple((1,))
+        if dsl.is_concrete_int(n) and dsl.is_concrete_int(m):
+            if n < m:
+                return dsl.IntTuple((m - n + 1,))
+            return dsl.IntTuple((n - m + 1,))
+        return dsl.IntTuple((dsl.Int.gradual(),))
+    return dsl.Invalid("mode must be one of ['full', 'same', 'valid']")
+
+@type_shape_dsl_function
+def append_shape(
+    arr_shape: IntTuple, values_shape: IntTuple, axis: int | None
+) -> IntTuple:
+    if axis is None:
+        return dsl.IntTuple((dsl.prod(arr_shape) + dsl.prod(values_shape),))
+    if dsl.is_int_value(axis):
+        rank = len(arr_shape)
+        if rank == 0 or len(values_shape) == 0:
+            return dsl.Invalid("zero-dimensional arrays cannot be concatenated")
+        if rank != len(values_shape):
+            return dsl.Invalid(
+                "all input arrays must have the same number of dimensions"
+            )
+        if axis < 0 - rank or axis >= rank:
+            return dsl.Invalid("axis out of bounds")
+        if axis < 0:
+            norm_axis = axis + rank
+        else:
+            norm_axis = axis + 0
+        if any(arr_shape[i] != values_shape[i] for i in range(rank) if i != norm_axis):
+            return dsl.Invalid(
+                "all input array dimensions for the concatenation axis must match exactly"
+            )
+        return dsl.IntTuple(
+            (
+                arr_shape[i] + values_shape[i] if i == norm_axis else arr_shape[i]
+                for i in range(rank)
+            )
+        )
+    return dsl.Invalid("axis must be an integer or None")
+
+@type_shape_dsl_function
+def packbits_shape(shape: IntTuple, axis: int | None) -> IntTuple:
+    if axis is None:
+        return dsl.IntTuple(((dsl.prod(shape) + 7) // 8,))
+    if dsl.is_int_value(axis):
+        rank = len(shape)
+        if rank == 0:
+            return dsl.Invalid("zero-dimensional array cannot be packed along an axis")
+        if axis < 0 - rank or axis >= rank:
+            return dsl.Invalid("axis out of bounds")
+        if axis < 0:
+            norm_axis = axis + rank
+        else:
+            norm_axis = axis + 0
+        return dsl.IntTuple(
+            ((shape[i] + 7) // 8 if i == norm_axis else shape[i] for i in range(rank))
+        )
+    return dsl.Invalid("axis must be an integer or None")
+
+@type_shape_dsl_function
+def unpackbits_shape(shape: IntTuple, axis: int | None, count: int | None) -> IntTuple:
+    if axis is None:
+        if count is not None:
+            if dsl.is_int_value(count):
+                return dsl.IntTuple((count + 0,))
+            return dsl.Invalid("count must be an integer or None")
+        return dsl.IntTuple((dsl.prod(shape) * 8,))
+    if dsl.is_int_value(axis):
+        rank = len(shape)
+        if rank == 0:
+            return dsl.Invalid(
+                "zero-dimensional array cannot be unpacked along an axis"
+            )
+        if axis < 0 - rank or axis >= rank:
+            return dsl.Invalid("axis out of bounds")
+        if axis < 0:
+            norm_axis = axis + rank
+        else:
+            norm_axis = axis + 0
+        if count is not None:
+            if dsl.is_int_value(count):
+                return dsl.IntTuple(
+                    (count + 0 if i == norm_axis else shape[i] for i in range(rank))
+                )
+            return dsl.Invalid("count must be an integer or None")
+        return dsl.IntTuple(
+            (shape[i] * 8 if i == norm_axis else shape[i] for i in range(rank))
+        )
+    return dsl.Invalid("axis must be an integer or None")
+
+@type_shape_dsl_function
+def histogram_counts_shape(bins: int) -> IntTuple:
+    if bins < 0:
+        return dsl.Invalid("bins must be non-negative")
+    return dsl.IntTuple((bins + 0,))
+
+@type_shape_dsl_function
+def histogram_edges_shape(bins: int) -> IntTuple:
+    if bins < 0:
+        return dsl.Invalid("bins must be non-negative")
+    return dsl.IntTuple((bins + 1,))
+
+@type_shape_dsl_function
+def histogram2d_counts_shape(bins: int) -> IntTuple:
+    if bins < 0:
+        return dsl.Invalid("bins must be non-negative")
+    return dsl.IntTuple((bins + 0, bins + 0))
+
+@type_shape_dsl_function
+def poly_shape(shape: IntTuple) -> IntTuple:
+    rank = len(shape)
+    if rank == 1:
+        return dsl.IntTuple((shape[0] + 1,))
+    if rank == 2:
+        if shape[0] != shape[1]:
+            return dsl.Invalid("input must be 1d or non-empty square 2d array")
+        return dsl.IntTuple((shape[0] + 1,))
+    return dsl.Invalid("input must be 1d or non-empty square 2d array")
+
+@type_shape_dsl_function
+def polyadd_shape(s1: IntTuple, s2: IntTuple) -> IntTuple:
+    if len(s1) != 1 or len(s2) != 1:
+        return dsl.Invalid("polynomial inputs must be 1-dimensional")
+    n = s1[0]
+    m = s2[0]
+    if n == m:
+        return s1
+    if dsl.is_concrete_int(n) and dsl.is_concrete_int(m):
+        if n < m:
+            return s2
+        return s1
+    return dsl.IntTuple((dsl.Int.gradual(),))
+
+@type_shape_dsl_function
+def polyder_shape(shape: IntTuple, m: int) -> IntTuple:
+    if len(shape) != 1:
+        return dsl.Invalid("input must be 1-dimensional")
+    if m < 0:
+        return dsl.Invalid("Order of derivative must be positive")
+    if m == 0:
+        return shape
+    n = shape[0]
+    m_dim_tuple = dsl.IntTuple((m + 0,))
+    m_dim = m_dim_tuple[0]
+    if n == m_dim:
+        return dsl.IntTuple((0,))
+    if dsl.is_concrete_int(n):
+        if n < m_dim:
+            return dsl.IntTuple((0,))
+        return dsl.IntTuple((n - m_dim,))
+    return dsl.IntTuple((dsl.Int.gradual(),))
+
+@type_shape_dsl_function
+def polyint_shape(shape: IntTuple, m: int) -> IntTuple:
+    if len(shape) != 1:
+        return dsl.Invalid("input must be 1-dimensional")
+    if m < 0:
+        return dsl.Invalid("Order of integral must be positive")
+    return dsl.IntTuple((shape[0] + m,))
+
+@type_shape_dsl_function
+def polydiv_quotient_shape(u_shape: IntTuple, v_shape: IntTuple) -> IntTuple:
+    if len(u_shape) != 1 or len(v_shape) != 1:
+        return dsl.Invalid("polynomial inputs must be 1-dimensional")
+    n = u_shape[0]
+    m = v_shape[0]
+    if n == m:
+        return dsl.IntTuple((1,))
+    if dsl.is_concrete_int(n) and dsl.is_concrete_int(m):
+        if n < m:
+            return dsl.IntTuple((1,))
+        return dsl.IntTuple((n - m + 1,))
+    return dsl.IntTuple((dsl.Int.gradual(),))
+
+@type_shape_dsl_function
+def polyfit_shape(deg: int) -> IntTuple:
+    if deg < 0:
+        return dsl.Invalid("deg must be non-negative")
+    return dsl.IntTuple((deg + 1,))
+
+@type_shape_dsl_function
+def polyfit_cov_shape(deg: int) -> IntTuple:
+    if deg < 0:
+        return dsl.Invalid("deg must be non-negative")
+    return dsl.IntTuple((deg + 1, deg + 1))
