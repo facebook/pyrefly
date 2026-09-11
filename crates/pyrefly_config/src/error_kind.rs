@@ -342,7 +342,9 @@ pub enum ErrorKind {
     NotIterable,
     /// Accessing a `NotRequired` TypedDict key without first proving it exists.
     NotRequiredKeyAccess,
-    /// Unpacking an open TypedDict that may contain a bad key via inheritance.
+    /// Unpacking an open TypedDict whose unknown extra items may be incompatible with the
+    /// target: a key with a bad type inherited by a subclass, or an extra keyword argument
+    /// that the callee cannot accept.
     OpenUnpacking,
     /// An error related to parsing or syntax.
     ParseError,

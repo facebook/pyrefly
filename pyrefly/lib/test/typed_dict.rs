@@ -1357,6 +1357,21 @@ class TD(TypedDict, extra_items=ReadOnly[int]):
 );
 
 testcase!(
+    test_extra_items_never_is_closed,
+    r#"
+from typing import Never, TypedDict
+class Closed(TypedDict, closed=True):
+    x: int
+class ExtraNever(TypedDict, extra_items=Never):
+    x: int
+class OpenChild(ExtraNever, closed=False):  # E: Non-closed TypedDict cannot inherit from closed TypedDict `ExtraNever`
+    pass
+c: Closed = {'x': 0}
+n: ExtraNever = c
+    "#,
+);
+
+testcase!(
     test_bad_extra_items,
     r#"
 from typing import TypedDict
@@ -2139,8 +2154,8 @@ def fun(field1: str, field2: str):
     pass
 
 def test(x: TD, y: TD2, z: TD3):
-    fun(**x)
-    fun(**y)  # E: Missing argument `field2` in function `fun`
+    fun(**x)  # E: `TD` may contain extra items of type `str`, which cannot be unpacked into a callable that accepts no extra keyword arguments
+    fun(**y)  # E: Missing argument `field2` in function `fun`  # E: `TD2` may contain extra items of type `str`
     fun(**z)
 "#,
 );
