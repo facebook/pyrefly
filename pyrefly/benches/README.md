@@ -1,12 +1,11 @@
 # PyTorch benchmarks
 
-Four real-world benchmarks over a large, pinned PyTorch checkout (15k+ Python
-files) across all cores. Two drive the actual Pyrefly LSP server and measure
-interactive latency (`cold_start`, `error_propagation`); one runs a cold batch
-`check` and measures whole-project throughput (`full_check`); one times a cold
-whole-project index (`indexed_memory`). A fifth target, `pytorch_memory`,
-reports the memory that index holds — a separate binary rather than a fifth
-benchmark, for the reason in its section below.
+Real-world benchmarks over a large, pinned PyTorch checkout (15k+ Python files)
+across all cores. They cover interactive LSP latency (`cold_start`,
+`error_propagation`, `workspace_symbol`), cold whole-project batch throughput
+(`full_check`), and cold whole-project indexing (`indexed_memory`). A separate
+`pytorch_memory` target reports the memory that index holds, for the reason in
+its section below.
 
 For the full command reference (all flags, micro benchmarks, cargo/buck forms),
 see `.claude/skills/benchmark-pyrefly/SKILL.md`.
@@ -28,7 +27,7 @@ one place. Two providers feed the checkout:
 Set `PYREFLY_PYTORCH_BENCH_PATH` to an existing checkout to bypass both. If the
 checkout can't be obtained the bench prints a skip notice and exits cleanly.
 
-## The four benches
+## Benchmarks
 
 They ship in **one target** — buck `pytorch_bench`, cargo bench `pytorch` — and
 you select an individual one at runtime with a Criterion name filter rather than
@@ -53,6 +52,9 @@ per bench:
   index and the per-module symbol tables. Times the cold index only; the memory
   that index holds is reported by the `pytorch_memory` target below. Criterion id
   `pytorch/indexed_memory`.
+- `pytorch/workspace_symbol.rs` — the workspace-symbol benchmark. Fully indexes
+  the checkout once, then measures warm `workspace/symbol("init")` requests.
+  Criterion id `pytorch/workspace_symbol_init`.
 - `pytorch/full_check.rs` — the full-check benchmark. Fresh `State` per iteration;
   runs exactly what `pyrefly check` (project mode, no file args) does from inside
   the checkout — discovers the project and checks every project file across all
@@ -104,10 +106,12 @@ buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench col
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench error_propagation
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench full_check
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench indexed_memory
+PYREFLY_LOG=off buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench workspace_symbol_init
 cargo bench --bench pytorch -- cold_start
 cargo bench --bench pytorch -- error_propagation
 cargo bench --bench pytorch -- full_check
 cargo bench --bench pytorch -- indexed_memory
+PYREFLY_LOG=off cargo bench --bench pytorch -- workspace_symbol_init
 
 # The memory report — its own target, so that it gets a clean process
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_memory_bench
@@ -142,5 +146,6 @@ Run on a machine with github access (devvm/Sandcastle have no egress):
 It clones the rev, archives a tarball, rewrites `pytorch_pin.bzl` (rev +
 sha256), and uploads the tarball to Manifold. **After a bump, re-check
 `PARAM_LINE` / `PARAM_COL` in `pytorch/cold_start.rs`** — they encode the
-position of `Parameter` in `_backward.py`, and the cold-start bench asserts if
-they drift.
+position of `Parameter` in `_backward.py` — and **`INDEXED_SYMBOL` /
+`INDEXED_SYMBOL_FILE` in `pytorch/workspace_symbol.rs`** — the indexed symbol
+name and file path depend on the pinned revision.
