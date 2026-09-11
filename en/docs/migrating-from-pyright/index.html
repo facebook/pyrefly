@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.caa578e5.css">
-<script src="/assets/js/runtime~main.2607c752.js" defer="defer"></script>
-<script src="/assets/js/main.28324bae.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.9f80ffcc.js" defer="defer"></script>
+<script src="/assets/js/main.8fe4ca43.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -65,6 +65,10 @@ path to migrate a project other than the current directory, and see
 <p>Your <code>pyrightconfig.json</code> is left in place. Pyrefly only reads its own config
 once one exists, so both checkers keep working and you can back out at any
 point.</p>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>If using basedpyright</div><div class="admonitionContent_BuS1"><p>If pyrefly detects <code>[tool.basedpyright]</code> instead of <code>[tool.pyright]</code> in your <code>pyproject.toml</code>:</p><ul>
+<li><code>python-platform</code> defaults to <code>&quot;all&quot;</code></li>
+<li><code>preset</code> defaults to <code>&quot;all&quot;</code></li>
+</ul></div></div>
 <h2 class="anchor anchorWithStickyNavbar_LWe7" id="2-check-the-config-was-mapped-correctly">2. Check the config was mapped correctly<a href="#2-check-the-config-was-mapped-correctly" class="hash-link" aria-label="Direct link to 2. Check the config was mapped correctly" title="Direct link to 2. Check the config was mapped correctly">​</a></h2>
 <p>Read the generated config line by line before committing it. Some configs may
 not have been mapped exactly. <code>extends</code>, virtual-environment selection,

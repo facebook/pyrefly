@@ -2007,7 +2007,7 @@ configure its aspect instead.
 
 On the command line, when no `pyrefly.toml` or `[tool.pyrefly]` section governs the file being checked, Pyrefly automatically selects a synthesized configuration:
 
-- If a `mypy.ini`, `pyrightconfig.json`, or `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml` is found nearby, Pyrefly migrates it in memory and uses the resulting settings (the same migration `pyrefly init` would commit to disk).
+- If a `mypy.ini`, `pyrightconfig.json`, or `[tool.mypy]` / `[tool.pyright]` / `[tool.basedpyright]` section in `pyproject.toml` is found nearby, Pyrefly migrates it in memory and uses the resulting settings (the same migration `pyrefly init` would commit to disk).
 - If no migratable configuration is found, or migration fails, Pyrefly uses the [**basic preset**](#preset-basic). This enables only high-confidence error kinds (syntax errors, missing imports, division by zero, etc.); other diagnostics are silenced.
 
 This automatic selection behavior is not a preset, so `auto` is not a valid value for [`preset`](#preset) or `--preset`. For the IDE equivalent, including how to override automatic selection, see [`python.pyrefly.typeCheckingMode`](../IDE#pythonpyreflytypecheckingmode).
@@ -2095,7 +2095,7 @@ we find the config for each file matched by the pattern provided.
 If a `pyrefly.toml` is found, it is parsed and used for type checking, and will
 return an error to the user on invalid types, syntax, values, or unknown config options.
 
-If a `pyproject.toml` with `[tool.pyrefly]` is found, Pyrefly parses and uses that section. The same errors are returned as when loading an invalid `pyrefly.toml`. Without `[tool.pyrefly]`, Pyrefly migrates `[tool.mypy]` or `[tool.pyright]` in memory if present; otherwise it uses the [`basic` preset](#preset-basic).
+If a `pyproject.toml` with `[tool.pyrefly]` is found, Pyrefly parses and uses that section. The same errors are returned as when loading an invalid `pyrefly.toml`. Without `[tool.pyrefly]`, Pyrefly migrates `[tool.mypy]`, `[tool.pyright]` or `[tool.basedpyright]` in memory if present; otherwise it uses the [`basic` preset](#preset-basic).
 
 ### Providing a Config in Single-File Mode
 
@@ -2665,6 +2665,7 @@ A minimal-checking preset used when automatic configuration selection finds no m
 A looser, less-strict preset intended for codebases migrating from mypy. This is the preset `pyrefly init` writes when it detects an existing mypy configuration. Pyrefly does not aim to mimic mypy precisely, but the preset preserves selected defaults that would otherwise produce new migration errors.
 
 - Sets [`check-unannotated-defs`](#check-unannotated-defs) `= false`, [`infer-return-types`](#infer-return-types) `= "never"`, [`legacy-overload-expansion`](#legacy-overload-expansion) `= true`, [`replace-untyped-imports-with-any`](#replace-untyped-imports-with-any) `= ["*"]`
+- Sets [`type-ignore-unknown-tag-behavior`](#type-ignore-unknown-tag-behavior) `= "suppress"` so existing mypy-coded ignores retain their legacy blanket-suppression behavior.
 - Disables: [`bad-override-mutable-attribute`](./error-kinds.mdx#bad-override-mutable-attribute), [`bad-override-param-name`](./error-kinds.mdx#bad-override-param-name), [`unbound-name`](./error-kinds.mdx#unbound-name)
 
 #### Preset: `default`
@@ -3210,6 +3211,23 @@ Passing the names of all tools is equivalent to enabling `permissive-ignores`.
 - Type: list of tools
 - Default: `["type", "pyrefly"]`
 - Flag equivalent: `--enabled-ignores`
+
+### `type-ignore-unknown-tag-behavior`
+
+Controls how a coded `# type: ignore[...]` comment affects Pyrefly diagnostics
+when it contains a tag without the `pyrefly:` prefix. Explicit
+`pyrefly:<error-code>` tags remain selective in every mode; unknown tags in the
+same comment independently use the configured behavior.
+
+- `no-effect`: The unknown tag has no effect on Pyrefly diagnostics.
+- `downgrade-to-warning`: Caps diagnostics on the comment's line at warning severity
+  without raising diagnostics that already have a lower severity.
+- `suppress`: The comment suppresses all Pyrefly diagnostics on the line, matching
+  Pyrefly's legacy behavior.
+
+- Type: `"no-effect" | "downgrade-to-warning" | "suppress"`
+- Default: `"suppress"`
+- Flag equivalent: `--type-ignore-unknown-tag-behavior`
 
 ### `sub-config`
 
@@ -9372,6 +9390,12 @@ Your `pyrightconfig.json` is left in place. Pyrefly only reads its own config
 once one exists, so both checkers keep working and you can back out at any
 point.
 
+:::info If using basedpyright
+If pyrefly detects `[tool.basedpyright]` instead of `[tool.pyright]` in your `pyproject.toml`:
+- `python-platform` defaults to `"all"`
+- `preset` defaults to `"all"`
+:::
+
 ## 2. Check the config was mapped correctly
 
 Read the generated config line by line before committing it. Some configs may
@@ -12010,7 +12034,7 @@ class Config[K: IntVar, MlpOut: IntVar]:
 
 When none of the above restructurings can recover shape tracking, the last
 resort is a **typed interface**: the module's `forward` signature provides
-the shape contract, and `type: ignore` narrows the internal result:
+the shape contract, and `pyrefly: ignore` narrows the internal result:
 
 ```python
 class DynamicMLP[InDim: IntVar, OutDim: IntVar](nn.Module):
@@ -12029,12 +12053,12 @@ class DynamicMLP[InDim: IntVar, OutDim: IntVar](nn.Module):
         h = x
         for layer in self.layers:
             h = layer(h)
-        result: Tensor[[B, OutDim]] = h  # type: ignore[bad-assignment]
+        result: Tensor[[B, OutDim]] = h  # pyrefly: ignore[bad-assignment]
         return result
 ```
 
 The caller sees a clean `Tensor[[B, InDim]] -> Tensor[[B, OutDim]]` contract.
-The `type: ignore` is localized to the module's internals.
+The `pyrefly: ignore` is localized to the module's internals.
 
 Use typed interfaces only after exhausting all restructuring options —
 they're the fallback, not the first move.
@@ -12147,10 +12171,10 @@ it for each use.
 
 Some algebraic equivalences can't be automatically proven. For example,
 `((H - 2) // 2 + 1) * 2` does not simplify back to `H`. When you hit this,
-use `type: ignore` with a comment explaining the gap:
+use `pyrefly: ignore` with a comment explaining the gap:
 
 ```python
-return up(deep, skip)  # type: ignore[bad-argument-type]  # ((H-2)//2+1)*2 = H
+return up(deep, skip)  # pyrefly: ignore[bad-argument-type]  # ((H-2)//2+1)*2 = H
 ```
 
 Keep these to an absolute minimum and document each one.
@@ -12226,7 +12250,7 @@ def forward[B: IntVar](self, input: Tensor[[B, 100, 1, 1]]) -> Tensor[[B, 3, 64,
   heterogeneous `ModuleList`s.
 - **`@overload`** separates base and recursive cases for exponential shape
   chains.
-- **`type: ignore`** is a last resort for algebraic gaps the checker can't
+- **`pyrefly: ignore`** is a last resort for algebraic gaps the checker can't
   prove. Always document the specific equivalence.
 
 ## Next steps
@@ -12538,9 +12562,9 @@ The fix is to separate the first iteration:
 x = input_embs
 for layer in self.layers:
     x = layer(x)
-out: Tensor[[B, K, D]] = x  # type: ignore[bad-assignment]
+out: Tensor[[B, K, D]] = x  # pyrefly: ignore[bad-assignment]
 
-# Solution: no union, no type: ignore
+# Solution: no union, no pyrefly: ignore
 x = self.layers[0](input_embs)        # [B, F, D] -> [B, K, D]
 assert_type(x, Tensor[[B, K, D]])
 for i in range(1, len(self.layers)):
