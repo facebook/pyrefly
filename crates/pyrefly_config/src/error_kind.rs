@@ -407,6 +407,8 @@ pub enum ErrorKind {
     UnannotatedReturn,
     /// Attempting to use a name that may be unbound or uninitialized
     UnboundName,
+    /// A type parameter may not be constrained by some valid calls to a generic function.
+    UnconstrainedTypeVar,
     /// An error caused by a keyword argument used in the wrong place.
     UnexpectedKeyword,
     /// An error caused by passing a positional argument for a keyword-only parameter.

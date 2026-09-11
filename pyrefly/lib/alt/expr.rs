@@ -2767,7 +2767,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let construct = kind.to_string();
         let mut arg_name = false;
         let mut restriction = None;
-        let mut default = None;
+        let mut default: Option<&Expr> = None;
         let mut variance = None;
 
         let check_name_arg = |arg: &Expr| {
@@ -2846,14 +2846,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         }
                     }
                     "default" => {
-                        default = Some((
-                            self.expr_untype(
-                                &kw.value,
-                                TypeFormContext::quantified_kind_default(kind),
-                                errors,
-                            ),
-                            kw.value.range(),
-                        ))
+                        default = Some(&kw.value);
                     }
                     "covariant" => try_set_variance(kw, PreInferenceVariance::Covariant),
                     "contravariant" => try_set_variance(kw, PreInferenceVariance::Contravariant),
@@ -2918,12 +2911,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         let restriction = restriction.unwrap_or(Restriction::Unrestricted);
         let mut default_value = None;
-        if let Some((default_ty, default_range)) = default {
+        if let Some(default_expr) = default {
+            let default_ty = if let Some(default) =
+                self.parse_int_tuple_type_var_default(default_expr, &restriction, errors)
+            {
+                default
+            } else {
+                self.expr_untype(
+                    default_expr,
+                    TypeFormContext::quantified_kind_default(kind),
+                    errors,
+                )
+            };
             default_value = Some(self.validate_type_var_default(
                 &name.id,
                 kind,
                 &default_ty,
-                default_range,
+                default_expr.range(),
                 &restriction,
                 errors,
             ));
@@ -4983,6 +4987,31 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
         self.parse_dimension_list(args, type_form_context, errors)
             .map(IntTuple::from_types)
+    }
+
+    /// Parse a list-form default for an `IntTuple`-bounded type variable.
+    pub(crate) fn parse_int_tuple_type_var_default(
+        &self,
+        default: &Expr,
+        restriction: &Restriction,
+        errors: &ErrorCollector,
+    ) -> Option<Type> {
+        let Restriction::Bound(bound) = restriction else {
+            return None;
+        };
+        let Expr::List(list) = default else {
+            return None;
+        };
+        if !self.solver().config.tensor_shapes
+            || !is_int_tuple_bound(bound, &self.stdlib.int().clone().to_type())
+        {
+            return None;
+        }
+        Some(
+            self.parse_int_tuple_shape_args(&list.elts, TypeFormContext::TypeVarDefault, errors)
+                .map(|shape| shape.to_shape_arg_type())
+                .unwrap_or_else(Type::any_error),
+        )
     }
 
     /// Parse a registered shaped-array annotation.

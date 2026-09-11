@@ -6325,6 +6325,86 @@ def check(default: Array, explicit: Array[IntTuple]) -> None:
 );
 
 testcase!(
+    test_empty_int_tuple_defaults_for_array_like_unions,
+    shape_extensions_env(),
+    r#"
+from typing import assert_type
+from shape_extensions import IntTuple
+from typing_extensions import TypeVar
+
+class Array[Shape: IntTuple]: ...
+class ndarray[Shape: IntTuple]: ...
+
+type ArrayLike[Shape: IntTuple = []] = ndarray[Shape] | Array[Shape] | float
+
+LegacyShape = TypeVar("LegacyShape", bound=IntTuple, default=[])
+LegacyMissing = TypeVar("LegacyMissing", bound=IntTuple)
+
+def direct[Shape: IntTuple = []](
+    value: ndarray[Shape] | Array[Shape] | float,
+) -> Array[Shape]: ...
+
+def through_alias[Shape: IntTuple = []](value: ArrayLike[Shape]) -> Array[Shape]: ...
+
+def concrete_default[Shape: IntTuple = [2, 3]]() -> Array[Shape]: ...
+
+def alias_without_function_default[Shape: IntTuple](  # E: `IntTuple` type parameter `Shape` may be unconstrained for some calls; give it a default
+    value: ArrayLike[Shape],
+) -> Array[Shape]: ...
+
+def missing_default_direct[Shape: IntTuple](  # E: `IntTuple` type parameter `Shape` may be unconstrained for some calls; give it a default
+    value: ndarray[Shape] | Array[Shape] | float,
+) -> Array[Shape]: ...
+
+type NestedArrayLike[Shape: IntTuple] = ArrayLike[Shape]
+
+def missing_default_through_alias[Shape: IntTuple](  # E: `IntTuple` type parameter `Shape` may be unconstrained for some calls; give it a default
+    value: NestedArrayLike[Shape],
+) -> Array[Shape]: ...
+
+def suppressed[Shape: IntTuple](  # pyrefly: ignore[unconstrained-type-var]
+    value: ArrayLike[Shape],
+) -> Array[Shape]: ...
+
+# Optional and variadic sources are intentionally outside this lint's ArrayLike-union scope.
+def optional_only[Shape: IntTuple](value: Array[Shape] = ...) -> Array[Shape]: ...
+
+def variadic_only[Shape: IntTuple](*values: Array[Shape]) -> Array[Shape]: ...
+
+def unpacked_variadic[Shape: IntTuple](*values: *Shape) -> Array[Shape]: ...
+
+def bound_by_required_parameter[Shape: IntTuple](
+    value: ArrayLike[Shape], required: Array[Shape],
+) -> Array[Shape]: ...
+
+def unobservable[Shape: IntTuple](value: ArrayLike[Shape]) -> None: ...
+
+def legacy(value: ndarray[LegacyShape] | Array[LegacyShape] | float) -> Array[LegacyShape]: ...
+
+def legacy_missing_default(  # E: `IntTuple` type parameter `LegacyMissing` may be unconstrained for some calls; give it a default
+    value: ndarray[LegacyMissing] | Array[LegacyMissing] | float,
+) -> Array[LegacyMissing]: ...
+
+def bare_alias(value: ArrayLike) -> ArrayLike: ...
+
+# Function type parameter defaults provide the useful scalar fallback.
+assert_type(direct(1.0), Array[[]])
+assert_type(through_alias(1.0), Array[[]])
+assert_type(legacy(1.0), Array[[]])
+assert_type(concrete_default(), Array[[2, 3]])
+
+# The alias default only specializes a bare alias to ArrayLike[[]].
+assert_type(bare_alias(1.0), ArrayLike[[]])
+
+def preserve_shape(array: Array[[2, 3]], nd: ndarray[[4]]) -> None:
+    assert_type(direct(array), Array[[2, 3]])
+    assert_type(through_alias(nd), Array[[4]])
+    assert_type(legacy(array), Array[[2, 3]])
+    bare_alias(array)  # E: is not assignable to parameter `value`
+"#,
+);
+
+testcase!(
     test_tensor_shapes_gradual_size,
     legacy_shaped_array_env(),
     r#"
@@ -7874,6 +7954,10 @@ def concrete(x: Float[Array, "3 4"]) -> None:
 
 def named_variadic(x: Float[Array, "*batch channels"]) -> None:
     reveal_type(x)  # E: revealed type: Shaped[Array, "*batch channels"]
+
+def scalar_or_variadic(
+    x: Float[Array, "*batch"] | float,
+) -> Float[Array, "*batch"]: ...
 "#,
 );
 
@@ -14336,6 +14420,8 @@ T_co = TypeVar("T_co", bound=tuple[int, ...], covariant=True)
 
 class InvariantBox(Generic[T]): ...
 class CovariantBox(Generic[T_co]): ...
+
+def scalar_or_box(value: InvariantBox[T] | float) -> InvariantBox[T]: ...
 
 def check(
     invariant_concrete: InvariantBox[tuple[int, int]],
