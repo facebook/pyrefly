@@ -1516,12 +1516,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         overload: &Overload,
         want: &Type,
     ) -> bool {
-        let pre_probe_snapshot = self.solver.snapshot_vars(captured_vars);
+        let pre_probe_snapshot = self.solver.snapshot_exact_vars(captured_vars);
         let mut matched_any_branch = false;
         let mut successful_branch_captures = Vec::new();
         let generic_captured_vars = self.active_call_context.generic_captured_vars();
         for (branch_index, l) in overload.signatures.iter().enumerate() {
-            let probe_snapshot = self.solver.snapshot_vars(captured_vars);
+            let probe_snapshot = self.solver.snapshot_exact_vars(captured_vars);
             if self.is_subset_eq(&l.as_type(), want).is_ok() {
                 matched_any_branch = true;
                 successful_branch_captures.push(self.solver.extract_overload_branch_capture(

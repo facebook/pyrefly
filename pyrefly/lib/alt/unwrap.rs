@@ -408,7 +408,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // responsible for instantiating any generics in the hint.
         let snapshot = self
             .solver()
-            .snapshot_vars(&hint.collect_maybe_placeholder_vars());
+            .snapshot_exact_vars(&hint.collect_maybe_placeholder_vars());
         let matched = self.is_subset_eq(&callable_ty, hint);
         // Parameter matching may constrain a prefix before the full callable comparison fails.
         let mut param_hints: Vec<Option<Type>> = param_vars
@@ -520,7 +520,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 // Decomposing a hint should not have any side effects.
                 let snapshot = self
                     .solver()
-                    .snapshot_vars(&hint.collect_maybe_placeholder_vars());
+                    .snapshot_exact_vars(&hint.collect_maybe_placeholder_vars());
                 let ret = decompose(hint);
                 self.solver().restore_vars(snapshot);
                 ret

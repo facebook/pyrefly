@@ -767,7 +767,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut matched_overloads = Vec::with_capacity(overloads.len());
         let mut closest_unmatched_overload: Option<CalledOverload<'c>> = None;
         for callable in overloads {
-            let snapshot = self.solver().snapshot_vars(&placeholder_vars);
+            let snapshot = self.solver().snapshot_exact_vars(&placeholder_vars);
             let called_overload = self.call_overload(
                 callable,
                 metadata,
@@ -888,7 +888,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     matched_overloads
                         .iter()
                         .find_position(|o| {
-                            let snapshot = self.solver().snapshot_vars(&placeholder_vars);
+                            let snapshot = self.solver().snapshot_exact_vars(&placeholder_vars);
                             let res = self.call_overload(
                                 o.func,
                                 metadata,

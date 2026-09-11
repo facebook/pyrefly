@@ -1984,7 +1984,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
 
         let vars = expected_return.collect_maybe_placeholder_vars();
-        let snapshot = self.solver().snapshot_vars(&vars);
+        let snapshot = self.solver().snapshot_exact_vars(&vars);
         if !self.is_subset_eq(&actual_return, &expected_return) {
             self.solver().restore_vars(snapshot);
         }
@@ -2026,7 +2026,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 && cur_hint.is_none_or(|hint| {
                     let snapshot = self
                         .solver()
-                        .snapshot_vars(&hint.collect_maybe_placeholder_vars());
+                        .snapshot_exact_vars(&hint.collect_maybe_placeholder_vars());
                     let res = self.is_subset_eq(result_type(&ret), hint);
                     self.solver().restore_vars(snapshot);
                     res

@@ -375,7 +375,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // resurrect an unfinished quantified variable.
         let snapshot = self
             .solver()
-            .snapshot_for_speculative_inference(&[actual, mapper.body()]);
+            .snapshot_reachable_vars(&[actual, mapper.body()]);
         let tparams = TParams::new(vec![mapper.parameter().clone()]);
         let (handle, target) =
             self.solver()
@@ -688,7 +688,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Ordinary argument inference above is not speculative and remains committed. Snapshot
         // before inversion and validation, which may constrain existing solver state. The mapper
         // probe creates and finalizes its own temporary variable after this snapshot.
-        let transaction_snapshot = self.solver().snapshot_for_speculative_inference(&[
+        let transaction_snapshot = self.solver().snapshot_reachable_vars(&[
             &actual,
             mapper.body(),
             mapped_member,
@@ -718,7 +718,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let view_matched = view_error.is_none() && !view_has_instantiation_errors;
         let source_snapshot = self
             .solver()
-            .snapshot_for_speculative_inference(&[&source, map_source]);
+            .snapshot_reachable_vars(&[&source, map_source]);
         let source_matched = view_matched
             && self
                 .solver()

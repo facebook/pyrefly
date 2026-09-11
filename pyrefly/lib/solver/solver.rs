@@ -813,7 +813,7 @@ impl Solver {
             .collect()
     }
 
-    fn snapshot_var_state(
+    fn snapshot_one_var(
         variables: &Variables,
         errors: &SmallMap<Var, TypeVarSpecializationError>,
         var: Var,
@@ -826,7 +826,7 @@ impl Solver {
     }
 
     /// Snapshot the current state of the given vars so they can be restored later.
-    pub fn snapshot_vars(&self, vars: &[Var]) -> VarSnapshot {
+    pub fn snapshot_exact_vars(&self, vars: &[Var]) -> VarSnapshot {
         if vars.is_empty() {
             return VarSnapshot(Vec::new()); // avoid acquiring locks
         }
@@ -834,7 +834,7 @@ impl Solver {
         let errors = self.instantiation_errors.read();
         VarSnapshot(
             vars.iter()
-                .map(|var| (*var, Self::snapshot_var_state(&variables, &errors, *var)))
+                .map(|var| (*var, Self::snapshot_one_var(&variables, &errors, *var)))
                 .collect(),
         )
     }
@@ -842,14 +842,14 @@ impl Solver {
     /// Snapshots pre-existing variable state that ordinary inference may mutate while processing
     /// `types`, for rollback after a speculative inference attempt.
     ///
-    /// Unlike `snapshot_vars`, whose caller supplies the complete set, this follows union-find
+    /// Unlike `snapshot_exact_vars`, whose caller supplies the complete set, this follows union-find
     /// parents and variables referenced by current bounds or answers. Snapshotting only variables
     /// spelled directly in the input types is insufficient because ordinary inference can mutate
     /// a variable reached solely through this existing solver state. Variables created after the
     /// snapshot remain owned by the caller and are not restored by this operation. The snapshot
     /// covers variable nodes, values, and instantiation errors; it does not capture caches or
     /// other solver state.
-    pub(crate) fn snapshot_for_speculative_inference(&self, types: &[&Type]) -> VarSnapshot {
+    pub(crate) fn snapshot_reachable_vars(&self, types: &[&Type]) -> VarSnapshot {
         let mut pending: Vec<Var> = types.iter().flat_map(|ty| ty.collect_all_vars()).collect();
         if pending.is_empty() {
             return VarSnapshot(Vec::new());
@@ -864,7 +864,7 @@ impl Solver {
                 continue;
             }
 
-            let state = Self::snapshot_var_state(&variables, &errors, var);
+            let state = Self::snapshot_one_var(&variables, &errors, var);
             match &state.node {
                 VariableNode::Goto(parent) => {
                     pending.push(parent.get());
@@ -950,7 +950,7 @@ impl Solver {
                 SubsetWithSnapshotResult::Ok
             });
         }
-        let snapshot = self.snapshot_vars(vars);
+        let snapshot = self.snapshot_exact_vars(vars);
         let res = match (f(), self.has_new_instantiation_errors(&snapshot)) {
             (Ok(()), false) => SubsetWithSnapshotResult::Ok,
             (Ok(()), true) => SubsetWithSnapshotResult::Err(SubsetError::Other),
@@ -3457,7 +3457,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         }
         let vars_snapshot = self
             .solver
-            .snapshot_vars(&vars.into_iter().collect::<Vec<_>>());
+            .snapshot_exact_vars(&vars.into_iter().collect::<Vec<_>>());
         let cache_snapshot = self.subset_cache.clone();
         self.subset_cache.clear();
         let protocol_assumptions = self.class_protocol_assumptions.clone();
@@ -4497,7 +4497,7 @@ mod tests {
             variables.unify(rank_filler, escapee);
         }
 
-        let snapshot = solver.snapshot_vars(&[inner, root]);
+        let snapshot = solver.snapshot_exact_vars(&[inner, root]);
 
         {
             let variables = solver.variables.lock();
@@ -4556,7 +4556,7 @@ mod tests {
             );
         }
 
-        let snapshot = solver.snapshot_for_speculative_inference(&[&Type::Var(outer)]);
+        let snapshot = solver.snapshot_reachable_vars(&[&Type::Var(outer)]);
         solver
             .variables
             .lock()
