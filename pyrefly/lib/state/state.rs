@@ -1514,6 +1514,7 @@ impl<'a> Transaction<'a> {
                 infer_with_first_use: config
                     .infer_with_first_use(module_data.handle.path().as_path()),
                 tensor_shapes,
+                jaxtyping: config.jaxtyping(module_data.handle.path().as_path()),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(module_data.handle.path().as_path()),
                 strict_partial_subtyping: config
@@ -2552,6 +2553,7 @@ impl<'a> Transaction<'a> {
                 // This is a one-shot timing/diagnostic dump, so we intentionally do not
                 // store the bit on `module_data` (no later dirty.find() re-check applies).
                 tensor_shapes: self.tensor_shapes_available(&config, &m.handle, None),
+                jaxtyping: config.jaxtyping(m.handle.path().as_path()),
                 strict_callable_subtyping: config
                     .strict_callable_subtyping(m.handle.path().as_path()),
                 strict_partial_subtyping: config

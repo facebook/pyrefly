@@ -119,7 +119,7 @@ class Tensor[Shape: IntTuple]:
     );
 }
 
-fn add_jaxtyping(env: &mut TestEnv) {
+fn add_jaxtyping_stubs(env: &mut TestEnv) {
     env.add_with_path(
         "jaxtyping",
         "jaxtyping.pyi",
@@ -153,6 +153,11 @@ from typing import (
 )
 "#,
     );
+}
+
+fn add_jaxtyping(env: &mut TestEnv) {
+    env.enable_jaxtyping();
+    add_jaxtyping_stubs(env);
 }
 
 fn plain_torch_and_jaxtyping_env() -> TestEnv {
@@ -7381,6 +7386,24 @@ def f(
     reveal_type(x)  # E: revealed type: Tensor[*tuple[Unknown, ...]]
     reveal_type(y)  # E: revealed type: Tensor[*tuple[Unknown, ...]]
     reveal_type(z)  # E: revealed type: Tensor[*tuple[Unknown, ...]]
+"#,
+);
+
+testcase!(
+    test_jaxtyping_disabled_by_default,
+    {
+        let mut env = legacy_shaped_array_env_with_torch();
+        add_jaxtyping_stubs(&mut env);
+        env
+    },
+    r#"
+from jaxtyping import Float
+from torch import Tensor
+from typing import assert_type
+
+def f(x: Float[Tensor, "2 3"], metadata: Float[Tensor, 123]) -> None:
+    assert_type(x, Tensor)
+    assert_type(metadata, Tensor)
 "#,
 );
 

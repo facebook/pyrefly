@@ -447,6 +447,7 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
         enable_fallback_search_path: true,
         ..Default::default()
     };
+    config.root.jaxtyping = Some(true);
     config.python_environment.set_empty_to_default();
     config.interpreters.skip_interpreter_query = true;
     let mut sourcedb = MapDatabase::new(config.get_sys_info());
@@ -535,6 +536,7 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
         enable_fallback_search_path: true,
         ..Default::default()
     };
+    config.root.jaxtyping = Some(true);
     config.python_environment.set_empty_to_default();
     config.interpreters.skip_interpreter_query = true;
     config.configure();
@@ -655,6 +657,7 @@ class IntTuple:
 fn test_tensor_shapes_source_db_rebuild_rechecks_marker_availability() {
     let shape_extensions_available = Arc::new(Mutex::new(false));
     let mut config = ConfigFile::default();
+    config.root.jaxtyping = Some(true);
     config.python_environment.set_empty_to_default();
     let sys_info = config.get_sys_info();
     config.source_db = Some(ArcId::new(Box::new(MutableShapeExtensionsSourceDb::new(
@@ -826,6 +829,7 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
         enable_fallback_search_path: true,
         ..Default::default()
     };
+    config.root.jaxtyping = Some(true);
     config.python_environment.set_empty_to_default();
     config.interpreters.skip_interpreter_query = true;
     config.configure();

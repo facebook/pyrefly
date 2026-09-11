@@ -12,9 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from shape_testing import Suite  # noqa: E402
 
-_JAXTYPING_FIXTURES: Path = (
-    Path(__file__).resolve().parent / "test" / "jaxtyping" / "fixtures"
-)
+_JAXTYPING_ROOT: Path = Path(__file__).resolve().parent / "test" / "jaxtyping"
+_JAXTYPING_FIXTURES: Path = _JAXTYPING_ROOT / "fixtures"
+_JAXTYPING_CONFIG: Path = _JAXTYPING_ROOT / "pyrefly.toml"
 
 # Unlike the numpy and jax suites, these files are only type checked here; the
 # torch runtime tests are separate unittest modules under test/runtime_tests.
@@ -30,12 +30,14 @@ SUITES: list[Suite] = [
         name="jaxtyping-positive",
         patterns=("test/jaxtyping/test_*.py",),
         python_version="3.12",
+        config=_JAXTYPING_CONFIG,
         extra_search_paths=(_JAXTYPING_FIXTURES,),
     ),
     Suite(
         name="jaxtyping-negative",
         patterns=("test/jaxtyping/negative_tests/test_*.py",),
         python_version="3.12",
+        config=_JAXTYPING_CONFIG,
         expectations=True,
         extra_search_paths=(_JAXTYPING_FIXTURES,),
     ),

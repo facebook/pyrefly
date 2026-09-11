@@ -212,7 +212,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> Option<Type> {
         let xs = Ast::unpack_slice(slice);
-        if xs.is_empty() || !self.solver().tensor_shapes || !self.is_jaxtyping_wrapper_expr(value) {
+        if xs.is_empty()
+            || !self.solver().tensor_shapes
+            || !self.solver().jaxtyping
+            || !self.is_jaxtyping_wrapper_expr(value)
+        {
             return None;
         }
         let base_head = match &xs[0] {
@@ -590,7 +594,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         name_range: TextRange,
         errors: &ErrorCollector,
     ) -> Arc<TParams> {
-        if !self.solver().tensor_shapes {
+        if !self.solver().tensor_shapes || !self.solver().jaxtyping {
             return tparams.dupe();
         }
 

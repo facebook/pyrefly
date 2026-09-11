@@ -290,6 +290,10 @@ pub struct ConfigBase {
     /// By default this is enabled.
     pub infer_with_first_use: Option<bool>,
 
+    /// Whether to interpret jaxtyping annotations as tensor shapes.
+    /// By default this is disabled.
+    pub jaxtyping: Option<bool>,
+
     /// Deprecated: set the `pytorch-efficiency-lints` error kind in `[errors]` instead.
     /// Enable PyTorch efficiency lints that detect common GPU performance anti-patterns.
     /// When true, all `pytorch-efficiency-lint-*` error kinds are set to `Warn` severity
@@ -415,6 +419,10 @@ impl ConfigBase {
 
     pub fn get_infer_with_first_use(base: &Self) -> Option<bool> {
         base.infer_with_first_use
+    }
+
+    pub fn get_jaxtyping(base: &Self) -> Option<bool> {
+        base.jaxtyping
     }
 
     pub fn get_enabled_ignores(base: &Self) -> Option<&SmallSet<Tool>> {

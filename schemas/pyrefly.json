@@ -72,6 +72,11 @@
           "type": "boolean",
           "default": true
         },
+        "jaxtyping": {
+          "description": "Whether to interpret jaxtyping annotations as tensor shapes.",
+          "type": "boolean",
+          "default": false
+        },
         "untyped-def-behavior": {
           "description": "How should Pyrefly treat function definitions with no parameter or return type annotations?",
           "type": "string",

@@ -58,6 +58,7 @@ class Suite:
     name: str
     patterns: tuple[str, ...]
     python_version: str = "3.13"
+    config: Path | None = None
     # Search paths beyond the stub tree and `shape_extensions`, for suites that
     # need extra fixtures on the path.
     extra_search_paths: tuple[Path, ...] = ()
@@ -239,7 +240,7 @@ def check_suites(
             *pyrefly,
             "check",
             "--config",
-            os.devnull,
+            str(suite.config or os.devnull),
             "--python-version",
             suite.python_version,
         ]

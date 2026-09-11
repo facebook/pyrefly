@@ -146,6 +146,7 @@ pub struct TestEnv {
     check_unannotated_defs: bool,
     infer_return_types: InferReturnTypes,
     infer_with_first_use: bool,
+    jaxtyping: bool,
     non_exhaustive_match_open_type_error: bool,
     recursion_depth_limit: Option<u32>,
     site_package_path: Vec<PathBuf>,
@@ -203,6 +204,7 @@ impl TestEnv {
             check_unannotated_defs: true,
             infer_return_types: InferReturnTypes::Checked,
             infer_with_first_use: true,
+            jaxtyping: false,
             non_exhaustive_match_open_type_error: false,
             recursion_depth_limit: None,
             site_package_path: Vec::new(),
@@ -352,6 +354,10 @@ impl TestEnv {
     pub fn enable_implicit_any_error(mut self) -> Self {
         self.implicit_any_error = true;
         self
+    }
+
+    pub fn enable_jaxtyping(&mut self) {
+        self.jaxtyping = true;
     }
 
     pub fn enable_implicit_any_attribute_error(mut self) -> Self {
@@ -616,6 +622,7 @@ impl TestEnv {
         config.root.check_unannotated_defs = Some(self.check_unannotated_defs);
         config.root.infer_return_types = Some(self.infer_return_types);
         config.root.infer_with_first_use = Some(self.infer_with_first_use);
+        config.root.jaxtyping = Some(self.jaxtyping);
         config.root.recursion_depth_limit = self.recursion_depth_limit;
         config.root.strict_callable_subtyping = Some(self.strict_callable_subtyping);
         config.root.strict_partial_subtyping = Some(self.strict_partial_subtyping);

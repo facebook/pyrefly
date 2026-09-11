@@ -182,9 +182,13 @@ array-like containers (supporting JAX, NumPy, and PyTorch), but is somewhat
 verbose — for example, `Shaped[Tensor, "M 2 M//2"]` instead of
 `Tensor[[M, 2, M // 2]]`.
 
-Pyrefly supports jaxtyping annotations as an alternative front-end to our native
-syntax; these annotations are translated internally to use generics and display
-back in jaxtyping syntax.
+Pyrefly has experimental static support for a subset of jaxtyping annotations as
+an alternative front-end to our native syntax. It is disabled by default; set
+[`jaxtyping = true`](./configuration.mdx#jaxtyping) to enable it. Supported
+annotations are translated internally to use generics and display back in
+jaxtyping syntax. See the
+[compatibility reference](./tensor-shapes-reference.mdx#jaxtyping-compatibility)
+for the supported syntax and remaining gaps.
 
 However, there is a significant limitation of jaxtyping: there is no way to
 share symbolic dimensions across variables and functions in a class (see

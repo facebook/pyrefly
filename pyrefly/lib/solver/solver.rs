@@ -515,6 +515,7 @@ pub struct Solver {
     pub infer_with_first_use: bool,
     pub heap: TypeHeap,
     pub tensor_shapes: bool,
+    pub jaxtyping: bool,
     pub strict_callable_subtyping: bool,
     pub strict_partial_subtyping: bool,
     pub spec_compliant_overloads: bool,
@@ -574,6 +575,7 @@ impl Solver {
     pub fn new(
         infer_with_first_use: bool,
         tensor_shapes: bool,
+        jaxtyping: bool,
         strict_callable_subtyping: bool,
         strict_partial_subtyping: bool,
         spec_compliant_overloads: bool,
@@ -587,6 +589,7 @@ impl Solver {
             infer_with_first_use,
             heap: TypeHeap::new(),
             tensor_shapes,
+            jaxtyping,
             strict_callable_subtyping,
             strict_partial_subtyping,
             spec_compliant_overloads,
@@ -4361,7 +4364,7 @@ mod tests {
     use crate::types::class::PrecomputedTParams;
 
     fn solver_with_answer(answer: Type) -> (Solver, Var) {
-        let solver = Solver::new(false, true, false, false, false, false);
+        let solver = Solver::new(false, true, false, false, false, false, false);
         let uniques = UniqueFactory::new();
         let var = Var::new(&uniques);
         solver
@@ -4404,7 +4407,7 @@ mod tests {
 
     #[test]
     fn sanitize_type_vars_follows_answer_chains_without_rewriting() {
-        let solver = Solver::new(false, true, false, false, false, false);
+        let solver = Solver::new(false, true, false, false, false, false, false);
         let uniques = UniqueFactory::new();
         let range = TextRange::new(TextSize::new(1), TextSize::new(3));
         let partial = solver.fresh_partial_contained(&uniques, range);
@@ -4434,7 +4437,7 @@ mod tests {
 
     #[test]
     fn sanitize_type_vars_freezes_through_residual_answers() {
-        let solver = Solver::new(false, true, false, false, false, false);
+        let solver = Solver::new(false, true, false, false, false, false, false);
         let uniques = UniqueFactory::new();
         let range = TextRange::new(TextSize::new(1), TextSize::new(3));
         let partial = solver.fresh_partial_contained(&uniques, range);
@@ -4476,7 +4479,7 @@ mod tests {
 
     #[test]
     fn restore_vars_preserves_vars_outside_the_snapshot() {
-        let solver = Solver::new(false, false, false, false, false, false);
+        let solver = Solver::new(false, false, false, false, false, false, false);
         let uniques = UniqueFactory::new();
         let inner = Var::new(&uniques);
         let root = Var::new(&uniques);
@@ -4529,7 +4532,7 @@ mod tests {
 
     #[test]
     fn speculative_inference_snapshot_restores_variables_referenced_only_by_bounds() {
-        let solver = Solver::new(false, false, false, false, false, false);
+        let solver = Solver::new(false, false, false, false, false, false, false);
         let uniques = UniqueFactory::new();
         let inner = Var::new(&uniques);
         let inner_alias = Var::new(&uniques);
@@ -5048,7 +5051,7 @@ mod tests {
         ];
         for (index, (v1_quantified, k1, r1, v2_quantified, k2, r2)) in cases.into_iter().enumerate()
         {
-            let solver = Solver::new(false, true, false, false, false, false);
+            let solver = Solver::new(false, true, false, false, false, false, false);
             let uniques = UniqueFactory::new();
             let v1 = Var::new(&uniques);
             let v2 = Var::new(&uniques);
