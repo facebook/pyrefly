@@ -588,6 +588,18 @@ impl RuleOverrides {
 #[error("No [tool.pyright] section found in pyproject.toml")]
 pub struct PyrightNotFoundError {}
 
+/// basedpyright itself rejects a `pyproject.toml` that carries both a
+/// `[tool.pyright]` and a `[tool.basedpyright]` section, so there is no
+/// well-defined config for us to migrate.
+#[derive(thiserror::Error, Debug)]
+#[error("Both `[tool.pyright]` and `[tool.basedpyright]` sections are not supported.")]
+pub struct BothPyrightSectionsError {}
+
+/// Migrate the pyright or basedpyright section of a `pyproject.toml`.
+///
+/// Exactly one of `[tool.pyright]` and `[tool.basedpyright]` must be present:
+/// this is the parse boundary that enforces that invariant, so callers do not
+/// have to check for the sections themselves before calling.
 pub fn parse_pyproject_toml(raw_file: &str) -> anyhow::Result<ConfigFile> {
     #[derive(Deserialize)]
     struct Tool {
@@ -604,19 +616,14 @@ pub fn parse_pyproject_toml(raw_file: &str) -> anyhow::Result<ConfigFile> {
         .tool
         .ok_or(anyhow::anyhow!(PyrightNotFoundError {}))?;
 
-    let config = match tool {
-        Tool {
-            pyright: Some(pyright),
-            ..
-        } => Ok(pyright),
-        Tool {
-            basedpyright: Some(mut basedpyright),
-            ..
-        } => {
+    let config = match (tool.pyright, tool.basedpyright) {
+        (Some(pyright), None) => Ok(pyright),
+        (None, Some(mut basedpyright)) => {
             basedpyright.is_basedpyright = true;
             Ok(basedpyright)
         }
-        _ => Err(anyhow::anyhow!(PyrightNotFoundError {})),
+        (Some(_), Some(_)) => Err(anyhow::anyhow!(BothPyrightSectionsError {})),
+        (None, None) => Err(anyhow::anyhow!(PyrightNotFoundError {})),
     }?;
 
     Ok(PyrightConfig::convert(config))
@@ -774,6 +781,24 @@ typeCheckingMode = "basic"
 "#;
         let result = parse_pyproject_toml(src).unwrap();
         assert_eq!(result.preset, None);
+    }
+
+    #[test]
+    fn test_convert_from_pyproject_rejects_both_pyright_and_basedpyright() {
+        // basedpyright treats the two sections coexisting as an error, so there
+        // is no well-defined config to migrate. The check lives here rather than
+        // in the callers, so it applies no matter which path reaches the parser.
+        let src = r#"[tool.pyright]
+include = ["pyright.py"]
+
+[tool.basedpyright]
+include = ["basedpyright.py"]
+"#;
+        let err = parse_pyproject_toml(src).expect_err("coexisting sections should be rejected");
+        assert!(
+            err.downcast_ref::<BothPyrightSectionsError>().is_some(),
+            "expected BothPyrightSectionsError, got: {err:#}"
+        );
     }
 
     #[test]

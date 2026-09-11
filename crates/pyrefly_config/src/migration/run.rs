@@ -134,7 +134,10 @@ pub fn find_and_migrate_in_memory(
                 mypy::parse_pyproject_config(&raw_file).with_context(ctx)?,
                 MigratedFromKind::Mypy(MigratedConfigSource::PyprojectToml),
             ))),
-            (false, true, false) => Ok(Some((
+            // A `[tool.pyright]` alongside a `[tool.basedpyright]` is rejected
+            // by `parse_pyproject_toml`, so the `Pyright` label is only ever
+            // built for a file that has `[tool.pyright]` on its own.
+            (false, true, _) => Ok(Some((
                 pyright::parse_pyproject_toml(&raw_file).with_context(ctx)?,
                 MigratedFromKind::Pyright(MigratedConfigSource::PyprojectToml),
             ))),
@@ -145,11 +148,6 @@ pub fn find_and_migrate_in_memory(
             // No tool sections at all — not a migrate-able config and not a
             // parse error. Treat as "nothing nearby."
             (false, false, false) => Ok(None),
-            // Both basedpyright and pyright config detected. This is invalid and
-            // is an error in basedpyright so we don't support it.
-            (false, true, true) => Err(anyhow::anyhow!(
-                "Both `[tool.pyright]` and `[tool.basedpyright]` sections are not supported."
-            )),
         }
     } else {
         // `find_upward_config(_, Auto)` only returns one of the three
@@ -285,16 +283,16 @@ impl Args {
                 let has_basedpyright = has_toml_section(&raw_file, "tool.basedpyright");
                 match (has_mypy, has_pyright, has_basedpyright) {
                     (true, _, _) => try_mypy(),
-                    (false, true, false) => try_pyright(),
+                    // A `[tool.pyright]` alongside a `[tool.basedpyright]` is
+                    // rejected by `parse_pyproject_toml`, which `try_pyright`
+                    // calls, so that combination surfaces as an error here too.
+                    (false, true, _) => try_pyright(),
                     (false, false, true) => try_basedpyright(),
                     // Neither section is present. Preserve the historical Auto
                     // behavior of trying mypy then falling back to pyright, so
                     // the surfaced error matches what `pyrefly init` produced
                     // before this change.
                     (false, false, false) => try_mypy().or_else(|_| try_pyright()),
-                    (false, true, true) => Err(anyhow::anyhow!(
-                        "Both `[tool.pyright]` and `[tool.basedpyright]` sections are not supported."
-                    )),
                 }
             }
         }
@@ -426,6 +424,7 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
+    use crate::base::Preset;
     use crate::error_kind::ErrorKind;
     use crate::error_kind::Severity;
 
@@ -677,6 +676,32 @@ files = ["mypy.py"]
     }
 
     #[test]
+    fn test_run_pyproject_both_pyright_sections_rejected() -> anyhow::Result<()> {
+        // Coexisting `[tool.pyright]` and `[tool.basedpyright]` is rejected at
+        // the parse boundary, so an explicit `--migrate-from pyright` is
+        // diagnosed just like `Auto` is, rather than silently migrating the
+        // `[tool.pyright]` variant.
+        let tmp = tempfile::tempdir()?;
+        let original_config_path = tmp.path().join("pyproject.toml");
+        let pyproject = r#"[tool.pyright]
+include = ["pyright.py"]
+
+[tool.basedpyright]
+include = ["basedpyright.py"]
+"#;
+        fs_anyhow::write(&original_config_path, pyproject)?;
+        for source in [MigrationSource::Auto, MigrationSource::Pyright] {
+            let err = Args::load_from_pyproject(&original_config_path, source)
+                .expect_err("coexisting pyright sections should be rejected");
+            assert!(
+                format!("{err:#}").contains("[tool.basedpyright]"),
+                "expected the coexistence error for {source:?}, got: {err:#}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_run_pyproject_migrate_from_mypy_missing() {
         // When migrate_from is MyPy but only pyright config exists, migration should fail
         // (no fallback to pyright).
@@ -863,7 +888,7 @@ files = ["mypy.py"]
             MigratedFromKind::Mypy(MigratedConfigSource::DedicatedFile)
         );
         // Mypy migration sets the legacy preset.
-        assert_eq!(cfg.preset, Some(crate::base::Preset::Legacy));
+        assert_eq!(cfg.preset, Some(Preset::Legacy));
         // Full migration also sets check_unannotated_defs (mypy's
         // `check_untyped_defs` maps to pyrefly's `check_unannotated_defs`).
         assert_eq!(cfg.root.check_unannotated_defs, Some(true));
@@ -958,6 +983,25 @@ files = ["mypy.py"]
         assert!(
             result.is_none(),
             "bare pyproject.toml without tool sections is not migrate-able"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_memory_both_pyright_sections_returns_err() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let bottom = tmp.path().join("a/b");
+        std::fs::create_dir_all(&bottom)?;
+        fs_anyhow::write(
+            &tmp.path().join("a/pyproject.toml"),
+            b"[tool.pyright]\ninclude = [\"a.py\"]\n\n[tool.basedpyright]\ninclude = [\"b.py\"]\n",
+        )?;
+
+        let err = find_and_migrate_in_memory(&bottom)
+            .expect_err("coexisting pyright sections should propagate as Err");
+        assert!(
+            format!("{err:#}").contains("[tool.basedpyright]"),
+            "expected the coexistence error, got: {err:#}"
         );
         Ok(())
     }
