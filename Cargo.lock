@@ -2362,6 +2362,7 @@ dependencies = [
  "lsp-types",
  "mimalloc",
  "num-traits",
+ "parking_lot",
  "parse-display",
  "paste",
  "percent-encoding",
