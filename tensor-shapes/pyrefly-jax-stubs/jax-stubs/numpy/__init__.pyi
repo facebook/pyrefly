@@ -16,6 +16,7 @@ from typing import (
 
 from jax._array import Array as Array, Array as ndarray
 from jax._shapes import (
+    append_shape,
     atleast_1d_shape,
     atleast_2d_shape,
     atleast_3d_shape,
@@ -23,6 +24,7 @@ from jax._shapes import (
     column_stack_shape,
     compress_shape,
     concatenate_shape,
+    convolve_shape,
     cross_axes_shape,
     cross_axis_shape,
     diag_indices_from_shape,
@@ -33,6 +35,9 @@ from jax._shapes import (
     expand_dims_shape,
     fill_diagonal_shape,
     flip_shape,
+    histogram2d_counts_shape,
+    histogram_counts_shape,
+    histogram_edges_shape,
     hstack_shape,
     inner_shape,
     int_min,
@@ -41,7 +46,15 @@ from jax._shapes import (
     matmul_shape,
     matvec_shape,
     moveaxis_shape,
+    packbits_shape,
     permute_shape,
+    poly_shape,
+    polyadd_shape,
+    polyder_shape,
+    polydiv_quotient_shape,
+    polyfit_cov_shape,
+    polyfit_shape,
+    polyint_shape,
     ravel_shape,
     reduce_shape,
     reshape_shape,
@@ -59,6 +72,7 @@ from jax._shapes import (
     tensordot_shape,
     top_k_shape,
     trace_shape,
+    unpackbits_shape,
     vecmat_shape,
     vstack_shape,
 )
@@ -172,6 +186,10 @@ def asarray(
     device: Any = ...,
     out_sharding: Any = ...,
 ) -> Array[IntTuple]: ...
+@overload
+def copy[Shape: _Shape](a: Array[Shape], order: str | None = None) -> Array[Shape]: ...
+@overload
+def copy(a: Any, order: str | None = None) -> Array[IntTuple]: ...
 
 # Literal tuples and values typed as `IntTuple` retain their shape. Other integer
 # sequences fall through to a gradual overload rather than being rejected.
@@ -1507,6 +1525,18 @@ def concatenate(
 
 concat = concatenate
 
+@overload
+def append[Shape1: _Shape, Shape2: _Shape, Axis: Flag[int | None] = None](
+    arr: Array[Shape1],
+    values: Array[Shape2],
+    axis: Axis = None,
+) -> Array[append_shape(Shape1, Shape2, Axis)]: ...
+@overload
+def append(
+    arr: Any,
+    values: Any,
+    axis: int | None = None,
+) -> Array[IntTuple]: ...
 @overload
 def stack[Shapes: IntTuples, Axis: Flag[int] = 0](
     arrays: MapIntTuples[lambda S: Array[S], Shapes],
@@ -3785,6 +3815,276 @@ def frompyfunc(
 ) -> ufunc: ...
 def vectorize(pyfunc: Any, *, excluded: Any = ..., signature: Any = None) -> Any: ...
 def load(file: Any, *args: Any, **kwargs: Any) -> Any: ...
+
+# Bit packing
+
+@overload
+def packbits[Shape: _Shape, Axis: Flag[int | None] = None](
+    a: Array[Shape],
+    axis: Axis = None,
+    bitorder: str = "big",
+) -> Array[packbits_shape(Shape, Axis)]: ...
+@overload
+def packbits(
+    a: Any,
+    axis: int | None = None,
+    bitorder: str = "big",
+) -> Array[IntTuple]: ...
+@overload
+def unpackbits[
+    Shape: _Shape,
+    Axis: Flag[int | None] = None,
+    Count: Flag[int | None] = None,
+](
+    a: Array[Shape],
+    axis: Axis = None,
+    count: Count = None,
+    bitorder: str = "big",
+) -> Array[unpackbits_shape(Shape, Axis, Count)]: ...
+@overload
+def unpackbits(
+    a: Any,
+    axis: int | None = None,
+    count: int | None = None,
+    bitorder: str = "big",
+) -> Array[IntTuple]: ...
+
+# Interpolation
+
+def interp[Shape: _Shape, N: IntVar](
+    x: Array[Shape],
+    xp: Array[[N]],
+    fp: Array[[N]],
+    left: Any = None,
+    right: Any = None,
+    period: Any = None,
+) -> Array[Shape]: ...
+
+# Convolutions & Signal Processing
+
+@overload
+def convolve[ShapeA: _Shape, ShapeV: _Shape, Mode: Flag[str] = "full"](
+    a: Array[ShapeA],
+    v: Array[ShapeV],
+    mode: Mode = "full",
+    *,
+    precision: Any = None,
+    preferred_element_type: DTypeLike | None = None,
+) -> Array[convolve_shape(ShapeA, ShapeV, Mode)]: ...
+@overload
+def convolve(
+    a: Any,
+    v: Any,
+    mode: str = "full",
+    *,
+    precision: Any = None,
+    preferred_element_type: DTypeLike | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def correlate[ShapeA: _Shape, ShapeV: _Shape, Mode: Flag[str] = "valid"](
+    a: Array[ShapeA],
+    v: Array[ShapeV],
+    mode: Mode = "valid",
+    *,
+    precision: Any = None,
+    preferred_element_type: DTypeLike | None = None,
+) -> Array[convolve_shape(ShapeA, ShapeV, Mode)]: ...
+@overload
+def correlate(
+    a: Any,
+    v: Any,
+    mode: str = "valid",
+    *,
+    precision: Any = None,
+    preferred_element_type: DTypeLike | None = None,
+) -> Array[IntTuple]: ...
+
+# Histograms
+
+@overload
+def histogram[Bins: Flag[int] = 10](
+    a: Array[Any],
+    bins: Bins = 10,
+    range: Sequence[Any] | None = None,
+    weights: Array[Any] | None = None,
+    density: bool | None = None,
+) -> tuple[Array[histogram_counts_shape(Bins)], Array[histogram_edges_shape(Bins)]]: ...
+@overload
+def histogram(
+    a: Any,
+    bins: Any = 10,
+    range: Sequence[Any] | None = None,
+    weights: Any = None,
+    density: bool | None = None,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+@overload
+def histogram2d[Bins: Flag[int] = 10](
+    x: Array[Any],
+    y: Array[Any],
+    bins: Bins = 10,
+    range: Sequence[Any] | None = None,
+    weights: Array[Any] | None = None,
+    density: bool | None = None,
+) -> tuple[
+    Array[histogram2d_counts_shape(Bins)],
+    Array[histogram_edges_shape(Bins)],
+    Array[histogram_edges_shape(Bins)],
+]: ...
+@overload
+def histogram2d(
+    x: Any,
+    y: Any,
+    bins: Any = 10,
+    range: Sequence[Any] | None = None,
+    weights: Any = None,
+    density: bool | None = None,
+) -> tuple[Array[IntTuple], Array[IntTuple], Array[IntTuple]]: ...
+@overload
+def histogram_bin_edges[Bins: Flag[int] = 10](
+    a: Array[Any],
+    bins: Bins = 10,
+    range: Any = None,
+    weights: Array[Any] | None = None,
+) -> Array[histogram_edges_shape(Bins)]: ...
+@overload
+def histogram_bin_edges(
+    a: Any,
+    bins: Any = 10,
+    range: Any = None,
+    weights: Any = None,
+) -> Array[IntTuple]: ...
+def histogramdd(
+    sample: Array[Any],
+    bins: Any = 10,
+    range: Sequence[Any] | None = None,
+    weights: Array[Any] | None = None,
+    density: bool | None = None,
+) -> tuple[Array[IntTuple], list[Array[IntTuple]]]: ...
+
+# Polynomials
+
+@overload
+def poly[Shape: _Shape](
+    seq_of_zeros: Array[Shape],
+) -> Array[poly_shape(Shape)]: ...
+@overload
+def poly(seq_of_zeros: Any) -> Array[IntTuple]: ...
+@overload
+def polyadd[Shape1: _Shape, Shape2: _Shape](
+    a1: Array[Shape1],
+    a2: Array[Shape2],
+) -> Array[polyadd_shape(Shape1, Shape2)]: ...
+@overload
+def polyadd(a1: Any, a2: Any) -> Array[IntTuple]: ...
+@overload
+def polyder[Shape: _Shape, M: Flag[int] = 1](
+    p: Array[Shape],
+    m: M = 1,
+) -> Array[polyder_shape(Shape, M)]: ...
+@overload
+def polyder(p: Any, m: int = 1) -> Array[IntTuple]: ...
+@overload
+def polydiv[Shape1: _Shape, Shape2: _Shape](
+    u: Array[Shape1],
+    v: Array[Shape2],
+    *,
+    trim_leading_zeros: Literal[False] = False,
+) -> tuple[Array[polydiv_quotient_shape(Shape1, Shape2)], Array[Shape1]]: ...
+@overload
+def polydiv(
+    u: Any,
+    v: Any,
+    *,
+    trim_leading_zeros: bool = False,
+) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
+@overload
+def polyfit[Deg: Flag[int]](
+    x: Array[Any],
+    y: Array[Any],
+    deg: Deg,
+    rcond: float | None = None,
+    full: Literal[False] = False,
+    w: Array[Any] | None = None,
+    cov: Literal[False] = False,
+) -> Array[polyfit_shape(Deg)]: ...
+@overload
+def polyfit[Deg: Flag[int]](
+    x: Array[Any],
+    y: Array[Any],
+    deg: Deg,
+    rcond: float | None = None,
+    full: Literal[False] = False,
+    w: Array[Any] | None = None,
+    cov: Literal[True, "unscaled"] = ...,
+) -> tuple[Array[polyfit_shape(Deg)], Array[polyfit_cov_shape(Deg)]]: ...
+@overload
+def polyfit(
+    x: Array[Any],
+    y: Array[Any],
+    deg: int,
+    rcond: float | None = None,
+    full: Literal[True] = ...,
+    w: Array[Any] | None = None,
+    cov: bool = False,
+) -> tuple[Array[IntTuple], ...]: ...
+@overload
+def polyfit(
+    x: Any,
+    y: Any,
+    deg: int,
+    rcond: float | None = None,
+    full: bool = False,
+    w: Any = None,
+    cov: bool | str = False,
+) -> Any: ...
+@overload
+def polyint[Shape: _Shape, M: Flag[int] = 1](
+    p: Array[Shape],
+    m: M = 1,
+    k: int | Array[Any] | None = None,
+) -> Array[polyint_shape(Shape, M)]: ...
+@overload
+def polyint(
+    p: Any,
+    m: int = 1,
+    k: int | Any | None = None,
+) -> Array[IntTuple]: ...
+@overload
+def polymul[Shape1: _Shape, Shape2: _Shape](
+    a1: Array[Shape1],
+    a2: Array[Shape2],
+    *,
+    trim_leading_zeros: Literal[False] = False,
+) -> Array[convolve_shape(Shape1, Shape2, "full")]: ...
+@overload
+def polymul(
+    a1: Any,
+    a2: Any,
+    *,
+    trim_leading_zeros: bool = False,
+) -> Array[IntTuple]: ...
+@overload
+def polysub[Shape1: _Shape, Shape2: _Shape](
+    a1: Array[Shape1],
+    a2: Array[Shape2],
+) -> Array[polyadd_shape(Shape1, Shape2)]: ...
+@overload
+def polysub(a1: Any, a2: Any) -> Array[IntTuple]: ...
+@overload
+def polyval[Shape: _Shape](
+    p: Array[Any],
+    x: Array[Shape],
+    *,
+    unroll: int = 16,
+) -> Array[Shape]: ...
+@overload
+def polyval(
+    p: Any,
+    x: Any,
+    *,
+    unroll: int = 16,
+) -> Array[IntTuple]: ...
+def roots(p: Array[Any], *, strip_zeros: bool = True) -> Array[IntTuple]: ...
 
 # Scalar constructors
 
