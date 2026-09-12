@@ -48,6 +48,8 @@ pub enum QuantifiedOrigin {
     MapIntTuplesParameter,
     /// De Bruijn sentinel used only while comparing `MapIntTuples` lambdas.
     NormalizedMapIntTuplesParameter,
+    /// Hidden class type parameter inferred from an unannotated `__init__` parameter.
+    SyntheticPseudoGeneric,
 }
 
 impl QuantifiedOrigin {
@@ -428,6 +430,9 @@ impl Quantified {
     pub(crate) fn normalized_map_int_tuples_parameter_depth(&self) -> Option<u32> {
         (self.identity.origin == QuantifiedOrigin::NormalizedMapIntTuplesParameter)
             .then_some(self.identity.anchor.index)
+    }
+    pub fn is_pseudo_generic(&self) -> bool {
+        self.identity.origin == QuantifiedOrigin::SyntheticPseudoGeneric
     }
 
     pub fn as_gradual_type_helper(kind: QuantifiedKind, default: Option<&Type>) -> Type {
