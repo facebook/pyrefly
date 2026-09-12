@@ -1808,9 +1808,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             extra_posargs_iter.next();
         }
         let mut extra_posargs_matched = 0;
-        let splat_may_supply_missing_args = splat_kwargs
-            .iter()
-            .any(|(_, _, source)| matches!(source, SplatSource::MappingValue));
+        let splat_may_supply_missing_args = splat_kwargs.iter().any(|(_, _, source)| {
+            matches!(
+                source,
+                SplatSource::MappingValue | SplatSource::ExtraItems { open: false }
+            )
+        });
         for (name, (want, origin, required)) in kwparams.iter() {
             if !seen_names.contains_key(name) {
                 match required {

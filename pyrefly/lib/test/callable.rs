@@ -1135,7 +1135,7 @@ def f(extra_int: ExtraInt) -> None:
     takes_count(**extra_int)  # OK
     takes_label(**extra_int)  # E: Extra items of type `int` are not assignable to parameter `label` with type `str`
     # Extra items don't excuse a missing required argument.
-    takes_other(**extra_int)  # E: Missing argument `other`  # E: Extra items of type `int` are not assignable to parameter `other` with type `str`
+    takes_other(**extra_int)  # E: Extra items of type `int` are not assignable to parameter `other` with type `str`
     "#,
 );
 
@@ -1154,6 +1154,29 @@ def f(strings: Extra[str], ints: Extra[int], inherited: IntExtra, closed: Extra[
     takes_str_kwargs(**ints)  # E: Extra items of type `int` are not assignable to parameter `kwargs` with type `str`
     takes_str_kwargs(**inherited)  # E: Extra items of type `int` are not assignable to parameter `kwargs` with type `str`
     takes_name(**closed)  # OK: the instantiated extra-items type is `Never`
+    "#,
+);
+
+testcase!(
+    test_typed_dict_extra_items_can_splat_into_kwonly_args,
+    r#"
+from typing import TypedDict
+
+class OpenTD(TypedDict): ...
+class ExtraItemsTD(TypedDict, extra_items=int): ...
+class ClosedTD(TypedDict, closed=True): ...
+
+def f1(*, x: int, **kwargs): ...
+def g1(open_td: OpenTD, extra_items_td: ExtraItemsTD, closed_td: ClosedTD):
+    # Technically, a subclass of `OpenTD` could declare `x`. But it's much more likely that this is
+    # an error.
+    f1(**open_td)  # E: Missing argument `x`
+    f1(**extra_items_td)  # ok, `x` could be an extra item
+    f1(**closed_td)  # E: Missing argument `x`
+
+def f2(*, x: str, **kwargs): ...
+def g2(extra_items_td: ExtraItemsTD):
+    f2(**extra_items_td)  # E: Extra items of type `int` are not assignable to parameter `x` with type `str`
     "#,
 );
 

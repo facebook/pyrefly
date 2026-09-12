@@ -2155,7 +2155,7 @@ def fun(field1: str, field2: str):
 
 def test(x: TD, y: TD2, z: TD3):
     fun(**x)  # E: `TD` may contain extra items of type `str`, which cannot be unpacked into a callable that accepts no extra keyword arguments
-    fun(**y)  # E: Missing argument `field2` in function `fun`  # E: `TD2` may contain extra items of type `str`
+    fun(**y)  # E: `TD2` may contain extra items of type `str`
     fun(**z)
 "#,
 );
