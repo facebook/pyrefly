@@ -172,6 +172,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// Extract key and value types for dictionary unpacking, including structural mappings.
+    pub fn unwrap_mapping_for_unpacking(&self, ty: &Type) -> Option<(Type, Type)> {
+        self.unwrap_mapping(ty).or_else(|| {
+            let key = self.fresh_var();
+            let value = self.fresh_var();
+            let mapping_type = self.heap.mk_class_type(
+                self.stdlib
+                    .supports_keys_and_get_item(key.to_type(self.heap), value.to_type(self.heap)),
+            );
+            if self.is_subset_eq(ty, &mapping_type) {
+                Some((self.resolve_var(ty, key), self.resolve_var(ty, value)))
+            } else {
+                None
+            }
+        })
+    }
+
     /// Warning: this returns `Some` if the type is `Any` or a class that extends `Any`
     pub fn unwrap_awaitable(&self, ty: &Type) -> Option<Type> {
         let var = self.fresh_var();
