@@ -1554,10 +1554,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn sqlalchemy_mapped_model_fields(&self, model: &Class) -> SmallSet<Name> {
-        self.get_class_field_map(model)
-            .into_iter()
+        let mut seen_fields = SmallSet::new();
+
+        std::iter::once(model)
+            .chain(
+                self.get_mro_for_class(model)
+                    .ancestors_no_object()
+                    .iter()
+                    .map(|ancestor| ancestor.class_object()),
+            )
+            .flat_map(|class| self.get_class_field_map(class))
             .filter_map(|(name, field)| {
-                if name.as_str().starts_with('_') || field.is_class_var() {
+                if !seen_fields.insert(name.clone())
+                    || name.as_str().starts_with('_')
+                    || field.is_class_var()
+                {
                     return None;
                 }
                 let (_, annotation, _) = field.for_variance_inference();
