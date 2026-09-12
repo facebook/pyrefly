@@ -2943,3 +2943,15 @@ def f(leaf: Leaf):
     assert_type(leaf["extra"], list[int])
     "#,
 );
+
+testcase!(
+    test_legacy_generic_extra_items,
+    r#"
+from typing import Generic, TypedDict, TypeVar, assert_type
+T = TypeVar("T")
+class TD(TypedDict, Generic[T], extra_items=T):
+    a: int
+d: TD[str] = {"a": 1}
+assert_type(d["b"], str)
+    "#,
+);
