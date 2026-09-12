@@ -5574,6 +5574,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
         let got_is_classvar = is_classvar_compatible(got);
         let want_is_classvar = is_classvar_compatible(want);
+        let cached_property_value_type = |getter: &Type| {
+            let ty = getter
+                .callable_return_type(self.heap)
+                .expect("cached_property getter should have a callable return type");
+            if getter
+                .toplevel_func_metadata()
+                .is_some_and(|meta| meta.flags.is_return_inferred)
+            {
+                ty.promote_implicit_literals(self.stdlib)
+            } else {
+                ty
+            }
+        };
         match (got, want) {
             (_, ClassAttribute::NoAccess(_)) => Ok(()),
             (ClassAttribute::NoAccess(_), _) => Err(Box::new(AttrSubsetError::NoAccess)),
@@ -5625,6 +5638,40 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 is_subset(want, &setter_value_type).map_err(|subset_error| {
                     Box::new(AttrSubsetError::Contravariant {
                         got: got_setter.clone(),
+                        want: want.clone(),
+                        got_is_property: true,
+                        want_is_property: false,
+                        subset_error,
+                    })
+                })
+            }
+            (ClassAttribute::Property(got_getter, None, _), ClassAttribute::ReadWrite(want))
+                if got_getter
+                    .toplevel_func_metadata()
+                    .is_some_and(|meta| meta.flags.is_cached_property) =>
+            {
+                let got = cached_property_value_type(got_getter);
+                let subset_error = is_subset(&got, want)
+                    .map_or_else(Some, |_| is_subset(want, &got).map_or_else(Some, |_| None));
+                if let Some(subset_error) = subset_error {
+                    Err(Box::new(AttrSubsetError::Invariant {
+                        got,
+                        want: want.clone(),
+                        subset_error,
+                    }))
+                } else {
+                    Ok(())
+                }
+            }
+            (ClassAttribute::Property(got_getter, None, _), ClassAttribute::ReadOnly(want, _))
+                if got_getter
+                    .toplevel_func_metadata()
+                    .is_some_and(|meta| meta.flags.is_cached_property) =>
+            {
+                let got = cached_property_value_type(got_getter);
+                is_subset(&got, want).map_err(|subset_error| {
+                    Box::new(AttrSubsetError::Covariant {
+                        got,
                         want: want.clone(),
                         got_is_property: true,
                         want_is_property: false,
