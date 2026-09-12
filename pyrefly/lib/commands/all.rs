@@ -5,9 +5,15 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::io;
+use std::io::Write;
 use std::sync::Arc;
 
+use clap::CommandFactory;
+use clap::Parser;
 use clap::Subcommand;
+use clap_complete::Shell;
+use clap_complete::generate;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::thread_pool::ThreadCount;
 
@@ -27,7 +33,24 @@ use crate::commands::stubgen::StubgenArgs;
 use crate::commands::suppress::SuppressArgs;
 use crate::commands::tsp::TspArgs;
 use crate::commands::util::CommandExitStatus;
+use crate::commands::util::CommonGlobalArgs;
 use crate::lsp::non_wasm::external_provider::NoExternalProvider;
+
+/// Main CLI entrypoint for Pyrefly.
+#[deny(clippy::missing_docs_in_private_items)]
+#[derive(Debug, Parser)]
+#[command(name = "pyrefly")]
+#[command(about = "A fast Python type checker", long_about = None)]
+#[command(version)]
+pub struct Args {
+    /// Common global arguments shared across commands.
+    #[command(flatten)]
+    pub common: CommonGlobalArgs,
+
+    /// Subcommand execution args.
+    #[command(subcommand)]
+    pub command: Command,
+}
 
 /// Subcommands to run Pyrefly with.
 #[deny(clippy::missing_docs_in_private_items)]
@@ -35,6 +58,13 @@ use crate::lsp::non_wasm::external_provider::NoExternalProvider;
 pub enum Command {
     /// Full type checking on a file or a project
     Check(FullCheckArgs),
+
+    /// Generate a shell completion script on stdout.
+    Completion {
+        /// Shell to generate completions for.
+        #[arg(long, value_enum)]
+        shell: Shell,
+    },
 
     /// Check a Python code snippet
     Snippet(SnippetCheckArgs),
@@ -86,6 +116,13 @@ impl Command {
             Command::Check(args) => {
                 args.run(version, config_configurer_wrapper, thread_count)
                     .await
+            }
+            Command::Completion { shell } => {
+                // Buffer generation so stdout errors are returned instead of panicking.
+                let mut script = Vec::new();
+                generate(shell, &mut Args::command(), "pyrefly", &mut script);
+                io::stdout().lock().write_all(&script)?;
+                Ok((CommandExitStatus::Success, None))
             }
             Command::Snippet(args) => args.run(version, thread_count).await,
             Command::BuckCheck(args) => Ok((args.run(thread_count)?, None)),

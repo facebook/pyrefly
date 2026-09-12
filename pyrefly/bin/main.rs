@@ -10,8 +10,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use clap::crate_version;
-use library::Command;
-use library::util::CommonGlobalArgs;
+use library::Args;
 use pyrefly::commands::lsp::filter_unrecognized_lsp_args;
 use pyrefly::library::library::library::library;
 use pyrefly_util::args::get_args_expanded;
@@ -28,22 +27,6 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[global_allocator]
 #[cfg(target_os = "windows")]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
-/// Main CLI entrypoint for Pyrefly.
-#[deny(clippy::missing_docs_in_private_items)]
-#[derive(Debug, Parser)]
-#[command(name = "pyrefly")]
-#[command(about = "A fast Python type checker", long_about = None)]
-#[command(version)]
-struct Args {
-    /// Common global arguments shared across commands.
-    #[command(flatten)]
-    common: CommonGlobalArgs,
-
-    /// Subcommand execution args.
-    #[command(subcommand)]
-    command: Command,
-}
 
 /// Run based on the command line arguments.
 async fn run() -> anyhow::Result<ExitCode> {

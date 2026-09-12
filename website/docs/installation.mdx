@@ -63,6 +63,53 @@ import TabItem from '@theme/TabItem';
   </TabItem>
 </Tabs>
 
+## Shell completion
+
+Generate a completion script with `pyrefly completion --shell <shell>`. Supported
+shells are `bash`, `zsh`, `fish`, `powershell`, and `elvish`. The script is written
+to standard output.
+
+For Bash, add this to `~/.bashrc`:
+
+```bash
+source <(pyrefly completion --shell bash)
+```
+
+For Zsh, add this to `~/.zshrc` after initializing completion with `compinit`:
+
+```zsh
+autoload -Uz compinit
+compinit
+source <(pyrefly completion --shell zsh)
+```
+
+For Fish, save the script in its completions directory:
+
+```fish
+mkdir -p ~/.config/fish/completions
+pyrefly completion --shell fish > ~/.config/fish/completions/pyrefly.fish
+```
+
+For PowerShell, add this to your profile (`$PROFILE`):
+
+```powershell
+pyrefly completion --shell powershell | Out-String | Invoke-Expression
+```
+
+For Elvish, save the script and load it from `~/.config/elvish/rc.elv`:
+
+```sh
+mkdir -p ~/.config/elvish/lib
+pyrefly completion --shell elvish > ~/.config/elvish/lib/pyrefly.elv
+```
+
+```elvish
+use pyrefly
+```
+
+Restart your shell after setup. Regenerate saved completion files after upgrading
+Pyrefly to include any new commands and options.
+
 ## Configure
 
 Pyrefly with no configuration [automatically finds nearby legacy type checking configurations](../configuration/#unconfigured-projects). If we cannot find one, or migration fails, we use the **basic preset**, which shows only high-confidence errors that are very likely to indicate real bugs or crashes (like syntax errors and missing imports) and silences other diagnostics.
