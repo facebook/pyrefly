@@ -935,6 +935,102 @@ class Sub(Mixin, Base):  # E: without a default may not follow
 "#,
 );
 
+// `B` and `C` both inherit `x` from their shared base `A` without redefining it, so merging
+// `D`'s fields must not move `x`. attrs builds the same `__init__` whether `D` lists its bases
+// as `(C, B)` or `(B, C)`, so both subclasses must reveal the same signature (#4640).
+attrs_testcase!(
+    test_attrs_diamond_inheritance_shared_field_not_relocated,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class A:
+    x: int
+
+@define
+class B(A):
+    y: bool = field(default=True)
+
+@define(slots=False)
+class C(A):
+    z: bool = field(default=True, kw_only=True)
+
+@define
+class D(C, B):
+    pass
+
+@define
+class D2(B, C):
+    pass
+
+reveal_type(D.__init__)   # E: revealed type: (self: D, x: int, y: bool = ..., *, z: bool = ...) -> None
+reveal_type(D2.__init__)  # E: revealed type: (self: D2, x: int, y: bool = ..., *, z: bool = ...) -> None
+
+D(1)                     # OK
+D(1, y=False, z=False)   # OK
+D2(1)                    # OK
+"#,
+);
+
+// `B` redefines `x` in its own body, so attrs moves `x` to its new position after `y`.
+attrs_testcase!(
+    test_attrs_redefined_field_still_relocated,
+    r#"
+from typing import reveal_type
+from attrs import define, field
+
+@define
+class A:
+    x: int
+    y: bool = field(default=True)
+
+@define
+class B(A):
+    x: int = field(default=5)
+
+reveal_type(B.__init__)  # E: revealed type: (self: B, y: bool = ..., x: int = ...) -> None
+"#,
+);
+
+// With plain defaulted fields (no kw_only), attrs' field order depends on base-list order.
+// `D(C, B)` and `D2(B, C)` are both valid and their `__init__` signatures differ accordingly.
+attrs_testcase!(
+    test_attrs_diamond_inheritance_positional_fields_track_base_order,
+    r#"
+from typing import reveal_type
+from attrs import define
+
+@define
+class A:
+    x: int
+
+@define
+class B(A):
+    b: int = 0
+
+@define(slots=False)
+class C(A):
+    c: int = 0
+
+@define
+class D(C, B):
+    pass
+
+@define
+class D2(B, C):
+    pass
+
+reveal_type(D.__init__)   # E: revealed type: (self: D, x: int, b: int = ..., c: int = ...) -> None
+reveal_type(D2.__init__)  # E: revealed type: (self: D2, x: int, c: int = ..., b: int = ...) -> None
+
+D(1)         # OK
+D(1, 2, 3)   # OK
+D2(1)        # OK
+D2(1, 2, 3)  # OK
+"#,
+);
+
 // A conflict contained within a single base is reported once (on that base); a subclass that
 // merely inherits it does NOT re-report it.
 attrs_testcase!(
