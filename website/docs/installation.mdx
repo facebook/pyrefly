@@ -10,25 +10,7 @@ description: How to install Pyrefly
  * LICENSE file in the root directory of this source tree.
  */}
 
-Pyrefly is available on [PyPI](https://pypi.org/project/pyrefly/) with a new release every Monday. We often release more frequently when shipping new features and bug fixes.
-
-## What you get out of the box
-
-When you first install Pyrefly without a configuration file, it uses the **basic preset** by default. This shows only high-confidence errors that are very likely to indicate real bugs or crashes, like syntax errors and missing imports. Other diagnostics are silenced.
-
-The basic preset is useful immediately, without setup. You don't need to understand Python typing concepts to benefit. Open a file in VS Code with the Pyrefly extension and you'll get inlay hints, go-to-definition, and the curated error set right away. The status bar shows `Pyrefly (Basic)` so you know which preset is active.
-
-If you already have a `mypy.ini`, `pyrightconfig.json`, or a `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml`, Pyrefly automatically migrates that configuration the first time it runs in your project. The status bar will show `Pyrefly (Legacy)` (mypy migration) or `Pyrefly (Default)` (pyright migration) accordingly. Nothing is written to disk during the migration; running `pyrefly init` later will commit the same migration permanently.
-
-To unlock full type checking and pin your configuration, run `pyrefly init`. This writes a `pyrefly.toml` (or updates `pyproject.toml`) and explicitly migrates any existing mypy/pyright settings. After running `pyrefly init`, common knobs to tune include:
-
-- `check-unannotated-defs`: type-check the bodies of unannotated functions.
-- `errors`: per-error-kind severity overrides.
-- `infer-return-types`: when to infer return types for unannotated functions.
-- `project-excludes` and `pyrefly suppress`: incremental rollout on existing
-  codebases.
-
-See the [configuration reference](../configuration) for the full list.
+Pyrefly is available on [PyPI](https://pypi.org/project/pyrefly/) with a new minor release intended every ~2 months.
 
 ## Install
 
@@ -80,6 +62,34 @@ import TabItem from '@theme/TabItem';
     ```
   </TabItem>
 </Tabs>
+
+## Configure
+
+Pyrefly with no configuration [automatically finds nearby legacy type checking configurations](../configuration/#unconfigured-projects). If we cannot find one, or migration fails, we use the **basic preset**, which shows only high-confidence errors that are very likely to indicate real bugs or crashes (like syntax errors and missing imports) and silences other diagnostics.
+
+To unlock full type checking and pin your configuration, run `pyrefly init`. This writes a `pyrefly.toml` (or updates `pyproject.toml`) and explicitly migrates any existing mypy/pyright settings. All [configuration options are documented here](../configuration). Common knobs to tune include:
+
+- `check-unannotated-defs`: type-check the bodies of unannotated functions.
+- `errors`: per-error-kind severity overrides.
+- `infer-return-types`: when to infer return types for unannotated functions.
+- `project-excludes` and `pyrefly suppress`: incremental rollout on existing
+  codebases.
+
+## Basic usage
+
+Run Pyrefly from your project directory to type-check the whole project:
+
+```sh
+pyrefly check
+```
+
+You can also check specific files or directories:
+
+```sh
+pyrefly check src/ tests/ path/to/file.py
+```
+
+For feedback while you edit, install a [Pyrefly IDE extension](../IDE). It provides diagnostics, hover information, inlay hints, and navigation directly in the editor. For more details, run `pyrefly help`.
 
 ## Configure
 

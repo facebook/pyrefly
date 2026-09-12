@@ -1,0 +1,185 @@
+---
+title: Pyright Diagnostics to Pyrefly
+slug: /migrate/pyright/diagnostics
+description:
+    Map every upstream Pyright report rule to Pyrefly error kinds, including
+    automatic migration, split rules, and missing equivalents.
+keywords:
+    - pyright diagnostics
+    - pyright report rules
+    - pyright error codes
+    - pyright to pyrefly mapping
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+Pyright configs set severity policy with `report*` rules, in
+`pyrightconfig.json`, `[tool.pyright]`, and execution environments. Pyrefly
+expresses the same policy with [error kinds](../../error-kinds.mdx), which use
+different names, so `pyrefly init` has to translate each rule as it converts the
+config.
+
+Some Pyright rules are not recognized by `pyrefly init` and are skipped without
+a warning. Pyright rules are also frequently broader than Pyrefly kinds, so one
+Pyright severity is often applied to several Pyrefly error kinds and is not
+always an exact equivalent. Review the table below to compare Pyright rules and
+Pyrefly error kinds.
+
+## Severity conversion
+
+| Pyright value               | Pyrefly severity |
+| --------------------------- | ---------------- |
+| `false` or `"none"`         | `ignore`         |
+| `"information"` or `"hint"` | `info`           |
+| `"warning"`                 | `warn`           |
+| `true` or `"error"`         | `error`          |
+
+When several Pyright rules map onto the same Pyrefly kind, the highest severity
+wins.
+
+:::warning
+
+A converted severity is not proof of exact diagnostic equivalence. One Pyright
+rule may cover multiple scenarios, and Pyrefly may split those scenarios into
+several kinds.
+
+:::
+
+## Complete upstream Pyright mapping
+
+| Pyright diagnostic                    | Closest Pyrefly kind(s)                                                                                                                                                                            | Config migration | Fidelity     | Notes                                                                                                               |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `reportGeneralTypeIssues`             | No single Pyrefly kind                                                                                                                                                                             | Not mapped       | Umbrella     | Pyright combines many scenarios here; map the actual diagnostics to specific Pyrefly kinds.                         |
+| `reportPropertyTypeMismatch`          | `bad-assignment` and/or `read-only`                                                                                                                                                                | Manual           | Related      | No dedicated property getter/setter consistency rule.                                                               |
+| `reportFunctionMemberAccess`          | `missing-attribute`                                                                                                                                                                                | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportMissingImports`                | `missing-import`                                                                                                                                                                                   | Automatic        | Direct       |                                                                                                                     |
+| `reportMissingModuleSource`           | `missing-source`, `missing-source-for-stubs`                                                                                                                                                       | Automatic        | Split        |                                                                                                                     |
+| `reportInvalidTypeForm`               | `invalid-annotation`, `invalid-literal`, `invalid-type-alias`, `not-a-type`                                                                                                                        | Automatic        | Split        | Pyrefly uses more specific error kinds.                                                                             |
+| `reportMissingTypeStubs`              | `untyped-import`                                                                                                                                                                                   | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportImportCycles`                  | No direct equivalent                                                                                                                                                                               | Not mapped       | None         | Use architecture tooling or a dedicated import-cycle linter.                                                        |
+| `reportUnusedImport`                  | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use Ruff `F401` or another linter.                                                                                  |
+| `reportUnusedClass`                   | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use dead-code analysis where needed.                                                                                |
+| `reportUnusedFunction`                | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use dead-code analysis where needed.                                                                                |
+| `reportUnusedVariable`                | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use Ruff or another linter.                                                                                         |
+| `reportDuplicateImport`               | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use Ruff `F811` or another linter.                                                                                  |
+| `reportWildcardImportFromLibrary`     | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use Ruff `F403` or another linter.                                                                                  |
+| `reportAbstractUsage`                 | `bad-instantiation`                                                                                                                                                                                | Automatic        | Partial      | Pyright also covers abstract-method calls; Pyrefly uses the separate `abstract-method-call` kind for that scenario. |
+| `reportArgumentType`                  | `bad-argument-type`, `invalid-argument`                                                                                                                                                            | Automatic        | Split        |                                                                                                                     |
+| `reportAssertTypeFailure`             | `assert-type`                                                                                                                                                                                      | Automatic        | Direct       |                                                                                                                     |
+| `reportAssignmentType`                | `bad-assignment`, `bad-unpacking`, `bad-typed-dict-key`                                                                                                                                            | Automatic        | Split        |                                                                                                                     |
+| `reportAttributeAccessIssue`          | `missing-attribute`, `missing-module-attribute`, `no-access`, `read-only`                                                                                                                          | Automatic        | Split        |                                                                                                                     |
+| `reportCallIssue`                     | `missing-argument`, `bad-argument-count`, `unexpected-positional-argument`, `unexpected-keyword`, `bad-keyword-argument`, `no-matching-overload`, `incompatible-overload-residual`, `not-callable` | Automatic        | Split        | This is one of the broadest Pyright diagnostics.                                                                    |
+| `reportInconsistentOverload`          | `inconsistent-overload`, `invalid-overload`                                                                                                                                                        | Automatic        | Split        |                                                                                                                     |
+| `reportIndexIssue`                    | `bad-index`                                                                                                                                                                                        | Automatic        | Partial      | Some unsupported indexing operations are reported as `unsupported-operation`.                                       |
+| `reportInvalidTypeArguments`          | `bad-specialization`                                                                                                                                                                               | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportNoOverloadImplementation`      | `invalid-overload`                                                                                                                                                                                 | Automatic        | Direct       |                                                                                                                     |
+| `reportOperatorIssue`                 | `unsupported-operation`, `invalid-argument`, `not-callable`                                                                                                                                        | Automatic        | Split        |                                                                                                                     |
+| `reportOptionalSubscript`             | `unsupported-operation`                                                                                                                                                                            | Automatic        | Related      |                                                                                                                     |
+| `reportOptionalMemberAccess`          | `missing-attribute`                                                                                                                                                                                | Automatic        | Related      |                                                                                                                     |
+| `reportOptionalCall`                  | `not-callable`                                                                                                                                                                                     | Automatic        | Related      |                                                                                                                     |
+| `reportOptionalIterable`              | `not-iterable`                                                                                                                                                                                     | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportOptionalContextManager`        | `bad-context-manager`                                                                                                                                                                              | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportOptionalOperand`               | `unsupported-operation`                                                                                                                                                                            | Automatic        | Related      |                                                                                                                     |
+| `reportRedeclaration`                 | `redefinition`                                                                                                                                                                                     | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportReturnType`                    | `bad-return`, `invalid-yield`                                                                                                                                                                      | Automatic        | Split        |                                                                                                                     |
+| `reportTypedDictNotRequiredAccess`    | `not-required-key-access`                                                                                                                                                                          | Automatic        | Direct       |                                                                                                                     |
+| `reportUntypedFunctionDecorator`      | `untyped-function-decorator`                                                                                                                                                                       | Automatic        | Direct       |                                                                                                                     |
+| `reportUntypedClassDecorator`         | `untyped-class-decorator`                                                                                                                                                                          | Automatic        | Direct       |                                                                                                                     |
+| `reportUntypedBaseClass`              | `unsupported-dynamic-base`                                                                                                                                                                         | Manual           | Related      | The Pyrefly kind is about dynamically unresolved bases, not every `Any`-typed base.                                 |
+| `reportUntypedNamedTuple`             | No direct equivalent                                                                                                                                                                               | Not mapped       | None         |                                                                                                                     |
+| `reportPrivateUsage`                  | `no-access`                                                                                                                                                                                        | Automatic        | Related      | The tools differ in what they consider protected or private usage.                                                  |
+| `reportTypeCommentUsage`              | No direct equivalent                                                                                                                                                                               | Not mapped       | None         | Use a linter if the goal is to prohibit legacy type comments.                                                       |
+| `reportPrivateImportUsage`            | `implicit-reexport` and/or `no-access`                                                                                                                                                             | Manual           | Related      | No one-to-one automatic mapping.                                                                                    |
+| `reportConstantRedefinition`          | `treat-all-caps-as-final = true` plus `bad-assignment`                                                                                                                                             | Manual           | Related      | This changes inference policy rather than enabling a single diagnostic kind.                                        |
+| `reportDeprecated`                    | `deprecated`                                                                                                                                                                                       | Automatic        | Direct       |                                                                                                                     |
+| `reportIncompatibleMethodOverride`    | `bad-override`                                                                                                                                                                                     | Automatic        | Broad        | Pyrefly reports some cases under `bad-override-param-name`.                                                         |
+| `reportIncompatibleVariableOverride`  | `bad-override`                                                                                                                                                                                     | Automatic        | Broad        | Pyrefly reports some cases under `bad-override-mutable-attribute`.                                                  |
+| `reportInconsistentConstructor`       | No direct equivalent                                                                                                                                                                               | Not mapped       | None         |                                                                                                                     |
+| `reportOverlappingOverload`           | `inconsistent-overload`                                                                                                                                                                            | Manual           | No exact 1:1 |                                                                                                                     |
+| `reportPossiblyUnboundVariable`       | `unbound-name`                                                                                                                                                                                     | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportMissingSuperCall`              | `missing-super-call`                                                                                                                                                                               | Manual           | Direct       | The Pyrefly kind exists but is not part of automatic config migration.                                              |
+| `reportUninitializedInstanceVariable` | `implicitly-defined-attribute`                                                                                                                                                                     | Automatic        | Related      | The exact initialization analysis differs.                                                                          |
+| `reportInvalidStringEscapeSequence`   | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use Ruff `W605` or Python warnings.                                                                                 |
+| `reportUnknownParameterType`          | `implicit-any-parameter`                                                                                                                                                                           | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportUnknownArgumentType`           | `unknown-argument-type`                                                                                                                                                                            | Automatic        | Direct       |                                                                                                                     |
+| `reportUnknownLambdaType`             | `implicit-any-lambda`                                                                                                                                                                              | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportUnknownVariableType`           | `unknown-variable-type`                                                                                                                                                                            | Automatic        | Direct       |                                                                                                                     |
+| `reportUnknownMemberType`             | `unknown-attribute-type`                                                                                                                                                                           | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportMissingParameterType`          | `implicit-any-parameter`                                                                                                                                                                           | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportMissingTypeArgument`           | `implicit-any-type-argument`                                                                                                                                                                       | Automatic        | Direct-ish   |                                                                                                                     |
+| `reportInvalidTypeVarUse`             | `invalid-type-var`                                                                                                                                                                                 | Automatic        | Broad        | Some variance-specific cases use `invalid-variance` or `variance-mismatch`.                                         |
+| `reportCallInDefaultInitializer`      | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use Ruff `B006` or another linter.                                                                                  |
+| `reportUnnecessaryIsInstance`         | `redundant-condition`                                                                                                                                                                              | Automatic        | Related      |                                                                                                                     |
+| `reportUnnecessaryCast`               | `redundant-cast`                                                                                                                                                                                   | Automatic        | Direct       |                                                                                                                     |
+| `reportUnnecessaryComparison`         | `incompatible-comparison`, `unnecessary-comparison`                                                                                                                                                | Automatic        | Split        |                                                                                                                     |
+| `reportUnnecessaryContains`           | No direct equivalent                                                                                                                                                                               | Not mapped       | None         |                                                                                                                     |
+| `reportAssertAlwaysTrue`              | `redundant-condition`                                                                                                                                                                              | Manual           | Related      | No dedicated tuple-assert rule.                                                                                     |
+| `reportSelfClsParameterName`          | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use Ruff `N804` / `N805`.                                                                                           |
+| `reportImplicitStringConcatenation`   | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use Ruff `ISC001` or another linter.                                                                                |
+| `reportUndefinedVariable`             | `unknown-name`                                                                                                                                                                                     | Automatic        | Direct       |                                                                                                                     |
+| `reportUnboundVariable`               | `unbound-name`                                                                                                                                                                                     | Automatic        | Direct       |                                                                                                                     |
+| `reportUnhashable`                    | No direct equivalent                                                                                                                                                                               | Not mapped       | None         |                                                                                                                     |
+| `reportInvalidStubStatement`          | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use Ruff's PYI rules where applicable.                                                                              |
+| `reportIncompleteStub`                | No direct equivalent                                                                                                                                                                               | Not mapped       | None         |                                                                                                                     |
+| `reportUnsupportedDunderAll`          | `bad-dunder-all`, `unresolvable-dunder-all`                                                                                                                                                        | Automatic        | Split        |                                                                                                                     |
+| `reportUnusedCallResult`              | `unused-call-result`                                                                                                                                                                               | Manual           | Direct-ish   | The Pyrefly kind exists but is not part of automatic config migration.                                              |
+| `reportUnusedCoroutine`               | `unused-coroutine`                                                                                                                                                                                 | Automatic        | Direct       |                                                                                                                     |
+| `reportUnusedExcept`                  | No direct equivalent                                                                                                                                                                               | Not mapped       | None         |                                                                                                                     |
+| `reportUnusedExpression`              | No type-checker equivalent                                                                                                                                                                         | Not mapped       | Lint         | Use Ruff `B018` or another linter.                                                                                  |
+| `reportUnnecessaryTypeIgnoreComment`  | `unused-type-ignore` and/or `unused-ignore`                                                                                                                                                        | Manual           | Direct-ish   | Select the Pyrefly kind based on whether you are checking `# type: ignore` or tool-specific ignores.                |
+| `reportMatchNotExhaustive`            | `non-exhaustive-match`                                                                                                                                                                             | Automatic        | Direct       |                                                                                                                     |
+| `reportUnreachable`                   | `unreachable`, `unreachable-match-case`                                                                                                                                                            | Automatic        | Split        |                                                                                                                     |
+| `reportImplicitOverride`              | `missing-override-decorator`                                                                                                                                                                       | Automatic        | Direct       |                                                                                                                     |
+
+## Why `reportGeneralTypeIssues` has no single mapping
+
+Pyright uses `reportGeneralTypeIssues` for many checks that are not assigned to
+a narrower `report*` rule. Depending on the scenario, Pyrefly might emit:
+
+- `invalid-inheritance`;
+- `invalid-annotation`;
+- `bad-raise`;
+- `not-iterable`;
+- `bad-context-manager`;
+- `bad-match`;
+- `invalid-super-call`;
+- another specific error kind.
+
+A global `reportGeneralTypeIssues = "none"` cannot be translated safely into one
+Pyrefly suppression. Run the code and decide which concrete Pyrefly kinds, if
+any, should be disabled.
+
+## BasedPyright-only settings
+
+BasedPyright adds rules beyond upstream Pyright. `pyrefly init` recognizes some
+of them:
+
+| BasedPyright rule                       | Pyrefly                          |
+| --------------------------------------- | -------------------------------- |
+| `reportExplicitAny`                     | `explicit-any`                   |
+| `reportImplicitRelativeImport`          | `missing-import`                 |
+| `reportIncompatibleUnannotatedOverride` | `bad-override-mutable-attribute` |
+
+These are a separate compatibility layer; an upstream Pyright config will not
+contain them.
+
+## Related guides and references
+
+- [Migrate from Pyright](index.mdx)
+- [Pyright config reference](config-reference.mdx)
+- [`reportMissingImports`](missing-imports.mdx)
+- [`reportUnknownMemberType`](unknown-member-type.mdx)
+- [Pyrefly error kinds](../../error-kinds.mdx)
+- [Pyright configuration and diagnostic rules](https://github.com/microsoft/pyright/blob/main/docs/configuration.md)
+
+:::note
+
+Last reviewed against upstream Pyright configuration documentation and Pyrefly's
+migration source on 2026-08-08.
+
+:::

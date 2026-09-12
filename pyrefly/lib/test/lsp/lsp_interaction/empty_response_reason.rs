@@ -12,17 +12,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lsp_types::Url;
-use pyrefly::commands::lsp::IndexingMode;
-use pyrefly::commands::lsp::LspArgs;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
+use pyrefly_lsp_test::object_model::RecordedTelemetryEvent;
+use pyrefly_lsp_test::object_model::TestTelemetry;
 use pyrefly_util::telemetry::EmptyResponseReason;
 use pyrefly_util::telemetry::TelemetryEventKind;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::object_model::RecordedTelemetryEvent;
-use crate::object_model::TestTelemetry;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -44,14 +43,6 @@ fn wait_for_lsp_event(
     }
 }
 
-fn default_args() -> LspArgs {
-    LspArgs {
-        indexing_mode: IndexingMode::None,
-        workspace_indexing_limit: 50,
-        build_system_blocking: false,
-    }
-}
-
 #[test]
 fn test_successful_definition_has_no_reason() {
     let test_files_root = get_test_files_root();
@@ -61,7 +52,10 @@ fn test_successful_definition_has_no_reason() {
     let telemetry = TestTelemetry::new();
     let rx = telemetry.subscribe();
 
-    let mut interaction = LspInteraction::new_with_args(default_args(), telemetry, None, None);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        telemetry: Box::new(telemetry),
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -103,7 +97,10 @@ fn test_language_services_disabled_sets_reason() {
     let telemetry = TestTelemetry::new();
     let rx = telemetry.subscribe();
 
-    let mut interaction = LspInteraction::new_with_args(default_args(), telemetry, None, None);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        telemetry: Box::new(telemetry),
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -150,7 +147,10 @@ fn test_method_disabled_sets_reason() {
     let telemetry = TestTelemetry::new();
     let rx = telemetry.subscribe();
 
-    let mut interaction = LspInteraction::new_with_args(default_args(), telemetry, None, None);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        telemetry: Box::new(telemetry),
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -203,7 +203,10 @@ fn test_not_an_identifier_sets_reason() {
     let telemetry = TestTelemetry::new();
     let rx = telemetry.subscribe();
 
-    let mut interaction = LspInteraction::new_with_args(default_args(), telemetry, None, None);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        telemetry: Box::new(telemetry),
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -242,7 +245,10 @@ fn test_definition_not_found_sets_reason() {
     let telemetry = TestTelemetry::new();
     let rx = telemetry.subscribe();
 
-    let mut interaction = LspInteraction::new_with_args(default_args(), telemetry, None, None);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        telemetry: Box::new(telemetry),
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -290,7 +296,10 @@ fn test_definition_not_found_attribute_context() {
     let telemetry = TestTelemetry::new();
     let rx = telemetry.subscribe();
 
-    let mut interaction = LspInteraction::new_with_args(default_args(), telemetry, None, None);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        telemetry: Box::new(telemetry),
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {

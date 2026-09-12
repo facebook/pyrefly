@@ -11,33 +11,33 @@ use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::hash::Hash;
+use std::num::NonZeroUsize;
 use std::path::Component;
-use std::path::MAIN_SEPARATOR;
-use std::path::MAIN_SEPARATOR_STR;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::thread::available_parallelism;
 
 use anyhow::Context;
-use bstr::ByteSlice;
 use glob::Pattern;
 use ignore::Match;
+use ignore::WalkBuilder;
+use ignore::WalkState;
 use ignore::gitignore::Gitignore;
 use ignore::gitignore::GitignoreBuilder;
+use ignore::types::Types;
+use ignore::types::TypesBuilder;
 use itertools::Itertools;
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de;
 use serde::de::Visitor;
-use starlark_map::small_set::SmallSet;
-use tracing::debug;
 use tracing::warn;
 
 use crate::absolutize::Absolutize as _;
-use crate::fs_anyhow;
 use crate::includes::Includes;
+use crate::lock::Mutex;
 use crate::prelude::SliceExt;
 use crate::prelude::VecExt;
 use crate::upward_search::UpwardSearch;
@@ -60,39 +60,84 @@ static IGNORE_FILES_SEARCH: LazyLock<Vec<UpwardSearch<Arc<(PathBuf, PathBuf)>>>>
             .collect::<Vec<_>>()
     });
 
-#[derive(Clone, Eq, Default)]
+const PYTHON_FILE_EXTENSIONS: &[&str] = &["py", "pyi", "pyw", "ipynb"];
 
+// Match Ruff's cap: walking is filesystem-bound, so spawning one thread per CPU
+// can overwhelm EdenFS on large devservers without improving latency.
+const MAX_PARALLEL_WALK_THREADS: usize = 12;
+
+#[derive(Clone, Eq)]
 /// A glob pattern for matching files.
+/// Patterns must use `/` as the path separator for cross-platform consistency.
 ///
 /// Only matches Python files (.py, .pyi, .pyw) and automatically excludes:
 /// - Files that don't have .py, .pyi, or .pyw extensions
 /// - Files whose names start with '.' (dot files)
-pub struct Glob(Pattern);
+pub struct Glob {
+    /// The (already-normalized) glob pattern. Doubles as the source string via
+    /// [`Glob::as_str`].
+    pattern: Pattern,
+    /// Precompiled `<pattern>/**` variant, so a glob naming a directory matches
+    /// the files beneath it. Precomputed so [`Glob::matches`] stays allocation-
+    /// and parse-free on the discovery hot path. `None` when `pattern` already
+    /// ends in a `**` globstar and so matches its descendants on its own, or if
+    /// this best-effort variant cannot be parsed.
+    dir_pattern: Option<Pattern>,
+}
 
 impl Glob {
     /// Create a new `Glob`, but do not do absolutizing (since we don't want to do
-    /// that until rewriting with a root)
-    pub fn new(mut pattern: String) -> anyhow::Result<Self> {
+    /// that until rewriting with a root).
+    /// Patterns must use `/` as the path separator for cross-platform consistency.
+    pub fn new(pattern: String) -> anyhow::Result<Self> {
+        Ok(Self::from_base_pattern(Self::base_pattern(pattern)?))
+    }
+
+    fn base_pattern(mut pattern: String) -> anyhow::Result<Pattern> {
         if pattern.ends_with("**") {
-            pattern.push_str(&format!("{MAIN_SEPARATOR_STR}*"));
-        } else if pattern.ends_with("**/") || pattern.ends_with(r"**\") {
+            pattern.push_str("/*");
+        } else if pattern.ends_with("**/") {
             pattern.push('*');
         }
-        Ok(Self(Pattern::new(&pattern).with_context(|| {
-            format!("While constructing glob pattern from {pattern}")
-        })?))
+        Pattern::new(&pattern)
+            .with_context(|| format!("While constructing glob pattern from {pattern}"))
+    }
+
+    /// Build a `Glob` from an already-validated base [`Pattern`], precompiling the
+    /// `<pattern>/**` variant used to match files beneath a directory pattern.
+    fn from_base_pattern(pattern: Pattern) -> Self {
+        // A pattern ending in `**/*` (the normalized form of a trailing `**`)
+        // already matches every descendant, so the `<pattern>/**` variant would
+        // be redundant: `P/**/*` matches a superset of `P/**/*/**`.
+        let dir_pattern = if pattern.as_str().ends_with("**/*") {
+            None
+        } else {
+            let mut dir = pattern.as_str().to_owned();
+            if !dir.ends_with('/') {
+                dir.push('/');
+            }
+            dir.push_str("**");
+            Pattern::new(&dir).ok()
+        };
+        Self {
+            pattern,
+            dir_pattern,
+        }
     }
 
     /// Create a new `Glob`, with the pattern relative to `root`.
     /// `root` should be an absolute path.
     pub fn new_with_root(root: &Path, pattern: String) -> anyhow::Result<Self> {
-        Ok(Self::new(pattern)?.from_root(root))
+        Ok(Self::from_base_pattern(Self::pattern_relative_to_root(
+            root,
+            &Self::base_pattern(pattern)?,
+        )))
     }
 
     /// Rewrite the current `Glob` relative to `root`.
     /// `root` should be an absolute path.
     pub fn from_root(self, root: &Path) -> Self {
-        Self(Self::pattern_relative_to_root(root, &self.0))
+        Self::from_base_pattern(Self::pattern_relative_to_root(root, &self.pattern))
     }
 
     fn contains_glob_char(part: &OsStr) -> bool {
@@ -100,16 +145,20 @@ impl Glob {
         bytes.contains(&b'*') || bytes.contains(&b'?') || bytes.contains(&b'[')
     }
 
+    /// Returns true if this pattern contains no glob wildcards, i.e. the user
+    /// named a concrete path rather than a pattern. Says nothing about whether
+    /// the path exists on disk.
+    fn has_no_wildcards(&self) -> bool {
+        self.as_path().components().all(|comp| match comp {
+            Component::Normal(part) => !Self::contains_glob_char(part),
+            _ => true,
+        })
+    }
+
     /// Returns true if this pattern is "explicit" - i.e., it has no wildcards
     /// and directly specifies a file path that exists.
     fn is_explicit_file_pattern(&self) -> bool {
-        // Check if any component contains glob characters
-        let has_no_wildcards = self.as_path().components().all(|comp| match comp {
-            Component::Normal(part) => !Self::contains_glob_char(part),
-            _ => true,
-        });
-
-        has_no_wildcards && self.as_path().is_file()
+        self.has_no_wildcards() && self.as_path().is_file()
     }
 
     fn pattern_relative_to_root(root: &Path, pattern: &Pattern) -> Pattern {
@@ -140,22 +189,26 @@ impl Glob {
                 }
             })
             .for_each(|comp| path.push(comp));
-        if path.extension().is_some() {
+        // A trailing component with an extension is a file name, not part of the
+        // directory prefix -- unless it is a real directory that happens to have a
+        // dot in its name (e.g. `my.project/`), which the walk must keep as a root.
+        if path.extension().is_some() && !path.is_dir() {
             path.pop();
         }
         path
     }
 
     pub fn as_path(&self) -> &Path {
-        Path::new(self.0.as_str())
+        Path::new(self.pattern.as_str())
     }
 
     pub fn as_str(&self) -> &str {
-        self.0.as_str()
+        self.pattern.as_str()
     }
 
     fn is_python_extension(ext: Option<&OsStr>) -> bool {
-        ext.is_some_and(|e| e == "py" || e == "pyi" || e == "pyw" || e == "ipynb")
+        ext.and_then(OsStr::to_str)
+            .is_some_and(|ext| PYTHON_FILE_EXTENSIONS.contains(&ext))
     }
 
     /// Returns true if the given file should be included in results.
@@ -180,97 +233,34 @@ impl Glob {
         true
     }
 
-    fn resolve_path(
-        path: PathBuf,
-        results: &mut Vec<PathBuf>,
-        filter: &GlobFilter,
-        is_explicit: bool,
-    ) -> anyhow::Result<()> {
-        if filter.is_excluded(&path) {
-            return Ok(());
-        }
-        if path.is_dir() {
-            Self::resolve_dir(&path, results, filter)?;
-        } else if Self::should_include_file(&path, is_explicit) {
-            results.push(path);
-        }
-        Ok(())
-    }
-
-    fn resolve_dir(
-        path: &Path,
-        results: &mut Vec<PathBuf>,
-        filter: &GlobFilter,
-    ) -> anyhow::Result<()> {
-        for entry in fs_anyhow::read_dir(path)? {
-            let entry = entry
-                .with_context(|| format!("When iterating over directory `{}`", path.display()))?;
-            let path = entry.path();
-            // Directory listings are never explicit
-            Self::resolve_path(path, results, filter, false)?;
-        }
-        Ok(())
-    }
-
-    fn resolve_pattern_with_limit(
-        pattern: &str,
-        filter: &GlobFilter,
-        limit: Option<usize>,
-    ) -> anyhow::Result<Vec<PathBuf>> {
-        let mut result = Vec::new();
-        let paths = glob::glob(pattern)?;
-        for (count, path) in paths.enumerate() {
-            if let Some(limit) = limit
-                && count >= limit
-            {
-                break;
-            }
-            let path = path?;
-            // Glob pattern results are never explicit (they came from a glob match)
-            Self::resolve_path(path, &mut result, filter, false)?;
-        }
-        Ok(result)
-    }
-
     #[cfg(test)]
     fn resolve_pattern(pattern: &str, filter: &GlobFilter) -> anyhow::Result<Vec<PathBuf>> {
-        Self::resolve_pattern_with_limit(pattern, filter, None)
+        Ok(Globs::new(vec![pattern.to_owned()])?
+            .filtered_files_iter(filter, None)?
+            .collect())
     }
 
-    /// Returns true if the given file matches any of the contained globs.
-    /// We always attempt to append `**` in case
-    /// the pattern is meant to be a directory wildcard.
+    /// Returns true if the given file matches this glob. The precompiled
+    /// `<pattern>/**` variant lets a glob naming a directory match the files
+    /// beneath it.
     pub fn matches(&self, file: &Path) -> bool {
-        if self.0.matches_path(file) {
-            return true;
-        }
-
-        // if we could match before, see if it's because of some matching semantics
-        // around the glob library we're using, where the end MUST be a wildcard
-        let pattern_path = &self.0;
-        let mut pattern_str = pattern_path.as_str().to_owned();
-        if !pattern_str.ends_with(['/', '\\']) {
-            pattern_str.push(MAIN_SEPARATOR);
-        }
-        pattern_str.push_str("**");
-
-        // don't return an error if we fail to construct a glob here, since it's something
-        // we automatically attempted and failed at. We should ignore failure here, since
-        // we attempted to do this automatically, and the pattern we're constructing should be valid
-        // (i.e. the previous pattern we constructed should have failed before we get to here).
-        glob::Pattern::new(&pattern_str).is_ok_and(|pattern| pattern.matches_path(file))
+        self.pattern.matches_path(file)
+            || self
+                .dir_pattern
+                .as_ref()
+                .is_some_and(|dir_pattern| dir_pattern.matches_path(file))
     }
 }
 
 impl Debug for Glob {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0.as_str())
+        write!(f, "{}", self.pattern.as_str())
     }
 }
 
 impl Display for Glob {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0.as_str())
+        write!(f, "{}", self.pattern.as_str())
     }
 }
 
@@ -330,33 +320,11 @@ impl PartialEq for Glob {
 }
 
 impl Glob {
+    #[cfg(test)]
     fn files(&self, filter: &GlobFilter, limit: Option<usize>) -> anyhow::Result<Vec<PathBuf>> {
-        let pattern = &self.0;
-        if filter.is_excluded(self.as_path()) {
-            return Err(anyhow::anyhow!(
-                "Pattern {} is matched by `project-excludes` or ignore file.\n{}",
-                pattern.as_str(),
-                filter
-            ));
-        }
-
-        // Check if this is an explicitly specified file (no wildcards)
-        let is_explicit = self.is_explicit_file_pattern();
-
-        // For explicit patterns, the file exists and can be included directly
-        if is_explicit {
-            let pattern_path = self.as_path();
-            let mut result = Vec::new();
-            if Self::should_include_file(pattern_path, true) {
-                result.push(pattern_path.to_path_buf());
-            }
-            return Ok(result);
-        }
-
-        let pattern_str = pattern.as_str().to_owned();
-        let result = Self::resolve_pattern_with_limit(&pattern_str, filter, limit)
-            .with_context(|| format!("When resolving pattern `{pattern_str}`"))?;
-        Ok(result)
+        Ok(Globs(vec![self.clone()])
+            .filtered_files_iter(filter, limit)?
+            .collect())
     }
 }
 
@@ -403,8 +371,8 @@ impl Globs {
     }
 
     /// Returns true if the given file matches any of the contained globs.
-    /// We always attempt to append `**` if a pattern ends in `/` in case
-    /// the pattern is meant to be a directory wildcard.
+    /// Directory-style matching is handled by each [`Glob`]'s precomputed
+    /// `<pattern>/**` variant.
     fn matches(&self, file: &Path) -> bool {
         self.0.iter().any(|pattern| pattern.matches(file))
     }
@@ -432,101 +400,345 @@ impl Display for Globs {
     }
 }
 
-/// If `eden` is likely to be available, we can resolve the globs faster.
-/// For a 100K file project, with a warm disk, non-Eden = 1.6s, Eden = 1.1s.
-/// For a cold disk, Eden is likely to win by a much larger margin.
-/// Currently `eden` is only likely available inside Meta.
-const USE_EDEN: bool = cfg!(fbcode_build);
-
 impl Globs {
-    pub fn files_eden(&self, filter: &GlobFilter) -> anyhow::Result<Vec<PathBuf>> {
-        fn hg_root() -> anyhow::Result<PathBuf> {
-            let output = Command::new("hg")
-                .arg("root")
-                .output()
-                .context("Failed to run `hg root`")?;
-            if !output.status.success() {
-                return Err(anyhow::anyhow!(
-                    "Failed to run `hg root`, stderr: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ));
-            }
-            Ok(PathBuf::from(std::str::from_utf8(
-                output.stdout.trim_ascii(),
-            )?))
-        }
-
-        fn eden_glob(root: PathBuf, patterns: Vec<(&Path, bool)>) -> anyhow::Result<Vec<PathBuf>> {
-            let mut command = Command::new("eden");
-            command.arg("glob");
-            command.args(patterns.iter().map(|(p, _)| p));
-            command.current_dir(&root);
-            let output = command.output().context("Failed to run `eden glob`")?;
-            if !output.status.success() {
-                // Last line of stderr of `eden glob` is usually a good indicator of what happened
-                let stderr_text = String::from_utf8_lossy(&output.stderr);
-                return Err(
-                    anyhow::anyhow!("{}", stderr_text.lines().last().unwrap_or(""))
-                        .context("Failure when running `eden glob`"),
-                );
-            }
-            let mut result: Vec<PathBuf> = Vec::new();
-            for line in output.stdout.lines() {
-                let path = line.to_path().with_context(|| {
-                    format!(
-                        "Failed to convert line `{}` into a valid path",
-                        line.to_str_lossy()
-                    )
+    /// Build the `ignore` file-type filter restricting the walk to Python files
+    /// (and notebooks), so the walker never hands us unrelated files.
+    fn python_file_types() -> anyhow::Result<Types> {
+        let mut builder = TypesBuilder::new();
+        for extension in PYTHON_FILE_EXTENSIONS {
+            builder
+                .add("pyreflypython", &format!("*.{extension}"))
+                .with_context(|| {
+                    format!("While constructing file type filter for extension `{extension}`")
                 })?;
-                // Determine if this result came from an explicit pattern
-                // by checking if any of the explicit patterns match this exact path
-                let is_explicit = patterns
-                    .iter()
-                    .any(|(pattern, explicit)| *explicit && pattern == &path);
-                Glob::resolve_path(
-                    root.join(path),
-                    &mut result,
-                    &GlobFilter::empty(),
-                    is_explicit,
-                )?;
+        }
+        builder.select("pyreflypython");
+        builder
+            .build()
+            .context("While constructing Python file type filter")
+    }
+
+    fn merged_files_iter(
+        mut explicit_files: Vec<PathBuf>,
+        mut walked_files: Vec<PathBuf>,
+    ) -> impl Iterator<Item = PathBuf> {
+        explicit_files.sort();
+        walked_files.sort();
+
+        let mut explicit_files = explicit_files.into_iter().peekable();
+        let mut walked_files = walked_files.into_iter().peekable();
+        std::iter::from_fn(move || {
+            let path = match (explicit_files.peek(), walked_files.peek()) {
+                (Some(explicit), Some(walked)) if explicit <= walked => explicit_files.next(),
+                (Some(_), Some(_)) => walked_files.next(),
+                (Some(_), None) => explicit_files.next(),
+                (None, Some(_)) => walked_files.next(),
+                (None, None) => return None,
             }
-            Ok(result)
+            .expect("peeked path should be available");
+            while explicit_files.peek() == Some(&path) {
+                explicit_files.next();
+            }
+            while walked_files.peek() == Some(&path) {
+                walked_files.next();
+            }
+            Some(path)
+        })
+    }
+
+    fn non_nested_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
+        roots.sort();
+        roots.dedup();
+        // `Path::starts_with` does not treat `.` as a prefix of relative paths
+        // like `tests`, but walking `.` already covers every nested relative root.
+        if roots.first().is_some_and(|root| root == Path::new(".")) {
+            return vec![PathBuf::from(".")];
         }
 
-        let root = hg_root()?;
-        let patterns_with_explicit: Vec<(&Path, bool)> = self
-            .0
+        let mut non_nested_roots: Vec<PathBuf> = Vec::new();
+        for root in roots {
+            if !non_nested_roots
+                .iter()
+                .any(|existing| root.starts_with(existing))
+            {
+                non_nested_roots.push(root);
+            }
+        }
+        non_nested_roots
+    }
+
+    /// The directories to walk for the given (non-explicit) patterns: the
+    /// non-wildcard prefix of each pattern, with nested roots removed so the same
+    /// subtree is never walked twice.
+    fn sorted_walk_roots(patterns: &[&Glob]) -> Vec<PathBuf> {
+        let roots = patterns
             .iter()
-            .map(|g| {
-                let stripped = g.as_path().strip_prefix(&root)?;
-                Ok((stripped, g.is_explicit_file_pattern()))
+            .filter_map(|pattern| {
+                if pattern.is_explicit_file_pattern() {
+                    return None;
+                }
+                if pattern.has_no_wildcards() {
+                    return pattern
+                        .as_path()
+                        .is_dir()
+                        .then(|| pattern.as_path().to_path_buf());
+                }
+                let root = pattern.get_glob_root();
+                let root = if root.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    root
+                };
+                root.is_dir().then_some(root)
             })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let mut result = eden_glob(root, patterns_with_explicit)?;
-        result.retain(|p| !filter.is_excluded(p));
+            .collect::<Vec<_>>();
+        Self::non_nested_roots(roots)
+    }
+
+    /// Construct an `ignore` walker over `roots`, restricted to Python files and
+    /// with `filter` installed as a `filter_entry` predicate so excluded, hidden,
+    /// and gitignored directories are pruned during traversal. Shared by the
+    /// sorted and parallel walkers; returns `None` when there are no roots.
+    fn walk_builder(roots: &[PathBuf], filter: &GlobFilter) -> anyhow::Result<Option<WalkBuilder>> {
+        let Some((first_root, rest_roots)) = roots.split_first() else {
+            return Ok(None);
+        };
+
+        let mut builder = WalkBuilder::new(first_root);
+        for root in rest_roots {
+            builder.add(root);
+        }
+        // We apply ignore files and excludes ourselves via `GlobFilter`, so turn
+        // off the walker's built-in filtering and use it only to enumerate files.
+        builder.standard_filters(false);
+        builder.hidden(false);
+        builder.follow_links(true);
+        builder.types(Self::python_file_types()?);
+
+        // `filter_entry` requires a `Fn + Send + Sync + 'static` predicate for both
+        // the serial and parallel walkers, so move an owned filter clone in.
+        let walk_filter = filter.for_walk();
+        builder.filter_entry(move |entry| {
+            let is_dir = entry
+                .file_type()
+                .is_some_and(|file_type| file_type.is_dir());
+            !walk_filter.is_excluded_with_file_type(entry.path(), is_dir)
+        });
+
+        Ok(Some(builder))
+    }
+
+    fn should_skip_path_error(filter: &GlobFilter, path: &Path) -> bool {
+        filter.is_excluded_with_file_type(path, false)
+            || filter.is_excluded_with_file_type(path, true)
+    }
+
+    fn should_skip_walk_error(
+        filter: &GlobFilter,
+        error: &ignore::Error,
+        path: Option<&Path>,
+    ) -> bool {
+        match error {
+            ignore::Error::Partial(errors) => errors
+                .iter()
+                .all(|error| Self::should_skip_walk_error(filter, error, path)),
+            ignore::Error::WithPath { path, err } => {
+                Self::should_skip_walk_error(filter, err, Some(path))
+            }
+            ignore::Error::WithLineNumber { err, .. } | ignore::Error::WithDepth { err, .. } => {
+                Self::should_skip_walk_error(filter, err, path)
+            }
+            ignore::Error::Loop { child, .. } => Self::should_skip_path_error(filter, child),
+            ignore::Error::Io(_)
+            | ignore::Error::Glob { .. }
+            | ignore::Error::UnrecognizedFileType(_)
+            | ignore::Error::InvalidDefinition => {
+                path.is_some_and(|path| Self::should_skip_path_error(filter, path))
+            }
+        }
+    }
+
+    fn broken_symlink_walk_error(
+        error: &ignore::Error,
+        path: Option<&Path>,
+    ) -> Option<(PathBuf, PathBuf)> {
+        match error {
+            ignore::Error::Partial(errors) => errors
+                .iter()
+                .find_map(|error| Self::broken_symlink_walk_error(error, path)),
+            ignore::Error::WithPath { path, err } => {
+                Self::broken_symlink_walk_error(err, Some(path))
+            }
+            ignore::Error::WithLineNumber { err, .. } | ignore::Error::WithDepth { err, .. } => {
+                Self::broken_symlink_walk_error(err, path)
+            }
+            ignore::Error::Io(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                let path = path?;
+                let metadata = std::fs::symlink_metadata(path).ok()?;
+                if metadata.file_type().is_symlink() {
+                    Some((path.to_path_buf(), std::fs::read_link(path).ok()?))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn walk_error(error: ignore::Error) -> anyhow::Error {
+        if let Some((path, target)) = Self::broken_symlink_walk_error(&error, None) {
+            anyhow::Error::new(error).context(format!(
+                "Broken symlink when walking project files: `{}` points to {:?}",
+                path.display(),
+                target,
+            ))
+        } else {
+            anyhow::Error::new(error).context("When walking project files")
+        }
+    }
+
+    /// Single-threaded, lexicographically-sorted walk used when a `limit` is set
+    /// (workspace indexing), so a truncated result is deterministic.
+    fn walk_files_sorted(
+        &self,
+        roots: &[PathBuf],
+        filter: &GlobFilter,
+        limit: usize,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        let Some(mut builder) = Self::walk_builder(roots, filter)? else {
+            return Ok(Vec::new());
+        };
+        builder.sort_by_file_path(|a, b| a.cmp(b));
+
+        let mut result = Vec::new();
+        for entry in builder.build() {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if Self::should_skip_walk_error(filter, &error, None) => continue,
+                Err(error) => return Err(Self::walk_error(error)),
+            };
+            if entry
+                .file_type()
+                .is_some_and(|file_type| file_type.is_dir())
+            {
+                continue;
+            }
+            let path = entry.into_path();
+            if self.matches(&path) && Glob::should_include_file(&path, false) {
+                result.push(path);
+                if result.len() >= limit {
+                    break;
+                }
+            }
+        }
         Ok(result)
     }
 
-    fn filtered_files(
+    /// Parallel walk used for unlimited discovery (full checks).
+    fn walk_files_parallel(
         &self,
+        roots: &[PathBuf],
         filter: &GlobFilter,
-        limit: Option<usize>,
     ) -> anyhow::Result<Vec<PathBuf>> {
-        // Eden glob returns all results. It doesn't provide an API to limit the number of results.
-        if USE_EDEN && limit.is_none() {
-            match self.files_eden(filter) {
-                Ok(files) if files.is_empty() => {
-                    return Err(anyhow::anyhow!(
-                        "No Python files matched pattern(s) {}",
-                        self.0.map(|p| format!("`{}`", p.as_str())).join(", "),
-                    ));
+        let Some(mut builder) = Self::walk_builder(roots, filter)? else {
+            return Ok(Vec::new());
+        };
+
+        builder.threads(
+            available_parallelism()
+                .map_or(1, NonZeroUsize::get)
+                .min(MAX_PARALLEL_WALK_THREADS),
+        );
+
+        struct WalkedFiles<'a> {
+            result: &'a Mutex<Vec<PathBuf>>,
+            local_files: Vec<PathBuf>,
+        }
+
+        impl Drop for WalkedFiles<'_> {
+            fn drop(&mut self) {
+                if !self.local_files.is_empty() {
+                    self.result.lock().append(&mut self.local_files);
                 }
-                Ok(files) => return Ok(files),
-                Err(e) => debug!("Failed to use `eden` for glob: {e:#}"),
             }
         }
 
-        let mut result = SmallSet::new();
+        let result = Mutex::new(Vec::new());
+        let walk_error = Mutex::new(None);
+        builder.build_parallel().run(|| {
+            let mut walked_files = WalkedFiles {
+                result: &result,
+                local_files: Vec::new(),
+            };
+            let walk_error = &walk_error;
+            Box::new(move |entry| match entry {
+                Ok(entry) => {
+                    if entry
+                        .file_type()
+                        .is_some_and(|file_type| file_type.is_dir())
+                    {
+                        return WalkState::Continue;
+                    }
+                    let path = entry.into_path();
+                    if self.matches(&path) && Glob::should_include_file(&path, false) {
+                        walked_files.local_files.push(path);
+                    }
+                    WalkState::Continue
+                }
+                Err(error) => {
+                    if Self::should_skip_walk_error(filter, &error, None) {
+                        return WalkState::Continue;
+                    }
+                    let error = Self::walk_error(error);
+                    let mut walk_error = walk_error.lock();
+                    if walk_error.is_none() {
+                        *walk_error = Some(error);
+                    }
+                    WalkState::Quit
+                }
+            })
+        });
+
+        if let Some(error) = walk_error.into_inner() {
+            return Err(error);
+        }
+        Ok(result.into_inner())
+    }
+
+    fn no_matched_files_error(&self) -> anyhow::Error {
+        if self.0.is_empty() {
+            return anyhow::anyhow!("There are no patterns to match Python files.");
+        }
+        if self.0.len() == 1 {
+            let pattern = &self.0[0];
+            let pattern_str = pattern.as_str();
+            // A lone concrete path (no wildcards) that resolved to nothing does
+            // not exist on disk -- a clearer error than "no files matched" for a
+            // path the user named directly.
+            if pattern.has_no_wildcards() && !pattern.as_path().exists() {
+                return anyhow::anyhow!("Path `{}` does not exist", pattern_str);
+            }
+            return anyhow::anyhow!("No Python files matched pattern `{}`", pattern_str);
+        }
+        anyhow::anyhow!(
+            "No Python files matched patterns {}",
+            self.0
+                .iter()
+                .map(|p| format!("`{}`", p.as_str()))
+                .join(", "),
+        )
+    }
+
+    fn filtered_files_iter(
+        &self,
+        filter: &GlobFilter,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Box<dyn Iterator<Item = PathBuf>>> {
+        if limit == Some(0) {
+            return Ok(Box::new(std::iter::empty()));
+        }
+        let mut active_patterns = Vec::new();
+        let mut explicit_files = Vec::new();
         for pattern in &self.0 {
             // Skip include patterns that are themselves excluded (e.g. the
             // default `**/*.ipynb` include when the user sets
@@ -541,44 +753,32 @@ impl Globs {
                 );
                 continue;
             }
-            let remaining_limit = if let Some(limit) = limit {
-                if limit > result.len() {
-                    Some(limit - result.len())
-                } else {
-                    break;
-                }
-            } else {
-                None
-            };
-            let files = pattern.files(filter, remaining_limit)?;
-            result.extend(files);
-        }
-        if result.is_empty() {
-            if self.0.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "There are no patterns to match Python files."
-                ));
+            active_patterns.push(pattern);
+            // An explicit concrete file is included directly, bypassing the
+            // extension filter that wildcard matches must satisfy.
+            if pattern.is_explicit_file_pattern()
+                && Glob::should_include_file(pattern.as_path(), true)
+            {
+                explicit_files.push(pattern.as_path().to_path_buf());
             }
-            if self.0.len() == 1 {
-                let pattern_str = self.0[0].as_str();
-                return Err(anyhow::anyhow!(
-                    "No Python files matched pattern `{}`",
-                    pattern_str
-                ));
-            }
-            return Err(anyhow::anyhow!(
-                "No Python files matched patterns {}",
-                self.0
-                    .iter()
-                    .map(|p| format!("`{}`", p.as_str()))
-                    .join(", "),
-            ));
         }
-        Ok(result.into_iter().collect())
+
+        let roots = Self::sorted_walk_roots(&active_patterns);
+        let walked_files = if let Some(limit) = limit {
+            self.walk_files_sorted(&roots, filter, limit)?
+        } else {
+            self.walk_files_parallel(&roots, filter)?
+        };
+        if explicit_files.is_empty() && walked_files.is_empty() {
+            return Err(self.no_matched_files_error());
+        }
+        Ok(Box::new(
+            Self::merged_files_iter(explicit_files, walked_files).take(limit.unwrap_or(usize::MAX)),
+        ))
     }
 
-    pub fn files(&self) -> anyhow::Result<Vec<PathBuf>> {
-        self.filtered_files(&GlobFilter::empty(), None)
+    pub fn files_iter(&self) -> anyhow::Result<Box<dyn Iterator<Item = PathBuf>>> {
+        self.filtered_files_iter(&GlobFilter::empty(), None)
     }
 
     pub fn covers(&self, path: &Path) -> bool {
@@ -706,22 +906,23 @@ impl GlobFilter {
         (ignores, errors, ignore_paths)
     }
 
-    /// Returns true if the path contains a hidden directory component (starting
+    /// Returns true if `path` contains a hidden directory component (starting
     /// with `.`, excluding `.` and `..`). When `root` is provided, only
-    /// components relative to `root` are checked so that hidden ancestors above
-    /// the project root are allowed.
-    fn has_hidden_dir_component(path: &Path, root: Option<&Path>) -> bool {
+    /// components below `root` are checked so that hidden ancestors above the
+    /// project root are allowed. For a directory the final component is checked
+    /// too, so the walker can prune a hidden directory before descending into it.
+    fn has_hidden_component(path: &Path, root: Option<&Path>, is_dir: bool) -> bool {
         let relative = match root {
             Some(root) => path.strip_prefix(root).unwrap_or(path),
             None => path,
         };
-        // Check every component except the filename (we only care about dirs).
         let components: Vec<_> = relative.components().collect();
-        let dir_components = if components.is_empty() {
-            &components[..]
+        let dir_component_count = if is_dir {
+            components.len()
         } else {
-            &components[..components.len() - 1]
+            components.len().saturating_sub(1)
         };
+        let dir_components = &components[..dir_component_count];
         dir_components.iter().any(|c| {
             if let Component::Normal(s) = c {
                 s.as_encoded_bytes().first() == Some(&b'.')
@@ -731,9 +932,29 @@ impl GlobFilter {
         })
     }
 
+    /// A copy of this filter for use inside a walk closure. `errors` are dropped
+    /// because `anyhow::Error` is not `Clone`; walk-time errors are surfaced
+    /// separately by the walk itself.
+    fn for_walk(&self) -> Self {
+        Self {
+            excludes: self.excludes.clone(),
+            ignores: self.ignores.clone(),
+            ignore_paths: self.ignore_paths.clone(),
+            errors: Vec::new(),
+            hidden_dir_filter: self.hidden_dir_filter.clone(),
+        }
+    }
+
     // Does this path match (either positively or negatively), the `excludes` or ignore
     // files found.
     pub fn is_excluded(&self, path: &Path) -> bool {
+        self.is_excluded_with_file_type(path, path.is_dir())
+    }
+
+    /// Like [`Self::is_excluded`], but with the file type supplied by the caller.
+    /// The walker already knows whether each entry is a directory, so it passes
+    /// that in to avoid an extra `stat`.
+    fn is_excluded_with_file_type(&self, path: &Path, is_dir: bool) -> bool {
         if self.excludes.matches(path) {
             return true;
         }
@@ -741,7 +962,7 @@ impl GlobFilter {
         match &self.hidden_dir_filter {
             HiddenDirFilter::Disabled => {}
             HiddenDirFilter::All => {
-                if Self::has_hidden_dir_component(path, None) {
+                if Self::has_hidden_component(path, None, is_dir) {
                     return true;
                 }
             }
@@ -752,7 +973,7 @@ impl GlobFilter {
                     .iter()
                     .filter(|r| path.starts_with(r))
                     .max_by_key(|r| r.as_os_str().len());
-                if Self::has_hidden_dir_component(path, root.map(|r| r.as_path())) {
+                if Self::has_hidden_component(path, root.map(|r| r.as_path()), is_dir) {
                     return true;
                 }
             }
@@ -761,7 +982,7 @@ impl GlobFilter {
         for ignore in &self.ignores {
             let ignore_root = ignore.path();
             if path.starts_with(ignore_root) {
-                match ignore.matched_path_or_any_parents(path, path.is_dir()) {
+                match ignore.matched_path_or_any_parents(path, is_dir) {
                     Match::None => (),
                     Match::Whitelist(_) => return false,
                     Match::Ignore(_) => return true,
@@ -808,12 +1029,16 @@ impl Includes for FilteredGlobs {
         self.includes.roots()
     }
 
-    fn files(&self) -> anyhow::Result<Vec<PathBuf>> {
-        self.includes.filtered_files(&self.filter, None)
+    fn files_iter(&self) -> anyhow::Result<Box<dyn Iterator<Item = PathBuf> + '_>> {
+        self.includes.filtered_files_iter(&self.filter, None)
     }
 
     fn covers(&self, path: &Path) -> bool {
-        self.includes.covers(path) && !self.filter.is_excluded(path)
+        self.covers_ignoring_excludes(path) && !self.filter.is_excluded(path)
+    }
+
+    fn covers_ignoring_excludes(&self, path: &Path) -> bool {
+        self.includes.covers(path)
     }
 
     fn errors(&mut self) -> Vec<anyhow::Error> {
@@ -822,11 +1047,14 @@ impl Includes for FilteredGlobs {
 }
 
 impl FilteredGlobs {
-    /// Same as `files`, but with an upper limit on the number of files returned.
+    /// Same as `files_iter`, but with an upper limit on the number of files returned.
     /// This is useful for indexing of workspaces, where we don't want to index too many files
     /// when the user decides to open VSCode at the root of the filesystem.
-    pub fn files_with_limit(&self, limit: usize) -> anyhow::Result<Vec<PathBuf>> {
-        self.includes.filtered_files(&self.filter, Some(limit))
+    pub fn files_iter_with_limit(
+        &self,
+        limit: usize,
+    ) -> anyhow::Result<Box<dyn Iterator<Item = PathBuf> + '_>> {
+        self.includes.filtered_files_iter(&self.filter, Some(limit))
     }
 }
 
@@ -859,22 +1087,6 @@ mod tests {
         f("a/b/*.txt", "a/b");
         f("/**", "/");
         f("/absolute/path/**/files", "/absolute/path");
-
-        if cfg!(windows) {
-            // These all use the \ separator, which only works on Windows.
-            f(r"C:\\windows\project\**\files", r"C:\\windows\project");
-            f(r"c:\windows\project\**\files", r"c:\windows\project");
-            f(r"\windows\project\**\files", r"\windows\project");
-            f(r"c:project\**\files", "c:project");
-            f(r"project\**\files", "project");
-            f(r"**\files", "");
-            f("pattern", "pattern");
-            f("pattern.txt", "");
-            f(r"a\b", r"a\b");
-            f(r"a\b\c.txt", r"a\b");
-            f(r"a\b*\c", "a");
-            f(r"a\b\*.txt", r"a\b");
-        }
     }
 
     #[test]
@@ -898,7 +1110,7 @@ mod tests {
 
     #[test]
     fn test_globs_relative_to_root() {
-        let mut inputs: Vec<&str> = vec![
+        let inputs: Vec<&str> = vec![
             "project/**/files",
             "**/files",
             "pattern",
@@ -911,25 +1123,13 @@ mod tests {
             "/**/",
             "/absolute/path/**/files",
         ];
-        if cfg!(windows) {
-            inputs.extend([r"c:\absolute\path\**", r"c:relative\path\**"]);
-        }
         let inputs: Vec<String> = inputs.into_iter().map(String::from).collect();
 
-        let f = |root: &str, expected: Vec<&str>, windows_extras: Vec<&str>| {
-            let mut expected: Vec<PathBuf> = expected.into_iter().map(PathBuf::from).collect();
+        let f = |root: &str, expected: Vec<&str>| {
+            let expected: Vec<PathBuf> = expected.into_iter().map(PathBuf::from).collect();
             let inputs = inputs.clone();
             let root = root.to_owned();
 
-            // windows has drives, so add tests for that when applicable
-            if cfg!(windows) {
-                expected.extend(
-                    windows_extras
-                        .into_iter()
-                        .map(PathBuf::from)
-                        .collect::<Vec<PathBuf>>(),
-                );
-            }
             let globs: Vec<PathBuf> = Globs::new_with_root(Path::new(&root), inputs)
                 .unwrap()
                 .0
@@ -954,53 +1154,7 @@ mod tests {
                 "/**/*",
                 "/absolute/path/**/files",
             ],
-            vec![
-                r"c:\absolute\path\**\*",
-                r"c:\my\path\to\relative\path\**\*",
-            ],
         );
-        if cfg!(windows) {
-            f(
-                r"c:\my\path\to",
-                vec![
-                    r"c:\my\path\to\project\**\files",
-                    r"c:\my\path\to\**\files",
-                    r"c:\my\path\to\pattern",
-                    r"c:\my\path\to\pattern.txt",
-                    r"c:\my\path\to\a\b",
-                    r"c:\my\path\to\a\b\c.txt",
-                    r"c:\my\path\to\a\b*\c",
-                    r"c:\my\path\to\a\b\*.txt",
-                    r"c:\**\*",
-                    r"c:\**\*",
-                    r"c:\absolute\path\**\files",
-                ],
-                vec![
-                    r"c:\absolute\path\**\*",
-                    r"c:\my\path\to\relative\path\**\*",
-                ],
-            );
-            f(
-                r"d:\my\path\to",
-                vec![
-                    r"d:\my\path\to\project\**\files",
-                    r"d:\my\path\to\**\files",
-                    r"d:\my\path\to\pattern",
-                    r"d:\my\path\to\pattern.txt",
-                    r"d:\my\path\to\a\b",
-                    r"d:\my\path\to\a\b\c.txt",
-                    r"d:\my\path\to\a\b*\c",
-                    r"d:\my\path\to\a\b\*.txt",
-                    r"d:\**\*",
-                    r"d:\**\*",
-                    r"d:\absolute\path\**\files",
-                ],
-                vec![
-                    r"c:\absolute\path\**\*",
-                    r"c:\my\path\to\relative\path\**\*",
-                ],
-            );
-        }
     }
 
     #[test]
@@ -1169,7 +1323,8 @@ mod tests {
         let glob_files_match = |pattern: &str, expected: &[&str]| -> anyhow::Result<()> {
             let glob_files = Globs::new_with_root(root, vec![pattern.to_owned()])
                 .unwrap()
-                .files()?;
+                .files_iter()?
+                .collect::<Vec<_>>();
             let mut glob_files = glob_files
                 .iter()
                 .map(|p| p.strip_prefix(root))
@@ -1388,7 +1543,7 @@ mod tests {
         let mut sorted_globs = Glob::resolve_pattern(&pattern, &GlobFilter::empty()).unwrap();
         sorted_globs.sort();
         assert_eq!(sorted_globs, vec![root.join("a/b.py"), root.join("a/c.py")]);
-        assert_eq!(
+        assert!(
             Glob::resolve_pattern(
                 &pattern,
                 &GlobFilter::new(
@@ -1397,8 +1552,7 @@ mod tests {
                     HiddenDirFilter::Disabled,
                 ),
             )
-            .unwrap(),
-            Vec::<PathBuf>::new()
+            .is_err()
         );
         assert!(
             Glob::new(pattern.clone())
@@ -1417,7 +1571,7 @@ mod tests {
         assert!(
             Globs::new(vec![root.to_string_lossy().to_string()])
                 .unwrap()
-                .filtered_files(
+                .filtered_files_iter(
                     &GlobFilter::new(
                         Globs::new(vec![root.join("**").to_string_lossy().to_string()]).unwrap(),
                         None,
@@ -1439,7 +1593,7 @@ mod tests {
             .unwrap(),
             vec![root.join("a/b.py")],
         );
-        assert_eq!(
+        assert!(
             Glob::resolve_pattern(
                 &pattern,
                 &GlobFilter::new(
@@ -1448,8 +1602,7 @@ mod tests {
                     HiddenDirFilter::Disabled,
                 )
             )
-            .unwrap(),
-            Vec::<PathBuf>::new()
+            .is_err()
         );
         assert_eq!(
             Glob::resolve_pattern(
@@ -1688,8 +1841,9 @@ mod tests {
         // Test single file without extension
         let files = Globs::new_with_root(root, vec!["myscript".to_owned()])
             .unwrap()
-            .files()
-            .unwrap();
+            .files_iter()
+            .unwrap()
+            .collect::<Vec<_>>();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0], root.join("myscript"));
 
@@ -1699,81 +1853,392 @@ mod tests {
             vec!["myscript".to_owned(), "another_script".to_owned()],
         )
         .unwrap()
-        .files()
-        .unwrap();
+        .files_iter()
+        .unwrap()
+        .collect::<Vec<_>>();
         assert_eq!(files.len(), 2);
 
         // Test file in subdirectory without extension
         let files = Globs::new_with_root(root, vec!["scripts/tool".to_owned()])
             .unwrap()
-            .files()
-            .unwrap();
+            .files_iter()
+            .unwrap()
+            .collect::<Vec<_>>();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0], root.join("scripts/tool"));
 
         // Test that glob patterns still filter by extension (wildcards should still require .py extension)
         let files = Globs::new_with_root(root, vec!["*".to_owned()])
             .unwrap()
-            .files()
-            .unwrap();
+            .files_iter()
+            .unwrap()
+            .collect::<Vec<_>>();
         // Should not include files without extensions when using wildcard
         assert!(!files.contains(&root.join("myscript")));
         assert!(!files.contains(&root.join("another_script")));
     }
 
-    #[cfg(fbcode_build)]
     #[test]
-    fn test_explicitly_specified_files_without_extension_eden() {
-        // This test ensures that the Eden code path correctly handles explicit files
-        // without Python extensions. It uses the actual Eden integration.
-        use std::process::Command;
-
-        // First check if we're in an Eden root
-        let eden_info_output = Command::new("eden").arg("info").output();
-        if eden_info_output.is_err() {
-            // Not in an eden root, skip this test
-            return;
-        }
-
+    fn test_excluded_directory_is_pruned_from_walk() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
         TestPath::setup_test_directory(
             root,
             vec![
-                TestPath::file_with_contents("myscript", "#!/usr/bin/env python3\nprint('hello')"),
-                TestPath::file_with_contents("another_script", "import sys\nprint(sys.version)"),
-                TestPath::file("regular.py"),
+                TestPath::dir("excluded", vec![TestPath::file("bad.py")]),
+                TestPath::dir("src", vec![TestPath::file("ok.py")]),
             ],
         );
 
-        // Test single explicit file without extension using Eden
-        // Note: This will use files_eden if Eden is available
-        let files = Globs::new_with_root(root, vec!["myscript".to_owned()])
-            .unwrap()
-            .filtered_files(&GlobFilter::empty(), None)
-            .unwrap();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0], root.join("myscript"));
+        let filtered = FilteredGlobs::new(
+            Globs::new_with_root(root, vec!["**".to_owned()]).unwrap(),
+            Globs::new_with_root(root, vec!["excluded".to_owned()]).unwrap(),
+            None,
+            HiddenDirFilter::Disabled,
+        );
 
-        // Test multiple explicit files without extensions
-        let files = Globs::new_with_root(
+        assert_eq!(
+            filtered.files_iter().unwrap().collect::<Vec<_>>(),
+            vec![root.join("src/ok.py")]
+        );
+    }
+
+    #[test]
+    fn test_hidden_directory_filter_is_respected_by_walk() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
             root,
-            vec!["myscript".to_owned(), "another_script".to_owned()],
-        )
-        .unwrap()
-        .filtered_files(&GlobFilter::empty(), None)
-        .unwrap();
-        assert_eq!(files.len(), 2);
+            vec![
+                TestPath::dir(".venv", vec![TestPath::file("bad.py")]),
+                TestPath::dir("src", vec![TestPath::file("ok.py")]),
+            ],
+        );
 
-        // Test that wildcards still filter by extension even with Eden
-        let files = Globs::new_with_root(root, vec!["*".to_owned()])
+        let unfiltered = FilteredGlobs::new(
+            Globs::new_with_root(root, vec!["**".to_owned()]).unwrap(),
+            Globs::empty(),
+            None,
+            HiddenDirFilter::Disabled,
+        );
+        let mut files = unfiltered.files_iter().unwrap().collect::<Vec<_>>();
+        files.sort();
+        assert_eq!(
+            files,
+            vec![root.join(".venv/bad.py"), root.join("src/ok.py")]
+        );
+
+        let hidden_filtered = FilteredGlobs::new(
+            Globs::new_with_root(root, vec!["**".to_owned()]).unwrap(),
+            Globs::empty(),
+            None,
+            HiddenDirFilter::RelativeTo(vec![root.to_path_buf()]),
+        );
+
+        assert_eq!(
+            hidden_filtered.files_iter().unwrap().collect::<Vec<_>>(),
+            vec![root.join("src/ok.py")]
+        );
+    }
+
+    /// A directory whose name contains a dot (so it looks like it has a file
+    /// extension) must still be used as a walk root rather than being truncated.
+    #[test]
+    fn test_walk_root_preserves_directory_with_extension() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path().join("project.with.dot");
+        std::fs::create_dir(&root).unwrap();
+        TestPath::setup_test_directory(&root, vec![TestPath::file("ok.py")]);
+
+        let includes = Globs::new_with_root(&root, vec!["**".to_owned()]).unwrap();
+
+        assert_eq!(includes.roots(), vec![root]);
+    }
+
+    #[test]
+    fn test_dot_walk_root_contains_nested_relative_roots() {
+        assert_eq!(
+            Globs::non_nested_roots(vec![PathBuf::from("."), PathBuf::from("tests")]),
+            vec![PathBuf::from(".")]
+        );
+    }
+
+    /// A limited walk is single-threaded and lexicographically sorted, so the
+    /// truncated result is deterministic.
+    #[test]
+    fn test_files_iter_with_limit_is_dfs_sorted() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::file("z.py"),
+                TestPath::dir("b", vec![TestPath::file("one.py")]),
+                TestPath::dir(
+                    "a",
+                    vec![TestPath::file("two.py"), TestPath::file("one.py")],
+                ),
+            ],
+        );
+
+        let filtered = FilteredGlobs::new(
+            Globs::new_with_root(root, vec!["**".to_owned()]).unwrap(),
+            Globs::empty(),
+            None,
+            HiddenDirFilter::Disabled,
+        );
+        let files = filtered
+            .files_iter_with_limit(3)
             .unwrap()
-            .filtered_files(&GlobFilter::empty(), None)
-            .unwrap();
-        // Should only include .py files, not files without extensions
-        assert!(!files.contains(&root.join("myscript")));
-        assert!(!files.contains(&root.join("another_script")));
-        assert!(files.contains(&root.join("regular.py")));
+            .collect::<Vec<_>>();
+        let files = files
+            .iter()
+            .map(|p| p.strip_prefix(root).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            files,
+            vec![
+                Path::new("a/one.py"),
+                Path::new("a/two.py"),
+                Path::new("b/one.py"),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_files_iter_with_limit_zero_returns_no_files() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("a.py")]);
+
+        let filtered = FilteredGlobs::new(
+            Globs::new_with_root(root, vec!["**".to_owned()]).unwrap(),
+            Globs::empty(),
+            None,
+            HiddenDirFilter::Disabled,
+        );
+
+        assert!(
+            filtered
+                .files_iter_with_limit(0)
+                .unwrap()
+                .collect::<Vec<_>>()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_walk_error_classification() {
+        fn io_error(kind: std::io::ErrorKind) -> ignore::Error {
+            ignore::Error::Io(std::io::Error::from(kind))
+        }
+
+        fn missing_path(path: &str) -> ignore::Error {
+            path_error(path, io_error(std::io::ErrorKind::NotFound))
+        }
+
+        fn path_error(path: &str, err: ignore::Error) -> ignore::Error {
+            ignore::Error::WithPath {
+                path: PathBuf::from(path),
+                err: Box::new(err),
+            }
+        }
+
+        fn missing_at_depth(path: &str) -> ignore::Error {
+            ignore::Error::WithDepth {
+                depth: 1,
+                err: Box::new(missing_path(path)),
+            }
+        }
+
+        fn missing_on_line(path: &str) -> ignore::Error {
+            ignore::Error::WithLineNumber {
+                line: 1,
+                err: Box::new(missing_path(path)),
+            }
+        }
+
+        let filter = GlobFilter::new(Globs::empty(), None, HiddenDirFilter::Disabled);
+        let excluded_filter = GlobFilter::new(
+            Globs::new(vec!["excluded/**".to_owned()]).unwrap(),
+            None,
+            HiddenDirFilter::Disabled,
+        );
+        let skip = |error: &ignore::Error| Globs::should_skip_walk_error(&filter, error, None);
+
+        let all_excluded_errors = ignore::Error::Partial(vec![
+            missing_path("excluded/.eslintignore"),
+            path_error(
+                "excluded/denied.py",
+                io_error(std::io::ErrorKind::PermissionDenied),
+            ),
+        ]);
+        let symlink_loop = ignore::Error::Loop {
+            ancestor: PathBuf::from("root"),
+            child: PathBuf::from("root/loop"),
+        };
+        let loop_with_excluded_source = ignore::Error::Loop {
+            ancestor: PathBuf::from("root"),
+            child: PathBuf::from("excluded/loop"),
+        };
+        let loop_with_excluded_destination = ignore::Error::Loop {
+            ancestor: PathBuf::from("excluded"),
+            child: PathBuf::from("root/loop"),
+        };
+
+        assert!(!skip(&io_error(std::io::ErrorKind::NotFound)));
+        assert!(!skip(&missing_path(".eslintignore")));
+        assert!(!skip(&missing_path("generated.txt")));
+        assert!(!skip(&missing_at_depth(".eslintignore")));
+        assert!(!skip(&missing_on_line("generated.txt")));
+        assert!(!skip(&symlink_loop));
+        assert!(Globs::should_skip_walk_error(
+            &excluded_filter,
+            &missing_path("excluded/broken.py"),
+            None,
+        ));
+        assert!(Globs::should_skip_walk_error(
+            &excluded_filter,
+            &path_error(
+                "excluded/denied.py",
+                io_error(std::io::ErrorKind::PermissionDenied),
+            ),
+            None,
+        ));
+        assert!(Globs::should_skip_walk_error(
+            &excluded_filter,
+            &path_error(
+                "excluded/glob",
+                ignore::Error::Glob {
+                    glob: Some("[".to_owned()),
+                    err: "invalid range pattern".to_owned(),
+                },
+            ),
+            None,
+        ));
+        assert!(Globs::should_skip_walk_error(
+            &excluded_filter,
+            &loop_with_excluded_source,
+            None,
+        ));
+        assert!(!Globs::should_skip_walk_error(
+            &excluded_filter,
+            &loop_with_excluded_destination,
+            None,
+        ));
+        assert!(Globs::should_skip_walk_error(
+            &excluded_filter,
+            &all_excluded_errors,
+            None,
+        ));
+
+        assert!(!skip(&missing_path("missing.py")));
+        assert!(!skip(&missing_path(".hidden.py")));
+        assert!(!skip(&missing_path("missing")));
+        assert!(!skip(&ignore::Error::Io(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        ))));
+        assert!(!skip(&ignore::Error::Glob {
+            glob: Some("[".to_owned()),
+            err: "invalid range pattern".to_owned(),
+        }));
+        assert!(!skip(&ignore::Error::UnrecognizedFileType(
+            "python".to_owned()
+        )));
+        assert!(!skip(&ignore::Error::InvalidDefinition));
+        let mixed_error = ignore::Error::Partial(vec![
+            missing_path("excluded/.eslintignore"),
+            missing_path("missing.py"),
+        ]);
+        assert!(!Globs::should_skip_walk_error(
+            &excluded_filter,
+            &mixed_error,
+            None,
+        ));
+        let mixed_error = ignore::Error::Partial(vec![
+            missing_path("excluded/.eslintignore"),
+            io_error(std::io::ErrorKind::PermissionDenied),
+        ]);
+        assert!(!Globs::should_skip_walk_error(
+            &excluded_filter,
+            &mixed_error,
+            None,
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_dangling_symlink_errors() {
+        fn check(link_name: &str, target: &str) {
+            let tempdir = tempfile::tempdir().unwrap();
+            let root = tempdir.path();
+            TestPath::setup_test_directory(root, vec![TestPath::file("ok.py")]);
+            std::os::unix::fs::symlink(target, root.join(link_name)).unwrap();
+
+            let filtered = FilteredGlobs::new(
+                Globs::new_with_root(root, vec!["**".to_owned()]).unwrap(),
+                Globs::empty(),
+                None,
+                HiddenDirFilter::Disabled,
+            );
+
+            let err = filtered.files_iter().err().unwrap();
+            assert!(
+                format!("{err:#}").contains("Broken symlink when walking project files"),
+                "got: {err:#}",
+            );
+            assert!(format!("{err:#}").contains(link_name), "got: {err:#}");
+            assert!(
+                format!("{err:#}").contains(&format!("{:?}", PathBuf::from(target))),
+                "got: {err:#}",
+            );
+            let err = filtered.files_iter_with_limit(10).err().unwrap();
+            assert!(
+                format!("{err:#}").contains("Broken symlink when walking project files"),
+                "got: {err:#}",
+            );
+            assert!(format!("{err:#}").contains(link_name), "got: {err:#}");
+            assert!(
+                format!("{err:#}").contains(&format!("{:?}", PathBuf::from(target))),
+                "got: {err:#}",
+            );
+        }
+
+        check(".eslintignore", "missing-target");
+        check("generated.txt", "missing-target");
+        check("broken.py", "missing-target\n");
+        check("package", "missing-target");
+    }
+
+    /// An excluded dangling symlink is not part of the Python file set and
+    /// should not fail traversal even if its name looks like Python.
+    #[cfg(unix)]
+    #[test]
+    fn test_excluded_dangling_python_symlink_is_skipped() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("ok.py")]);
+        std::os::unix::fs::symlink("missing-target", root.join("excluded.py")).unwrap();
+
+        let filtered = FilteredGlobs::new(
+            Globs::new_with_root(root, vec!["**".to_owned()]).unwrap(),
+            Globs::new_with_root(root, vec!["excluded.py".to_owned()]).unwrap(),
+            None,
+            HiddenDirFilter::Disabled,
+        );
+
+        assert_eq!(
+            filtered.files_iter().unwrap().collect::<Vec<_>>(),
+            vec![root.join("ok.py")]
+        );
+        assert_eq!(
+            filtered
+                .files_iter_with_limit(10)
+                .unwrap()
+                .collect::<Vec<_>>(),
+            vec![root.join("ok.py")]
+        );
     }
 
     /// Regression test: setting `project-excludes = ["**/*.ipynb"]` should not
@@ -1810,10 +2275,13 @@ mod tests {
         let excludes = Globs::new_with_root(root, vec!["**/*.ipynb".to_owned()]).unwrap();
         let filtered = FilteredGlobs::new(includes, excludes, None, HiddenDirFilter::Disabled);
 
-        let mut files = filtered.files().expect(
-            "file discovery should succeed: the excluded **/*.ipynb include \
-             pattern should be skipped, not abort the entire search",
-        );
+        let mut files = filtered
+            .files_iter()
+            .expect(
+                "file discovery should succeed: the excluded **/*.ipynb include \
+                 pattern should be skipped, not abort the entire search",
+            )
+            .collect::<Vec<_>>();
         files.sort();
         let files: Vec<&Path> = files
             .iter()
@@ -1830,48 +2298,33 @@ mod tests {
         );
     }
 
-    #[cfg(not(fbcode_build))]
+    /// A lone non-existent concrete path now reports a clear "does not exist"
+    /// error instead of the generic "no files matched". A non-existent path
+    /// alongside a real one is still silently skipped, so tools that pass a mix
+    /// of paths keep working. https://github.com/facebook/pyrefly/issues/3647
     #[test]
-    fn test_explicitly_specified_files_without_extension_non_eden() {
-        // This test ensures that the non-Eden code path correctly handles explicit files
-        // without Python extensions.
+    fn test_explicit_nonexistent_path() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
-        TestPath::setup_test_directory(
-            root,
-            vec![
-                TestPath::file_with_contents("myscript", "#!/usr/bin/env python3\nprint('hello')"),
-                TestPath::file_with_contents("another_script", "import sys\nprint(sys.version)"),
-                TestPath::file("regular.py"),
-            ],
-        );
+        TestPath::setup_test_directory(root, vec![TestPath::file("real.py")]);
 
-        // Test single explicit file without extension using non-Eden path
-        let files = Globs::new_with_root(root, vec!["myscript".to_owned()])
+        // A lone non-existent concrete path errors with a clear message.
+        let err = Globs::new_with_root(root, vec!["does_not_exist.py".to_owned()])
             .unwrap()
-            .filtered_files(&GlobFilter::empty(), None)
+            .filtered_files_iter(&GlobFilter::empty(), None)
+            .err()
             .unwrap();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0], root.join("myscript"));
+        assert!(err.to_string().contains("does not exist"), "got: {err}");
 
-        // Test multiple explicit files without extensions
+        // A non-existent path alongside a real one is silently skipped.
         let files = Globs::new_with_root(
             root,
-            vec!["myscript".to_owned(), "another_script".to_owned()],
+            vec!["real.py".to_owned(), "does_not_exist.py".to_owned()],
         )
         .unwrap()
-        .filtered_files(&GlobFilter::empty(), None)
-        .unwrap();
-        assert_eq!(files.len(), 2);
-
-        // Test that wildcards still filter by extension
-        let files = Globs::new_with_root(root, vec!["*".to_owned()])
-            .unwrap()
-            .filtered_files(&GlobFilter::empty(), None)
-            .unwrap();
-        // Should only include .py files, not files without extensions
-        assert!(!files.contains(&root.join("myscript")));
-        assert!(!files.contains(&root.join("another_script")));
-        assert!(files.contains(&root.join("regular.py")));
+        .filtered_files_iter(&GlobFilter::empty(), None)
+        .unwrap()
+        .collect::<Vec<_>>();
+        assert_eq!(files, vec![root.join("real.py")]);
     }
 }

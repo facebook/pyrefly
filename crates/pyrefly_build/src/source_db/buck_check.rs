@@ -17,17 +17,15 @@ use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::fs_anyhow;
-use pyrefly_util::interned_path::InternedPath;
-use pyrefly_util::telemetry::TelemetrySourceDbRebuildInstanceStats;
-use pyrefly_util::watch_pattern::WatchPattern;
+use regex::Regex;
 use starlark_map::small_map::SmallMap;
-use starlark_map::small_set::SmallSet;
 use tracing::debug;
 use vec1::Vec1;
 
 use crate::handle::Handle;
+use crate::source_db::LiveSourceDatabase;
+use crate::source_db::ModuleEnumerator;
 use crate::source_db::SourceDatabase;
-use crate::source_db::Target;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct ManifestItem {
@@ -47,6 +45,15 @@ fn strip_stubs_suffix(path: &Path) -> PathBuf {
             }
         })
         .collect()
+}
+
+fn path_is_from_stubs_package(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|component| component.ends_with("-stubs"))
+    })
 }
 
 fn read_manifest_file_data(data: &[u8]) -> anyhow::Result<Vec<ManifestItem>> {
@@ -100,14 +107,20 @@ fn read_manifest_files(manifest_paths: &[PathBuf]) -> anyhow::Result<Vec<Manifes
 }
 
 fn same_module_path_compare(left: &ModulePath, right: &ModulePath) -> Ordering {
-    // .pyi file always comes before .py file
     match (
         left.as_path().extension().and_then(OsStr::to_str),
         right.as_path().extension().and_then(OsStr::to_str),
     ) {
         (Some("pyi"), Some("py")) => Ordering::Less,
         (Some("py"), Some("pyi")) => Ordering::Greater,
-        _ => Ordering::Equal, // Preserve original ordering by default
+        _ => match (
+            path_is_from_stubs_package(left.as_path()),
+            path_is_from_stubs_package(right.as_path()),
+        ) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            _ => Ordering::Equal,
+        },
     }
 }
 
@@ -133,33 +146,14 @@ fn create_manifest_item_index(
 
 #[derive(Debug)]
 pub struct BuckCheckSourceDatabase {
-    sources: SmallMap<ModuleName, Vec1<ModulePath>>,
-    dependencies: SmallMap<ModuleName, Vec1<ModulePath>>,
-    /// In Buck, any module that is the parent of a source/dependency is implicitly an empty `__init__.py` file.
-    /// See <https://github.com/facebook/buck2/blob/03ed62f85e7cc487fd505ad097ef9f260fae2522/prelude/python/tools/wheel.py#L196C1-L198C1>.
-    implicit_init: SmallMap<ModuleName, ModulePath>,
-    sys_info: SysInfo,
-    check_dependencies: bool,
+    lookup: SmallMap<ModuleName, ModulePath>,
+    modules_to_check: Vec<Handle>,
+    path_to_handle: SmallMap<ModulePath, Handle>,
 }
 
 impl SourceDatabase for BuckCheckSourceDatabase {
-    fn modules_to_check(&self) -> Vec<Handle> {
-        let sources = self.sources.iter().flat_map(|(name, paths)| {
-            paths
-                .iter()
-                .map(|path| Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
-        });
-        if self.check_dependencies {
-            sources
-                .chain(self.dependencies.iter().flat_map(|(name, paths)| {
-                    paths
-                        .iter()
-                        .map(|path| Handle::new(name.dupe(), path.dupe(), self.sys_info.dupe()))
-                }))
-                .collect()
-        } else {
-            sources.collect()
-        }
+    fn may_contain_module(&self, module: ModuleName) -> bool {
+        self.lookup.contains_key(&module)
     }
 
     fn lookup(
@@ -168,45 +162,23 @@ impl SourceDatabase for BuckCheckSourceDatabase {
         _: Option<&Path>,
         _: Option<ModuleStyle>,
     ) -> Option<ModulePath> {
-        match self
-            .sources
-            .get(&module)
-            .or_else(|| self.dependencies.get(&module))
-        {
-            Some(p) => Some(p.first().dupe()),
-            None if let Some(x) = self.implicit_init.get(&module) => Some(x.dupe()),
-            None => None,
-        }
+        self.lookup.get(&module).map(|path| path.dupe())
     }
 
     fn handle_from_module_path(&self, module_path: &ModulePath) -> Option<Handle> {
-        let find = |i: &SmallMap<ModuleName, Vec1<ModulePath>>| {
-            i.iter()
-                .find(|s| s.1.iter().any(|p| p == module_path))
-                .map(|s| s.0.dupe())
-        };
-        let name = find(&self.sources).or_else(|| find(&self.dependencies))?;
-        Some(Handle::new(name, module_path.dupe(), self.sys_info.dupe()))
+        self.path_to_handle
+            .get(module_path)
+            .map(|handle| handle.dupe())
     }
 
-    fn query_source_db(
-        &self,
-        _: SmallSet<InternedPath>,
-        _: bool,
-    ) -> (anyhow::Result<bool>, TelemetrySourceDbRebuildInstanceStats) {
-        (Ok(false), TelemetrySourceDbRebuildInstanceStats::default())
-    }
-
-    fn get_paths_to_watch(&self) -> SmallSet<WatchPattern> {
-        SmallSet::new()
-    }
-
-    fn get_target(&self, _: Option<&Path>) -> Option<Target> {
+    fn as_live_source_database(&self) -> Option<&dyn LiveSourceDatabase> {
         None
     }
+}
 
-    fn get_generated_files(&self) -> SmallSet<InternedPath> {
-        SmallSet::new()
+impl ModuleEnumerator for BuckCheckSourceDatabase {
+    fn modules_to_check(&self) -> Vec<Handle> {
+        self.modules_to_check.clone()
     }
 }
 
@@ -217,6 +189,7 @@ impl BuckCheckSourceDatabase {
         typeshed_manifests: &[PathBuf],
         sys_info: SysInfo,
         check_dependencies: bool,
+        skip_dependency_modules: Vec<Regex>,
     ) -> anyhow::Result<Self> {
         let sources = read_manifest_files(source_manifests)?;
         let dependencies = read_manifest_files(dependency_manifests)?;
@@ -227,6 +200,7 @@ impl BuckCheckSourceDatabase {
             typeshed,
             sys_info,
             check_dependencies,
+            skip_dependency_modules,
         ))
     }
 
@@ -236,6 +210,7 @@ impl BuckCheckSourceDatabase {
         typeshed_items: Vec<ManifestItem>,
         sys_info: SysInfo,
         check_dependencies: bool,
+        skip_dependency_modules: Vec<Regex>,
     ) -> Self {
         let mut implicit_init = SmallMap::new();
         for x in source_items
@@ -252,14 +227,52 @@ impl BuckCheckSourceDatabase {
             }
         }
 
+        let sources = create_manifest_item_index(source_items.into_iter());
+        let dependencies =
+            create_manifest_item_index(dependency_items.into_iter().chain(typeshed_items));
+
+        let mut lookup = dependencies
+            .iter()
+            .map(|(name, paths)| (name.dupe(), paths.first().dupe()))
+            .collect::<SmallMap<_, _>>();
+        lookup.extend(
+            sources
+                .iter()
+                .map(|(name, paths)| (name.dupe(), paths.first().dupe())),
+        );
+        for (name, path) in implicit_init {
+            lookup.entry(name).or_insert(path);
+        }
+
+        let handle = |name: &ModuleName, path: &ModulePath| {
+            Handle::new(name.dupe(), path.dupe(), sys_info.dupe())
+        };
+        let sources_to_check = sources
+            .iter()
+            .flat_map(|(name, paths)| paths.iter().map(|path| handle(name, path)));
+        let modules_to_check = if check_dependencies {
+            let dependencies_to_check = dependencies
+                .iter()
+                .filter(|(name, _)| {
+                    !skip_dependency_modules
+                        .iter()
+                        .any(|re| re.is_match(name.as_str()))
+                })
+                .flat_map(|(name, paths)| paths.iter().map(|path| handle(name, path)));
+            sources_to_check.chain(dependencies_to_check).collect()
+        } else {
+            sources_to_check.collect()
+        };
+        let path_to_handle = dependencies
+            .iter()
+            .chain(sources.iter())
+            .flat_map(|(name, paths)| paths.iter().map(|path| (path.dupe(), handle(name, path))))
+            .collect();
+
         Self {
-            sources: create_manifest_item_index(source_items.into_iter()),
-            dependencies: create_manifest_item_index(
-                dependency_items.into_iter().chain(typeshed_items),
-            ),
-            implicit_init,
-            sys_info,
-            check_dependencies,
+            lookup,
+            modules_to_check,
+            path_to_handle,
         }
     }
 }
@@ -270,28 +283,16 @@ mod tests {
 
     use super::*;
 
-    /// Return type from `BuckCheckSourceDatabase::lookup`
-    #[derive(Debug, PartialEq, Eq)]
-    enum LookupResult {
-        /// Source file of this module is owned by the current target.
-        /// Type errors in the file should be reported to user.
-        OwningSource(ModulePath),
-        /// Source file of this module is owned by the dependency of the current target.
-        /// The file should be analyzed but no type errors should be reported.
-        ExternalSource(ModulePath),
-        /// Did not find any source file associated with the given module name.
-        NoSource,
-    }
-
     impl BuckCheckSourceDatabase {
-        fn lookup_for_test(&self, module: ModuleName) -> LookupResult {
-            match self.sources.get(&module) {
-                Some(paths) => LookupResult::OwningSource(paths.first().dupe()),
-                None => match self.dependencies.get(&module) {
-                    Some(paths) => LookupResult::ExternalSource(paths.first().dupe()),
-                    None => LookupResult::NoSource,
-                },
-            }
+        fn lookup_for_test(&self, module: ModuleName) -> Option<ModulePath> {
+            self.lookup(module, None, None)
+        }
+
+        fn paths_to_check_for_test(&self) -> Vec<ModulePath> {
+            self.modules_to_check()
+                .into_iter()
+                .map(|handle| handle.path().dupe())
+                .collect()
         }
     }
 
@@ -347,22 +348,54 @@ mod tests {
             }],
             SysInfo::default(),
             false,
+            Vec::new(),
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
-            LookupResult::OwningSource(foo_path)
+            Some(foo_path.dupe())
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("bar")),
-            LookupResult::ExternalSource(bar_path)
+            Some(bar_path.dupe())
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("baz")),
-            LookupResult::ExternalSource(baz_path)
+            Some(baz_path)
+        );
+        assert_eq!(source_db.lookup_for_test(ModuleName::from_str("qux")), None);
+        assert_eq!(source_db.paths_to_check_for_test(), vec![foo_path]);
+        assert!(source_db.may_contain_module(ModuleName::from_str("foo")));
+        assert!(source_db.may_contain_module(ModuleName::from_str("bar")));
+        assert!(source_db.may_contain_module(ModuleName::from_str("baz")));
+        assert!(!source_db.may_contain_module(ModuleName::from_str("qux")));
+    }
+
+    #[test]
+    fn test_load_prefers_stub_package_for_same_module() {
+        let runtime_path =
+            ModulePath::filesystem(PathBuf::from_str("/root/foo/__init__.pyi").unwrap());
+        let stub_path =
+            ModulePath::filesystem(PathBuf::from_str("/root/foo-stubs/__init__.pyi").unwrap());
+        let source_db = BuckCheckSourceDatabase::from_manifest_items(
+            vec![],
+            vec![
+                ManifestItem {
+                    module_name: ModuleName::from_str("foo"),
+                    module_path: runtime_path,
+                },
+                ManifestItem {
+                    module_name: ModuleName::from_str("foo"),
+                    module_path: stub_path.dupe(),
+                },
+            ],
+            vec![],
+            SysInfo::default(),
+            false,
+            Vec::new(),
         );
         assert_eq!(
-            source_db.lookup_for_test(ModuleName::from_str("qux")),
-            LookupResult::NoSource
+            source_db.lookup_for_test(ModuleName::from_str("foo")),
+            Some(stub_path)
         );
     }
 
@@ -398,14 +431,15 @@ mod tests {
             vec![],
             SysInfo::default(),
             false,
+            Vec::new(),
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
-            LookupResult::OwningSource(src_foo_path)
+            Some(src_foo_path)
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("bar")),
-            LookupResult::OwningSource(src_bar_path)
+            Some(src_bar_path)
         );
     }
 
@@ -440,14 +474,15 @@ mod tests {
             vec![],
             SysInfo::default(),
             false,
+            Vec::new(),
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("foo")),
-            LookupResult::OwningSource(foo_pyi_path)
+            Some(foo_pyi_path)
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("bar")),
-            LookupResult::ExternalSource(bar_pyi_path)
+            Some(bar_pyi_path)
         );
     }
 
@@ -503,22 +538,60 @@ mod tests {
             ],
             SysInfo::default(),
             false,
+            Vec::new(),
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("a")),
-            LookupResult::ExternalSource(dep_a_path)
+            Some(dep_a_path)
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("b")),
-            LookupResult::ExternalSource(dep_b_path)
+            Some(dep_b_path)
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("c")),
-            LookupResult::ExternalSource(typeshed_c_path)
+            Some(typeshed_c_path)
         );
         assert_eq!(
             source_db.lookup_for_test(ModuleName::from_str("d")),
-            LookupResult::ExternalSource(dep_d_path)
+            Some(dep_d_path)
+        );
+    }
+
+    #[test]
+    fn test_check_dependencies_with_skip_patterns() {
+        let foo_path = ModulePath::filesystem(PathBuf::from_str("/src/foo.py").unwrap());
+        let bar_path = ModulePath::filesystem(PathBuf::from_str("/dep/bar.py").unwrap());
+        let baz_path = ModulePath::filesystem(PathBuf::from_str("/dep/baz.py").unwrap());
+
+        let source_db = BuckCheckSourceDatabase::from_manifest_items(
+            vec![ManifestItem {
+                module_name: ModuleName::from_str("foo"),
+                module_path: foo_path.dupe(),
+            }],
+            vec![
+                ManifestItem {
+                    module_name: ModuleName::from_str("bar"),
+                    module_path: bar_path.dupe(),
+                },
+                ManifestItem {
+                    module_name: ModuleName::from_str("baz"),
+                    module_path: baz_path.dupe(),
+                },
+            ],
+            vec![],
+            SysInfo::default(),
+            true,
+            vec![Regex::new("^bar$").unwrap()],
+        );
+
+        assert_eq!(
+            source_db.paths_to_check_for_test(),
+            vec![foo_path, baz_path]
+        );
+        assert_eq!(
+            source_db.lookup_for_test(ModuleName::from_str("bar")),
+            Some(bar_path)
         );
     }
 
@@ -543,6 +616,7 @@ mod tests {
             vec![],
             SysInfo::default(),
             false,
+            Vec::new(),
         );
         let res = source_db.lookup(ModuleName::from_str("foo"), None, None);
         assert_eq!(res.unwrap().as_path().to_str().unwrap(), "/root/foo");

@@ -104,6 +104,7 @@ const styles = stylex.create({
         flex: 1,
         position: 'relative',
         padding: '1rem 0',
+        scrollMarginTop: '4rem',
     },
     isFirstSection: {
         paddingTop: '7rem',

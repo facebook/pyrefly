@@ -5,6 +5,9 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::cmp::Reverse;
+use std::fmt::Display;
+
 use dupe::Dupe;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_util::display;
@@ -21,16 +24,25 @@ type ErrorCounts = SmallMap<ErrorKind, usize>;
 fn collect_and_sort<I, T>(errors: I) -> Vec<(T, Vec<(ErrorKind, usize)>)>
 where
     I: IntoIterator<Item = (T, ErrorCounts)>,
+    T: Display,
 {
     let mut errors = errors
         .into_iter()
         .map(|(p, error_counts)| {
             let mut error_kind_counts = error_counts.into_iter().collect::<Vec<_>>();
-            error_kind_counts.sort_by_key(|(_, c)| -(*c as isize));
+            error_kind_counts.sort_by(|(k1, c1), (k2, c2)| {
+                c2.cmp(c1).then_with(|| k1.to_name().cmp(k2.to_name()))
+            });
             (p, error_kind_counts)
         })
         .collect::<Vec<_>>();
-    errors.sort_by_key(|(_, m)| -(m.iter().map(|x| x.1).sum::<usize>() as isize));
+    // Cache the total and path string per entry so the comparator does not
+    // re-sum the counts or re-format the path on every comparison. Sort by count
+    // descending (via `Reverse`), then by path name ascending.
+    errors.sort_by_cached_key(|(p, m)| {
+        let total: usize = m.iter().map(|x| x.1).sum();
+        (Reverse(total), p.to_string())
+    });
     errors
 }
 
@@ -53,7 +65,6 @@ fn get_errors_per_file(errors: &[Error]) -> SmallMap<ModulePath, SmallMap<ErrorK
 /// and path_index = 2 groups by alpha/beta/gamma.
 /// If the path_index is larger than the number of components in the path, then the entire path is used.
 pub fn print_error_summary(errors: &[Error]) {
-    // TODO: Sort errors by count and then name. More consistent and human-readable.
     // TODO: Consider output formatting.
     let path_errors = get_errors_per_file(errors);
     eprintln!("=== Error Summary ===");
@@ -84,10 +95,58 @@ pub fn print_error_summary(errors: &[Error]) {
             })
             .into_iter()
             .collect::<Vec<_>>();
-        ec.sort_by_key(|(_, c)| -(*c as isize));
+        ec.sort_by(|(k1, c1), (k2, c2)| c2.cmp(c1).then_with(|| k1.to_name().cmp(k2.to_name())));
         ec
     };
     for (kind, count) in error_counts {
         eprintln!("{}: {}", kind.to_name(), display::count(count, "instance"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use starlark_map::smallmap;
+
+    use super::*;
+
+    #[test]
+    fn collect_and_sort_breaks_count_ties_by_name() {
+        // "z.py" has the largest total, so it sorts first regardless of input
+        // order. "a.py" and "b.py" tie on total (4), so the file order breaks on
+        // name ascending. Within "b.py" two kinds tie on count (2), so the
+        // per-kind order breaks on error-kind name ascending (`bad-assignment`
+        // before `bad-return`). Input order is deliberately none of these.
+        let input = vec![
+            (
+                "b.py",
+                smallmap! {
+                    ErrorKind::BadReturn => 2,
+                    ErrorKind::BadAssignment => 2,
+                },
+            ),
+            ("z.py", smallmap! { ErrorKind::BadAssignment => 5 }),
+            (
+                "a.py",
+                smallmap! {
+                    ErrorKind::BadReturn => 1,
+                    ErrorKind::BadAssignment => 3,
+                },
+            ),
+        ];
+
+        assert_eq!(
+            collect_and_sort(input),
+            vec![
+                ("z.py", vec![(ErrorKind::BadAssignment, 5)]),
+                (
+                    "a.py",
+                    vec![(ErrorKind::BadAssignment, 3), (ErrorKind::BadReturn, 1)],
+                ),
+                (
+                    "b.py",
+                    vec![(ErrorKind::BadAssignment, 2), (ErrorKind::BadReturn, 2)],
+                ),
+            ],
+        );
     }
 }

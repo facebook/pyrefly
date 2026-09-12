@@ -76,8 +76,11 @@ pub fn filter_unrecognized_lsp_args(args: Vec<OsString>) -> Vec<OsString> {
         return args;
     };
 
-    let mut known_long: HashSet<String> = HashSet::new();
-    let mut known_short: HashSet<char> = HashSet::new();
+    // Seed with the auto-generated `--help`/`-h` flags. clap synthesizes these,
+    // so they are not returned by `get_arguments()`; without this they would be
+    // stripped and `pyrefly lsp --help` would silently start the server.
+    let mut known_long: HashSet<String> = HashSet::from(["help".to_owned()]);
+    let mut known_short: HashSet<char> = HashSet::from(['h']);
     for cmd in [LspArgs::command(), CommonGlobalArgs::command()] {
         for arg in cmd.get_arguments() {
             if let Some(long) = arg.get_long() {
@@ -127,12 +130,13 @@ pub fn run_lsp(
     server_info: Option<ServerInfo>,
     path_remapper: Option<PathRemapper>,
     thrift_remapper: Option<ThriftRemapper>,
-    telemetry: &impl Telemetry,
+    telemetry: &dyn Telemetry,
     external_references: Arc<dyn ExternalProvider>,
     wrapper: Option<ConfigConfigurerWrapper>,
     thread_count: ThreadCount,
 ) -> anyhow::Result<()> {
     let lsp_start_time = Instant::now();
+    let server_version = server_info.as_ref().and_then(|i| i.version.clone());
     if let Some(initialize_info) =
         initialize_connection(&connection, &mut reader, args.indexing_mode, server_info)?
     {
@@ -150,6 +154,7 @@ pub fn run_lsp(
             wrapper,
             thread_count,
             lsp_start_time,
+            server_version,
         )?;
     }
     Ok(())
@@ -180,7 +185,7 @@ impl LspArgs {
         version: &str,
         path_remapper: Option<PathRemapper>,
         thrift_remapper: Option<ThriftRemapper>,
-        telemetry: &impl Telemetry,
+        telemetry: &dyn Telemetry,
         external_references: Arc<dyn ExternalProvider>,
         wrapper: Option<ConfigConfigurerWrapper>,
         thread_count: ThreadCount,
@@ -304,6 +309,20 @@ mod tests {
         let args = os(&["pyrefly", "lsp", "-j", "4"]);
         let result = filter_unrecognized_lsp_args(args.clone());
         assert_eq!(result, args);
+    }
+
+    #[test]
+    fn filter_preserves_help_flags() {
+        // `--help`/`-h` are synthesized by clap and not in `get_arguments()`, so
+        // they must be allowlisted explicitly or the server starts instead of
+        // printing help.
+        for help in [
+            os(&["pyrefly", "lsp", "--help"]),
+            os(&["pyrefly", "lsp", "-h"]),
+        ] {
+            let result = filter_unrecognized_lsp_args(help.clone());
+            assert_eq!(result, help);
+        }
     }
 
     #[test]

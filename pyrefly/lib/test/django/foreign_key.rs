@@ -110,6 +110,44 @@ assert_type(article.reporter_id, int)
 "#,
 );
 
+testcase!(
+    test_foreign_key_app_label_string_literal,
+    django_env_with_model_import(),
+    r#"
+from typing import assert_type, TYPE_CHECKING
+from django.db import models
+
+if TYPE_CHECKING:
+    from .reporter import Reporter
+
+class Article(models.Model):
+    reporter = models.ForeignKey('news.Reporter', on_delete=models.CASCADE)
+
+article = Article()
+assert_type(article.reporter, Reporter)
+assert_type(article.reporter.full_name, str)
+assert_type(article.reporter_id, int)
+"#,
+);
+
+testcase!(
+    test_foreign_key_module_alias,
+    django_env_with_model_import(),
+    r#"
+from typing import assert_type
+from django.db import models
+import reporter as reporter_models
+
+class Article(models.Model):
+    reporter = models.ForeignKey(reporter_models.Reporter, on_delete=models.CASCADE)
+
+article = Article()
+assert_type(article.reporter, reporter_models.Reporter)
+assert_type(article.reporter.full_name, str)
+assert_type(article.reporter_id, int)
+"#,
+);
+
 django_testcase!(
     test_foreign_key_self_reference,
     r#"

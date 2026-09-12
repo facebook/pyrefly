@@ -28,7 +28,12 @@ impl ConfigOptionMigrater for ProjectIncludes {
         let packages = util::string_to_array(&mypy_cfg.get("mypy", "packages"));
         let modules = util::string_to_array(&mypy_cfg.get("mypy", "modules"));
 
-        let includes: Vec<String> = [files, packages, modules].into_iter().flatten().collect();
+        let includes: Vec<String> = [files, packages, modules]
+            .into_iter()
+            .flatten()
+            .map(|s| util::expand_config_file_dir(&s))
+            .filter(|s| !s.is_empty())
+            .collect();
 
         if includes.is_empty() {
             return Err(anyhow::anyhow!("No project includes found in mypy config"));
@@ -90,6 +95,29 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(pyrefly_cfg.project_includes, expected_includes);
+    }
+
+    #[test]
+    fn test_migrate_from_mypy_expands_config_file_dir() {
+        // `$MYPY_CONFIG_FILE_DIR` is mypy's variable for the config file's
+        // directory; pyrefly strips it from the front of each entry so the
+        // migrated include stays relative.
+        let mut mypy_cfg = Ini::new();
+        mypy_cfg.set(
+            "mypy",
+            "files",
+            Some("$MYPY_CONFIG_FILE_DIR/src,$MYPY_CONFIG_FILE_DIR/lib".to_owned()),
+        );
+
+        let mut pyrefly_cfg = ConfigFile::default();
+
+        let project_includes = ProjectIncludes;
+        let _ = project_includes.migrate_from_mypy(&mypy_cfg, &mut pyrefly_cfg);
+
+        assert_eq!(
+            pyrefly_cfg.project_includes,
+            Globs::new(vec!["src".to_owned(), "lib".to_owned()]).unwrap()
+        );
     }
 
     #[test]

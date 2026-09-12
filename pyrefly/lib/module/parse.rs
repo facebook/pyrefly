@@ -9,6 +9,7 @@ use pyrefly_python::ast::Ast;
 use pyrefly_python::sys_info::PythonVersion;
 use ruff_python_ast::ModModule;
 use ruff_python_ast::PySourceType;
+use ruff_python_ast::token::Tokens;
 
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
@@ -18,8 +19,9 @@ pub fn module_parse(
     version: PythonVersion,
     source_type: PySourceType,
     errors: &ErrorCollector,
-) -> ModModule {
-    let (module, parse_errors, unsupported_syntax_errors) =
+    keep_tokens: bool,
+) -> (ModModule, Option<Tokens>) {
+    let (parsed, parse_errors, unsupported_syntax_errors) =
         Ast::parse_with_version(contents, version, source_type);
     for err in parse_errors {
         errors
@@ -35,5 +37,12 @@ pub fn module_parse(
             .error_builder(err.range, ErrorKind::InvalidSyntax, format!("{err}"))
             .emit();
     }
-    module
+
+    let tokens = if keep_tokens {
+        Some(parsed.tokens().clone())
+    } else {
+        None
+    };
+
+    (parsed.into_syntax(), tokens)
 }

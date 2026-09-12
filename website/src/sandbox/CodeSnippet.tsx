@@ -21,7 +21,7 @@ interface CodeSnippetProps {
 export default function CodeSnippet({
     sampleFilename,
     codeSample = '',
-}: CodeSnippetProps): JSX.Element {
+}: CodeSnippetProps): React.JSX.Element {
     if (sampleFilename == null) {
         throw "Missing sampleFilename. IDE services won't work properly.";
     }

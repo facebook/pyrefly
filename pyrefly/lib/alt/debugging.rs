@@ -32,7 +32,7 @@ use crate::dispatch_anyidx;
 ///   if debug {
 ///      ... dump some information that would be too verbose if printed for stdlib modules ...
 ///   }
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn show_idx<K>(&self, idx: Idx<K>) -> String
     where
         K: Keyed,

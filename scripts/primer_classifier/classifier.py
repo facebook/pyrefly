@@ -301,9 +301,7 @@ def _cross_check_stats(entries: list[ErrorEntry]) -> str:
     return f"    Cross-check: {in_mypy}/{total} also in mypy, {in_pyright}/{total} also in pyright"
 
 
-def _format_errors_for_llm(
-    project: ProjectDiff, cross_check: bool = False
-) -> str:
+def _format_errors_for_llm(project: ProjectDiff, cross_check: bool = False) -> str:
     """Format errors for the LLM prompt.
 
     For projects with <= CATEGORY_THRESHOLD errors, list each individually.
@@ -414,9 +412,7 @@ def _determine_change_type(project: ProjectDiff) -> str:
         return "mixed (some errors added, some removed)"
 
 
-def _compute_structural_signals(
-    project: ProjectDiff, cross_check: bool = False
-) -> str:
+def _compute_structural_signals(project: ProjectDiff, cross_check: bool = False) -> str:
     """Compute structural signals about the project and errors for the LLM.
 
     Returns a string of signals to append to the user prompt, helping the
@@ -427,9 +423,7 @@ def _compute_structural_signals(
 
     # Cross-check signal: summarize how many errors are also in mypy/pyright
     if cross_check and project.added:
-        total, in_mypy, in_pyright, pyrefly_only = _cross_check_counts(
-            project.added
-        )
+        total, in_mypy, in_pyright, pyrefly_only = _cross_check_counts(project.added)
         if total > 0:
             signals.append(
                 f"STRUCTURAL SIGNAL — CROSS-CHECK: {in_mypy}/{total} new errors also reported by mypy, "
@@ -568,9 +562,7 @@ def classify_project(
     # Build cross-check stats string if cross-checking was enabled
     cc_stats = ""
     if cross_check and project.added:
-        total, in_mypy, in_pyright, pyrefly_only = _cross_check_counts(
-            project.added
-        )
+        total, in_mypy, in_pyright, pyrefly_only = _cross_check_counts(project.added)
         if total > 0:
             cc_stats = (
                 f"{in_mypy}/{total} mypy, {in_pyright}/{total} pyright, "
@@ -583,11 +575,11 @@ def classify_project(
         reason="",
         added_count=len(project.added),
         removed_count=len(project.removed),
-        error_kinds=sorted(set(
-            e.error_kind
-            for e in (*project.added, *project.removed)
-            if e.error_kind
-        )),
+        error_kinds=sorted(
+            set(
+                e.error_kind for e in (*project.added, *project.removed) if e.error_kind
+            )
+        ),
         cross_check_stats=cc_stats,
     )
 
@@ -755,7 +747,8 @@ def _enforce_cross_project_consistency(
     """
     # Only consider LLM-classified projects with clear verdicts
     llm_classified = [
-        c for c in classifications
+        c
+        for c in classifications
         if c.method == "llm" and c.verdict in ("regression", "improvement")
     ]
     if len(llm_classified) < 2:
@@ -783,9 +776,7 @@ def _enforce_cross_project_consistency(
             verdict_counts[v] = verdict_counts.get(v, 0) + 1
 
         majority = max(verdict_counts, key=lambda v: verdict_counts[v])
-        minority_count = sum(
-            c for v, c in verdict_counts.items() if v != majority
-        )
+        minority_count = sum(c for v, c in verdict_counts.items() if v != majority)
 
         # Only enforce if majority is clear (> minority)
         if verdict_counts[majority] <= minority_count:
@@ -868,11 +859,13 @@ def classify_all(
             result.ambiguous += 1
 
     # Pass 3: aggregate suggestion generation
-    if generate_suggestion and use_llm and (result.regressions > 0 or result.ambiguous > 0):
+    if (
+        generate_suggestion
+        and use_llm
+        and (result.regressions > 0 or result.ambiguous > 0)
+    ):
         try:
-            suggestion_result = generate_suggestions(
-                result, pyrefly_diff or "", model
-            )
+            suggestion_result = generate_suggestions(result, pyrefly_diff or "", model)
             result.suggestion = suggestion_result
         except Exception as e:
             print(

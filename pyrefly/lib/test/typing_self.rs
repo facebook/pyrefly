@@ -347,6 +347,16 @@ class C(type):
 );
 
 testcase!(
+    test_self_inside_typed_dict,
+    r#"
+from typing import Optional, Self, TypedDict
+
+class TD(TypedDict):
+    x: Optional[Self]  # E: `Self` is not allowed in a `TypedDict`
+    "#,
+);
+
+testcase!(
     test_classmethod_cls_call_returns_self,
     r#"
 from typing import Self
@@ -611,10 +621,11 @@ def test(c: MyClass) -> None:
 "#,
 );
 
-// Regression test for a previously unhandled crash when computing intersection
-// of SelfType and ClassType (after removing SelfType <: ClassType)
+// Narrowing `cls` (a `type[Self]`) via `issubclass` intersects `SelfType(Parent)`
+// with `ClassType(Child)`. That intersection stays a self-type anchored at `Child`,
+// so `cls(...)` resolves through `Child`'s constructor while its result remains
+// assignable to the declared `-> Self`.
 testcase!(
-    bug = "Should not error",
     test_classmethod_self_return_with_issubclass_narrowing,
     r#"
 from typing import Self, assert_type
@@ -623,8 +634,7 @@ class Parent:
     @classmethod
     def decode(cls, data: dict) -> Self:
         if issubclass(cls, Child):
-            # This narrowing creates an intersection of a Self type with a concrete type
-            return cls(data, legacy=True) # E: Returned type `Child` is not assignable to declared return type `Self@Parent`
+            return cls(data, legacy=True)
         return cls(data)
 
     def __init__(self, data: dict) -> None:
@@ -636,6 +646,26 @@ class Child(Parent):
 
 assert_type(Parent.decode({}), Parent)
 assert_type(Child.decode({}), Child)
+"#,
+);
+
+// `isinstance(self, Child)` narrows `self` (a `SelfType(Parent)`) by intersecting
+// with `ClassType(Child)`. The result stays a self-type anchored at `Child`, so
+// `Child`-only members are accessible and `return self` still satisfies `-> Self`.
+testcase!(
+    test_instance_method_self_return_with_isinstance_narrowing,
+    r#"
+from typing import Self, assert_type
+
+class Parent:
+    def widen(self) -> Self:
+        if isinstance(self, Child):
+            assert_type(self.extra, int)
+            return self
+        return self
+
+class Child(Parent):
+    extra: int = 0
 "#,
 );
 
@@ -714,7 +744,7 @@ class TypedField(Generic[T, V]):
     def __set__(self, instance: T, value: V) -> None: ...
 
 class Base:
-    field: TypedField[Base, str] = TypedField()
+    field: TypedField["Base", str] = TypedField()
 
     def update(self) -> None:
         self.field = "hello"
