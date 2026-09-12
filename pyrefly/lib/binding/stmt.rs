@@ -759,6 +759,17 @@ impl<'a> BindingsBuilder<'a> {
                             self.assign_type_var(name, call, kind);
                             return;
                         }
+                        if special == SpecialExport::ClassMethod
+                            && self.scopes.in_class_body()
+                            && call.arguments.keywords.is_empty()
+                            && let [Expr::Name(argument)] = &*call.arguments.args
+                            && argument.id == name.id
+                            && let Some((_, FlowStyle::FunctionDef { function_idx, .. })) =
+                                self.scopes.binding_idx_for_name(&name.id)
+                        {
+                            self.mark_reassigned_classmethod(function_idx);
+                            self.scopes.mark_method_as_classmethod(&name.id);
+                        }
                         match special {
                             SpecialExport::ParamSpec => {
                                 self.assign_param_spec(name, call);

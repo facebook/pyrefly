@@ -1079,6 +1079,19 @@ impl ScopeClass {
         }
     }
 
+    fn mark_method_as_classmethod(&mut self, method_name: &Name) {
+        for attributes in [
+            &mut self.attributes_from_recognized_methods,
+            &mut self.attributes_from_other_methods,
+        ] {
+            if let Some(attributes) = attributes.get_mut(method_name) {
+                for attribute in attributes.values_mut() {
+                    attribute.3 = MethodSelfKind::Class;
+                }
+            }
+        }
+    }
+
     /// Produces triples (hashed_attr_name, MethodThatSetsAttr, attribute) for all assignments
     /// to `self.<attr_name>` in methods.
     ///
@@ -1720,6 +1733,13 @@ impl Scopes {
             ScopeKind::Class(_) => true,
             _ => false,
         }
+    }
+
+    pub fn mark_method_as_classmethod(&mut self, method_name: &Name) {
+        let ScopeKind::Class(class_scope) = &mut self.current_mut().kind else {
+            unreachable!("a reassigned classmethod is only marked in a class body")
+        };
+        class_scope.mark_method_as_classmethod(method_name);
     }
 
     /// The `ClassDefIndex` of the current class body, if the innermost scope is one.
