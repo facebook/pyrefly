@@ -6,6 +6,7 @@
  */
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use lsp_types::SemanticToken;
 use lsp_types::SemanticTokenModifier;
@@ -20,12 +21,16 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit as _;
+use regex::Regex;
 use ruff_python_ast::Arguments;
 use ruff_python_ast::ExceptHandler;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprContext;
+use ruff_python_ast::InterpolatedElement;
+use ruff_python_ast::InterpolatedStringElement;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Operator;
 use ruff_python_ast::Pattern;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
@@ -43,11 +48,36 @@ use crate::state::lsp::attribute_symbol_kind_from_type;
 
 const SELF_PARAMETER_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("selfParameter");
 const BYTE_STRING_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("byteString");
+const ESCAPE_SEQUENCE_MODIFIER: SemanticTokenModifier =
+    SemanticTokenModifier::new("escapeSequence");
+const FORMAT_PLACEHOLDER_MODIFIER: SemanticTokenModifier =
+    SemanticTokenModifier::new("formatPlaceholder");
+const FORMAT_SPECIFIER_MODIFIER: SemanticTokenModifier =
+    SemanticTokenModifier::new("formatSpecifier");
 const FORMAT_STRING_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("formatString");
 const RAW_STRING_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("rawString");
 const STRING_PREFIX_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("stringPrefix");
 const TEMPLATE_STRING_MODIFIER: SemanticTokenModifier =
     SemanticTokenModifier::new("templateString");
+
+// Mirrors the escape forms consumed by Ruff's string parser. Raw strings bypass these,
+// and byte strings use the subset without Unicode escapes.
+static STRING_ESCAPE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"\\(?:\r\n?|\n|[\\'"abfnrtv]|[0-7]{1,3}|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|N\{[^}\r\n]+\})"#,
+    )
+    .expect("string escape regex must be valid")
+});
+static BYTE_STRING_ESCAPE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\\(?:\r\n?|\n|[\\'"abfnrtv]|[0-7]{1,3}|x[0-9A-Fa-f]{2})"#)
+        .expect("byte string escape regex must be valid")
+});
+static PRINTF_PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"%(?:%|(?:\([^\r\n)]*\))?[#0 +\-]*(?:\*|[0-9]+)?(?:\.(?:\*|[0-9]*))?[hlL]?[diouxXeEfFgGcrsab%])",
+    )
+    .expect("printf placeholder regex must be valid")
+});
 
 /// Adds the DEFAULT_LIBRARY modifier if the module is a standard library module
 /// (builtins, typing, typing_extensions).
@@ -112,6 +142,9 @@ impl SemanticTokensLegends {
                 SemanticTokenModifier::DEFAULT_LIBRARY,
                 SELF_PARAMETER_MODIFIER.clone(),
                 BYTE_STRING_MODIFIER.clone(),
+                ESCAPE_SEQUENCE_MODIFIER.clone(),
+                FORMAT_PLACEHOLDER_MODIFIER.clone(),
+                FORMAT_SPECIFIER_MODIFIER.clone(),
                 FORMAT_STRING_MODIFIER.clone(),
                 RAW_STRING_MODIFIER.clone(),
                 STRING_PREFIX_MODIFIER.clone(),
@@ -260,6 +293,91 @@ fn range_overlaps(limit_range: Option<TextRange>, range: TextRange) -> bool {
     })
 }
 
+struct StringContentRange {
+    range: TextRange,
+    modifier: SemanticTokenModifier,
+}
+
+fn text_size(value: usize) -> TextSize {
+    TextSize::try_from(value).expect("string token offset must fit in TextSize")
+}
+
+fn regex_content_ranges(
+    regex: &Regex,
+    range: TextRange,
+    source: &str,
+    modifier: &SemanticTokenModifier,
+) -> Vec<StringContentRange> {
+    let text = &source[range.start().to_usize()..range.end().to_usize()];
+    regex
+        .find_iter(text)
+        .map(|found| StringContentRange {
+            range: TextRange::at(
+                range.start() + text_size(found.start()),
+                text_size(found.len()),
+            ),
+            modifier: modifier.clone(),
+        })
+        .collect()
+}
+
+fn collect_interpolated_string_ranges(
+    elements: &[InterpolatedStringElement],
+    modifiers: &[SemanticTokenModifier],
+    content_ranges: &mut Vec<StringContentRange>,
+    punctuation_ranges: &mut Vec<SemanticTokenWithFullRange>,
+) {
+    for element in elements {
+        let InterpolatedStringElement::Interpolation(InterpolatedElement {
+            range,
+            conversion,
+            format_spec,
+            ..
+        }) = element
+        else {
+            continue;
+        };
+        let format_spec_start = format_spec.as_ref().map(|spec| spec.start());
+        if conversion.to_byte().is_some() {
+            let end = format_spec_start
+                .map(|start| start - text_size(1))
+                .unwrap_or(range.end() - text_size(1));
+            punctuation_ranges.push(SemanticTokenWithFullRange {
+                range: TextRange::new(end - text_size(2), end),
+                token_type: SemanticTokenType::STRING,
+                token_modifiers: modifiers
+                    .iter()
+                    .cloned()
+                    .chain([FORMAT_SPECIFIER_MODIFIER.clone()])
+                    .collect(),
+            });
+        }
+        if let Some(format_spec) = format_spec {
+            punctuation_ranges.push(SemanticTokenWithFullRange {
+                range: TextRange::at(format_spec.start() - text_size(1), text_size(1)),
+                token_type: SemanticTokenType::STRING,
+                token_modifiers: modifiers
+                    .iter()
+                    .cloned()
+                    .chain([FORMAT_SPECIFIER_MODIFIER.clone()])
+                    .collect(),
+            });
+            content_ranges.extend(format_spec.elements.literals().map(|literal| {
+                StringContentRange {
+                    range: literal.range,
+                    modifier: FORMAT_SPECIFIER_MODIFIER.clone(),
+                }
+            }));
+            collect_interpolated_string_ranges(
+                &format_spec.elements,
+                modifiers,
+                content_ranges,
+                punctuation_ranges,
+            );
+        }
+    }
+}
+
 /// Classify an attribute's resolved type into a semantic token kind. For a union,
 /// every member must agree on the same kind; any disagreement (or a member that is
 /// a plain attribute) falls back to `PROPERTY`.
@@ -336,8 +454,84 @@ impl SemanticTokenBuilder {
             .any(|disabled| disabled.contains_range(range))
     }
 
-    /// Add syntax-level semantic tokens, classifying Python string kinds from lexer metadata.
-    pub fn process_syntax_tokens(&mut self, tokens: &Tokens) {
+    fn push_string_range(
+        &mut self,
+        range: TextRange,
+        modifiers: Vec<SemanticTokenModifier>,
+        content_ranges: &[StringContentRange],
+    ) {
+        let mut boundaries = vec![range.start(), range.end()];
+        for content in content_ranges {
+            if let Some(intersection) = range.intersect(content.range) {
+                boundaries.push(intersection.start());
+                boundaries.push(intersection.end());
+            }
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        for boundary in boundaries.windows(2) {
+            let segment = TextRange::new(boundary[0], boundary[1]);
+            let mut segment_modifiers = modifiers.clone();
+            for content in content_ranges {
+                if content.range.contains_range(segment)
+                    && !segment_modifiers.contains(&content.modifier)
+                {
+                    segment_modifiers.push(content.modifier.clone());
+                }
+            }
+            self.push_if_in_range(segment, SemanticTokenType::STRING, segment_modifiers);
+        }
+    }
+
+    /// Add syntax-level semantic tokens, using the AST for interpolated and printf formatting.
+    pub fn process_syntax_tokens(&mut self, tokens: &Tokens, ast: &ModModule, source: &str) {
+        let mut content_ranges = Vec::new();
+        let mut punctuation_ranges = Vec::new();
+        let mut printf_operands = Vec::new();
+        ast.visit(&mut |expr| match expr {
+            Expr::FString(expr) => {
+                for fstring in expr.value.f_strings() {
+                    let mut modifiers = vec![FORMAT_STRING_MODIFIER.clone()];
+                    if fstring.flags.prefix().is_raw() {
+                        modifiers.push(RAW_STRING_MODIFIER.clone());
+                    }
+                    collect_interpolated_string_ranges(
+                        &fstring.elements,
+                        &modifiers,
+                        &mut content_ranges,
+                        &mut punctuation_ranges,
+                    );
+                }
+            }
+            Expr::TString(expr) => {
+                for tstring in expr.value.iter() {
+                    let mut modifiers = vec![TEMPLATE_STRING_MODIFIER.clone()];
+                    if tstring.flags.prefix().is_raw() {
+                        modifiers.push(RAW_STRING_MODIFIER.clone());
+                    }
+                    collect_interpolated_string_ranges(
+                        &tstring.elements,
+                        &modifiers,
+                        &mut content_ranges,
+                        &mut punctuation_ranges,
+                    );
+                }
+            }
+            Expr::BinOp(binop)
+                if binop.op == Operator::Mod
+                    && matches!(
+                        binop.left.as_ref(),
+                        Expr::StringLiteral(_)
+                            | Expr::BytesLiteral(_)
+                            | Expr::FString(_)
+                            | Expr::TString(_)
+                    ) =>
+            {
+                printf_operands.push(binop.left.range());
+            }
+            _ => {}
+        });
+
         for token in tokens.iter() {
             let kind = token.kind();
             match kind {
@@ -384,19 +578,58 @@ impl SemanticTokenBuilder {
                             vec![STRING_PREFIX_MODIFIER.clone()],
                         );
                     }
-                    self.push_if_in_range(
-                        TextRange::new(token.start() + prefix_len, token.end()),
-                        SemanticTokenType::STRING,
-                        modifiers,
+                    let content_range = TextRange::new(token.start() + prefix_len, token.end());
+                    let escape_regex: &Regex = if flags.is_byte_string() {
+                        &BYTE_STRING_ESCAPE
+                    } else {
+                        &STRING_ESCAPE
+                    };
+                    let mut token_content_ranges = if flags.is_raw_string() {
+                        Vec::new()
+                    } else {
+                        regex_content_ranges(
+                            escape_regex,
+                            content_range,
+                            source,
+                            &ESCAPE_SEQUENCE_MODIFIER,
+                        )
+                    };
+                    if printf_operands
+                        .iter()
+                        .any(|operand| operand.contains_range(token.range()))
+                    {
+                        token_content_ranges.extend(regex_content_ranges(
+                            &PRINTF_PLACEHOLDER,
+                            content_range,
+                            source,
+                            &FORMAT_PLACEHOLDER_MODIFIER,
+                        ));
+                    }
+                    token_content_ranges.extend(
+                        content_ranges
+                            .iter()
+                            .filter(|content| content.range.intersect(content_range).is_some())
+                            .map(|content| StringContentRange {
+                                range: content.range,
+                                modifier: content.modifier.clone(),
+                            }),
                     );
+                    self.push_string_range(content_range, modifiers, &token_content_ranges);
                 }
                 _ => {
+                    if punctuation_ranges
+                        .iter()
+                        .any(|special| special.range.contains_range(token.range()))
+                    {
+                        continue;
+                    }
                     if let Some(token_type) = syntax_token_type(kind) {
                         self.push_if_in_range(token.range(), token_type, Vec::new());
                     }
                 }
             }
         }
+        self.tokens.extend(punctuation_ranges);
     }
 
     fn process_arguments(&mut self, args: &Arguments) {

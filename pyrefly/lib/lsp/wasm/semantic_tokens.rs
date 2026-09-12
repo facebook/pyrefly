@@ -33,7 +33,7 @@ impl Transaction<'_> {
         let mut builder = SemanticTokenBuilder::new(limit_range, disabled_ranges);
 
         if include_syntax_tokens && let Some(tokens) = parsed.tokens() {
-            builder.process_syntax_tokens(&tokens);
+            builder.process_syntax_tokens(&tokens, &ast, module_info.contents().as_str());
         }
 
         builder.process_ast(
