@@ -560,7 +560,7 @@ impl RuleOverrides {
         // Import rules
         add(
             self.report_implicit_relative_import,
-            ErrorKind::MissingImport,
+            ErrorKind::ImplicitRelativeImport,
         );
 
         // Type argument rules
@@ -799,6 +799,20 @@ include = ["basedpyright.py"]
             err.downcast_ref::<BothPyrightSectionsError>().is_some(),
             "expected BothPyrightSectionsError, got: {err:#}"
         );
+    }
+
+    #[test]
+    fn test_implicit_relative_import_maps_to_dedicated_error_kind() -> anyhow::Result<()> {
+        let raw_file = r#"{"reportImplicitRelativeImport": "none"}"#;
+        let config = serde_json::from_str::<PyrightConfig>(raw_file)?.convert();
+        let errors = config.root.errors.as_ref().unwrap();
+
+        assert_eq!(
+            errors.severity(ErrorKind::ImplicitRelativeImport),
+            Severity::Ignore
+        );
+        assert_eq!(errors.severity(ErrorKind::MissingImport), Severity::Error);
+        Ok(())
     }
 
     #[test]

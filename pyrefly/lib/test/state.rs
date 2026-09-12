@@ -42,6 +42,8 @@ use tempfile::TempDir;
 use crate::commands::config_finder::default_config_finder;
 use crate::config::config::ConfigFile;
 use crate::config::config::ConfigSource;
+use crate::config::error_kind::ErrorKind;
+use crate::config::error_kind::Severity;
 use crate::config::finder::ConfigFinder;
 use crate::error::error::print_errors;
 use crate::lsp::non_wasm::server::resolve_export_location;
@@ -52,6 +54,42 @@ use crate::state::require::Require;
 use crate::state::require::RequireLevels;
 use crate::state::state::State;
 use crate::test::util::TestEnv;
+
+#[test]
+fn test_directory_relative_import_emits_dedicated_diagnostic() {
+    let tdir = TempDir::new().unwrap();
+    let root = tdir.path();
+    let package = root.join("pkg");
+    fs::create_dir(&package).unwrap();
+    fs::write(root.join(ConfigFile::PYREFLY_FILE_NAME), "").unwrap();
+    fs::write(package.join("helper.py"), "answer: int = 42").unwrap();
+    let main_path = package.join("main.py");
+    fs::write(&main_path, "import helper\nvalue: int = helper.answer\n").unwrap();
+
+    let mut config = ConfigFile {
+        source: ConfigSource::File(root.join(ConfigFile::PYREFLY_FILE_NAME)),
+        enable_fallback_search_path: true,
+        ..Default::default()
+    };
+    config.python_environment.set_empty_to_default();
+    config.interpreters.skip_interpreter_query = true;
+    config.configure();
+    let config = ArcId::new(config);
+    let handle = Handle::new(
+        ModuleName::from_str("pkg.main"),
+        ModulePath::filesystem(main_path),
+        config.get_sys_info(),
+    );
+    let state = State::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT);
+    let mut transaction = state.new_transaction(Require::Errors, None);
+
+    transaction.run(&[handle.dupe()], Require::Errors, None);
+    let errors = transaction.get_errors([&handle]).collect_display_errors();
+
+    assert_eq!(errors.len(), 1, "expected one diagnostic, got {errors:?}");
+    assert_eq!(errors[0].error_kind(), ErrorKind::ImplicitRelativeImport);
+    assert!(errors[0].msg().contains("implicitly relative"));
+}
 
 #[derive(Debug)]
 struct MutableShapeExtensionsSourceDb {
@@ -447,6 +485,13 @@ def f(x: Float[Tensor, "batch channels"]) -> None:
         enable_fallback_search_path: true,
         ..Default::default()
     };
+    // This test intentionally models third-party imports with the directory-relative
+    // fallback. Keep its assertions focused on origin-sensitive tensor shape state.
+    config
+        .root
+        .errors
+        .get_or_insert_default()
+        .set_error_severity(ErrorKind::ImplicitRelativeImport, Severity::Ignore);
     config.root.jaxtyping = Some(true);
     config.python_environment.set_empty_to_default();
     config.interpreters.skip_interpreter_query = true;
