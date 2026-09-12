@@ -227,10 +227,24 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// The extra items of `cls`, expressed in terms of `cls`'s own type parameters. A class
+    /// inherits `extra_items` verbatim from the base that declares it, so the declared type is
+    /// written in terms of that base's type parameters and has to be substituted through the MRO.
     fn typed_dict_extra_items_for_cls(&self, cls: &Class) -> ExtraItems {
-        self.get_metadata_for_class(cls)
+        let mut extra_items = self
+            .get_metadata_for_class(cls)
             .typed_dict_metadata()
-            .map_or(ExtraItems::Default, |m| m.extra_items.clone())
+            .map_or(ExtraItems::Default, |m| m.extra_items.clone());
+        if let ExtraItems::Extra(extra) = &mut extra_items {
+            for ancestor in self.get_mro_for_class(cls).ancestors_no_object() {
+                ancestor.targs().substitute_into_mut(&mut extra.ty);
+            }
+            // If extra_items is generic, a base may bind it to `Never`, closing `cls`.
+            if extra.ty.is_never() {
+                return ExtraItems::Closed;
+            }
+        }
+        extra_items
     }
 
     pub fn typed_dict_extra_items(&self, typed_dict: &TypedDict) -> ExtraItems {
@@ -238,13 +252,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             TypedDict::TypedDict(inner) => {
                 let mut extra_items = self.typed_dict_extra_items_for_cls(inner.class_object());
                 if let ExtraItems::Extra(extra) = &mut extra_items {
-                    for ancestor in self
-                        .get_mro_for_class(inner.class_object())
-                        .ancestors_no_object()
-                    {
-                        ancestor.targs().substitute_into_mut(&mut extra.ty);
-                    }
                     inner.targs().substitute_into_mut(&mut extra.ty);
+                    // If extra_items is generic, `inner` may bind it to `Never`, closing `cls`.
                     if extra.ty.is_never() {
                         return ExtraItems::Closed;
                     }

@@ -2955,3 +2955,23 @@ d: TD[str] = {"a": 1}
 assert_type(d["b"], str)
     "#,
 );
+
+testcase!(
+    test_inherited_generic_extra_items,
+    r#"
+from typing import assert_type, TypedDict
+class Extra[T](TypedDict, extra_items=T):
+    name: str
+class IntExtra(Extra[int]):
+    pass
+def f(x: IntExtra, y: Extra[int]) -> None:
+    IntExtra(name="a", other=1)
+    IntExtra(name="a", other="wrong")  # E: Keyword argument `other` with type `Literal['wrong']` is not assignable to kwargs type `int`
+    x.update({"other": 1})
+    # This is consistent with Pyrefly's behavior on non-generic `TypedDict`s: for unknown keys,
+    # `get` returns the overall value type unioned with `None`, even though in this case we know
+    # "other" is an extra and cannot be a `str`.
+    assert_type(x.get("other"), int | str | None)
+    assert_type(y.get("other"), int | str | None)
+    "#,
+);
