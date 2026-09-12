@@ -18,15 +18,17 @@ use pyrefly_util::args::get_args_expanded;
 use pyrefly_util::panic::exit_on_panic;
 use pyrefly_util::telemetry::NoTelemetry;
 
-// fbcode likes to set its own allocator in fbcode.default_allocator
-// So when we set our own allocator, buck build buck2 or buck2 build buck2 often breaks.
-// Making jemalloc the default only when we do a cargo build.
+// fbcode sets its own allocator, so only select a custom allocator for Cargo builds.
+// Cargo's musl binaries use mimalloc because jemalloc is not reliable on older Linux hosts.
 #[global_allocator]
-#[cfg(all(any(target_os = "linux", target_os = "macos"), not(fbcode_build)))]
+#[cfg(all(
+    any(target_os = "macos", all(target_os = "linux", target_env = "gnu")),
+    not(fbcode_build)
+))]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[global_allocator]
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_env = "musl"))]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// Main CLI entrypoint for Pyrefly.
