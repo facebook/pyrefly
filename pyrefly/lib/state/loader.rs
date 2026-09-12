@@ -25,8 +25,9 @@ use crate::config::config::FallbackSearchPath;
 use crate::config::config::ImportLookupPathPart;
 use crate::error::context::ErrorContext;
 use crate::module::finder::DirEntryCache;
+use crate::module::finder::ImportLookupMode;
 use crate::module::finder::find_import;
-use crate::module::finder::find_import_filtered;
+use crate::module::finder::find_import_with_mode;
 use crate::module::finder::suggest_stdlib_import;
 use crate::state::state::TransactionTimingCounters;
 
@@ -256,11 +257,11 @@ impl LoaderFindCache {
             Some(Some(module)) => FindingOrError::new_finding(module.dupe()),
             Some(None) => self.find_import(module, origin, timing),
             None => {
-                match find_import_filtered(
+                match find_import_with_mode(
                     &self.config,
                     module,
                     origin,
-                    Some(ModuleStyle::Executable),
+                    ImportLookupMode::Style(ModuleStyle::Executable),
                     &self.dir_cache,
                     timing,
                 ) {

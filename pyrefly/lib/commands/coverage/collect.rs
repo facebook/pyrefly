@@ -65,7 +65,8 @@ use crate::error::error::Error;
 use crate::export::exports::ExportLocation;
 use crate::export::exports::Exports;
 use crate::module::finder::DirEntryCache;
-use crate::module::finder::find_import_filtered;
+use crate::module::finder::ImportLookupMode;
+use crate::module::finder::find_import_with_mode;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
@@ -1673,11 +1674,11 @@ pub fn collect_module_reports(
                 .as_ref()
                 .config_finder()
                 .python_file(h.module_kind(), h.path());
-            if let Some(py_module_path) = find_import_filtered(
+            if let Some(py_module_path) = find_import_with_mode(
                 &config,
                 h.module(),
                 None,
-                Some(ModuleStyle::Executable),
+                ImportLookupMode::Style(ModuleStyle::Executable),
                 &DirEntryCache::new(),
                 None,
             )
@@ -1697,9 +1698,16 @@ pub fn collect_module_reports(
     let importable = |handle: &Handle| {
         handle.module() == ModuleName::unknown() || {
             let config = config_finder.python_file(handle.module_kind(), handle.path());
-            find_import_filtered(&config, handle.module(), None, None, &dir_cache, None)
-                .finding()
-                .is_some()
+            find_import_with_mode(
+                &config,
+                handle.module(),
+                None,
+                ImportLookupMode::TypeChecking,
+                &dir_cache,
+                None,
+            )
+            .finding()
+            .is_some()
         }
     };
     let mut targets: Vec<Handle> = handles
@@ -2126,11 +2134,11 @@ mod tests {
         config.interpreters.skip_interpreter_query = true;
         config.configure();
 
-        let py_module_path = find_import_filtered(
+        let py_module_path = find_import_with_mode(
             &config,
             ModuleName::from_str("test"),
             None,
-            Some(ModuleStyle::Executable),
+            ImportLookupMode::Style(ModuleStyle::Executable),
             &DirEntryCache::new(),
             None,
         )
@@ -2161,9 +2169,16 @@ mod tests {
 
         let cache = DirEntryCache::new();
         let find = |m| {
-            find_import_filtered(&config, ModuleName::from_str(m), None, None, &cache, None)
-                .finding()
-                .is_some()
+            find_import_with_mode(
+                &config,
+                ModuleName::from_str(m),
+                None,
+                ImportLookupMode::TypeChecking,
+                &cache,
+                None,
+            )
+            .finding()
+            .is_some()
         };
         assert!(find("lapack_lite"), "real module importable");
         assert!(!find("lapack_lite.fortran"), "shadowed file skipped");
