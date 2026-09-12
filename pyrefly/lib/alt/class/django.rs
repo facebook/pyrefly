@@ -10,6 +10,7 @@ use pyrefly_python::module_name::is_python_identifier;
 use pyrefly_types::callable::Callable;
 use pyrefly_types::callable::ParamList;
 use pyrefly_types::class::Class;
+use pyrefly_types::class::ClassType;
 use pyrefly_types::function::FuncMetadata;
 use pyrefly_types::function::Function;
 use pyrefly_types::function::PropertyMetadata;
@@ -40,6 +41,7 @@ use crate::error::collector::ErrorCollector;
 
 /// Django stubs use this attribute to specify the Python type that a field should infer to
 const DJANGO_PRIVATE_GET_TYPE: Name = Name::new_static("_pyi_private_get_type");
+const DJANGO_PRIVATE_SET_TYPE: Name = Name::new_static("_pyi_private_set_type");
 
 pub fn is_django_choices_subclass(bases_with_metadata: &[(Class, &ClassMetadata)]) -> bool {
     bases_with_metadata.iter().any(|(base, base_meta)| {
@@ -113,6 +115,35 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ModuleName::django_models_fields_related().as_str(),
             ONE_TO_ONE_FIELD.as_str(),
         )
+    }
+
+    /// Specialize the set/get parameters used by Django's generic field descriptors.
+    pub fn specialize_django_field_descriptor(
+        &self,
+        field: &Class,
+        get_type: Type,
+    ) -> Option<ClassType> {
+        let tparams = self.get_class_tparams(field);
+        let mut tparams = tparams.iter();
+        if !matches!(
+            (tparams.next(), tparams.next(), tparams.next()),
+            (Some(set), Some(get), None)
+                if set.name().as_str() == "_ST" && get.name().as_str() == "_GT"
+        ) {
+            return None;
+        }
+        let mut set_type = self.get_class_member(field, &DJANGO_PRIVATE_SET_TYPE)?.ty();
+        if get_type.is_none()
+            || matches!(&get_type, Type::Union(union) if union.members.iter().any(Type::is_none))
+        {
+            set_type = self.union(set_type, self.heap.mk_none());
+        }
+        Some(self.specialize_nontypeddict_to_classtype(
+            field,
+            vec![set_type, get_type],
+            TextRange::default(),
+            &self.error_swallower(),
+        ))
     }
 
     pub fn get_django_field_type(
