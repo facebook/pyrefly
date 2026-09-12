@@ -7,7 +7,7 @@
 from typing import Any, overload
 
 from shape_extensions import Elements, IntTuple, IntVar
-from torch import Tensor
+from torch import return_types, Tensor
 from torch._shapes import eig_shape, eigvals_shape, slogdet_shape
 
 # Eigenvalue decomposition
@@ -72,11 +72,11 @@ def det[Batch: IntTuple, M: IntVar, N: IntVar](
 @overload
 def slogdet[Batch: IntTuple, M: IntVar, N: IntVar](
     self: Tensor[[*Elements[Batch], M, N]],
-) -> tuple[Tensor[Batch], Tensor[Batch]]: ...
+) -> return_types.linalg_slogdet[Batch]: ...
 @overload
 def slogdet[Shape: IntTuple](
     self: Tensor[Shape],
-) -> tuple[Tensor[slogdet_shape(Shape)], Tensor[slogdet_shape(Shape)]]: ...
+) -> return_types.linalg_slogdet[slogdet_shape(Shape)]: ...
 
 # Matrix power
 def matrix_power[Shape: IntTuple](input: Tensor[Shape], n: int) -> Tensor[Shape]: ...
