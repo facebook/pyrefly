@@ -12,6 +12,7 @@ use lsp_types::CompletionItem;
 use lsp_types::CompletionItemKind;
 use lsp_types::CompletionItemLabelDetails;
 use lsp_types::CompletionItemTag;
+use lsp_types::CompletionTextEdit;
 use lsp_types::InsertTextFormat;
 use lsp_types::TextEdit;
 use pyrefly_build::handle::Handle;
@@ -348,6 +349,90 @@ impl Transaction<'_> {
                 item.insert_text = Some(format!("{}()", item.label));
             }
         }
+    }
+
+    /// Offers to insert the closer after an opening triple-quoted string.
+    ///
+    /// Only a run of exactly three quotes is treated as that opener. A single or
+    /// double quote is already an open string (Literal values, dict keys, kwargs),
+    /// so expanding those would steal the completions that belong in that context.
+    fn add_triple_quoted_string_completions(
+        &self,
+        handle: &Handle,
+        position: TextSize,
+        supports_snippets: bool,
+        completions: &mut Vec<RankedCompletion>,
+    ) {
+        let Some(module_info) = self.get_module_info(handle) else {
+            return;
+        };
+        let source = module_info.contents();
+        let pos = position.to_usize();
+        if pos == 0 || pos > source.len() {
+            return;
+        }
+        let before = &source[..pos];
+        let Some(quote) = before.chars().next_back() else {
+            return;
+        };
+        if quote != '"' && quote != '\'' {
+            return;
+        }
+        let mut count = 0usize;
+        for c in before.chars().rev() {
+            if c == quote && count < 3 {
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        if count != 3 {
+            return;
+        }
+        let quote_start = pos - count;
+        if quote_start > 0 && before.as_bytes()[quote_start - 1] == quote as u8 {
+            return;
+        }
+        if quote_start > 0 {
+            let prev = before.as_bytes()[quote_start - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' {
+                let mut ident_start = quote_start;
+                while ident_start > 0 {
+                    let b = before.as_bytes()[ident_start - 1];
+                    if b.is_ascii_alphanumeric() || b == b'_' {
+                        ident_start -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                let ident = before[ident_start..quote_start].to_ascii_lowercase();
+                let is_string_prefix = matches!(
+                    ident.as_str(),
+                    "r" | "u" | "f" | "b" | "fr" | "rf" | "br" | "rb"
+                );
+                if !is_string_prefix {
+                    return;
+                }
+            }
+        }
+        let closer = quote.to_string().repeat(3);
+        if source[pos..].starts_with(&closer) {
+            return;
+        }
+        let new_text = if supports_snippets {
+            format!("$0{closer}")
+        } else {
+            closer.clone()
+        };
+        let range = module_info.to_lsp_range(TextRange::new(position, position));
+        completions.push(RankedCompletion::new(CompletionItem {
+            label: closer,
+            detail: Some("triple-quoted string".to_owned()),
+            kind: Some(CompletionItemKind::SNIPPET),
+            insert_text_format: supports_snippets.then_some(InsertTextFormat::SNIPPET),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text })),
+            ..Default::default()
+        }));
     }
 
     /// Retrieves documentation for an export to display in completion items.
@@ -1056,6 +1141,12 @@ impl Transaction<'_> {
             auto_import,
         } = options;
         let mut result: Vec<RankedCompletion> = Vec::new();
+        self.add_triple_quoted_string_completions(
+            handle,
+            position,
+            supports_snippet_completions,
+            &mut result,
+        );
         let mut is_incomplete = false;
         let mut allow_function_call_parens = false;
         let ast = self.get_ast(handle);
