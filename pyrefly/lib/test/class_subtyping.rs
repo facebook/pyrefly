@@ -304,6 +304,28 @@ assert_type(B.x, int)
 );
 
 testcase!(
+    test_call_returning_type_in_base_class_list,
+    r#"
+from typing import Any, assert_type
+
+class Mixin:
+    def greet(self) -> str:
+        return "hi"
+
+def factory(name: str) -> type[Mixin]: ...
+def untyped_factory(name: str) -> Any: ...
+
+class C(factory("x")):
+    pass
+
+class D(untyped_factory("x")):
+    pass
+
+assert_type(C().greet(), str)
+    "#,
+);
+
+testcase!(
     test_type_function_in_base_class_list_self_cycle,
     r#"
 from typing import assert_type

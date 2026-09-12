@@ -287,6 +287,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     Some((ty, x.range()))
                 }
+                BaseClass::Call(x) => Some((
+                    self.expr_untype(x, TypeFormContext::BaseClassList, &fake_error_collector),
+                    x.range(),
+                )),
                 BaseClass::NamedTuple(..) => Some((
                     self.heap
                         .mk_class_type(self.stdlib.named_tuple_fallback().clone()),
