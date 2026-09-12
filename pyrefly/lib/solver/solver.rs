@@ -35,6 +35,7 @@ use pyrefly_types::special_form::SpecialForm;
 use pyrefly_types::tuple::Tuple;
 use pyrefly_types::type_var::Restriction;
 use pyrefly_types::type_var::ShapeExtensionRestriction;
+use pyrefly_types::types::AnyStyle;
 use pyrefly_types::types::TArgs;
 use pyrefly_util::gas::Gas;
 use pyrefly_util::lock::Mutex;
@@ -1718,11 +1719,15 @@ impl Solver {
     }
 
     fn solve_bounds(&self, bounds: Bounds) -> Option<Type> {
-        // Prefer non-Any lower bound > upper bound > Any lower bound.
+        // Preserve explicit Any lower bounds. Implicit Any and error placeholders
+        // can use an upper bound to infer a useful type or preserve diagnostics.
         // TODO(https://github.com/facebook/pyrefly/issues/105): consider using polarity to
         // determine whether we use the lower or upper bound.
         let lower_bound = self.solve_one_bounds(bounds.lower);
-        if lower_bound.as_ref().is_none_or(|b| b.is_any()) {
+        if lower_bound
+            .as_ref()
+            .is_none_or(|b| matches!(b, Type::Any(AnyStyle::Implicit | AnyStyle::Error)))
+        {
             self.solve_one_bounds(bounds.upper).or(lower_bound)
         } else {
             lower_bound
