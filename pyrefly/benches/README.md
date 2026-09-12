@@ -2,10 +2,10 @@
 
 Real-world benchmarks over a large, pinned PyTorch checkout (15k+ Python files)
 across all cores. They cover interactive LSP latency (`cold_start`,
-`error_propagation`, `workspace_symbol`), cold whole-project batch throughput
-(`full_check`), and cold whole-project indexing (`indexed_memory`). A separate
-`pytorch_memory` target reports the memory that index holds, for the reason in
-its section below.
+`error_propagation`, `workspace_symbol`, `rename`), cold whole-project batch
+throughput (`full_check`), and cold whole-project indexing (`indexed_memory`). A
+separate `pytorch_memory` target reports the memory that index holds, for the
+reason in its section below.
 
 For the full command reference (all flags, micro benchmarks, cargo/buck forms),
 see `.claude/skills/benchmark-pyrefly/SKILL.md`.
@@ -46,6 +46,10 @@ per bench:
   resulting type error to surface in the distant dependent `_backward.py`.
   Proxy for incremental edit-propagation latency. Criterion id
   `pytorch/error_propagation`.
+- `pytorch/rename.rs` — paired warm LSP rename measurements with and without
+  `textOccurrences`. Their difference measures the cost of walking and scanning
+  all non-Python files in the workspace on each rename. Criterion ids
+  `pytorch/rename_semantic_only` and `pytorch/rename_with_text_occurrences`.
 - `pytorch/indexed_memory.rs` — the indexed-build benchmark. Drives every project
   file to `Require::Indexing`, the level the language server uses for the files it
   indexes in the background and the only one that retains the find-references
@@ -68,7 +72,7 @@ per bench:
 `pytorch_memory`. Indexes the checkout once and prints the resident memory the
 indexed project holds.
 
-**Why it is a separate target and not a fifth benchmark.** RSS is a property of
+**Why it is a separate target rather than a benchmark.** RSS is a property of
 the process, not of the routine: `VmRSS` counts everything the process still
 holds, and `VmHWM` is the high-water mark over its whole life. Run inside
 `pytorch_bench`, it would report whatever the cold-start, error-propagation and
@@ -93,8 +97,9 @@ parallel.
 These are heavy walltime benchmarks: budget roughly 2-4 minutes each (Criterion's
 sample floor is 10; ~3-5 s per cold-start iteration, ~2-3 s per
 error-propagation iteration after warmup, ~1-1.5 s per full-check iteration).
-They are manual/heavy and are not run in CI Sandcastle by default (the
-`http_archive` dep is labeled `manual`).
+The rename comparison takes about 15 seconds total. They are manual/heavy and
+are not run in CI Sandcastle by default (the `http_archive` dep is labeled
+`manual`).
 
 ```bash
 # All benchmarks
@@ -107,11 +112,13 @@ buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench err
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench full_check
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench indexed_memory
 PYREFLY_LOG=off buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench workspace_symbol_init
+buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_bench -- --bench rename
 cargo bench --bench pytorch -- cold_start
 cargo bench --bench pytorch -- error_propagation
 cargo bench --bench pytorch -- full_check
 cargo bench --bench pytorch -- indexed_memory
 PYREFLY_LOG=off cargo bench --bench pytorch -- workspace_symbol_init
+cargo bench --bench pytorch -- rename
 
 # The memory report — its own target, so that it gets a clean process
 buck2 run @fbcode//mode/opt fbcode//pyrefly/pyrefly:pytorch_memory_bench
