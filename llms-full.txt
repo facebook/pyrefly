@@ -2898,6 +2898,18 @@ set `infer-return-types` to `"never"` in your config or pass it as a flag.
 - Default: `"checked"`
 - Flag equivalent: `--infer-return-types`
 
+### `jaxtyping`
+
+Controls whether Pyrefly interprets jaxtyping annotations such as
+`Float[Tensor, "batch channels"]` as tensor shapes. When disabled, Pyrefly uses
+the ordinary types exposed by jaxtyping's stubs without enforcing the shape
+strings. This enables an experimental subset of jaxtyping's static semantics;
+see the [compatibility reference](./tensor-shapes-reference.mdx#jaxtyping-compatibility)
+for supported syntax and current limitations.
+
+- Type: `bool`
+- Default: `false`
+
 ### `strict-callable-subtyping`
 
 Controls whether Pyrefly enforces strict parameter compatibility when checking
@@ -6406,6 +6418,16 @@ def f(o: OpenTypedDict) -> UnpackingTarget:
     return {"y": "", **o}
 ```
 
+The same error is reported when an open TypedDict is unpacked into a call whose target cannot
+accept the unknown items:
+```python
+def g(x: int) -> None: ...
+
+def h(o: OpenTypedDict) -> None:
+    # Error: `o` could carry items under keys that `g` does not accept.
+    g(**o)
+```
+
 To fix this error, close the open TypedDict to indicate it does not contain any unknown items:
 ```python
 class OpenTypedDict(TypedDict, closed=True): ...
@@ -7583,27 +7605,7 @@ description: How to install Pyrefly
  * LICENSE file in the root directory of this source tree.
  */}
 
-Pyrefly is available on [PyPI](https://pypi.org/project/pyrefly/) with a new release every Monday. We often release more frequently when shipping new features and bug fixes.
-
-## What you get out of the box
-
-When you first install Pyrefly without a Pyrefly configuration, it automatically looks for a nearby mypy or Pyright configuration to migrate in memory. If it does not find one, or migration fails, Pyrefly uses the **basic preset**. This shows only high-confidence errors that are very likely to indicate real bugs or crashes, like syntax errors and missing imports. Other diagnostics are silenced.
-
-The basic preset is useful immediately, without setup. You don't need to understand Python typing concepts to benefit. Open a file in VS Code with the Pyrefly extension and you'll get inlay hints, go-to-definition, and the curated error set right away. When the fallback is active, the status bar shows `Pyrefly (Basic)` so you know which preset is active.
-
-If Pyrefly finds a `mypy.ini`, `pyrightconfig.json`, or a `[tool.mypy]` / `[tool.pyright]` section in `pyproject.toml`, the status bar instead shows `Pyrefly (Legacy)` (mypy migration) or `Pyrefly (Default)` (Pyright migration). Nothing is written to disk during the migration; running `pyrefly init` later will commit the same migration permanently.
-
-For what that migration does and does not preserve, see [migrating from mypy](../migrating-from-mypy) and [migrating from Pyright](../migrating-from-pyright).
-
-To unlock full type checking and pin your configuration, run `pyrefly init`. This writes a `pyrefly.toml` (or updates `pyproject.toml`) and explicitly migrates any existing mypy/pyright settings. After running `pyrefly init`, common knobs to tune include:
-
-- `check-unannotated-defs`: type-check the bodies of unannotated functions.
-- `errors`: per-error-kind severity overrides.
-- `infer-return-types`: when to infer return types for unannotated functions.
-- `project-excludes` and `pyrefly suppress`: incremental rollout on existing
-  codebases.
-
-See the [configuration reference](../configuration) for the full list.
+Pyrefly is available on [PyPI](https://pypi.org/project/pyrefly/) with a new minor release intended every ~2 months.
 
 ## Install
 
@@ -7655,6 +7657,34 @@ import TabItem from '@theme/TabItem';
     ```
   </TabItem>
 </Tabs>
+
+## Configure
+
+Pyrefly with no configuration [automatically finds nearby legacy type checking configurations](../configuration/#unconfigured-projects). If we cannot find one, or migration fails, we use the **basic preset**, which shows only high-confidence errors that are very likely to indicate real bugs or crashes (like syntax errors and missing imports) and silences other diagnostics.
+
+To unlock full type checking and pin your configuration, run `pyrefly init`. This writes a `pyrefly.toml` (or updates `pyproject.toml`) and explicitly migrates any existing mypy/pyright settings. All [configuration options are documented here](../configuration). Common knobs to tune include:
+
+- `check-unannotated-defs`: type-check the bodies of unannotated functions.
+- `errors`: per-error-kind severity overrides.
+- `infer-return-types`: when to infer return types for unannotated functions.
+- `project-excludes` and `pyrefly suppress`: incremental rollout on existing
+  codebases.
+
+## Basic usage
+
+Run Pyrefly from your project directory to type-check the whole project:
+
+```sh
+pyrefly check
+```
+
+You can also check specific files or directories:
+
+```sh
+pyrefly check src/ tests/ path/to/file.py
+```
+
+For feedback while you edit, install a [Pyrefly IDE extension](../IDE). It provides diagnostics, hover information, inlay hints, and navigation directly in the editor. For more details, run `pyrefly help`.
 
 ## Configure
 
@@ -7842,15 +7872,6 @@ That repository contains:
 - Example configuration snippets for your project and CI
 
 To get started, follow the setup steps in the repo’s [README](https://github.com/facebook/pyrefly-pre-commit#readme).
-
-----
-
-## Browser / WebAssembly
-
-The [sandbox](https://pyrefly.org/sandbox/) runs Pyrefly in the browser via
-WebAssembly. That path is for trying Pyrefly online and for website
-development, not a replacement for the CLI or IDE extension. See
-[WebAssembly](./wasm.mdx).
 
 
 ---
@@ -11620,17 +11641,52 @@ When annotating local variables, choose from most to least desirable:
 
 ## Jaxtyping compatibility
 
-Pyrefly supports [jaxtyping](https://github.com/patrick-kidger/jaxtyping)
-annotations as an alternative front-end:
+Pyrefly has experimental static support for a subset of
+[jaxtyping](https://github.com/patrick-kidger/jaxtyping) annotations. Support is
+disabled by default. Enable it for a project or
+[`sub-config`](./configuration.mdx#sub-config) with:
+
+```toml
+jaxtyping = true
+```
+
+Pyrefly recognizes jaxtyping's public array and dtype wrappers, including
+`Shaped`, `Float`, and `Int`. An annotation is shape-checked when its array type
+is either a Pyrefly shaped-array class or a generic class with one gradual
+`IntTuple`-bounded shape argument. The currently supported shape syntax is:
+
+- named dimensions, integer dimensions, and scalar shapes;
+- anonymous dimensions (`_`);
+- one named variadic dimension (`*shape`) or ellipsis (`...`), with optional
+  prefix and suffix dimensions;
+- broadcast markers (`#batch` and `*#batch`), currently treated as their
+  non-broadcast equivalents; and
+- simple addition and subtraction such as `n+1`, `n-1`, and `(1+n)`.
+
+Within a function, repeated names represent the same dimension and participate
+in inference across parameters and returns. Supported annotations are translated
+internally to generics and display back in jaxtyping syntax:
 
 | Pyrefly native | Jaxtyping equivalent |
 |---------------|---------------------|
-| `Tensor[[M, 2, M // 2]]` | `Shaped[Tensor, "M 2 M//2"]` |
+| `Tensor[[M, 2, M + 1]]` | `Shaped[Tensor, "M 2 M+1"]` |
 | `Tensor[[B, C, H, W]]` | `Shaped[Tensor, "B C H W"]` |
 
-Jaxtyping annotations are translated internally to generics and display
-back in jaxtyping syntax. Note that jaxtyping cannot share symbolic
-dimensions across class boundaries — see the
+This is not yet full static jaxtyping compatibility. In particular:
+
+- dtype wrappers are recognized as markers, but dtype refinements are not
+  checked;
+- broadcast markers do not yet implement jaxtyping's broadcast semantics;
+- the full dimension-expression grammar and PyTree annotations are not
+  supported;
+- generic type aliases, dependent generic defaults, and array types without a
+  unique gradual shape argument fall back to their ordinary stub types; and
+- jaxtyping cannot share symbolic dimensions across methods or class boundaries.
+
+Full static support would require implementing those semantics and extending
+the compatibility tests across the remaining jaxtyping grammar and container
+forms. The cross-method/class limitation also requires an upstream annotation
+model for shared dimensions; see the
 [overview](./tensor-shapes.mdx#jaxtyping-runtime-type-checking) for details.
 
 
@@ -12841,9 +12897,13 @@ array-like containers (supporting JAX, NumPy, and PyTorch), but is somewhat
 verbose — for example, `Shaped[Tensor, "M 2 M//2"]` instead of
 `Tensor[[M, 2, M // 2]]`.
 
-Pyrefly supports jaxtyping annotations as an alternative front-end to our native
-syntax; these annotations are translated internally to use generics and display
-back in jaxtyping syntax.
+Pyrefly has experimental static support for a subset of jaxtyping annotations as
+an alternative front-end to our native syntax. It is disabled by default; set
+[`jaxtyping = true`](./configuration.mdx#jaxtyping) to enable it. Supported
+annotations are translated internally to use generics and display back in
+jaxtyping syntax. See the
+[compatibility reference](./tensor-shapes-reference.mdx#jaxtyping-compatibility)
+for the supported syntax and remaining gaps.
 
 However, there is a significant limitation of jaxtyping: there is no way to
 share symbolic dimensions across variables and functions in a class (see

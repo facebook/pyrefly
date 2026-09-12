@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.caa578e5.css">
-<script src="/assets/js/runtime~main.9f80ffcc.js" defer="defer"></script>
-<script src="/assets/js/main.8fe4ca43.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.efc7f3bd.js" defer="defer"></script>
+<script src="/assets/js/main.74e5c89c.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -136,9 +136,13 @@ and <code>beartype</code> can check at runtime. The syntax is designed to be uni
 array-like containers (supporting JAX, NumPy, and PyTorch), but is somewhat
 verbose — for example, <code>Shaped[Tensor, &quot;M 2 M//2&quot;]</code> instead of
 <code>Tensor[[M, 2, M // 2]]</code>.</p>
-<p>Pyrefly supports jaxtyping annotations as an alternative front-end to our native
-syntax; these annotations are translated internally to use generics and display
-back in jaxtyping syntax.</p>
+<p>Pyrefly has experimental static support for a subset of jaxtyping annotations as
+an alternative front-end to our native syntax. It is disabled by default; set
+<a href="/en/docs/configuration/#jaxtyping"><code>jaxtyping = true</code></a> to enable it. Supported
+annotations are translated internally to use generics and display back in
+jaxtyping syntax. See the
+<a href="/en/docs/tensor-shapes-reference/#jaxtyping-compatibility">compatibility reference</a>
+for the supported syntax and remaining gaps.</p>
 <p>However, there is a significant limitation of jaxtyping: there is no way to
 share symbolic dimensions across variables and functions in a class (see
 <a href="https://github.com/patrick-kidger/jaxtyping/issues/383" target="_blank" rel="noopener noreferrer">this issue</a>). This

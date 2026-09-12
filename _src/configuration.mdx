@@ -926,6 +926,18 @@ set `infer-return-types` to `"never"` in your config or pass it as a flag.
 - Default: `"checked"`
 - Flag equivalent: `--infer-return-types`
 
+### `jaxtyping`
+
+Controls whether Pyrefly interprets jaxtyping annotations such as
+`Float[Tensor, "batch channels"]` as tensor shapes. When disabled, Pyrefly uses
+the ordinary types exposed by jaxtyping's stubs without enforcing the shape
+strings. This enables an experimental subset of jaxtyping's static semantics;
+see the [compatibility reference](./tensor-shapes-reference.mdx#jaxtyping-compatibility)
+for supported syntax and current limitations.
+
+- Type: `bool`
+- Default: `false`
+
 ### `strict-callable-subtyping`
 
 Controls whether Pyrefly enforces strict parameter compatibility when checking
