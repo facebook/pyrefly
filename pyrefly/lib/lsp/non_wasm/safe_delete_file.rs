@@ -5,21 +5,36 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashSet;
+
 use lsp_types::ClientCapabilities;
 use lsp_types::CodeAction;
 use lsp_types::CodeActionKind;
 use lsp_types::CodeActionOrCommand;
+use lsp_types::Command;
 use lsp_types::DeleteFile;
 use lsp_types::DeleteFileOptions;
 use lsp_types::DocumentChangeOperation;
 use lsp_types::DocumentChanges;
+use lsp_types::Location;
 use lsp_types::ResourceOp;
 use lsp_types::ResourceOperationKind;
 use lsp_types::Url;
 use lsp_types::WorkspaceEdit;
+use pyrefly_build::handle::Handle;
 use pyrefly_python::PYTHON_EXTENSIONS;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
+use pyrefly_python::module_path::ModulePathDetails;
+use ruff_python_ast::Stmt;
+use ruff_python_ast::StmtImport;
+use ruff_python_ast::StmtImportFrom;
+use ruff_python_ast::name::Name;
+use ruff_python_ast::visitor::Visitor;
+use ruff_python_ast::visitor::walk_stmt;
+use ruff_text_size::Ranged;
+use ruff_text_size::TextRange;
+use serde_json::json;
 
 use crate::lsp::non_wasm::module_helpers::handle_from_module_path;
 use crate::state::state::State;
@@ -48,13 +63,13 @@ fn supports_workspace_edit_resource_ops(
         .all(|kind| supported.is_some_and(|ops| ops.contains(kind)))
 }
 
-/// Builds a safe-delete refactor action for a file that nothing imports.
-pub(crate) fn safe_delete_file_code_action(
+/// Builds safe-delete refactor actions for a file.
+pub(crate) fn safe_delete_file_code_actions(
     capabilities: &ClientCapabilities,
     state: &State,
     transaction: &Transaction<'_>,
     uri: &Url,
-) -> Option<CodeActionOrCommand> {
+) -> Option<Vec<CodeActionOrCommand>> {
     if !supports_workspace_edit_document_changes(capabilities) {
         return None;
     }
@@ -77,9 +92,24 @@ pub(crate) fn safe_delete_file_code_action(
     if module_name == ModuleName::unknown() {
         return None;
     }
-    if transaction.is_depended_on_by_anything(&handle) {
+    let rdeps = transaction.get_rdeps(&handle);
+    if rdeps.is_empty() {
+        return Some(vec![delete_file_code_action(
+            format!("Safe delete file `{file_name}`"),
+            uri,
+        )]);
+    }
+    let usage_locations = collect_import_usage_locations(transaction, rdeps, module_name);
+    if usage_locations.is_empty() {
         return None;
     }
+    Some(vec![
+        find_usages_code_action(&file_name, uri, usage_locations),
+        delete_file_code_action(format!("Delete file `{file_name}` anyway"), uri),
+    ])
+}
+
+fn delete_file_code_action(title: String, uri: &Url) -> CodeActionOrCommand {
     let operation = DocumentChangeOperation::Op(ResourceOp::Delete(DeleteFile {
         uri: uri.clone(),
         options: Some(DeleteFileOptions {
@@ -88,13 +118,157 @@ pub(crate) fn safe_delete_file_code_action(
             annotation_id: None,
         }),
     }));
-    Some(CodeActionOrCommand::CodeAction(CodeAction {
-        title: format!("Safe delete file `{file_name}`"),
+    CodeActionOrCommand::CodeAction(CodeAction {
+        title,
         kind: Some(CodeActionKind::new("refactor.delete")),
         edit: Some(WorkspaceEdit {
             document_changes: Some(DocumentChanges::Operations(vec![operation])),
             ..Default::default()
         }),
         ..Default::default()
-    }))
+    })
+}
+
+fn find_usages_code_action(
+    file_name: &str,
+    uri: &Url,
+    locations: Vec<Location>,
+) -> CodeActionOrCommand {
+    let title = format!("Find usages of file `{file_name}`");
+    CodeActionOrCommand::CodeAction(CodeAction {
+        title: title.clone(),
+        command: Some(Command {
+            title,
+            command: "pyrefly.findFileUsages".to_owned(),
+            arguments: Some(vec![json!({
+                "uri": uri,
+                "locations": locations,
+            })]),
+            tooltip: None,
+        }),
+        ..Default::default()
+    })
+}
+
+fn collect_import_usage_locations(
+    transaction: &Transaction<'_>,
+    rdeps: HashSet<Handle>,
+    target_module: ModuleName,
+) -> Vec<Location> {
+    let mut seen = HashSet::new();
+    let mut locations = Vec::new();
+    for rdep_handle in rdeps {
+        if !seen.insert(rdep_handle.path().as_path().to_owned()) {
+            continue;
+        }
+        let Some(module_info) = transaction.get_module_info(&rdep_handle) else {
+            continue;
+        };
+        if !matches!(
+            module_info.path().details(),
+            ModulePathDetails::FileSystem(_) | ModulePathDetails::Memory(_)
+        ) {
+            continue;
+        }
+        let Some(ast) = transaction.get_ast(&rdep_handle) else {
+            continue;
+        };
+        let mut visitor = ImportUsageVisitor {
+            target_module,
+            current_module: module_info.name(),
+            is_init: module_info.path().is_init(),
+            ranges: Vec::new(),
+        };
+        for stmt in &ast.body {
+            visitor.visit_stmt(stmt);
+        }
+        if visitor.ranges.is_empty() {
+            continue;
+        }
+        let Some(uri) = Url::from_file_path(module_info.path().as_path()).ok() else {
+            continue;
+        };
+        for range in visitor.ranges {
+            locations.push(Location {
+                uri: uri.clone(),
+                range: module_info.to_lsp_range(range),
+            });
+        }
+    }
+    locations
+}
+
+struct ImportUsageVisitor {
+    target_module: ModuleName,
+    current_module: ModuleName,
+    is_init: bool,
+    ranges: Vec<TextRange>,
+}
+
+impl ImportUsageVisitor {
+    fn record_import(&mut self, imported_module: ModuleName, range: TextRange) -> bool {
+        if module_matches_target(imported_module, self.target_module) {
+            self.ranges.push(range);
+            return true;
+        }
+        false
+    }
+
+    fn visit_import(&mut self, import: &StmtImport) {
+        for alias in &import.names {
+            let imported_module = ModuleName::from_name(&alias.name.id);
+            if self.record_import(imported_module, import.range()) {
+                return;
+            }
+        }
+    }
+
+    fn visit_import_from(&mut self, import_from: &StmtImportFrom) {
+        let base = self.current_module.new_maybe_relative(
+            self.is_init,
+            import_from.level,
+            import_from.module.as_ref().map(|id| &id.id),
+        );
+        let Some(base) = base else {
+            return;
+        };
+        if self.record_import(base, import_from.range()) {
+            return;
+        }
+        for alias in &import_from.names {
+            let imported_module = append_module(base, &alias.name.id);
+            if self.record_import(imported_module, import_from.range()) {
+                return;
+            }
+        }
+    }
+}
+
+impl Visitor<'_> for ImportUsageVisitor {
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Import(import) => self.visit_import(import),
+            Stmt::ImportFrom(import_from) => self.visit_import_from(import_from),
+            _ => walk_stmt(self, stmt),
+        }
+    }
+}
+
+fn append_module(base: ModuleName, suffix: &Name) -> ModuleName {
+    if base.as_str().is_empty() {
+        ModuleName::from_name(suffix)
+    } else {
+        base.append(suffix)
+    }
+}
+
+fn module_matches_target(module: ModuleName, target: ModuleName) -> bool {
+    if module == target {
+        return true;
+    }
+    let module_str = module.as_str();
+    let target_str = target.as_str();
+    module_str.starts_with(target_str)
+        && module_str.len() > target_str.len()
+        && module_str.as_bytes().get(target_str.len()) == Some(&b'.')
 }

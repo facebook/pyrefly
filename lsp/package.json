@@ -88,6 +88,11 @@
                 "title": "Run Test",
                 "category": "pyrefly",
                 "command": "pyrefly.runTest"
+            },
+            {
+                "title": "Find File Usages",
+                "category": "pyrefly",
+                "command": "pyrefly.findFileUsages"
             }
         ],
         "semanticTokenScopes": [
