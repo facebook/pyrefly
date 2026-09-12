@@ -25,6 +25,14 @@ class LinearLayer[N: IntVar, M: IntVar](nn.Module):
         return self.linear(x)
 
 
+class Passthrough(nn.Module):
+    """Transform-style module, like torchvision's `Transform.forward(self, *inputs)`."""
+
+    @override
+    def forward(self, *inputs: Any) -> Any:
+        return inputs
+
+
 def test_forward_override_keeps_call_proxy() -> None:
     x: Tensor[[16, 6]] = torch.randn(16, 6)
     layer = LinearLayer(6, 9)
@@ -36,3 +44,8 @@ def test_call_through_base_module_type() -> None:
     x: Tensor[[16, 6]] = torch.randn(16, 6)
     module: nn.Module = LinearLayer(6, 9)
     assert_type(module(x), Any)
+
+
+def test_forward_override_with_star_args() -> None:
+    module = Passthrough()
+    module(torch.zeros(2), torch.zeros(3))

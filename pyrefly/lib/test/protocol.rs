@@ -463,11 +463,32 @@ class GradualCallableTarget:
     __call__: ProxyMethod["forward"]
     forward: Callable[..., Any]
 
-class OverridesTarget(GradualCallableTarget):
+assert_type(GradualCallableTarget()(1, "two", three=3), Any)
+"#,
+);
+
+testcase!(
+    test_proxy_method_callable_attribute_target_strict_override,
+    proxy_method_env().enable_strict_callable_subtyping(),
+    r#"
+from typing import Any, Callable, assert_type
+from shape_extensions import ProxyMethod
+
+class AttributeBase:
+    __call__: ProxyMethod["forward"]
+    forward: Callable[..., Any]
+
+class AttributeChild(AttributeBase):
     def forward(self, x: int) -> str: ...
 
-assert_type(GradualCallableTarget()(1, "two", three=3), Any)
-assert_type(OverridesTarget()(1), str)
+assert_type(AttributeChild()(1), str)
+
+class MethodBase:
+    __call__: ProxyMethod["forward"]
+    def forward(self, *args: Any, **kwargs: Any) -> Any: ...
+
+class MethodChild(MethodBase):
+    def forward(self, x: int) -> str: ...  # E: overrides parent class `MethodBase` in an inconsistent manner
 "#,
 );
 
