@@ -55,6 +55,7 @@ pub struct SecondaryAnnotation {
 pub enum ErrorQuickFix {
     ReplaceWithEnumMember { replacement: String },
     AssertNotNone,
+    ReplaceDeprecatedContextManagerReturn { from: String, to: String },
 }
 
 /// Whether an error was compared with the configured baseline.

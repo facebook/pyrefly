@@ -35,7 +35,8 @@ pub(crate) fn replace_with_enum_member_code_action(
 fn enum_member_replacement(error: &Error) -> Option<&str> {
     error.quick_fixes().iter().find_map(|fix| match fix {
         ErrorQuickFix::ReplaceWithEnumMember { replacement } => Some(replacement.as_str()),
-        ErrorQuickFix::AssertNotNone => None,
+        ErrorQuickFix::AssertNotNone
+        | ErrorQuickFix::ReplaceDeprecatedContextManagerReturn { .. } => None,
     })
 }
 
