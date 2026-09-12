@@ -52,7 +52,7 @@ impl ImportTracker {
     ) -> Self {
         let mut tracker = Self::default();
         tracker.module_scope_names.extend(
-            Definitions::new(&ast.body, current_module, is_init, sys_info)
+            Definitions::new(&ast.body, current_module, is_init, sys_info, false)
                 .definitions
                 .keys()
                 .map(|name| name.as_str().to_owned()),
