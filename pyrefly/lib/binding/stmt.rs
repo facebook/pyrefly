@@ -1256,6 +1256,7 @@ impl<'a> BindingsBuilder<'a> {
                 // x is bound to Narrow(x, Is(None)) in the if branch, and the negation, Narrow(x, IsNot(None)),
                 // is carried over to the else branch.
                 let mut negated_prev_ops = NarrowOps::new();
+                let mut conditional_flow_facts = Vec::new();
                 let mut contains_static_test_with_no_else = false;
                 let mut is_first_branch = true;
                 let mut following_runtime_only_branch = false;
@@ -1328,7 +1329,18 @@ impl<'a> BindingsBuilder<'a> {
                         NarrowUseLocation::Span(range),
                         &Usage::NonPinningValue(None),
                     );
-                    negated_prev_ops.and_all(new_narrow_ops.negate());
+                    let mut active_narrow_ops = negated_prev_ops.clone();
+                    if active_narrow_ops.0.is_empty() {
+                        active_narrow_ops = new_narrow_ops.clone();
+                    } else if !new_narrow_ops.0.is_empty() {
+                        active_narrow_ops.and_all(new_narrow_ops.clone());
+                    }
+                    let negated_new_narrow_ops = new_narrow_ops.negate();
+                    if negated_prev_ops.0.is_empty() {
+                        negated_prev_ops = negated_new_narrow_ops;
+                    } else {
+                        negated_prev_ops.and_all(negated_new_narrow_ops);
+                    }
                     if is_type_checking_branch {
                         self.type_checking_depth += 1;
                         self.stmts(body, parent);
@@ -1336,6 +1348,10 @@ impl<'a> BindingsBuilder<'a> {
                     } else {
                         self.stmts(body, parent);
                     }
+                    conditional_flow_facts.extend(
+                        self.scopes
+                            .conditional_flow_facts_for_current_branch(&active_narrow_ops),
+                    );
                     self.finish_branch();
                     if this_branch_chosen == Some(true) {
                         exhaustive = true;
@@ -1362,6 +1378,8 @@ impl<'a> BindingsBuilder<'a> {
                 } else {
                     self.finish_non_exhaustive_fork(&negated_prev_ops, exhaustive_key);
                 }
+                self.scopes
+                    .add_conditional_flow_facts(conditional_flow_facts);
                 // If we have a statically evaluated test like `sys.version_info`, we should set `is_definitely_unreachable` to false
                 // to reduce false positive unreachable errors, since some code paths can still be hit at runtime
                 if contains_static_test_with_no_else && !is_definitely_unreachable {
