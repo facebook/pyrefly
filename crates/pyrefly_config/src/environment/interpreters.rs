@@ -26,6 +26,7 @@ use which::which_in;
 use crate::environment::active_environment::ActiveEnvironment;
 use crate::environment::conda;
 use crate::environment::environment::PythonEnvironment;
+use crate::environment::pixi;
 use crate::environment::venv;
 use crate::util::ConfigOrigin;
 
@@ -164,7 +165,8 @@ impl Interpreters {
     /// 2. Check for a configured interpreter path, discovery command, or Conda environment.
     /// 3. Check for an IDE / LSP provided `python-interpreter`.
     /// 4. Check for an active venv or Conda environment.
-    /// 5. Check for a `venv` in the current project.
+    /// 5. Check the project and its ancestors for a venv or Pixi default environment.
+    ///    The nearest environment wins, with venv preferred in the same directory.
     /// 6. Use an interpreter we can find on the `$PATH`.
     /// 7. Give up and return an error.
     pub(crate) fn find_interpreter(
@@ -224,9 +226,9 @@ impl Interpreters {
         }
 
         if let Some(start_path) = path
-            && let Some(venv) = venv::find(start_path)
+            && let Some(interpreter) = Self::find_project_interpreter(start_path)
         {
-            return Ok(ConfigOrigin::auto(venv));
+            return Ok(ConfigOrigin::auto(interpreter));
         }
 
         if let Some(interpreter) = Self::get_default_interpreter() {
@@ -238,6 +240,19 @@ impl Interpreters {
                 but no Python interpreter could be found to query for values. Falling back to \
                 Pyrefly defaults for missing values."
         ))
+    }
+
+    /// Find the nearest project environment, preferring venv over Pixi at the same root.
+    pub(crate) fn find_project_interpreter(start_path: &Path) -> Option<PathBuf> {
+        Self::search_roots(start_path)
+            .find_map(|root| venv::find_in_root(root).or_else(|| pixi::find_in_workspace(root)))
+    }
+
+    /// Visit the project and its ancestors without treating an empty relative path as a root.
+    fn search_roots(start_path: &Path) -> impl Iterator<Item = &Path> {
+        start_path
+            .ancestors()
+            .take_while(|path| !path.as_os_str().is_empty())
     }
 
     fn interpreter_path_or_cmd(&self) -> anyhow::Result<Option<ConfigOrigin<PathBuf>>> {
@@ -334,7 +349,6 @@ impl Interpreters {
 
 #[cfg(test)]
 mod test {
-    #[cfg(windows)]
     use std::fs;
 
     use pyrefly_util::test_path::TestPath;
@@ -365,6 +379,37 @@ mod test {
             )],
         );
         tempdir
+    }
+
+    fn setup_pixi_test_dir(root: &Path) -> PathBuf {
+        if cfg!(windows) {
+            TestPath::setup_test_directory(
+                root,
+                vec![TestPath::dir(
+                    ".pixi",
+                    vec![TestPath::dir(
+                        "envs",
+                        vec![TestPath::dir("default", vec![TestPath::file("python.exe")])],
+                    )],
+                )],
+            );
+            root.join(".pixi/envs/default/python.exe")
+        } else {
+            TestPath::setup_test_directory(
+                root,
+                vec![TestPath::dir(
+                    ".pixi",
+                    vec![TestPath::dir(
+                        "envs",
+                        vec![TestPath::dir(
+                            "default",
+                            vec![TestPath::dir("bin", vec![TestPath::file("python3")])],
+                        )],
+                    )],
+                )],
+            );
+            root.join(".pixi/envs/default/bin/python3")
+        }
     }
 
     /// Produces a conda environment name that should not actually be possible in conda.
@@ -631,6 +676,86 @@ mod test {
         assert_eq!(
             interpreters.to_string(),
             "interpreter at path /resolved/python (from command `poetry env info -e`)"
+        );
+    }
+
+    #[test]
+    fn test_find_project_interpreter_pixi() {
+        let tempdir = tempdir().unwrap();
+        let interpreter = setup_pixi_test_dir(tempdir.path());
+
+        assert_eq!(
+            Interpreters::find_project_interpreter(tempdir.path()),
+            Some(interpreter)
+        );
+    }
+
+    #[test]
+    fn test_search_roots_skips_empty_relative_ancestor() {
+        assert_eq!(
+            Interpreters::search_roots(Path::new("project/src"))
+                .map(Path::to_path_buf)
+                .collect::<Vec<_>>(),
+            vec![PathBuf::from("project/src"), PathBuf::from("project")],
+        );
+    }
+
+    #[test]
+    fn test_find_project_interpreter_prefers_venv() {
+        let tempdir = setup_test_dir();
+        let root = tempdir.path();
+        setup_pixi_test_dir(root);
+
+        assert_eq!(
+            Interpreters::find_project_interpreter(root),
+            Some(
+                root.join("venv")
+                    .join(INTERPRETER_DIR)
+                    .join(INTERPRETER_NAME)
+            )
+        );
+    }
+
+    #[test]
+    fn test_find_project_interpreter_prefers_nearer_pixi() {
+        let tempdir = setup_test_dir();
+        let project = tempdir.path().join("project");
+        let start_path = project.join("src");
+        fs::create_dir_all(&start_path).unwrap();
+        let interpreter = setup_pixi_test_dir(&project);
+
+        assert_eq!(
+            Interpreters::find_project_interpreter(&start_path),
+            Some(interpreter)
+        );
+    }
+
+    #[test]
+    fn test_find_project_interpreter_prefers_nearer_venv() {
+        let tempdir = tempdir().unwrap();
+        setup_pixi_test_dir(tempdir.path());
+        let project = tempdir.path().join("project");
+        let start_path = project.join("src");
+        fs::create_dir_all(&start_path).unwrap();
+        TestPath::setup_test_directory(
+            &project,
+            vec![TestPath::dir(
+                "venv",
+                vec![
+                    TestPath::dir(INTERPRETER_DIR, vec![TestPath::file(INTERPRETER_NAME)]),
+                    TestPath::file("pyvenv.cfg"),
+                ],
+            )],
+        );
+
+        assert_eq!(
+            Interpreters::find_project_interpreter(&start_path),
+            Some(
+                project
+                    .join("venv")
+                    .join(INTERPRETER_DIR)
+                    .join(INTERPRETER_NAME)
+            )
         );
     }
 }
