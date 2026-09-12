@@ -87,6 +87,14 @@ impl State {
         }
     }
 
+    #[wasm_bindgen(js_name=gotoDefinitionLocations)]
+    pub fn goto_definition_locations(&mut self, line: i32, column: i32) -> JsValue {
+        let results = self
+            .0
+            .goto_definition_locations(Position::new(line, column));
+        serde_wasm_bindgen::to_value(&results).unwrap()
+    }
+
     #[wasm_bindgen(js_name=autoComplete)]
     pub fn autocomplete(&mut self, line: i32, column: i32) -> JsValue {
         serde_wasm_bindgen::to_value(&self.0.autocomplete(Position::new(line, column))).unwrap()
