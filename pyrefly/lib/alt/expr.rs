@@ -95,7 +95,6 @@ use crate::alt::shape_extension::is_int_tuple_bound;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::solve::UntypeContext;
 use crate::alt::unwrap::HintRef;
-use crate::alt::unwrap::ListElementHint;
 use crate::binding::binding::Binding;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyYield;
@@ -789,32 +788,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 |hint| self.decompose_list(hint),
                 |elt_hint, hint| {
                     if x.is_empty() {
-                        let elem_ty = match elt_hint {
-                            Some(ListElementHint::Hint(elem_hint)) => elem_hint,
-                            Some(ListElementHint::UninformativeAny(_)) | None => self
-                                .solver()
+                        let elem_ty = elt_hint.unwrap_or_else(|| {
+                            self.solver()
                                 .fresh_partial_contained(self.uniques, x.range)
-                                .to_type(self.heap),
-                        };
+                                .to_type(self.heap)
+                        });
                         self.heap.mk_class_type(self.stdlib.list(elem_ty))
                     } else {
-                        let (elt_hint, partial_fallback) = elt_hint
-                            .map(ListElementHint::into_parts)
-                            .unwrap_or_default();
                         let elem_tys = self.elts_infer(
                             &x.elts,
                             HintRef::with_ty_opt(hint, elt_hint.as_ref()),
                             errors,
                         );
-                        let ty = self
-                            .heap
-                            .mk_class_type(self.stdlib.list(self.unions(elem_tys)));
-                        if let Some(partial_fallback) = partial_fallback {
-                            self.solver()
-                                .replace_unresolved_partials(ty, &partial_fallback)
-                        } else {
-                            ty
-                        }
+                        self.heap
+                            .mk_class_type(self.stdlib.list(self.unions(elem_tys)))
                     }
                 },
             ),
@@ -845,9 +832,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 hint,
                 |hint| self.decompose_list(hint),
                 |elem_hint, hint| {
-                    let (elem_hint, partial_fallback) = elem_hint
-                        .map(ListElementHint::into_parts)
-                        .unwrap_or_default();
                     self.ifs_infer(&x.generators, errors);
                     let elem_ty = self.expr_infer_with_hint_promote(
                         &x.elt,
@@ -855,13 +839,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         errors,
                         HintCoercion::BestEffort,
                     );
-                    let ty = self.heap.mk_class_type(self.stdlib.list(elem_ty));
-                    if let Some(partial_fallback) = partial_fallback {
-                        self.solver()
-                            .replace_unresolved_partials(ty, &partial_fallback)
-                    } else {
-                        ty
-                    }
+                    self.heap.mk_class_type(self.stdlib.list(elem_ty))
                 },
             ),
             Expr::SetComp(x) => self.infer_with_decomposed_hint(
