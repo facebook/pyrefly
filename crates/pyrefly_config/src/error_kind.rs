@@ -284,6 +284,8 @@ pub enum ErrorKind {
     /// Attempting to use `yield` in a way that is not allowed.
     /// e.g. `yield from` with something that's not an iterable.
     InvalidYield,
+    /// Assigning to a method on a class object or instance.
+    MethodAssign,
     /// A file-level `# pyrefly: ignore-errors` (or `ignore-errors[code]`) directive
     /// appears after the first line of code, where it is silently inert. File-level
     /// suppressions are only honored in the preamble, at the top of the file.
@@ -573,6 +575,7 @@ impl ErrorKind {
             ErrorKind::InvalidAbstractMethod => Severity::Ignore,
             ErrorKind::InvalidCast => Severity::Ignore,
             ErrorKind::InvalidDecorator => Severity::Warn,
+            ErrorKind::MethodAssign => Severity::Ignore,
             ErrorKind::MisplacedIgnore => Severity::Warn,
             ErrorKind::MissingAttributePatchTarget => Severity::Warn,
             ErrorKind::MissingOverrideDecorator => Severity::Ignore,

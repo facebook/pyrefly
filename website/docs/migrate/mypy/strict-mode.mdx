@@ -53,6 +53,7 @@ The [`strict` preset](../../configuration.mdx#preset-strict) sets
 `strict-callable-subtyping = true` and enables
 [`implicit-any`](../../error-kinds.mdx#implicit-any) (which covers every
 implicit-`Any` sub-kind),
+[`method-assign`](../../error-kinds.mdx#method-assign),
 [`missing-override-decorator`](../../error-kinds.mdx#missing-override-decorator),
 [`potential-bad-keyword-argument`](../../error-kinds.mdx#potential-bad-keyword-argument),
 [`unused-ignore`](../../error-kinds.mdx#unused-ignore), and
@@ -66,6 +67,7 @@ implicit-`Any` sub-kind),
 | Redundant casts                           | `redundant-cast = "warn"`                       | Generated at warning severity                                                    |
 | Untyped or incompletely typed definitions | `implicit-any-parameter` + `unannotated-return` | Two Pyrefly policies stand in for several mypy flags                             |
 | Missing generic arguments                 | `implicit-any = "error"`                        | Broader than `implicit-any-type-argument` alone                                  |
+| Assigning to methods                      | `method-assign = "error"`                       | Direct mapping, and enabled by Pyrefly's strict preset                           |
 | Checking unannotated function bodies      | Not expanded by the converter                   | Set `check-unannotated-defs = true` yourself                                     |
 | Explicit `Any`                            | `explicit-any`                                  | Only when `disallow_any_explicit` is set; mypy `strict` alone does not enable it |
 | Unused ignores                            | `unused-type-ignore` / `unused-ignore`          | Not part of the mypy converter map; add by hand                                  |
