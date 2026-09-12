@@ -81,6 +81,7 @@ mod shape_extension_restrictions;
 mod simple;
 mod sklearn;
 mod slots;
+mod sqlalchemy;
 mod state;
 mod subscript_narrow;
 mod suppression;
