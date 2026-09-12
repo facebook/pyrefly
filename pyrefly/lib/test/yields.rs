@@ -640,6 +640,36 @@ def g() -> Iterator[list[int]] | Iterator[list[str]]:
 );
 
 testcase!(
+    test_iterator_annotation_with_return_value,
+    r#"
+from collections.abc import Generator, Iterable, Iterator
+from typing import assert_type
+
+def gen(x: int) -> Iterator[int] | int:
+    yield from range(4)
+    return 5
+
+assert_type(gen(0), Iterator[int] | int)
+
+def iterator() -> Iterator[int]:
+    yield 1
+    return "done"
+
+def iterable() -> Iterable[int]:
+    yield 1
+    return "done"
+
+def bad_yield() -> Iterator[int] | int:
+    yield "oops"  # E: Yielded type `Literal['oops']` is not assignable to declared yield type `int`
+    return 5
+
+def explicit_return_type() -> Generator[int, None, None] | int:
+    yield 1
+    return 5  # E: Returned type `Literal[5]` is not assignable to declared return type `None`
+    "#,
+);
+
+testcase!(
     test_return_is_incompatible_with_generator,
     r#"
 from typing import Generator
