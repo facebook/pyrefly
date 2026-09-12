@@ -437,6 +437,41 @@ Base()()  # E: Proxy method `__call__` of class `Base` cannot resolve target met
 );
 
 testcase!(
+    test_proxy_method_callable_attribute_target,
+    proxy_method_env(),
+    r#"
+from typing import Any, Callable, Protocol, assert_type
+from shape_extensions import ProxyMethod
+
+class CallableTarget:
+    __call__: ProxyMethod["forward"]
+    forward: Callable[[int], str]
+
+assert_type(CallableTarget()(1), str)
+CallableTarget()("bad")  # E: `Literal['bad']` is not assignable to parameter with type `int`
+
+class Callback(Protocol):
+    def __call__(self, x: int) -> str: ...
+
+class ProtocolTarget:
+    __call__: ProxyMethod["forward"]
+    forward: Callback
+
+assert_type(ProtocolTarget()(1), str)
+
+class GradualCallableTarget:
+    __call__: ProxyMethod["forward"]
+    forward: Callable[..., Any]
+
+class OverridesTarget(GradualCallableTarget):
+    def forward(self, x: int) -> str: ...
+
+assert_type(GradualCallableTarget()(1, "two", three=3), Any)
+assert_type(OverridesTarget()(1), str)
+"#,
+);
+
+testcase!(
     test_proxy_method_rejects_proxy_chain_and_self_reference,
     proxy_method_env(),
     r#"
