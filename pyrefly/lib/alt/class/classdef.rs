@@ -186,6 +186,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     .map_or_else(TParams::default, |tparams| (**tparams).clone()),
                 self.instantiate(c),
             )),
+            Type::SpecializedClass(c) => Some((TParams::empty(), Type::ClassType(c.clone()))),
             Type::TypeAlias(ta) => {
                 self.unwrap_class_object_silently(&self.get_type_alias(ta).as_value(self.stdlib))
             }
