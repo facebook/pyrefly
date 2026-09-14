@@ -2168,7 +2168,7 @@ Completion Results:
 }
 
 #[test]
-fn completion_django_annotate_omits_extra_attribute() {
+fn completion_django_annotate_includes_extra_attribute() {
     let code = r#"
 from django.db import models
 
@@ -2197,10 +2197,9 @@ for article in Article.objects.annotate(extra_title=models.F("title")):
         completions.iter().any(|item| item.label == "title"),
         "model field missing from {completions:?}"
     );
-    // `extra_title` should be offered once `annotate()`-defined attributes are supported.
     assert!(
-        !completions.iter().any(|item| item.label == "extra_title"),
-        "annotate() extra attribute unexpectedly present in {completions:?}"
+        completions.iter().any(|item| item.label == "extra_title"),
+        "annotate() extra attribute missing from {completions:?}"
     );
 }
 

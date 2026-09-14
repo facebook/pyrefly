@@ -1811,6 +1811,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                 .push(attribute_reference_range);
                         }
                     }
+                    AttrDefinition::Synthetic => {}
                 }
             }
         }
