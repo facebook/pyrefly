@@ -67,7 +67,6 @@ from jax._shapes import (
     stack_shape,
     swapaxes_shape,
     take_along_axis_shape,
-    take_scalar_idx_shape,
     take_shape,
     tensordot_shape,
     top_k_shape,
@@ -2954,10 +2953,9 @@ def put_along_axis(
     *,
     mode: str | None = None,
 ) -> Array[IntTuple]: ...
-@overload
-def take[Shape: _Shape, IdxShape: _Shape, Axis: Flag[int | None] = None](
-    a: Array[Shape],
-    indices: Array[IdxShape],
+def take[Shape: _Shape = [], IdxShape: _Shape = [], Axis: Flag[int | None] = None](
+    a: _ArrayLike[Shape],
+    indices: _ArrayLike[IdxShape],
     axis: Axis = None,
     out: None = None,
     mode: str | None = None,
@@ -2965,48 +2963,19 @@ def take[Shape: _Shape, IdxShape: _Shape, Axis: Flag[int | None] = None](
     indices_are_sorted: bool = False,
     fill_value: Any = None,
 ) -> Array[take_shape(Shape, IdxShape, Axis)]: ...
-@overload
-def take[Shape: _Shape, Axis: Flag[int | None] = None](
-    a: Array[Shape],
-    indices: int,
-    axis: Axis = None,
-    out: None = None,
-    mode: str | None = None,
-    unique_indices: bool = False,
-    indices_are_sorted: bool = False,
-    fill_value: Any = None,
-) -> Array[take_scalar_idx_shape(Shape, Axis)]: ...
-@overload
-def take(
-    a: Any,
-    indices: Any,
-    axis: int | None = None,
-    out: None = None,
-    mode: str | None = None,
-    unique_indices: bool = False,
-    indices_are_sorted: bool = False,
-    fill_value: Any = None,
-) -> Array[IntTuple]: ...
-@overload
-def take_along_axis[ArrShape: _Shape, IdxShape: _Shape, Axis: Flag[int | None] = -1](
-    arr: Array[ArrShape],
-    indices: Array[IdxShape],
+def take_along_axis[
+    ArrShape: _Shape = [],
+    IdxShape: _Shape = [],
+    Axis: Flag[int | None] = -1,
+](
+    arr: _ArrayLike[ArrShape],
+    indices: _ArrayLike[IdxShape],
     axis: Axis = -1,
     mode: str | None = None,
     fill_value: Any = None,
     *,
     wrap_negative_indices: bool = True,
 ) -> Array[take_along_axis_shape(ArrShape, IdxShape, Axis)]: ...
-@overload
-def take_along_axis(
-    arr: Any,
-    indices: Any,
-    axis: int | None = -1,
-    mode: str | None = None,
-    fill_value: Any = None,
-    *,
-    wrap_negative_indices: bool = True,
-) -> Array[IntTuple]: ...
 def trim_zeros(
     filt: Any,
     trim: str = "fb",
