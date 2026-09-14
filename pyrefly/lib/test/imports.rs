@@ -2436,6 +2436,21 @@ from bar import d
 );
 
 testcase!(
+    test_implicit_reexport_module_attribute,
+    env_implicit_reexport().enable_implicit_reexport_error(),
+    r#"
+import bar
+import bar as baz
+
+bar.a  # E: `a` is not exported from module `bar`
+baz.a  # E: `a` is not exported from module `bar`
+bar.b
+bar.c
+bar.d
+"#,
+);
+
+testcase!(
     test_implicit_reexport_off_by_default,
     env_implicit_reexport(),
     r#"
