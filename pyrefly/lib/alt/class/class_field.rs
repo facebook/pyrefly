@@ -55,6 +55,7 @@ use crate::alt::answers_solver::AnswersSolver;
 use crate::alt::attr::AttrSubsetError;
 use crate::alt::attr::ClassBase;
 use crate::alt::attr::NoAccessReason;
+use crate::alt::call::CallTargetLookup;
 use crate::alt::callable::CallArg;
 use crate::alt::expr::TypeOrExpr;
 use crate::alt::types::class_bases::ClassBases;
@@ -2657,6 +2658,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// A `ProxyMethod` target is either an ordinary instance method or a class
+    /// attribute whose type is callable (e.g. `torch.nn.Module` declares
+    /// `forward: Callable[..., Any]`).
+    fn is_proxy_method_target(&self, field: &ClassFieldInner) -> bool {
+        match field {
+            ClassFieldInner::Method { ty, .. } => Self::is_ordinary_instance_method_type(ty),
+            ClassFieldInner::ClassAttribute { ty, .. } => matches!(
+                self.as_call_target(self.normalize_attr_ty(ty.clone())),
+                CallTargetLookup::Ok(_)
+            ),
+            _ => false,
+        }
+    }
+
     fn is_ordinary_instance_method_type(ty: &Type) -> bool {
         ty.toplevel_func_metadata()
             .is_some_and(&|metadata: &FuncMetadata| {
@@ -3495,13 +3510,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             ClassFieldInner::ProxyMethod { target, .. } => {
                 match self.get_class_member(instance.class, &target) {
-                    Some(target_field)
-                        if matches!(
-                            &target_field.0,
-                            ClassFieldInner::Method { ty, .. }
-                                if Self::is_ordinary_instance_method_type(ty)
-                        ) =>
-                    {
+                    Some(target_field) if self.is_proxy_method_target(&target_field.0) => {
                         self.as_instance_attribute(&target, target_field.as_ref(), instance)
                     }
                     _ => ClassAttribute::no_access(NoAccessReason::ProxyMethodTargetInvalid {

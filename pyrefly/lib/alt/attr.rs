@@ -279,7 +279,8 @@ pub enum NoAccessReason {
     SuperMethodNeedsImplementation(Class),
     /// A proxy method was accessed on the class object rather than an instance.
     ProxyMethodClassAccess(Class),
-    /// A proxy method declaration exists, but its target cannot be used as an instance method.
+    /// A proxy method declaration exists, but its target is neither an ordinary instance method
+    /// nor a class attribute whose type is callable.
     ProxyMethodTargetInvalid { class: Class, target: Name },
 }
 
