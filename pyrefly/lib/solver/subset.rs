@@ -1594,8 +1594,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         );
                         let vars = fresh_forall.handle.vars().to_vec();
                         match self
-                            .solver
-                            .with_snapshot(&vars, || self.is_subset_forall(fresh_forall, want))
+                            .with_snapshot(&vars, |me| me.is_subset_forall(fresh_forall, want))
                         {
                             SubsetWithSnapshotResult::Ok => Ok(()),
                             SubsetWithSnapshotResult::Err(e) => Err(e),
@@ -1798,9 +1797,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     // entry being treated as Ok) that this failure invalidates.
                     // Entries from before our computation are preserved — they are
                     // independent and not tainted by our failure.
-                    while self.subset_cache.len() > cache_size.unwrap() {
-                        self.subset_cache.pop();
-                    }
+                    self.truncate_subset_cache(cache_size.unwrap());
                     self.subset_cache
                         .insert(key, SubsetCacheEntry::Err(err.clone()));
                 }
@@ -1887,9 +1884,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     // first (https://github.com/facebook/pyrefly/issues/4187).
                     && !matches!(u, Type::Union(union) if union.members.iter().any(|t| matches!(t, Type::Var(_))))
                     && self
-                        .solver
-                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
-                            self.is_subset_eq(bound, u)
+                        .with_snapshot(&u.collect_maybe_placeholder_vars(), |me| {
+                            me.is_subset_eq(bound, u)
                         })
                         .is_ok() =>
             {
@@ -1898,10 +1894,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (Type::Quantified(q), u)
                 if let Restriction::ShapeExtension(extension) = q.restriction()
                     && self
-                        .solver
-                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
-                            self.is_subset_eq(
-                                &extension.upper_bound(self.type_order.stdlib(), &self.solver.heap),
+                        .with_snapshot(&u.collect_maybe_placeholder_vars(), |me| {
+                            me.is_subset_eq(
+                                &extension.upper_bound(me.type_order.stdlib(), &me.solver.heap),
                                 u,
                             )
                         })
@@ -1912,10 +1907,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             (Type::Quantified(q), u)
                 if let Restriction::Constraints(constraints) = q.restriction()
                     && self
-                        .solver
-                        .with_snapshot(&u.collect_maybe_placeholder_vars(), || {
+                        .with_snapshot(&u.collect_maybe_placeholder_vars(), |me| {
                             all(constraints.iter(), |constraint| {
-                                self.is_subset_eq(constraint, u)
+                                me.is_subset_eq(constraint, u)
                             })
                         })
                         .is_ok() =>
@@ -2070,10 +2064,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 // Take the first successful match.
                 for (u, vs) in ordered_us {
                     let all_vs = l_vs.iter().copied().chain(vs).collect::<Vec<_>>();
-                    match self
-                        .solver
-                        .with_snapshot(&all_vs, || self.is_subset_eq(l, u))
-                    {
+                    match self.with_snapshot(&all_vs, |me| me.is_subset_eq(l, u)) {
                         SubsetWithSnapshotResult::Ok => return Ok(()),
                         SubsetWithSnapshotResult::Err(e) => {
                             if error.is_none() {

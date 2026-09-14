@@ -935,10 +935,9 @@ impl Solver {
     }
 
     /// Snapshots the given vars, calls `f`, and rolls back the vars if the call fails.
-    /// Note that this only rolls back the var state and not:
-    /// * `Ok` entries left in `subset_cache` (the rollback in `is_subset_eq_impl` only fires on
-    ///   `Err` from the speculative call, not on `Ok`-with-instantiation-errors), or
-    /// * `coinductive_assumptions_used`, which is one-way.
+    ///
+    /// This rolls back var state only. Callers that also hold subset-checking state should use
+    /// `Subset::with_snapshot`.
     pub fn with_snapshot(
         &self,
         vars: &[Var],
@@ -3424,6 +3423,12 @@ pub struct Subset<'solver, 'subset, Ans: LookupAnswer> {
     witness_deferred_vars: SmallMap<ArgumentKey, SmallSet<Var>>,
 }
 
+struct SubsetStateSnapshot {
+    subset_cache_size: usize,
+    class_protocol_assumptions: SmallSet<(Class, Class)>,
+    coinductive_assumptions_used: bool,
+}
+
 impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     fn snapshot_witness_deferred_vars(&self) -> SmallMap<ArgumentKey, SmallSet<Var>> {
         self.witness_deferred_vars.clone()
@@ -3434,6 +3439,44 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         deferred_vars: SmallMap<ArgumentKey, SmallSet<Var>>,
     ) {
         self.witness_deferred_vars = deferred_vars;
+    }
+
+    /// Drops the `self.subset_cache.len() - cache_size` most recent entries in the subset cache.
+    /// This can be used to roll back the cache after some speculative calculation by recording its
+    /// pre-calculation size, doing the calculation, then truncating back to the recorded size.
+    /// This works because the cache is a `SmallMap`, which preserves insertion order.
+    pub fn truncate_subset_cache(&mut self, cache_size: usize) {
+        while self.subset_cache.len() > cache_size {
+            self.subset_cache.pop();
+        }
+    }
+
+    fn snapshot_subset_state(&self) -> SubsetStateSnapshot {
+        SubsetStateSnapshot {
+            subset_cache_size: self.subset_cache.len(),
+            class_protocol_assumptions: self.class_protocol_assumptions.clone(),
+            coinductive_assumptions_used: self.coinductive_assumptions_used,
+        }
+    }
+
+    fn restore_subset_state(&mut self, snapshot: SubsetStateSnapshot) {
+        self.truncate_subset_cache(snapshot.subset_cache_size);
+        self.class_protocol_assumptions = snapshot.class_protocol_assumptions;
+        self.coinductive_assumptions_used = snapshot.coinductive_assumptions_used;
+    }
+
+    /// Run `f` as a speculative subset check, rolling back to the current state if it fails.
+    pub fn with_snapshot(
+        &mut self,
+        vars: &[Var],
+        f: impl FnOnce(&mut Self) -> Result<(), SubsetError>,
+    ) -> SubsetWithSnapshotResult {
+        let subset_snapshot = self.snapshot_subset_state();
+        let res = self.solver.with_snapshot(vars, || f(self));
+        if !res.is_ok() {
+            self.restore_subset_state(subset_snapshot);
+        }
+        res
     }
 
     /// Check one overload branch's constraints as a transaction during quantified finishing.
@@ -3458,11 +3501,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         let vars_snapshot = self
             .solver
             .snapshot_exact_vars(&vars.into_iter().collect::<Vec<_>>());
-        let cache_snapshot = self.subset_cache.clone();
-        self.subset_cache.clear();
-        let protocol_assumptions = self.class_protocol_assumptions.clone();
+        let subset_snapshot = self.snapshot_subset_state();
         let deferred_vars = self.snapshot_witness_deferred_vars();
-        let coinductive_assumptions_used = self.coinductive_assumptions_used;
         let compatible = self.with_active_call_context(CallContext::outside(), |me| {
             constraints
                 .iter()
@@ -3470,10 +3510,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         });
         if !compatible || mode == OverloadPruningSubsetMode::Probe {
             self.solver.restore_vars(vars_snapshot);
-            self.subset_cache = cache_snapshot;
-            self.class_protocol_assumptions = protocol_assumptions;
+            self.restore_subset_state(subset_snapshot);
             self.restore_witness_deferred_vars(deferred_vars);
-            self.coinductive_assumptions_used = coinductive_assumptions_used;
         }
         compatible
     }
