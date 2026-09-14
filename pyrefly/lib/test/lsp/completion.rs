@@ -2168,6 +2168,43 @@ Completion Results:
 }
 
 #[test]
+fn completion_django_annotate_omits_extra_attribute() {
+    let code = r#"
+from django.db import models
+
+class Article(models.Model):
+    title = models.CharField(max_length=100)
+
+for article in Article.objects.annotate(extra_title=models.F("title")):
+    article.
+#           ^
+"#;
+    let django_path = std::env::var("DJANGO_TEST_PATH").expect("DJANGO_TEST_PATH must be set");
+    let mut test_env = TestEnv::new_with_site_package_paths(&[&django_path]);
+    test_env.add("main", code);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let completions = state.transaction().completion(
+        &handle("main"),
+        extract_cursors_for_test(code)[0],
+        ImportFormat::Absolute,
+        true,
+        None,
+    );
+
+    assert!(
+        completions.iter().any(|item| item.label == "title"),
+        "model field missing from {completions:?}"
+    );
+    // `extra_title` should be offered once `annotate()`-defined attributes are supported.
+    assert!(
+        !completions.iter().any(|item| item.label == "extra_title"),
+        "annotate() extra attribute unexpectedly present in {completions:?}"
+    );
+}
+
+#[test]
 fn kwargs_completion_pydantic_constructor_ignores_inherited_unannotated_new() {
     let sqlmodel = r#"
 from typing import Any
