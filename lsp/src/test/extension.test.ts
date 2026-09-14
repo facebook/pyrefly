@@ -105,3 +105,17 @@ suite('resolveLspPath', () => {
 		);
 	});
 });
+
+suite('find_pyrefly.py', () => {
+	// The selection logic itself is covered by test/test_find_pyrefly.py,
+	// which runs on pull requests and needs no extension host. What only this suite
+	// can show is that the script is actually packaged into the VSIX and reachable
+	// where the extension looks for it.
+	test('is packaged with the extension', async () => {
+		const extension = vscode.extensions.getExtension('meta.pyrefly');
+		assert.ok(extension);
+		await fs.access(
+			join(extension.extensionPath, 'resources', 'find_pyrefly.py'),
+		);
+	});
+});
