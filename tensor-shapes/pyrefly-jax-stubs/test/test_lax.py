@@ -50,6 +50,21 @@ def test_unary_elementwise() -> None:
     assert_shape(lax.imag(c_mat).shape, (2, 3))
     assert_shape(lax.conj(c_tensor).shape, (2, 3, 4))
 
+    # Python scalars
+    assert_shape(lax.sin(1.0).shape, ())
+    assert_shape(lax.abs(-5).shape, ())
+    assert_shape(lax.exp(0.0).shape, ())
+    assert_shape(lax.real(1.0 + 2.0j).shape, ())
+    assert_shape(lax.imag(1.0 + 2.0j).shape, ())
+    assert_shape(lax.conj(1.0 + 2.0j).shape, ())
+    assert_shape(lax.integer_pow(2, 3).shape, ())
+
+    # NumPy arrays
+    assert_shape(lax.sin(np.ones((2, 3))).shape, (2, 3))
+    assert_shape(lax.sqrt(np.ones(4)).shape, (4,))
+    assert_shape(lax.abs(np.ones((2, 3, 4))).shape, (2, 3, 4))
+    assert_shape(lax.neg(np.ones(())).shape, ())
+
 
 def test_binary_broadcasting_with_scalars() -> None:
     scalar_arr = jnp.ones(())
@@ -61,6 +76,12 @@ def test_binary_broadcasting_with_scalars() -> None:
     assert_shape(lax.add(vec, 1.0).shape, (4,))
     assert_shape(lax.sub(2.0, mat).shape, (2, 3))
     assert_shape(lax.mul(mat, 3.0).shape, (2, 3))
+    assert_shape(lax.add(1.0, 2.0).shape, ())
+    assert_shape(lax.mul(2.0, 3.0).shape, ())
+
+    # NumPy arrays
+    assert_shape(lax.add(np.ones(4), 1.0).shape, (4,))
+    assert_shape(lax.add(np.ones((2, 3)), mat).shape, (2, 3))
 
     # 0-D Array with N-D Array
     assert_shape(lax.add(scalar_arr, vec).shape, (4,))
@@ -592,7 +613,7 @@ def test_lax_scans() -> None:
 
 def test_lax_reductions() -> None:
     x = jnp.ones((2, 3, 4))
-    b = jnp.array([[[True, False, True, False]] * 3] * 2)
+    b = jnp.ones((2, 3, 4), dtype=bool)
 
     # reduce
     assert_shape(lax.reduce(x, 0.0, lax.add, (0, 2)).shape, (3,))
@@ -1126,6 +1147,18 @@ def test_special_math() -> None:
     assert_shape(lax.betainc(1.0, 2.0, 0.5).shape, ())
     assert_shape(lax.random_gamma_grad(a, x).shape, (2, 3))
     assert_shape(lax.fft(lax.complex(a, a), lax.FftType.FFT, (3,)).shape, (2, 3))
+
+    # Broadcasting with different shapes and scalars
+    col = jnp.ones((2, 1))
+    row = jnp.ones((1, 3))
+    mat = jnp.ones((2, 3)) * 0.5
+    assert_shape(lax.betainc(col, row, mat).shape, (2, 3))
+    assert_shape(lax.betainc(col, 2.0, row).shape, (2, 3))
+    assert_shape(lax.betainc(1.0, row, col).shape, (2, 3))
+
+    # NumPy arrays
+    assert_shape(lax.betainc(np.ones((2, 1)), np.ones((1, 3)), mat).shape, (2, 3))
+    assert_shape(lax.betainc(np.ones((1, 3)), 2.0, col).shape, (2, 3))
 
 
 def generic_rng_and_data_types[KeyShape: IntTuple, Shape: IntTuple](

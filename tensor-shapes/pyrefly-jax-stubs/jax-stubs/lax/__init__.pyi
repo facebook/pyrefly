@@ -6,7 +6,7 @@
 from typing import Any, Callable, Hashable, overload, Sequence
 
 import numpy as np
-from jax._array import Array
+from jax._array import Array, ArrayLike as _ArrayLike
 from jax._shapes import (
     broadcast_to_rank_shape,
     collapse_shape,
@@ -16,8 +16,6 @@ from jax._shapes import (
     lax_associative_scan_shape,
     lax_axis_reduce_shape,
     lax_broadcast,
-    lax_clamp_max_scalar_shape,
-    lax_clamp_min_scalar_shape,
     lax_clamp_shape,
     lax_dynamic_index_in_dim_shape,
     lax_dynamic_slice_in_dim_shape,
@@ -25,7 +23,6 @@ from jax._shapes import (
     lax_reduce_shape,
     lax_scan_shape,
     lax_select_n_shape,
-    lax_select_scalar_pred_shape,
     lax_select_shape,
     lax_sort_key_val_shape,
     lax_sort_shape,
@@ -74,347 +71,189 @@ type _Scalar = int | float | complex
 type _Axis = int | tuple[int, ...] | None
 
 # Unary elementwise operators
-def abs[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def acos[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def acosh[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def asin[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def asinh[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def atan[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def atanh[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def bessel_i0e[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def bessel_i1e[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def bitwise_not[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def cbrt[Shape: _Shape](x: Array[Shape], *, accuracy: Any = None) -> Array[Shape]: ...
-def ceil[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def clz[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def conj[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def cos[Shape: _Shape](x: Array[Shape], *, accuracy: Any = None) -> Array[Shape]: ...
-def cosh[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def digamma[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def erf[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def erf_inv[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def erfc[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def exp[Shape: _Shape](x: Array[Shape], *, accuracy: Any = None) -> Array[Shape]: ...
-def exp2[Shape: _Shape](x: Array[Shape], *, accuracy: Any = None) -> Array[Shape]: ...
-def expm1[Shape: _Shape](x: Array[Shape], *, accuracy: Any = None) -> Array[Shape]: ...
-def floor[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def imag[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def integer_pow[Shape: _Shape](x: Array[Shape], y: int) -> Array[Shape]: ...
-def is_finite[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def lgamma[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def log[Shape: _Shape](x: Array[Shape], *, accuracy: Any = None) -> Array[Shape]: ...
-def log1p[Shape: _Shape](x: Array[Shape], *, accuracy: Any = None) -> Array[Shape]: ...
-def logistic[Shape: _Shape](
-    x: Array[Shape], *, accuracy: Any = None
+def abs[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def acos[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def acosh[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def asin[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def asinh[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def atan[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def atanh[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def bessel_i0e[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def bessel_i1e[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def bitwise_not[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def cbrt[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
 ) -> Array[Shape]: ...
-def neg[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def population_count[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def real[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def reciprocal[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def round[Shape: _Shape](
-    x: Array[Shape], rounding_method: Any = ...
+def ceil[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def clz[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def conj[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def cos[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
 ) -> Array[Shape]: ...
-def rsqrt[Shape: _Shape](x: Array[Shape], *, accuracy: Any = None) -> Array[Shape]: ...
-def sign[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def sin[Shape: _Shape](x: Array[Shape], *, accuracy: Any = None) -> Array[Shape]: ...
-def sinh[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def sqrt[Shape: _Shape](x: Array[Shape], *, accuracy: Any = None) -> Array[Shape]: ...
-def square[Shape: _Shape](x: Array[Shape]) -> Array[Shape]: ...
-def tan[Shape: _Shape](x: Array[Shape], *, accuracy: Any = None) -> Array[Shape]: ...
-def tanh[Shape: _Shape](x: Array[Shape], *, accuracy: Any = None) -> Array[Shape]: ...
+def cosh[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def digamma[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def erf[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def erf_inv[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def erfc[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def exp[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
+) -> Array[Shape]: ...
+def exp2[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
+) -> Array[Shape]: ...
+def expm1[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
+) -> Array[Shape]: ...
+def floor[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def imag[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def integer_pow[Shape: _Shape = []](x: _ArrayLike[Shape], y: int) -> Array[Shape]: ...
+def is_finite[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def lgamma[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def log[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
+) -> Array[Shape]: ...
+def log1p[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
+) -> Array[Shape]: ...
+def logistic[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
+) -> Array[Shape]: ...
+def neg[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def population_count[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def real[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def reciprocal[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def round[Shape: _Shape = []](
+    x: _ArrayLike[Shape], rounding_method: Any = ...
+) -> Array[Shape]: ...
+def rsqrt[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
+) -> Array[Shape]: ...
+def sign[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def sin[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
+) -> Array[Shape]: ...
+def sinh[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def sqrt[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
+) -> Array[Shape]: ...
+def square[Shape: _Shape = []](x: _ArrayLike[Shape]) -> Array[Shape]: ...
+def tan[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
+) -> Array[Shape]: ...
+def tanh[Shape: _Shape = []](
+    x: _ArrayLike[Shape], *, accuracy: Any = None
+) -> Array[Shape]: ...
 
 # Binary elementwise operators with strict rank-matching broadcasting
-@overload
-def add[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def add[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def add[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def add[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def atan2[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def atan2[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def atan2[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def atan2[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def bitwise_and[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def bitwise_and[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def bitwise_and[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def bitwise_and[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def bitwise_or[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def bitwise_or[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def bitwise_or[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def bitwise_or[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def bitwise_xor[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def bitwise_xor[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def bitwise_xor[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def bitwise_xor[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def complex[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def complex[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def complex[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def complex[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def div[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def div[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def div[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def div[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def eq[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def eq[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def eq[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def eq[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def ge[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def ge[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def ge[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def ge[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def gt[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def gt[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def gt[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def gt[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def igamma[Shape: _Shape](a: Array[Shape], x: _Scalar, /) -> Array[Shape]: ...
-@overload
-def igamma[Shape: _Shape](a: _Scalar, x: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def igamma[Shape1: _Shape, Shape2: _Shape](
-    a: Array[Shape1], x: Array[Shape2], /
+def igamma[Shape1: _Shape = [], Shape2: _Shape = []](
+    a: _ArrayLike[Shape1], x: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def igamma_grad_a[Shape: _Shape](a: Array[Shape], x: _Scalar, /) -> Array[Shape]: ...
-@overload
-def igamma_grad_a[Shape: _Shape](a: _Scalar, x: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def igamma_grad_a[Shape1: _Shape, Shape2: _Shape](
-    a: Array[Shape1], x: Array[Shape2], /
+def igamma_grad_a[Shape1: _Shape = [], Shape2: _Shape = []](
+    a: _ArrayLike[Shape1], x: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def igammac[Shape: _Shape](a: Array[Shape], x: _Scalar, /) -> Array[Shape]: ...
-@overload
-def igammac[Shape: _Shape](a: _Scalar, x: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def igammac[Shape1: _Shape, Shape2: _Shape](
-    a: Array[Shape1], x: Array[Shape2], /
+def igammac[Shape1: _Shape = [], Shape2: _Shape = []](
+    a: _ArrayLike[Shape1], x: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def le[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def le[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def le[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def le[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def lt[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def lt[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def lt[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def lt[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def max[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def max[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def max[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def max[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def min[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def min[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def min[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def min[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def mul[Shape: _Shape](
-    x: Array[Shape],
-    y: _Scalar,
-    /,
-    *,
-    out_dtype: DTypeLike | None = None,
-) -> Array[Shape]: ...
-@overload
-def mul[Shape: _Shape](
-    x: _Scalar,
-    y: Array[Shape],
-    /,
-    *,
-    out_dtype: DTypeLike | None = None,
-) -> Array[Shape]: ...
-@overload
-def mul[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1],
-    y: Array[Shape2],
+def mul[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1],
+    y: _ArrayLike[Shape2],
     /,
     *,
     out_dtype: DTypeLike | None = None,
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def mulhi[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def mulhi[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def mulhi[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def mulhi[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def ne[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def ne[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def ne[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def ne[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def nextafter[Shape: _Shape](x1: Array[Shape], x2: _Scalar, /) -> Array[Shape]: ...
-@overload
-def nextafter[Shape: _Shape](x1: _Scalar, x2: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def nextafter[Shape1: _Shape, Shape2: _Shape](
-    x1: Array[Shape1], x2: Array[Shape2], /
+def nextafter[Shape1: _Shape = [], Shape2: _Shape = []](
+    x1: _ArrayLike[Shape1], x2: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def polygamma[Shape: _Shape](m: Array[Shape], x: _Scalar, /) -> Array[Shape]: ...
-@overload
-def polygamma[Shape: _Shape](m: _Scalar, x: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def polygamma[Shape1: _Shape, Shape2: _Shape](
-    m: Array[Shape1], x: Array[Shape2], /
+def polygamma[Shape1: _Shape = [], Shape2: _Shape = []](
+    m: _ArrayLike[Shape1], x: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def pow[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def pow[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def pow[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def pow[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def rem[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def rem[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def rem[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def rem[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def shift_left[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def shift_left[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def shift_left[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def shift_left[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def shift_right_arithmetic[Shape: _Shape](
-    x: Array[Shape], y: _Scalar, /
-) -> Array[Shape]: ...
-@overload
-def shift_right_arithmetic[Shape: _Shape](
-    x: _Scalar, y: Array[Shape], /
-) -> Array[Shape]: ...
-@overload
-def shift_right_arithmetic[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def shift_right_arithmetic[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def shift_right_logical[Shape: _Shape](
-    x: Array[Shape], y: _Scalar, /
-) -> Array[Shape]: ...
-@overload
-def shift_right_logical[Shape: _Shape](
-    x: _Scalar, y: Array[Shape], /
-) -> Array[Shape]: ...
-@overload
-def shift_right_logical[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def shift_right_logical[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def sub[Shape: _Shape](x: Array[Shape], y: _Scalar, /) -> Array[Shape]: ...
-@overload
-def sub[Shape: _Shape](x: _Scalar, y: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def sub[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], y: Array[Shape2], /
+def sub[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], y: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def zeta[Shape: _Shape](x: Array[Shape], q: _Scalar, /) -> Array[Shape]: ...
-@overload
-def zeta[Shape: _Shape](x: _Scalar, q: Array[Shape], /) -> Array[Shape]: ...
-@overload
-def zeta[Shape1: _Shape, Shape2: _Shape](
-    x: Array[Shape1], q: Array[Shape2], /
+def zeta[Shape1: _Shape = [], Shape2: _Shape = []](
+    x: _ArrayLike[Shape1], q: _ArrayLike[Shape2], /
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
 @overload
 def betainc[Shape: _Shape](
-    a: Array[Shape],
-    b: Array[Shape] | _Scalar,
-    x: Array[Shape] | _Scalar,
+    a: _ArrayLike[Shape],
+    b: _ArrayLike[Shape],
+    x: _ArrayLike[Shape],
     /,
 ) -> Array[Shape]: ...
 @overload
-def betainc[Shape: _Shape](
-    a: _Scalar,
-    b: Array[Shape],
-    x: Array[Shape] | _Scalar,
+def betainc[
+    Shape1: _Shape = [],
+    Shape2: _Shape = [],
+    Shape3: _Shape = [],
+](
+    a: _ArrayLike[Shape1],
+    b: _ArrayLike[Shape2],
+    x: _ArrayLike[Shape3],
     /,
-) -> Array[Shape]: ...
-@overload
-def betainc[Shape: _Shape](
-    a: _Scalar,
-    b: _Scalar,
-    x: Array[Shape],
-    /,
-) -> Array[Shape]: ...
-@overload
-def betainc(
-    a: _Scalar,
-    b: _Scalar,
-    x: _Scalar,
-    /,
-) -> Array[[]]: ...
-@overload
-def betainc(
-    a: Any,
-    b: Any,
-    x: Any,
-    /,
-) -> Array[IntTuple]: ...
+) -> Array[lax_broadcast(lax_broadcast(Shape1, Shape2), Shape3)]: ...
 @overload
 def fft[Shape: _Shape](
     x: Array[Shape],
@@ -429,22 +268,16 @@ def fft(
 ) -> Array[IntTuple]: ...
 @overload
 def random_gamma_grad[Shape: _Shape](
-    a: Array[Shape],
-    x: Array[Shape],
+    a: _ArrayLike[Shape],
+    x: _ArrayLike[Shape],
     /,
 ) -> Array[Shape]: ...
 @overload
-def random_gamma_grad[Shape1: _Shape, Shape2: _Shape](
-    a: Array[Shape1],
-    x: Array[Shape2],
+def random_gamma_grad[Shape1: _Shape = [], Shape2: _Shape = []](
+    a: _ArrayLike[Shape1],
+    x: _ArrayLike[Shape2],
     /,
 ) -> Array[lax_broadcast(Shape1, Shape2)]: ...
-@overload
-def random_gamma_grad(
-    a: Any,
-    x: Any,
-    /,
-) -> Array[IntTuple]: ...
 
 # -----------------------------------------------------------------------------
 # Array Creation & Constants
@@ -610,27 +443,15 @@ def broadcast_in_dim(
     *,
     out_sharding: Any = None,
 ) -> Array[IntTuple]: ...
-@overload
-def broadcast_like[Shape: _Shape](
-    arr: Any,
-    like_arr: Array[Shape],
-) -> Array[Shape]: ...
-@overload
-def broadcast_like(
-    arr: Any,
-    like_arr: Any,
-) -> Array[IntTuple]: ...
+def broadcast_like[InShape: _Shape = [], OutShape: _Shape = []](
+    arr: _ArrayLike[InShape],
+    like_arr: _ArrayLike[OutShape],
+) -> Array[OutShape]: ...
 def broadcast_shapes(*shapes: Sequence[int]) -> tuple[int, ...]: ...
-@overload
-def broadcast_to_rank[Shape: _Shape, Rank: Flag[int]](
-    x: Array[Shape],
+def broadcast_to_rank[Rank: Flag[int], Shape: _Shape = []](
+    x: _ArrayLike[Shape],
     rank: Rank,
 ) -> Array[broadcast_to_rank_shape(Shape, Rank)]: ...
-@overload
-def broadcast_to_rank(
-    x: Any,
-    rank: int,
-) -> Array[IntTuple]: ...
 @overload
 def collapse[Shape: _Shape, Start: Flag[int]](
     operand: Array[Shape],
@@ -674,28 +495,19 @@ def padtype_to_pads(
     window_strides: Sequence[int],
     padding: str,
 ) -> list[tuple[int, int]]: ...
-@overload
-def reshape[NewShape: _Shape](
-    operand: Any,
+def reshape[NewShape: _Shape, Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     new_sizes: NewShape,
     dimensions: Sequence[int] | None = None,
     *,
     out_sharding: Any = None,
 ) -> Array[NewShape]: ...
-@overload
-def reshape(
-    operand: Any,
-    new_sizes: Sequence[int] | int,
-    dimensions: Sequence[int] | None = None,
-    *,
-    out_sharding: Any = None,
-) -> Array[IntTuple]: ...
 def rev[Shape: _Shape](
     operand: Array[Shape],
     dimensions: Sequence[int],
 ) -> Array[Shape]: ...
-def slice(
-    operand: Any,
+def slice[Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     start_indices: Sequence[int],
     limit_indices: Sequence[int],
     strides: Sequence[int] | None = None,
@@ -712,16 +524,10 @@ def split(
     sizes: Sequence[int],
     axis: int = 0,
 ) -> list[Array[IntTuple]]: ...
-@overload
-def squeeze[Shape: _Shape, Dims: Flag[tuple[int, ...]]](
-    array: Array[Shape],
+def squeeze[Dims: Flag[tuple[int, ...]], Shape: _Shape = []](
+    array: _ArrayLike[Shape],
     dimensions: Dims,
 ) -> Array[lax_squeeze_shape(Shape, Dims)]: ...
-@overload
-def squeeze(
-    array: Any,
-    dimensions: Sequence[int],
-) -> Array[IntTuple]: ...
 @overload
 def stack[Shapes: IntTuples, Axis: Flag[int] = 0](
     operands: MapIntTuples[lambda S: Array[S], Shapes],
@@ -732,20 +538,14 @@ def stack(
     operands: Any,
     axis: int = 0,
 ) -> Array[IntTuple]: ...
-def tile(
-    operand: Any,
+def tile[Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     reps: Sequence[int],
 ) -> Array[IntTuple]: ...
-@overload
-def transpose[Shape: _Shape, Permutation: Flag[_Axis]](
-    operand: Array[Shape],
+def transpose[Permutation: Flag[_Axis], Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     permutation: Permutation,
 ) -> Array[permute_shape(Shape, Permutation)]: ...
-@overload
-def transpose(
-    operand: Any,
-    permutation: Sequence[int],
-) -> Array[IntTuple]: ...
 def unstack[Batch: IntTuple, M: IntVar](
     x: Array[[*Elements[Batch], M]],
     axis: int = 0,
@@ -1242,234 +1042,101 @@ def scaled_dot(
 ) -> Array[IntTuple]: ...
 
 # Data types & bitcasting
-def bitcast_convert_type(
-    operand: Any,
+def bitcast_convert_type[Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     new_dtype: DTypeLike,
 ) -> Array[IntTuple]: ...
-@overload
-def convert_element_type[Shape: _Shape](
-    operand: Array[Shape],
+def convert_element_type[Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     new_dtype: DTypeLike,
 ) -> Array[Shape]: ...
-@overload
-def convert_element_type(
-    operand: _Scalar | bool,
-    new_dtype: DTypeLike,
-) -> Array[[]]: ...
-@overload
-def convert_element_type(
-    operand: Any,
-    new_dtype: DTypeLike,
-) -> Array[IntTuple]: ...
 
 # Reductions, Scans & Window Operations
-@overload
-def argmax[Shape: _Shape, Axis: Flag[int]](
-    operand: Array[Shape],
+def argmax[Axis: Flag[int], Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     axis: Axis,
     index_dtype: DTypeLike = ...,
 ) -> Array[lax_axis_reduce_shape(Shape, Axis)]: ...
-@overload
-def argmax(
-    operand: Any,
-    axis: int,
-    index_dtype: DTypeLike = ...,
-) -> Array[IntTuple]: ...
-@overload
-def argmin[Shape: _Shape, Axis: Flag[int]](
-    operand: Array[Shape],
+def argmin[Axis: Flag[int], Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     axis: Axis,
     index_dtype: DTypeLike = ...,
 ) -> Array[lax_axis_reduce_shape(Shape, Axis)]: ...
-@overload
-def argmin(
-    operand: Any,
-    axis: int,
-    index_dtype: DTypeLike = ...,
-) -> Array[IntTuple]: ...
-@overload
-def associative_scan[Shape: _Shape, Axis: Flag[int] = 0](
+def associative_scan[Shape: _Shape = [], Axis: Flag[int] = 0](
     fn: Callable[[Any, Any], Any],
-    elems: Array[Shape],
+    elems: _ArrayLike[Shape],
     reverse: bool = False,
     axis: Axis = 0,
 ) -> Array[lax_associative_scan_shape(Shape, Axis)]: ...
-@overload
-def associative_scan(
-    fn: Callable[[Any, Any], Any],
-    elems: Any,
-    reverse: bool = False,
-    axis: int = 0,
-) -> Any: ...
-@overload
-def cumlogsumexp[Shape: _Shape, Axis: Flag[int] = 0](
-    operand: Array[Shape],
+def cumlogsumexp[Shape: _Shape = [], Axis: Flag[int] = 0](
+    operand: _ArrayLike[Shape],
     axis: Axis = 0,
     reverse: bool = False,
 ) -> Array[lax_scan_shape(Shape, Axis)]: ...
-@overload
-def cumlogsumexp(
-    operand: Any,
-    axis: int = 0,
-    reverse: bool = False,
-) -> Array[IntTuple]: ...
-@overload
-def cummax[Shape: _Shape, Axis: Flag[int] = 0](
-    operand: Array[Shape],
+def cummax[Shape: _Shape = [], Axis: Flag[int] = 0](
+    operand: _ArrayLike[Shape],
     axis: Axis = 0,
     reverse: bool = False,
 ) -> Array[lax_scan_shape(Shape, Axis)]: ...
-@overload
-def cummax(
-    operand: Any,
-    axis: int = 0,
-    reverse: bool = False,
-) -> Array[IntTuple]: ...
-@overload
-def cummin[Shape: _Shape, Axis: Flag[int] = 0](
-    operand: Array[Shape],
+def cummin[Shape: _Shape = [], Axis: Flag[int] = 0](
+    operand: _ArrayLike[Shape],
     axis: Axis = 0,
     reverse: bool = False,
 ) -> Array[lax_scan_shape(Shape, Axis)]: ...
-@overload
-def cummin(
-    operand: Any,
-    axis: int = 0,
-    reverse: bool = False,
-) -> Array[IntTuple]: ...
-@overload
-def cumprod[Shape: _Shape, Axis: Flag[int] = 0](
-    operand: Array[Shape],
+def cumprod[Shape: _Shape = [], Axis: Flag[int] = 0](
+    operand: _ArrayLike[Shape],
     axis: Axis = 0,
     reverse: bool = False,
 ) -> Array[lax_scan_shape(Shape, Axis)]: ...
-@overload
-def cumprod(
-    operand: Any,
-    axis: int = 0,
-    reverse: bool = False,
-) -> Array[IntTuple]: ...
-@overload
-def cumsum[Shape: _Shape, Axis: Flag[int] = 0](
-    operand: Array[Shape],
+def cumsum[Shape: _Shape = [], Axis: Flag[int] = 0](
+    operand: _ArrayLike[Shape],
     axis: Axis = 0,
     reverse: bool = False,
 ) -> Array[lax_scan_shape(Shape, Axis)]: ...
-@overload
-def cumsum(
-    operand: Any,
-    axis: int = 0,
-    reverse: bool = False,
-) -> Array[IntTuple]: ...
-@overload
-def reduce[Shape: _Shape, Dims: Flag[tuple[int, ...]]](
-    operands: Array[Shape],
+def reduce[Dims: Flag[tuple[int, ...]], Shape: _Shape = []](
+    operands: _ArrayLike[Shape],
     init_values: Any,
     computation: Callable[[Any, Any], Any],
     dimensions: Dims,
     out_sharding: Any = None,
 ) -> Array[lax_reduce_shape(Shape, Dims)]: ...
-@overload
-def reduce(
-    operands: Any,
-    init_values: Any,
-    computation: Callable[..., Any],
-    dimensions: Sequence[int],
-    out_sharding: Any = None,
-) -> Any: ...
-@overload
-def reduce_and[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
-    operand: Array[Shape],
+def reduce_and[Axes: Flag[tuple[int, ...]], Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     axes: Axes,
 ) -> Array[lax_reduce_shape(Shape, Axes)]: ...
-@overload
-def reduce_and(
-    operand: Any,
-    axes: Sequence[int],
-) -> Array[IntTuple]: ...
-@overload
-def reduce_max[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
-    operand: Array[Shape],
+def reduce_max[Axes: Flag[tuple[int, ...]], Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     axes: Axes,
     *,
     out_sharding: Any = None,
 ) -> Array[lax_reduce_shape(Shape, Axes)]: ...
-@overload
-def reduce_max(
-    operand: Any,
-    axes: Sequence[int],
-    *,
-    out_sharding: Any = None,
-) -> Array[IntTuple]: ...
-@overload
-def reduce_min[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
-    operand: Array[Shape],
+def reduce_min[Axes: Flag[tuple[int, ...]], Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     axes: Axes,
     *,
     out_sharding: Any = None,
 ) -> Array[lax_reduce_shape(Shape, Axes)]: ...
-@overload
-def reduce_min(
-    operand: Any,
-    axes: Sequence[int],
-    *,
-    out_sharding: Any = None,
-) -> Array[IntTuple]: ...
-@overload
-def reduce_or[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
-    operand: Array[Shape],
+def reduce_or[Axes: Flag[tuple[int, ...]], Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     axes: Axes,
 ) -> Array[lax_reduce_shape(Shape, Axes)]: ...
-@overload
-def reduce_or(
-    operand: Any,
-    axes: Sequence[int],
-) -> Array[IntTuple]: ...
-@overload
-def reduce_precision[Shape: _Shape](
-    operand: Array[Shape],
+def reduce_precision[Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     exponent_bits: int,
     mantissa_bits: int,
 ) -> Array[Shape]: ...
-@overload
-def reduce_precision(
-    operand: float | int,
-    exponent_bits: int,
-    mantissa_bits: int,
-) -> Array[[]]: ...
-@overload
-def reduce_precision(
-    operand: Any,
-    exponent_bits: int,
-    mantissa_bits: int,
-) -> Array[IntTuple]: ...
-@overload
-def reduce_prod[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
-    operand: Array[Shape],
+def reduce_prod[Axes: Flag[tuple[int, ...]], Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     axes: Axes,
 ) -> Array[lax_reduce_shape(Shape, Axes)]: ...
-@overload
-def reduce_prod(
-    operand: Any,
-    axes: Sequence[int],
-) -> Array[IntTuple]: ...
-@overload
-def reduce_sum[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
-    operand: Array[Shape],
+def reduce_sum[Axes: Flag[tuple[int, ...]], Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     axes: Axes,
     *,
     out_sharding: Any = None,
 ) -> Array[lax_reduce_shape(Shape, Axes)]: ...
-@overload
-def reduce_sum(
-    operand: Any,
-    axes: Sequence[int],
-    *,
-    out_sharding: Any = None,
-) -> Array[IntTuple]: ...
-@overload
-def reduce_window[Shape: _Shape](
-    operand: Array[Shape],
+def reduce_window[Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     init_value: Any,
     computation: Callable[..., Any],
     window_dimensions: Sequence[int],
@@ -1478,17 +1145,6 @@ def reduce_window[Shape: _Shape](
     base_dilation: Sequence[int] | None = None,
     window_dilation: Sequence[int] | None = None,
 ) -> Array[IntTuple]: ...
-@overload
-def reduce_window(
-    operand: Any,
-    init_value: Any,
-    computation: Callable[..., Any],
-    window_dimensions: Sequence[int],
-    window_strides: Sequence[int] | None = None,
-    padding: str | Sequence[tuple[int, int]] = "VALID",
-    base_dilation: Sequence[int] | None = None,
-    window_dilation: Sequence[int] | None = None,
-) -> Any: ...
 def reduce_window_shape_tuple(
     operand_shape: Sequence[int],
     window_dimensions: Sequence[int],
@@ -1497,21 +1153,14 @@ def reduce_window_shape_tuple(
     base_dilation: Sequence[int] | None = None,
     window_dilation: Sequence[int] | None = None,
 ) -> tuple[int, ...]: ...
-@overload
-def reduce_xor[Shape: _Shape, Axes: Flag[tuple[int, ...]]](
-    operand: Array[Shape],
+def reduce_xor[Axes: Flag[tuple[int, ...]], Shape: _Shape = []](
+    operand: _ArrayLike[Shape],
     axes: Axes,
 ) -> Array[lax_reduce_shape(Shape, Axes)]: ...
-@overload
-def reduce_xor(
-    operand: Any,
-    axes: Sequence[int],
-) -> Array[IntTuple]: ...
 
 # Selection, Sorting & Searching
-@overload
-def approx_max_k[Shape: _Shape, K: Flag[int], Dim: Flag[int] = -1](
-    operand: Array[Shape],
+def approx_max_k[K: Flag[int], Shape: _Shape = [], Dim: Flag[int] = -1](
+    operand: _ArrayLike[Shape],
     k: K,
     reduction_dimension: Dim = -1,
     recall_target: float = 0.95,
@@ -1521,18 +1170,8 @@ def approx_max_k[Shape: _Shape, K: Flag[int], Dim: Flag[int] = -1](
     Array[top_k_shape(Shape, K, Dim)],
     Array[top_k_shape(Shape, K, Dim)],
 ]: ...
-@overload
-def approx_max_k(
-    operand: Any,
-    k: int,
-    reduction_dimension: int = -1,
-    recall_target: float = 0.95,
-    reduction_input_size_override: int = -1,
-    aggregate_to_topk: bool = True,
-) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
-@overload
-def approx_min_k[Shape: _Shape, K: Flag[int], Dim: Flag[int] = -1](
-    operand: Array[Shape],
+def approx_min_k[K: Flag[int], Shape: _Shape = [], Dim: Flag[int] = -1](
+    operand: _ArrayLike[Shape],
     k: K,
     reduction_dimension: Dim = -1,
     recall_target: float = 0.95,
@@ -1542,143 +1181,60 @@ def approx_min_k[Shape: _Shape, K: Flag[int], Dim: Flag[int] = -1](
     Array[top_k_shape(Shape, K, Dim)],
     Array[top_k_shape(Shape, K, Dim)],
 ]: ...
-@overload
-def approx_min_k(
-    operand: Any,
-    k: int,
-    reduction_dimension: int = -1,
-    recall_target: float = 0.95,
-    reduction_input_size_override: int = -1,
-    aggregate_to_topk: bool = True,
-) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
-@overload
-def clamp[Shape: _Shape](
-    min: _Scalar,
-    x: Array[Shape],
-    max: _Scalar,
-) -> Array[Shape]: ...
-@overload
-def clamp[Shape: _Shape, ShapeMin: _Shape](
-    min: Array[ShapeMin],
-    x: Array[Shape],
-    max: _Scalar,
-) -> Array[lax_clamp_max_scalar_shape(ShapeMin, Shape)]: ...
-@overload
-def clamp[Shape: _Shape, ShapeMax: _Shape](
-    min: _Scalar,
-    x: Array[Shape],
-    max: Array[ShapeMax],
-) -> Array[lax_clamp_min_scalar_shape(Shape, ShapeMax)]: ...
-@overload
-def clamp[Shape: _Shape, ShapeMin: _Shape, ShapeMax: _Shape](
-    min: Array[ShapeMin],
-    x: Array[Shape],
-    max: Array[ShapeMax],
+def clamp[
+    ShapeMin: _Shape = [],
+    Shape: _Shape = [],
+    ShapeMax: _Shape = [],
+](
+    min: _ArrayLike[ShapeMin],
+    x: _ArrayLike[Shape],
+    max: _ArrayLike[ShapeMax],
 ) -> Array[lax_clamp_shape(ShapeMin, Shape, ShapeMax)]: ...
-@overload
-def clamp(
-    min: _Scalar,
-    x: _Scalar,
-    max: _Scalar,
-) -> Array[[]]: ...
-@overload
-def clamp(
-    min: Any,
-    x: Any,
-    max: Any,
-) -> Array[IntTuple]: ...
-@overload
-def select[Shape: _Shape, Shape2: _Shape](
-    pred: bool | int,
-    on_true: Array[Shape],
-    on_false: Array[Shape2],
-) -> Array[lax_select_scalar_pred_shape(Shape, Shape2)]: ...
-@overload
-def select[Shape: _Shape, Shape2: _Shape, PredShape: _Shape](
-    pred: Array[PredShape],
-    on_true: Array[Shape],
-    on_false: Array[Shape2],
+def select[
+    PredShape: _Shape = [],
+    Shape: _Shape = [],
+    Shape2: _Shape = [],
+](
+    pred: _ArrayLike[PredShape],
+    on_true: _ArrayLike[Shape],
+    on_false: _ArrayLike[Shape2],
 ) -> Array[lax_select_shape(PredShape, Shape, Shape2)]: ...
-@overload
-def select(
-    pred: bool | int,
-    on_true: _Scalar,
-    on_false: _Scalar,
-) -> Array[[]]: ...
-@overload
-def select(
-    pred: Any,
-    on_true: Any,
-    on_false: Any,
-) -> Array[IntTuple]: ...
-@overload
-def select_n[Shape: _Shape, WhichShape: _Shape](
-    which: Array[WhichShape],
-    *cases: Array[Shape],
+def select_n[WhichShape: _Shape = [], Shape: _Shape = []](
+    which: _ArrayLike[WhichShape],
+    *cases: _ArrayLike[Shape],
 ) -> Array[lax_select_n_shape(WhichShape, Shape)]: ...
 @overload
-def select_n[Shape: _Shape](
-    which: bool | int,
-    *cases: Array[Shape],
-) -> Array[Shape]: ...
-@overload
-def select_n(
-    which: bool | int,
-    *cases: _Scalar,
-) -> Array[[]]: ...
-@overload
-def select_n(
-    which: Any,
-    *cases: Any,
-) -> Array[IntTuple]: ...
-@overload
 def sort[Shape: _Shape, Dim: Flag[int] = -1](
-    operand: Array[Shape],
+    operand: _ArrayLike[Shape],
     dimension: Dim = -1,
     is_stable: bool = True,
     num_keys: int = 1,
 ) -> Array[lax_sort_shape(Shape, Dim)]: ...
 @overload
-def sort[Shape: _Shape, Dim: Flag[int] = -1](
-    operand: tuple[Array[Shape], Array[Shape]],
+def sort[Shape: _Shape = [], Dim: Flag[int] = -1](
+    operand: tuple[_ArrayLike[Shape], _ArrayLike[Shape]],
     dimension: Dim = -1,
     is_stable: bool = True,
     num_keys: int = 1,
 ) -> tuple[Array[lax_sort_shape(Shape, Dim)], Array[lax_sort_shape(Shape, Dim)]]: ...
 @overload
-def sort[Shape: _Shape, Dim: Flag[int] = -1](
-    operand: Sequence[Array[Shape]],
+def sort[Shape: _Shape = [], Dim: Flag[int] = -1](
+    operand: Sequence[_ArrayLike[Shape]],
     dimension: Dim = -1,
     is_stable: bool = True,
     num_keys: int = 1,
 ) -> tuple[Array[lax_sort_shape(Shape, Dim)], ...]: ...
-@overload
-def sort(
-    operand: Any,
-    dimension: int = -1,
-    is_stable: bool = True,
-    num_keys: int = 1,
-) -> Any: ...
-@overload
-def sort_key_val[Shape1: _Shape, Shape2: _Shape, Dim: Flag[int] = -1](
-    keys: Array[Shape1],
-    values: Array[Shape2],
+def sort_key_val[Shape1: _Shape = [], Shape2: _Shape = [], Dim: Flag[int] = -1](
+    keys: _ArrayLike[Shape1],
+    values: _ArrayLike[Shape2],
     dimension: Dim = -1,
     is_stable: bool = True,
 ) -> tuple[
     Array[lax_sort_key_val_shape(Shape1, Shape2, Dim)],
     Array[lax_sort_key_val_shape(Shape1, Shape2, Dim)],
 ]: ...
-@overload
-def sort_key_val(
-    keys: Any,
-    values: Any,
-    dimension: int = -1,
-    is_stable: bool = True,
-) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
-@overload
-def top_k[Shape: _Shape, K: Flag[int], Axis: Flag[int] = -1](
-    operand: Array[Shape],
+def top_k[K: Flag[int], Shape: _Shape = [], Axis: Flag[int] = -1](
+    operand: _ArrayLike[Shape],
     k: K,
     *,
     axis: Axis = -1,
@@ -1687,14 +1243,6 @@ def top_k[Shape: _Shape, K: Flag[int], Axis: Flag[int] = -1](
     Array[top_k_shape(Shape, K, Axis)],
     Array[top_k_shape(Shape, K, Axis)],
 ]: ...
-@overload
-def top_k(
-    operand: Any,
-    k: int,
-    *,
-    axis: int = -1,
-    is_stable: bool = True,
-) -> tuple[Array[IntTuple], Array[IntTuple]]: ...
 
 # -----------------------------------------------------------------------------
 # Control Flow & Higher-Order Functions

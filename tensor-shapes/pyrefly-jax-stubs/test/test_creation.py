@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 
 import jax.numpy as jnp
+import numpy as np
 from shape_extensions import assert_shape
 
 # A multi-argument `arange` has a length the DSL cannot compute, and a shape
@@ -189,6 +190,10 @@ def test_array_and_asarray() -> None:
     assert_shape(jnp.array(x3).shape, (2, 3, 4))
     assert_shape(jnp.asarray(x3).shape, (2, 3, 4))
 
+    # NumPy array inputs
+    assert_shape(jnp.array(np.ones((2, 3))).shape, (2, 3))
+    assert_shape(jnp.asarray(np.ones((2, 3))).shape, (2, 3))
+
     # Generic inputs
     assert jnp.array([1, 2, 3]).shape == (3,)
     assert jnp.asarray([1, 2, 3]).shape == (3,)
@@ -202,6 +207,7 @@ def test_astype() -> None:
     assert_shape(jnp.astype(x, None).shape, (2, 3))
     assert_shape(jnp.astype(5, jnp.float32).shape, ())
     assert_shape(jnp.astype(2.5, jnp.int32).shape, ())
+    assert_shape(jnp.astype(np.ones((2, 3)), jnp.int32).shape, (2, 3))
 
 
 def test_shape_ndim_size() -> None:
