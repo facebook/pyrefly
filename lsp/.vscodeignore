@@ -11,8 +11,9 @@ client/node_modules/**
 !client/node_modules/vscode-languageserver-types/**
 !client/node_modules/semver/**
 node_modules
-out/
-src/
+out/**
+src/**
+test/**
 esbuild.js
 build-pyrefly.js
 **/.fingerprint/
