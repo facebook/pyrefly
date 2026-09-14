@@ -3,10 +3,8 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-class Target:
-    def source_method(self) -> None:
-        pass
+import collision
+import library
 
-
-def __getattr__(name: str) -> object:
-    return object()
+missing = library.Missing
+shadowed = collision.Target.Inner

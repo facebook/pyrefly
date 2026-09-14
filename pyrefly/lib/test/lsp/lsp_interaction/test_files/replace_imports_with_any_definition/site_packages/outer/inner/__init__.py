@@ -4,9 +4,4 @@
 # LICENSE file in the root directory of this source tree.
 
 class Target:
-    def source_method(self) -> None:
-        pass
-
-
-def __getattr__(name: str) -> object:
-    return object()
+    pass

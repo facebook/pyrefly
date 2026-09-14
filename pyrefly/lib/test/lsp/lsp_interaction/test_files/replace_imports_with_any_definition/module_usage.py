@@ -3,10 +3,11 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-class Target:
-    def source_method(self) -> None:
-        pass
+import library
+import library as alias
 
+value = library.Target()
+alias_value = alias.Target()
 
-def __getattr__(name: str) -> object:
-    return object()
+def shadow(library):
+    return library.Target

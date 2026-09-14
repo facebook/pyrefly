@@ -3,10 +3,6 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-class Target:
-    def source_method(self) -> None:
-        pass
+from stub_only import Target
 
-
-def __getattr__(name: str) -> object:
-    return object()
+value = Target()
