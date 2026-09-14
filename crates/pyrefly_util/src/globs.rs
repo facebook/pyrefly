@@ -1060,6 +1060,7 @@ impl FilteredGlobs {
 
 #[cfg(test)]
 mod tests {
+    use std::env::current_dir;
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -1155,6 +1156,14 @@ mod tests {
                 "/absolute/path/**/files",
             ],
         );
+    }
+
+    #[test]
+    fn test_glob_with_empty_root() {
+        let cwd = current_dir().unwrap();
+        let glob = Glob::new(".".to_owned()).unwrap().from_root(Path::new(""));
+        assert!(glob.matches(&cwd.join("main.py")));
+        assert!(!glob.matches(&cwd.with_extension("other").join("main.py")));
     }
 
     #[test]
