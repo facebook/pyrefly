@@ -210,6 +210,54 @@ def f(c: C) -> None:
 );
 
 testcase!(
+    test_property_getter_with_extra_required_parameter,
+    r#"
+class Foo:
+    @property
+    def value(self, huh: str) -> int:  # E: Property getter cannot take extra required parameter `huh`
+        return 1
+    "#,
+);
+
+testcase!(
+    test_property_setter_with_extra_required_parameter,
+    r#"
+class Foo:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    def value(self, new_value: int, huh: str) -> None:  # E: Property setter cannot take extra required parameter `huh`
+        pass
+    "#,
+);
+
+testcase!(
+    test_property_deleter_with_extra_required_parameter,
+    r#"
+class Foo:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.deleter
+    def value(self, huh: str) -> None:  # E: Property deleter cannot take extra required parameter `huh`
+        pass
+    "#,
+);
+
+testcase!(
+    test_property_getter_with_defaulted_extra_parameter,
+    r#"
+class Foo:
+    @property
+    def value(self, huh: str = "x") -> int:
+        return 1
+    "#,
+);
+
+testcase!(
     test_cached_property_assignment_allowed,
     r#"
 from functools import cached_property

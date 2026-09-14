@@ -624,6 +624,49 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             );
         }
 
+        // A property getter runs with just the instance, and a setter with the instance
+        // and the assigned value, so any further required parameter is unreachable at
+        // runtime. The decorator path attaches property metadata without checking the
+        // signature against `property.__init__`, so validate it here.
+        // See https://github.com/facebook/pyrefly/issues/4918.
+        if defining_cls.is_some()
+            && !flags.is_staticmethod
+            && !flags.is_classmethod
+            && let Some(property) = &flags.property_metadata
+        {
+            let (kind, expected) = match property.role {
+                PropertyRole::Getter => ("getter", 1),
+                PropertyRole::Setter | PropertyRole::SetterDecorator => ("setter", 2),
+                PropertyRole::DeleterDecorator => ("deleter", 1),
+            };
+            let extra = def
+                .parameters
+                .posonlyargs
+                .iter()
+                .chain(def.parameters.args.iter())
+                .filter(|p| p.default.is_none())
+                .nth(expected)
+                .map(|p| &p.parameter)
+                .or_else(|| {
+                    def.parameters
+                        .kwonlyargs
+                        .iter()
+                        .find(|p| p.default.is_none())
+                        .map(|p| &p.parameter)
+                });
+            if let Some(param) = extra {
+                self.error(
+                    errors,
+                    param.range,
+                    ErrorKind::BadFunctionDefinition,
+                    format!(
+                        "Property {kind} cannot take extra required parameter `{}`",
+                        param.name
+                    ),
+                );
+            }
+        }
+
         let FunctionParamsResult {
             params,
             paramspec,
