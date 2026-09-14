@@ -43,6 +43,7 @@ pub enum SpecialExport {
     Quit,
     OsExit,
     Len,
+    Range,
     Bool,
     BuiltinsType,
     TypingType,
@@ -124,6 +125,7 @@ impl SpecialExport {
             "quit" => Some(Self::Quit),
             "_exit" => Some(Self::OsExit),
             "len" => Some(Self::Len),
+            "range" => Some(Self::Range),
             "bool" => Some(Self::Bool),
             "type" => Some(Self::BuiltinsType),
             "Type" => Some(Self::TypingType),
@@ -216,6 +218,7 @@ impl SpecialExport {
             Self::Enum | Self::StrEnum | Self::IntEnum => matches!(m.as_str(), "enum"),
             Self::Super
             | Self::Len
+            | Self::Range
             | Self::Quit
             | Self::Bool
             | Self::BuiltinsType

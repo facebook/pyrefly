@@ -103,54 +103,38 @@ fn is_directory_import(module_name: ModuleName) -> bool {
     s.ends_with(".__files__") || s.ends_with(".__recursefiles__")
 }
 
-/// Checks if an iterable expression is guaranteed to be non-empty and thus
-/// the for-loop body will definitely execute at least once.
-///
-/// Returns true for:
-/// - `range(N)` where N is a positive integer literal
-/// - Non-empty list literals like `[1, 2, 3]`
-/// - Non-empty tuple literals like `(1, 2, 3)`
-/// - Non-empty set literals like `{1, 2, 3}`
-fn is_definitely_nonempty_iterable(iter: &Expr) -> bool {
-    match iter {
-        // Check for range(N) where N is a positive integer literal
-        Expr::Call(ExprCall {
-            func, arguments, ..
-        }) => {
-            // Check if the function is `range` with a single argument and no keywords
-            if let Expr::Name(ExprName { id, .. }) = &**func
-                && id.as_str() == "range"
-                && arguments.keywords.is_empty()
-                && let [arg] = &*arguments.args
-            {
-                // range(stop) - positive stop means at least one iteration
-                // range(start, stop) - we only handle range(stop) for simplicity
-                if let Expr::NumberLiteral(ExprNumberLiteral { value, .. }) = arg
-                    && let Some(n) = value.as_int().and_then(|i| i.as_i64())
-                {
-                    return n > 0;
-                }
-                // Also handle negative literals like range(-5) which iterate 0 times
-                if let Expr::UnaryOp(unary) = arg
-                    && matches!(unary.op, ruff_python_ast::UnaryOp::USub)
-                {
-                    // range(-N) always iterates 0 times
-                    return false;
-                }
-            }
-            false
-        }
-        // Check for non-empty list literals
-        Expr::List(ExprList { elts, .. }) => !elts.is_empty(),
-        // Check for non-empty tuple literals
-        Expr::Tuple(ExprTuple { elts, .. }) => !elts.is_empty(),
-        // Check for non-empty set literals
-        Expr::Set(ExprSet { elts, .. }) => !elts.is_empty(),
-        _ => false,
-    }
-}
-
 impl<'a> BindingsBuilder<'a> {
+    /// Whether iterating this expression definitely performs at least one iteration.
+    ///
+    /// Both definite-assignment and reachability rely on this, so it must not over-report:
+    /// claiming a loop runs when it may not lets an unbound name through, and marks live
+    /// code after the loop as dead.
+    fn is_definitely_nonempty_iterable(&self, iter: &Expr) -> bool {
+        // At least one element that is not an unpacking, which may contribute nothing.
+        let has_a_definite_element =
+            |elts: &[Expr]| elts.iter().any(|e| !matches!(e, Expr::Starred(_)));
+        match iter {
+            // `range(n)` for a positive integer literal `n`. Resolved through
+            // `as_special_export` rather than by name, so a shadowed `range` does not count.
+            Expr::Call(ExprCall {
+                func, arguments, ..
+            }) if self.as_special_export(func) == Some(SpecialExport::Range)
+                && arguments.keywords.is_empty()
+                && let [Expr::NumberLiteral(ExprNumberLiteral { value, .. })] =
+                    &*arguments.args
+                && let Some(n) = value.as_int().and_then(|i| i.as_i64()) =>
+            {
+                // Only `range(stop)` is handled. A negative literal parses as a unary
+                // operation rather than a number, so it falls through to `false`.
+                n > 0
+            }
+            Expr::List(ExprList { elts, .. })
+            | Expr::Tuple(ExprTuple { elts, .. })
+            | Expr::Set(ExprSet { elts, .. }) => has_a_definite_element(elts),
+            _ => false,
+        }
+    }
+
     fn assert(&mut self, assert_range: TextRange, mut test: Expr, msg: Option<Expr>) {
         let test_range = test.range();
         self.ensure_expr(&mut test, &mut Usage::NonPinningValue(None));
@@ -1185,7 +1169,7 @@ impl<'a> BindingsBuilder<'a> {
                 });
                 // Check if the iterable is definitely non-empty before binding
                 // (must be done before x.iter is moved)
-                let loop_definitely_runs = is_definitely_nonempty_iterable(&x.iter);
+                let loop_definitely_runs = self.is_definitely_nonempty_iterable(&x.iter);
                 self.bind_target_with_expr(&mut x.target, &mut x.iter, &|expr, ann| {
                     Binding::IterableValueLoop(
                         ann,
