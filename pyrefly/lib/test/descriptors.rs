@@ -1019,6 +1019,33 @@ update(User).values(nam="alice")
 );
 
 testcase!(
+    test_sqlalchemy_update_values_checks_inherited_mapped_fields,
+    sqlalchemy_mapped_env(),
+    r#"
+import sqlalchemy as sa
+from sqlalchemy.orm import DeclarativeBase, Mapped
+
+class Base(DeclarativeBase):
+    pass
+
+class SoftDeleteMixin:
+    deleted: Mapped[bool]
+
+class User(Base, SoftDeleteMixin):
+    id: Mapped[int]
+    name: Mapped[str]
+
+class AdminUser(User):
+    role: Mapped[str]
+    deleted: bool  # type: ignore
+
+sa.update(AdminUser).where(AdminUser.id == 1).values(name="alice")
+sa.update(User).where(User.id == 1).values(name="alice", deleted=False)
+sa.update(AdminUser).where(AdminUser.id == 1).values(deleted=False)  # E: Unexpected SQLAlchemy update field `deleted`
+    "#,
+);
+
+testcase!(
     test_stub_annotation_only_descriptor_has_descriptor_semantics,
     stub_descriptor_env(),
     r#"
