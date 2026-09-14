@@ -6,11 +6,18 @@
  */
 
 use std::env::args_os;
+use std::io;
+use std::io::Write;
 use std::process::ExitCode;
 
+use clap::CommandFactory;
 use clap::Parser;
+use clap::Subcommand;
 use clap::crate_version;
-use library::Command;
+use clap_complete::Shell;
+use clap_complete::generate;
+use library::Command as StandardCommand;
+use library::util::CommandExitStatus;
 use library::util::CommonGlobalArgs;
 use pyrefly::commands::lsp::filter_unrecognized_lsp_args;
 use pyrefly::library::library::library::library;
@@ -45,6 +52,28 @@ struct Args {
     command: Command,
 }
 
+/// Subcommands of the open-source `pyrefly` binary.
+///
+/// `Completion` lives here rather than in the library's shared `Command` so
+/// that each binary generates completions for its own argument tree under its
+/// own name. A binary that embeds the shared commands in a larger CLI (such as
+/// the Meta-internal wrapper) would otherwise emit a script describing a
+/// command tree it does not have.
+#[deny(clippy::missing_docs_in_private_items)]
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Generate a shell completion script on stdout.
+    Completion {
+        /// Shell to generate completions for.
+        #[arg(long, value_enum)]
+        shell: Shell,
+    },
+
+    /// The commands shared with every other Pyrefly frontend.
+    #[command(flatten)]
+    Standard(StandardCommand),
+}
+
 /// Run based on the command line arguments.
 async fn run() -> anyhow::Result<ExitCode> {
     let expanded_args = get_args_expanded(args_os())?;
@@ -52,10 +81,21 @@ async fn run() -> anyhow::Result<ExitCode> {
     let args = Args::parse_from(filtered_args);
     args.common.init(false);
     let thread_count = args.common.thread_count();
-    let (status, _) = args
-        .command
-        .run(crate_version!(), &NoTelemetry, None, thread_count)
-        .await?;
+    let status = match args.command {
+        Command::Completion { shell } => {
+            // Buffer generation so stdout errors are returned instead of panicking.
+            let mut script = Vec::new();
+            generate(shell, &mut Args::command(), "pyrefly", &mut script);
+            io::stdout().lock().write_all(&script)?;
+            CommandExitStatus::Success
+        }
+        Command::Standard(command) => {
+            let (status, _) = command
+                .run(crate_version!(), &NoTelemetry, None, thread_count)
+                .await?;
+            status
+        }
+    };
     Ok(status.to_exit_code())
 }
 
