@@ -82,14 +82,14 @@ impl ClassFieldId {
     ) -> ClassFieldId {
         // Regular fields occupy `[0, class_fields.len())`; synthesized fields are
         // offset by the raw `class_fields` length.
-        let class_fields = context.bindings.get_class_fields(class.index());
+        let class_fields = context.bindings().get_class_fields(class.index());
         if let Some(index) = class_fields.and_then(|fields| fields.get_index_of(name)) {
             return ClassFieldId(index as u32);
         }
 
         let base = class_fields.map_or(0, ClassFields::len);
         let synthesized_fields_idx = context
-            .bindings
+            .bindings()
             .key_to_idx(&KeyClassSynthesizedFields(class.index()));
         let synthesized_fields = context.answers.get_idx(synthesized_fields_idx).unwrap();
         let index = synthesized_fields
@@ -271,7 +271,7 @@ impl ClassDefinition {
 
 pub fn get_all_classes(context: &ModuleAnswersContext) -> impl Iterator<Item = Class> {
     context
-        .bindings
+        .bindings()
         .keys::<KeyClass>()
         .map(|idx| context.answers.get_idx(idx).unwrap().0.dupe().unwrap())
 }
@@ -287,10 +287,14 @@ pub fn get_class_field_from_current_class_only<'a>(
     assert!(class.module() == &context.module_info);
 
     // Non-synthesized field: check class fields list, then look up the answer.
-    let class_fields = &context.bindings.metadata().get_class(class.index()).fields;
+    let class_fields = &context
+        .bindings()
+        .metadata()
+        .get_class(class.index())
+        .fields;
     if class_fields.contains(field_name) {
         let key = KeyClassField(class.index(), field_name.clone());
-        if let Some(idx) = context.bindings.key_to_idx_hashed_opt(Hashed::new(&key))
+        if let Some(idx) = context.bindings().key_to_idx_hashed_opt(Hashed::new(&key))
             && let Some(field) = context.answers.get_idx(idx)
         {
             return Some(field);
@@ -299,7 +303,9 @@ pub fn get_class_field_from_current_class_only<'a>(
 
     // Synthesized field (e.g., dataclass fields).
     let key = KeyClassSynthesizedFields(class.index());
-    let idx = context.bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
+    let idx = context
+        .bindings()
+        .key_to_idx_hashed_opt(Hashed::new(&key))?;
     let synthesized_fields = context.answers.get_idx(idx)?;
     Some(synthesized_fields.get(field_name)?.inner.as_ref())
 }
@@ -329,16 +335,16 @@ pub fn get_class_field_declaration<'a>(
     let key_class_field = KeyClassField(class.index(), field_name.clone());
     // We use `key_to_idx_hashed_opt` below because the key might not be valid (could be a synthesized field).
     context
-        .bindings
+        .bindings()
         .key_to_idx_hashed_opt(Hashed::new(&key_class_field))
-        .map(|idx| context.bindings.get(idx))
+        .map(|idx| context.bindings().get(idx))
 }
 
 pub fn get_class_mro<'a>(class: &Class, context: &'a ModuleAnswersContext) -> &'a ClassMro {
     assert_eq!(class.module(), &context.module_info);
     context
         .answers
-        .get_idx(context.bindings.key_to_idx(&KeyClassMro(class.index())))
+        .get_idx(context.bindings().key_to_idx(&KeyClassMro(class.index())))
         .unwrap()
 }
 
@@ -349,7 +355,7 @@ pub fn get_class_fields<'a>(
     context: &'a ModuleAnswersContext,
 ) -> impl Iterator<Item = (Cow<'a, Name>, &'a ClassField)> + use<'a> {
     let class_fields = context
-        .bindings
+        .bindings()
         .get_class_fields(class.index())
         .cloned()
         .unwrap_or_else(ClassFields::empty);
@@ -363,7 +369,7 @@ pub fn get_class_fields<'a>(
         .into_iter();
 
     let synthesized_fields_idx = context
-        .bindings
+        .bindings()
         .key_to_idx(&KeyClassSynthesizedFields(class.index()));
     let synthesized_fields = context.answers.get_idx(synthesized_fields_idx).unwrap();
     let synthesized_fields = synthesized_fields
@@ -445,7 +451,7 @@ fn export_class_fields(
                 }) => *annotation,
                 _ => None,
             }
-            .map(|idx| context.answers_context.bindings.idx_to_key(idx))
+            .map(|idx| context.answers_context.bindings().idx_to_key(idx))
             .and_then(|key_annotation| match key_annotation {
                 // We want to export the annotation as it is in the source code.
                 // We cannot use the answer for `key_annotation` (which wraps a `Type`),
@@ -538,7 +544,7 @@ pub fn export_all_classes(context: &ModuleContext) -> HashMap<ClassId, ClassDefi
     let mut class_definitions = HashMap::new();
     let ann_assign_map = AnnAssignMap::build(&context.answers_context.ast);
 
-    for class_idx in context.answers_context.bindings.keys::<KeyClass>() {
+    for class_idx in context.answers_context.bindings().keys::<KeyClass>() {
         let class = context
             .answers_context
             .answers
@@ -555,12 +561,12 @@ pub fn export_all_classes(context: &ModuleContext) -> HashMap<ClassId, ClassDefi
             .get_idx(
                 context
                     .answers_context
-                    .bindings
+                    .bindings()
                     .key_to_idx(&KeyClassMetadata(class_index)),
             )
             .unwrap();
 
-        let is_synthesized = match context.answers_context.bindings.get(class_idx) {
+        let is_synthesized = match context.answers_context.bindings().get(class_idx) {
             BindingClass::FunctionalClassDef(_, _, _) => true,
             BindingClass::ClassDef(_) => false,
         };

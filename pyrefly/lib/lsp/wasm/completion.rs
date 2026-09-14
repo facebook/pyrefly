@@ -550,9 +550,10 @@ impl Transaction<'_> {
         completions: &mut Vec<RankedCompletion>,
     ) -> bool {
         let mut has_added_any = false;
-        if let Some(bindings) = self.get_bindings(handle)
+        if let Some(answers) = self.get_answers(handle)
             && let Some(module_info) = self.get_module_info(handle)
         {
+            let bindings = answers.bindings();
             let matcher = SkimMatcherV2::default();
             for idx in bindings.available_definitions(position) {
                 let key = bindings.idx_to_key(idx);
@@ -570,7 +571,7 @@ impl Transaction<'_> {
                 {
                     continue;
                 }
-                let ty = self.get_type(handle, key);
+                let ty = answers.get_type_at(idx);
                 let export_info = self.key_to_export(handle, key, FindPreference::default());
 
                 let kind = if let Some((_, ref export)) = export_info {

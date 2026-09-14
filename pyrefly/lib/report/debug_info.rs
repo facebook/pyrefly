@@ -25,7 +25,6 @@ use crate::alt::answers::SolutionsTable;
 use crate::binding::binding::Keyed;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
-use crate::binding::bindings::Bindings;
 use crate::binding::table::TableKeyed;
 use crate::config::config::ConfigFile;
 use crate::error::collector::ErrorCollector;
@@ -38,14 +37,13 @@ pub fn debug_info(transaction: &Transaction, handles: &[Handle], is_javascript: 
     fn f(
         transaction: &Transaction,
         handles: &[Handle],
-    ) -> Option<Vec<(ArcId<ConfigFile>, Arc<Load>, Bindings, Arc<Answers>)>> {
+    ) -> Option<Vec<(ArcId<ConfigFile>, Arc<Load>, Arc<Answers>)>> {
         handles
             .iter()
             .map(|x| {
                 Some((
                     transaction.get_config(x)?,
                     transaction.get_load(x)?,
-                    transaction.get_bindings(x)?,
                     transaction.get_answers(x)?,
                 ))
             })
@@ -53,8 +51,7 @@ pub fn debug_info(transaction: &Transaction, handles: &[Handle], is_javascript: 
     }
 
     let owned = f(transaction, handles).expect("Everything to be computed for debug info");
-    let debug_info =
-        DebugInfo::new(&owned.map(|x| (&*x.0, &x.1.module_info, &x.1.errors, &x.2, &*x.3)));
+    let debug_info = DebugInfo::new(&owned.map(|x| (&*x.0, &x.1.module_info, &x.1.errors, &*x.2)));
     let mut output = serde_json::to_string(&debug_info).unwrap();
 
     // It's super handy to be able to diff the output, which we can do most easily if each binding is on its own line.
@@ -96,19 +93,10 @@ struct Error {
 }
 
 impl DebugInfo {
-    pub fn new(
-        modules: &[(
-            &ConfigFile,
-            &ModuleInfo,
-            &ErrorCollector,
-            &Bindings,
-            &Answers,
-        )],
-    ) -> Self {
+    pub fn new(modules: &[(&ConfigFile, &ModuleInfo, &ErrorCollector, &Answers)]) -> Self {
         fn f<K: Keyed>(
             _t: &AnswerEntry<K>,
             module_info: &ModuleInfo,
-            bindings: &Bindings,
             answers: &Answers,
             res: &mut Vec<Binding>,
         ) where
@@ -116,6 +104,7 @@ impl DebugInfo {
             AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
             SolutionsTable: TableKeyed<K, Value = SolutionsEntry<K>>,
         {
+            let bindings = answers.bindings();
             for idx in bindings.keys::<K>() {
                 let key = bindings.idx_to_key(idx);
                 res.push(Binding {
@@ -141,16 +130,10 @@ impl DebugInfo {
         Self {
             modules: modules
                 .iter()
-                .map(|(config, module_info, errors, bindings, answers)| {
+                .map(|(config, module_info, errors, answers)| {
                     let mut res = Vec::new();
                     let error_config = config.get_error_config(module_info.path().as_path());
-                    table_for_each!(answers.table(), |t| f(
-                        t,
-                        module_info,
-                        bindings,
-                        answers,
-                        &mut res
-                    ));
+                    table_for_each!(answers.table(), |t| f(t, module_info, answers, &mut res));
                     let collected = errors.collect(&error_config);
                     let mut output_errors = collected.ordinary;
                     output_errors.extend(collected.directives);

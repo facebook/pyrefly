@@ -197,9 +197,6 @@ impl InitializedInFlow {
     }
 }
 
-#[derive(Clone, Dupe, Debug)]
-pub struct Bindings(Arc<BindingsInner>);
-
 pub type BindingEntry<K> = (Index<K>, IndexMap<K, <K as Keyed>::Value>);
 
 table! {
@@ -207,8 +204,8 @@ table! {
     pub struct BindingTable(pub BindingEntry)
 }
 
-#[derive(Clone, Debug)]
-struct BindingsInner {
+#[derive(Debug)]
+pub struct Bindings {
     module_info: ModuleInfo,
     sys_info: SysInfo,
     table: BindingTable,
@@ -261,7 +258,7 @@ impl Display for Bindings {
             }
             Ok(())
         }
-        table_try_for_each!(self.0.table, |items| go(items, self, f));
+        table_try_for_each!(self.table, |items| go(items, self, f));
         Ok(())
     }
 }
@@ -320,7 +317,7 @@ pub struct BindingsBuilder<'a> {
     /// recover the enclosing class for a given expression range without
     /// needing a per-`Self`-use bind-time key.
     pub class_scopes: Vec<(TextRange, Idx<KeyClass>)>,
-    /// See `BindingsInner::subsequently_initialized`.
+    /// See `Bindings::subsequently_initialized`.
     subsequently_initialized: SmallSet<Idx<KeyAnnotation>>,
     /// Defaults extracted from an adjacent `__new__.__defaults__` assignment,
     /// set by `stmts()` and consumed by namedtuple synthesis in `stmt()`.
@@ -348,7 +345,7 @@ impl Bindings {
     #[expect(dead_code)] // Useful API
     fn len(&self) -> usize {
         let mut res = 0;
-        table_for_each!(&self.0.table, |x: &BindingEntry<_>| res += x.1.len());
+        table_for_each!(&self.table, |x: &BindingEntry<_>| res += x.1.len());
         res
     }
 
@@ -367,7 +364,7 @@ impl Bindings {
         let module_path = ModulePath::filesystem(PathBuf::from(format!("/test/{}.py", name)));
         let contents = Arc::new(String::new());
         let module_info = Module::new(module_name, module_path, contents);
-        Self(Arc::new(BindingsInner {
+        Self {
             module_info,
             sys_info: SysInfo::default(),
             table: Default::default(),
@@ -387,7 +384,7 @@ impl Bindings {
             class_scopes: Vec::new(),
             subsequently_initialized: SmallSet::new(),
             promote_ranges: SmallSet::new(),
-        }))
+        }
     }
 
     pub fn display<K: Keyed>(&self, idx: Idx<K>) -> impl Display + '_
@@ -398,26 +395,26 @@ impl Bindings {
     }
 
     pub fn module(&self) -> &ModuleInfo {
-        &self.0.module_info
+        &self.module_info
     }
 
     pub fn sys_info(&self) -> &SysInfo {
-        &self.0.sys_info
+        &self.sys_info
     }
 
     pub fn metadata(&self) -> &Arc<BindingsMetadata> {
-        &self.0.metadata
+        &self.metadata
     }
 
     pub fn module_ranges(&self) -> &Arc<ModuleRanges> {
-        &self.0.module_ranges
+        &self.module_ranges
     }
 
     /// Look up pre-computed class fields by `ClassDefIndex`. O(1) Vec index.
     /// Returns `None` if the index is out of bounds (e.g., stale cross-module
     /// index after incremental rebuild).
     pub fn get_class_fields(&self, idx: ClassDefIndex) -> Option<&ClassFields> {
-        Some(&self.0.metadata.get_class_checked(idx)?.fields)
+        Some(&self.metadata.get_class_checked(idx)?.fields)
     }
 
     /// Per-module class index for a class definition statement (`ClassDefIndex`),
@@ -441,25 +438,24 @@ impl Bindings {
     }
 
     pub fn unused_parameters(&self) -> &[UnusedParameter] {
-        &self.0.unused_parameters
+        &self.unused_parameters
     }
 
     pub fn unused_imports(&self) -> &[UnusedImport] {
-        &self.0.unused_imports
+        &self.unused_imports
     }
 
     pub fn unused_variables(&self) -> &[UnusedVariable] {
-        &self.0.unused_variables
+        &self.unused_variables
     }
 
     pub(crate) fn pytest_info(&self) -> Option<&PytestBindingInfo> {
-        self.0.pytest_info.as_ref()
+        self.pytest_info.as_ref()
     }
     /// Returns the yield and yield-from indices for a lambda at the given range,
     /// or empty slices if the lambda has no yields.
     pub fn lambda_yield_keys(&self, range: TextRange) -> (&[Idx<KeyYield>], &[Idx<KeyYieldFrom>]) {
-        self.0
-            .lambda_yield_keys
+        self.lambda_yield_keys
             .iter()
             .find(|(r, _, _)| *r == range)
             .map_or((&[], &[]), |(_, yields, yield_froms)| (yields, yield_froms))
@@ -472,8 +468,7 @@ impl Bindings {
     /// `class_scopes` is populated in source/visit order, so reverse
     /// iteration yields the most-recently-pushed (innermost) class first.
     pub fn enclosing_class(&self, range: TextRange) -> Option<Idx<KeyClass>> {
-        self.0
-            .class_scopes
+        self.class_scopes
             .iter()
             .rev()
             .find(|(r, _)| r.contains_range(range))
@@ -483,25 +478,25 @@ impl Bindings {
     /// Returns `true` if the given annotation-only declaration was subsequently
     /// initialized by a non-annotated assignment (tuple unpacking, walrus, `with … as`).
     pub fn subsequently_initialized(&self, ann: Idx<KeyAnnotation>) -> bool {
-        self.0.subsequently_initialized.contains(&ann)
+        self.subsequently_initialized.contains(&ann)
     }
 
     /// Names `del`eted at module scope.
     pub fn module_deletes(&self) -> &SmallSet<Name> {
-        &self.0.module_deletes
+        &self.module_deletes
     }
 
     pub fn available_definitions(&self, position: TextSize) -> SmallSet<Idx<Key>> {
-        if let Some(trace) = &self.0.scope_trace {
-            trace.available_definitions(&self.0.table, position)
+        if let Some(trace) = &self.scope_trace {
+            trace.available_definitions(&self.table, position)
         } else {
             SmallSet::new()
         }
     }
 
     pub fn definition_at_position(&self, position: TextSize) -> Option<&Key> {
-        if let Some(trace) = &self.0.scope_trace {
-            trace.definition_at_position(&self.0.table, position)
+        if let Some(trace) = &self.scope_trace {
+            trace.definition_at_position(&self.table, position)
         } else {
             None
         }
@@ -510,11 +505,11 @@ impl Bindings {
     /// Within the LSP, check if a key exists.
     /// It may not exist within `if False:` or `if sys.version == 0:` style code.
     pub fn is_valid_key(&self, k: &Key) -> bool {
-        self.0.table.get::<Key>().0.key_to_idx(k).is_some()
+        self.table.get::<Key>().0.key_to_idx(k).is_some()
     }
 
     pub fn should_promote_at_range(&self, range: TextRange) -> bool {
-        self.0.promote_ranges.contains(&range)
+        self.promote_ranges.contains(&range)
     }
 
     pub fn key_to_idx<K: Keyed>(&self, k: &K) -> Idx<K>
@@ -528,7 +523,7 @@ impl Bindings {
     where
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        self.0.table.get::<K>().0.key_to_idx_hashed(k)
+        self.table.get::<K>().0.key_to_idx_hashed(k)
     }
 
     pub fn key_to_idx_hashed<K: Keyed>(&self, k: Hashed<&K>) -> Idx<K>
@@ -538,8 +533,8 @@ impl Bindings {
         self.key_to_idx_hashed_opt(k).unwrap_or_else(|| {
             panic!(
                 "Internal error: key not found, module `{}`, path `{}`, key {k:?}",
-                self.0.module_info.name(),
-                self.0.module_info.path(),
+                self.module_info.name(),
+                self.module_info.path(),
             )
         })
     }
@@ -548,7 +543,7 @@ impl Bindings {
     where
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        self.0.table.get::<K>().1.get(idx).unwrap_or_else(|| {
+        self.table.get::<K>().1.get(idx).unwrap_or_else(|| {
             let key = self.idx_to_key(idx);
             panic!(
                 "Internal error: key lacking binding, module={}, path={}, key={}, key-debug={key:?}",
@@ -563,14 +558,14 @@ impl Bindings {
     where
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        self.0.table.get::<K>().0.idx_to_key(idx)
+        self.table.get::<K>().0.idx_to_key(idx)
     }
 
     pub fn keys<K: Keyed>(&self) -> impl ExactSizeIterator<Item = Idx<K>> + '_
     where
         BindingTable: TableKeyed<K, Value = BindingEntry<K>>,
     {
-        self.0.table.get::<K>().0.items().map(|(k, _)| k)
+        self.table.get::<K>().0.items().map(|(k, _)| k)
     }
 
     pub fn get_lambda_param_id(&self, name: &Identifier) -> LambdaParamId {
@@ -784,7 +779,7 @@ impl Bindings {
                 classes: builder.django_relation_classes.into_boxed_slice(),
             },
         );
-        Self(Arc::new(BindingsInner {
+        Self {
             module_info,
             sys_info: builder.sys_info,
             table: builder.table,
@@ -804,7 +799,7 @@ impl Bindings {
             class_scopes: builder.class_scopes,
             subsequently_initialized: builder.subsequently_initialized,
             promote_ranges: builder.promote_ranges,
-        }))
+        }
     }
 
     fn should_emit_semantic_syntax_error(error: &SemanticSyntaxError) -> bool {

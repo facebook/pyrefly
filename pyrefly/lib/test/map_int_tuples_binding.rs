@@ -88,14 +88,12 @@ fn mapped_annotation(bindings: &Bindings) -> Idx<Key> {
 
 fn solve_mapper_parameter(state: &State, mapmod: &Handle) -> (bool, Type) {
     let transaction = state.transaction();
-    let bindings = transaction
-        .get_bindings(mapmod)
-        .expect("lazily reached module should retain bindings");
     let answers = transaction
         .get_answers(mapmod)
         .expect("lazily reached module should retain answers");
-    let parameter = mapper_parameter(&bindings);
-    let annotation = mapped_annotation(&bindings);
+    let bindings = answers.bindings();
+    let parameter = mapper_parameter(bindings);
+    let annotation = mapped_annotation(bindings);
     let both_unsolved =
         answers.get_idx(parameter).is_none() && answers.get_idx(annotation).is_none();
 
@@ -188,9 +186,10 @@ def shadowed() -> None:
     let (state, handle) = env.to_state();
     let main = handle("main");
     let transaction = state.transaction();
-    let bindings = transaction
-        .get_bindings(&main)
-        .expect("checked module should retain bindings");
+    let answers = transaction
+        .get_answers(&main)
+        .expect("checked module should retain answers");
+    let bindings = answers.bindings();
     let module = bindings.module();
     let kind_for = |expected_name: &str| {
         bindings
@@ -233,9 +232,10 @@ second: MapIntTuples[lambda S: list[S], int]
     );
     let (state, handle) = env.to_state();
     let transaction = state.transaction();
-    let bindings = transaction
-        .get_bindings(&handle("main"))
-        .expect("checked module should retain bindings");
+    let answers = transaction
+        .get_answers(&handle("main"))
+        .expect("checked module should retain answers");
+    let bindings = answers.bindings();
     let parameters = bindings
         .keys::<Key>()
         .filter_map(|idx| match bindings.get(idx) {

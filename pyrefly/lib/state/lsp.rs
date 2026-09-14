@@ -833,8 +833,9 @@ impl<'a> Transaction<'a> {
     }
 
     fn get_type_for_surface(&self, handle: &Handle, key: &Key) -> Option<Type> {
-        let idx = self.get_bindings(handle)?.key_to_idx(key);
-        self.get_answers(handle)?.get_type_at(idx)
+        let answers = self.get_answers(handle)?;
+        let idx = answers.bindings().key_to_idx(key);
+        answers.get_type_at(idx)
     }
 
     pub fn get_type(&self, handle: &Handle, key: &Key) -> Option<Type> {
@@ -968,11 +969,10 @@ impl<'a> Transaction<'a> {
             _ => None,
         })?;
         let key = Key::PatternNarrow(case_range);
-        if self
-            .get_bindings(handle)
-            .is_some_and(|bindings| bindings.is_valid_key(&key))
+        if let Some(answers) = self.get_answers(handle)
+            && answers.bindings().is_valid_key(&key)
         {
-            self.get_type_for_surface(handle, &key)
+            answers.get_type_at(answers.bindings().key_to_idx(&key))
         } else {
             // The subject must be looked up by its whole range: a position inside it
             // resolves the leading token, which is the base (`obj` in `match obj.attr:`)
@@ -1405,18 +1405,20 @@ impl<'a> Transaction<'a> {
                 self.get_active_call_argument_type_for_surface(handle, position)
             }
             ResolutionKind::KeyInModule(handle, key) => {
-                let bindings = self.get_bindings(&handle)?;
+                let answers = self.get_answers(&handle)?;
+                let bindings = answers.bindings();
                 if !bindings.is_valid_key(&key) {
                     return None;
                 }
-                self.get_type_for_surface(&handle, &key)
+                answers.get_type_at(bindings.key_to_idx(&key))
             }
             ResolutionKind::Key(key) => {
-                let bindings = self.get_bindings(handle)?;
+                let answers = self.get_answers(handle)?;
+                let bindings = answers.bindings();
                 if !bindings.is_valid_key(&key) {
                     return None;
                 }
-                let mut ty = self.get_type_for_surface(handle, &key)?;
+                let mut ty = answers.get_type_at(bindings.key_to_idx(&key))?;
                 // Only a plain expression reference coerces to its callee signature.
                 if coerce_callees && let IdentifierContext::Expr(_) = context {
                     let call_args_range = self.callee_at(handle, position).and_then(
@@ -1427,9 +1429,7 @@ impl<'a> Transaction<'a> {
                         },
                     );
                     if let Some(arguments_range) = call_args_range {
-                        if let Some(ret) =
-                            self.get_chosen_overload_trace_for_surface(handle, arguments_range)
-                        {
+                        if let Some(ret) = answers.get_chosen_overload_trace(arguments_range) {
                             return Some(ret);
                         }
                         ty = self.coerce_type_to_callable(handle, ty);
@@ -1944,8 +1944,9 @@ impl<'a> Transaction<'a> {
         key: &Key,
         preference: FindPreference,
     ) -> Option<(Handle, Export)> {
-        let bindings = self.get_bindings(handle)?;
-        let intermediate_definition = key_to_intermediate_definition(&bindings, key)?;
+        let answers = self.get_answers(handle)?;
+        let bindings = answers.bindings();
+        let intermediate_definition = key_to_intermediate_definition(bindings, key)?;
         let (definition_handle, mut export) =
             self.resolve_intermediate_definition(handle, intermediate_definition, preference)?;
         if let Export {
@@ -1953,7 +1954,7 @@ impl<'a> Transaction<'a> {
             ..
         } = &export
             && *symbol_kind == SymbolKind::Variable
-            && let Some(type_) = self.get_type(handle, key)
+            && let Some(type_) = answers.get_type_at(bindings.key_to_idx(key))
         {
             let symbol_kind = match type_ {
                 Type::Callable(_) | Type::Function(_) => SymbolKind::Function,
@@ -1993,9 +1994,10 @@ impl<'a> Transaction<'a> {
         key: &Key,
         preference: FindPreference,
     ) -> Result<Option<(Handle, Export)>, EmptyResponseReason> {
-        let bindings = self
-            .get_bindings(handle)
-            .ok_or(EmptyResponseReason::BindingsNotFound)?;
+        let answers = self
+            .get_answers(handle)
+            .ok_or(EmptyResponseReason::AnswersNotFound)?;
+        let bindings = answers.bindings();
         if !bindings.is_valid_key(key) {
             return Ok(None);
         }
@@ -2744,11 +2746,12 @@ impl<'a> Transaction<'a> {
                             && !is_function_or_method
                             && let Some(AnyNodeRef::ExprCall(call)) = covering_nodes.get(1)
                             && call.func.range() == id.range
-                            && let Some(bindings) = self.get_bindings(handle)
+                            && let Some(answers) = self.get_answers(handle)
                         {
+                            let bindings = answers.bindings();
                             let key = Key::BoundName(ShortIdentifier::new(&id));
                             if bindings.is_valid_key(&key)
-                                && let Some(ty) = self.get_type(handle, &key)
+                                && let Some(ty) = answers.get_type_at(bindings.key_to_idx(&key))
                             {
                                 let defs =
                                     self.find_call_target_definitions(handle, preference, ty);
@@ -3164,9 +3167,10 @@ impl<'a> Transaction<'a> {
             );
             // The binding table already holds the `def` name, so this stays a
             // read-only lookup with nothing to solve.
-            let Some(bindings) = self.get_bindings(&def_handle) else {
-                return Some(Err(EmptyResponseReason::BindingsNotFound));
+            let Some(answers) = self.get_answers(&def_handle) else {
+                return Some(Err(EmptyResponseReason::AnswersNotFound));
             };
+            let bindings = answers.bindings();
             return Some(
                 bindings
                     .function_def_range(func_id.def_index)
@@ -3320,7 +3324,8 @@ impl<'a> Transaction<'a> {
         // user the same quick fix twice. Keying on (title, edit range, edit text)
         // treats two actions as equal when they would make the same visible edit.
         let mut other_action_keys: HashSet<(String, TextRange, String)> = HashSet::new();
-        if let Some(bindings) = self.get_bindings(handle) {
+        if let Some(answers) = self.get_answers(handle) {
+            let bindings = answers.bindings();
             for unused in bindings.unused_imports() {
                 if (unused.range.contains_range(range) || range.contains_range(unused.range))
                     && let Some(action) =
@@ -4194,7 +4199,8 @@ impl<'a> Transaction<'a> {
         ) {
             references.extend(pytest_references);
         }
-        if let Some(bindings) = self.get_bindings(handle) {
+        if let Some(answers) = self.get_answers(handle) {
+            let bindings = answers.bindings();
             let key = Key::Definition(ShortIdentifier::from_text_range(definition_range));
             if bindings.is_valid_key(&key) {
                 let binding = bindings.get(bindings.key_to_idx(&key));
@@ -5103,7 +5109,7 @@ fn compute_transitive_rdeps_for_definition_impl<T: RdepTransaction>(
                 sys_info,
             );
             let rdeps = transaction.transitive_rdeps(definition_handle.dupe());
-            // Same-module reference discovery reads the definition's AST, bindings, and answers,
+            // Same-module reference discovery reads the definition's AST and answers,
             // even though most reverse dependencies can be answered from their retained indexes.
             transaction.run_for_handles(&[definition_handle], Require::Everything)?;
             rdeps

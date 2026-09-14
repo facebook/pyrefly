@@ -296,7 +296,8 @@ impl<'a> Transaction<'a> {
                     _ => !Ast::is_literal(e),
                 }
         };
-        let bindings = self.get_bindings(handle)?;
+        let answers = self.get_answers(handle)?;
+        let bindings = answers.bindings();
         let stdlib = self.get_stdlib(handle);
         let renderer = self.get_ast(handle).map(|ast| TypeHintRenderer {
             transaction: self,
@@ -331,11 +332,11 @@ impl<'a> Transaction<'a> {
         let mut res = Vec::new();
         for idx in bindings.keys::<Key>() {
             match bindings.idx_to_key(idx) {
-                key @ Key::ReturnType(id) if inlay_hint_config.function_return_types => {
+                Key::ReturnType(id) if inlay_hint_config.function_return_types => {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
                         Binding::Function { decorated_idx, .. } => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
-                                && let Some(mut ty) = self.get_type(handle, key)
+                                && let Some(mut ty) = answers.get_type_at(idx)
                                 && !ty.is_any()
                             {
                                 let fun =
@@ -362,7 +363,7 @@ impl<'a> Transaction<'a> {
                 }
                 key @ Key::Definition(_)
                     if inlay_hint_config.variable_types
-                        && let Some(mut ty) = self.get_type(handle, key) =>
+                        && let Some(mut ty) = answers.get_type_at(idx) =>
                 {
                     let mut insertable = true;
                     if let Some(constructor) = self.new_type_constructor_signature(handle, &ty) {
@@ -393,7 +394,7 @@ impl<'a> Transaction<'a> {
                         {
                             // Try to get the element expression from the unpacked source
                             let element_expr = Self::get_unpacked_element_expr(
-                                &bindings,
+                                bindings,
                                 value.source,
                                 value.position,
                             );
@@ -435,9 +436,7 @@ impl<'a> Transaction<'a> {
         }
 
         // Inlay hints for unannotated class attributes defined in methods (e.g. self.x = value in __init__)
-        if inlay_hint_config.variable_types
-            && let Some(answers) = self.get_answers(handle)
-        {
+        if inlay_hint_config.variable_types {
             for field_idx in bindings.keys::<KeyClassField>() {
                 let field = bindings.get(field_idx);
                 if let ClassFieldDefinition::DefinedInMethod {
@@ -730,7 +729,7 @@ impl<'a> Transaction<'a> {
         &self,
         handle: &Handle,
         idx: pyrefly_graph::index::Idx<Key>,
-        bindings: Bindings,
+        bindings: &Bindings,
         transaction: &mut CancellableTransaction,
     ) -> Vec<(pyrefly_python::module::Module, Vec<TextRange>)> {
         if let Key::Definition(id) = bindings.idx_to_key(idx)
@@ -754,7 +753,8 @@ impl<'a> Transaction<'a> {
         handle: &Handle,
         cancellable_transaction: &mut CancellableTransaction,
     ) -> Vec<ParameterAnnotation> {
-        if let Some(bindings) = self.get_bindings(handle) {
+        if let Some(answers) = self.get_answers(handle) {
+            let bindings = answers.bindings();
             let transaction = cancellable_transaction;
             fn transpose<T: Clone>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
                 if v.is_empty() {
@@ -829,7 +829,7 @@ impl<'a> Transaction<'a> {
                             return vec![];
                         }
                         let references =
-                            self.collect_references(handle, idx, bindings.clone(), transaction);
+                            self.collect_references(handle, idx, bindings, transaction);
                         let ranges: Vec<&TextRange> =
                             references.iter().flat_map(|(_, range)| range).collect();
                         let inferred_types = ranges
@@ -854,16 +854,17 @@ impl<'a> Transaction<'a> {
     ) -> Option<Vec<(TextSize, Type, AnnotationKind)>> {
         let is_interesting_type = |x: &Type| !x.is_any();
         let is_interesting_expr = |x: &Expr| !Ast::is_literal(x);
-        let bindings = self.get_bindings(handle)?;
+        let answers = self.get_answers(handle)?;
+        let bindings = answers.bindings();
         let mut res = Vec::new();
         for idx in bindings.keys::<Key>() {
             match bindings.idx_to_key(idx) {
                 // Return Annotation
-                key @ Key::ReturnType(id) if return_types => {
+                Key::ReturnType(id) if return_types => {
                     match bindings.get(bindings.key_to_idx(&Key::Definition(*id))) {
                         Binding::Function { decorated_idx, .. } => {
                             if matches!(&bindings.get(idx), Binding::ReturnType(ret) if !ret.kind.has_return_annotation())
-                                && let Some(ty) = self.get_type(handle, key)
+                                && let Some(ty) = answers.get_type_at(idx)
                                 && is_interesting_type(&ty)
                             {
                                 let fun =
@@ -880,7 +881,7 @@ impl<'a> Transaction<'a> {
                 }
                 // Only annotate empty containers for now
                 key @ Key::Definition(_) if containers => {
-                    if let Some(ty) = self.get_type(handle, key) {
+                    if let Some(ty) = answers.get_type_at(idx) {
                         let e = match bindings.get(idx) {
                             Binding::NameAssign(x) if !x.is_pinned() => match &*x.expr {
                                 Expr::List(ExprList { elts, .. }) => {

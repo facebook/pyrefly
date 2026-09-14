@@ -336,12 +336,9 @@ pub enum EmptyResponseReason {
     /// `get_ast` returned None — module is in the graph but AST hasn't
     /// been computed yet (startup/initial load).
     AstNotFound,
-    /// `get_answers` returned None — answers haven't been computed yet
-    /// for this module (should only happen during startup/initial load).
+    /// `get_answers` returned None — answers, including bindings, haven't been
+    /// computed yet for this module (should only happen during startup/initial load).
     AnswersNotFound,
-    /// `get_bindings` returned None — bindings haven't been computed yet
-    /// for this module (should only happen during startup/initial load).
-    BindingsNotFound,
     /// `get_type_trace` returned None — the expression at the cursor
     /// doesn't have a traced type (e.g., operator on an unresolved expr).
     TypeTraceNotFound,
@@ -384,7 +381,6 @@ impl EmptyResponseReason {
             Self::ModuleInfoNotFound => "module_info_not_found",
             Self::AstNotFound => "ast_not_found",
             Self::AnswersNotFound => "answers_not_found",
-            Self::BindingsNotFound => "bindings_not_found",
             Self::TypeTraceNotFound => "type_trace_not_found",
             Self::ModuleNotFound => "module_not_found",
             Self::NotAnIdentifier { .. } => "not_an_identifier",

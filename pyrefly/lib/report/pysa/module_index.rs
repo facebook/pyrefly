@@ -108,8 +108,7 @@ fn decorator_matches_graphql_ref(ty: &Type, graphql_ref: &GraphQLDecoratorRef) -
 
 /// Per-module information required for the pysa report step.
 ///
-/// Built while AST + bindings + answers are still available, persists after
-/// eviction.
+/// Built while the AST and answers are still available, persists after eviction.
 pub struct PysaModuleIndex {
     /// FuncDefIndex → FunctionRef for functions defined with `def`.
     func_def_to_function_ref: HashMap<FuncDefIndex, FunctionRef>,
@@ -145,8 +144,8 @@ impl PysaModuleIndex {
         let mut short_identifier_to_function_ref = HashMap::new();
         let mut short_identifier_to_setter_ref = HashMap::new();
 
-        for idx in context.bindings.keys::<KeyDecoratedFunction>() {
-            let key = context.bindings.idx_to_key(idx);
+        for idx in context.bindings().keys::<KeyDecoratedFunction>() {
+            let key = context.bindings().idx_to_key(idx);
             let short_identifier = key.0;
 
             let exported = get_exported_decorated_function(
@@ -183,8 +182,8 @@ impl PysaModuleIndex {
         // KeyUndecoratedFunctionRange entries and reusing short_identifier_to_function_ref.
         let mut func_def_to_function_ref = HashMap::new();
 
-        for idx in context.bindings.keys::<KeyUndecoratedFunctionRange>() {
-            let key = context.bindings.idx_to_key(idx);
+        for idx in context.bindings().keys::<KeyUndecoratedFunctionRange>() {
+            let key = context.bindings().idx_to_key(idx);
             let func_def_index = key.0;
             if let Some(answer) = context.answers.get_idx(idx) {
                 let short_identifier = answer.0;

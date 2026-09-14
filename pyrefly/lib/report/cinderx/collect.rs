@@ -44,7 +44,6 @@ use starlark_map::Hashed;
 use crate::alt::answers::Answers;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyClassField;
-use crate::binding::bindings::Bindings;
 use crate::module::module_info::ModuleInfo;
 use crate::report::cinderx::convert::type_to_structured;
 use crate::report::cinderx::types::LocatedType;
@@ -69,8 +68,8 @@ pub(crate) struct ModuleTypeData {
 /// `TypeTable`, and records a `LocatedType` mapping source location
 /// to table index.
 ///
-/// Returns `None` if any of the required data (AST, answers, bindings,
-/// module info) is unavailable for the given handle.
+/// Returns `None` if any of the required data (AST, answers, module info) is
+/// unavailable for the given handle.
 pub(crate) fn collect_module_types(
     transaction: &Transaction,
     handle: &Handle,
@@ -78,16 +77,13 @@ pub(crate) fn collect_module_types(
     let ast = transaction.get_ast(handle)?;
     let module_info = transaction.get_module_info(handle)?;
     let answers = transaction.get_answers(handle)?;
-    let bindings = transaction.get_bindings(handle)?;
 
-    let mut contextual_types =
-        build_contextual_types(&ast, &answers, &bindings, transaction, handle);
-    collect_call_contextual_types(&ast, &answers, &bindings, &mut contextual_types);
+    let mut contextual_types = build_contextual_types(&ast, &answers, transaction, handle);
+    collect_call_contextual_types(&ast, &answers, &mut contextual_types);
 
     let mut collector = ExpressionCollector {
         module_info: &module_info,
         answers: &answers,
-        bindings: &bindings,
         transaction,
         handle,
         contextual_types: &contextual_types,
@@ -155,8 +151,8 @@ fn lookup_attr_type(
         class.module_path().dupe(),
         handle.sys_info().dupe(),
     );
-    let class_bindings = transaction.get_bindings(&class_handle)?;
     let class_answers = transaction.get_answers(&class_handle)?;
+    let class_bindings = class_answers.bindings();
     let key = KeyClassField(class.index(), attr.attr.id.clone());
     let idx = class_bindings.key_to_idx_hashed_opt(Hashed::new(&key))?;
     let class_field = class_answers.get_idx(idx)?;
@@ -168,7 +164,6 @@ fn lookup_attr_type(
 /// targeting `__static__` primitive types.
 struct ContextualTypeCollector<'a> {
     answers: &'a Answers,
-    bindings: &'a Bindings,
     transaction: &'a Transaction<'a>,
     handle: &'a Handle,
     contextual_types: HashMap<TextRange, Type>,
@@ -176,14 +171,15 @@ struct ContextualTypeCollector<'a> {
 
 impl<'a> StatementVisitor<'a> for ContextualTypeCollector<'a> {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        let bindings = self.answers.bindings();
         if let Stmt::AnnAssign(ann) = stmt
             && let Some(ref value) = ann.value
         {
             let target_type = match ann.target.as_ref() {
                 Expr::Name(name) => {
                     let key = Key::Definition(ShortIdentifier::expr_name(name));
-                    if self.bindings.is_valid_key(&key) {
-                        self.answers.get_type_at(self.bindings.key_to_idx(&key))
+                    if bindings.is_valid_key(&key) {
+                        self.answers.get_type_at(bindings.key_to_idx(&key))
                     } else {
                         None
                     }
@@ -204,19 +200,18 @@ impl<'a> StatementVisitor<'a> for ContextualTypeCollector<'a> {
                 let target_type = match target {
                     Expr::Name(name) => {
                         let key = Key::BoundName(ShortIdentifier::expr_name(name));
-                        let valid_key = if self.bindings.is_valid_key(&key) {
+                        let valid_key = if bindings.is_valid_key(&key) {
                             Some(key)
                         } else {
                             let key = Key::Definition(ShortIdentifier::expr_name(name));
-                            if self.bindings.is_valid_key(&key) {
+                            if bindings.is_valid_key(&key) {
                                 Some(key)
                             } else {
                                 None
                             }
                         };
-                        valid_key.and_then(|key| {
-                            self.answers.get_type_at(self.bindings.key_to_idx(&key))
-                        })
+                        valid_key
+                            .and_then(|key| self.answers.get_type_at(bindings.key_to_idx(&key)))
                     }
                     Expr::Attribute(attr) => {
                         lookup_attr_type(attr, self.answers, self.transaction, self.handle)
@@ -239,13 +234,11 @@ impl<'a> StatementVisitor<'a> for ContextualTypeCollector<'a> {
 fn build_contextual_types<'a>(
     ast: &Arc<ModModule>,
     answers: &'a Answers,
-    bindings: &'a Bindings,
     transaction: &'a Transaction<'a>,
     handle: &'a Handle,
 ) -> HashMap<TextRange, Type> {
     let mut collector = ContextualTypeCollector {
         answers,
-        bindings,
         transaction,
         handle,
         contextual_types: HashMap::new(),
@@ -264,9 +257,9 @@ fn build_contextual_types<'a>(
 fn collect_call_contextual_types(
     ast: &Arc<ModModule>,
     answers: &Answers,
-    bindings: &Bindings,
     contextual_types: &mut HashMap<TextRange, Type>,
 ) {
+    let bindings = answers.bindings();
     ast.visit(&mut |x: &Expr| {
         if let Expr::Call(call) = x {
             // Skip if any arg is starred (*args).
@@ -425,14 +418,13 @@ fn has_facet_narrow_in_chain(type_info: &TypeInfo, chain: &[FacetKind]) -> bool 
 /// Holds all the context needed to walk expressions and collect types
 /// for the CinderX report.
 ///
-/// Groups the read-only per-module data (answers, bindings, module info,
-/// transaction context) together with the mutable output accumulators
+/// Groups the read-only per-module data (answers, module info, transaction
+/// context) together with the mutable output accumulators
 /// (type table, located types, pending classes) to avoid threading many
 /// arguments through every recursive call.
 struct ExpressionCollector<'a> {
     module_info: &'a ModuleInfo,
     answers: &'a Answers,
-    bindings: &'a Bindings,
     transaction: &'a Transaction<'a>,
     handle: &'a Handle,
     contextual_types: &'a HashMap<TextRange, Type>,
@@ -447,12 +439,13 @@ impl<'a> ExpressionCollector<'a> {
     /// Checks `BoundName` (use/load site) first, then `Definition`
     /// (store site), returning `None` if neither exists in bindings.
     fn try_find_key_for_name(&self, name: &ExprName) -> Option<Key> {
+        let bindings = self.answers.bindings();
         let key = Key::BoundName(ShortIdentifier::expr_name(name));
-        if self.bindings.is_valid_key(&key) {
+        if bindings.is_valid_key(&key) {
             return Some(key);
         }
         let key = Key::Definition(ShortIdentifier::expr_name(name));
-        if self.bindings.is_valid_key(&key) {
+        if bindings.is_valid_key(&key) {
             return Some(key);
         }
         None
@@ -466,7 +459,9 @@ impl<'a> ExpressionCollector<'a> {
     fn lookup_type(&self, x: &Expr) -> Option<Type> {
         if let Expr::Name(name) = x
             && let Some(key) = self.try_find_key_for_name(name)
-            && let Some(ty) = self.answers.get_type_at(self.bindings.key_to_idx(&key))
+            && let Some(ty) = self
+                .answers
+                .get_type_at(self.answers.bindings().key_to_idx(&key))
         {
             return Some(ty);
         }
@@ -498,7 +493,9 @@ impl<'a> ExpressionCollector<'a> {
             let (unnarrowed_type, is_narrowed_mismatch) = if let Some((name, chain)) =
                 extract_facet_chain(x)
                 && let Some(key) = self.try_find_key_for_name(name)
-                && let Some(type_info) = self.answers.get_idx(self.bindings.key_to_idx(&key))
+                && let Some(type_info) = self
+                    .answers
+                    .get_idx(self.answers.bindings().key_to_idx(&key))
                 && type_info.has_facets()
                 && has_facet_narrow_in_chain(type_info, &chain)
             {

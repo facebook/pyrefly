@@ -4077,7 +4077,7 @@ impl<'a> CallGraphVisitor<'a> {
         let key = KeyDecoratedFunction(ShortIdentifier::new(&function_def.name));
         let callees = self
             .module_answers_context
-            .bindings
+            .bindings()
             .key_to_idx_hashed_opt(Hashed::new(&key))
             .and_then(|idx| {
                 let function = DecoratedFunction {

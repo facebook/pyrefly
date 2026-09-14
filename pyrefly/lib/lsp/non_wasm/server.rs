@@ -5666,7 +5666,8 @@ impl Server {
         handle: &Handle,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let Some(bindings) = transaction.get_bindings(handle) {
+        if let Some(answers) = transaction.get_answers(handle) {
+            let bindings = answers.bindings();
             let module_info = bindings.module();
             for unused in bindings.unused_parameters() {
                 if Ast::is_intentionally_unused(unused.name.as_str()) {
@@ -5693,7 +5694,8 @@ impl Server {
         handle: &Handle,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let Some(bindings) = transaction.get_bindings(handle) {
+        if let Some(answers) = transaction.get_answers(handle) {
+            let bindings = answers.bindings();
             let module_info = bindings.module();
             for unused in bindings.unused_imports() {
                 let lsp_range = module_info.to_lsp_range(unused.range);
@@ -5717,7 +5719,8 @@ impl Server {
         handle: &Handle,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let Some(bindings) = transaction.get_bindings(handle) {
+        if let Some(answers) = transaction.get_answers(handle) {
+            let bindings = answers.bindings();
             let module_info = bindings.module();
             for unused in bindings.unused_variables() {
                 if Ast::is_intentionally_unused(unused.name.as_str()) {
@@ -6351,7 +6354,8 @@ impl Server {
     ) -> Option<TypeHierarchyTarget> {
         let ast = transaction.as_ref().get_ast(handle)?;
         let class_def = find_class_at_position_in_ast(&ast, definition.definition_range.start())?;
-        let bindings = transaction.as_ref().get_bindings(handle)?;
+        let answers = transaction.as_ref().get_answers(handle)?;
+        let bindings = answers.bindings();
         let def_index = bindings.class_def_index(class_def)?;
         Some(TypeHierarchyTarget {
             def_index,
@@ -6401,9 +6405,10 @@ impl Server {
             let Some(solutions) = transaction.as_ref().get_solutions(&candidate) else {
                 continue;
             };
-            let Some(bindings) = transaction.as_ref().get_bindings(&candidate) else {
+            let Some(answers) = transaction.as_ref().get_answers(&candidate) else {
                 continue;
             };
+            let bindings = answers.bindings();
             let Some(module_info) = transaction.as_ref().get_module_info(&candidate) else {
                 continue;
             };
@@ -6712,7 +6717,8 @@ impl Server {
                 source_handle.sys_info().dupe(),
             );
             transaction
-                .get_bindings(&handle)?
+                .get_answers(&handle)?
+                .bindings()
                 .function_def_range(func_id.def_index)
         };
         // An importable module's backing filesystem path.

@@ -198,9 +198,10 @@ mod impl_ {
         handle: &Handle,
         position: TextSize,
     ) -> Vec<String> {
-        let Some(bindings) = transaction.get_bindings(handle) else {
+        let Some(answers) = transaction.get_answers(handle) else {
             return Vec::new();
         };
+        let bindings = answers.bindings();
         let Some(module) = transaction.get_module_info(handle) else {
             return Vec::new();
         };
@@ -234,13 +235,13 @@ mod impl_ {
         }
         let idx = bindings.key_to_idx(&key);
         let mut sources = Vec::new();
-        if let Some(narrow_source) = narrow_source_for_key(&bindings, &module, idx) {
+        if let Some(narrow_source) = narrow_source_for_key(bindings, &module, idx) {
             sources.push(narrow_source);
         }
         if is_attribute_hover {
             return sources;
         }
-        if let Some(first_use_source) = first_use_source_for_key(&bindings, &module, &key, position)
+        if let Some(first_use_source) = first_use_source_for_key(bindings, &module, &key, position)
         {
             sources.push(first_use_source);
         }

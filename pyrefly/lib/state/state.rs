@@ -101,7 +101,6 @@ use crate::binding::binding::KeyVariance;
 use crate::binding::binding::Keyed;
 use crate::binding::bindings::BindingEntry;
 use crate::binding::bindings::BindingTable;
-use crate::binding::bindings::Bindings;
 use crate::binding::metadata::BindingsMetadata;
 use crate::binding::scope::builtin_module_for_name;
 use crate::binding::table::TableKeyed;
@@ -466,7 +465,7 @@ impl ModuleDep {
 #[derive(Debug, Default)]
 pub(crate) struct OldData {
     pub exports: Option<Arc<Exports>>,
-    pub answers: Option<Arc<(Bindings, Arc<Answers>)>>,
+    pub answers: Option<Arc<Answers>>,
     pub solutions: Option<Arc<Solutions>>,
 }
 
@@ -695,7 +694,7 @@ pub(crate) struct TransactionData<'a> {
     pysa_reporter: Option<Box<crate::report::pysa::PysaReporter>>,
     /// When set, CinderX reporting writes per-module output during answer solving.
     cinderx_reporter: Option<Box<crate::report::cinderx::CinderxReporter>>,
-    /// When set, called per solved module while its bindings/answers are still live (before eviction).
+    /// When set, called per solved module while its answers are still live (before eviction).
     solutions_hook: Option<Box<dyn Fn(&Handle, &Transaction) + Send + Sync + 'a>>,
 }
 
@@ -837,7 +836,7 @@ impl<'a> Transaction<'a> {
         self.data.pysa_reporter = reporter;
     }
 
-    /// Set a hook called per solved module while its bindings/answers are still live (before
+    /// Set a hook called per solved module while its answers are still live (before
     /// eviction), letting per-module analyses (e.g. `coverage`) read them without retaining them.
     pub fn set_solutions_hook(
         &mut self,
@@ -908,24 +907,20 @@ impl<'a> Transaction<'a> {
         self.with_module_inner(handle, |x| x.get_solutions())
     }
 
-    pub fn get_bindings(&self, handle: &Handle) -> Option<Bindings> {
-        self.with_module_inner(handle, |x| x.get_answers().map(|a| a.0.dupe()))
-    }
-
     pub fn get_answers(&self, handle: &Handle) -> Option<Arc<Answers>> {
-        self.with_module_inner(handle, |x| x.get_answers().map(|a| a.1.dupe()))
+        self.with_module_inner(handle, |x| x.get_answers())
     }
 
     /// Look up the `ClassFields` for a class, which may be defined in another module.
-    /// Falls back to `Solutions` metadata when bindings are evicted (e.g. during `coverage`).
+    /// Falls back to `Solutions` metadata when answers are evicted (e.g. during `coverage`).
     pub fn get_class_fields(&self, source_handle: &Handle, class: &Class) -> Option<ClassFields> {
         let handle = Handle::new(
             class.module_name(),
             class.module_path().dupe(),
             source_handle.sys_info().dupe(),
         );
-        if let Some(bindings) = self.get_bindings(&handle) {
-            bindings.get_class_fields(class.index()).cloned()
+        if let Some(answers) = self.get_answers(&handle) {
+            answers.bindings().get_class_fields(class.index()).cloned()
         } else {
             Some(
                 self.get_solutions(&handle)?
@@ -1595,7 +1590,7 @@ impl<'a> Transaction<'a> {
                     // Old solutions were None but old exports existed — module
                     // was previously computed to Answers but not Solutions.
                     // Diff new solutions against old answers.
-                    new_solutions.changed_exports_vs_answers(&old_ans.0, &old_ans.1, &mut changed);
+                    new_solutions.changed_exports_vs_answers(&old_ans, &mut changed);
                 }
             }
             if !changed.is_empty() {
@@ -1632,8 +1627,8 @@ impl<'a> Transaction<'a> {
                 if let Some(hook) = &self.data.solutions_hook {
                     hook(&module_data.handle, self);
                 }
-                if !require.keep_bindings() && !require.keep_answers() {
-                    // From now on we can use the answers directly, so evict the bindings/answers.
+                if !require.keep_answers() {
+                    // From now on we can use the solutions directly, so evict the answers.
                     post.evict_answers();
                 }
                 load_result = module_data.state.get_load();
@@ -1932,10 +1927,11 @@ impl<'a> Transaction<'a> {
                         .expect("answers evicted implies solutions exist"),
                 ),
             });
-        let (bindings, answers) = match provider {
-            AnswerProvider::Answers(answers) => (&answers.0, answers.1.as_ref()),
+        let answers = match provider {
+            AnswerProvider::Answers(answers) => answers,
             AnswerProvider::Solutions(solutions) => return solutions.get_hashed_opt(key),
         };
+        let bindings = answers.bindings();
 
         // Fast path: check if the answer is already computed in the
         // result slot. This avoids constructing
@@ -1953,7 +1949,6 @@ impl<'a> Transaction<'a> {
         answers.solve_exported_key(
             &lookup,
             &lookup,
-            bindings,
             &load.errors,
             &stdlib,
             &self.data.state.uniques,
@@ -2300,16 +2295,15 @@ impl<'a> Transaction<'a> {
         let jaxtyping_quantifieds = RefCell::default();
         let solver = AnswersSolver::new(
             &lookup,
-            &answers.1,
+            &answers,
             errors,
-            &answers.0,
             &lookup,
             &self.data.state.uniques,
             &recurser,
             &stdlib,
             &thread_state,
             &answer_scope,
-            answers.1.heap(),
+            answers.heap(),
             &jaxtyping_quantifieds,
         );
         let solve_timed = || {
@@ -2693,13 +2687,10 @@ impl<'a> Transaction<'a> {
         if let Some(cinderx_solutions) = solutions.cinderx_solutions() {
             return cinderx_solutions.clone();
         }
-        let bindings = self
-            .get_bindings(handle)
-            .expect("bindings must be available to build cinderx_solutions");
         let answers = self
             .get_answers(handle)
             .expect("answers must be available to build cinderx_solutions");
-        crate::report::cinderx::CinderxSolutions::build_from_answers(&bindings, &answers)
+        crate::report::cinderx::CinderxSolutions::build_from_answers(&answers)
     }
 }
 
@@ -2732,7 +2723,6 @@ enum TargetAnswers<'a> {
     /// The target module's `Answers` are available. The caller should perform
     /// its operation (commit or solve) using the contained data.
     Available {
-        bindings: Bindings,
         answers: Arc<Answers>,
         load: Option<Arc<Load>>,
         module_data: &'a ArcId<ModuleDataMut>,
@@ -2851,7 +2841,7 @@ impl<'a> TransactionHandle<'a> {
     /// This helper centralizes that logic and returns a `TargetAnswers`
     /// enum so callers only need to handle the "answers available" case.
     fn lookup_target_answers(&self, calc_id: &CalcId) -> TargetAnswers<'a> {
-        let CalcId(ref bindings, _) = *calc_id;
+        let bindings = calc_id.bindings();
         let module = bindings.module().name();
         let path = bindings.module().path();
 
@@ -2865,12 +2855,9 @@ impl<'a> TransactionHandle<'a> {
             None => return TargetAnswers::ModuleNotFound,
         };
 
-        if let Some(answers_pair) = module_data.state.get_answers() {
-            let bindings = answers_pair.0.dupe();
-            let answers = answers_pair.1.dupe();
+        if let Some(answers) = module_data.state.get_answers() {
             let load = module_data.state.get_load();
             TargetAnswers::Available {
-                bindings,
                 answers,
                 load,
                 module_data,
@@ -3209,7 +3196,6 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
             TargetAnswers::ModuleNotFound => false,
             TargetAnswers::Evicted => true,
             TargetAnswers::Available {
-                bindings: target_bindings,
                 answers: target_answers,
                 load,
                 module_data,
@@ -3223,7 +3209,6 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
                 target_answers.solve_idx_erased(
                     any_idx,
                     &lookup,
-                    &target_bindings,
                     &lookup,
                     &target_load.errors,
                     &stdlib,
@@ -3300,7 +3285,7 @@ impl<'a> LookupAnswer for TransactionHandle<'a> {
 
             let answers_guard = module_data.state.load_answers();
             if let Some(answers) = answers_guard.as_ref() {
-                return answers.0.metadata().dupe();
+                return answers.bindings().metadata().dupe();
             }
             let solutions_guard = module_data.state.load_solutions();
             let solutions = solutions_guard

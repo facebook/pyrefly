@@ -94,14 +94,15 @@ impl<'a> Transaction<'a> {
             return None;
         };
         let short_id = ShortIdentifier::expr_name(name);
-        let bindings = self.get_bindings(handle)?;
+        let answers = self.get_answers(handle)?;
+        let bindings = answers.bindings();
         let bound_key = Key::BoundName(short_id);
         if bindings.is_valid_key(&bound_key) {
-            return self.get_type(handle, &bound_key);
+            return answers.get_type_at(bindings.key_to_idx(&bound_key));
         }
         let def_key = Key::Definition(short_id);
         if bindings.is_valid_key(&def_key) {
-            self.get_type(handle, &def_key)
+            answers.get_type_at(bindings.key_to_idx(&def_key))
         } else {
             None
         }
@@ -935,8 +936,9 @@ impl<'a> Transaction<'a> {
         suggestions: &mut BTreeMap<String, Option<Type>>,
     ) {
         if let Some(base_expr) = base_expr
-            && let Some(bindings) = self.get_bindings(handle)
+            && let Some(answers) = self.get_answers(handle)
         {
+            let bindings = answers.bindings();
             let base_info = if let Some((identifier, facets)) = Self::expression_facets(base_expr) {
                 Some((identifier, facets))
             } else if let Expr::Name(name) = base_expr {

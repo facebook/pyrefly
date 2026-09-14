@@ -100,6 +100,8 @@ use crate::export::exports::LookupExport;
 use crate::module::module_info::ModuleInfo;
 use crate::solver::solver::CallContext;
 use crate::solver::solver::PinError;
+#[cfg(test)]
+use crate::solver::solver::Solver;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::VarRecurser;
 use crate::solver::type_order::TypeOrder;
@@ -148,15 +150,15 @@ impl<'a, 'subset> TypeCheckOptions<'a, 'subset> {
 /// Compactly represents the identity of a binding, for the purposes of
 /// understanding the calculation stack.
 #[derive(Clone, Dupe)]
-pub struct CalcId(pub Bindings, pub AnyIdx);
+pub struct CalcId(pub Arc<Answers>, pub AnyIdx);
 
 impl Debug for CalcId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "CalcId({}, {}, {:?})",
-            self.0.module().name(),
-            self.0.module().path(),
+            self.bindings().module().name(),
+            self.bindings().module().path(),
             self.1,
         )
     }
@@ -167,17 +169,24 @@ impl Display for CalcId {
         write!(
             f,
             "CalcId({}, {}, {})",
-            self.0.module().name(),
-            self.0.module().path(),
-            self.1.display_with(&self.0),
+            self.bindings().module().name(),
+            self.bindings().module().path(),
+            self.1.display_with(self.bindings()),
         )
     }
 }
 
 impl PartialEq for CalcId {
     fn eq(&self, other: &Self) -> bool {
-        (self.0.module().name(), self.0.module().path(), &self.1)
-            == (other.0.module().name(), other.0.module().path(), &other.1)
+        (
+            self.bindings().module().name(),
+            self.bindings().module().path(),
+            &self.1,
+        ) == (
+            other.bindings().module().name(),
+            other.bindings().module().path(),
+            &other.1,
+        )
     }
 }
 
@@ -186,8 +195,17 @@ impl Eq for CalcId {}
 impl Ord for CalcId {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.1.cmp(&other.1) {
-            Ordering::Equal => match self.0.module().name().cmp(&other.0.module().name()) {
-                Ordering::Equal => self.0.module().path().cmp(other.0.module().path()),
+            Ordering::Equal => match self
+                .bindings()
+                .module()
+                .name()
+                .cmp(&other.bindings().module().name())
+            {
+                Ordering::Equal => self
+                    .bindings()
+                    .module()
+                    .path()
+                    .cmp(other.bindings().module().path()),
                 not_equal => not_equal,
             },
             not_equal => not_equal,
@@ -203,13 +221,17 @@ impl PartialOrd for CalcId {
 
 impl Hash for CalcId {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.module().name().hash(state);
-        self.0.module().path().hash(state);
+        self.bindings().module().name().hash(state);
+        self.bindings().module().path().hash(state);
         self.1.hash(state);
     }
 }
 
 impl CalcId {
+    pub(crate) fn bindings(&self) -> &Bindings {
+        self.0.bindings()
+    }
+
     /// Create a CalcId for testing purposes.
     ///
     /// The `module_name` creates a distinguishable module, and `idx` creates
@@ -219,11 +241,16 @@ impl CalcId {
     pub fn for_test(module_name: &str, idx: usize) -> Self {
         use pyrefly_graph::index::Idx;
 
-        let bindings = Bindings::for_test(module_name);
+        let answers = Arc::new(Answers::new(
+            Bindings::for_test(module_name),
+            Solver::new(Default::default()),
+            false,
+            false,
+        ));
         // Create a fake Key index - the actual key doesn't matter for test purposes,
         // only that different idx values produce different CalcIds
         let key_idx: Idx<Key> = Idx::new(idx);
-        CalcId(bindings, AnyIdx::Key(key_idx))
+        CalcId(answers, AnyIdx::Key(key_idx))
     }
 }
 
@@ -286,7 +313,7 @@ impl<'a> GenerationAnswer<'a> {
 }
 
 pub(crate) enum AnswerProvider {
-    Answers(Arc<(Bindings, Arc<Answers>)>),
+    Answers(Arc<Answers>),
     Solutions(Arc<Solutions>),
 }
 
@@ -2045,14 +2072,13 @@ fn check_demotion_limit(demotions: u32, scc_identity: &CalcId) {
 /// the two lets one lifetime describe a borrow of either.
 pub struct AnswersSolver<'ctx, 'answer, Ans: LookupAnswer> {
     answers: &'ctx Ans,
-    current: &'answer Answers,
+    current: &'answer Arc<Answers>,
     thread_state: &'answer ThreadState,
     answer_scope: &'answer AnswerScope,
     // The base solver is only used to reset the error collector at binding
     // boundaries. Answers code should generally use the error collector passed
     // along the call stack instead.
     base_errors: &'ctx ErrorCollector,
-    bindings: &'answer Bindings,
     pub exports: &'ctx dyn LookupExport,
     pub uniques: &'ctx UniqueFactory,
     pub recurser: &'ctx VarRecurser,
@@ -2133,9 +2159,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     pub(crate) fn new(
         answers: &'ctx Ans,
-        current: &'answer Answers,
+        current: &'answer Arc<Answers>,
         base_errors: &'ctx ErrorCollector,
-        bindings: &'answer Bindings,
         exports: &'ctx dyn LookupExport,
         uniques: &'ctx UniqueFactory,
         recurser: &'ctx VarRecurser,
@@ -2149,7 +2174,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             stdlib,
             uniques,
             answers,
-            bindings,
             base_errors,
             exports,
             recurser,
@@ -2172,7 +2196,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             thread_state: self.thread_state,
             answer_scope,
             base_errors: self.base_errors,
-            bindings: self.bindings,
             exports: self.exports,
             uniques: self.uniques,
             recurser: self.recurser,
@@ -2286,7 +2309,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     pub fn bindings(&self) -> &'answer Bindings {
-        self.bindings
+        self.current.bindings()
     }
 
     pub fn base_errors(&self) -> &ErrorCollector {
@@ -2294,7 +2317,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     pub fn module(&self) -> &ModuleInfo {
-        self.bindings.module()
+        self.bindings().module()
     }
 
     /// Look up the fields of a class from binding metadata.
@@ -2308,7 +2331,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// same-module indices are always valid).
     pub fn get_class_fields(&self, cls: &Class) -> Option<&ClassFields> {
         if cls.module_path() == self.module().path() {
-            return Some(&self.bindings.metadata().get_class(cls.index()).fields);
+            return Some(&self.bindings().metadata().get_class(cls.index()).fields);
         }
         self.answers.get_class_fields(cls)
     }
@@ -2542,7 +2565,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return (v, true);
         }
 
-        let current = CalcId(self.bindings().dupe(), K::to_anyidx(idx));
+        let current = CalcId(self.current.dupe(), K::to_anyidx(idx));
 
         // Check depth limit before any calculation
         let borrowed = if let Some(config) = self.recursion_limit_config()
@@ -2937,7 +2960,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     /// Returns true if the cell is same-module.
     fn is_same_module(&self, calc_id: &CalcId) -> bool {
-        let CalcId(ref bindings, _) = *calc_id;
+        let bindings = calc_id.bindings();
         bindings.module().name() == self.bindings().module().name()
             && bindings.module().path() == self.bindings().module().path()
     }
@@ -3115,14 +3138,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
     /// Drive a single iteration member by calling `get_idx` for its typed index.
     ///
-    /// The member is a `CalcId` containing `(Bindings, AnyIdx)`. For same-module
+    /// The member is a `CalcId` containing `(Answers, AnyIdx)`. For same-module
     /// members (where the member's module matches this solver's module), we
     /// dispatch through `dispatch_anyidx!` to call `get_idx` with the concrete
     /// key type. Cross-module members are driven via `solve_idx_erased`, which
     /// constructs a temporary `AnswersSolver` in the target module's context
     /// using the shared `ThreadState` (and therefore the shared `CalcStack`).
     fn drive_member(&self, calc_id: &CalcId) {
-        let CalcId(ref bindings, ref any_idx) = *calc_id;
+        let any_idx = &calc_id.1;
+        let bindings = calc_id.bindings();
         if bindings.module().name() != self.bindings().module().name()
             || bindings.module().path() != self.bindings().module().path()
         {
@@ -3314,7 +3338,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     Self::emit_non_convergent_diagnostic(diagnostic, self.base_errors);
                 } else {
                     let cross_errors = ErrorCollector::new(
-                        diagnostic.calc_id.0.module().dupe(),
+                        diagnostic.calc_id.bindings().module().dupe(),
                         ErrorStyle::Delayed,
                     );
                     Self::emit_non_convergent_diagnostic(diagnostic, &cross_errors);
@@ -4001,7 +4025,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// answer changed in the final iteration. Called via `dispatch_anyidx!`
     /// so that the concrete `K` (and therefore `K::Answer`) is known.
     ///
-    /// `member_bindings` and `member_errors` must come from the member's own
+    /// `member_answers` must come from the member's own
     /// module, not necessarily `self`. SCCs can span modules, so `self.bindings()`
     /// and `self.base_errors` are only correct for same-module members.
     ///
@@ -4016,7 +4040,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         idx: Idx<K>,
         current: &AnyAnswer,
         previous: Option<&AnyAnswer>,
-        member_bindings: &Bindings,
+        member_answers: &Arc<Answers>,
     ) -> Option<NonConvergentDiagnostic>
     where
         AnswerTable: TableKeyed<K, Value = AnswerEntry<K>>,
@@ -4024,6 +4048,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         K::Answer: Debug,
         K::Value: Debug,
     {
+        let member_bindings = member_answers.bindings();
+
         // Only report if the answer actually changed from the previous iteration.
         if let Some(prev) = previous
             && self.answers_equal_typed::<K>(idx, prev, current)
@@ -4079,7 +4105,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             None
         };
         Some(NonConvergentDiagnostic {
-            calc_id: CalcId(member_bindings.dupe(), K::to_anyidx(idx)),
+            calc_id: CalcId(member_answers.dupe(), K::to_anyidx(idx)),
             range: K::range_with(idx, member_bindings),
             message,
             details,

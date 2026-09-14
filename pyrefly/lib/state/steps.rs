@@ -120,7 +120,7 @@ pub struct Steps {
     pub load: Option<Arc<Load>>,
     pub ast: Option<Arc<ParsedModule>>,
     pub exports: Option<Arc<Exports>>,
-    pub answers: Option<Arc<(Bindings, Arc<Answers>)>>,
+    pub answers: Option<Arc<Answers>>,
     pub solutions: Option<Arc<Solutions>>,
 }
 
@@ -273,7 +273,7 @@ pub struct StepsMut {
     pub load: ArcSwapOption<Load>,
     pub ast: ArcSwapOption<ParsedModule>,
     pub exports: ArcSwapOption<Exports>,
-    pub answers: ArcSwapOption<(Bindings, Arc<Answers>)>,
+    pub answers: ArcSwapOption<Answers>,
     pub solutions: ArcSwapOption<Solutions>,
 }
 
@@ -464,7 +464,7 @@ impl Step {
         load: Arc<Load>,
         ast: Arc<ParsedModule>,
         exports: Arc<Exports>,
-    ) -> Arc<(Bindings, Arc<Answers>)> {
+    ) -> Arc<Answers> {
         let solver = Solver::new(SolverConfig {
             infer_with_first_use: ctx.infer_with_first_use,
             tensor_shapes: ctx.tensor_shapes,
@@ -492,8 +492,7 @@ impl Step {
             ctx.infer_return_types,
             ctx.treat_all_caps_as_final,
         );
-        let answers = Answers::new(&bindings, solver, enable_index, enable_trace);
-        Arc::new((bindings, Arc::new(answers)))
+        Arc::new(Answers::new(bindings, solver, enable_index, enable_trace))
     }
 
     #[inline(never)]
@@ -501,7 +500,7 @@ impl Step {
         ctx: &Context<Lookup>,
         load: Arc<Load>,
         ast: Option<Arc<ParsedModule>>,
-        answers: Arc<(Bindings, Arc<Answers>)>,
+        answers: Arc<Answers>,
     ) -> Arc<Solutions> {
         let pysa_context = ctx.pysa_context.as_ref().map(|pysa_context| {
             crate::report::pysa::context::ModuleAnswersContext {
@@ -512,15 +511,13 @@ impl Step {
                 ast: ast
                     .expect("AST must be available when pysa is enabled")
                     .module(),
-                bindings: answers.0.dupe(),
-                answers: answers.1.dupe(),
+                answers: answers.dupe(),
             }
         });
 
-        let solutions = answers.1.solve(
+        let solutions = answers.solve(
             ctx.lookup,
             ctx.lookup,
-            &answers.0,
             &load.errors,
             ctx.stdlib,
             ctx.uniques,

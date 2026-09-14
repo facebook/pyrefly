@@ -44,7 +44,6 @@ use ruff_python_ast::ModModule;
 use crate::alt::answers::Answers;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers::Solutions;
-use crate::binding::bindings::Bindings;
 use crate::export::exports::Exports;
 use crate::export::exports::LookupExport;
 use crate::state::dirty::AtomicComputedDirty;
@@ -158,13 +157,13 @@ impl ModuleStateMut {
         self.steps.exports.load_full()
     }
 
-    pub fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
+    pub fn get_answers(&self) -> Option<Arc<Answers>> {
         self.steps.answers.load_full()
     }
 
     /// Borrow the answers via a Guard, avoiding Arc refcount operations.
     /// The Guard keeps the data alive without incrementing the Arc refcount.
-    pub fn load_answers(&self) -> Guard<Option<Arc<(Bindings, Arc<Answers>)>>> {
+    pub fn load_answers(&self) -> Guard<Option<Arc<Answers>>> {
         self.steps.answers.load()
     }
 
@@ -456,7 +455,7 @@ pub trait ModuleStateReader {
     fn get_load(&self) -> Option<Arc<Load>>;
     fn get_ast(&self) -> Option<Arc<ModModule>>;
     fn get_parsed_module(&self) -> Option<Arc<ParsedModule>>;
-    fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>>;
+    fn get_answers(&self) -> Option<Arc<Answers>>;
     fn get_solutions(&self) -> Option<Arc<Solutions>>;
     fn module_ranges(&self) -> Option<Arc<ModuleRanges>>;
 }
@@ -474,7 +473,7 @@ impl ModuleStateReader for ModuleState {
         self.steps.ast.dupe()
     }
 
-    fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
+    fn get_answers(&self) -> Option<Arc<Answers>> {
         self.steps.answers.dupe()
     }
 
@@ -484,7 +483,7 @@ impl ModuleStateReader for ModuleState {
 
     fn module_ranges(&self) -> Option<Arc<ModuleRanges>> {
         if let Some(answers) = self.steps.answers.as_ref() {
-            Some(answers.0.module_ranges().dupe())
+            Some(answers.bindings().module_ranges().dupe())
         } else {
             self.steps
                 .solutions
@@ -507,7 +506,7 @@ impl ModuleStateReader for ModuleStateMut {
         self.get_parsed_module()
     }
 
-    fn get_answers(&self) -> Option<Arc<(Bindings, Arc<Answers>)>> {
+    fn get_answers(&self) -> Option<Arc<Answers>> {
         self.get_answers()
     }
 
@@ -518,7 +517,7 @@ impl ModuleStateReader for ModuleStateMut {
     fn module_ranges(&self) -> Option<Arc<ModuleRanges>> {
         let answers = self.load_answers();
         if let Some(answers) = answers.as_ref() {
-            return Some(answers.0.module_ranges().dupe());
+            return Some(answers.bindings().module_ranges().dupe());
         }
         self.load_solutions()
             .as_ref()

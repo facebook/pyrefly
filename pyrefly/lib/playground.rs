@@ -534,7 +534,8 @@ impl Playground {
         filename: &str,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let Some(bindings) = transaction.get_bindings(handle) {
+        if let Some(answers) = transaction.get_answers(handle) {
+            let bindings = answers.bindings();
             let module_info = bindings.module();
             for unused in bindings.unused_imports() {
                 let range = module_info.display_range(unused.range);
@@ -560,7 +561,8 @@ impl Playground {
         filename: &str,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let Some(bindings) = transaction.get_bindings(handle) {
+        if let Some(answers) = transaction.get_answers(handle) {
+            let bindings = answers.bindings();
             let module_info = bindings.module();
             for unused in bindings.unused_variables() {
                 if Ast::is_intentionally_unused(unused.name.as_str()) {
@@ -589,7 +591,8 @@ impl Playground {
         filename: &str,
         items: &mut Vec<Diagnostic>,
     ) {
-        if let Some(bindings) = transaction.get_bindings(handle) {
+        if let Some(answers) = transaction.get_answers(handle) {
+            let bindings = answers.bindings();
             let module_info = bindings.module();
             for unused in bindings.unused_parameters() {
                 if Ast::is_intentionally_unused(unused.name.as_str()) {

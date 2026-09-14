@@ -923,7 +923,7 @@ fn test_change_require() {
             .len(),
         0
     );
-    assert!(state.transaction().get_bindings(&handle).is_none());
+    assert!(state.transaction().get_answers(&handle).is_none());
     state.run(
         &[handle.dupe()],
         RequireLevels {
@@ -943,7 +943,7 @@ fn test_change_require() {
             .len(),
         2
     );
-    assert!(state.transaction().get_bindings(&handle).is_none());
+    assert!(state.transaction().get_answers(&handle).is_none());
     state.run(
         &[handle.dupe()],
         RequireLevels {
@@ -963,7 +963,7 @@ fn test_change_require() {
             .len(),
         2
     );
-    assert!(state.transaction().get_bindings(&handle).is_some());
+    assert!(state.transaction().get_answers(&handle).is_some());
 }
 
 #[test]
