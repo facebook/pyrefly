@@ -798,7 +798,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             TypedDict::TypedDict(inner) => {
                 let cls = inner.class_object();
                 if let Some(metadata) = self.get_metadata_for_class(cls).typed_dict_metadata() {
-                    self.get_typed_dict_value_type_from_fields(cls, &metadata.fields)
+                    let value_type =
+                        self.get_typed_dict_value_type_from_fields(cls, &metadata.fields);
+                    inner.targs().substitute_into(value_type)
                 } else {
                     self.heap.mk_class_type(self.stdlib.object().clone())
                 }

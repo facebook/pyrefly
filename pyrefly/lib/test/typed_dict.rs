@@ -2975,3 +2975,27 @@ def f(x: IntExtra, y: Extra[int]) -> None:
     assert_type(y.get("other"), int | str | None)
     "#,
 );
+
+testcase!(
+    bug = "IntExtra is incorrectly considered to have changed the extra_items type",
+    test_redundant_extra_items_is_ok,
+    r#"
+from typing import TypedDict
+class Extra[T](TypedDict, extra_items=T): ...
+class IntExtra(Extra[int], extra_items=int): ...  # E: Cannot change the non-read-only extra items type
+    "#,
+);
+
+testcase!(
+    test_generic_extra_items_is_resolved_through_value_type,
+    r#"
+from typing import Mapping, TypedDict, assert_type
+
+class Extra[T](TypedDict, extra_items=T):
+    name: str
+
+def f(x: Extra[int], key: str) -> None:
+    assert_type(x[key], str | int)
+    mapping: Mapping[str, str | int] = x
+    "#,
+);
