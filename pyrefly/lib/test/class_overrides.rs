@@ -2242,3 +2242,38 @@ class D(C):
 from stub import C, D
     "#,
 );
+
+testcase!(
+    test_override_module_level_typevar,
+    r#"
+from typing import TypeVar
+from typing_extensions import override
+
+T = TypeVar("T", bound=int)
+TConstrained = TypeVar("TConstrained", int, str)
+
+class Base:
+    def method(self, x: T | None = None) -> T: ...
+    def method_no_opt(self, x: T) -> T: ...
+    def method_constrained(self, x: TConstrained | None = None) -> TConstrained: ...
+
+class Derived(Base):
+    @override
+    def method(self, x: T | None = None) -> T:
+        raise NotImplementedError
+    @override
+    def method_no_opt(self, x: T) -> T:
+        raise NotImplementedError
+    @override
+    def method_constrained(self, x: TConstrained | None = None) -> TConstrained:
+        raise NotImplementedError
+
+class BasePep:
+    def method[T: int](self, x: T | None = None) -> T: ...
+
+class DerivedPep(BasePep):
+    @override
+    def method[T: int](self, x: T | None = None) -> T:
+        raise NotImplementedError
+    "#,
+);
