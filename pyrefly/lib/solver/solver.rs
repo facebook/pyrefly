@@ -3634,9 +3634,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 }),
             Restriction::Unrestricted => {
                 // Check if the implicit bound `object` is assignable to any of the constraints
-                constraints.iter().any(|c| {
-                    c.is_any() || matches!(c, Type::ClassType(cls) if cls.is_builtin("object"))
-                })
+                constraints.iter().any(|c| c.is_any() || c.is_object())
             }
         }
     }
