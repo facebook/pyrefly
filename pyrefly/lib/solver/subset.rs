@@ -817,14 +817,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         want: &Type,
         allow_residual_capture: bool,
     ) -> Result<(), SubsetError> {
-        if allow_residual_capture {
-            self.is_subset_eq(got, want)
-        } else {
-            self.with_active_call_context(
-                self.active_call_context.clone().with_outside_context(),
-                |me| me.is_subset_eq(got, want),
-            )
-        }
+        self.with_active_call_context(
+            (!allow_residual_capture)
+                .then(|| self.active_call_context.clone().with_outside_context()),
+            |me| me.is_subset_eq(got, want),
+        )
     }
 
     fn is_subset_tuple(&mut self, got: &Tuple, want: &Tuple) -> Result<(), SubsetError> {
@@ -1565,9 +1562,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let synthesized =
                     ResidualWitnessContext::for_overload(argument, &eligible_vars, argument_side);
                 self.with_active_call_context(
-                    self.active_call_context
-                        .clone()
-                        .with_residual_witness(synthesized),
+                    Some(
+                        self.active_call_context
+                            .clone()
+                            .with_residual_witness(synthesized),
+                    ),
                     |me| {
                         let (witness, captured_vars) =
                             me.witness_and_captured_vars_for_overload().expect(
@@ -1689,21 +1688,24 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             ty,
             witness,
         } = got;
-        let (result, mut maybe_witness) = if let Some(witness) = witness {
-            self.with_active_call_context(
+        let has_witness = witness.is_some();
+        let (result, mut maybe_witness) = self.with_active_call_context(
+            witness.map(|witness| {
                 self.active_call_context
                     .clone()
-                    .with_residual_witness(witness),
-                |me| {
-                    (
-                        me.is_subset_eq(&ty, want),
-                        me.active_call_context.take_residual_witness(),
-                    )
-                },
-            )
-        } else {
-            (self.is_subset_eq(&ty, want), None)
-        };
+                    .with_residual_witness(witness)
+            }),
+            |me| {
+                (
+                    me.is_subset_eq(&ty, want),
+                    has_witness.then(|| {
+                        me.active_call_context
+                            .take_residual_witness()
+                            .expect("Active witness should still be present")
+                    }),
+                )
+            },
+        );
         let in_call_analysis = !matches!(
             self.active_call_context.argument_side(),
             ArgumentSide::NotAnalyzingACall
@@ -2200,9 +2202,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 let u_gradual = sig_is_gradual_variadic(want);
                 let argument_side = self.active_call_context.argument_side();
                 self.with_active_call_context(
-                    self.active_call_context
-                        .clone()
-                        .with_argument_side(argument_side.negated()),
+                    Some(
+                        self.active_call_context
+                            .clone()
+                            .with_argument_side(argument_side.negated()),
+                    ),
                     |me| me.is_subset_params(&l_sig.params, &u_sig.params, l_gradual, u_gradual),
                 )?;
                 self.is_subset_eq(&l_sig.ret, &u_sig.ret)

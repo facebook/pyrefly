@@ -2690,11 +2690,7 @@ impl Solver {
         call_context: Option<&CallContext<'subset>>,
     ) -> Result<(), SubsetError> {
         let mut subset = self.subset(type_order);
-        if let Some(cc) = call_context {
-            subset.with_active_call_context(cc.clone(), |me| me.is_subset_eq(got, want))
-        } else {
-            subset.is_subset_eq(got, want)
-        }
+        subset.with_active_call_context(call_context.cloned(), |me| me.is_subset_eq(got, want))
     }
 
     pub fn is_consistent<Ans: LookupAnswer>(
@@ -3574,7 +3570,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             .snapshot_exact_vars(&vars.into_iter().collect::<Vec<_>>());
         let subset_snapshot = self.snapshot_subset_state();
         let deferred_vars = self.snapshot_witness_deferred_vars();
-        let compatible = self.with_active_call_context(CallContext::outside(), |me| {
+        let compatible = self.with_active_call_context(Some(CallContext::outside()), |me| {
             constraints
                 .iter()
                 .all(|(got, want)| me.is_subset_eq(got, want).is_ok())
@@ -3638,14 +3634,18 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         res
     }
 
+    /// Runs `f` within the given call context, restoring the current context afterwards.
+    /// Directly runs `f` within the current context if the given context is `None`.
     pub fn with_active_call_context<T>(
         &mut self,
-        call_context: CallContext<'subset>,
+        call_context: Option<CallContext<'subset>>,
         f: impl FnOnce(&mut Self) -> T,
     ) -> T {
-        let old = mem::replace(&mut self.active_call_context, call_context);
+        let old = call_context.map(|cc| mem::replace(&mut self.active_call_context, cc));
         let res = f(self);
-        self.active_call_context = old;
+        if let Some(old) = old {
+            self.active_call_context = old;
+        }
         res
     }
 
