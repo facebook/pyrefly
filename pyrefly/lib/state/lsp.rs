@@ -1905,6 +1905,7 @@ impl<'a> Transaction<'a> {
                     def.docstring_range,
                 ))
             }
+            AttrDefinition::Synthetic => None,
         }
     }
 
