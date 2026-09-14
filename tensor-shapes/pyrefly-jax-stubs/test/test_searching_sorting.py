@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import assert_type
 
 import jax.numpy as jnp
+import numpy as np
 from shape_extensions import assert_shape
 
 
@@ -148,10 +149,12 @@ def test_searchsorted() -> None:
     assert_shape(jnp.searchsorted(a, 2.5).shape, ())
     assert_shape(jnp.searchsorted(a, jnp.ones(3)).shape, (3,))
     assert_shape(jnp.searchsorted(a, jnp.zeros((2, 3))).shape, (2, 3))
+    assert_shape(jnp.searchsorted(a, np.ones(3)).shape, (3,))
 
     # Method
     assert_shape(a.searchsorted(2.5).shape, ())
     assert_shape(a.searchsorted(jnp.zeros((2, 3))).shape, (2, 3))
+    assert_shape(a.searchsorted(np.zeros((2, 3))).shape, (2, 3))
 
 
 def test_nonzero_and_flatnonzero() -> None:
@@ -199,6 +202,8 @@ def test_where() -> None:
     assert_shape(jnp.where(cond, 0.0, 1.0).shape, (2, 3))
     assert_shape(jnp.where(cond, x, 0.0).shape, (2, 3))
     assert_shape(jnp.where(cond, 0.0, y).shape, (2, 3))
+    assert_shape(jnp.where(cond, np.zeros((2, 3)), 1.0).shape, (2, 3))
+    assert_shape(jnp.where(True, x, y).shape, (2, 3))
 
     # Broadcast
     cond_bc = jnp.ones((3,), dtype=bool)
@@ -232,16 +237,20 @@ def test_clip() -> None:
     assert_shape(jnp.clip(x, min=0.0, max=2.0).shape, (2, 3))
     assert_shape(jnp.clip(x, min=0.0).shape, (2, 3))
     assert_shape(jnp.clip(x, max=2.0).shape, (2, 3))
+    assert_shape(jnp.clip(1.5, 0.0, 2.0).shape, ())
+    assert_shape(jnp.clip(np.ones((2, 3)), 0.0, 2.0).shape, (2, 3))
 
     # Broadcast min/max
     min_arr = jnp.zeros((3,))
     max_arr = jnp.ones((2, 1))
     assert_shape(jnp.clip(x, min_arr, max_arr).shape, (2, 3))
+    assert_shape(jnp.clip(x, np.zeros((3,)), max_arr).shape, (2, 3))
 
     # Method
     assert_shape(x.clip(0.0, 2.0).shape, (2, 3))
     assert_shape(x.clip(min=0.0, max=2.0).shape, (2, 3))
     assert_shape(x.clip(min_arr, max_arr).shape, (2, 3))
+    assert_shape(x.clip(np.zeros((3,)), max_arr).shape, (2, 3))
 
 
 def test_fmax_and_fmin() -> None:

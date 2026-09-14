@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import jax.numpy as jnp
+import numpy as np
 from shape_extensions import assert_shape
 
 
@@ -236,3 +237,16 @@ def test_binary_functions_reject_incompatible_broadcast() -> None:
         pass
     else:
         raise AssertionError("expected JAX to reject incompatible shapes")
+
+
+def test_arraylike_operands() -> None:
+    # Unary functions on scalars and numpy arrays
+    assert_shape(jnp.sin(1.0).shape, ())
+    assert_shape(jnp.sin(np.ones((2, 3))).shape, (2, 3))
+    assert_shape(jnp.abs(-5).shape, ())
+
+    # Binary functions on scalars and numpy arrays
+    assert_shape(jnp.add(1, 2).shape, ())
+    assert_shape(jnp.add(np.ones((2, 1)), jnp.ones((1, 3))).shape, (2, 3))
+    assert_shape(jnp.maximum(np.ones((2, 3)), 0.0).shape, (2, 3))
+    assert_shape(jnp.equal(np.ones((2, 3)), 1).shape, (2, 3))

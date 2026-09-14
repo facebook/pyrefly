@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import jax.numpy as jnp
+import numpy as np
 from shape_extensions import assert_shape
 
 
@@ -433,6 +434,10 @@ def test_broadcast_arrays_and_shapes() -> None:
 
     (c1,) = jnp.broadcast_arrays(jnp.ones((2, 3)))
     assert_shape(c1.shape, (2, 3))
+
+    d1, d2 = jnp.broadcast_arrays(np.ones((2, 1)), jnp.ones((1, 3)))
+    assert_shape(d1.shape, (2, 3))
+    assert_shape(d2.shape, (2, 3))
 
     assert jnp.broadcast_shapes((2, 1), (1, 3)) == (2, 3)
 

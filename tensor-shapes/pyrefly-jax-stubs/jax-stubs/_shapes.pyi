@@ -1106,28 +1106,6 @@ def lax_clamp_shape(
     return x_shape
 
 @type_shape_dsl_function
-def lax_clamp_min_scalar_shape(x_shape: IntTuple, max_shape: IntTuple) -> IntTuple:
-    if len(max_shape) != 0:
-        if len(max_shape) != len(x_shape) or any(
-            max_shape[i] != x_shape[i] for i in range(len(x_shape))
-        ):
-            return dsl.Invalid(
-                "clamp requires max.shape == operand.shape or max.shape == ()"
-            )
-    return x_shape
-
-@type_shape_dsl_function
-def lax_clamp_max_scalar_shape(min_shape: IntTuple, x_shape: IntTuple) -> IntTuple:
-    if len(min_shape) != 0:
-        if len(min_shape) != len(x_shape) or any(
-            min_shape[i] != x_shape[i] for i in range(len(x_shape))
-        ):
-            return dsl.Invalid(
-                "clamp requires min.shape == operand.shape or min.shape == ()"
-            )
-    return x_shape
-
-@type_shape_dsl_function
 def lax_select_shape(
     pred_shape: IntTuple, true_shape: IntTuple, false_shape: IntTuple
 ) -> IntTuple:
@@ -1142,16 +1120,6 @@ def lax_select_shape(
             return dsl.Invalid(
                 "select `which` must be scalar or have the same shape as cases"
             )
-    return true_shape
-
-@type_shape_dsl_function
-def lax_select_scalar_pred_shape(
-    true_shape: IntTuple, false_shape: IntTuple
-) -> IntTuple:
-    if len(true_shape) != len(false_shape) or any(
-        true_shape[i] != false_shape[i] for i in range(len(true_shape))
-    ):
-        return dsl.Invalid("select cases must have the same shapes")
     return true_shape
 
 @type_shape_dsl_function
@@ -1252,26 +1220,6 @@ def take_shape(
             dsl.concat(a_shape[:norm_axis], idx_shape),
             a_shape[norm_axis + 1 :],
         )
-    return dsl.Invalid("axis must be an integer or None")
-
-@type_shape_dsl_function
-def take_scalar_idx_shape(
-    a_shape: IntTuple,
-    axis: int | None,
-) -> IntTuple:
-    if axis is None:
-        return dsl.IntTuple(())
-    if dsl.is_int_value(axis):
-        rank = len(a_shape)
-        if rank == 0:
-            return dsl.Invalid("axis out of bounds")
-        if axis < 0:
-            norm_axis = axis + rank
-        else:
-            norm_axis = axis + 0
-        if norm_axis < 0 or norm_axis >= rank:
-            return dsl.Invalid("axis out of bounds")
-        return dsl.concat(a_shape[:norm_axis], a_shape[norm_axis + 1 :])
     return dsl.Invalid("axis must be an integer or None")
 
 @type_shape_dsl_function

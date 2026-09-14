@@ -125,7 +125,7 @@ def test_invalid_index() -> None:
 
 def test_take() -> None:
     x = jnp.ones((2, 3, 4))
-    idx = jnp.array([[0, 1], [2, 0]])
+    idx = jnp.zeros((2, 2), dtype=int)
 
     # Multi-dimensional indices along axis
     assert_shape(jnp.take(x, idx, axis=1).shape, (2, 2, 2, 4))

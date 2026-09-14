@@ -9,6 +9,7 @@ from typing import assert_type, reveal_type, TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from shape_extensions import assert_shape, IntVar
 
 N = IntVar("N")
@@ -195,6 +196,7 @@ def test_atleast_1d() -> None:
     assert_shape(jnp.atleast_1d(jnp.ones(4)).shape, (4,))
     assert_shape(jnp.atleast_1d(jnp.ones((2, 3))).shape, (2, 3))
     assert_shape(jnp.atleast_1d(jnp.ones((2, 3, 4))).shape, (2, 3, 4))
+    assert_shape(jnp.atleast_1d(np.ones((2, 3))).shape, (2, 3))
 
     # Zero arguments: returns list of arrays
     res0 = jnp.atleast_1d()
@@ -222,6 +224,7 @@ def test_atleast_2d() -> None:
     assert_shape(jnp.atleast_2d(jnp.ones(4)).shape, (1, 4))
     assert_shape(jnp.atleast_2d(jnp.ones((2, 3))).shape, (2, 3))
     assert_shape(jnp.atleast_2d(jnp.ones((2, 3, 4))).shape, (2, 3, 4))
+    assert_shape(jnp.atleast_2d(np.ones((2, 3))).shape, (2, 3))
 
     # Zero arguments: returns list of arrays
     res0 = jnp.atleast_2d()
@@ -250,6 +253,7 @@ def test_atleast_3d() -> None:
     assert_shape(jnp.atleast_3d(jnp.ones((2, 3))).shape, (2, 3, 1))
     assert_shape(jnp.atleast_3d(jnp.ones((2, 3, 4))).shape, (2, 3, 4))
     assert_shape(jnp.atleast_3d(jnp.ones((2, 3, 4, 5))).shape, (2, 3, 4, 5))
+    assert_shape(jnp.atleast_3d(np.ones((2, 3))).shape, (2, 3, 1))
 
     # Zero arguments: returns list of arrays
     res0 = jnp.atleast_3d()
