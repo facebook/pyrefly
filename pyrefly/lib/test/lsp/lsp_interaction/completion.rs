@@ -1215,3 +1215,29 @@ fn test_relative_import_double_dot_name_completion() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn completion_for_import_replaced_with_any_does_not_use_library_source() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("replace_imports_with_any_definition"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+    interaction.client.did_open("main.py");
+
+    interaction
+        .client
+        .completion("main.py", 8, 6)
+        .expect_completion_response_with(|list| list.items.is_empty())
+        .unwrap();
+
+    interaction.client.did_open("module_boundary.py");
+    interaction
+        .client
+        .completion("module_boundary.py", 7, 16)
+        .expect_completion_response_with(|list| list.items.is_empty())
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}

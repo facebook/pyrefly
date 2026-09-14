@@ -280,3 +280,33 @@ fn test_hover_suppressed_error_deprecated_alias() {
 
     interaction.shutdown().unwrap();
 }
+
+#[test]
+fn hover_for_import_replaced_with_any_remains_unknown() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("replace_imports_with_any_definition"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+    interaction.client.did_open("main.py");
+
+    interaction
+        .client
+        .hover("main.py", 7, 9)
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| text.contains("(variable) Target: Unknown"))
+        })
+        .unwrap();
+
+    interaction.client.did_open("module_boundary.py");
+    interaction
+        .client
+        .hover("module_boundary.py", 7, 18)
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| text.contains("Target: Unknown"))
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
