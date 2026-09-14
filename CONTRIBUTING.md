@@ -35,8 +35,9 @@ How it works:
 - `#unclaim` only removes *your own* assignment, and only if you're currently assigned.
 - Both commands are case-insensitive and can appear anywhere in a comment (e.g. "I'd like to work on this, #claim").
 - If the bot can't assign you automatically (GitHub only allows assigning users with repository access), it leaves a comment so a maintainer can assign you manually.
+- If you'd like to work on an already-`#claim`ed issue, please post a comment on the issue mentioning a maintainer. You may message us in the `#dev` channel of our Discord server if we don't respond to your issue comment after a few days. We generally ask that you wait until two weeks after the issue is claimed by the current contributor, and that there's little activity indicating progress on the issue before request reassignment.
 
-**Please note:** Claiming issues helps other contributors and maintainers see what is being worked on. If you do not claim an issue you're working on someone else might claim it, which can lead to multiple PRs opened for the same task and increases review burden on maintainers. In cases where multiple PRs are opened for the same task maintainers will prioritise reviewing the PR from the author who #claim-ed the issue. For issues marked with the `good-first-issues` tag, please only claim and work on one issue at a time to allow other newcomers to also work on issues.
+**Please note:** Claiming issues helps other contributors and maintainers see what is being worked on. If you do not claim an issue you're working on, multiple people may work on the same issue at the same time. This can lead to multiple PRs for the same task and increased review burden on maintainers. In cases where multiple PRs are opened for the same task, maintainers will prioritise reviewing the PR from the author who #claim-ed the issue. For issues marked with the `good-first-issue` tag, please only claim and work on one issue at a time to allow other newcomers to also work on issues.
 
 ## Developing Pyrefly
 
