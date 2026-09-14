@@ -21,10 +21,10 @@ function requireSettingOrUndefined<T>(path: string): T | undefined {
   return vscode.workspace.getConfiguration().get(path);
 }
 
-function requireSettingOrDefault<T>(path: string, default: T): T {
+function requireSettingOrDefault<T>(path: string, fallback: T): T {
   const ret: T | undefined = requireSettingOrUndefined(path);
   if (ret == undefined) {
-    return default;
+    return fallback;
   }
   return ret;
 }

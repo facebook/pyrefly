@@ -54,6 +54,24 @@ jobs:
     # it runs before the Rust steps.
     - name: Test the Pyrefly binary finder
       run: python -m unittest discover -s lsp/test
+    # Type checking needs nothing but the sources, so it runs before the Rust
+    # steps and catches the ordinary mistakes — a syntax error, a dropped
+    # export, a wrong argument type — without waiting for a build. It is
+    # platform-independent, so one runner is enough.
+    - uses: actions/setup-node@v6
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: lsp/package-lock.json
+      if: ${{ matrix.os == 'ubuntu-latest' }}
+    - name: Install extension dependencies
+      run: npm ci
+      working-directory: lsp/
+      if: ${{ matrix.os == 'ubuntu-latest' }}
+    - name: Typecheck the VS Code extension
+      run: npm run check-types
+      working-directory: lsp/
+      if: ${{ matrix.os == 'ubuntu-latest' }}
     - name: set windows cargo home
       # we need to set CARGO_HOME to a high-up directory on Windows machines, since some dependencies cloned
       # by Cargo have long paths and will cause builds/tests to fail
@@ -77,6 +95,19 @@ jobs:
     - run: cargo fmt -- --check
     - run: cargo clippy --release
     - run: cargo build --release
+    # The extension's own tests activate it, which spawns a real Pyrefly, so
+    # they need the binary the step above just produced. Reusing it is what
+    # makes running them per-pull-request cheap: test_extension.yml builds for
+    # nine platforms and only runs after merge. `npm ci` and Node are already
+    # set up above.
+    - name: Test the VS Code extension
+      run: |
+        mkdir -p bin
+        cp ../target/release/pyrefly bin/
+        npm run compile
+        xvfb-run -a npm run test
+      working-directory: lsp/
+      if: ${{ matrix.os == 'ubuntu-latest' }}
     - run: cargo test --release
     - name: Check conformance output is up to date
       # The generated output is platform-independent, so one OS is enough. It must not
