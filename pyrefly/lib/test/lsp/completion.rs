@@ -17,6 +17,7 @@ use crate::state::lsp::ImportFormat;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::state::Transaction;
+use crate::test::django::util::django_env;
 use crate::test::util::TestEnv;
 use crate::test::util::extract_cursors_for_test;
 use crate::test::util::get_batched_lsp_operations_report;
@@ -2164,6 +2165,42 @@ Completion Results:
 "#
         .trim(),
         report.trim(),
+    );
+}
+
+#[test]
+fn completion_django_annotate_omits_extra_attribute() {
+    let code = r#"
+from django.db import models
+
+class Article(models.Model):
+    title = models.CharField(max_length=100)
+
+for article in Article.objects.annotate(extra_title=models.F("title")):
+    article.
+#           ^
+"#;
+    let mut test_env = django_env();
+    test_env.add("main", code);
+    let (state, handle) = test_env
+        .with_default_require_level(Require::Exports)
+        .to_state();
+    let completions = state.transaction().completion(
+        &handle("main"),
+        extract_cursors_for_test(code)[0],
+        ImportFormat::Absolute,
+        true,
+        None,
+    );
+
+    assert!(
+        completions.iter().any(|item| item.label == "title"),
+        "model field missing from {completions:?}"
+    );
+    // `extra_title` should be offered once `annotate()`-defined attributes are supported.
+    assert!(
+        !completions.iter().any(|item| item.label == "extra_title"),
+        "annotate() extra attribute unexpectedly present in {completions:?}"
     );
 }
 
