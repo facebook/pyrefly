@@ -776,10 +776,13 @@ enum NameOrigin<'a> {
 enum SplatSource {
     /// The value type of a splatted mapping, e.g. `f(**d)` where `d: dict[str, int]`.
     MappingValue,
-    /// The extra items of a splatted TypedDict. `open` distinguishes items implied by the
-    /// TypedDict being open from ones declared with `extra_items`, which are reported
-    /// under different error kinds.
-    ExtraItems { open: bool },
+    /// The extra items of a splatted TypedDict, which by definition exclude its declared
+    /// field names. `open` distinguishes items implied by the TypedDict being open from ones
+    /// declared with `extra_items`, which are reported under different error kinds.
+    ExtraItems {
+        open: bool,
+        declared_keys: SmallSet<Name>,
+    },
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
@@ -1519,6 +1522,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let ty = kw.value.infer(self, arg_errors);
                     self.maybe_error_unknown_argument_type(&ty, kw.range, arg_errors);
                     if let Type::TypedDict(typed_dict) = ty {
+                        let fields = self.typed_dict_fields(&typed_dict);
                         // A non-closed TypedDict may carry arbitrary unknown keys, which can
                         // match the callee's kwargs or any of its unmatched keyword params. An
                         // anonymous TypedDict comes from a dict display, whose keys are all known.
@@ -1567,10 +1571,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             splat_kwargs.push((
                                 extra_ty,
                                 kw.range,
-                                SplatSource::ExtraItems { open },
+                                SplatSource::ExtraItems {
+                                    open,
+                                    declared_keys: fields.keys().cloned().collect(),
+                                },
                             ));
                         }
-                        for (name, field) in self.typed_dict_fields(&typed_dict).into_iter() {
+                        for (name, field) in fields {
                             let name = name_owner.push(name);
                             let mut hint = kwargs.as_ref().and_then(|(_, ty)| *ty);
                             if let Some((ty, _, definitely_seen)) = seen_names.get_mut(name) {
@@ -1811,11 +1818,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let splat_may_supply_missing_args = splat_kwargs.iter().any(|(_, _, source)| {
             matches!(
                 source,
-                SplatSource::MappingValue | SplatSource::ExtraItems { open: false }
+                SplatSource::MappingValue | SplatSource::ExtraItems { open: false, .. }
             )
         });
         for (name, (want, origin, required)) in kwparams.iter() {
-            if !seen_names.contains_key(name) {
+            let seen = seen_names.get(name);
+            if seen.is_none() {
                 match required {
                     Required::Required => {
                         if !splat_may_supply_missing_args {
@@ -1846,7 +1854,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                     Required::Optional(None) => {}
                 }
+            }
+            // If `name` has been seen but not definitely seen - for example, if it was matched by
+            // a `NotRequired` field of an unpacked `TypedDict` - then it's possible for the splat
+            // to supply it.
+            let definitely_seen = seen.is_some_and(|(_, _, definitely_seen)| *definitely_seen);
+            if !definitely_seen {
                 for (ty, range, source) in &splat_kwargs {
+                    if let SplatSource::ExtraItems { declared_keys, .. } = source
+                        && declared_keys.contains(*name)
+                    {
+                        // If the splat source declares `name`, then `name` can't possibly be
+                        // supplied by the same source's `extra_items`.
+                        continue;
+                    }
                     self.check_type_with_options(
                         ty,
                         want,
@@ -1857,11 +1878,13 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                                     (*name).clone(),
                                     callable_name.cloned(),
                                 ),
-                                SplatSource::ExtraItems { open } => TypeCheckKind::CallExtraItems(
-                                    *open,
-                                    Some((*name).clone()),
-                                    callable_name.cloned(),
-                                ),
+                                SplatSource::ExtraItems { open, .. } => {
+                                    TypeCheckKind::CallExtraItems(
+                                        *open,
+                                        Some((*name).clone()),
+                                        callable_name.cloned(),
+                                    )
+                                }
                             })
                             .with_context(context.map(|ctx| ctx()))
                         })

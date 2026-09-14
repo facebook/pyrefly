@@ -1181,6 +1181,47 @@ def g2(extra_items_td: ExtraItemsTD):
 );
 
 testcase!(
+    test_unpacking_multiple_typed_dict_extra_items_into_call,
+    r#"
+from typing import NotRequired, TypedDict
+class ExtraInt(TypedDict, extra_items=int):
+    pass
+class MaybeLabel(TypedDict, closed=True):
+    label: NotRequired[str]
+def takes_label(*, label: str = "", **kwargs: int) -> None: ...
+def f(extra: ExtraInt, maybe_label: MaybeLabel) -> None:
+    takes_label(**extra, **maybe_label)  # E: Extra items of type `int` are not assignable to parameter `label` with type `str`
+    "#,
+);
+
+testcase!(
+    test_unpacking_mapping_onto_not_required_field,
+    r#"
+from typing import NotRequired, TypedDict
+class Opts(TypedDict, closed=True):
+    verbose: NotRequired[bool]
+def takes_verbose(*, verbose: bool = False) -> None: ...
+def f(opts: Opts, extra: dict[str, str]) -> None:
+    # `verbose` may be absent from `opts` at runtime, so `extra` may supply it instead.
+    takes_verbose(**opts, **extra)  # E: Unpacked keyword argument `str` is not assignable to parameter `verbose` with type `bool`
+    "#,
+);
+
+testcase!(
+    test_unpacking_typed_dict_extra_items_onto_own_declared_key,
+    r#"
+from typing import NotRequired, TypedDict
+class ExtraInt(TypedDict, extra_items=int):
+    label: NotRequired[str]
+def takes_label(*, label: str = "", **kwargs: int) -> None: ...
+def f(extra: ExtraInt) -> None:
+    # `label` is declared by `ExtraInt`, so its extra items cannot land on that parameter
+    # even though the field is NotRequired.
+    takes_label(**extra)  # OK
+    "#,
+);
+
+testcase!(
     test_function_vs_callable,
     r#"
 from typing import assert_type, Callable
