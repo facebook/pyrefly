@@ -58,6 +58,22 @@ $ echo "x: str = 0" > $TMPDIR/oops.py && echo "errors = { bad-assignment = false
 [0]
 ```
 
+## Replaced imports resolve exported and missing names to Any
+
+`replace-imports-with-any` discards the module's type information even when its
+source exists. Both names the source exports and names it does not export are
+therefore `Any`.
+
+```scrut {output_stream: stderr}
+$ mkdir $TMPDIR/replace_with_any && \
+> printf 'replace-imports-with-any = ["module"]\n' > $TMPDIR/replace_with_any/pyrefly.toml && \
+> printf 'class Exported: ...\n' > $TMPDIR/replace_with_any/module.py && \
+> printf 'from typing import Any, assert_type\nfrom module import Exported, Missing\n\nassert_type(Exported, Any)\nassert_type(Missing, Any)\n' > $TMPDIR/replace_with_any/main.py && \
+> $PYREFLY check -c $TMPDIR/replace_with_any/pyrefly.toml --output-format=min-text $TMPDIR/replace_with_any/main.py
+ INFO 0 errors
+[0]
+```
+
 ## Replaced imports remain dynamic when used as TypeVar bounds
 
 ```scrut {output_stream: stderr}
