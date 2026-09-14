@@ -144,11 +144,17 @@ Automatically insert parentheses when completing a function or method.
 
 Controls whether completions include symbols that are not yet imported. When enabled, accepting such a completion also inserts the required import statement. Set to `false` to only complete symbols that are already in scope.
 
+#### `pyrefly.pyreflyExecutable`
+
+**Type:** enum (`bundled`, `from-environment`) &nbsp; **Default:** `"from-environment"`
+
+Which Pyrefly binary the extension launches. `from-environment` looks for a Pyrefly installed in your active Python environment, so your editor and your command line agree on a version; if there isn't one, the bundled binary is used. `bundled` always uses the binary shipped with the extension, whose version is tied to the extension version.
+
 #### `pyrefly.lspPath`
 
 **Type:** string &nbsp; **Default:** `""`
 
-If your platform is not supported, you can build pyrefly from source and specify the binary path with this setting.
+If your platform is not supported, you can build pyrefly from source and specify the binary path with this setting. When set, it overrides `pyrefly.pyreflyExecutable`.
 
 #### `pyrefly.lspArguments`
 
@@ -180,7 +186,7 @@ When used with non-VSCode editors, the options above can also be configured by s
 
 The keys are the VSCode setting names with the leading `python.` stripped, so `python.pyrefly.typeCheckingMode` becomes `pyrefly.typeCheckingMode` and `python.analysis.importFormat` becomes `analysis.importFormat`. `analysis` is also accepted under `pyrefly` (`pyrefly.analysis.importFormat`) — the two are equivalent. Everything is optional; omitted keys keep their defaults.
 
-Two exceptions: `commentFoldingRanges` sits at the top level rather than under `pyrefly`, and `pyrefly.lspPath` / `pyrefly.lspArguments` / `pyrefly.trace.server` have no `initializationOptions` equivalent at all — they tell the VSCode extension how to launch the server, which your client already does itself.
+Two exceptions: `commentFoldingRanges` sits at the top level rather than under `pyrefly`, and `pyrefly.pyreflyExecutable` / `pyrefly.lspPath` / `pyrefly.lspArguments` / `pyrefly.trace.server` have no `initializationOptions` equivalent at all — they tell the VSCode extension how to launch the server, which your client already does itself.
 
 Below is an example showing every supported key at its default value:
 ```json

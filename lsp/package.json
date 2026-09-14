@@ -144,7 +144,17 @@
                 "pyrefly.lspPath": {
                     "type": "string",
                     "default": "",
-                    "description": "The command to run for the language server. Accepts an absolute path, a path relative to your workspace root, a path starting with ~, or a bare command name to look up on your $PATH. This is useful to guarantee version parity between your IDE and CLI, but means extension updates won't update which Pyrefly version you'll be using.",
+                    "description": "The command to run for the language server. Accepts an absolute path, a path relative to your workspace root, a path starting with ~, or a bare command name to look up on your $PATH. NOTE: This overrides the Pyrefly Executable setting when present. This is useful to guarantee version parity between your IDE and CLI, but means extension updates won't update which Pyrefly version you'll be using.",
+                    "scope": "machine-overridable"
+                },
+                "pyrefly.pyreflyExecutable": {
+                    "type": "string",
+                    "default": "from-environment",
+                    "enum": [
+                        "bundled",
+                        "from-environment"
+                    ],
+                    "description": "The Pyrefly executable that should run in VSCode. `from-environment` uses the Pyrefly version that can be found in your environment, attempting to match a local version. `bundled` uses the Pyrefly executable bundled with the extension, whose version is tied to the extension version.",
                     "scope": "machine-overridable"
                 },
                 "pyrefly.lspArguments": {
@@ -155,7 +165,7 @@
                     "default": [
                         "lsp"
                     ],
-                    "description": "Additional arguments that should be passed to the binary at pyrefly.lspPath",
+                    "description": "Additional arguments that should be passed when the extension starts the selected Pyrefly executable.",
                     "scope": "machine-overridable"
                 },
                 "python.pyrefly.disableLanguageServices": {
