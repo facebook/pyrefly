@@ -722,6 +722,7 @@ mod tests {
     fn repeated_python_platform_flags_merge() {
         let args = ConfigOverrideArgs::parse_from([
             "pyrefly",
+            "--skip-interpreter-query", // To avoid calling a Python binary in the test
             "--python-platform",
             "linux",
             "--python-platform",
@@ -743,6 +744,7 @@ mod tests {
     fn repeated_python_platform_flags_all_wins() {
         let args = ConfigOverrideArgs::parse_from([
             "pyrefly",
+            "--skip-interpreter-query", // To avoid calling a Python binary in the test
             "--python-platform",
             "all",
             "--python-platform",
