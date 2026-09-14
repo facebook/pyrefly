@@ -4549,6 +4549,28 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
+    /// Parse a generic `IntVar` argument or default without tensor-size restrictions.
+    pub(super) fn parse_int_var_argument(
+        &self,
+        arg: &Expr,
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        match self.parse_dimension_list_with_context(
+            slice::from_ref(arg),
+            type_form_context,
+            errors,
+            DimensionExprContext::Bare,
+            false,
+        ) {
+            Ok(dims) => dims
+                .into_iter()
+                .next()
+                .expect("a single IntVar argument parses to one integer"),
+            Err(_) => Type::any_error(),
+        }
+    }
+
     /// Parse a list of dimension expressions, simplifying and validating each one.
     /// Returns None if any dimension fails to parse or is non-positive.
     pub(super) fn parse_dimension_list(
@@ -4562,6 +4584,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             type_form_context,
             errors,
             DimensionExprContext::Bare,
+            true,
         )
         .ok()
     }
@@ -4579,6 +4602,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             type_form_context,
             errors,
             DimensionExprContext::DslArgument,
+            true,
         )
     }
 
@@ -4588,6 +4612,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
         context: DimensionExprContext,
+        require_positive: bool,
     ) -> Result<Vec<Type>, DimensionExprError> {
         let mut dims = Vec::new();
         for arg in args {
@@ -4623,8 +4648,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             };
             let simplified = canonicalize(dim);
 
-            // Validate that literal dimensions are positive
-            if let Type::Int(Int::Literal(value)) = &simplified
+            // Tensor dimensions require positive literals; generic integers can be signed.
+            if require_positive
+                && let Type::Int(Int::Literal(value)) = &simplified
                 && value <= &0
             {
                 self.error(
@@ -4811,14 +4837,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .map(|(idx, arg)| {
                 if let Some(param) = param_for_arg(idx) {
                     if !matches!(arg, Expr::Starred(_)) && param.kind() == QuantifiedKind::IntVar {
-                        return self
-                            .parse_dimension_list(
-                                slice::from_ref(arg),
-                                type_argument_context,
-                                errors,
-                            )
-                            .and_then(|dims| dims.into_iter().next())
-                            .unwrap_or_else(Type::any_error);
+                        return self.parse_int_var_argument(arg, type_argument_context, errors);
                     }
                     if param.kind() == QuantifiedKind::TypeVar
                         && let Expr::List(ExprList { elts, .. }) = arg

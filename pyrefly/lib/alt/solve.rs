@@ -6,7 +6,6 @@
  */
 
 use std::iter;
-use std::slice;
 use std::sync::Arc;
 
 use dupe::Dupe;
@@ -7051,12 +7050,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         errors: &ErrorCollector,
     ) -> Type {
         let result = match x {
-            // A `IntVar`'s default (e.g. `N = 3`) is a dimension expression, not
-            // an ordinary type, so route it through the dimension parser.
-            _ if type_form_context == TypeFormContext::IntVarDefault => self
-                .parse_dimension_list(slice::from_ref(x), type_form_context, errors)
-                .and_then(|dims| dims.into_iter().next())
-                .unwrap_or_else(Type::any_error),
+            // An `IntVar` default is a signed integer expression, not an ordinary type.
+            _ if type_form_context == TypeFormContext::IntVarDefault => {
+                self.parse_int_var_argument(x, type_form_context, errors)
+            }
             Expr::List(x)
                 if matches!(
                     type_form_context,
