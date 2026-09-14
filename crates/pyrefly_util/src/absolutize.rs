@@ -32,11 +32,18 @@ impl Absolutize for Path {
     }
 
     /// Absolutize the path, removing `..` and `.` components,
-    /// relative to `base`. A relative base is resolved against cwd.
+    /// relative to `base`. A base without a root is resolved against cwd.
     fn absolutize_from(&self, base: &Path) -> PathBuf {
         // The dependency's `absolutize_from` can panic with a relative base
         // when normalization removes every component (for example, `.` from `""`).
-        Absolutize::absolutize(base.join(self).as_path())
+        if !base.has_root() {
+            return Absolutize::absolutize(base.join(self).as_path());
+        }
+        // Preserve rooted Windows paths that do not have a drive prefix.
+        if let Ok(absolutized) = PathAbsolutize::absolutize_from(self, base) {
+            return absolutized.into_owned();
+        }
+        base.join(self)
     }
 
     /// Compute a relative path from `base` to `self`.
@@ -71,6 +78,31 @@ mod tests {
                 expected,
                 "path {path:?}, base {base:?}",
             );
+        }
+    }
+
+    #[test]
+    fn test_absolutize_from_rooted_base() {
+        let base = Path::new("/workspace");
+        for path in ["test.py", "/workspace/test.py", "src/../test.py"] {
+            assert_eq!(
+                Path::new(path).absolutize_from(base),
+                Path::new("/workspace/test.py"),
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_absolutize_from_windows_base() {
+        let base = Path::new(r"C:\workspace");
+        for (path, expected) in [
+            (r"\src\test.py", r"C:\src\test.py"),
+            (r"src\..\test.py", r"C:\workspace\test.py"),
+            (r"D:\src\test.py", r"D:\src\test.py"),
+            (r"D:src\test.py", r"D:\workspace\src\test.py"),
+        ] {
+            assert_eq!(Path::new(path).absolutize_from(base), Path::new(expected));
         }
     }
 
