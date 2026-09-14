@@ -260,6 +260,9 @@ enum Variable {
         /// A var may be published in `Answers` only when its answer is frozen.
         /// Frozen answers do not need to be traversed again when sanitizing vars for publication.
         frozen: bool,
+        /// The restricted type parameter this answer instantiates, while the call that supplied
+        /// the answer is still matching arguments against it. See [`RestrictedAnswer`].
+        restricted: Option<Box<RestrictedAnswer>>,
     },
     /// A variable whose answer is a residual that is only visible to selected vars.
     ResidualAnswer {
@@ -270,9 +273,40 @@ enum Variable {
     },
 }
 
+/// A gradual expected type's answer for a restricted type parameter admits every argument, so it
+/// cannot enforce the parameter's restriction on its own. Argument matching checks each argument
+/// against `param` instead and records the first violation in `error`.
+///
+/// `finish_quantified_with_pruning` reports the violation and takes the whole record off the answer,
+/// which also keeps `param` out of published answers: `sanitize_vars` traverses only the answer
+/// type, so a parameter left here could hide a variable that never gets pinned.
+///
+/// The violation is recorded here rather than in `Solver::instantiation_errors` because an entry in
+/// that map means "solving this variable went wrong", which makes `with_snapshot` reject the
+/// enclosing subset check. This violation must reject nothing: keeping the answer the expected type
+/// supplied is the whole point of having an expected type.
+#[derive(Debug, Clone)]
+struct RestrictedAnswer {
+    param: Quantified,
+    error: Option<TypeVarSpecializationError>,
+}
+
 impl Variable {
     fn answer(ty: Type) -> Self {
-        Self::Answer { ty, frozen: false }
+        Self::Answer {
+            ty,
+            frozen: false,
+            restricted: None,
+        }
+    }
+
+    /// See [`RestrictedAnswer`].
+    fn restricted_answer(ty: Type, param: Quantified) -> Self {
+        Self::Answer {
+            ty,
+            frozen: false,
+            restricted: Some(Box::new(RestrictedAnswer { param, error: None })),
+        }
     }
 
     fn residual_answer(target_vars: SmallSet<Var>, ty: Type) -> Self {
@@ -2130,6 +2164,13 @@ impl Solver {
                     if let Some(e) = self.instantiation_errors.read().get(&v) {
                         err.push(e.clone());
                     }
+                    // Every argument has now been matched, so the restriction has been checked as
+                    // far as it can be. Take the record off the answer before it can be published.
+                    if let Variable::Answer { restricted, .. } = &mut *variable
+                        && let Some(restricted) = restricted.take()
+                    {
+                        err.extend(restricted.error);
+                    }
                 }
                 Variable::Quantified {
                     quantified: q,
@@ -2368,6 +2409,30 @@ impl Solver {
         targs: &mut TArgs,
         vars_with_residual_captures: &SmallSet<Var>,
     ) {
+        self.generalize_class_targs_impl(targs, vars_with_residual_captures, false)
+    }
+
+    /// Like `generalize_class_targs`, but for type arguments that came from an expected type
+    /// applied to a constructor call, with argument matching still to come.
+    ///
+    /// A gradual expected type solves a restricted type parameter to a type that admits every
+    /// argument, which would silently suppress the parameter's restriction. Keeping that solution
+    /// is what the expected type is for, so the answer records the parameter it instantiates and
+    /// argument matching checks the restriction against each argument instead.
+    pub fn generalize_class_targs_for_constructor_hint(
+        &self,
+        targs: &mut TArgs,
+        vars_with_residual_captures: &SmallSet<Var>,
+    ) {
+        self.generalize_class_targs_impl(targs, vars_with_residual_captures, true)
+    }
+
+    fn generalize_class_targs_impl(
+        &self,
+        targs: &mut TArgs,
+        vars_with_residual_captures: &SmallSet<Var>,
+        constructor_hint: bool,
+    ) {
         // Expanding targs might require the variables lock, so do that first.
         targs.as_mut().iter_mut().for_each(|t| self.expand_mut(t));
         let lock = self.variables.lock();
@@ -2385,10 +2450,16 @@ impl Solver {
                         *t = param.clone().to_type(&self.heap);
                     } else if !bounds.is_empty() {
                         // If the variable has bounds, finalize its type now.
-                        *e = Variable::answer(
-                            self.solve_bounds(mem::take(bounds))
-                                .unwrap_or_else(|| quantified_gradual_type(q)),
-                        );
+                        let solved = self
+                            .solve_bounds(mem::take(bounds))
+                            .unwrap_or_else(|| quantified_gradual_type(q));
+                        // A restriction that rejects nothing needs no further checking, so only a
+                        // parameter that can reject is worth carrying on the answer.
+                        *e = if constructor_hint && param.restriction().is_restricted() {
+                            Variable::restricted_answer(solved, param.clone())
+                        } else {
+                            Variable::answer(solved)
+                        };
                     }
                     // Otherwise (residuals but no bounds): leave the var as
                     // Quantified so finish_quantified can materialize residuals.
@@ -3670,6 +3741,36 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         Some(best)
     }
 
+    /// Check `got` against the restriction of the type parameter that `v`'s answer instantiates,
+    /// recording the first violation on the answer. See [`RestrictedAnswer`].
+    ///
+    /// The answer is deliberately kept, so this runs purely for its error: the type the check would
+    /// have solved to must not be committed, and neither may the bindings and cached subset results
+    /// it produced along the way. The caller must not hold the `variables` lock.
+    ///
+    /// The check can bind a var reachable only through an existing answer or bound, so rollback
+    /// needs the transitive set. `param`'s restriction is the `want` side, so it is seeded too.
+    fn check_restricted_answer(&mut self, got: &Type, v: Var, param: &Quantified) {
+        let is_shape_extension_binding_source = self.is_shape_extension_binding_source(param, v);
+        let param_ty = Type::Quantified(Box::new(param.clone()));
+        let subset_snapshot = self.snapshot_subset_state();
+        let var_snapshot = self.solver.snapshot_reachable_vars(&[got, &param_ty]);
+        let (_, error) =
+            self.is_subset_eq_quantified(got, param, None, None, is_shape_extension_binding_source);
+        self.solver.restore_vars(var_snapshot);
+        self.restore_subset_state(subset_snapshot);
+        let Some(error) = error else { return };
+        // Re-read under a fresh lock: the answer is only still the place to record against if it is
+        // still awaiting a restriction check.
+        if let Variable::Answer {
+            restricted: Some(restricted),
+            ..
+        } = &mut *self.solver.variables.lock().get_mut(v)
+        {
+            restricted.error = Some(error);
+        }
+    }
+
     /// is_subset_eq_var(t1, Quantified)
     fn is_subset_eq_quantified(
         &mut self,
@@ -4191,10 +4292,22 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     );
                 }
                 match &*v2_ref {
-                    Variable::Answer { ty: t2, .. } => {
+                    Variable::Answer {
+                        ty: t2, restricted, ..
+                    } => {
                         let t2 = t2.clone();
+                        // Only the first violation is kept, so a parameter that has already been
+                        // rejected needs no further checking.
+                        let param = restricted
+                            .as_ref()
+                            .filter(|r| r.error.is_none())
+                            .map(|r| r.param.clone());
+                        // Both guards are dropped before recursing: the mutex is not reentrant.
                         drop(v2_ref);
                         drop(variables);
+                        if let Some(param) = param {
+                            self.check_restricted_answer(t1, *v2, &param);
+                        }
                         self.is_subset_eq(t1, &t2)
                     }
                     Variable::ResidualAnswer {
@@ -4511,6 +4624,72 @@ mod tests {
             &*variables.get(partial),
             Variable::Answer { frozen: true, .. }
         ));
+    }
+
+    #[test]
+    fn finishing_takes_the_restriction_record_off_the_answer() {
+        let solver = Solver::new(SolverConfig {
+            infer_with_first_use: true,
+            tensor_shapes: false,
+            jaxtyping: false,
+            strict_callable_subtyping: false,
+            strict_partial_subtyping: false,
+            spec_compliant_overloads: false,
+            legacy_overload_expansion: false,
+        });
+        let uniques = UniqueFactory::new();
+        let var = Var::new(&uniques);
+        let bound = Type::ClassType(fake_array(TArgs::default()));
+        let param = quantified_with_restriction(
+            QuantifiedKind::TypeVar,
+            0,
+            Restriction::Bound(bound.clone()),
+        );
+        // Stand in for argument matching, which records the first violation it finds.
+        let error = TypeVarSpecializationError::BadBoundSpecialization {
+            name: param.name().clone(),
+            got: Type::None,
+            want: bound,
+        };
+        solver.variables.lock().insert_fresh(
+            var,
+            Variable::Answer {
+                ty: Type::Any(AnyStyle::Explicit),
+                frozen: false,
+                restricted: Some(Box::new(RestrictedAnswer {
+                    param,
+                    error: Some(error),
+                })),
+            },
+        );
+
+        let errors = solver
+            .finish_quantified_with_pruning(
+                QuantifiedHandle(vec![var]),
+                false,
+                &mut |_, _| true,
+                &mut WitnessCaptures::default(),
+            )
+            .expect_err("the violation recorded while matching arguments is reported");
+
+        assert!(matches!(
+            errors.as_slice(),
+            [TypeVarSpecializationError::BadBoundSpecialization {
+                got: Type::None,
+                ..
+            }]
+        ));
+        assert!(
+            matches!(
+                &*solver.variables.lock().get(var),
+                Variable::Answer {
+                    ty: Type::Any(AnyStyle::Explicit),
+                    restricted: None,
+                    ..
+                }
+            ),
+            "the answer the expected type supplied is kept, and the record is gone before publication"
+        );
     }
 
     #[test]
