@@ -3337,13 +3337,18 @@ class no_grad:
         with torch.no_grad():
             output = model(input)
 
-        # As decorator:
+        # As decorator, with or without parentheses:
         @torch.no_grad()
         def inference(x):
             return model(x)
     """
 
-    def __init__(self) -> None: ...
+    # Mirrors `_NoParamDecoratorContextManager.__new__`: a bare `@torch.no_grad`
+    # passes the function to the constructor and gets it back.
+    @overload
+    def __new__[F: Callable[..., Any]](cls, orig_func: F) -> F: ...
+    @overload
+    def __new__(cls, orig_func: None = None) -> Self: ...
     def __enter__(self) -> None: ...
     def __exit__(self, exc_type, exc_value, traceback) -> None: ...
     def __call__[**P, R](self, func: Callable[P, R]) -> Callable[P, R]: ...
