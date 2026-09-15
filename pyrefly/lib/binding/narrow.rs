@@ -29,6 +29,8 @@ use ruff_python_ast::ExprUnaryOp;
 use ruff_python_ast::Identifier;
 use ruff_python_ast::Number;
 use ruff_python_ast::UnaryOp;
+use ruff_python_ast::comparable::ComparableArguments;
+use ruff_python_ast::comparable::ComparableExpr;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -55,7 +57,7 @@ assert_words!(NarrowOp, 12);
 
 /// Indicates where an isinstance-style narrow operation originated from.
 /// This determines whether validation needs to happen during narrowing.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NarrowSource {
     /// From an isinstance() call - validation already happened in special_calls.rs.
     Call,
@@ -263,6 +265,84 @@ impl DisplayWith<ModuleInfo> for NarrowOp {
 }
 
 impl AtomicNarrowOp {
+    /// Compares narrowing semantics while ignoring AST source locations and trivia.
+    fn semantically_eq(&self, other: &Self) -> bool {
+        use AtomicNarrowOp::*;
+
+        let expr_eq =
+            |left: &Expr, right: &Expr| ComparableExpr::from(left) == ComparableExpr::from(right);
+        let optional_expr_eq = |left: &Option<Box<Expr>>, right: &Option<Box<Expr>>| {
+            left.as_deref().map(ComparableExpr::from) == right.as_deref().map(ComparableExpr::from)
+        };
+        let arguments_eq = |left: &Arguments, right: &Arguments| {
+            ComparableArguments::from(left) == ComparableArguments::from(right)
+        };
+
+        match (self, other) {
+            (Is(left), Is(right))
+            | (IsNot(left), IsNot(right))
+            | (Eq(left), Eq(right))
+            | (NotEq(left), NotEq(right))
+            | (IsSubclass(left), IsSubclass(right))
+            | (IsNotSubclass(left), IsNotSubclass(right))
+            | (TypeEq(left), TypeEq(right))
+            | (TypeNotEq(left), TypeNotEq(right))
+            | (In(left), In(right))
+            | (NotIn(left), NotIn(right))
+            | (LenEq(left), LenEq(right))
+            | (LenNotEq(left), LenNotEq(right))
+            | (LenGt(left), LenGt(right))
+            | (LenGte(left), LenGte(right))
+            | (LenLt(left), LenLt(right))
+            | (LenLte(left), LenLte(right)) => expr_eq(left, right),
+            (IsInstance(left, left_source), IsInstance(right, right_source))
+            | (IsNotInstance(left, left_source), IsNotInstance(right, right_source)) => {
+                left_source == right_source && expr_eq(left, right)
+            }
+            (HasAttr(left), HasAttr(right))
+            | (NotHasAttr(left), NotHasAttr(right))
+            | (HasKey(left), HasKey(right))
+            | (NotHasKey(left), NotHasKey(right)) => left == right,
+            (GetAttr(left_name, left_default), GetAttr(right_name, right_default))
+            | (NotGetAttr(left_name, left_default), NotGetAttr(right_name, right_default)) => {
+                left_name == right_name && optional_expr_eq(left_default, right_default)
+            }
+            (TypeGuard(left_type, left_args), TypeGuard(right_type, right_args))
+            | (NotTypeGuard(left_type, left_args), NotTypeGuard(right_type, right_args))
+            | (TypeIs(left_type, left_args), TypeIs(right_type, right_args))
+            | (NotTypeIs(left_type, left_args), NotTypeIs(right_type, right_args)) => {
+                left_type == right_type && arguments_eq(left_args, right_args)
+            }
+            (Call(left_expr, left_args), Call(right_expr, right_args))
+            | (NotCall(left_expr, left_args), NotCall(right_expr, right_args)) => {
+                expr_eq(left_expr, right_expr) && arguments_eq(left_args, right_args)
+            }
+            (PolarsColumnMutation(left), PolarsColumnMutation(right)) => match (left, right) {
+                (PolarsMutationKind::Add, PolarsMutationKind::Add)
+                | (PolarsMutationKind::Replace, PolarsMutationKind::Replace) => true,
+                (
+                    PolarsMutationKind::Insert(left_name, left_index, left_expr),
+                    PolarsMutationKind::Insert(right_name, right_index, right_expr),
+                ) => {
+                    left_name == right_name
+                        && left_index == right_index
+                        && expr_eq(left_expr, right_expr)
+                }
+                _ => false,
+            },
+            (ClassCoverageGate(left), ClassCoverageGate(right))
+            | (ClassCoverageGateNeg(left), ClassCoverageGateNeg(right)) => left == right,
+            (IsSequence, IsSequence)
+            | (IsNotSequence, IsNotSequence)
+            | (IsMapping, IsMapping)
+            | (IsNotMapping, IsNotMapping)
+            | (IsTruthy, IsTruthy)
+            | (IsFalsy, IsFalsy)
+            | (Placeholder, Placeholder) => true,
+            _ => false,
+        }
+    }
+
     /// Produce a Python-like snippet for hover display.
     ///
     /// `subject` is the name (possibly with facet chain) being narrowed.
@@ -425,6 +505,49 @@ pub struct FacetSubject {
     pub allow_never_collapse: bool,
 }
 
+impl FacetSubject {
+    /// Compares facet semantics while ignoring locations in embedded AST nodes.
+    fn semantically_eq(&self, other: &Self) -> bool {
+        self.origin == other.origin
+            && self.chain.facets().len() == other.chain.facets().len()
+            && self
+                .chain
+                .facets()
+                .iter()
+                .zip(other.chain.facets())
+                .all(|(left, right)| match (left, right) {
+                    (
+                        UnresolvedFacetKind::Attribute(left),
+                        UnresolvedFacetKind::Attribute(right),
+                    ) => left == right,
+                    (UnresolvedFacetKind::Index(left), UnresolvedFacetKind::Index(right)) => {
+                        left == right
+                    }
+                    (UnresolvedFacetKind::Key(left), UnresolvedFacetKind::Key(right)) => {
+                        left == right
+                    }
+                    (
+                        UnresolvedFacetKind::VariableSubscript(left),
+                        UnresolvedFacetKind::VariableSubscript(right),
+                    ) => left.id == right.id,
+                    (
+                        UnresolvedFacetKind::MatchArg {
+                            class: left_class,
+                            index: left_index,
+                        },
+                        UnresolvedFacetKind::MatchArg {
+                            class: right_class,
+                            index: right_index,
+                        },
+                    ) => {
+                        left_index == right_index
+                            && ComparableExpr::from(left_class) == ComparableExpr::from(right_class)
+                    }
+                    _ => false,
+                })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum NarrowingSubject {
     Name(Name),
@@ -464,6 +587,28 @@ impl NarrowingSubject {
 }
 
 impl NarrowOp {
+    /// Compares narrowing semantics while ignoring AST source locations and trivia.
+    pub(crate) fn semantically_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Atomic(left_facet, left_op), Self::Atomic(right_facet, right_op)) => {
+                match (left_facet, right_facet) {
+                    (Some(left), Some(right)) if left.semantically_eq(right) => {}
+                    (None, None) => {}
+                    _ => return false,
+                }
+                left_op.semantically_eq(right_op)
+            }
+            (Self::And(left), Self::And(right)) | (Self::Or(left), Self::Or(right)) => {
+                left.len() == right.len()
+                    && left
+                        .iter()
+                        .zip(right)
+                        .all(|(left, right)| left.semantically_eq(right))
+            }
+            _ => false,
+        }
+    }
+
     /// Produce a Python-like snippet for hover display.
     ///
     /// `base_name` is the variable being narrowed. `snippet` converts a
@@ -734,6 +879,17 @@ pub struct NarrowOps(pub SmallMap<Name, (NarrowOp, TextRange)>);
 impl NarrowOps {
     pub fn new() -> Self {
         Self(SmallMap::new())
+    }
+
+    /// Compares narrowing semantics without considering the source range of each operation.
+    pub(crate) fn semantically_eq(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len()
+            && self.0.iter().all(|(name, (op, _))| {
+                other
+                    .0
+                    .get(name)
+                    .is_some_and(|(other_op, _)| op.semantically_eq(other_op))
+            })
     }
 
     /// Adds or merges a narrowing operation for the given subject.
