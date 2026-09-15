@@ -169,6 +169,26 @@ pub fn is_pytest_fixture_function(function_def: &StmtFunctionDef, aliases: &Pyte
         .any(|decorator| is_pytest_fixture_decorator(&decorator.expression, aliases))
 }
 
+pub fn is_pytest_parametrize_decorator(expr: &Expr, aliases: &PytestAliases) -> bool {
+    let Expr::Call(call) = expr else {
+        return false;
+    };
+    let Expr::Attribute(parametrize) = call.func.as_ref() else {
+        return false;
+    };
+    if parametrize.attr.id() != "parametrize" {
+        return false;
+    }
+    let Expr::Attribute(mark) = parametrize.value.as_ref() else {
+        return false;
+    };
+    mark.attr.id() == "mark"
+        && matches!(
+            mark.value.as_ref(),
+            Expr::Name(base) if aliases.is_pytest_module_alias(base.id())
+        )
+}
+
 fn is_pytest_fixture_decorator(expr: &Expr, aliases: &PytestAliases) -> bool {
     match expr {
         Expr::Name(name) => aliases.is_fixture_alias(name.id()),
