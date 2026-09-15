@@ -1554,11 +1554,35 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     fn sqlalchemy_mapped_model_fields(&self, model: &Class) -> SmallSet<Name> {
-        let mut seen_fields = SmallSet::new();
+        // Find the SQLModel table model in the mro if there is one
+        let sqlmodel_table = self
+            .get_mro_for_class(model)
+            .ancestors_no_object()
+            .iter()
+            .rev()
+            .map(|cls| cls.class_object())
+            .chain(std::iter::once(model))
+            .skip_while(|cls| {
+                !(cls.has_toplevel_qname("sqlmodel", "SQLModel")
+                    || cls.has_toplevel_qname("sqlmodel.main", "SQLModel"))
+            })
+            .find(|cls| {
+                self.get_metadata_for_class(cls)
+                    .keywords()
+                    .iter()
+                    .any(|(name, typ)| {
+                        name == "table"
+                            && matches!(typ, Type::Literal(l) if l.value==Lit::Bool(true))
+                    })
+            });
 
-        std::iter::once(model)
+        // If there is a SQLModel table model we want to ignore the fields below it in the mro
+        let find_fields_from = sqlmodel_table.unwrap_or(model);
+
+        let mut seen_fields = SmallSet::new();
+        std::iter::once(find_fields_from)
             .chain(
-                self.get_mro_for_class(model)
+                self.get_mro_for_class(find_fields_from)
                     .ancestors_no_object()
                     .iter()
                     .map(|ancestor| ancestor.class_object()),
@@ -1572,10 +1596,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     return None;
                 }
                 let (_, annotation, _) = field.for_variance_inference();
-                annotation
-                    .is_some_and(|annotation| {
-                        Self::is_sqlalchemy_mapped_annotation(annotation.get_type())
-                    })
+                let is_mapped_annotation = annotation.is_some_and(|annotation| {
+                    Self::is_sqlalchemy_mapped_annotation(annotation.get_type())
+                });
+                (is_mapped_annotation || (sqlmodel_table.is_some() && annotation.is_some()))
                     .then_some(name)
             })
             .collect()
