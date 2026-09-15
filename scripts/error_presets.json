@@ -50,6 +50,7 @@
     "implicit-bool": ["all"],
     "implicit-import": ["legacy", "default", "strict", "all"],
     "implicit-reexport": ["all"],
+    "implicit-relative-import": ["legacy", "default", "strict", "all"],
     "implicitly-defined-attribute": ["all"],
     "incompatible-comparison": ["all"],
     "incompatible-overload-residual": ["legacy", "default", "strict", "all"],
