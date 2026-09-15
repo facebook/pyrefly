@@ -82,6 +82,66 @@ def f(a: A):
 );
 
 testcase!(
+    test_unannotated_constructor_attribute_inferred_from_call,
+    r#"
+from typing import assert_type
+class A:
+    def __init__(self, t):
+        self.t = t
+
+assert_type(A(1).t, int)
+assert_type(A("x").t, str)
+assert_type(A(1), A)
+A[int]  # E: Expected 0 type arguments for `A`, got 1
+    "#,
+);
+
+testcase!(
+    test_pseudo_generic_attribute_use_in_method,
+    r#"
+class A:
+    def __init__(self, x):
+        self.x = x
+        self.flag = False
+
+    def call_member(self):
+        self.x.foo()
+
+    def compare(self):
+        if self.x == 0:
+            self.flag = True
+    "#,
+);
+
+testcase!(
+    test_pseudo_generic_constructor_eligibility,
+    r#"
+from typing import Any, assert_type
+
+class Pair:
+    def __init__(self, left, *, right):
+        self.left = left
+        self.right = right
+
+pair = Pair(1, right="x")
+assert_type(pair.left, int)
+assert_type(pair.right, str)
+
+class PartiallyAnnotated:
+    def __init__(self, value, flag: bool):
+        self.value = value
+
+assert_type(PartiallyAnnotated(1, True).value, Any)
+
+class AlreadyGeneric[T]:
+    def __init__(self, value):
+        self.value = value
+
+assert_type(AlreadyGeneric[int](1).value, Any)
+    "#,
+);
+
+testcase!(
     test_unannotated_attribute_bad_assignment,
     r#"
 class A:
