@@ -74,7 +74,6 @@
   "generics_paramspec_semantics.py": [],
   "generics_paramspec_specialization.py": [],
   "generics_paramspec_variance.py": [
-    "Line 15: Expected 1 errors",
     "Line 117: Expected 1 errors",
     "Line 126: Expected 1 errors",
     "Line 97: Unexpected errors ['Unexpected keyword argument `contravariant` to ParamSpec']",

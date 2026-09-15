@@ -6556,6 +6556,17 @@
     },
     {
       "code": -2,
+      "column": 39,
+      "concise_description": "`InvariantParamSpec[[object]]` is not assignable to `InvariantParamSpec[[int]]`",
+      "description": "`InvariantParamSpec[[object]]` is not assignable to `InvariantParamSpec[[int]]`",
+      "line": 15,
+      "name": "bad-assignment",
+      "severity": "error",
+      "stop_column": 67,
+      "stop_line": 15
+    },
+    {
+      "code": -2,
       "column": 42,
       "concise_description": "`ContravariantParamSpec[[int]]` is not assignable to `ContravariantParamSpec[[object]]`",
       "description": "`ContravariantParamSpec[[int]]` is not assignable to `ContravariantParamSpec[[object]]`",
