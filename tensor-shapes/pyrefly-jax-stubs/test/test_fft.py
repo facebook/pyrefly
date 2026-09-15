@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from shape_extensions import assert_shape, IntTuple
 
 
@@ -125,3 +126,18 @@ def test_fft_rejects_out_of_bounds_axis() -> None:
         pass
     else:
         raise AssertionError("expected JAX to reject out-of-bounds FFT axis")
+
+
+def test_fft_arraylike() -> None:
+    vec8 = np.ones((8,))
+    mat48 = np.ones((4, 8))
+
+    assert_shape(jnp.fft.fft(vec8).shape, (8,))
+    assert_shape(jnp.fft.ifft(vec8, n=16).shape, (16,))
+    assert_shape(jnp.fft.rfft(mat48).shape, (4, 5))
+    assert_shape(jnp.fft.irfft(mat48).shape, (4, 14))
+    assert_shape(jnp.fft.hfft(vec8).shape, (14,))
+    assert_shape(jnp.fft.ihfft(vec8).shape, (5,))
+    assert_shape(jnp.fft.fft2(mat48).shape, (4, 8))
+    assert_shape(jnp.fft.rfftn(mat48).shape, (4, 5))
+    assert_shape(jnp.fft.fftshift(mat48).shape, (4, 8))
