@@ -83,6 +83,7 @@ use crate::export::exports::Exports;
 use crate::lsp::module_helpers::collect_symbol_def_paths;
 use crate::lsp::wasm::completion::CompletionOptions;
 use crate::lsp::wasm::signature_help::CallInfo;
+use crate::module::finder::ImportReplacementPolicy;
 use crate::state::ide::ImportEdit;
 use crate::state::ide::IntermediateDefinition;
 use crate::state::ide::common_alias_target_module;
@@ -277,6 +278,8 @@ pub struct FindPreference {
     /// when callers need the raw definition (e.g., call-graph queries that
     /// unwrap decorators like `@lru_cache`).
     pub resolve_call_dunders: bool,
+    /// Controls whether import lookup can include modules matched by `replace-imports-with-any`.
+    pub(crate) replacement_policy: ImportReplacementPolicy,
     /// When true, disable the LSP style fallback behavior. Normally, if a
     /// symbol is not found in the preferred file style (e.g., `.pyi`), the LSP
     /// will fall back to the other style (e.g., `.py`) and look for the same
@@ -292,6 +295,7 @@ impl Default for FindPreference {
             import_behavior: ImportBehavior::JumpThroughEverything,
             prefer_pyi: true,
             resolve_call_dunders: true,
+            replacement_policy: ImportReplacementPolicy::Respect,
             disable_style_fallback: false,
         }
     }
@@ -882,9 +886,27 @@ impl<'a> Transaction<'a> {
         module: ModuleName,
         preference: FindPreference,
     ) -> Option<Handle> {
-        match preference.prefer_pyi {
-            true => self.import_handle(handle, module, None).finding(),
-            false => self
+        match (preference.replacement_policy, preference.prefer_pyi) {
+            (ImportReplacementPolicy::Bypass, true) => self
+                .import_handle_including_replaced(
+                    handle,
+                    module,
+                    ModuleStyle::Interface,
+                    (!preference.disable_style_fallback).then_some(ModuleStyle::Executable),
+                )
+                .finding(),
+            (ImportReplacementPolicy::Bypass, false) => self
+                .import_handle_including_replaced(
+                    handle,
+                    module,
+                    ModuleStyle::Executable,
+                    (!preference.disable_style_fallback).then_some(ModuleStyle::Interface),
+                )
+                .finding(),
+            (ImportReplacementPolicy::Respect, true) => {
+                self.import_handle(handle, module, None).finding()
+            }
+            (ImportReplacementPolicy::Respect, false) => self
                 .import_handle_prefer_executable(handle, module, None)
                 .finding(),
         }
@@ -3104,6 +3126,7 @@ impl<'a> Transaction<'a> {
             position,
             FindPreference {
                 prefer_pyi: false,
+                replacement_policy: ImportReplacementPolicy::Bypass,
                 ..Default::default()
             },
         );

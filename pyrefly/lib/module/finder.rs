@@ -441,6 +441,7 @@ fn find_third_party_stub(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ImportReplacementPolicy {
     Respect,
+    Bypass,
 }
 
 /// Selects whether import resolution follows type-checking semantics or looks for a
@@ -461,6 +462,13 @@ impl ImportLookupMode {
         Self::Style {
             style,
             replacement_policy: ImportReplacementPolicy::Respect,
+        }
+    }
+
+    pub(crate) fn style_including_replaced(style: ModuleStyle) -> Self {
+        Self::Style {
+            style,
+            replacement_policy: ImportReplacementPolicy::Bypass,
         }
     }
 
@@ -4422,6 +4430,45 @@ mod tests {
             )
             .unwrap(),
             FindingOrError::new_finding(ModulePath::filesystem(root.join("rules/if.config.cconf")))
+        );
+    }
+
+    #[test]
+    fn test_style_lookup_can_include_replaced_import() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(root, vec![TestPath::file("replaced.py")]);
+
+        let mut config = ConfigFile::parse_config("replace-imports-with-any = [\"replaced\"]")
+            .expect("test configuration should parse");
+        config.source = ConfigSource::File(root.join("pyrefly.toml"));
+        config.interpreters.skip_interpreter_query = true;
+        config.search_path_from_file = vec![root.to_path_buf()];
+        config.configure();
+
+        let module = ModuleName::from_str("replaced");
+        let cache = DirEntryCache::new();
+        assert_eq!(
+            find_import_with_mode(
+                &config,
+                module,
+                None,
+                ImportLookupMode::style(ModuleStyle::Executable),
+                &cache,
+                None,
+            ),
+            FindingOrError::Error(FindError::Ignored)
+        );
+        assert_eq!(
+            find_import_with_mode(
+                &config,
+                module,
+                None,
+                ImportLookupMode::style_including_replaced(ModuleStyle::Executable),
+                &cache,
+                None,
+            ),
+            FindingOrError::new_finding(ModulePath::filesystem(root.join("replaced.py")))
         );
     }
 }

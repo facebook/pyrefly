@@ -37,6 +37,7 @@ use pyrefly_python::module::Module;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::module_path::ModulePath;
 use pyrefly_python::module_path::ModulePathDetails;
+use pyrefly_python::module_path::ModuleStyle;
 use pyrefly_python::sys_info::SysInfo;
 use pyrefly_types::type_alias::TypeAliasIndex;
 use pyrefly_util::arc_id::ArcId;
@@ -1233,6 +1234,25 @@ impl<'a> Transaction<'a> {
                 .find_import(module, Some(handle.path()), Some(&self.timing)),
         };
         path.map(|path| Handle::new(module, path, handle.sys_info().dupe()))
+    }
+
+    /// Create a handle for source lookup, including modules replaced with `Any`.
+    pub(crate) fn import_handle_including_replaced(
+        &self,
+        handle: &Handle,
+        module: ModuleName,
+        preferred_style: ModuleStyle,
+        fallback_style: Option<ModuleStyle>,
+    ) -> FindingOrError<Handle> {
+        self.get_cached_loader(&self.get_module(handle).config.read())
+            .find_import_including_replaced(
+                module,
+                Some(handle.path()),
+                preferred_style,
+                fallback_style,
+                Some(&self.timing),
+            )
+            .map(|path| Handle::new(module, path, handle.sys_info().dupe()))
     }
 
     /// Create a handle for import `module` within the handle `handle`, preferring `.py` over `.pyi`

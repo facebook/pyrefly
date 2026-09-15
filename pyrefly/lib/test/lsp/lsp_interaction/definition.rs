@@ -912,9 +912,8 @@ fn definition_site_packages_relative_import() {
     interaction.shutdown().unwrap();
 }
 
-// bug = "Go-to-definition cannot resolve source for imports replaced with Any."
 #[test]
-fn definition_for_import_replaced_with_any_stays_at_import() {
+fn definition_for_import_replaced_with_any_uses_source() {
     let root = get_test_files_root();
     let root_path = root.path().join("replace_imports_with_any_definition");
     let mut interaction = LspInteraction::new();
@@ -927,31 +926,31 @@ fn definition_for_import_replaced_with_any_stays_at_import() {
     interaction
         .client
         .definition("main.py", 5, 6)
-        .expect_response_with(|response| response.is_none())
+        .expect_definition_response_from_root("site_packages/library/__init__.py", 0, 0, 0, 0)
         .unwrap();
     interaction
         .client
         .definition("main.py", 5, 22)
-        .expect_definition_response_from_root("main.py", 5, 20, 5, 26)
+        .expect_definition_response_from_root("site_packages/library/__init__.py", 5, 6, 5, 12)
         .unwrap();
     interaction
         .client
         .definition("main.py", 7, 9)
-        .expect_definition_response_from_root("main.py", 5, 20, 5, 26)
+        .expect_definition_response_from_root("site_packages/library/__init__.py", 5, 6, 5, 12)
         .unwrap();
 
     interaction.client.did_open("stub_usage.py");
     interaction
         .client
         .definition("stub_usage.py", 7, 9)
-        .expect_definition_response_from_root("stub_usage.py", 5, 22, 5, 28)
+        .expect_definition_response_from_root("site_packages/stub_only.pyi", 5, 6, 5, 12)
         .unwrap();
 
     interaction.client.did_open("dual_usage.py");
     interaction
         .client
         .definition("dual_usage.py", 7, 9)
-        .expect_definition_response_from_root("dual_usage.py", 5, 17, 5, 23)
+        .expect_definition_response_from_root("site_packages/dual.pyi", 5, 6, 5, 12)
         .unwrap();
 
     interaction.shutdown().unwrap();
