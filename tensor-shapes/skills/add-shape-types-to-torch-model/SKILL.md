@@ -46,6 +46,12 @@ inventory against the native annotations: every removed annotation must have a
 native counterpart with equal or better precision, or a documented reason why
 that precision is not representable.
 
+Treat each jaxtyping annotation as an information-preservation obligation, not
+merely syntax to remove. Preserve its rank, literal dimensions, named-dimension
+equalities, arithmetic relationships, and variadic-prefix semantics whenever
+native shape types can express them. A clean type check is not sufficient if a
+precise jaxtyping contract became gradual.
+
 - Never delete a local annotation merely because current inference appears
   sufficient. Preserve it with native syntax and reuse any enclosing `IntVar`
   or `IntTuple` parameters so it continues to document and check the intended
@@ -53,9 +59,20 @@ that precision is not representable.
 - Convert a variadic prefix such as `"*B D"` using `Bs: IntTuple` and
   `Tensor[[*Elements[Bs], D]]`; do not collapse it to a bare `Tensor`.
 - When a dimension is known only from a runtime value and cannot be related to
-  a type parameter, preserve at least its rank with `int`, for example
-  `Tensor[[B, int, int]]`. Use bare `Tensor` only when even the rank is genuinely
-  unknown, and record that reason in the before/after audit.
+  an input type parameter, preserve its rank and documentation with a named
+  output-only `IntVar`, for example `Tensor[[B, NewH, NewW]]`. Pyrefly
+  instantiates such unconstrained variables as gradual dimensions at call
+  sites. Use `int` only when a useful name is unavailable, and bare `Tensor`
+  only when even the rank is genuinely unknown. Record every loss of precision
+  in the before/after audit.
+- Do not weaken a public signature because an implementation detail is
+  untracked. First try a more precise stub, a shape-preserving restructuring,
+  or a narrow `cast` immediately around the untracked operation. Keep all
+  dimensions that are bound by parameters on both sides of that boundary.
+- Do not assume an empty jaxtyping shape string accurately describes a scalar.
+  Check how the value is used. If it accepts arbitrary ranks, bind its complete
+  shape with `Shape: IntTuple` and `Tensor[[*Elements[Shape]]]`; if the code
+  requires trailing dimensions, spell those out after a variadic prefix.
 - Treat code that reads annotations at runtime—including schema validators—as
   executable behavior. Adapt and test that consumer separately rather than
   assuming a syntactically equivalent annotation preserves validation.
@@ -156,9 +173,12 @@ annotation. If it calls a shape function, confirm that function exists in
 annotation computes the shape from the signature's own generics — do not leave
 this column blank or write "check DSL".
 
-A `GAP` is information, not a blocker — note it and move on. You decide what to do
-about gaps later: most degrade gracefully to a bare `Tensor`, and only if the user
-opted into stub changes is a `GAP` worth a stub fix.
+A `GAP` is information, not a blocker, but it is not permission to discard the
+surrounding contract. Preserve known rank and dimensions in the public
+annotation, isolate the untracked expression with a narrow cast when needed,
+and record the gap. Only use bare `Tensor` when the value's rank is genuinely
+unknown. If the user opted into stub changes, consider whether a general stub
+fix would remove the boundary.
 
 ## Gate 2: Inventory the original
 
@@ -745,6 +765,23 @@ Each bare:
 - line M: var — root cause (receipt: <module>.Step4)
 ```
 
+## Measure shape coverage
+
+Report two separate metrics so casts do not get confused with lost precision:
+
+- **Contract preservation:** removed jaxtyping annotation sites whose rank,
+  literal dimensions, and expressible relationships were preserved in the
+  native annotation, divided by all removed jaxtyping annotation sites.
+- **Inference coverage:** precise native shape expressions that do not rely on
+  a cast, divided by all precise native shape expressions. Report precise casts,
+  `cast(Any, ...)` boundaries, and bare-`Tensor` boundaries separately.
+
+Treat 80–90% inference coverage as a solid result for a codebase using
+untyped transforms such as einops, but investigate every remaining boundary;
+do not weaken annotations merely to reach a clean check. Aim above 90% when the
+necessary stubs or shape rules exist. Contract preservation should normally be
+100%; anything lower needs a specific, documented reason.
+
 ## Compare against known patterns
 
 **Read `style_guide.md` NOW — not earlier.** It is comparison material
@@ -791,6 +828,9 @@ type: ignore total: ___
 assert_type total: ___ (___ shaped, ___ bare)
 Bare fraction: ___%
 Each bare assert_type has comment + receipt trail: yes/no
+Contract preservation: ___ / ___ removed jaxtyping sites = ___%
+Inference coverage: ___ / ___ precise native shape expressions = ___%
+Precise shape casts: ___. cast(Any) boundaries: ___. Bare Tensor boundaries: ___.
 smoke tests: ___ — all use `assert_type` on typed output (not `.shape ==`): yes/no
 
 Verification phase:
