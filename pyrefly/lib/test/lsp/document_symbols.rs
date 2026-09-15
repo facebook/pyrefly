@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use lsp_types::SymbolKind;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
 
@@ -1896,5 +1897,85 @@ b = 2
     assert_eq!(
         flat_symbols[7].container_name,
         Some("Configuration".to_owned())
+    );
+}
+
+/// Document symbols omit destructured assignments and aliases, and assign one
+/// variable kind to constants and class fields.
+#[test]
+fn test_assignment_symbol_gaps() {
+    let code = r#"
+MAX_SIZE = 1
+Kelvin = 2
+type Alias = int
+class Container:
+    FIELD = 3
+    field: int
+    left, [right, *rest] = (1, [2, 3, 4])
+    def method(self):
+        def nested():
+            local = 4
+"#;
+    let report =
+        get_batched_lsp_operations_report_no_cursor(&[("main", code)], get_combined_report);
+
+    let hierarchical: Vec<lsp_types::DocumentSymbol> =
+        serde_json::from_str(extract_section(&report, "Hierarchical")).unwrap();
+    assert_eq!(
+        hierarchical
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("MAX_SIZE", SymbolKind::VARIABLE),
+            ("Kelvin", SymbolKind::VARIABLE),
+            ("Container", SymbolKind::CLASS),
+        ]
+    );
+    let class_children = hierarchical[2].children.as_ref().unwrap();
+    assert_eq!(
+        class_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![
+            ("FIELD", SymbolKind::VARIABLE),
+            ("field", SymbolKind::VARIABLE),
+            ("method", SymbolKind::METHOD),
+        ]
+    );
+    let method_children = class_children[2].children.as_ref().unwrap();
+    assert_eq!(
+        method_children
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.kind))
+            .collect::<Vec<_>>(),
+        vec![("nested", SymbolKind::FUNCTION)]
+    );
+
+    let flat: Vec<lsp_types::SymbolInformation> =
+        serde_json::from_str(extract_section(&report, "Flat")).unwrap();
+    assert_eq!(
+        flat.iter()
+            .map(|symbol| (
+                symbol.name.as_str(),
+                symbol.kind,
+                symbol.container_name.as_deref(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("MAX_SIZE", SymbolKind::VARIABLE, None),
+            ("Kelvin", SymbolKind::VARIABLE, None),
+            ("Container", SymbolKind::CLASS, None),
+            ("FIELD", SymbolKind::VARIABLE, Some("Container")),
+            ("field", SymbolKind::VARIABLE, Some("Container")),
+            ("method", SymbolKind::METHOD, Some("Container")),
+            ("nested", SymbolKind::FUNCTION, Some("Container.method")),
+            (
+                "local",
+                SymbolKind::VARIABLE,
+                Some("Container.method.nested"),
+            ),
+        ]
     );
 }
