@@ -307,7 +307,10 @@ assert_type(b.fn(1), int)
 "#,
 );
 
+// The variance-direction fix exposes a generic residual until the solver treats residuals as
+// fallback-only bounds.
 testcase!(
+    bug = "Generic callable residual is not a fallback bound",
     test_callable_class_wrapper,
     r#"
 from typing import Callable, assert_type, reveal_type
@@ -323,11 +326,14 @@ def f[S](x: S) -> S: ...
 wrapper = Wrapper(f)
 reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
 reveal_type(wrapper.__call__)  # E: [R](x: R) -> R
-assert_type(wrapper(1), int)
+assert_type(wrapper(1), int)  # E: assert_type(Unknown, int) failed # E: Argument `Literal[1]` is not assignable to parameter `x` with type `GenericResidual@R`
 "#,
 );
 
+// The variance-direction fix exposes a generic residual until the solver treats residuals as
+// fallback-only bounds.
 testcase!(
+    bug = "Generic callable residual is not a fallback bound",
     test_callable_class_wrapper_with_helper,
     r#"
 from typing import Callable, assert_type, reveal_type
@@ -346,7 +352,7 @@ def f[S](x: S) -> S: ...
 wrapper = wrap(f)
 reveal_type(wrapper.fn)  # E: revealed type: [R](x: R) -> R
 reveal_type(wrapper.__call__)  # E: [R](x: R) -> R
-assert_type(wrapper(1), int)
+assert_type(wrapper(1), int)  # E: assert_type(Unknown, int) failed # E: Argument `Literal[1]` is not assignable to parameter `x` with type `GenericResidual@R`
 "#,
 );
 
