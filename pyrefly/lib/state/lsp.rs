@@ -782,6 +782,13 @@ pub struct FindDefinitionItemWithDocstring {
     pub display_name: Option<String>,
 }
 
+struct FindDefinitionQuery<'a, 'ast> {
+    handle: &'a Handle,
+    position: TextSize,
+    covering_nodes: &'a [AnyNodeRef<'ast>],
+    preclassified_identifier: Option<IdentifierWithContext>,
+}
+
 #[derive(Debug)]
 pub struct FindDefinitionItem {
     pub metadata: DefinitionMetadata,
@@ -2739,7 +2746,27 @@ impl<'a> Transaction<'a> {
             return Err(EmptyResponseReason::AstNotFound);
         };
         let covering_nodes = Ast::locate_node(&mod_module, position);
+        let query = FindDefinitionQuery {
+            handle,
+            position,
+            covering_nodes: &covering_nodes,
+            preclassified_identifier: None,
+        };
+        self.find_definition_for_query(query, preference)
+    }
 
+    /// The query contains syntax shared across resolutions; preference is the varying axis.
+    fn find_definition_for_query(
+        &self,
+        query: FindDefinitionQuery<'_, '_>,
+        preference: FindPreference,
+    ) -> Result<Vec1<FindDefinitionItemWithDocstring>, EmptyResponseReason> {
+        let FindDefinitionQuery {
+            handle,
+            position,
+            covering_nodes,
+            preclassified_identifier,
+        } = query;
         if covering_nodes
             .iter()
             .any(|node| matches!(node, AnyNodeRef::ExprStringLiteral(_)))
@@ -2789,7 +2816,9 @@ impl<'a> Transaction<'a> {
             }
         }
 
-        match Self::identifier_from_covering_nodes(&covering_nodes) {
+        match preclassified_identifier
+            .or_else(|| Self::identifier_from_covering_nodes(covering_nodes))
+        {
             Some(IdentifierWithContext {
                 identifier: id,
                 context: IdentifierContext::Expr(expr_context),
@@ -2988,7 +3017,7 @@ impl<'a> Transaction<'a> {
                 if let Some(pytest_definitions) = self.pytest_fixture_definitions_for_parameter(
                     handle,
                     &identifier,
-                    &covering_nodes,
+                    covering_nodes,
                 ) {
                     Ok(pytest_definitions)
                 } else {
@@ -3170,12 +3199,9 @@ impl<'a> Transaction<'a> {
                     };
                 }
                 // Fall back to operator handling
-                if let Some(defs) = self.find_definition_for_operator(
-                    handle,
-                    position,
-                    &covering_nodes,
-                    preference,
-                )? {
+                if let Some(defs) =
+                    self.find_definition_for_operator(handle, position, covering_nodes, preference)?
+                {
                     return Ok(defs);
                 }
                 let found = covering_nodes
