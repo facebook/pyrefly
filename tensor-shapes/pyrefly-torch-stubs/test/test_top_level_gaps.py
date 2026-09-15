@@ -219,3 +219,11 @@ def test_tensor_float():
     assert_type(float(torch.zeros(())), float)
     assert_type(float(torch.zeros(1)), float)
     assert_type(float(torch.zeros(1, 1)), float)
+
+
+def test_where_single_argument_and_keywords(cond: Tensor, x: Tensor, y: Tensor):
+    assert_type(torch.where(cond), tuple[Tensor, ...])
+    assert_type(torch.where(cond)[0], Tensor)
+    assert_type(torch.where(cond, x, other=y), Tensor)
+    assert_type(torch.where(cond, input=x, other=0.0), Tensor)
+    assert_type(torch.where(cond, x, y, out=y), Tensor)
