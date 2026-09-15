@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use anyhow::bail;
 use clap::Parser;
 use pyrefly_config::args::ConfigOverrideArgs;
 use pyrefly_util::thread_pool::ThreadCount;
@@ -18,7 +19,9 @@ use crate::commands::util::CommandExitStatus;
 use crate::error::suppress;
 use crate::error::suppress::CommentLocation;
 use crate::error::suppress::SerializedError;
+use crate::error::suppress::SuppressionUsage;
 use crate::error::suppress::UnusedIgnoreKind;
+use crate::error::suppress::unused_errors_from_suppression_usage;
 
 /// Suppress type errors by adding ignore comments to source files.
 #[derive(Clone, Debug, Parser)]
@@ -31,10 +34,13 @@ pub struct SuppressArgs {
     #[command(flatten, next_help_heading = "Config Overrides")]
     config_override: ConfigOverrideArgs,
 
-    /// Path to a JSON file containing errors to suppress.
-    /// The JSON should be an array of objects with "path", "line", "name", and "message" fields.
+    /// Path to JSON input containing errors to suppress.
+    ///
+    /// With `--remove-unused`, this can be passed multiple times with files
+    /// from `check --report-suppressions` to aggregate suppression usage across
+    /// multiple environments.
     #[arg(long)]
-    json: Option<PathBuf>,
+    json: Vec<PathBuf>,
 
     /// Remove unused ignores instead of adding suppressions, optionally selecting `pyrefly`, `type`, or `all`.
     /// Defaults to `pyrefly` when no kind is specified.
@@ -63,17 +69,17 @@ impl SuppressArgs {
     ) -> anyhow::Result<CommandExitStatus> {
         if let Some(kind) = self.remove_unused {
             // Remove unused ignores mode
-            let unused_errors: Vec<SerializedError> = if let Some(json_path) = &self.json {
-                // Parse errors from JSON file, filtering for unused suppression errors only.
-                let json_content = std::fs::read_to_string(json_path)?;
-                let errors: Vec<SerializedError> = serde_json::from_str(&json_content)?;
-                errors
+            let unused_errors: Vec<SerializedError> = if !self.json.is_empty() {
+                let (errors, reports) = read_json_inputs(&self.json)?;
+                let mut unused_errors: Vec<_> = errors
                     .into_iter()
                     .filter(|e| {
-                        kind.includes_pyrefly_or_pyre() && e.is_unused_ignore()
-                            || kind.includes_type() && e.is_unused_type_ignore()
+                        (kind.includes_pyrefly_or_pyre() && e.is_unused_ignore())
+                            || (kind.includes_type() && e.is_unused_type_ignore())
                     })
-                    .collect()
+                    .collect();
+                unused_errors.extend(unused_errors_from_suppression_usage(reports, kind));
+                unused_errors
             } else {
                 // Delegate to `check --remove-unused-ignores`, which
                 // collects unused ignore errors directly (bypassing severity
@@ -109,10 +115,12 @@ impl SuppressArgs {
             suppress::remove_unused_ignores_from_serialized(unused_errors, kind);
         } else {
             // Add suppressions mode (existing behavior)
-            let serialized_errors: Vec<SerializedError> = if let Some(json_path) = &self.json {
+            let serialized_errors: Vec<SerializedError> = if !self.json.is_empty() {
                 // Parse errors from JSON file, filtering out directives and UnusedIgnore errors
-                let json_content = std::fs::read_to_string(json_path)?;
-                let errors: Vec<SerializedError> = serde_json::from_str(&json_content)?;
+                let (errors, reports) = read_json_inputs(&self.json)?;
+                if !reports.is_empty() {
+                    bail!("suppression usage reports can only be used with --remove-unused");
+                }
                 errors
                     .into_iter()
                     .filter(|e| !e.is_directive() && !e.is_unused_ignore())
@@ -150,6 +158,24 @@ impl SuppressArgs {
 
         Ok(CommandExitStatus::Success)
     }
+}
+
+fn read_json_inputs(
+    paths: &[PathBuf],
+) -> anyhow::Result<(Vec<SerializedError>, Vec<SuppressionUsage>)> {
+    let mut errors = Vec::new();
+    let mut reports = Vec::new();
+    for path in paths {
+        let json_content = std::fs::read_to_string(path)?;
+        match serde_json::from_str::<Vec<SuppressionUsage>>(&json_content) {
+            Ok(mut report) => reports.append(&mut report),
+            Err(_) => {
+                let mut parsed_errors: Vec<SerializedError> = serde_json::from_str(&json_content)?;
+                errors.append(&mut parsed_errors);
+            }
+        }
+    }
+    Ok((errors, reports))
 }
 
 #[cfg(test)]
