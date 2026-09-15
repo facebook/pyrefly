@@ -45,7 +45,8 @@ pub fn find_active(root: &Path) -> Option<PathBuf> {
     }
 }
 
-fn find_in_root(root: &Path) -> Option<PathBuf> {
+/// Find an interpreter in a known venv subdirectory (`.venv`, `venv`, or `env`).
+pub(crate) fn find_in_root(root: &Path) -> Option<PathBuf> {
     CANDIDATE_DIRS
         .iter()
         .map(|candidate| root.join(candidate))
@@ -53,27 +54,12 @@ fn find_in_root(root: &Path) -> Option<PathBuf> {
         .find_map(|path| find_interpreter(&path))
 }
 
-fn search_roots(project_path: &Path) -> impl Iterator<Item = &Path> {
-    project_path
-        .ancestors()
-        .take_while(|path| !path.as_os_str().is_empty())
-}
-
-/// Find a virtual environment interpreter starting from `project_path`.
-///
-/// Search order:
-/// 1. Look for `pyvenv.cfg` in a known subdirectory (`.venv`, `venv`, `env`) of
-///    `project_path`, then look for an interpreter there.
-/// 2. Repeat step 1 in each ancestor directory.
-pub fn find(project_path: &Path) -> Option<PathBuf> {
-    search_roots(project_path).find_map(find_in_root)
-}
-
 #[cfg(test)]
 mod tests {
     use pyrefly_util::test_path::TestPath;
 
     use super::*;
+    use crate::environment::interpreters::Interpreters;
 
     fn interp_name() -> &'static str {
         if cfg!(windows) {
@@ -103,7 +89,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(root), None);
+        assert_eq!(Interpreters::find_project_interpreter(root), None);
     }
 
     #[test]
@@ -127,7 +113,10 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(root), Some(interp_path(&root.join(".venv"))));
+        assert_eq!(
+            Interpreters::find_project_interpreter(root),
+            Some(interp_path(&root.join(".venv")))
+        );
     }
 
     #[test]
@@ -145,7 +134,10 @@ mod tests {
             )],
         );
 
-        assert_eq!(find(root), Some(interp_path(&root.join("env"))));
+        assert_eq!(
+            Interpreters::find_project_interpreter(root),
+            Some(interp_path(&root.join("env")))
+        );
     }
 
     #[cfg(unix)]
@@ -173,7 +165,7 @@ mod tests {
         symlink(&real_venv, project_root.join(".venv")).unwrap();
 
         assert_eq!(
-            find(&project_root),
+            Interpreters::find_project_interpreter(&project_root),
             Some(interp_path(&project_root.join(".venv"))),
         );
     }
@@ -197,7 +189,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(root), None);
+        assert_eq!(Interpreters::find_project_interpreter(root), None);
     }
 
     #[test]
@@ -224,7 +216,7 @@ mod tests {
             )],
         );
 
-        assert_eq!(find(root), None);
+        assert_eq!(Interpreters::find_project_interpreter(root), None);
     }
 
     #[test]
@@ -246,7 +238,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(root), None);
+        assert_eq!(Interpreters::find_project_interpreter(root), None);
     }
 
     #[test]
@@ -271,7 +263,10 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(&project_root), Some(interp_path(&root.join(".venv"))),);
+        assert_eq!(
+            Interpreters::find_project_interpreter(&project_root),
+            Some(interp_path(&root.join(".venv"))),
+        );
     }
 
     #[test]
@@ -309,7 +304,7 @@ mod tests {
         // Start from project/src so the search considers both ancestor environments.
         // The nearest ancestor with .venv is project/, not root/.
         assert_eq!(
-            find(&start_path),
+            Interpreters::find_project_interpreter(&start_path),
             Some(interp_path(&project_root.join(".venv"))),
         );
     }
@@ -343,7 +338,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(&project_root), None);
+        assert_eq!(Interpreters::find_project_interpreter(&project_root), None);
     }
 
     #[test]
@@ -364,7 +359,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(root), None);
+        assert_eq!(Interpreters::find_project_interpreter(root), None);
     }
 
     #[test]
@@ -386,7 +381,7 @@ mod tests {
             ],
         );
 
-        assert_eq!(find(&project_root), None);
+        assert_eq!(Interpreters::find_project_interpreter(&project_root), None);
     }
 
     #[test]
@@ -409,7 +404,7 @@ mod tests {
                 ),
             ],
         );
-        assert_eq!(find(root), None);
+        assert_eq!(Interpreters::find_project_interpreter(root), None);
     }
 
     #[test]
@@ -436,16 +431,6 @@ mod tests {
                 ),
             ],
         );
-        assert_eq!(find(root), None);
-    }
-
-    #[test]
-    fn test_search_roots_skips_empty_relative_ancestor() {
-        assert_eq!(
-            search_roots(Path::new("project/src"))
-                .map(Path::to_path_buf)
-                .collect::<Vec<_>>(),
-            vec![PathBuf::from("project/src"), PathBuf::from("project")],
-        );
+        assert_eq!(Interpreters::find_project_interpreter(root), None);
     }
 }
