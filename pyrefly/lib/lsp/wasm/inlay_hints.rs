@@ -46,7 +46,6 @@ use crate::state::lsp::ReferenceOptions;
 use crate::state::state::CancellableTransaction;
 use crate::state::state::Transaction;
 use crate::types::callable::Param;
-use crate::types::callable::Params;
 use crate::types::stdlib::Stdlib;
 use crate::types::types::Type;
 
@@ -207,24 +206,6 @@ impl<'param> ParamNameMatch<'param> {
             self.name.as_str().to_owned()
         }
     }
-}
-
-// Re-export normalize_singleton_function_type_into_params which is shared with signature help
-pub fn normalize_singleton_function_type_into_params(type_: Type) -> Option<Vec<Param>> {
-    let callable = type_.to_callable()?;
-    // We will drop the self parameter for signature help
-    if let Params::List(params_list) = callable.params {
-        if let Some(Param::PosOnly(Some(name), _, _) | Param::Pos(name, _, _)) =
-            params_list.items().first()
-            && (name.as_str() == "self" || name.as_str() == "cls" || name.as_str() == "_cls")
-        {
-            let mut params = params_list.into_items();
-            params.remove(0);
-            return Some(params);
-        }
-        return Some(params_list.into_items());
-    }
-    None
 }
 
 impl<'a> Transaction<'a> {
@@ -579,7 +560,7 @@ impl<'a> Transaction<'a> {
 
                     if let Some(params) = callee_type
                         .map(|ty| self.coerce_type_to_callable(handle, ty))
-                        .and_then(normalize_singleton_function_type_into_params)
+                        .and_then(Self::normalize_singleton_function_type_into_params)
                     {
                         for (arg_idx, arg) in call.arguments.args.iter().enumerate() {
                             // Account for keyword arguments omitted from `args`, including
@@ -605,6 +586,7 @@ impl<'a> Transaction<'a> {
                                 )
                                 && !param_match.is_vararg_repeat
                                 && param_match.name.as_str() != "self"
+                                && param_match.name.as_str() != "__self"
                                 && param_match.name.as_str() != "cls"
                                 && param_match.name.as_str() != "_cls"
                             {
