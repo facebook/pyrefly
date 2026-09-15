@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from shape_extensions import assert_shape, Elements, IntTuple, IntVar
 
 
@@ -263,3 +264,20 @@ def test_batched_linalg_operations() -> None:
     batch_rhs = jnp.ones((2, 4, 3))
     assert_shape(jnp.linalg.solve(batch_eye, batch_rhs).shape, (2, 4, 3))
     assert_shape(jnp.linalg.pinv(batch_mat).shape, (2, 5, 4))
+
+
+def test_linalg_arraylike() -> None:
+    np_eye = np.ones((4, 4)) + np.eye(4)
+    np_vec = np.ones((4,))
+    np_mat = np.ones((3, 4))
+
+    assert_shape(jnp.linalg.inv(np_eye).shape, (4, 4))
+    assert_shape(jnp.linalg.solve(np_eye, np_vec).shape, (4,))
+    assert_shape(jnp.linalg.matmul(np_mat, np_vec).shape, (3,))
+    assert_shape(jnp.linalg.norm(1.0).shape, ())
+    assert_shape(jnp.linalg.norm(np_vec).shape, ())
+    assert_shape(jnp.linalg.det(np_eye).shape, ())
+    u, s, vt = jnp.linalg.svd(np_mat, full_matrices=False)
+    assert_shape(u.shape, (3, 3))
+    assert_shape(s.shape, (3,))
+    assert_shape(vt.shape, (3, 4))

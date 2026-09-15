@@ -1245,3 +1245,20 @@ def test_compiler_and_misc() -> None:
         x, x, default=lambda a, b: a + b, cpu=lambda a, b: a - b
     )
     assert_shape(pd2.shape, (2, 3))
+
+
+def test_lax_linalg_arraylike() -> None:
+    np_eye = np.ones((3, 3)) + np.eye(3)
+    np_mat = np.ones((3, 4))
+
+    assert_shape(lax.linalg.cholesky(np.eye(3)).shape, (3, 3))
+    q, r = lax.linalg.qr(np_mat, full_matrices=False)
+    assert_shape(q.shape, (3, 3))
+    assert_shape(r.shape, (3, 4))
+    u, s, vt = lax.linalg.svd(np_mat, full_matrices=False)
+    assert_shape(u.shape, (3, 3))
+    assert_shape(s.shape, (3,))
+    assert_shape(vt.shape, (3, 4))
+    assert_shape(
+        lax.linalg.triangular_solve(np_eye, np_mat, left_side=True).shape, (3, 4)
+    )
