@@ -427,6 +427,79 @@ fn test_skip_interpreter_query_ignores_lsp_pythonpath() {
     interaction.shutdown().unwrap();
 }
 
+// A client-provided `pythonPath` fills in what the config left unset; it must not
+// discard what the config set explicitly. Regression test for the LSP replacing the
+// whole Python environment with the interpreter's, which dropped an explicit
+// `python-version` and silently type checked against the interpreter's version.
+// Only run this test on unix since windows has no way to mock a .exe without compiling something
+// (we call python with python.exe)
+#[cfg(unix)]
+#[test]
+fn test_config_python_version_survives_lsp_pythonpath() {
+    let test_files_root = get_test_files_root();
+    // This interpreter reports 3.12.0, disagreeing with the `python-version = "3.9"`
+    // in the fixture's config. The fixture's only error sits behind a
+    // `sys.version_info >= (3, 10)` guard, so it is reported iff the configured
+    // version was discarded in favor of the interpreter's.
+    let interpreter_path =
+        setup_dummy_interpreter(&test_files_root.path().join("custom_interpreter"));
+
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(test_files_root.path().to_path_buf());
+    interaction
+        .initialize(InitializeSettings {
+            configuration: Some(Some(
+                json!([{"pyrefly": {"displayTypeErrors": "force-on"}}]),
+            )),
+            initialization_options: Some(json!({
+                "pyrefly": {"streamDiagnostics": false},
+            })),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction
+        .client
+        .did_open("python_version_config/src/foo.py");
+    // Both the unresolved import and the `typing.override` error that the
+    // configured 3.9 produces before any interpreter is applied.
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(
+            test_files_root
+                .path()
+                .join("python_version_config/src/foo.py"),
+            2,
+        )
+        .unwrap();
+
+    interaction.client.did_change_configuration();
+    interaction
+        .client
+        .expect_request::<WorkspaceConfiguration>(json!({"items":[{"section":"python"}]}))
+        .unwrap()
+        .send_configuration_response(json!([
+            {
+                "pythonPath": interpreter_path.to_str().unwrap()
+            }
+        ]));
+    // The interpreter resolves the import, proving it was applied. The
+    // `typing.override` error remains, so `python-version` is still the
+    // configured 3.9; had it been overwritten with the interpreter's 3.12 that
+    // error would have disappeared too, leaving no diagnostics.
+    interaction
+        .client
+        .expect_publish_diagnostics_eventual_error_count(
+            test_files_root
+                .path()
+                .join("python_version_config/src/foo.py"),
+            1,
+        )
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
 // Only run this test on unix since windows has no way to mock a .exe without compiling something
 // (we call python with python.exe)
 #[cfg(unix)]

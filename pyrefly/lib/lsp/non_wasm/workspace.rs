@@ -160,16 +160,16 @@ impl ConfigConfigurer for WorkspaceConfigConfigurer {
                     && config.interpreters.is_empty()
                     && !config.interpreters.skip_interpreter_query
                 {
-                    let (mut env, query_error) =
-                        PythonEnvironment::get_interpreter_env(&interpreter);
+                    let (env, query_error) = PythonEnvironment::get_interpreter_env(&interpreter);
                     if let Some(error) = query_error {
                         error!("{error}");
                     }
-                    let site_package_path: Option<Vec<PathBuf>> =
-                        config.python_environment.site_package_path.take();
-                    env.site_package_path = site_package_path;
                     config.interpreters.set_lsp_python_interpreter(interpreter);
-                    config.python_environment = env;
+                    // The interpreter fills in what the config left unset, and nothing
+                    // more: an explicit `python-version`, `python-platform` or
+                    // `site-package-path` outranks it, exactly as it does when
+                    // `configure_at` queries an interpreter on the CLI path.
+                    config.python_environment.override_empty(env);
                     // skip interpreter query because we already have the interpreter from the workspace
                     config.interpreters.skip_interpreter_query = true;
                 }
