@@ -1775,6 +1775,46 @@ Widget docstring"#
 }
 
 #[test]
+fn hover_currently_uses_py_docstring_when_pyi_docstring_is_nonempty() {
+    let mut test_env = TestEnv::new();
+    test_env.add_with_path(
+        "lib",
+        "lib.py",
+        r#"
+def documented() -> int:
+    """Documentation from the implementation."""
+    return 1
+"#,
+    );
+    test_env.add_with_path(
+        "lib",
+        "lib.pyi",
+        r#"
+def documented() -> int:
+    """Documentation from the stub."""
+    ...
+"#,
+    );
+    let main_code = r#"
+from lib import documented
+
+documented()
+#   ^
+"#;
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+    let position = extract_cursors_for_test(main_code)[0];
+
+    let report = get_test_report(&state, &main_handle, position);
+    assert!(
+        report.contains("Documentation from the implementation."),
+        "got: {report}"
+    );
+    assert!(!report.contains("Documentation from the stub."));
+}
+
+#[test]
 fn hover_on_dict_constructor_is_multiline() {
     let code = r#"
 x: dict[str, int]
