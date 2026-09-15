@@ -258,6 +258,23 @@ class Foo:
 );
 
 testcase!(
+    test_property_getter_with_signature_changing_decorator,
+    r#"
+from collections.abc import Callable
+from typing import Any
+
+def ensure_item(func: Callable[..., Any]) -> Callable[..., Any]:
+    return func
+
+class Foo:
+    @property
+    @ensure_item
+    def value(self, item: int) -> int:
+        return item
+    "#,
+);
+
+testcase!(
     test_cached_property_assignment_allowed,
     r#"
 from functools import cached_property

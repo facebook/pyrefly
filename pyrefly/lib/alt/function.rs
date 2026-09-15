@@ -629,9 +629,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // runtime. The decorator path attaches property metadata without checking the
         // signature against `property.__init__`, so validate it here.
         // See https://github.com/facebook/pyrefly/issues/4918.
+        // Skip when custom (non-special) decorators remain between `@property` and
+        // the function, since they may reshape the signature before `@property`
+        // sees it (e.g. homeassistant Spotify's `@ensure_item` turns
+        // `(self, item)` into `(self)`). Special decorators like `@override`
+        // are already filtered out of `decorators`, so they don't suppress this.
         if defining_cls.is_some()
             && !flags.is_staticmethod
             && !flags.is_classmethod
+            && decorators.is_empty()
             && let Some(property) = &flags.property_metadata
         {
             let (kind, expected) = match property.role {
