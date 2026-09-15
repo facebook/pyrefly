@@ -1999,7 +1999,7 @@ assert_type(1, int)  # error
 
 Default severity: `ignore`
 
-An instance attribute is declared with a type annotation in the class body but is never assigned a value there or in a recognized method such as `__init__`, so reading it raises `AttributeError` at runtime. Enable this check to require that annotated instance attributes are initialized. This mirrors pyright's `reportUninitializedInstanceVariable`. `ClassVar` and `Final` members, as well as `dataclass`, `NamedTuple`, and `Protocol` classes, are handled separately and are not reported.
+An instance attribute is declared with a type annotation in the class body but is never assigned a value there or in a recognized method such as `__init__`, so reading it raises `AttributeError` at runtime. Enable this check to require that annotated instance attributes are initialized. This mirrors pyright's `reportUninitializedInstanceVariable`. `ClassVar` and `Final` members, `NamedTuple` and `Protocol` classes, and dataclasses whose synthesized `__init__` initializes their fields are not reported. A plain `@dataclass(init=False)` synthesizes no `__init__`, so its annotation-only fields are reported — a case pyright misses.
 
 ```python
 class C:

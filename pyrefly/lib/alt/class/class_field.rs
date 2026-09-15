@@ -1621,7 +1621,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let is_uninit_instance_var = !initialized_in_recognized_method
                     && !direct_annotation.as_ref().is_some_and(|a| a.is_final())
                     && matches!(initialization, ClassFieldInitialization::Uninitialized);
-                if is_uninit_instance_var && !is_special_class {
+                // A dataclass normally initializes every annotated field through its
+                // synthesized `__init__`, so those fields are not reported. The exception is
+                // a plain `@dataclass(init=False)`, which synthesizes no `__init__` and so
+                // leaves annotation-only fields uninitialized at runtime. attrs and pydantic
+                // manage initialization in ways we do not model here, so they stay excluded.
+                // Reuse `is_special_class` so new special classes are excluded here too, then
+                // carve out the plain `@dataclass(init=False)` case, which it over-excludes.
+                let excluded_from_uninit_check = is_special_class
+                    && metadata.dataclass_metadata().is_none_or(|dc| {
+                        !matches!(dc.kind, DataclassKind::Dataclass { .. }) || dc.kws.init
+                    });
+                if is_uninit_instance_var && !excluded_from_uninit_check {
                     self.error(
                         errors,
                         range,

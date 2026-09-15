@@ -74,3 +74,36 @@ class C:
     x: int
 "#,
 );
+
+testcase!(
+    test_uninitialized_instance_variable_dataclass_init_false,
+    TestEnv::new().enable_uninitialized_instance_variable_error(),
+    r#"
+from dataclasses import dataclass
+@dataclass(init=False)
+class C:
+    x: int  # E: Instance attribute `x` is declared but never initialized
+"#,
+);
+
+testcase!(
+    test_uninitialized_instance_variable_dataclass_default_init,
+    TestEnv::new().enable_uninitialized_instance_variable_error(),
+    r#"
+from dataclasses import dataclass
+@dataclass
+class C:
+    x: int
+"#,
+);
+
+testcase!(
+    test_uninitialized_instance_variable_dataclass_init_false_class_body_value,
+    TestEnv::new().enable_uninitialized_instance_variable_error(),
+    r#"
+from dataclasses import dataclass
+@dataclass(init=False)
+class C:
+    x: int = 0
+"#,
+);
