@@ -185,6 +185,48 @@ Example(id="123")  # E: Missing argument `attribute_1`
 );
 
 pydantic_testcase!(
+    test_model_construct,
+    r#"
+from typing import assert_type
+
+from pydantic import BaseModel, Field
+
+class Model(BaseModel):
+    x: int
+    y: str = "default"
+    z: bool = Field(alias="aliased")
+
+model = Model.model_construct(x=1, z=True)
+assert_type(model, Model)
+Model.model_construct(x="1", z=True)  # E: Argument `Literal['1']` is not assignable to parameter `x`
+Model.model_construct(x=1, z=0)  # E: Argument `Literal[0]` is not assignable to parameter `z`
+Model.model_construct(x=1, aliased=True)  # E: Missing argument `z`
+Model.model_construct(z=True)  # E: Missing argument `x`
+Model.model_construct(x=1, z=True, _fields_set={"x"})
+Model.model_construct(x=1, z=True, _fields_set={1})  # E: `set[int]` is not assignable to parameter `_fields_set`
+
+# Normal construction performs validation and can accept coercible input.
+Model(x="1", aliased=True)
+"#,
+);
+
+pydantic_testcase!(
+    test_model_construct_generic,
+    r#"
+from typing import assert_type
+
+from pydantic import BaseModel
+
+class Model[T](BaseModel):
+    value: T
+
+model = Model[int].model_construct(value=1)
+assert_type(model, Model[int])
+Model[int].model_construct(value="1")  # E: `Literal['1']` is not assignable to parameter `value`
+"#,
+);
+
+pydantic_testcase!(
     test_frozen_field_override_covariant,
     r#"
 from pydantic import BaseModel, Field

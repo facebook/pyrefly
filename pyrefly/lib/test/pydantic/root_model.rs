@@ -38,6 +38,24 @@ DefaultFactoryRootModel()
 );
 
 pydantic_testcase!(
+    test_root_model_construct,
+    r#"
+from typing import assert_type
+
+from pydantic import RootModel
+
+class IntRootModel(RootModel[int]):
+    pass
+
+model = IntRootModel.model_construct(1)
+assert_type(model, IntRootModel)
+IntRootModel.model_construct("1")  # E: `Literal['1']` is not assignable to parameter `root`
+IntRootModel.model_construct(1, {"root"})
+IntRootModel.model_construct(1, {1})  # E: `set[int]` is not assignable to parameter `_fields_set`
+"#,
+);
+
+pydantic_testcase!(
     test_root_model_generic,
     r#"
 from pydantic import RootModel
