@@ -2517,6 +2517,63 @@ impl<'a> Transaction<'a> {
         })
     }
 
+    fn find_definition_for_replaced_module_attribute(
+        &self,
+        handle: &Handle,
+        base: &Expr,
+        base_identifier: &Identifier,
+        name: &Name,
+        preference: FindPreference,
+    ) -> Option<Vec1<FindDefinitionItemWithDocstring>> {
+        fn dotted_suffix(expression: &Expr, root: &Identifier) -> Option<Vec<Name>> {
+            match expression {
+                Expr::Name(name) if name.id == root.id && name.range() == root.range => {
+                    Some(Vec::new())
+                }
+                Expr::Attribute(attribute) => {
+                    let mut suffix = dotted_suffix(&attribute.value, root)?;
+                    suffix.push(attribute.attr.id.clone());
+                    Some(suffix)
+                }
+                _ => None,
+            }
+        }
+
+        let answers = self.get_answers(handle)?;
+        let bindings = answers.bindings();
+        let key = Key::BoundName(ShortIdentifier::new(base_identifier));
+        let IntermediateDefinition::Module(_, mut imported_module, _) =
+            key_to_intermediate_definition(bindings, &key)?
+        else {
+            return None;
+        };
+        for component in dotted_suffix(base, base_identifier)? {
+            let (definition_handle, _, export) =
+                self.resolve_named_import(handle, imported_module, component.clone(), preference)?;
+            if export.symbol_kind != Some(SymbolKind::Module) {
+                return None;
+            }
+            imported_module = definition_handle.module();
+        }
+
+        if !self.replaces_import_with_any(handle, imported_module) {
+            return None;
+        }
+        let (definition_handle, resolved_name, export) =
+            self.resolve_named_import(handle, imported_module, name.clone(), preference)?;
+        if name != &*dunder::GETATTR && resolved_name == *dunder::GETATTR {
+            return None;
+        }
+        let definition_module = self.get_module_info(&definition_handle)?;
+        Some(vec1![FindDefinitionItemWithDocstring {
+            metadata: DefinitionMetadata::VariableOrAttribute(export.symbol_kind),
+            definition_range: export.location,
+            module: definition_module,
+            docstring_range: export.docstring_range,
+            display_name: Some(name.to_string()),
+        }])
+    }
+
     pub(crate) fn find_definition_for_imported_module(
         &self,
         handle: &Handle,
@@ -3005,7 +3062,12 @@ impl<'a> Transaction<'a> {
             }
             Some(IdentifierWithContext {
                 identifier,
-                context: IdentifierContext::Attribute { base_range, .. },
+                context:
+                    IdentifierContext::Attribute {
+                        base_range,
+                        base_identifier,
+                        ..
+                    },
             }) => {
                 // If this attribute is the callee of a call expression, jump
                 // to constructor or __call__ definitions when applicable.
@@ -3020,12 +3082,45 @@ impl<'a> Transaction<'a> {
                         return Ok(defs);
                     }
                 }
-                Ok(self.find_definition_for_attribute(
+                match self.find_definition_for_attribute(
                     handle,
                     base_range,
                     identifier.id(),
                     preference,
-                )?)
+                ) {
+                    Ok(definitions) => Ok(definitions),
+                    Err(reason) => {
+                        if preference.replacement_policy != ImportReplacementPolicy::Bypass
+                            || !matches!(
+                                reason,
+                                EmptyResponseReason::DefinitionNotFound {
+                                    context: DefinitionContext::Attribute,
+                                    ..
+                                }
+                            )
+                            || !self
+                                .get_type_trace(handle, base_range)
+                                .is_some_and(|ty| matches!(ty, Type::Any(_) | Type::Module(_)))
+                        {
+                            return Err(reason);
+                        }
+                        let Some(base_identifier) = base_identifier else {
+                            return Err(reason);
+                        };
+                        let attribute = match covering_nodes.get(1) {
+                            Some(AnyNodeRef::ExprAttribute(attribute)) => attribute,
+                            _ => unreachable!("attribute context requires an attribute expression"),
+                        };
+                        self.find_definition_for_replaced_module_attribute(
+                            handle,
+                            attribute.value.as_ref(),
+                            &base_identifier,
+                            identifier.id(),
+                            preference,
+                        )
+                        .ok_or(reason)
+                    }
+                }
             }
             Some(IdentifierWithContext {
                 identifier,

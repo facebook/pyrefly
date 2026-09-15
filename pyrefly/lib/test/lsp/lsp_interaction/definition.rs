@@ -958,7 +958,7 @@ fn definition_for_import_replaced_with_any_uses_source() {
 
 // bug = "Go-to-definition cannot resolve direct attributes on modules replaced with Any."
 #[test]
-fn definition_for_attribute_on_module_replaced_with_any_finds_no_source() {
+fn definition_for_attribute_on_module_replaced_with_any_uses_source() {
     let root = get_test_files_root();
     let root_path = root.path().join("replace_imports_with_any_definition");
     let mut interaction = LspInteraction::new();
@@ -967,12 +967,35 @@ fn definition_for_attribute_on_module_replaced_with_any_finds_no_source() {
         .initialize(InitializeSettings::default())
         .unwrap();
 
+    interaction.client.did_open("module_usage.py");
+    interaction
+        .client
+        .definition("module_usage.py", 8, 18)
+        .expect_definition_response_from_root("site_packages/library/__init__.py", 5, 6, 5, 12)
+        .unwrap();
+    interaction
+        .client
+        .definition("module_usage.py", 9, 22)
+        .expect_definition_response_from_root("site_packages/library/__init__.py", 5, 6, 5, 12)
+        .unwrap();
+
+    interaction.client.did_open("module_boundary.py");
+    interaction
+        .client
+        .definition("module_boundary.py", 7, 18)
+        .expect_definition_response_from_root("site_packages/library/__init__.py", 5, 6, 5, 12)
+        .unwrap();
+
+    interaction.client.did_open("dotted_usage.py");
+    let dotted_path = "site_packages/outer/inner/__init__.py";
+    interaction
+        .client
+        .definition("dotted_usage.py", 7, 22)
+        .expect_definition_response_from_root(dotted_path, 5, 6, 5, 12)
+        .unwrap();
+
     for (file, line, column) in [
-        ("module_usage.py", 8, 18),
-        ("module_usage.py", 9, 22),
         ("module_usage.py", 12, 21),
-        ("module_boundary.py", 7, 18),
-        ("dotted_usage.py", 7, 22),
         ("main.py", 8, 10),
         ("false_positive_usage.py", 8, 18),
         ("false_positive_usage.py", 9, 28),

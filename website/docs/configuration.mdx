@@ -778,7 +778,8 @@ with `typing.Any` and ignore import errors for the module. For example,
 with `from x.y import z` in a file, adding `x.*`, `*.y`, or `x.y` to this config will
 silence those import errors and replace the module with `typing.Any`. If the module
 can be found, its type information will still be replaced with `typing.Any`. Go-to-definition
-can still open the module source when source is available.
+can still open the module source when source is available. It can also open direct module
+attributes from that source. Other language features do not use the source type information.
 
 This is different from [`ignore-missing-imports`](#ignore-missing-imports), which only
 replaces the import with `typing.Any` if it can't be found.

@@ -1236,6 +1236,13 @@ impl<'a> Transaction<'a> {
         path.map(|path| Handle::new(module, path, handle.sys_info().dupe()))
     }
 
+    pub(crate) fn replaces_import_with_any(&self, handle: &Handle, module: ModuleName) -> bool {
+        self.get_module(handle)
+            .config
+            .read()
+            .replace_imports_with_any(Some(handle.path().as_path()), module)
+    }
+
     /// Create a handle for source lookup, including modules replaced with `Any`.
     pub(crate) fn import_handle_including_replaced(
         &self,
