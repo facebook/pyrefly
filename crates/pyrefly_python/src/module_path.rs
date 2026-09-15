@@ -22,7 +22,9 @@ use serde::Serializer;
 use crate::dunder;
 use crate::module_name::ModuleName;
 
-#[derive(Debug, Clone, Dupe, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(
+    Debug, Clone, Dupe, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord
+)]
 pub enum ModuleStyle {
     /// .py - executable code.
     #[default]
@@ -40,6 +42,16 @@ impl ModuleStyle {
             ModuleStyle::Executable
         }
     }
+}
+
+impl<To: 'static> Visit<To> for ModuleStyle {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse<'a>(&'a self, _: &mut dyn FnMut(&'a To)) {}
+}
+
+impl<To: 'static> VisitMut<To> for ModuleStyle {
+    const RECURSE_CONTAINS: bool = false;
+    fn recurse_mut(&mut self, _: &mut dyn FnMut(&mut To)) {}
 }
 
 /// Store information about where a module is sourced from.
@@ -196,10 +208,6 @@ impl ModulePath {
         matches!(self.0, ModulePathDetails::Memory(_))
     }
 
-    pub fn is_notebook(&self) -> bool {
-        self.as_path().extension() == Some("ipynb".as_ref())
-    }
-
     /// Attempt to match the given [`ModuleName`]'s components to this `ModulePath`,
     /// returning the directory that is the import root for the `ModuleName`, if
     /// *all* module components could be matched to directories. `ModulePath`s
@@ -300,6 +308,21 @@ impl ModulePath {
 
     pub fn details(&self) -> &ModulePathDetails {
         &self.0
+    }
+
+    /// Whether this module is first-party user code eligible for IDE indexing.
+    /// Excludes bundled typeshed/third-party stubs and site-packages libraries.
+    pub fn is_first_party_for_indexing(&self) -> bool {
+        match &self.0 {
+            ModulePathDetails::BundledTypeshed(_)
+            | ModulePathDetails::BundledTypeshedThirdParty(_)
+            | ModulePathDetails::BundledThirdParty(_) => false,
+            ModulePathDetails::FileSystem(path)
+            | ModulePathDetails::Memory(path)
+            | ModulePathDetails::Namespace(path) => {
+                !path.to_string_lossy().contains("site-packages")
+            }
+        }
     }
 }
 

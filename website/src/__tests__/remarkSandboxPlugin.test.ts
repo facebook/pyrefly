@@ -6,27 +6,20 @@
  */
 
 import {
+    buildSandboxUrl,
     parseSandboxConfig,
     readSandboxFiles,
     stripLicenseHeader,
 } from '../sandbox/remarkSandboxPlugin';
+import { decodeSandboxUrl } from '../sandbox/generateSandboxUrl';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-// Load the real lz-string .js file directly to bypass Jest's moduleNameMapper.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const LZString = require(
-    require('path').resolve(
-        process.cwd(),
-        'node_modules/lz-string/libs/lz-string.js',
-    ),
-);
-
 describe('parseSandboxConfig', () => {
     test('parses all fields', () => {
         const config = parseSandboxConfig(
-            'dir: my-example\nactive: main.py\nlinkText: Try it\ndescription: A demo',
+            'dir: my-example\nactive: main.py\nlinkText: Try it\ndescription: A demo'
         );
         expect(config).toEqual({
             dir: 'my-example',
@@ -56,14 +49,14 @@ describe('parseSandboxConfig', () => {
 
     test('handles values with colons', () => {
         const config = parseSandboxConfig(
-            'dir: my-example\ndescription: shapes: tracked end-to-end',
+            'dir: my-example\ndescription: shapes: tracked end-to-end'
         );
         expect(config!.description).toBe('shapes: tracked end-to-end');
     });
 
     test('ignores lines without colons', () => {
         const config = parseSandboxConfig(
-            'dir: my-example\nthis line has no key-value',
+            'dir: my-example\nthis line has no key-value'
         );
         expect(config).not.toBeNull();
         expect(config!.dir).toBe('my-example');
@@ -148,7 +141,7 @@ describe('readSandboxFiles', () => {
 
     test('throws for nonexistent directory', () => {
         expect(() => readSandboxFiles('/nonexistent/path')).toThrow(
-            'not found',
+            'not found'
         );
     });
 
@@ -164,7 +157,7 @@ describe('readSandboxFiles', () => {
             '# LICENSE file in the root directory of this source tree.\n';
         fs.writeFileSync(
             path.join(tmpDir, 'sandbox.py'),
-            license + '\nx = 1\n',
+            license + '\nx = 1\n'
         );
         const files = readSandboxFiles(tmpDir);
         expect(files['sandbox.py']).toBe('x = 1\n');
@@ -173,47 +166,33 @@ describe('readSandboxFiles', () => {
     test('reads files with unicode content', () => {
         fs.writeFileSync(
             path.join(tmpDir, 'sandbox.py'),
-            'x = "héllo 日本語"\n',
+            'x = "héllo 日本語"\n'
         );
         const files = readSandboxFiles(tmpDir);
         expect(files['sandbox.py']).toBe('x = "héllo 日本語"\n');
     });
 });
 
-describe('buildSandboxUrl (via real lz-string)', () => {
-    function buildUrl(files: Record<string, string>, activeFile: string): string {
-        const project = { files, activeFile };
-        const compressed = LZString.compressToEncodedURIComponent(
-            JSON.stringify(project),
-        );
-        return `https://pyrefly.org/sandbox/?project=${compressed}`;
-    }
-
+describe('buildSandboxUrl', () => {
     test('produces a valid URL', () => {
-        const url = buildUrl({ 'sandbox.py': 'x = 1' }, 'sandbox.py');
-        expect(url).toMatch(/^https:\/\/pyrefly\.org\/sandbox\/\?project=/);
+        const url = buildSandboxUrl({ 'sandbox.py': 'x = 1' }, 'sandbox.py');
+        expect(url).toMatch(/^https:\/\/pyrefly\.org\/sandbox\/\?project=v2\./);
     });
 
     test('URL is decodable back to original files', () => {
         const files = {
             'sandbox.py': 'import torch\nx = torch.randn(3)',
-            'pyrefly.toml': 'tensor-shapes = true',
+            'pyrefly.toml': 'python-version = "3.12"',
         };
-        const url = buildUrl(files, 'sandbox.py');
-
-        const match = url.match(/project=(.+)/);
-        expect(match).not.toBeNull();
-        const decoded = JSON.parse(
-            LZString.decompressFromEncodedURIComponent(match![1]),
-        );
-        expect(decoded.files).toEqual(files);
-        expect(decoded.activeFile).toBe('sandbox.py');
+        const decoded = decodeSandboxUrl(buildSandboxUrl(files, 'sandbox.py'));
+        expect(decoded!.files).toEqual(files);
+        expect(decoded!.activeFile).toBe('sandbox.py');
     });
 
     test('reads real example directory and produces a working URL', () => {
         const examplesDir = path.resolve(
             __dirname,
-            '../../sandbox-examples/tensor-shapes-overview',
+            '../../sandbox-examples/tensor-shapes-overview'
         );
         if (!fs.existsSync(examplesDir)) {
             return; // skip if examples not present
@@ -223,12 +202,8 @@ describe('buildSandboxUrl (via real lz-string)', () => {
         expect(files['pyrefly.toml']).toBeDefined();
         expect(files['torch.pyi']).toBeDefined();
 
-        const url = buildUrl(files, 'sandbox.py');
-        const match = url.match(/project=(.+)/);
-        const decoded = JSON.parse(
-            LZString.decompressFromEncodedURIComponent(match![1]),
-        );
-        expect(decoded.files['sandbox.py']).toContain('assert_type');
-        expect(decoded.activeFile).toBe('sandbox.py');
+        const decoded = decodeSandboxUrl(buildSandboxUrl(files, 'sandbox.py'));
+        expect(decoded!.files['sandbox.py']).toContain('assert_type');
+        expect(decoded!.activeFile).toBe('sandbox.py');
     });
 });

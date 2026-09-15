@@ -31,6 +31,7 @@ use crate::types::Type;
 assert_words!(Lit, 3);
 
 static LITERAL_STR_MAX_SIZE: usize = 4096;
+static LITERAL_BYTES_MAX_SIZE: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
@@ -55,6 +56,45 @@ pub enum Lit {
     Bool(bool),
     Bytes(Box<[u8]>),
     Enum(Box<LitEnum>),
+}
+
+/// Write a Python string literal without allocating an intermediate string.
+pub(crate) fn write_escaped_string(
+    s: &str,
+    f: &mut impl fmt::Write,
+    use_single_quotes: bool,
+) -> fmt::Result {
+    let quote = if use_single_quotes { '\'' } else { '"' };
+    f.write_char(quote)?;
+
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        let escape = match c {
+            '\\' => Some("\\\\"),
+            '\'' if use_single_quotes => Some("\\'"),
+            '"' if !use_single_quotes => Some("\\\""),
+            '\x07' => Some("\\a"),
+            '\x08' => Some("\\b"),
+            '\x0c' => Some("\\f"),
+            '\n' => Some("\\n"),
+            '\r' => Some("\\r"),
+            '\t' => Some("\\t"),
+            '\x0b' => Some("\\v"),
+            _ => None,
+        };
+        if let Some(escape) = escape {
+            if start < i {
+                f.write_str(&s[start..i])?;
+            }
+            f.write_str(escape)?;
+            start = i + c.len_utf8();
+        }
+    }
+    if start < s.len() {
+        f.write_str(&s[start..])?;
+    }
+
+    f.write_char(quote)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -151,8 +191,13 @@ impl Lit {
         Some(Lit::Str(x.value.to_str().into()))
     }
 
-    pub fn from_bytes_literal(x: &ExprBytesLiteral) -> Self {
-        Lit::Bytes(x.value.bytes().collect())
+    /// Returns `None` for oversized literals, which are widened to `bytes` (mirrors
+    /// `from_string_literal`), to keep huge literals out of the type representation.
+    pub fn from_bytes_literal(x: &ExprBytesLiteral) -> Option<Self> {
+        if x.value.len() > LITERAL_BYTES_MAX_SIZE {
+            return None;
+        }
+        Some(Lit::Bytes(x.value.bytes().collect()))
     }
 
     pub fn from_fstring(x: &ExprFString) -> Option<Self> {
@@ -232,44 +277,7 @@ impl Lit {
         use_single_quotes_for_string: bool,
     ) -> fmt::Result {
         match self {
-            Lit::Str(s) => {
-                let quote = if use_single_quotes_for_string {
-                    '\''
-                } else {
-                    '"'
-                };
-                f.write_char(quote)?;
-
-                // Batch non-escaped characters to minimize write calls
-                let mut start = 0;
-                for (i, c) in s.char_indices() {
-                    let escape = match c {
-                        '\\' => Some("\\\\"),
-                        '\'' if use_single_quotes_for_string => Some("\\'"),
-                        '\"' if !use_single_quotes_for_string => Some("\\\""),
-                        '\x07' => Some("\\a"),
-                        '\x08' => Some("\\b"),
-                        '\x0c' => Some("\\f"),
-                        '\n' => Some("\\n"),
-                        '\r' => Some("\\r"),
-                        '\t' => Some("\\t"),
-                        '\x0b' => Some("\\v"),
-                        _ => None,
-                    };
-                    if let Some(esc) = escape {
-                        if start < i {
-                            f.write_str(&s[start..i])?;
-                        }
-                        f.write_str(esc)?;
-                        start = i + c.len_utf8();
-                    }
-                }
-                if start < s.len() {
-                    f.write_str(&s[start..])?;
-                }
-
-                f.write_char(quote)
-            }
+            Lit::Str(s) => write_escaped_string(s, f, use_single_quotes_for_string),
             lit => write!(f, "{lit}"),
         }
     }

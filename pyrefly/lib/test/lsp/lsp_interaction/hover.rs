@@ -6,11 +6,11 @@
  */
 
 use lsp_types::Url;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_hover_basic() {
@@ -277,6 +277,36 @@ fn test_hover_suppressed_error_deprecated_alias() {
                 "value": "**Suppressed Error**\n\n`bad-override-param-name`: Class member `B.f` overrides parent class `A` in an inconsistent manner\n  Got parameter name `x1`, expected `x`",
             }
         })).unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+#[test]
+fn hover_for_import_replaced_with_any_remains_unknown() {
+    let root = get_test_files_root();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root.path().join("replace_imports_with_any_definition"));
+    interaction
+        .initialize(InitializeSettings::default())
+        .unwrap();
+    interaction.client.did_open("main.py");
+
+    interaction
+        .client
+        .hover("main.py", 7, 9)
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| text.contains("(variable) Target: Unknown"))
+        })
+        .unwrap();
+
+    interaction.client.did_open("module_boundary.py");
+    interaction
+        .client
+        .hover("module_boundary.py", 7, 18)
+        .expect_hover_response_with_markup(|value| {
+            value.is_some_and(|text| text.contains("Target: Unknown"))
+        })
+        .unwrap();
 
     interaction.shutdown().unwrap();
 }

@@ -13,6 +13,7 @@ use std::fmt::Display;
 
 use parse_display::Display;
 use pyrefly_derive::TypeEq;
+use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
 use pyrefly_util::display::intersperse_iter;
 
@@ -20,7 +21,7 @@ use crate::types::AnyStyle;
 use crate::types::Substitution;
 use crate::types::Type;
 
-#[derive(Debug, Clone, Default, VisitMut, TypeEq, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Visit, VisitMut, TypeEq, PartialEq, Eq)]
 pub struct Annotation {
     pub qualifiers: Vec<Qualifier>,
     pub ty: Option<Type>,
@@ -79,7 +80,7 @@ impl Annotation {
     }
 }
 
-#[derive(Debug, Clone, VisitMut, TypeEq, PartialEq, Eq, Display)]
+#[derive(Debug, Clone, Visit, VisitMut, TypeEq, PartialEq, Eq, Display)]
 pub enum Qualifier {
     Required,
     NotRequired,

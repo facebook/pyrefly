@@ -160,12 +160,13 @@ pub enum ExtraItems {
 
 impl ExtraItems {
     pub fn extra(ty: Type, qualifiers: &[Qualifier]) -> Self {
-        match &ty {
-            Type::Type(inner) if inner.is_never() => Self::Closed,
-            _ => Self::Extra(ExtraItem {
+        if ty.is_never() {
+            Self::Closed
+        } else {
+            Self::Extra(ExtraItem {
                 ty,
                 read_only: qualifiers.iter().any(|q| q == &Qualifier::ReadOnly),
-            }),
+            })
         }
     }
 

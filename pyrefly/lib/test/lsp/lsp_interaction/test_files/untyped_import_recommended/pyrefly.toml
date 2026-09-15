@@ -1,0 +1,6 @@
+search-path = ["."]
+site-package-path = ["site_packages"]
+skip-interpreter-query = true
+
+[errors]
+untyped-import = "error"

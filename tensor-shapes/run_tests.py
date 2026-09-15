@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+"""Run every tensor-shape stub test: static and runtime, for every library.
+
+This is the single entry point CI uses, internally and on GitHub, so that all
+of the shape coverage lands in one job rather than one job per library. The
+per-package `run_pyrefly.py` and `run_runtime_tests.py` remain the things to
+reach for while iterating on a single library.
+
+Builds Pyrefly before checking, and needs the shared virtualenv from
+bootstrap_venv.py for runtime tests and Torch and NumPy static checks. Nothing
+here downloads anything.
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+from shape_testing import pyrefly_command, TENSOR_SHAPES_ROOT, venv_python
+
+PACKAGES: tuple[str, ...] = (
+    "pyrefly-torch-stubs",
+    "pyrefly-numpy-stubs",
+    "pyrefly-jax-stubs",
+)
+
+
+def shaped_array_reference_lines(source: str) -> list[int]:
+    return [
+        line_number
+        for line_number, line in enumerate(source.splitlines(), start=1)
+        if "shaped_array" in line
+    ]
+
+
+def shaped_array_references() -> list[str]:
+    uses = []
+    for package in PACKAGES:
+        package_root = TENSOR_SHAPES_ROOT / package
+        for path in package_root.rglob("*"):
+            if path.suffix not in {".py", ".pyi"}:
+                continue
+            uses.extend(
+                f"{path.relative_to(TENSOR_SHAPES_ROOT)}:{line}"
+                for line in shaped_array_reference_lines(path.read_text())
+            )
+    return uses
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--pyrefly",
+        type=Path,
+        default=None,
+        help="use this binary as is; the only mode that does not build Pyrefly first",
+    )
+    parser.add_argument(
+        "--buck",
+        action="store_true",
+        help="build and run Pyrefly with Buck instead of Cargo",
+    )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="build with the Cargo release profile instead of debug",
+    )
+    parser.add_argument(
+        "--python",
+        type=Path,
+        default=None,
+        help=(
+            "virtualenv interpreter used by runtime tests and Torch/NumPy static fallback "
+            "(default: shared virtualenv)"
+        ),
+    )
+    parser.add_argument(
+        "--static-only",
+        action="store_true",
+        help="only type check; still needs the virtualenv for Torch/NumPy fallback",
+    )
+    parser.add_argument(
+        "--runtime-only",
+        action="store_true",
+        help="only execute the suites against the real libraries",
+    )
+    parser.add_argument("--nocapture", action="store_true")
+    args = parser.parse_args()
+
+    if args.static_only and args.runtime_only:
+        raise SystemExit("--static-only and --runtime-only are mutually exclusive")
+    if references := shaped_array_references():
+        print(
+            "Legacy shaped_array references remain:\n" + "\n".join(references),
+            file=sys.stderr,
+        )
+        return 1
+
+    # Resolve both toolchains before running anything, so a missing virtualenv
+    # fails immediately rather than after several minutes of type checking.
+    pyrefly = (
+        None
+        if args.runtime_only
+        else pyrefly_command(
+            explicit=args.pyrefly, buck=args.buck, release=args.release
+        )
+    )
+    python = venv_python(args.python)
+
+    failures: list[str] = []
+    for package in PACKAGES:
+        package_root = TENSOR_SHAPES_ROOT / package
+        if pyrefly is not None:
+            step = f"{package} static"
+            print(f"\n=== {step} ===", flush=True)
+            command = [sys.executable, str(package_root / "run_pyrefly.py")]
+            # Forward the already-resolved binary rather than re-passing the
+            # flags, so that the three packages share one build. `--pyrefly`,
+            # $PYREFLY and $CARGO_TARGET_DIR may all be relative to this
+            # process's directory, and the child runs from a different one. A
+            # single-element command is a binary path; anything longer is the
+            # `buck2 run` invocation, which needs no resolving.
+            if len(pyrefly) == 1:
+                command.extend(["--pyrefly", pyrefly[0]])
+            else:
+                command.append("--buck")
+            if package in PACKAGES:
+                command.extend(["--python", str(python)])
+            if args.nocapture:
+                command.append("--nocapture")
+            if not run(command):
+                failures.append(step)
+        if not args.static_only:
+            step = f"{package} runtime"
+            print(f"\n=== {step} ===", flush=True)
+            if not run([str(python), str(package_root / "run_runtime_tests.py")]):
+                failures.append(step)
+
+    if failures:
+        print("\nFAILED: " + ", ".join(failures), file=sys.stderr, flush=True)
+        return 1
+    print("\nAll tensor-shape tests passed.", flush=True)
+    return 0
+
+
+def run(command: list[str]) -> bool:
+    print("+ " + " ".join(command), flush=True)
+    return subprocess.run(command, cwd=TENSOR_SHAPES_ROOT).returncode == 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

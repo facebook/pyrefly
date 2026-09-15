@@ -37,6 +37,7 @@ This builds the wasm dependencies and installs the yarn dependencies.
 #### Troubleshooting
 
 - If you run into any issues with "SSL peer certificate or SSH remote key was not OK (SSL certificate problem: unable to get local issuer certificate)", double check your `~/.gitconfig` that you aren't setting a proxy, as this will override the proxy override set in `setup_cargo.sh`.
+- If `yarn start` fails with `Error: not found: hg`, you are on `docusaurus-plugin-internaldocs-fb` 1.19.1 or older. That plugin version calls `which.sync('hg')` without `nothrow`, so a missing Mercurial binary crashes the public docs server. Upgrade the plugin to 1.19.2+ (this repository pins `~1.19.3`). Public website development does not require Mercurial.
 
 ### Run the Website
 
