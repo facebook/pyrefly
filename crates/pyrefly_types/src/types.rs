@@ -1453,67 +1453,132 @@ impl Type {
         })
     }
 
-    /// Visits quantified variables that are not bound by a containing callable or type-level map.
-    pub fn for_each_free_quantified<'a>(&'a self, f: &mut impl FnMut(&'a Quantified)) {
-        fn visit_forall<'a, T: Visit<Type>>(
+    /// Recurses through type-variable positions while tracking type parameters declared by
+    /// enclosing generic types.
+    pub(crate) fn recurse_with_type_parameter_scopes<'a>(
+        &'a self,
+        in_scope: &mut Vec<&'a Quantified>,
+        f: &mut dyn FnMut(&'a Type, &mut Vec<&'a Quantified>),
+    ) {
+        fn recurse_forall<'a, T: Visit<Type>>(
             forall: &'a Forall<T>,
-            f: &mut dyn FnMut(&'a Quantified),
-            shadowed: &mut Vec<&'a Quantified>,
+            in_scope: &mut Vec<&'a Quantified>,
+            f: &mut dyn FnMut(&'a Type, &mut Vec<&'a Quantified>),
         ) {
-            let old_len = shadowed.len();
-            shadowed.extend(forall.tparams.iter());
-            forall.tparams.visit(&mut |ty| visit(ty, f, shadowed));
-            forall.body.visit(&mut |ty| visit(ty, f, shadowed));
-            shadowed.truncate(old_len);
+            let old_len = in_scope.len();
+            in_scope.extend(forall.tparams.iter());
+            forall.tparams.visit(&mut |ty| f(ty, in_scope));
+            forall.body.visit(&mut |ty| f(ty, in_scope));
+            in_scope.truncate(old_len);
         }
 
-        fn visit_overload<'a>(
+        fn recurse_overload<'a>(
             overload: &'a Overload,
-            f: &mut dyn FnMut(&'a Quantified),
-            shadowed: &mut Vec<&'a Quantified>,
+            in_scope: &mut Vec<&'a Quantified>,
+            f: &mut dyn FnMut(&'a Type, &mut Vec<&'a Quantified>),
         ) {
             for signature in &overload.signatures {
                 match signature {
                     OverloadType::Function(function) => {
-                        function.visit(&mut |ty| visit(ty, f, shadowed));
+                        function.visit(&mut |ty| f(ty, in_scope));
                     }
-                    OverloadType::Forall(forall) => visit_forall(forall, f, shadowed),
+                    OverloadType::Forall(forall) => recurse_forall(forall, in_scope, f),
                 }
             }
-            overload.metadata.visit(&mut |ty| visit(ty, f, shadowed));
+            overload.metadata.visit(&mut |ty| f(ty, in_scope));
         }
 
+        match self {
+            Type::Forall(forall) => recurse_forall(forall, in_scope, f),
+            Type::Overload(overload) => recurse_overload(overload, in_scope, f),
+            Type::BoundMethod(method) => {
+                f(&method.obj, in_scope);
+                match &method.func {
+                    BoundMethodType::Function(function) => {
+                        function.visit(&mut |ty| f(ty, in_scope));
+                    }
+                    BoundMethodType::Forall(forall) => recurse_forall(forall, in_scope, f),
+                    BoundMethodType::Overload(overload) => recurse_overload(overload, in_scope, f),
+                }
+            }
+            Type::TypeLevelDslCall(call) => {
+                call.visit_parts(in_scope, &mut |ty, in_scope| f(ty, in_scope));
+            }
+            _ => self.recurse_type_variable_positions(&mut |inside| f(inside, in_scope)),
+        }
+    }
+
+    /// The mutable form of [`Type::recurse_with_type_parameter_scopes`].
+    #[expect(dead_code, reason = "used by quantified finalization in a follow-up")]
+    pub(crate) fn recurse_with_type_parameter_scopes_mut(
+        &mut self,
+        in_scope: &mut Vec<Quantified>,
+        f: &mut dyn FnMut(&mut Type, &mut Vec<Quantified>),
+    ) {
+        fn recurse_forall<T: VisitMut<Type>>(
+            forall: &mut Forall<T>,
+            in_scope: &mut Vec<Quantified>,
+            f: &mut dyn FnMut(&mut Type, &mut Vec<Quantified>),
+        ) {
+            let old_len = in_scope.len();
+            in_scope.extend(forall.tparams.iter().cloned());
+            // Match `VisitMut` for `Arc<TParams>`: do not mutate bounds/defaults or clone the Arc.
+            forall.body.visit_mut(&mut |ty| f(ty, in_scope));
+            in_scope.truncate(old_len);
+        }
+
+        fn recurse_overload(
+            overload: &mut Overload,
+            in_scope: &mut Vec<Quantified>,
+            f: &mut dyn FnMut(&mut Type, &mut Vec<Quantified>),
+        ) {
+            for signature in &mut overload.signatures {
+                match signature {
+                    OverloadType::Function(function) => {
+                        function.visit_mut(&mut |ty| f(ty, in_scope));
+                    }
+                    OverloadType::Forall(forall) => recurse_forall(forall, in_scope, f),
+                }
+            }
+            overload.metadata.visit_mut(&mut |ty| f(ty, in_scope));
+        }
+
+        match self {
+            Type::Forall(forall) => recurse_forall(forall, in_scope, f),
+            Type::Overload(overload) => recurse_overload(overload, in_scope, f),
+            Type::BoundMethod(method) => {
+                f(&mut method.obj, in_scope);
+                match &mut method.func {
+                    BoundMethodType::Function(function) => {
+                        function.visit_mut(&mut |ty| f(ty, in_scope));
+                    }
+                    BoundMethodType::Forall(forall) => recurse_forall(forall, in_scope, f),
+                    BoundMethodType::Overload(overload) => recurse_overload(overload, in_scope, f),
+                }
+            }
+            Type::TypeLevelDslCall(call) => {
+                call.subst_parts_mut(in_scope, &mut |ty, in_scope| f(ty, in_scope));
+            }
+            _ => self.recurse_type_variable_positions_mut(&mut |inside| f(inside, in_scope)),
+        }
+    }
+
+    /// Visits quantified variables that are not bound by a containing callable or type-level map.
+    pub fn for_each_free_quantified<'a>(&'a self, f: &mut impl FnMut(&'a Quantified)) {
         fn visit<'a>(
             ty: &'a Type,
             f: &mut dyn FnMut(&'a Quantified),
-            shadowed: &mut Vec<&'a Quantified>,
+            in_scope: &mut Vec<&'a Quantified>,
         ) {
             if let Type::Quantified(q) = ty {
-                if !shadowed.contains(&q.as_ref()) {
+                if !in_scope.contains(&q.as_ref()) {
                     f(q);
                 }
                 return;
             }
-            match ty {
-                Type::Forall(forall) => visit_forall(forall, f, shadowed),
-                Type::Overload(overload) => visit_overload(overload, f, shadowed),
-                Type::BoundMethod(method) => {
-                    visit(&method.obj, f, shadowed);
-                    match &method.func {
-                        BoundMethodType::Function(function) => {
-                            function.visit(&mut |ty| visit(ty, f, shadowed));
-                        }
-                        BoundMethodType::Forall(forall) => visit_forall(forall, f, shadowed),
-                        BoundMethodType::Overload(overload) => {
-                            visit_overload(overload, f, shadowed)
-                        }
-                    }
-                }
-                Type::TypeLevelDslCall(call) => {
-                    call.visit_parts(shadowed, &mut |ty, shadowed| visit(ty, f, shadowed));
-                }
-                _ => ty.recurse_type_variable_positions(&mut |inside| visit(inside, f, shadowed)),
-            }
+            ty.recurse_with_type_parameter_scopes(in_scope, &mut |inside, in_scope| {
+                visit(inside, f, in_scope)
+            });
         }
 
         visit(self, f, &mut Vec::new());
