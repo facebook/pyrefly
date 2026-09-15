@@ -10,6 +10,7 @@ pub(crate) mod assert_not_none;
 pub(crate) mod change_signature;
 pub(crate) mod convert_dict;
 pub(crate) mod convert_star_import;
+pub(crate) mod deprecated_contextmanager;
 pub(crate) mod enum_member;
 pub(crate) mod extract_field;
 pub(crate) mod extract_function;
