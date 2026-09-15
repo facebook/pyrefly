@@ -33,3 +33,13 @@ def test_no_grad_context_manager[N: IntVar](x: Tensor[[N]]):
     with torch.no_grad():
         y = x.relu()
     assert_type(y, Tensor[[N]])
+
+
+@torch.no_grad
+def bare_decorated[N: IntVar](x: Tensor[[N]], *, scale: float = 1.0) -> Tensor[[N]]:
+    return x * scale
+
+
+def test_no_grad_bare_decorator_preserves_signature[N: IntVar](x: Tensor[[N]]):
+    y = bare_decorated(x, scale=2.0)
+    assert_type(y, Tensor[[N]])
