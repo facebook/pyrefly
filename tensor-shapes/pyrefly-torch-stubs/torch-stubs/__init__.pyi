@@ -86,6 +86,7 @@ if TYPE_CHECKING:
 __all__ = ["Tensor"]
 
 type _Shape = IntTuple
+type _Scalar = builtins.bool | builtins.int | builtins.float | builtins.complex
 type _BasicIndex = builtins.int | slice | list[builtins.int] | None | EllipsisType
 
 # ============================================================================
@@ -1269,7 +1270,7 @@ class Tensor[Shape: _Shape = _Shape]:
         ...
 
     # Comparison methods
-    def eq(self, other: Tensor) -> Self:
+    def eq(self, other: Tensor | _Scalar) -> Self:
         """Element-wise equality. Shape inference via generic fixture signature."""
         ...
 
@@ -2678,7 +2679,7 @@ def sigmoid[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     ...
 
 # Comparison operations
-def eq[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def eq[Shape: IntTuple](input: Tensor[Shape], other: Tensor | _Scalar) -> Tensor[Shape]:
     """Element-wise equality. Shape inference via generic fixture signature."""
     ...
 
@@ -3058,6 +3059,8 @@ def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
 
 # Conditional operations
 # TODO(stroxler): Infer the broadcast result shape.
+@overload
+def where(condition: Tensor[Any]) -> tuple[Tensor, ...]: ...
 @overload
 def where(
     condition: Tensor[Any],

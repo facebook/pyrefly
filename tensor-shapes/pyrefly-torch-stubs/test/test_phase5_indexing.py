@@ -22,6 +22,11 @@ def test_where_2d():
     assert_type(result, Tensor)
 
 
+def test_where_indices():
+    condition: Tensor[[3, 4]] = torch.ones(3, 4)
+    assert_type(torch.where(condition), tuple[Tensor, ...])
+
+
 def test_where_broadcasting():
     """where with broadcasting"""
     condition: Tensor[[3, 1]] = torch.ones(3, 1)
