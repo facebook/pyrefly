@@ -1802,17 +1802,6 @@
     },
     {
       "code": -2,
-      "column": 12,
-      "concise_description": "Returned type `Literal[True]` is not assignable to declared return type `None`",
-      "description": "Returned type `Literal[True]` is not assignable to declared return type `None`",
-      "line": 71,
-      "name": "bad-return",
-      "severity": "error",
-      "stop_column": 16,
-      "stop_line": 71
-    },
-    {
-      "code": -2,
       "column": 11,
       "concise_description": "Yielded type `B` is not assignable to declared yield type `A`",
       "description": "Yielded type `B` is not assignable to declared yield type `A`",
