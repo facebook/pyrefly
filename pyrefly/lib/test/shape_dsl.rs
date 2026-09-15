@@ -7155,6 +7155,51 @@ def explicit_literals[S: IntVar](literal: ExplicitBox[3], symbolic: ExplicitBox[
 );
 
 testcase!(
+    test_intvar_generic_signed_arguments,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntVar
+from typing import Generic, assert_type
+
+class Quantity[N: IntVar = 0]: ...
+type Alias[N: IntVar = -1] = Quantity[N]
+type Reciprocal[N: IntVar] = Quantity[-N]
+
+N = IntVar("N", default=-1)
+class LegacyBox(Generic[N]): ...
+
+def divide[A: IntVar, B: IntVar](x: Quantity[A], y: Quantity[B]) -> Quantity[A - B]: ...
+def identity(x: LegacyBox[N]) -> LegacyBox[N]: ...
+def takes_length(x: Quantity[1]) -> None: ...
+
+def check(
+    length: Quantity[1], area: Quantity[2], legacy_zero: LegacyBox[0],
+    default_zero: Quantity, default_negative: LegacyBox, default_alias: Alias,
+) -> None:
+    assert_type(divide(length, length), Quantity[0])
+    assert_type(divide(length, area), Reciprocal[1])
+    assert_type(identity(legacy_zero), LegacyBox[0])
+    assert_type(default_zero, Quantity[2 - 2])
+    assert_type(identity(default_negative), LegacyBox[1 - 2])
+    assert_type(default_alias, Quantity[-1])
+    takes_length(divide(length, area))  # E: is not assignable to parameter `x`
+"#,
+);
+
+testcase!(
+    test_intvar_generic_signed_arguments_keep_shape_validation,
+    shape_extensions_env_with_torch(),
+    r#"
+from torch import Tensor
+
+def invalid(
+    zero: Tensor[[0]],  # E: Tensor shape dimension must be positive, got 0
+    negative: Tensor[[-1]],  # E: Tensor shape dimension must be positive, got -1
+) -> None: ...
+"#,
+);
+
+testcase!(
     test_dim_field_requires_intvar_class_type_parameter,
     shape_extensions_env_with_torch(),
     r#"
