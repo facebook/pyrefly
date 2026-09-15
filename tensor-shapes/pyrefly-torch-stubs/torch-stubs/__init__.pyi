@@ -3059,22 +3059,34 @@ def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
 # Conditional operations
 # TODO(stroxler): Infer the broadcast result shape.
 @overload
+def where(condition: Tensor[Any]) -> tuple[Tensor, ...]: ...
+@overload
 def where(
     condition: Tensor[Any],
-    x: Tensor[Any],
-    y: Tensor[Any] | builtins.bool | builtins.int | builtins.float | builtins.complex,
+    input: Tensor[Any],
+    other: Tensor[Any],
+    *,
+    out: Tensor | None = None,
 ) -> Tensor: ...
 @overload
 def where(
     condition: Tensor[Any],
-    x: builtins.bool | builtins.int | builtins.float | builtins.complex,
-    y: Tensor[Any],
+    input: Tensor[Any],
+    other: builtins.bool | builtins.int | builtins.float | builtins.complex,
+) -> Tensor: ...
+
+# PyTorch names a scalar value parameter `self`, not `input`.
+@overload
+def where(
+    condition: Tensor[Any],
+    self: builtins.bool | builtins.int | builtins.float | builtins.complex,
+    other: Tensor[Any],
 ) -> Tensor: ...
 @overload
 def where(
     condition: Tensor[Any],
-    x: builtins.bool | builtins.int | builtins.float | builtins.complex,
-    y: builtins.bool | builtins.int | builtins.float | builtins.complex,
+    self: builtins.bool | builtins.int | builtins.float | builtins.complex,
+    other: builtins.bool | builtins.int | builtins.float | builtins.complex,
 ) -> Tensor: ...
 def masked_fill[Shape: IntTuple](
     input: Tensor[Shape], mask: Tensor, value: float
