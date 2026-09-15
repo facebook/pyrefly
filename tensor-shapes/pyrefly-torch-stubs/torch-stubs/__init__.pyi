@@ -3392,6 +3392,45 @@ def load(
     """Load an object saved with `torch.save`."""
     ...
 
+# Re-export the public submodules `torch/__init__.py` imports, so `torch.cuda.x`
+# resolves without an explicit `import torch.cuda`.
+from torch import (
+    accelerator as accelerator,
+    amp as amp,
+    autograd as autograd,
+    backends as backends,
+    cpu as cpu,
+    cuda as cuda,
+    distributed as distributed,
+    distributions as distributions,
+    export as export,
+    fft as fft,
+    func as func,
+    futures as futures,
+    hub as hub,
+    jit as jit,
+    library as library,
+    linalg as linalg,
+    mps as mps,
+    mtia as mtia,
+    multiprocessing as multiprocessing,
+    nested as nested,
+    nn as nn,
+    optim as optim,
+    overrides as overrides,
+    profiler as profiler,
+    random as random,
+    return_types as return_types,
+    serialization as serialization,
+    sparse as sparse,
+    special as special,
+    testing as testing,
+    types as types,
+    utils as utils,
+    version as version,
+    xpu as xpu,
+)
+
 # A partial stub package falls back to runtime stubs only for modules it does
 # not define. Use a gradual fallback for names missing from this shadowing
 # module until they receive shape-aware declarations.
