@@ -482,8 +482,27 @@ allow_redefinition = true
 
     #[test]
     fn test_strict_checks_unannotated_defs() -> anyhow::Result<()> {
-        let cfg = parse_pyproject_config("[tool.mypy]\nstrict = true\n")?;
+        let mut cfg = parse_pyproject_config("[tool.mypy]\nstrict = true\n")?;
         assert_eq!(cfg.root.check_unannotated_defs, Some(true));
+        cfg.configure();
+        assert_eq!(
+            cfg.errors(Path::new(".")).severity(ErrorKind::MethodAssign),
+            Severity::Error
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_enable_method_assign_error() -> anyhow::Result<()> {
+        let src = r#"[tool.mypy]
+enable_error_code = ["method-assign"]
+"#;
+        let mut cfg = parse_pyproject_config(src)?;
+        cfg.configure();
+        assert_eq!(
+            cfg.errors(Path::new(".")).severity(ErrorKind::MethodAssign),
+            Severity::Error
+        );
         Ok(())
     }
 

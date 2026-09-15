@@ -1043,6 +1043,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
         let (lookup_found, lookup_not_found, lookup_error) =
             self.lookup_attr(attr_base.clone(), attr_name).decompose();
+        if lookup_found
+            .iter()
+            .any(|(_, found_on)| self.attribute_base_has_method(found_on, attr_name))
+        {
+            self.error_with_context(
+                errors,
+                range,
+                ErrorKind::MethodAssign,
+                format!("Cannot assign to method `{attr_name}`"),
+                context,
+            );
+        }
         for e in lookup_error {
             e.add_to(errors, range, attr_name, todo_ctx);
             should_narrow = false;
@@ -1148,6 +1160,49 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Some(self.unions(narrowed_types))
         } else {
             None
+        }
+    }
+
+    fn attribute_base_has_method(&self, base: &AttributeBase1, attr_name: &Name) -> bool {
+        let class_has_method = |class: &Class| {
+            self.get_class_member(class, attr_name)
+                .is_some_and(|field| field.is_method())
+        };
+        match base {
+            AttributeBase1::ClassInstance(class)
+            | AttributeBase1::SelfType(class)
+            | AttributeBase1::Quantified(_, class) => class_has_method(class.class_object()),
+            AttributeBase1::ClassObject(class) | AttributeBase1::GenericAlias(class) => {
+                class_has_method(class.class_object())
+            }
+            AttributeBase1::EnumLiteral(literal) => class_has_method(literal.class.class_object()),
+            AttributeBase1::LiteralString => class_has_method(self.stdlib.str().class_object()),
+            AttributeBase1::QuantifiedValue(quantified) => {
+                class_has_method(quantified.class_type(self.stdlib).class_object())
+            }
+            AttributeBase1::SuperInstance(_, obj) => match obj {
+                SuperObj::Instance(class) | SuperObj::Class(class) => {
+                    class_has_method(class.class_object())
+                }
+            },
+            AttributeBase1::ShapedArrayInstance(tensor) => {
+                class_has_method(tensor.base_class.class_object())
+            }
+            AttributeBase1::ProtocolSubset(inner) => {
+                self.attribute_base_has_method(inner, attr_name)
+            }
+            AttributeBase1::Intersect(options, fallback) => options
+                .iter()
+                .chain(fallback)
+                .any(|base| self.attribute_base_has_method(base, attr_name)),
+            AttributeBase1::Any(_)
+            | AttributeBase1::Never
+            | AttributeBase1::TypeAny(_)
+            | AttributeBase1::TypeNever
+            | AttributeBase1::Module(_)
+            | AttributeBase1::Property(_)
+            | AttributeBase1::BoundMethod(_)
+            | AttributeBase1::TypedDict(_) => false,
         }
     }
 

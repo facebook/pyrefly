@@ -262,8 +262,7 @@ Child.shared
 );
 
 testcase!(
-    bug = "Example of how making methods read-write but not invariant is unsound",
-    test_method_assign,
+    test_method_assign_disabled_by_default,
     r#"
 from typing import Protocol
 class X(Protocol):
@@ -277,6 +276,42 @@ def func(x: X):
 y: Y = Y()
 func(y)
 y.foo()  # result is "hi"
+    "#,
+);
+
+testcase!(
+    test_method_assign,
+    TestEnv::new().enable_method_assign_error(),
+    r#"
+from collections.abc import Callable
+
+class A:
+    def method(self) -> None: ...
+
+    @staticmethod
+    def static_method() -> None: ...
+
+    @classmethod
+    def class_method(cls) -> None: ...
+
+    callback: Callable[[], None] = lambda: None
+
+class B(A):
+    pass
+
+def replacement(self: A) -> None: ...
+
+a = A()
+A.method = replacement  # E: Cannot assign to method `method`
+a.method = lambda: None  # E: Cannot assign to method `method`
+A.static_method = lambda: None  # E: Cannot assign to method `static_method`
+a.static_method = lambda: None  # E: Cannot assign to method `static_method`
+A.class_method = lambda: None  # E: Cannot assign to method `class_method`
+a.class_method = lambda: None  # E: Cannot assign to method `class_method`
+B.method = replacement  # E: Cannot assign to method `method`
+B().method = lambda: None  # E: Cannot assign to method `method`
+A.callback = lambda: None
+a.callback = lambda: None
     "#,
 );
 
