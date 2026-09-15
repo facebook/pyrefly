@@ -6,12 +6,15 @@
  */
 
 use lsp_types::SemanticToken;
+use lsp_types::SemanticTokenType;
 use pyrefly_build::handle::Handle;
 use ruff_text_size::TextRange;
 
+use crate::alt::attr::AttrDefinition;
 use crate::binding::binding::Key;
 use crate::state::lsp::FindPreference;
 use crate::state::lsp::ImportBehavior;
+use crate::state::lsp::attribute_symbol_kind_from_type;
 use crate::state::semantic_tokens::SemanticTokenBuilder;
 use crate::state::semantic_tokens::SemanticTokensLegends;
 use crate::state::semantic_tokens::disabled_ranges_for_module;
@@ -38,7 +41,28 @@ impl Transaction<'_> {
 
         builder.process_ast(
             &ast,
-            &|range| self.get_type_trace(handle, range),
+            &|range, base_range, name| {
+                let ty = self.get_type_trace(handle, range)?;
+                let kind = attribute_symbol_kind_from_type(&ty)
+                    .to_lsp_semantic_token_type_with_modifiers()
+                    .0;
+                // Enum-valued fields can have the same type as enum members, so
+                // confirm that the attribute's definitions are enum members.
+                if kind == SemanticTokenType::PROPERTY
+                    && let Some(base) = self.get_type_trace(handle, base_range)
+                    && self.ad_hoc_solve(handle, "semantic_token_enum_member", |solver| {
+                        let definitions = solver.completions(base, Some(name), false);
+                        !definitions.is_empty()
+                            && definitions.iter().all(|info| {
+                                matches!(&info.definition, AttrDefinition::FullyResolved { cls, .. }
+                                    if solver.get_enum_member(cls, name).is_some())
+                            })
+                    }) == Some(true)
+                {
+                    return Some(SemanticTokenType::ENUM_MEMBER);
+                }
+                Some(kind)
+            },
             &|key: &Key| {
                 let find_preference = FindPreference {
                     import_behavior: ImportBehavior::StopAtRenamedImports,
