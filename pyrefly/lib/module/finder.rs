@@ -437,21 +437,46 @@ fn find_third_party_stub(
     }
 }
 
+/// Controls whether a lookup follows `replace-imports-with-any`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ImportReplacementPolicy {
+    Respect,
+}
+
 /// Selects whether import resolution follows type-checking semantics or looks for a
 /// particular module style.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ImportLookupMode {
+pub(crate) enum ImportLookupMode {
     /// Resolve the import as the type checker would.
     TypeChecking,
     /// Resolve the import for a particular module style.
-    Style(ModuleStyle),
+    Style {
+        style: ModuleStyle,
+        replacement_policy: ImportReplacementPolicy,
+    },
 }
 
 impl ImportLookupMode {
+    pub(crate) fn style(style: ModuleStyle) -> Self {
+        Self::Style {
+            style,
+            replacement_policy: ImportReplacementPolicy::Respect,
+        }
+    }
+
     fn style_filter(self) -> Option<ModuleStyle> {
         match self {
             Self::TypeChecking => None,
-            Self::Style(style) => Some(style),
+            Self::Style { style, .. } => Some(style),
+        }
+    }
+
+    fn replacement_policy(self) -> ImportReplacementPolicy {
+        match self {
+            Self::TypeChecking => ImportReplacementPolicy::Respect,
+            Self::Style {
+                replacement_policy, ..
+            } => replacement_policy,
         }
     }
 }
@@ -478,7 +503,7 @@ impl ImportLookupMode {
 ///
 /// If `None` is returned when `style_filter.is_some()`, the import should be retried
 /// with `style_filter.is_none()`, since we hard-filter a lot of values here.
-pub fn find_import_internal(
+fn find_import_internal(
     config: &ConfigFile,
     module: ModuleName,
     origin: Option<&ModulePath>,
@@ -492,7 +517,10 @@ pub fn find_import_internal(
     let origin = origin.map(|p| p.as_path());
     let from_real_config_file = config.from_real_config_file();
 
-    if module != ModuleName::builtins() && config.replace_imports_with_any(origin, module) {
+    if lookup_mode.replacement_policy() == ImportReplacementPolicy::Respect
+        && module != ModuleName::builtins()
+        && config.replace_imports_with_any(origin, module)
+    {
         FindingOrError::Error(FindError::Ignored)
     } else if let Some(build_system) = config.build_system.as_ref()
         && let Some(path) = find_module(
@@ -651,7 +679,7 @@ pub fn find_import(
     )
 }
 
-pub fn find_import_with_mode(
+pub(crate) fn find_import_with_mode(
     config: &ConfigFile,
     module: ModuleName,
     origin: Option<&ModulePath>,
@@ -1956,7 +1984,7 @@ mod tests {
                 &config,
                 ModuleName::from_str("spp_priority.d"),
                 None,
-                ImportLookupMode::Style(ModuleStyle::Interface),
+                ImportLookupMode::style(ModuleStyle::Interface),
                 &DirEntryCache::new(),
                 None,
             ),
@@ -3016,7 +3044,7 @@ mod tests {
             &config,
             ModuleName::from_str("requests"),
             None,
-            ImportLookupMode::Style(ModuleStyle::Executable),
+            ImportLookupMode::style(ModuleStyle::Executable),
             &DirEntryCache::new(),
             None,
         );

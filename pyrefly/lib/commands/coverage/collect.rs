@@ -1669,7 +1669,7 @@ pub fn collect_module_reports(
                 &config,
                 h.module(),
                 None,
-                ImportLookupMode::Style(ModuleStyle::Executable),
+                ImportLookupMode::style(ModuleStyle::Executable),
                 &DirEntryCache::new(),
                 None,
             )
@@ -2129,7 +2129,7 @@ mod tests {
             &config,
             ModuleName::from_str("test"),
             None,
-            ImportLookupMode::Style(ModuleStyle::Executable),
+            ImportLookupMode::style(ModuleStyle::Executable),
             &DirEntryCache::new(),
             None,
         )

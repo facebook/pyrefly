@@ -261,7 +261,7 @@ impl LoaderFindCache {
                     &self.config,
                     module,
                     origin,
-                    ImportLookupMode::Style(ModuleStyle::Executable),
+                    ImportLookupMode::style(ModuleStyle::Executable),
                     &self.dir_cache,
                     timing,
                 ) {
