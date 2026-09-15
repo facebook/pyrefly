@@ -4103,6 +4103,22 @@ def b():
 );
 
 testcase!(
+    test_isclass_typeform_class_info,
+    r#"
+from inspect import isclass
+from typing import TypeVar
+from typing_extensions import TypeForm
+
+T = TypeVar("T")
+
+def matches(value: object, hint: TypeForm[T]) -> bool:
+    if isclass(hint):
+        return isinstance(value, hint)
+    return False
+"#,
+);
+
+testcase!(
     test_isinstance_type_then_issubclass_typeform,
     r#"
 from typing import reveal_type
