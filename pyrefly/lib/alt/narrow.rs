@@ -1755,6 +1755,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             // too conservative and prone to false positives, see
                             // https://github.com/facebook/pyrefly/issues/911
                             self.heap.mk_callable_ellipsis(self.heap.mk_any_implicit())
+                        } else if let Some(q) = self.solver().partial_quantified(&t) {
+                            // An uninferred TypeVar provides its upper bound as positive evidence.
+                            // Do not infer it from the subject during the intersection check.
+                            q.upper_bound(self.stdlib, self.heap)
                         } else {
                             *t
                         };
@@ -1780,6 +1784,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         None,
                     );
                     if let Type::TypeIs(t) = ret {
+                        if self.solver().partial_quantified(&t).is_some() {
+                            // The unknown type may be narrower than its bound, so a failed
+                            // check cannot exclude every value assignable to that bound.
+                            return ty.clone();
+                        }
                         return self.subtract(ty, &t);
                     }
                 }

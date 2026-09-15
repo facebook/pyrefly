@@ -1589,6 +1589,80 @@ def f(x: Cat | Dog):
 );
 
 testcase!(
+    test_typeis_free_typevar_bound,
+    r#"
+from typing import TypeIs, TypeVar, assert_type
+
+T = TypeVar("T", bound=int)
+
+def is_t(x: object) -> TypeIs[T]: ...
+
+def caller(x: int | str | None) -> None:
+    if is_t(x):
+        assert_type(x, int)
+    else:
+        assert_type(x, int | str | None)
+
+def caller_object(x: object) -> None:
+    if is_t(x):
+        assert_type(x, int)
+
+def caller_subtype(x: bool | str) -> None:
+    if is_t(x):
+        assert_type(x, bool)
+    else:
+        assert_type(x, bool | str)
+    "#,
+);
+
+testcase!(
+    test_typeis_free_typevar_restrictions,
+    r#"
+from typing import TypeIs, assert_type
+
+def is_bounded[T: int](x: object) -> TypeIs[T]: ...
+def is_constrained[T: (int, str)](x: object) -> TypeIs[T]: ...
+def is_unbounded[T](x: object) -> TypeIs[T]: ...
+def is_defaulted[T: int = bool](x: object) -> TypeIs[T]: ...
+
+def caller(x: int | str | None) -> None:
+    if is_bounded(x):
+        assert_type(x, int)
+    if is_constrained(x):
+        assert_type(x, int | str)
+    else:
+        assert_type(x, int | str | None)
+    if is_unbounded(x):
+        assert_type(x, int | str | None)
+    else:
+        assert_type(x, int | str | None)
+    if is_defaulted(x):
+        assert_type(x, bool)
+    else:
+        assert_type(x, int | str | None)
+    "#,
+);
+
+testcase!(
+    test_typeis_inferred_typevar_bound,
+    r#"
+from typing import TypeIs, assert_type
+
+def is_t[T: int](x: object, target: type[T]) -> TypeIs[T]: ...
+
+def caller(x: bool | str) -> None:
+    if is_t(x, bool):
+        assert_type(x, bool)
+    else:
+        assert_type(x, str)
+
+def caller_generic[T: int](x: object, target: type[T]) -> None:
+    if is_t(x, target):
+        assert_type(x, T)
+    "#,
+);
+
+testcase!(
     test_typeis_union,
     r#"
 from typing import TypeIs, assert_type
