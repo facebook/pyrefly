@@ -693,11 +693,17 @@ Automatically insert parentheses when completing a function or method.
 
 Controls whether completions include symbols that are not yet imported. When enabled, accepting such a completion also inserts the required import statement. Set to `false` to only complete symbols that are already in scope.
 
+#### `pyrefly.pyreflyExecutable`
+
+**Type:** enum (`bundled`, `from-environment`) &nbsp; **Default:** `"from-environment"`
+
+Which Pyrefly binary the extension launches. `from-environment` looks for a Pyrefly installed in your active Python environment, so your editor and your command line agree on a version; if there isn't one, the bundled binary is used. `bundled` always uses the binary shipped with the extension, whose version is tied to the extension version.
+
 #### `pyrefly.lspPath`
 
 **Type:** string &nbsp; **Default:** `""`
 
-If your platform is not supported, you can build pyrefly from source and specify the binary path with this setting.
+If your platform is not supported, you can build pyrefly from source and specify the binary path with this setting. When set, it overrides `pyrefly.pyreflyExecutable`.
 
 #### `pyrefly.lspArguments`
 
@@ -729,7 +735,7 @@ When used with non-VSCode editors, the options above can also be configured by s
 
 The keys are the VSCode setting names with the leading `python.` stripped, so `python.pyrefly.typeCheckingMode` becomes `pyrefly.typeCheckingMode` and `python.analysis.importFormat` becomes `analysis.importFormat`. `analysis` is also accepted under `pyrefly` (`pyrefly.analysis.importFormat`) — the two are equivalent. Everything is optional; omitted keys keep their defaults.
 
-Two exceptions: `commentFoldingRanges` sits at the top level rather than under `pyrefly`, and `pyrefly.lspPath` / `pyrefly.lspArguments` / `pyrefly.trace.server` have no `initializationOptions` equivalent at all — they tell the VSCode extension how to launch the server, which your client already does itself.
+Two exceptions: `commentFoldingRanges` sits at the top level rather than under `pyrefly`, and `pyrefly.pyreflyExecutable` / `pyrefly.lspPath` / `pyrefly.lspArguments` / `pyrefly.trace.server` have no `initializationOptions` equivalent at all — they tell the VSCode extension how to launch the server, which your client already does itself.
 
 Below is an example showing every supported key at its default value:
 ```json
@@ -7658,6 +7664,8 @@ import TabItem from '@theme/TabItem';
   </TabItem>
 </Tabs>
 
+For tab completion setup, see [Shell completion](../shell-completion).
+
 ## Configure
 
 Pyrefly with no configuration [automatically finds nearby legacy type checking configurations](../configuration/#unconfigured-projects). If we cannot find one, or migration fails, we use the **basic preset**, which shows only high-confidence errors that are very likely to indicate real bugs or crashes (like syntax errors and missing imports) and silences other diagnostics.
@@ -11215,6 +11223,76 @@ pyrefly coverage report path/to/directory/ | jq .summary.strict_coverage
 ---
 
 ---
+title: Shell completion
+description: How to enable shell completion for Pyrefly
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+Generate a completion script with `pyrefly completion --shell <shell>`. Supported
+shells are `bash`, `zsh`, `fish`, `powershell`, and `elvish`. The script is written
+to standard output.
+
+## Bash
+
+Add this to `~/.bashrc`:
+
+```bash
+source <(pyrefly completion --shell bash)
+```
+
+## Zsh
+
+Add this to `~/.zshrc` after initializing completion with `compinit`:
+
+```zsh
+autoload -Uz compinit
+compinit
+source <(pyrefly completion --shell zsh)
+```
+
+## Fish
+
+Save the script in the completions directory:
+
+```fish
+mkdir -p ~/.config/fish/completions
+pyrefly completion --shell fish > ~/.config/fish/completions/pyrefly.fish
+```
+
+## PowerShell
+
+Add this to your profile (`$PROFILE`):
+
+```powershell
+pyrefly completion --shell powershell | Out-String | Invoke-Expression
+```
+
+## Elvish
+
+Save the script and load it from `~/.config/elvish/rc.elv`:
+
+```sh
+mkdir -p ~/.config/elvish/lib
+pyrefly completion --shell elvish > ~/.config/elvish/lib/pyrefly.elv
+```
+
+```elvish
+use pyrefly
+```
+
+Restart your shell after setup. Regenerate saved completion files after upgrading
+Pyrefly to include any new commands and options.
+
+
+---
+
+---
 title: Stub Generation
 description: Generate .pyi stub files from Python source files with Pyrefly stubgen.
 ---
@@ -11507,6 +11585,10 @@ class Attention[D: IntVar, RK: IntVar](nn.Module):
 | `class Model[D: IntVar](nn.Module)` | Make a dimension a class-level type parameter |
 | `def forward[B: IntVar](self, x: Tensor[[B, D]])` | Bind a per-call dimension |
 | `self.head_dim = dim // n_head` | Compute a derived dimension (`Int[D // NHead]`) |
+
+General-purpose `IntVar` arguments and defaults accept zero and negative integers,
+which can represent physical-unit exponents. Literal dimensions in tensor shapes
+still require positive values.
 
 ## `Tensor[[D1, D2, ...]]`
 

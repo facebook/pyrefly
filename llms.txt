@@ -37,6 +37,7 @@
 - [Typing Features and PEPS](/en/docs/python-features-and-peps/): Typing features and associated PEPs available in each Python version.
 - [Python Typing 101](/en/docs/python-typing-for-beginners/): A gentle, example‑driven introduction to static type hints in Python.
 - [Coverage](/en/docs/report/): Measure and enforce type coverage in your Python codebase with Pyrefly.
+- [Shell completion](/en/docs/shell-completion/): How to enable shell completion for Pyrefly
 - [Stub Generation](/en/docs/stubgen/): Generate .pyi stub files from Python source files with Pyrefly stubgen.
 - [Tensor Shapes](/en/docs/tensor-shapes/): An overview of Pyrefly's tensor shape type system for static type checking of PyTorch models.
 - [Agent Skill for Tensor Shape Porting](/en/docs/tensor-shapes-ai-porting/): How to use Pyrefly's agent skill to automatically add tensor shape annotations to PyTorch models.

@@ -84,6 +84,10 @@ class Attention[D: IntVar, RK: IntVar](nn.Module):
 | `def forward[B: IntVar](self, x: Tensor[[B, D]])` | Bind a per-call dimension |
 | `self.head_dim = dim // n_head` | Compute a derived dimension (`Int[D // NHead]`) |
 
+General-purpose `IntVar` arguments and defaults accept zero and negative integers,
+which can represent physical-unit exponents. Literal dimensions in tensor shapes
+still require positive values.
+
 ## `Tensor[[D1, D2, ...]]`
 
 `Tensor` with type arguments represents a tensor with a known shape. The
