@@ -30,6 +30,13 @@ What varies is the *deliverable*:
   full, because others read these ports to learn the patterns. A skill that
   invokes this one for corpus work will say so; absent that, assume the lighter
   deliverable.
+- **Migrating an existing production codebase:** preserve its structure and
+  tests. Inventory the existing shape annotations and the public tensor
+  boundaries being changed, but do not add inventory comments, an
+  `assert_type` after every local, or model-file smoke tests. Add focused static
+  tests only for reusable stub behavior. Use temporary `reveal_type` probes as
+  needed and remove them before handoff. Existing test and lint conventions
+  take precedence over the corpus artifact templates below.
 
 ## Converting existing jaxtyping annotations
 
@@ -856,6 +863,18 @@ Either:
 (`[D: IntVar]`); `IntTuple` is the bound for variadic/whole-shape params
 (`[Bs: IntTuple]`); `Elements` unpacks a variadic batch
 (`Tensor[[*Elements[Bs], D]]`). Import only the ones a given file uses.
+
+When replacing jaxtyping in an existing codebase, do not translate annotations
+mechanically. An empty shape string may have been used as an escape hatch even
+when the value is not scalar, and `_` dimensions only promise rank. Use bare
+`Tensor` for genuinely unconstrained inputs and `Tensor[[int, ...]]` when rank
+or fixed axes are the useful contract. For third-party transforms such as
+`einops.rearrange` whose stubs do not compute output shapes, prefer a local
+`cast(Tensor[[...]], ...)` at the transform boundary over weakening the public
+signature or scattering ignores through callers. A cast's type argument is a
+runtime expression even under `from __future__ import annotations`; quote it
+when it contains type parameters or arithmetic, for example
+`cast("Tensor[[B, H * W, C]]", rearrange(...))`.
 
 **Runtime-compatible annotations:** if you need annotations to evaluate at
 runtime (e.g., for runtime shape validation), import `shape_extensions` directly
