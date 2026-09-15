@@ -1653,19 +1653,24 @@ impl Solver {
                 kind,
             )
         });
-        let (first_bound, opposite_bound) = if is_upper {
-            (
-                bounds.upper.first().cloned(),
-                self.get_current_bound(bounds.lower.clone()),
-            )
+        let (first_bound, opposite_bounds) = if is_upper {
+            (bounds.upper.first().cloned(), bounds.lower.clone())
         } else {
-            (
-                bounds.lower.first().cloned(),
-                self.get_current_bound(bounds.upper.clone()),
-            )
+            (bounds.lower.first().cloned(), bounds.upper.clone())
         };
         drop(e);
         drop(lock);
+        // Generic residuals are fallback-only and cannot make a concrete bound inconsistent.
+        let opposite_bound = if bound.is_generic_callable_residual() {
+            None
+        } else {
+            self.get_current_bound(
+                opposite_bounds
+                    .into_iter()
+                    .filter(|bound| !bound.is_generic_callable_residual())
+                    .collect(),
+            )
+        };
         let res = res.and_then(|_| {
             // The new bound must be consistent with the opposite-side bound via transitivity.
             let consistent = if is_upper {
@@ -1750,7 +1755,21 @@ impl Solver {
         Some(unions(bounds, &self.heap))
     }
 
-    fn solve_bounds(&self, bounds: Bounds) -> Option<Type> {
+    fn solve_bounds(&self, mut bounds: Bounds) -> Option<Type> {
+        // Generic callable residuals are fallback bounds across both polarities.
+        if bounds
+            .lower
+            .iter()
+            .chain(&bounds.upper)
+            .any(|bound| !bound.is_any() && !matches!(bound, Type::CallableResidual(_)))
+        {
+            bounds
+                .lower
+                .retain(|bound| !bound.is_generic_callable_residual());
+            bounds
+                .upper
+                .retain(|bound| !bound.is_generic_callable_residual());
+        }
         // Prefer non-Any lower bound > upper bound > Any lower bound.
         // TODO(https://github.com/facebook/pyrefly/issues/105): consider using polarity to
         // determine whether we use the lower or upper bound.
@@ -4335,7 +4354,15 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                         let lower_bound = is_shape_extension_binding_source
                             .then(|| self.solver.get_current_bound(bounds.lower.clone()))
                             .flatten();
-                        let upper_bound = self.solver.get_current_bound(bounds.upper.clone());
+                        // A fallback residual must not prevent ordinary implicit-literal promotion.
+                        let upper_bound = self.solver.get_current_bound(
+                            bounds
+                                .upper
+                                .iter()
+                                .filter(|bound| !bound.is_generic_callable_residual())
+                                .cloned()
+                                .collect(),
+                        );
                         drop(v2_ref);
                         drop(variables);
                         let (answer, specialization_error) = self.is_subset_eq_quantified(

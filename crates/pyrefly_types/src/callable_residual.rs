@@ -119,6 +119,15 @@ impl Type {
         }))
     }
 
+    /// Whether this type is a placeholder for deferred generic callable structure.
+    pub fn is_generic_callable_residual(&self) -> bool {
+        matches!(
+            self,
+            Type::CallableResidual(residual)
+                if matches!(&residual.kind, CallableResidualKind::Generic { .. })
+        )
+    }
+
     /// Check if the type contains an overload callable residual marker anywhere.
     pub fn contains_overload_callable_residual(&self) -> bool {
         self.any(|inner| {

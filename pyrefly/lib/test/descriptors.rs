@@ -1307,6 +1307,40 @@ def f(foo: Foo) -> None:
     "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/4844.
+testcase!(
+    test_descriptor_concatenate_infers_residual_paramspec,
+    r#"
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import Any, cast, Concatenate, Protocol
+
+
+class Descriptor[**P](Protocol):
+    def __get__[**P2](
+        self: Descriptor[Concatenate[Any, P2]],
+        instance: object,
+        owner: type,
+    ) -> Descriptor[P2]: ...
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> Any: ...
+
+
+def descriptor[**P](func: Callable[P, Any]) -> Descriptor[P]:
+    return cast(Descriptor[P], func)
+
+
+class Example:
+    @descriptor
+    def field(self, value: int) -> int:
+        return value
+
+
+assert Example().field(1) == 1
+    "#,
+);
+
 // Assignment resolves a descriptor through its getter too, so the same guard keeps
 // the write path from overflowing the stack.
 testcase!(
