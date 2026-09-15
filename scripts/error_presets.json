@@ -125,6 +125,7 @@
     "unexpected-keyword": ["basic", "legacy", "default", "strict", "all"],
     "unexpected-positional-argument": ["basic", "legacy", "default", "strict", "all"],
     "unimported-directive": ["legacy", "default", "strict", "all"],
+    "uninitialized-instance-variable": ["all"],
     "unknown-argument-type": ["all"],
     "unknown-attribute-type": ["all"],
     "unknown-column": ["legacy", "default", "strict", "all"],

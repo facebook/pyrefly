@@ -1614,6 +1614,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         "Final attribute declared in class body must be initialized with a value or in `__init__`".to_owned(),
                     );
                 }
+                // An annotated instance attribute declared in the class body must be
+                // initialized there or in a recognized method such as `__init__`. Final
+                // fields are already reported by the check above, so skip them here to
+                // avoid a duplicate diagnostic.
+                let is_uninit_instance_var = !initialized_in_recognized_method
+                    && !direct_annotation.as_ref().is_some_and(|a| a.is_final())
+                    && matches!(initialization, ClassFieldInitialization::Uninitialized);
+                if is_uninit_instance_var && !is_special_class {
+                    self.error(
+                        errors,
+                        range,
+                        ErrorKind::UninitializedInstanceVariable,
+                        format!("Instance attribute `{name}` is declared but never initialized"),
+                    );
+                }
                 let value =
                     value_storage.push(ExprOrBinding::Binding(Binding::Any(AnyStyle::Implicit)));
                 let (value_ty, annotation, is_inherited) = self.analyze_class_field_value(

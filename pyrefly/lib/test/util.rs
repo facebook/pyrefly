@@ -151,6 +151,7 @@ pub struct TestEnv {
     recursion_depth_limit: Option<u32>,
     site_package_path: Vec<PathBuf>,
     implicitly_defined_attribute_error: bool,
+    uninitialized_instance_variable_error: bool,
     explicit_any_error: bool,
     implicit_any_error: bool,
     unannotated_return_error: bool,
@@ -209,6 +210,7 @@ impl TestEnv {
             recursion_depth_limit: None,
             site_package_path: Vec::new(),
             implicitly_defined_attribute_error: false,
+            uninitialized_instance_variable_error: false,
             explicit_any_error: false,
             implicit_any_error: false,
             unannotated_return_error: false,
@@ -343,6 +345,11 @@ impl TestEnv {
 
     pub fn enable_implicitly_defined_attribute_error(mut self) -> Self {
         self.implicitly_defined_attribute_error = true;
+        self
+    }
+
+    pub fn enable_uninitialized_instance_variable_error(mut self) -> Self {
+        self.uninitialized_instance_variable_error = true;
         self
     }
 
@@ -637,6 +644,9 @@ impl TestEnv {
         let errors = config.root.errors.as_mut().unwrap();
         if self.implicitly_defined_attribute_error {
             errors.set_error_severity(ErrorKind::ImplicitlyDefinedAttribute, Severity::Error);
+        }
+        if self.uninitialized_instance_variable_error {
+            errors.set_error_severity(ErrorKind::UninitializedInstanceVariable, Severity::Error);
         }
         if self.explicit_any_error {
             errors.set_error_severity(ErrorKind::ExplicitAny, Severity::Error);

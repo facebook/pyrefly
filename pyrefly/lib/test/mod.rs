@@ -93,6 +93,7 @@ mod type_variable_scope;
 mod typed_dict;
 mod typeform;
 mod typing_self;
+mod uninitialized_instance_variable;
 mod unittest_mock_patch;
 mod unnecessary_comparison;
 mod unnecessary_type_conversion;

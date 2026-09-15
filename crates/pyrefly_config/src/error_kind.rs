@@ -413,6 +413,10 @@ pub enum ErrorKind {
     UnexpectedPositionalArgument,
     /// Attempting to use a type checker directive without importing it from `typing`.
     UnimportedDirective,
+    /// An instance attribute is declared with a type annotation in the class body but is
+    /// never initialized there or in a recognized method such as `__init__`, so accessing
+    /// it at runtime raises `AttributeError`.
+    UninitializedInstanceVariable,
     /// A call argument whose type is an implicit `Any` (unknown), because the value
     /// passed has an unknown type.
     UnknownArgumentType,
@@ -599,6 +603,7 @@ impl ErrorKind {
             ErrorKind::UnannotatedAttribute => Severity::Ignore,
             ErrorKind::UnannotatedParameter => Severity::Ignore,
             ErrorKind::UnannotatedReturn => Severity::Ignore,
+            ErrorKind::UninitializedInstanceVariable => Severity::Ignore,
             ErrorKind::UnknownArgumentType => Severity::Ignore,
             ErrorKind::ImplicitAnyLambda => Severity::Ignore,
             ErrorKind::UnknownAttributeType => Severity::Ignore,
