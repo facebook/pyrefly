@@ -37,8 +37,16 @@ if TYPE_CHECKING:
         symmetric_pad2d_shape,
     )
 
-# Re-export submodules
-from . import functional as functional, init as init
+# Re-export the submodules `torch/nn/__init__.py` imports, so they resolve as attributes
+from . import (
+    attention as attention,
+    functional as functional,
+    init as init,
+    modules as modules,
+    parallel as parallel,
+    parameter as parameter,
+    utils as utils,
+)
 
 # Base class for all neural network modules
 class Module:
