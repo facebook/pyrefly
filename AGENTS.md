@@ -156,13 +156,13 @@ available tooling differs. **How to detect which one you are in:** check for a
   you are confident the feature is complete.
 - For external builds, always use `python3 test.py` instead of `./test.py`.
 - To run just formatting and linting (much faster than running tests):
-  `./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema`
+  `./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema --no-extension`
 
 ### Before committing
 
 **Always run formatting and linting before committing, updating a commit, or
 handing code off to a human for review:**
-`./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema`
+`./test.py --no-test --no-tensor-shapes --no-conformance --no-jsonschema --no-extension`
 
 This applies whether you are committing autonomously or preparing code for a
 human to commit. Do not skip this step during human-in-the-loop iteration.
