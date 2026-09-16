@@ -1215,3 +1215,18 @@ def identity[T](x: T) -> T: ...
 reveal_type(returner(identity))  # E: () -> Unknown
     "#,
 );
+
+testcase!(
+    test_overloaded_argument_branch_respects_upper_bound,
+    r#"
+from typing import Callable, assert_type, overload
+def transform_all[T](items: list[T], transform: Callable[[T], T]) -> list[T]: ...
+@overload
+def normalize[N: int](value: N) -> N: ...
+@overload
+def normalize(value: bytes) -> bytes: ...
+def normalize(value: int | bytes) -> int | bytes: ...
+transform_all(["hello"], normalize)  # E: Overload type was not compatible with solved type variables: T = str
+assert_type(transform_all([1], normalize), list[int])
+    "#,
+);

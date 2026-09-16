@@ -1876,36 +1876,46 @@ impl Solver {
         branch_value: &Variable,
         solved_ty: &Type,
     ) -> Vec<(Type, Type)> {
-        match branch_value {
-            Variable::Quantified { bounds, .. } | Variable::Unwrap(bounds) => {
-                let mut constraints = Vec::with_capacity(bounds.lower.len() + bounds.upper.len());
-                constraints.extend(bounds.lower.iter().map(|lower| {
-                    let lower = self
-                        .sanitize_self_referential_vars(lower, solved_ty)
-                        .unwrap_or_else(|| lower.clone());
-                    (lower, solved_ty.clone())
-                }));
-                constraints.extend(bounds.upper.iter().map(|upper| {
-                    let upper = self
-                        .sanitize_self_referential_vars(upper, solved_ty)
-                        .unwrap_or_else(|| upper.clone());
-                    (solved_ty.clone(), upper)
-                }));
-                constraints
-            }
+        let bounds = match branch_value {
+            Variable::Quantified { bounds, .. } | Variable::Unwrap(bounds) => bounds,
             Variable::Answer { ty: branch_ty, .. }
             | Variable::ResidualAnswer { ty: branch_ty, .. } => {
                 // If this branch already collapsed to a concrete type, treat
                 // compatibility as type equivalence against the solved type.
-                vec![
+                return vec![
                     (branch_ty.clone(), solved_ty.clone()),
                     (solved_ty.clone(), branch_ty.clone()),
-                ]
+                ];
             }
             Variable::PartialQuantified(_)
             | Variable::PartialContained(_)
-            | Variable::Recursive => Vec::new(),
+            | Variable::Recursive => return Vec::new(),
+        };
+        let mut constraints = Vec::with_capacity(bounds.lower.len() + bounds.upper.len());
+        constraints.extend(bounds.lower.iter().map(|lower| {
+            let lower = self
+                .sanitize_self_referential_vars(lower, solved_ty)
+                .unwrap_or_else(|| lower.clone());
+            (lower, solved_ty.clone())
+        }));
+        constraints.extend(bounds.upper.iter().map(|upper| {
+            let upper = self
+                .sanitize_self_referential_vars(upper, solved_ty)
+                .unwrap_or_else(|| upper.clone());
+            (solved_ty.clone(), upper)
+        }));
+        let Variable::Quantified { quantified, .. } = branch_value else {
+            return constraints;
+        };
+        // The branch's own restriction has to accept the solved type.
+        match &quantified.restriction {
+            Restriction::Constraints(options) => {
+                constraints.push((solved_ty.clone(), unions(options.clone(), &self.heap)))
+            }
+            Restriction::Bound(bound) => constraints.push((solved_ty.clone(), bound.clone())),
+            Restriction::ShapeExtension(_) | Restriction::Unrestricted => {}
         }
+        constraints
     }
 
     /// Replace any placeholder var whose answer mentions the var itself with the solved type.
