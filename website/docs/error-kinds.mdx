@@ -801,6 +801,25 @@ from bar import a  # error: `a` is not exported from module `bar`
 from foo import a as a  # or add `a` to `__all__`
 ```
 
+## implicit-relative-import
+
+Default severity: `warn`
+
+This error is emitted when an unqualified import resolves only by searching
+relative to the importing file. Such an import can work when a file is run as a
+script but fail when the same file is imported as part of a package.
+
+Use an explicit relative import or the module's full absolute package path:
+
+```python
+# pkg/main.py
+import helper  # implicit-relative-import
+
+# Fix:
+from . import helper
+# or: import pkg.helper
+```
+
 ## implicitly-defined-attribute
 
 Default severity: `ignore`
