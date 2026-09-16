@@ -25,6 +25,7 @@ from shape_extensions import (
     IntTuples,
     IntVar,
     MapIntTuples,
+    RegularNestedList,
 )
 
 # `Generator` is not defined anywhere in this package, and resolving it relies
@@ -89,6 +90,8 @@ type _Shape = IntTuple
 type _Scalar = builtins.bool | builtins.int | builtins.float | builtins.complex
 type _RealScalar = builtins.bool | builtins.int | builtins.float
 type _BasicIndex = builtins.int | slice | list[builtins.int] | None | EllipsisType
+type _TensorScalar = builtins.bool | builtins.int | builtins.float | builtins.complex
+type _LegacyTensorScalar = builtins.bool | builtins.int | builtins.float
 
 # ============================================================================
 # Device Type
@@ -131,6 +134,41 @@ class Tensor[Shape: _Shape = _Shape]:
     Most shape transformations are handled by meta-shape functions registered
     in the type checker, not by explicit type signatures here.
     """
+
+    @overload
+    def __new__(cls, *, device: Any = None) -> Tensor[[0]]: ...
+    # Unsupported scalar forms stay gradual; `Never` would incorrectly make the caller's
+    # remaining control flow unreachable.
+    @overload
+    def __new__(
+        cls, data: builtins.bool, *, device: Any = None
+    ) -> Tensor[IntTuple]: ...
+    @overload
+    def __new__[Size: IntTuple](
+        cls, *size: *Size, device: Any = None
+    ) -> Tensor[Size]: ...
+    @overload
+    def __new__(cls, *, data: builtins.int, device: Any = None) -> Tensor[IntTuple]: ...
+    @overload
+    def __new__(
+        cls,
+        data: builtins.float | builtins.complex,
+        *,
+        device: Any = None,
+    ) -> Tensor[IntTuple]: ...
+    @overload
+    def __new__[DataShape: IntTuple](
+        cls, data: Tensor[DataShape], *, device: Any = None
+    ) -> Tensor[DataShape]: ...
+    @overload
+    def __new__[DataShape: IntTuple](
+        cls,
+        data: RegularNestedList[DataShape, _LegacyTensorScalar],
+        *,
+        device: Any = None,
+    ) -> Tensor[DataShape]: ...
+    @overload
+    def __new__(cls, data: Any, *, device: Any = None) -> Tensor[IntTuple]: ...
 
     # ==== Tensor Properties ====
     shape: Shape  # Tensor shape as a tuple
@@ -3230,13 +3268,43 @@ class dtype:
 # Tensor Creation with dtype support
 # ==============================================================================
 
-def tensor(
-    data: Any,
+@overload
+def tensor[Shape: IntTuple](
+    data: Tensor[Shape],
+    *,
     dtype: Any = None,
     device: Any = None,
-    requires_grad: bool = False,
-) -> Tensor:
-    """Create tensor from data. Returns shapeless tensor (shape depends on input data)."""
+    requires_grad: builtins.bool = False,
+    pin_memory: builtins.bool = False,
+) -> Tensor[Shape]: ...
+@overload
+def tensor(
+    data: _TensorScalar,
+    *,
+    dtype: Any = None,
+    device: Any = None,
+    requires_grad: builtins.bool = False,
+    pin_memory: builtins.bool = False,
+) -> Tensor[[]]: ...
+@overload
+def tensor[Shape: IntTuple](
+    data: RegularNestedList[Shape, _TensorScalar],
+    *,
+    dtype: Any = None,
+    device: Any = None,
+    requires_grad: builtins.bool = False,
+    pin_memory: builtins.bool = False,
+) -> Tensor[Shape]: ...
+@overload
+def tensor(
+    data: Any,
+    *,
+    dtype: Any = None,
+    device: Any = None,
+    requires_grad: builtins.bool = False,
+    pin_memory: builtins.bool = False,
+) -> Tensor[IntTuple]:
+    """Create a tensor from data, preserving or inferring its shape when possible."""
     ...
 
 def as_tensor(

@@ -4,11 +4,56 @@
 # LICENSE file in the root directory of this source tree.
 
 # Phase 1.3: Tensor creation operations tests
-from typing import assert_type
+from typing import Any, assert_type, TYPE_CHECKING
 
 import torch
 from shape_extensions import IntTuple
 from torch import Tensor
+
+
+def test_tensor_data_constructors() -> None:
+    assert_type(torch.tensor(1), Tensor[[]])
+    assert_type(torch.tensor([1, 2, 3]), Tensor[[3]])
+    assert_type(torch.tensor([[1, 2], [3, 4]]), Tensor[[2, 2]])
+    assert_type(torch.tensor([[], []]), Tensor[[2, 0]])
+    assert_type(torch.tensor([1, 2], dtype=torch.float32), Tensor[[2]])
+    assert_type(
+        torch.tensor([1, 2], device="cpu", requires_grad=False, pin_memory=False),
+        Tensor[[2]],
+    )
+    assert_type(torch.Tensor([1, 2, 3]), Tensor[[3]])
+    assert_type(torch.Tensor([[1, 2], [3, 4]]), Tensor[[2, 2]])
+
+
+def test_tensor_size_constructor() -> None:
+    assert_type(torch.Tensor(), Tensor[[0]])
+    assert_type(torch.Tensor(device="cpu"), Tensor[[0]])
+    assert_type(torch.Tensor(2), Tensor[[2]])
+    assert_type(torch.Tensor(2, device="cpu"), Tensor[[2]])
+    assert_type(torch.Tensor(2, 3), Tensor[[2, 3]])
+    assert_type(torch.Tensor([1, 2], device="cpu"), Tensor[[2]])
+
+
+def check_tensor_constructor_compatibility(
+    tensor: Tensor[[2, 3]], raw: list[int], dynamic: Any, size: int
+) -> None:
+    assert_type(torch.tensor(tensor), Tensor[[2, 3]])
+    assert_type(torch.tensor(tensor, pin_memory=False), Tensor[[2, 3]])
+    assert_type(torch.Tensor(tensor), Tensor[[2, 3]])
+    assert_type(torch.Tensor(size), Tensor[IntTuple[int]])
+    assert_type(torch.Tensor(size, size), Tensor[IntTuple[int, int]])
+    assert_type(torch.tensor(raw), Tensor[IntTuple])
+    assert_type(torch.tensor(dynamic), Tensor[Any])
+
+
+if TYPE_CHECKING:
+    assert_type(torch.tensor([[1], [2, 3]]), Tensor[IntTuple])
+    assert_type(torch.Tensor([[1], [2, 3]]), Tensor[IntTuple])
+    assert_type(torch.Tensor(True), Tensor[IntTuple])
+    assert_type(torch.Tensor(data=True), Tensor[IntTuple])
+    assert_type(torch.Tensor(1.0), Tensor[IntTuple])
+    assert_type(torch.Tensor(data=2), Tensor[IntTuple])
+    assert_type(torch.Tensor([1 + 2j]), Tensor[IntTuple])
 
 # ==== *_like Operations (preserve shape) ====
 
