@@ -48,16 +48,20 @@ assert_type(out_b, int)
 );
 
 // Defaulted return-only type var: default IS used, no partial type.
+// Context does not override the default, but argument inference still can.
 testcase!(
     test_unsolved_typevar_with_default,
     r#"
 from typing import assert_type
 def f[T = int]() -> T: ...
+def identity[T = int](x: T) -> T: ...
 assert_type(f(), int)
 out_a = f()
 assert_type(out_a, int)
 out_b: int = f()
 assert_type(out_b, int)
+out_c: str = f()  # E: `int` is not assignable to `str`
+assert_type(identity("x"), str)
 "#,
 );
 

@@ -68,6 +68,9 @@ assert_type(factory([["x"], ["y", "z"]]), Array[IntTuple])
 assert_type(array_scalar_or_data([1, 2]), Array[[2]])
 assert_type(array_scalar_or_data(1), Array[[]])
 
+def require_matrix(x: Array[[2, 2]]) -> None: ...
+require_matrix(array_scalar_or_data(1))  # E: is not assignable to parameter `x`
+
 assert_type(consume_callbacks([lambda value: value + 1]), Array[[1]])
 consume_callbacks([lambda value: value + "bad"])  # E: is not assignable
 # A rejected marker arm must not leak errors into a valid ordinary-list arm.
