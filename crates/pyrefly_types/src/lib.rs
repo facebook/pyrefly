@@ -21,6 +21,7 @@
 
 pub mod alias;
 pub mod annotation;
+pub mod boundary;
 pub mod callable;
 pub mod callable_residual;
 pub mod class;

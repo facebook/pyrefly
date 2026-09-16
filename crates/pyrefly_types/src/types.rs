@@ -1509,7 +1509,6 @@ impl Type {
     }
 
     /// The mutable form of [`Type::recurse_with_type_parameter_scopes`].
-    #[expect(dead_code, reason = "used by quantified finalization in a follow-up")]
     pub(crate) fn recurse_with_type_parameter_scopes_mut(
         &mut self,
         in_scope: &mut Vec<Quantified>,

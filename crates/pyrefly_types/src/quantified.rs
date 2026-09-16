@@ -172,18 +172,23 @@ pub struct Quantified {
     /// Qualified owner, e.g. `"mod.func"`, set for function type params to enable
     /// disambiguation in display (e.g. `T@mod.func`).
     pub owner: Option<Name>,
+    /// Set when this must either be declared by an enclosing callable or replaced with its
+    /// gradual fallback at a type boundary.
+    pub needs_finalization: bool,
 }
 
 impl Quantified {
     pub fn with_restriction(self, restriction: Restriction) -> Self {
         Self {
             restriction,
-            identity: self.identity,
-            name: self.name,
-            kind: self.kind,
-            default: self.default,
-            variance: self.variance,
-            owner: self.owner,
+            ..self
+        }
+    }
+
+    pub fn with_needs_finalization(self) -> Self {
+        Self {
+            needs_finalization: true,
+            ..self
         }
     }
 }
@@ -278,6 +283,7 @@ impl Quantified {
             restriction,
             variance,
             owner: None,
+            needs_finalization: false,
         }
     }
 
