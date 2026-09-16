@@ -8,6 +8,14 @@
    layers. Functionally equivalent restructuring is fine (e.g., extracting
    modules from a list into individual attributes, converting a Sequential
    subclass to composition).
+   - Do not add runtime validation merely to satisfy the checker. In particular,
+     preserve sentinel values such as `None` when callers use them to signal a
+     skip or retry. If the declared interface does not describe existing runtime
+     behavior, use a narrow suppression and record the contract mismatch for
+     follow-up instead of changing behavior during the annotation migration.
+   - After an `isinstance(value, Tensor)` guard, do not add a redundant
+     `cast(Tensor, value)`. If narrowing still fails at the return boundary, use
+     a targeted suppression and record it as a checker-narrowing gap.
 2. **Shape coverage** — preserve every rank, literal dimension, named equality,
    arithmetic relationship, and variadic prefix that the original annotation
    expressed. Use `assert_type` to verify inference, not just annotation
@@ -20,6 +28,28 @@
 **0 errors ≠ shapes tracked.** The checker silently accepts bare `Tensor`
 where a shaped `Tensor[...]` is expected (annotation fallback). The ONLY
 proof that shapes are inferred is `assert_type` inside forward methods.
+
+## Shape values at ordinary API boundaries
+
+Shape-aware stubs expose `.shape` as an `IntTuple`. When an ordinary API needs
+a fixed-rank tuple such as `tuple[int, int]`, preserve both the runtime rank
+check and the static type by destructuring first:
+
+```python
+height, width = image.shape
+context = RecordContext(size=(height, width))
+```
+
+Do not silence the mismatch by passing the whole `IntTuple`, converting it with
+`tuple(...)`, or selecting the first two dimensions. Those alternatives either
+remain variadic to the checker or silently accept an unexpected higher-rank
+value.
+
+When an overloaded third-party API chooses its scalar return type for an array
+input, normalize the result at that boundary only if the runtime contract is
+known to be array-valued, for example `np.asarray(colormap(values))`. Do not
+weaken downstream annotations or change scalar-versus-array behavior merely to
+make the inferred type convenient.
 
 ## Preserve known rank and dimension names
 
