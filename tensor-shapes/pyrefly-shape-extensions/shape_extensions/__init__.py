@@ -199,6 +199,10 @@ class RegularNestedList(typing.Generic[_RegularNestedShape, _Domain]):
     Here, regular means the opposite of jagged or irregular: every sibling list
     has the same shape.
 
+    Use this as a contextual parameter type for constructor-style APIs that
+    accept nested Python lists and need to infer a shape type argument. It is a
+    static marker, not the runtime type of an existing list value.
+
     A literal such as ``[[1, 2], [3, 4]]`` binds ``Shape`` to
     ``IntTuple[2, 2]``, while ``[[1, 2], [3]]`` is jagged and therefore not
     regular. Existing containers, starred literals, and statically jagged

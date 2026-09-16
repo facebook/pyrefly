@@ -71,6 +71,7 @@ mod pytorch_efficiency_lint;
 mod query;
 mod recursive_alias;
 mod redundant_cast;
+mod regular_nested_list;
 mod returns;
 mod scope;
 mod self_cls_default;

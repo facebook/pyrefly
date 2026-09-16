@@ -6,6 +6,7 @@
  */
 
 use std::cell::LazyCell;
+use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Display;
 use std::slice;
@@ -91,6 +92,7 @@ use crate::alt::nn_module_specials::is_nn_module_dict;
 use crate::alt::polars_specials::is_polars_series;
 use crate::alt::regex::RegexValidationError;
 use crate::alt::regex::validate_pattern;
+use crate::alt::regular_nested_list::regular_nested_list;
 use crate::alt::shape_extension::is_int_tuple_bound;
 use crate::alt::solve::TypeFormContext;
 use crate::alt::solve::UntypeContext;
@@ -784,40 +786,66 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 )
             }
             Expr::Tuple(x) => self.tuple_infer(x, hint, errors),
-            Expr::List(x) => self.infer_with_decomposed_hint(
-                hint,
-                |hint| self.decompose_list(hint),
-                |elt_hint, hint| {
-                    if x.is_empty() {
-                        let elem_ty = match elt_hint {
-                            Some(ListElementHint::Hint(elem_hint)) => elem_hint,
-                            Some(ListElementHint::UninformativeAny(_)) | None => self
-                                .solver()
-                                .fresh_partial_contained(self.uniques, x.range)
-                                .to_type(self.heap),
-                        };
-                        self.heap.mk_class_type(self.stdlib.list(elem_ty))
-                    } else {
-                        let (elt_hint, partial_fallback) = elt_hint
-                            .map(ListElementHint::into_parts)
-                            .unwrap_or_default();
-                        let elem_tys = self.elts_infer(
-                            &x.elts,
-                            HintRef::with_ty_opt(hint, elt_hint.as_ref()),
-                            errors,
-                        );
-                        let ty = self
-                            .heap
-                            .mk_class_type(self.stdlib.list(self.unions(elem_tys)));
-                        if let Some(partial_fallback) = partial_fallback {
-                            self.solver()
-                                .replace_unresolved_partials(ty, &partial_fallback)
-                        } else {
-                            ty
-                        }
+            Expr::List(x) => {
+                let projection = if self.solver().config.tensor_shapes
+                    && hint.is_some_and(|hint| {
+                        let raw_hints = hint.types();
+                        let flattened_hints = self.flatten_alias_union_hints(raw_hints);
+                        flattened_hints
+                            .as_deref()
+                            .unwrap_or(raw_hints)
+                            .iter()
+                            .any(|hint| regular_nested_list(hint).is_some())
+                    }) {
+                    // Try marker arms before ordinary list arms: the generic ordering prefers a
+                    // concrete `list[object]` over a marker containing an unsolved shape variable.
+                    let successful_projections = RefCell::new(Vec::new());
+                    let projected =
+                        self.infer_with_decomposed_hint(hint, regular_nested_list, |marker, _| {
+                            match marker {
+                                Some(marker) => {
+                                    let branch_errors = self.error_collector();
+                                    match self.project_regular_nested_list_hint(
+                                        x,
+                                        &marker,
+                                        &branch_errors,
+                                    ) {
+                                        Some((ty, traces)) if !branch_errors.has_hard() => {
+                                            successful_projections.borrow_mut().push((
+                                                ty.clone(),
+                                                branch_errors,
+                                                traces,
+                                            ));
+                                            ty
+                                        }
+                                        Some(_) | None => self.stdlib.object().clone().to_type(),
+                                    }
+                                }
+                                None => self.stdlib.object().clone().to_type(),
+                            }
+                        });
+                    successful_projections
+                        .into_inner()
+                        .into_iter()
+                        .find(|(ty, _, _)| ty == &projected)
+                        .map(|(_, branch_errors, traces)| (projected, branch_errors, traces))
+                } else {
+                    None
+                };
+                if let Some((projected, branch_errors, traces)) = projection {
+                    errors.extend(branch_errors);
+                    for (range, ty) in traces {
+                        self.record_type_trace(range, &ty);
                     }
-                },
-            ),
+                    projected
+                } else {
+                    self.infer_with_decomposed_hint(
+                        hint,
+                        |hint| self.decompose_list(hint),
+                        |elt_hint, hint| self.list_literal_infer(x, elt_hint, hint, errors),
+                    )
+                }
+            }
             Expr::Dict(x) => self.dict_infer(&x.items, hint, x.range, errors),
             Expr::Set(x) => self.infer_with_decomposed_hint(
                 hint,
@@ -3164,6 +3192,44 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             ));
         }
         TypeVarTuple::new(name, self.module().dupe(), default_value)
+    }
+
+    /// Infer an ordinary list after contextual-hint decomposition.
+    fn list_literal_infer(
+        &self,
+        list: &ExprList,
+        elt_hint: Option<ListElementHint>,
+        hint: Option<HintRef>,
+        errors: &ErrorCollector,
+    ) -> Type {
+        if list.is_empty() {
+            let elem_ty = match elt_hint {
+                Some(ListElementHint::Hint(elem_hint)) => elem_hint,
+                Some(ListElementHint::UninformativeAny(_)) | None => self
+                    .solver()
+                    .fresh_partial_contained(self.uniques, list.range)
+                    .to_type(self.heap),
+            };
+            self.heap.mk_class_type(self.stdlib.list(elem_ty))
+        } else {
+            let (elt_hint, partial_fallback) = elt_hint
+                .map(ListElementHint::into_parts)
+                .unwrap_or_default();
+            let elem_tys = self.elts_infer(
+                &list.elts,
+                HintRef::with_ty_opt(hint, elt_hint.as_ref()),
+                errors,
+            );
+            let ty = self
+                .heap
+                .mk_class_type(self.stdlib.list(self.unions(elem_tys)));
+            if let Some(partial_fallback) = partial_fallback {
+                self.solver()
+                    .replace_unresolved_partials(ty, &partial_fallback)
+            } else {
+                ty
+            }
+        }
     }
 
     /// Helper to infer element types for a list or set.

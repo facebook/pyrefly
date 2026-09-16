@@ -615,7 +615,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Flatten the hint candidates produced by `HintRef::split`, additionally looking through type
     /// aliases. Otherwise, if the alias is a union, the solver pins the decomposition vars to
     /// whichever union arm matches first, which is usually the wrong one.
-    fn flatten_alias_union_hints(&self, hints: &[Type]) -> Option<Vec<Type>> {
+    pub(crate) fn flatten_alias_union_hints(&self, hints: &[Type]) -> Option<Vec<Type>> {
         if !hints
             .iter()
             .any(|hint| matches!(hint, Type::UntypedAlias(_) | Type::Union(_)))
