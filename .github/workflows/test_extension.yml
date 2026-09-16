@@ -9,6 +9,16 @@ on:
       - '!.*'
       - '.github/workflows/build_extension.yml'
       - '.github/workflows/test_extension.yml'
+  # Narrower than the push trigger above, because a pull request pays for the
+  # whole nine-platform binary build before any test runs. Server changes are
+  # already covered per pull request by the Rust and Scrut suites in
+  # pyrefly.yml; what only this workflow can check is the extension itself,
+  # against the packaged VSIX.
+  pull_request:
+    paths:
+      - 'lsp/**'
+      - '.github/workflows/build_extension.yml'
+      - '.github/workflows/test_extension.yml'
 
 jobs:
   build_extension:
