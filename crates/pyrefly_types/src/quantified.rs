@@ -191,6 +191,12 @@ impl Quantified {
             ..self
         }
     }
+
+    /// Return this parameter without its declared default.
+    pub fn without_default(mut self) -> Self {
+        self.default = None;
+        self
+    }
 }
 
 impl PartialEq for Quantified {

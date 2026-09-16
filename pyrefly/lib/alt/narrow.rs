@@ -17,6 +17,7 @@ use pyrefly_types::facet::FacetChain;
 use pyrefly_types::facet::FacetKind;
 use pyrefly_types::facet::UnresolvedFacetChain;
 use pyrefly_types::facet::UnresolvedFacetKind;
+use pyrefly_types::quantified::Quantified;
 use pyrefly_types::simplify::intersect;
 use pyrefly_types::simplify::simplify_tuples;
 use pyrefly_types::type_alias::TypeAliasData;
@@ -608,7 +609,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 Type::ClassType(cls) => self.as_tuple(cls).is_some(),
                 _ => false,
             };
-        if narrow_heterogeneous_tuple {
+        let (tparams, target) = if narrow_heterogeneous_tuple {
             Some(self.instantiate_type_var_tuple())
         } else if matches!(right, Type::ClassDef(c) if c == self.stdlib.builtins_type().class_object())
         {
@@ -624,7 +625,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         } else {
             self.unwrap_class_object_silently(right)
-        }
+        }?;
+        let tparams = TParams::new(
+            tparams
+                .iter()
+                .cloned()
+                .map(Quantified::without_default)
+                .collect(),
+        );
+        Some((tparams, target))
     }
 
     /// Run `f` with the freshened instance type produced by unwrapping `right` as class info.

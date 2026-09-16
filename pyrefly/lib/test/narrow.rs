@@ -1025,6 +1025,23 @@ def test_negative():
 );
 
 testcase!(
+    test_isinstance_bare_generic_ignores_default,
+    r#"
+from typing import assert_type, reveal_type
+
+class Defaulted[T = int]: ...
+
+def unknown(x):
+    if isinstance(x, Defaulted):
+        reveal_type(x)  # E: Defaulted[Unknown]
+
+def known(x: Defaulted[str] | None):
+    if isinstance(x, Defaulted):
+        assert_type(x, Defaulted[str])
+"#,
+);
+
+testcase!(
     test_isinstance_and_len_narrow,
     r#"
 from typing import assert_type
