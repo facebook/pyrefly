@@ -14,6 +14,7 @@ from typing import (
     Unpack,
 )
 
+import numpy as np
 from jax._array import Array as Array, Array as ndarray, ArrayLike as _ArrayLike
 from jax._shapes import (
     append_shape,
@@ -110,6 +111,7 @@ from shape_extensions import (
     IntTuples,
     IntVar,
     MapIntTuples,
+    RegularNestedList,
 )
 
 from . import fft as fft, linalg as linalg
@@ -120,11 +122,23 @@ type _Axis = int | tuple[int, ...] | None
 # an `int | tuple[int, ...]` parameter cannot be iterated inside a DSL function
 # after narrowing with `is_int_value` alone. See `reshape_shape`, which rejects it.
 type _NewShape = int | tuple[int, ...] | None
-type _Scalar = bool | int | float | complex
+type _Scalar = bool | int | float | complex | np.number
+type _ShapedArrayLike[Shape: _Shape] = Array[Shape] | np.ndarray[Shape]
 
 @overload
-def array[Shape: _Shape = []](
-    object: _ArrayLike[Shape],
+def array(
+    object: _Scalar,
+    dtype: DTypeLike | None = ...,
+    copy: bool | None = ...,
+    order: str | None = ...,
+    ndmin: Literal[0] = 0,
+    *,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[]]: ...
+@overload
+def array[Shape: _Shape](
+    object: _ShapedArrayLike[Shape] | RegularNestedList[Shape, _Scalar],
     dtype: DTypeLike | None = ...,
     copy: bool | None = ...,
     order: str | None = ...,
@@ -145,8 +159,18 @@ def array(
     out_sharding: Any = ...,
 ) -> Array[IntTuple]: ...
 @overload
-def asarray[Shape: _Shape = []](
-    a: _ArrayLike[Shape],
+def asarray(
+    a: _Scalar,
+    dtype: DTypeLike | None = ...,
+    order: str | None = ...,
+    *,
+    copy: bool | None = ...,
+    device: Any = ...,
+    out_sharding: Any = ...,
+) -> Array[[]]: ...
+@overload
+def asarray[Shape: _Shape](
+    a: _ShapedArrayLike[Shape] | RegularNestedList[Shape, _Scalar],
     dtype: DTypeLike | None = ...,
     order: str | None = ...,
     *,
