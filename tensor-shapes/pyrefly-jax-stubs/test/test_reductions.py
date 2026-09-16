@@ -87,8 +87,8 @@ def test_reduce_methods() -> None:
 def test_non_tuple_sequence_axis_is_accepted() -> None:
     c = jnp.ones((2, 3, 4))
 
-    # Not a TODO: only a tuple is a `Flag` domain, and `range(n)` for a computed
-    # `n` has no statically knowable content.
+    # Non-tuple sequences remain gradual because only a tuple is a `Flag` domain,
+    # and `range(n)` for a computed `n` has no statically knowable content.
     assert_shape(jnp.sum(c, axis=[0, 2]).shape, IntTuple, runtime=(3,))
     assert_shape(jnp.sum(c, axis=range(2)).shape, IntTuple, runtime=(4,))
     assert_shape(c.mean(axis=[0, 2]).shape, IntTuple, runtime=(3,))

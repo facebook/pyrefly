@@ -80,8 +80,8 @@ def test_array_indexing_falls_back_gradually() -> None:
     values = np.ones((5, 3))
     rows = np.arange(2)
 
-    # Not a TODO: an array index has no statically knowable content, so the
-    # result rank is unknown rather than merely imprecise.
+    # An array index has no statically knowable content, so the result rank is
+    # unknown rather than merely imprecise.
     assert_shape(values[rows].shape, IntTuple, runtime=(2, 3))
     assert_shape(values[rows, :].shape, IntTuple, runtime=(2, 3))
     assert_shape(values[True].shape, IntTuple, runtime=(1, 5, 3))

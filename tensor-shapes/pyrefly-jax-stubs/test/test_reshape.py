@@ -69,8 +69,8 @@ def test_reshape_accepts_keywords_where_jax_does() -> None:
 def test_reshape_accepts_a_sequence_shape() -> None:
     a = jnp.ones((3, 4))
 
-    # Not a TODO: only a tuple is a `Flag` domain, and a sequence in general --
-    # `range(n)` for a computed `n` -- has no statically knowable content.
+    # Non-tuple sequences remain gradual because only a tuple is a `Flag` domain,
+    # and `range(n)` for a computed `n` has no statically knowable content.
     assert_shape(jnp.reshape(a, [2, 6]).shape, IntTuple, runtime=(2, 6))
     assert_shape(a.reshape([2, 6]).shape, IntTuple, runtime=(2, 6))
 

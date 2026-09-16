@@ -93,9 +93,9 @@ def test_like_constructors() -> None:
 
 
 def test_non_tuple_shapes_are_gradual() -> None:
-    # A tuple is exact at any rank. Not a TODO for the rest: only a tuple is a
-    # `Flag` domain, and a sequence in general -- `range(n)` for a computed `n` --
-    # has no statically knowable content.
+    # A tuple is exact at any rank. Other sequences remain gradual because only
+    # a tuple is a `Flag` domain, and `range(n)` for a computed `n` has no
+    # statically knowable content.
     assert_shape(jnp.zeros((2, 3, 4, 5)).shape, (2, 3, 4, 5))
     assert_shape(jnp.zeros([2, 3]).shape, IntTuple, runtime=(2, 3))
     assert_shape(jnp.ones([2, 3]).shape, IntTuple, runtime=(2, 3))

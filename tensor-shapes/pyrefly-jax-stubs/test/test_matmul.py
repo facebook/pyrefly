@@ -156,8 +156,8 @@ def test_transpose_method() -> None:
 def test_transpose_method_variadic_and_sequence_forms() -> None:
     c = jnp.ones((2, 3, 4))
 
-    # Not a TODO: a variadic argument list cannot be captured as a `Flag`, and
-    # only a tuple is a `Flag` domain.
+    # A variadic argument list cannot be captured as a `Flag`, and only a tuple
+    # is a `Flag` domain.
     assert_shape(c.transpose(0, 2, 1).shape, IntTuple, runtime=(2, 4, 3))
     assert_shape(c.transpose([2, 0, 1]).shape, IntTuple, runtime=(4, 2, 3))
 
@@ -210,7 +210,7 @@ def test_transpose_with_explicit_axes() -> None:
 def test_transpose_accepts_any_axis_sequence() -> None:
     c = jnp.ones((2, 3, 4))
 
-    # Not a TODO, for the same reason as the method form above.
+    # As in the method form above, only a tuple is a `Flag` domain.
     assert_shape(jnp.transpose(c, [2, 0, 1]).shape, IntTuple, runtime=(4, 2, 3))
     assert_shape(jnp.transpose(c, range(3)).shape, IntTuple, runtime=(2, 3, 4))
 
