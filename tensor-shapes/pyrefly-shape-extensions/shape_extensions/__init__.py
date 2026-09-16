@@ -7,9 +7,8 @@
 
 """Library-agnostic shape typing primitives.
 
-The .pyi stub provides full type information to pyrefly. This .py file
-provides minimal runtime classes so that annotations using these types
-don't crash when evaluated by Python.
+These definitions provide static shape information to Pyrefly while remaining
+safe to evaluate in runtime annotations.
 """
 
 import typing
@@ -25,6 +24,7 @@ __all__ = [
     "Index",
     "MapIntTuples",
     "ProxyMethod",
+    "RegularNestedList",
     "SymbolicArithExpr",
     "TypeVarTuple",
     "assert_shape",
@@ -176,6 +176,37 @@ class ProxyMethod[T]:
     """Type-checker marker for method forwarding annotations."""
 
     pass
+
+
+# `TypeVar` defaults require Python 3.13 at runtime, so omit them on Python 3.12.
+if typing.TYPE_CHECKING:
+    _RegularNestedShape = typing.TypeVar(
+        "_RegularNestedShape", bound=IntTuple, default=IntTuple, covariant=True
+    )
+    _Domain = typing.TypeVar(
+        "_Domain", default=bool | int | float | complex, covariant=True
+    )
+else:
+    _RegularNestedShape = typing.TypeVar(
+        "_RegularNestedShape", bound=IntTuple, covariant=True
+    )
+    _Domain = typing.TypeVar("_Domain", covariant=True)
+
+
+class RegularNestedList(typing.Generic[_RegularNestedShape, _Domain]):
+    """A regular nested list literal whose scalar leaves belong to ``Domain``.
+
+    Here, regular means the opposite of jagged or irregular: every sibling list
+    has the same shape.
+
+    A literal such as ``[[1, 2], [3, 4]]`` binds ``Shape`` to
+    ``IntTuple[2, 2]``, while ``[[1, 2], [3]]`` is jagged and therefore not
+    regular. Existing containers, starred literals, and statically jagged
+    literals use ordinary typing instead of this marker.
+    """
+
+    def __class_getitem__(cls, params):
+        return cls
 
 
 @dataclass(frozen=True)

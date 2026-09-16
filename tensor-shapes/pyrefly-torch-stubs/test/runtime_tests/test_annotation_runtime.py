@@ -34,6 +34,7 @@ from shape_extensions import (
     IntTuple,
     IntVar,
     MapIntTuples,
+    RegularNestedList,
     TypeVarTuple,
 )
 
@@ -64,6 +65,9 @@ class TestSubscriptRuntime(unittest.TestCase):
             return x
 
         self.assertTrue(callable(f))
+
+    def test_regular_nested_list_shape_subscript_erases_to_marker(self):
+        self.assertIs(RegularNestedList[[2], int], RegularNestedList)
 
 
 class TestTorchScriptRuntimeCompat(unittest.TestCase):
