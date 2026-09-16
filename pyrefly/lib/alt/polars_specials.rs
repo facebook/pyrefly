@@ -2290,10 +2290,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // same as with_columns, so a sibling's new column is not visible.
         for kw in &args.keywords {
             let name = kw.arg.as_ref()?.id.clone();
-            // A keyword value that itself resolves to multiple columns (e.g.
-            // `x=pl.col("a", "b")`) is a duplicate-column error in Polars, not a single
-            // named output — degrade the whole call, same as an opaque positional arg.
-            if self.polars_output_count(&kw.value) != OutputCount::One {
+            // Polars implements `name=value` as `value.alias(name)`, so a value that provably
+            // expands to several columns (e.g. `x=pl.col("a", "b")`) gives all of them the same
+            // name, which Polars rejects — degrade rather than report an impossible schema. A
+            // value of unknown width keeps its keyword's name and an Unknown dtype, since the
+            // overwhelmingly common case is one column and the name is spelled out either way.
+            if self.polars_output_count(&kw.value) == OutputCount::Many {
                 has_opaque = true;
                 continue;
             }
@@ -2758,6 +2760,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let Some(arg) = &kw.arg else {
                 return None;
             };
+            // A keyword aliases every column its value expands to, so a provably wide value
+            // repeats one name — the same reasoning `select` applies.
+            if self.polars_output_count(&kw.value) == OutputCount::Many {
+                return None;
+            }
             if !output_names.insert(arg.id.clone()) {
                 has_repeated_name = true;
             }

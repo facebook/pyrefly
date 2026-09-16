@@ -2858,7 +2858,7 @@ polars_testcase!(
 import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": ["x"]})
-reveal_type(df.with_columns(c=pl.col("a", "b")))  # E: revealed type: DataFrame[a: Int64, b: String, c: Unknown]
+reveal_type(df.with_columns(c=pl.col("a", "b")))  # E: revealed type: DataFrame
 "#,
 );
 
@@ -3015,6 +3015,21 @@ import polars as pl
 from typing import reveal_type
 df = pl.DataFrame({"a": [1], "b": [2]})
 reveal_type(df.select(x=pl.col("a", "b")))  # E: revealed type: DataFrame
+"#,
+);
+
+// A keyword spells out its column's name, so a value whose width we cannot follow still names
+// one column. Only a provably wide value costs the call its schema, as the test above shows.
+polars_testcase!(
+    test_select_keyword_unresolved_value_is_unknown,
+    r#"
+import polars as pl
+from typing import reveal_type
+def make() -> pl.Expr: ...
+df = pl.DataFrame({"a": [1]})
+s = pl.col("a")
+reveal_type(df.select(b=s))  # E: revealed type: DataFrame[b: Unknown]
+reveal_type(df.select(b=make()))  # E: revealed type: DataFrame[b: Unknown]
 "#,
 );
 
