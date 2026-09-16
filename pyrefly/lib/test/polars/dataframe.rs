@@ -2951,6 +2951,16 @@ reveal_type(df.with_columns(pl.col("a").alias("z"), w=pl.col("b")))  # E: reveal
 "#,
 );
 
+polars_testcase!(
+    test_with_columns_positional_keyword_duplicate_falls_back,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.with_columns(pl.col("a").alias("x"), x=pl.col("b")))  # E: Operation produces duplicate column `x` # E: revealed type: DataFrame
+"#,
+);
+
 // A positional arg's new column is not visible to a sibling keyword in the same call — every
 // argument resolves against the pre-call schema, matching Polars' parallel-evaluation semantics
 // already established for keyword-only calls.

@@ -2686,13 +2686,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // positional arg with no well-defined output name is ambiguous in shape (it could
         // expand to any number of columns), so it degrades the whole call, the same as select.
         let mut resolved_positional = Vec::with_capacity(positional.len());
+        let mut output_names = SmallSet::new();
+        let mut has_repeated_name = false;
         for &arg in &positional {
             let output = match self.polars_column_arg(arg) {
                 ColumnArg::Named(name) => Some((name, true)),
                 ColumnArg::Opaque => None,
                 ColumnArg::Expr => self.polars_expr_output_name(arg).map(|name| (name, false)),
-            };
-            output.as_ref()?;
+            }?;
+            if !output_names.insert(output.0.clone()) {
+                has_repeated_name = true;
+            }
             resolved_positional.push(output);
         }
         let mut named = Vec::with_capacity(args.keywords.len());
@@ -2700,6 +2704,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let Some(arg) = &kw.arg else {
                 return None;
             };
+            if !output_names.insert(arg.id.clone()) {
+                has_repeated_name = true;
+            }
             named.push((arg.id.clone(), &kw.value));
         }
         for arg in &args.args {
@@ -2708,17 +2715,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Polars evaluates every positional and keyword expression against the receiver's
         // original schema in parallel, so a sibling's new column is not visible in the same call.
         let mut columns = schema.columns.clone();
+        let mut resolved_names = SmallSet::new();
         for (output, arg) in resolved_positional.iter().zip(&positional) {
-            let (name, is_column) = output
-                .as_ref()
-                .expect("opacity already checked before inference");
-            let dtype = if *is_column {
+            let (name, is_column) = output;
+            let resolved = if *is_column {
                 resolve_column(schema, name, arg.range(), errors)
             } else {
                 self.eval_polars_expr(arg, schema, errors)
                     .map(ExprValue::dtype)
+            };
+            if resolved.is_some() && !resolved_names.insert(name.clone()) {
+                report_duplicate_column(name, arg.range(), errors);
             }
-            .unwrap_or(PolarsDType::Unknown);
+            let dtype = resolved.unwrap_or(PolarsDType::Unknown);
             match columns.iter_mut().find(|(c, _)| c == name) {
                 Some((_, ty)) => *ty = dtype,
                 None => columns.push((name.clone(), dtype)),
@@ -2726,20 +2735,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         for (name, value) in named {
             self.expr_infer(value, errors);
-            let dtype = match self.polars_column_arg(value) {
+            let resolved = match self.polars_column_arg(value) {
                 ColumnArg::Named(name) => resolve_column(schema, &name, value.range(), errors),
                 ColumnArg::Opaque => None,
                 ColumnArg::Expr => self
                     .eval_polars_expr(value, schema, errors)
                     .map(ExprValue::dtype),
+            };
+            if resolved.is_some() && !resolved_names.insert(name.clone()) {
+                report_duplicate_column(&name, value.range(), errors);
             }
-            .unwrap_or(PolarsDType::Unknown);
+            let dtype = resolved.unwrap_or(PolarsDType::Unknown);
             match columns.iter_mut().find(|(c, _)| *c == name) {
                 Some((_, ty)) => *ty = dtype,
                 None => columns.push((name, dtype)),
             }
         }
-        Some(dataframe_type_with_columns(schema, columns))
+        if has_repeated_name {
+            Some(schema.underlying_type())
+        } else {
+            Some(dataframe_type_with_columns(schema, columns))
+        }
     }
 
     /// A bound `GroupBy` does not expose its receiver schema, so only an inline chain is modeled.
