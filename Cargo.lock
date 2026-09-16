@@ -2838,9 +2838,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "ruff_annotate_snippets"
-version = "0.0.13"
+version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a16eb7a2d37abd29dbf128b729f86da593a12f1131f3ac6eda1e53f2f4de91b2"
+checksum = "295b88ac8bad3581ed48e775a148d05bdfa1360be1d0587317270943d73a706c"
 dependencies = [
  "anstyle",
  "memchr",
@@ -2849,9 +2849,9 @@ dependencies = [
 
 [[package]]
 name = "ruff_cache"
-version = "0.0.13"
+version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54f966e29482a7172cbc6da5ec7b82abefd4234cd4ea331909feb0629b588dbb"
+checksum = "a34b15d240667704d18c5e4ae591e051ad6f9963ce616be2859dbf41ebec7fc0"
 dependencies = [
  "char_str",
  "filetime",
@@ -2864,9 +2864,9 @@ dependencies = [
 
 [[package]]
 name = "ruff_diagnostics"
-version = "0.0.13"
+version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a8ec7864824e1557792dce5da20d9b98e9a85f89f038e0e9a73188c28c07b42"
+checksum = "3ad300b25e4bf76831905415a0d9eefa5edd5e3da5ba1bac934cbc368e3d3f47"
 dependencies = [
  "get-size2",
  "is-macro",
@@ -2875,9 +2875,9 @@ dependencies = [
 
 [[package]]
 name = "ruff_notebook"
-version = "0.0.13"
+version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc53c96f9214336ac22029b8f2d83d36b934a9bd3f9ca36bdea8c69ede4becdd"
+checksum = "391c4665c6871a4c849ed6750a6a6f9bc0f64bf2af6edffba0fdd7a9a5550e13"
 dependencies = [
  "anyhow",
  "rand 0.10.2",
@@ -2892,9 +2892,9 @@ dependencies = [
 
 [[package]]
 name = "ruff_python_ast"
-version = "0.0.13"
+version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78a29807fda69c48797648e48e432d88d7e5ed0c70b17ea73c0812f57491e6bc"
+checksum = "6aa1de604c478a790cfbcc9c1fef3060e619ed87dd776c6614862ed7e59dc461"
 dependencies = [
  "aho-corasick",
  "arrayvec",
@@ -2916,9 +2916,9 @@ dependencies = [
 
 [[package]]
 name = "ruff_python_parser"
-version = "0.0.13"
+version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8749340d7349b35a8690688dcb5228fd09158d9ec2456b10920448c73c3af37c"
+checksum = "b44b423a842d5d2f10807189a260ba677d4eacdc98c5d0459b66bef67fb78d97"
 dependencies = [
  "bitflags 2.13.2",
  "bstr",
@@ -2940,9 +2940,9 @@ dependencies = [
 
 [[package]]
 name = "ruff_python_trivia"
-version = "0.0.13"
+version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1e5d4adda6a367232d55904c9fc3658ea8e25955344fa96f777fef8c87ae1e9"
+checksum = "990dadfad3aa3fd63040d98056112e5a377af8ada0c9c7659e8907a4b3c7cb34"
 dependencies = [
  "itertools 0.15.0",
  "ruff_source_file",
@@ -2953,9 +2953,9 @@ dependencies = [
 
 [[package]]
 name = "ruff_source_file"
-version = "0.0.13"
+version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da6e63a7f83e656db977a895558b77db1d62bd695689fdec9767935e80f81ee4"
+checksum = "ed11e9366de40e79707c0e575afd8beffad58ec94c253577d516b8679cf98308"
 dependencies = [
  "memchr",
  "ruff_text_size",
@@ -2964,9 +2964,9 @@ dependencies = [
 
 [[package]]
 name = "ruff_text_size"
-version = "0.0.13"
+version = "0.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff588f7776e5024cf3239240bc56fc033ee76e8a080a6b2c28540e644bd10327"
+checksum = "5a4edc941f215495170a1bda0beeeb31db2fdcd67beecfe7f29d94b2663e1965"
 dependencies = [
  "get-size2",
  "serde",

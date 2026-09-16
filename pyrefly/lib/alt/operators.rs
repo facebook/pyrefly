@@ -759,10 +759,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     pub fn compare_infer(&self, x: &ExprCompare, errors: &ErrorCollector) -> Type {
         // For chained comparisons like `a < b < c`, Python evaluates as `(a < b) and (b < c)`.
         // We need to track the current left operand as we iterate through the chain.
-        let mut current_left = self.expr_infer(&x.left, errors);
-        let mut current_left_range = x.left.range();
+        let mut current_left = self.expr_infer(x.first_operand(), errors);
+        let mut current_left_range = x.first_operand().range();
         let mut results = Vec::new();
-        for (op, comparator) in x.ops.iter().zip(x.comparators.iter()) {
+        for (op, comparator) in x.ops.iter().zip(x.comparators()) {
             let right = self.expr_infer(comparator, errors);
 
             // Check for unnecessary identity comparisons (is/is not) BEFORE distribute_over_union

@@ -802,10 +802,7 @@ impl SysInfo {
 
     fn depends_on_sys_info(x: &Expr) -> bool {
         match x {
-            Expr::Compare(x) => {
-                Self::depends_on_sys_info(&x.left)
-                    || x.comparators.iter().any(Self::depends_on_sys_info)
-            }
+            Expr::Compare(x) => x.operands.iter().any(Self::depends_on_sys_info),
             Expr::Attribute(ExprAttribute { value, attr, .. }) => {
                 matches!(
                     &**value,
@@ -874,7 +871,7 @@ impl SysInfo {
             }
             Expr::Compare(x)
                 if x.ops.len() == 1
-                    && x.comparators.len() == 1
+                    && x.operands.len() == 2
                     && matches!(x.ops[0], CmpOp::Is | CmpOp::Eq) =>
             {
                 let is_false = |e: &Expr| {
@@ -883,8 +880,9 @@ impl SysInfo {
                         Expr::BooleanLiteral(ExprBooleanLiteral { value: false, .. })
                     )
                 };
-                (Self::is_type_checking_guard(&x.left) && is_false(&x.comparators[0]))
-                    || (is_false(&x.left) && Self::is_type_checking_guard(&x.comparators[0]))
+                (Self::is_type_checking_guard(x.first_operand()) && is_false(x.second_operand()))
+                    || (is_false(x.first_operand())
+                        && Self::is_type_checking_guard(x.second_operand()))
             }
             _ => false,
         }
@@ -892,9 +890,9 @@ impl SysInfo {
 
     fn evaluate(self, x: &Expr) -> Option<Value> {
         match x {
-            Expr::Compare(x) if x.ops.len() == 1 && x.comparators.len() == 1 => Some(Value::Bool(
-                self.evaluate(&x.left)?
-                    .compare(x.ops[0], &self.evaluate(&x.comparators[0])?)?,
+            Expr::Compare(x) if x.ops.len() == 1 && x.operands.len() == 2 => Some(Value::Bool(
+                self.evaluate(x.first_operand())?
+                    .compare(x.ops[0], &self.evaluate(x.second_operand())?)?,
             )),
             Expr::Attribute(ExprAttribute { value, attr, .. })
                 if let Expr::Name(name) = &**value

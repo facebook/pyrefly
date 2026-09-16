@@ -2571,7 +2571,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 unary_value(unary.op, a)
             }
             Expr::Compare(cmp) => {
-                let ([op], [right]) = (&*cmp.ops, &*cmp.comparators) else {
+                let ([op], [left, right]) = (&*cmp.ops, &*cmp.operands) else {
                     return None;
                 };
                 if !matches!(
@@ -2580,7 +2580,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 ) {
                     return None;
                 }
-                let a = self.eval_polars_expr(&cmp.left, schema, errors)?;
+                let a = self.eval_polars_expr(left, schema, errors)?;
                 let b = self.eval_polars_expr(right, schema, errors)?;
                 comparison_value(a, b)
             }
@@ -2651,9 +2651,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .polars_output_count(&binop.left)
                 .combine(self.polars_output_count(&binop.right)),
             Expr::UnaryOp(unary) => self.polars_output_count(&unary.operand),
-            Expr::Compare(cmp) => match (&*cmp.ops, &*cmp.comparators) {
-                ([_], [right]) => self
-                    .polars_output_count(&cmp.left)
+            Expr::Compare(cmp) => match (&*cmp.ops, &*cmp.operands) {
+                ([_], [left, right]) => self
+                    .polars_output_count(left)
                     .combine(self.polars_output_count(right)),
                 _ => OutputCount::Unknown,
             },
@@ -2771,15 +2771,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
             Expr::UnaryOp(unary) => self.polars_expr_output_name(&unary.operand),
             Expr::Compare(cmp) => {
-                let ([_], [right]) = (&*cmp.ops, &*cmp.comparators) else {
+                let ([_], [left, right]) = (&*cmp.ops, &*cmp.operands) else {
                     return None;
                 };
                 if self.polars_output_count(expr) != OutputCount::One {
                     return None;
                 }
                 // Python reflects comparisons whose left operand is not a Polars expression.
-                if self.is_polars_expr_value(&cmp.left) {
-                    self.polars_expr_output_name(&cmp.left)
+                if self.is_polars_expr_value(left) {
+                    self.polars_expr_output_name(left)
                 } else {
                     self.polars_expr_output_name(right)
                 }

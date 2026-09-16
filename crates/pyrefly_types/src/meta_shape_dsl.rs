@@ -1229,8 +1229,8 @@ fn convert_expr(expr: &Expr) -> Result<DslExpr, DslCompileError> {
                     message: "DSL does not support chained comparisons".to_owned(),
                 });
             }
-            let left = convert_expr(&cmp.left)?;
-            let right = convert_expr(&cmp.comparators[0])?;
+            let left = convert_expr(cmp.first_operand())?;
+            let right = convert_expr(cmp.second_operand())?;
             match cmp.ops[0] {
                 RuffCmpOp::In => Ok(DslExpr::In {
                     left: Box::new(left),

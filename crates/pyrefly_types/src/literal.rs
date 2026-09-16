@@ -18,7 +18,7 @@ use ruff_python_ast::ExprBooleanLiteral;
 use ruff_python_ast::ExprBytesLiteral;
 use ruff_python_ast::ExprFString;
 use ruff_python_ast::ExprStringLiteral;
-use ruff_python_ast::FStringPart;
+use ruff_python_ast::FStringPartRef;
 use ruff_python_ast::Int;
 use ruff_python_ast::InterpolatedStringElement;
 use ruff_python_ast::name::Name;
@@ -202,10 +202,10 @@ impl Lit {
 
     pub fn from_fstring(x: &ExprFString) -> Option<Self> {
         let mut collected_literals = Vec::new();
-        for fstring_part in x.value.as_slice() {
+        for fstring_part in &x.value {
             match fstring_part {
-                FStringPart::Literal(x) => collected_literals.push(x.value.clone()),
-                FStringPart::FString(x) => {
+                FStringPartRef::Literal(x) => collected_literals.push(x.value.clone()),
+                FStringPartRef::FString(x) => {
                     for fstring_part in x.elements.iter() {
                         match fstring_part {
                             InterpolatedStringElement::Literal(x) => {

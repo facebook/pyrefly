@@ -3306,10 +3306,10 @@ impl<'a> CallGraphVisitor<'a> {
         let left_comparator_type = self
             .module_answers_context
             .answers
-            .get_type_trace(compare.comparators.first().unwrap().range());
+            .get_type_trace(compare.second_operand().range());
 
         let mut last_lhs_start = compare.range().start();
-        for (operator, right_comparator) in compare.ops.iter().zip(compare.comparators.iter()) {
+        for (operator, right_comparator) in compare.ops.iter().zip(compare.comparators()) {
             let callee_name = dunder::rich_comparison_dunder(*operator);
             let DunderAttrCallees { callees, .. } = self.call_targets_from_magic_dunder_attr(
                 /* base */ left_comparator_type.as_ref(),

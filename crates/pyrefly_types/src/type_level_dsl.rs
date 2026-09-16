@@ -4450,12 +4450,12 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         if let Expr::Compare(compare) = condition
             && compare.ops.len() == 1
             && matches!(compare.ops[0], CmpOp::Is | CmpOp::IsNot)
-            && compare.comparators.len() == 1
-            && matches!(&compare.comparators[0], Expr::NoneLiteral(_))
+            && compare.operands.len() == 2
+            && matches!(compare.second_operand(), Expr::NoneLiteral(_))
         {
             let negated = compare.ops[0] == CmpOp::IsNot;
             let (slot, origins) = self.validate_value_set_narrowing_operand(
-                &compare.left,
+                compare.first_operand(),
                 flow,
                 FLAG_REPRESENTABLE,
                 if negated {
@@ -4578,16 +4578,16 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 message: "condition may use only boolean Flag values, `and`, `or`, `not`, `any(...)`, `is None`, `is_concrete_int(...)`, `is_int_value(...)`, integer or string comparisons, and Flag sequence membership",
             });
         };
-        if compare.ops.len() != 1 || compare.comparators.len() != 1 {
+        if compare.ops.len() != 1 || compare.operands.len() != 2 {
             return Err(TypeShapeDslDefinitionError {
                 range: compare.range,
                 message: "comparison must be exactly one binary comparison",
             });
         }
         let op = compare.ops[0];
-        let right = &compare.comparators[0];
+        let right = compare.second_operand();
         if matches!(op, CmpOp::In | CmpOp::NotIn) {
-            self.validate_flag_int(&compare.left, flow)?;
+            self.validate_flag_int(compare.first_operand(), flow)?;
             self.validate_flag_sequence(right, flow)?;
             self.conditions.push(TypeShapeDslCondition {
                 range: compare.range,
@@ -4614,14 +4614,14 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                             && kinds & !(FLAG_STRING | FLAG_NONE) == 0
                 )))
         };
-        if string_operand(&compare.left) || string_operand(right) {
+        if string_operand(compare.first_operand()) || string_operand(right) {
             if !matches!(op, CmpOp::Eq | CmpOp::NotEq) {
                 return Err(TypeShapeDslDefinitionError {
                     range: compare.range,
                     message: "Flag strings support only `==` and `!=`",
                 });
             }
-            self.validate_flag_string(&compare.left, flow)?;
+            self.validate_flag_string(compare.first_operand(), flow)?;
             self.validate_flag_string(right, flow)?;
             self.conditions.push(TypeShapeDslCondition {
                 range: compare.range,
@@ -4679,9 +4679,9 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             }
             _ => None,
         };
-        let slot_comparison = match (&*compare.left, right) {
+        let slot_comparison = match (compare.first_operand(), right) {
             (Expr::Name(_), Expr::Name(_)) => {
-                let left = self.slot(&compare.left, flow)?;
+                let left = self.slot(compare.first_operand(), flow)?;
                 let right = self.slot(right, flow)?;
                 if left == right
                     && matches!(flow.kinds[left], DslStaticKind::GeneratorElement { .. })
@@ -4705,13 +4705,13 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             }
             _ => None,
         };
-        let has_dimension_expression = self.is_dimension_expression(&compare.left, flow)
+        let has_dimension_expression = self.is_dimension_expression(compare.first_operand(), flow)
             || self.is_dimension_expression(right, flow);
         let right_literal = match integer_literal(right) {
             IntegerLiteral::Value(value) => Some(value),
             IntegerLiteral::NotLiteral | IntegerLiteral::Unrepresentable { .. } => None,
         };
-        let left_literal = match integer_literal(&compare.left) {
+        let left_literal = match integer_literal(compare.first_operand()) {
             IntegerLiteral::Value(value) => Some(value),
             IntegerLiteral::NotLiteral | IntegerLiteral::Unrepresentable { .. } => None,
         };
@@ -4740,10 +4740,11 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 _ => false,
             })
         };
-        let simple_operands = (matches!(&*compare.left, Expr::Name(_)) || left_literal.is_some())
+        let simple_operands = (matches!(compare.first_operand(), Expr::Name(_))
+            || left_literal.is_some())
             && (matches!(right, Expr::Name(_)) || right_literal.is_some());
         let integer_comparison = if simple_operands
-            && (is_integer_comparison_candidate(&compare.left)?
+            && (is_integer_comparison_candidate(compare.first_operand())?
                 || is_integer_comparison_candidate(right)?)
         {
             let integer_literal_operand = || {
@@ -4753,9 +4754,9 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     non_parameter_flag_domain: flag_domain_from_kinds(FLAG_INT),
                 })
             };
-            let left_operand = match &*compare.left {
+            let left_operand = match compare.first_operand() {
                 Expr::Name(_) => {
-                    let left = self.slot(&compare.left, flow)?;
+                    let left = self.slot(compare.first_operand(), flow)?;
                     comparison_operand(&flow.kinds[left])
                 }
                 _ if left_literal.is_some() => integer_literal_operand(),
@@ -4776,7 +4777,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         let kind = match (slot_comparison, integer_comparison) {
             (Some(kind), _) => kind,
             (None, Some((left_operand, right_operand))) => {
-                self.validate_dimension_arithmetic_operand(&compare.left, flow)?;
+                self.validate_dimension_arithmetic_operand(compare.first_operand(), flow)?;
                 self.validate_dimension_arithmetic_operand(right, flow)?;
                 TypeShapeDslConditionKind::IntegerCompare {
                     left_operand,
@@ -4791,7 +4792,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         message: "derived dimension comparisons support only `==` and `!=`",
                     });
                 }
-                self.validate_dimension(&compare.left, flow)?;
+                self.validate_dimension(compare.first_operand(), flow)?;
                 self.validate_dimension(right, flow)?;
                 TypeShapeDslConditionKind::DimensionEquality {
                     negated: op == CmpOp::NotEq,
@@ -4801,16 +4802,16 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 if op == CmpOp::Eq
                     && right_literal.is_some()
                     && matches!(
-                        &*compare.left,
+                        compare.first_operand(),
                         Expr::Call(call)
                             if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Len)
                                 && call.arguments.args.len() == 1
                                 && call.arguments.keywords.is_empty()
                     ) =>
             {
-                self.validate_flag_int(&compare.left, flow)?;
+                self.validate_flag_int(compare.first_operand(), flow)?;
                 self.validate_flag_int(right, flow)?;
-                let Expr::Call(call) = &*compare.left else {
+                let Expr::Call(call) = compare.first_operand() else {
                     unreachable!("guarded length equality has a call on the left")
                 };
                 let slot = self.slot(&call.arguments.args[0], flow)?;
@@ -4821,7 +4822,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 }
             }
             (None, None) => {
-                self.validate_flag_int(&compare.left, flow)?;
+                self.validate_flag_int(compare.first_operand(), flow)?;
                 self.validate_flag_int(right, flow)?;
                 TypeShapeDslConditionKind::FlagIntCompare(comparison_op)
             }
@@ -7745,8 +7746,8 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 let Expr::Compare(compare) = condition else {
                     unreachable!("validated Flag string equality is a comparison")
                 };
-                let left = self.evaluate_expression(&compare.left, environment, budget);
-                let right = self.evaluate_expression(&compare.comparators[0], environment, budget);
+                let left = self.evaluate_expression(compare.first_operand(), environment, budget);
+                let right = self.evaluate_expression(compare.second_operand(), environment, budget);
                 let equality = match (left, right) {
                     (
                         DslOutcome::Value(DslValue::FlagString(left)),
@@ -7786,8 +7787,8 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 let Expr::Compare(compare) = condition else {
                     unreachable!("validated Flag comparison is a comparison")
                 };
-                let left = self.evaluate_expression(&compare.left, environment, budget);
-                let right = self.evaluate_expression(&compare.comparators[0], environment, budget);
+                let left = self.evaluate_expression(compare.first_operand(), environment, budget);
+                let right = self.evaluate_expression(compare.second_operand(), environment, budget);
                 match (left, right) {
                     (
                         DslOutcome::Value(DslValue::FlagInt(left)),
@@ -7813,9 +7814,9 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 let Expr::Compare(compare) = condition else {
                     unreachable!("validated membership condition is a comparison")
                 };
-                let item = self.evaluate_expression(&compare.left, environment, budget);
+                let item = self.evaluate_expression(compare.first_operand(), environment, budget);
                 let sequence =
-                    self.evaluate_expression(&compare.comparators[0], environment, budget);
+                    self.evaluate_expression(compare.second_operand(), environment, budget);
                 match (item, sequence) {
                     (
                         DslOutcome::Value(DslValue::FlagInt(item)),
@@ -7842,8 +7843,8 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 let Expr::Compare(compare) = condition else {
                     unreachable!("validated dimension comparison is a comparison")
                 };
-                let left = self.evaluate_expression(&compare.left, environment, budget);
-                let right = self.evaluate_expression(&compare.comparators[0], environment, budget);
+                let left = self.evaluate_expression(compare.first_operand(), environment, budget);
+                let right = self.evaluate_expression(compare.second_operand(), environment, budget);
                 match (left, right) {
                     (
                         DslOutcome::Value(DslValue::Dimension(left)),
@@ -7872,8 +7873,8 @@ impl StructurallyValidatedTypeShapeDslFunction {
                 let Expr::Compare(compare) = condition else {
                     unreachable!("validated integer comparison is a comparison")
                 };
-                let left = self.evaluate_expression(&compare.left, environment, budget);
-                let right = self.evaluate_expression(&compare.comparators[0], environment, budget);
+                let left = self.evaluate_expression(compare.first_operand(), environment, budget);
+                let right = self.evaluate_expression(compare.second_operand(), environment, budget);
                 match (left, right) {
                     (
                         DslOutcome::Value(DslValue::Dimension(Int::Literal(left))),

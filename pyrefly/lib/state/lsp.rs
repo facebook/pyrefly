@@ -2268,8 +2268,8 @@ impl<'a> Transaction<'a> {
             .iter()
             .find_map(|node| match node {
                 AnyNodeRef::ExprCompare(compare) => {
-                    let mut left = compare.left.as_ref();
-                    for (op, right) in compare.ops.iter().zip(compare.comparators.iter()) {
+                    let mut left = compare.first_operand();
+                    for (op, right) in compare.ops.iter().zip(compare.comparators()) {
                         if !Self::position_is_between(
                             position,
                             left.range().end(),
