@@ -7,6 +7,7 @@
 
 use lsp_types::DocumentSymbol;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::comment_section::CommentSection;
 use pyrefly_python::module::Module;
 use pyrefly_util::visit::Visit;
@@ -200,10 +201,10 @@ fn recurse_stmt_adding_symbols<'a>(
         Stmt::FunctionDef(stmt_function_def) => {
             let mut children = Vec::new();
             children.append(&mut recursed_symbols);
-            // todo(kylei): better approach to filtering out "" for all symbols
-            let name = match stmt_function_def.name.as_str() {
-                "" => "unknown".to_owned(),
-                name => name.to_owned(),
+            let name = if Ast::is_synthesized_empty_identifier(&stmt_function_def.name) {
+                "unknown".to_owned()
+            } else {
+                stmt_function_def.name.to_string()
             };
             symbols.push(DocumentSymbol {
                 name,
@@ -228,9 +229,10 @@ fn recurse_stmt_adding_symbols<'a>(
                 }
             }
 
-            let name = match stmt_class_def.name.as_str() {
-                "" => "unknown".to_owned(),
-                name => name.to_owned(),
+            let name = if Ast::is_synthesized_empty_identifier(&stmt_class_def.name) {
+                "unknown".to_owned()
+            } else {
+                stmt_class_def.name.to_string()
             };
             symbols.push(DocumentSymbol {
                 name,
@@ -246,7 +248,7 @@ fn recurse_stmt_adding_symbols<'a>(
         Stmt::Assign(stmt_assign) => {
             for target in &stmt_assign.targets {
                 if let Expr::Name(name) = target {
-                    if name.id.is_empty() {
+                    if Ast::is_synthesized_empty_name(name) {
                         continue;
                     }
                     // todo(jvansch): Try to reuse DefinitionMetadata here.
@@ -265,7 +267,7 @@ fn recurse_stmt_adding_symbols<'a>(
         }
         Stmt::AnnAssign(stmt_ann_assign) => {
             if let Expr::Name(name) = &*stmt_ann_assign.target
-                && !name.id.is_empty()
+                && !Ast::is_synthesized_empty_name(name)
             {
                 symbols.push(DocumentSymbol {
                     name: name.id.to_string(),
