@@ -482,8 +482,14 @@ allow_redefinition = true
 
     #[test]
     fn test_strict_checks_unannotated_defs() -> anyhow::Result<()> {
-        let mut cfg = parse_pyproject_config("[tool.mypy]\nstrict = true\n")?;
+        let cfg = parse_pyproject_config("[tool.mypy]\nstrict = true\n")?;
         assert_eq!(cfg.root.check_unannotated_defs, Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn test_strict_enables_method_assign() -> anyhow::Result<()> {
+        let mut cfg = parse_pyproject_config("[tool.mypy]\nstrict = true\n")?;
         cfg.configure();
         assert_eq!(
             cfg.errors(Path::new(".")).severity(ErrorKind::MethodAssign),

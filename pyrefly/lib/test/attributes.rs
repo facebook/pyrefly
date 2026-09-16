@@ -316,6 +316,47 @@ a.callback = lambda: None
 );
 
 testcase!(
+    test_method_assign_lookup_precedence,
+    TestEnv::new().enable_method_assign_error(),
+    r#"
+from collections.abc import Callable
+from typing import TypedDict
+
+class Meta(type):
+    def f(cls) -> None: ...
+
+class C(metaclass=Meta):
+    pass
+
+C.f = C.f  # E: Cannot assign to method `f`
+
+class D(TypedDict):
+    items: int
+
+d: D = {"items": 1}
+d.items = d.items  # E: Cannot assign to method `items`
+
+class Base:
+    def f(self) -> None: ...
+
+class Child(Base):
+    f: Callable[[], None] = lambda: None
+
+    def test(self) -> None:
+        super().f = lambda: None  # E: Cannot assign to method `f` # E: Cannot set field `f`
+
+class Parent:
+    f: Callable[[], None] = lambda: None
+
+class Derived(Parent):
+    def f(self) -> None: ...
+
+    def test(self) -> None:
+        super().f = lambda: None  # E: Cannot set field `f`
+    "#,
+);
+
+testcase!(
     test_attribute_union,
     r#"
 class A:

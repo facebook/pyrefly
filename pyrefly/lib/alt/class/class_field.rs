@@ -4762,8 +4762,22 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     pub fn get_instance_attribute(&self, cls: &ClassType, name: &Name) -> Option<ClassAttribute> {
+        self.get_instance_attribute_with_method(cls, name)
+            .map(|(attr, _)| attr)
+    }
+
+    pub fn get_instance_attribute_with_method(
+        &self,
+        cls: &ClassType,
+        name: &Name,
+    ) -> Option<(ClassAttribute, bool)> {
         self.get_class_member(cls.class_object(), name)
-            .map(|field| self.as_instance_attribute(name, field.as_ref(), &Instance::of_class(cls)))
+            .map(|field| {
+                let is_method = field.is_method();
+                let attr =
+                    self.as_instance_attribute(name, field.as_ref(), &Instance::of_class(cls));
+                (attr, is_method)
+            })
     }
 
     pub fn get_self_attribute(&self, cls: &ClassType, name: &Name) -> Option<ClassAttribute> {
@@ -4832,7 +4846,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         metaclass: &ClassType,
         name: &Name,
     ) -> Option<ClassAttribute> {
+        self.get_metaclass_attribute_with_method(cls, metaclass, name)
+            .map(|(attr, _)| attr)
+    }
+
+    pub fn get_metaclass_attribute_with_method(
+        &self,
+        cls: &ClassBase,
+        metaclass: &ClassType,
+        name: &Name,
+    ) -> Option<(ClassAttribute, bool)> {
         let attr = self.get_class_member(metaclass.class_object(), name)?;
+        let is_method = attr.is_method();
         let attr = self.as_instance_attribute(
             name,
             attr.as_ref(),
@@ -4843,11 +4868,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 .class_object()
                 .has_toplevel_qname(ModuleName::builtins().as_str(), "type")
         {
-            return Some(ClassAttribute::read_write(
-                self.constructor_to_callable(cls.class_type()),
+            return Some((
+                ClassAttribute::read_write(self.constructor_to_callable(cls.class_type())),
+                is_method,
             ));
         }
-        Some(attr)
+        Some((attr, is_method))
     }
 
     /// Returns true if this attribute represents a data descriptor
@@ -4906,6 +4932,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         td: &TypedDictInner,
         name: &Name,
     ) -> Option<ClassAttribute> {
+        self.get_typed_dict_attribute_with_method(td, name)
+            .map(|(attr, _)| attr)
+    }
+
+    pub fn get_typed_dict_attribute_with_method(
+        &self,
+        td: &TypedDictInner,
+        name: &Name,
+    ) -> Option<(ClassAttribute, bool)> {
         if let Some(meta) = self
             .get_metadata_for_class(td.class_object())
             .typed_dict_metadata()
@@ -4927,15 +4962,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     }
                 })
                 .map(|member| {
-                    self.as_instance_attribute(
+                    let is_method = member.value.is_method();
+                    let attr = self.as_instance_attribute(
                         name,
                         member.value.as_ref(),
                         &Instance::of_typed_dict(td),
-                    )
+                    );
+                    (attr, is_method)
                 });
         }
         self.get_class_member(td.class_object(), name).map(|field| {
-            self.as_instance_attribute(name, field.as_ref(), &Instance::of_typed_dict(td))
+            let is_method = field.is_method();
+            let attr =
+                self.as_instance_attribute(name, field.as_ref(), &Instance::of_typed_dict(td));
+            (attr, is_method)
         })
     }
 
@@ -4980,31 +5020,45 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         super_obj: &SuperObj,
         name: &Name,
     ) -> Option<ClassAttribute> {
+        self.get_super_attribute_with_method(start_lookup_cls, super_obj, name)
+            .map(|(attr, _)| attr)
+    }
+
+    pub fn get_super_attribute_with_method(
+        &self,
+        start_lookup_cls: &ClassType,
+        super_obj: &SuperObj,
+        name: &Name,
+    ) -> Option<(ClassAttribute, bool)> {
         match super_obj {
             SuperObj::Instance(obj) => self
                 .get_super_class_member(obj.class_object(), Some(start_lookup_cls), name)
                 .map(|member| {
+                    let is_method = member.value.is_method();
                     if let Some(reason) = self.super_method_needs_impl_reason(&member) {
-                        ClassAttribute::no_access(reason)
+                        (ClassAttribute::no_access(reason), is_method)
                     } else {
-                        self.as_instance_attribute(
+                        let attr = self.as_instance_attribute(
                             name,
                             member.value.as_ref(),
                             &Instance::of_self_type(obj),
-                        )
+                        );
+                        (attr, is_method)
                     }
                 }),
             SuperObj::Class(obj) => self
                 .get_super_class_member(obj.class_object(), Some(start_lookup_cls), name)
                 .map(|member| {
+                    let is_method = member.value.is_method();
                     if let Some(reason) = self.super_method_needs_impl_reason(&member) {
-                        ClassAttribute::no_access(reason)
+                        (ClassAttribute::no_access(reason), is_method)
                     } else {
-                        self.as_class_attribute(
+                        let attr = self.as_class_attribute(
                             name,
                             member.value.as_ref(),
                             &ClassBase::SelfType(obj.clone()),
-                        )
+                        );
+                        (attr, is_method)
                     }
                 }),
         }
@@ -5044,8 +5098,21 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Access is disallowed for instance-only attributes and for attributes whose
     /// type contains a class-scoped type parameter - e.g., `class A[T]: x: T`.
     pub fn get_class_attribute(&self, cls: &ClassBase, name: &Name) -> Option<ClassAttribute> {
+        self.get_class_attribute_with_method(cls, name)
+            .map(|(attr, _)| attr)
+    }
+
+    pub fn get_class_attribute_with_method(
+        &self,
+        cls: &ClassBase,
+        name: &Name,
+    ) -> Option<(ClassAttribute, bool)> {
         self.get_class_member(cls.class_object(), name)
-            .map(|field| self.as_class_attribute(name, field.as_ref(), cls))
+            .map(|field| {
+                let is_method = field.is_method();
+                let attr = self.as_class_attribute(name, field.as_ref(), cls);
+                (attr, is_method)
+            })
     }
 
     pub fn get_bounded_quantified_class_attribute(
