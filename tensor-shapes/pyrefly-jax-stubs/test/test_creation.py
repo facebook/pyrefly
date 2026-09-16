@@ -174,16 +174,19 @@ def test_window_functions() -> None:
     assert_shape(jnp.kaiser(18, 5.0).shape, (18,))
 
 
-def test_multi_argument_arange_length_is_gradual() -> None:
-    # The rank is known and only the length is gradual. Integer lengths can be
-    # computed by a follow-up; floating-point rounding remains out of scope.
-    # TODO(stroxler): Compute integer lengths in `jax/numpy/__init__.pyi`.
-    assert_shape(jnp.arange(2, 7).shape, (int,), runtime=(5,))
+def test_multi_argument_arange_lengths() -> None:
+    assert_shape(jnp.arange(2, 7).shape, (5,))
+    assert_shape(jnp.arange(0, 10, 2).shape, (5,))
+    assert_shape(jnp.arange(0, 10, 3).shape, (4,))
+    assert_shape(jnp.arange(10, 0, -2).shape, (5,))
+    assert_shape(jnp.arange(10, 0, -3).shape, (4,))
+    assert_shape(jnp.arange(7, 2).shape, (0,))
+    assert_shape(jnp.arange(2, 7, -1).shape, (0,))
+
+    # Floating-point lengths remain gradual because their rounding behavior is
+    # not modeled by the integer shape DSL.
     assert_shape(jnp.arange(5.0).shape, (int,), runtime=(5,))
     assert_shape(jnp.arange(0.0, 1.0, 0.2).shape, (int,), runtime=(5,))
-    assert_shape(jnp.arange(0, 10, 2).shape, (int,), runtime=(5,))
-    assert_shape(jnp.arange(10, 0, -2).shape, (int,), runtime=(5,))
-    assert_shape(jnp.arange(7, 2).shape, (int,), runtime=(0,))
 
 
 def test_single_argument_arange_clamps_a_negative_dimension() -> None:

@@ -32,6 +32,21 @@ def arange_stop(stop: Int) -> Int:
     return stop
 
 @type_shape_dsl_function
+def arange_size(start: int, stop: int, step: int) -> Int:
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    if step == 0:
+        return dsl.Invalid("arange step must not be zero")
+    if 0 < step:
+        if start < stop:
+            return (stop - start + step - 1) // step
+        return zero
+    if stop < start:
+        positive_step = 0 - step
+        return (start - stop + positive_step - 1) // positive_step
+    return zero
+
+@type_shape_dsl_function
 def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     if len(left) == 0 or len(right) == 0:
         return dsl.Invalid("matmul expects at least 1-D arrays")

@@ -1991,6 +1991,43 @@ def check() -> None:
 );
 
 testcase!(
+    test_type_shape_dsl_arange_size,
+    shape_extensions_env_with_torch(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def arange_size(start: int, stop: int, step: int) -> Int:
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    if step == 0:
+        return dsl.Invalid("arange step must not be zero")
+    if 0 < step:
+        if start < stop:
+            return (stop - start + step - 1) // step
+        return zero
+    if stop < start:
+        positive_step = 0 - step
+        return (start - stop + positive_step - 1) // positive_step
+    return zero
+
+def ascending() -> Tensor[[arange_size(0, 10, 3)]]: ...
+def descending() -> Tensor[[arange_size(10, 0, -3)]]: ...
+def empty_ascending() -> Tensor[[arange_size(7, 2, 1)]]: ...
+def empty_descending() -> Tensor[[arange_size(2, 7, -1)]]: ...
+
+def check() -> None:
+    assert_type(ascending(), Tensor[[4]])
+    assert_type(descending(), Tensor[[4]])
+    assert_type(empty_ascending(), Tensor[[0]])
+    assert_type(empty_descending(), Tensor[[0]])
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_explicit_int_arithmetic_operands,
     shape_extensions_env_with_torch(),
     r#"
