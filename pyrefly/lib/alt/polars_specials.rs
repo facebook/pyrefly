@@ -575,6 +575,28 @@ enum ColumnArg {
     Expr,
 }
 
+/// How many columns one argument expands to. Polars expands an expression against the receiver's
+/// schema, so a single argument can name several columns at once.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OutputCount {
+    One,
+    /// Provably more than one, so an alias applied to it repeats a name.
+    Many,
+    /// Not statically known: a selector, or an expression we do not model.
+    Unknown,
+}
+
+impl OutputCount {
+    /// The width of an expression built from two operands, which broadcast against each other.
+    fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Many, _) | (_, Self::Many) => Self::Many,
+            (Self::Unknown, _) | (_, Self::Unknown) => Self::Unknown,
+            (Self::One, Self::One) => Self::One,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ArgumentValue<'b> {
     Missing,
@@ -2271,7 +2293,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             // A keyword value that itself resolves to multiple columns (e.g.
             // `x=pl.col("a", "b")`) is a duplicate-column error in Polars, not a single
             // named output — degrade the whole call, same as an opaque positional arg.
-            if !self.polars_expr_has_single_output(&kw.value) {
+            if self.polars_output_count(&kw.value) != OutputCount::One {
                 has_opaque = true;
                 continue;
             }
@@ -2499,80 +2521,111 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             .then(|| attr.attr.id.clone())
     }
 
-    /// Prove an expression produces one column, so its output name is well-defined.
-    fn polars_expr_has_single_output(&self, expr: &Expr) -> bool {
+    /// How many columns an expression expands to when Polars evaluates it against a schema.
+    fn polars_output_count(&self, expr: &Expr) -> OutputCount {
         match expr {
             Expr::Call(call) => {
                 if let Expr::Attribute(attr) = &*call.func {
                     // A `when(...).then(...)` / `.otherwise(...)` chain evaluates to one value
-                    // per row, unless a branch value itself resolves to multiple columns (e.g.
-                    // `pl.col("a", "b")`), in which case the chain inherits that multiplicity.
+                    // per row, unless a predicate or branch itself resolves to multiple columns
+                    // (e.g. `pl.col("a", "b")`), in which case the chain inherits that width.
                     if matches!(attr.attr.id.as_str(), "then" | "otherwise") {
-                        return self.polars_when_chain_has_single_output(expr);
+                        return self.polars_when_chain_output_count(expr);
                     }
                     if PolarsExprMethod::parse(attr.attr.id.as_str()).is_some() {
-                        return self.polars_expr_has_single_output(&attr.value);
+                        return self.polars_output_count(&attr.value);
                     }
                 }
                 match self.polars_function(&call.func) {
-                    Some(PolarsFunction::Len) => true,
-                    Some(PolarsFunction::Col) => {
-                        matches!(&call.arguments.args[..], [arg] if matches!(self.polars_column_arg(arg), ColumnArg::Named(_)))
-                    }
-                    Some(PolarsFunction::Lit) => matches!(&call.arguments.args[..], [_]),
-                    _ => false,
+                    Some(PolarsFunction::Len) => OutputCount::One,
+                    // Every argument to `pl.col` names its own column, so two or more of them
+                    // are provably two or more outputs. A selector or a non-literal argument
+                    // matches a data-dependent set, which could be any width.
+                    Some(PolarsFunction::Col) => match &call.arguments.args[..] {
+                        [arg] if matches!(self.polars_column_arg(arg), ColumnArg::Named(_)) => {
+                            OutputCount::One
+                        }
+                        args if args.len() > 1
+                            && args.iter().all(|arg| {
+                                matches!(self.polars_column_arg(arg), ColumnArg::Named(_))
+                            }) =>
+                        {
+                            OutputCount::Many
+                        }
+                        _ => OutputCount::Unknown,
+                    },
+                    Some(PolarsFunction::Lit) => match &call.arguments.args[..] {
+                        [_] => OutputCount::One,
+                        _ => OutputCount::Unknown,
+                    },
+                    _ => OutputCount::Unknown,
                 }
             }
-            Expr::BinOp(binop) => {
-                self.polars_expr_has_single_output(&binop.left)
-                    && self.polars_expr_has_single_output(&binop.right)
-            }
-            Expr::UnaryOp(unary) => self.polars_expr_has_single_output(&unary.operand),
-            Expr::Compare(cmp) => {
-                matches!((&*cmp.ops, &*cmp.comparators), ([_], [right]) if self.polars_expr_has_single_output(&cmp.left) && self.polars_expr_has_single_output(right))
-            }
+            Expr::BinOp(binop) => self
+                .polars_output_count(&binop.left)
+                .combine(self.polars_output_count(&binop.right)),
+            Expr::UnaryOp(unary) => self.polars_output_count(&unary.operand),
+            Expr::Compare(cmp) => match (&*cmp.ops, &*cmp.comparators) {
+                ([_], [right]) => self
+                    .polars_output_count(&cmp.left)
+                    .combine(self.polars_output_count(right)),
+                _ => OutputCount::Unknown,
+            },
             Expr::NumberLiteral(_)
             | Expr::BooleanLiteral(_)
             | Expr::StringLiteral(_)
             | Expr::BytesLiteral(_)
-            | Expr::NoneLiteral(_) => true,
-            Expr::Attribute(_) if self.polars_col_attribute_name(expr).is_some() => true,
-            _ => !self.is_polars_expr_value(expr),
+            | Expr::NoneLiteral(_) => OutputCount::One,
+            Expr::Attribute(_) if self.polars_col_attribute_name(expr).is_some() => {
+                OutputCount::One
+            }
+            // A plain Python value broadcasts to one column; anything still typed as a Polars
+            // expression carries a width we have not been able to follow.
+            _ if self.is_polars_expr_value(expr) => OutputCount::Unknown,
+            _ => OutputCount::One,
         }
     }
 
-    /// Check that every predicate and branch in a Polars conditional is single-output.
-    fn polars_when_chain_has_single_output(&self, expr: &Expr) -> bool {
+    /// How many columns a Polars conditional expands to: the width of its widest predicate or
+    /// branch, since either expands the whole conditional.
+    fn polars_when_chain_output_count(&self, expr: &Expr) -> OutputCount {
         let Expr::Call(call) = expr else {
-            return false;
+            return OutputCount::Unknown;
         };
-        let arguments_have_single_output = || {
+        let arguments_count = || {
             call.arguments
                 .args
                 .iter()
-                .all(|arg| self.polars_expr_has_single_output(arg))
-                && call
-                    .arguments
-                    .keywords
-                    .iter()
-                    .all(|kw| kw.arg.is_some() && self.polars_expr_has_single_output(&kw.value))
+                .map(|arg| self.polars_output_count(arg))
+                .chain(call.arguments.keywords.iter().map(|kw| match kw.arg {
+                    Some(_) => self.polars_output_count(&kw.value),
+                    None => OutputCount::Unknown,
+                }))
+                .fold(OutputCount::One, OutputCount::combine)
         };
         let Expr::Attribute(attr) = &*call.func else {
-            return self.polars_function(&call.func) == Some(PolarsFunction::When)
-                && arguments_have_single_output();
+            return match self.polars_function(&call.func) {
+                Some(PolarsFunction::When) => arguments_count(),
+                _ => OutputCount::Unknown,
+            };
         };
         match attr.attr.id.as_str() {
             "then" | "otherwise" => {
-                call.arguments.keywords.is_empty()
-                    && matches!(&call.arguments.args[..], [value] if self.polars_expr_has_single_output(value))
-                    && self.polars_when_chain_has_single_output(&attr.value)
+                let [value] = &call.arguments.args[..] else {
+                    return OutputCount::Unknown;
+                };
+                if !call.arguments.keywords.is_empty() {
+                    return OutputCount::Unknown;
+                }
+                self.polars_output_count(value)
+                    .combine(self.polars_when_chain_output_count(&attr.value))
             }
-            "when" => {
-                arguments_have_single_output()
-                    && (self.polars_function(&call.func) == Some(PolarsFunction::When)
-                        || self.polars_when_chain_has_single_output(&attr.value))
+            // `pl.when(...)` opens a chain; `.when(...)` continues one, so its receiver counts too.
+            "when" if self.polars_function(&call.func) == Some(PolarsFunction::When) => {
+                arguments_count()
             }
-            _ => false,
+            "when" => arguments_count().combine(self.polars_when_chain_output_count(&attr.value)),
+            _ => OutputCount::Unknown,
         }
     }
 
@@ -2586,7 +2639,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                             return self.polars_expr_output_name(&attr.value);
                         }
                         Some(PolarsExprMethod::Alias) => {
-                            if !self.polars_expr_has_single_output(&attr.value) {
+                            if self.polars_output_count(&attr.value) != OutputCount::One {
                                 return None;
                             }
                             let [arg] = &call.arguments.args[..] else {
@@ -2625,7 +2678,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 }
             }
             Expr::BinOp(binop) => {
-                if !self.polars_expr_has_single_output(expr) {
+                if self.polars_output_count(expr) != OutputCount::One {
                     return None;
                 }
                 self.polars_expr_output_name(&binop.left)
@@ -2635,7 +2688,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 let ([_], [right]) = (&*cmp.ops, &*cmp.comparators) else {
                     return None;
                 };
-                if !self.polars_expr_has_single_output(expr) {
+                if self.polars_output_count(expr) != OutputCount::One {
                     return None;
                 }
                 // Python reflects comparisons whose left operand is not a Polars expression.
