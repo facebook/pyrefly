@@ -8,6 +8,7 @@
 from typing import assert_type
 
 import torch
+from shape_extensions import Elements, IntTuple
 from torch import Tensor
 
 # ==== Additional Mathematical Operations (Binary) ====
@@ -26,6 +27,12 @@ def test_atan2_method():
     b: Tensor[[2, 3]] = torch.randn(2, 3)
     result = a.atan2(b)
     assert_type(result, Tensor[[2, 3]])
+
+
+def test_atan2_variadic[Shape: IntTuple](
+    left: Tensor[[*Elements[Shape]]], right: Tensor[[*Elements[Shape]]]
+) -> None:
+    assert_type(torch.atan2(left, right), Tensor[Shape])
 
 
 # Test: hypot - element-wise hypotenuse

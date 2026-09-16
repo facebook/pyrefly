@@ -19,7 +19,7 @@ def test_where_2d():
     x: Tensor[[3, 4]] = torch.randn(3, 4)
     y: Tensor[[3, 4]] = torch.randn(3, 4)
     result = torch.where(condition, x, y)
-    assert_type(result, Tensor)
+    assert_type(result, Tensor[[3, 4]])
 
 
 def test_where_indices():
@@ -33,7 +33,7 @@ def test_where_broadcasting():
     x: Tensor[[3, 4]] = torch.randn(3, 4)
     y: Tensor[[3, 4]] = torch.randn(3, 4)
     result = torch.where(condition, x, y)
-    assert_type(result, Tensor)
+    assert_type(result, Tensor[[3, 4]])
 
 
 def test_where_generic_shape[XShape: IntTuple](

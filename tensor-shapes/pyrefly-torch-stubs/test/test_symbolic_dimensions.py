@@ -956,9 +956,9 @@ def test_gather[N: IntVar, M: IntVar](x: Tensor[[N, M]], index: Tensor[[N, 5]]):
 def test_where[N: IntVar, M: IntVar](
     condition: Tensor[[N, M]], x: Tensor[[N, M]], y: Tensor[[N, M]]
 ):
-    """Where currently returns a gradual shape."""
+    """Where broadcasts and preserves matching symbolic shapes."""
     result = torch.where(condition, x, y)
-    assert_type(result, Tensor)
+    assert_type(result, Tensor[[N, M]])
 
 
 def test_zeros_like[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
@@ -1163,8 +1163,8 @@ def test_unfold_symbolic_size[N: IntVar, M: IntVar](x: Tensor[[N]], size: Int[M]
     assert_type(torch.unfold(x, 0, size, 2), Tensor[IntTuple])
 
 
-def test_diag_embed_symbolic_offset[B: IntVar, N: IntVar, O: IntVar](
-    x: Tensor[[B, N]], offset: Int[O]
+def test_diag_embed_symbolic_offset[B: IntVar, N: IntVar, Offset: IntVar](
+    x: Tensor[[B, N]], offset: Int[Offset]
 ):
     assert_type(torch.diag_embed(x, offset=offset), Tensor[IntTuple])
 

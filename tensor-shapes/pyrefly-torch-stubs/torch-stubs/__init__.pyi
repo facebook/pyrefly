@@ -1377,7 +1377,9 @@ class Tensor[Shape: _Shape = _Shape]:
         ...
 
     # Additional mathematical methods
-    def atan2(self, other: Tensor) -> Self:
+    def atan2[OtherShape: _Shape](
+        self, other: Tensor[OtherShape]
+    ) -> Tensor[broadcast(Shape, OtherShape)]:
         """Element-wise arctangent. Shape inference via generic fixture signature."""
         ...
 
@@ -2786,7 +2788,9 @@ def relu[Shape: IntTuple](input: Tensor[Shape]) -> Tensor[Shape]:
     ...
 
 # Additional mathematical operations
-def atan2[Shape: IntTuple](input: Tensor[Shape], other: Tensor) -> Tensor[Shape]:
+def atan2[Shape: IntTuple, OtherShape: IntTuple](
+    input: Tensor[Shape], other: Tensor[OtherShape]
+) -> Tensor[broadcast(Shape, OtherShape)]:
     """Element-wise arctangent of input/other. Shape inference via generic fixture signature."""
     ...
 
@@ -3109,30 +3113,34 @@ def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
 @overload
 def where(condition: Tensor[Any]) -> tuple[Tensor, ...]: ...
 @overload
-def where(
-    condition: Tensor[Any],
-    input: Tensor[Any],
-    other: Tensor[Any],
+def where[
+    ConditionShape: IntTuple,
+    InputShape: IntTuple,
+    OtherShape: IntTuple,
+](
+    condition: Tensor[ConditionShape],
+    input: Tensor[InputShape],
+    other: Tensor[OtherShape],
     *,
     out: Tensor | None = None,
-) -> Tensor: ...
+) -> Tensor[broadcast(ConditionShape, broadcast(InputShape, OtherShape))]: ...
 @overload
-def where(
-    condition: Tensor[Any],
-    input: Tensor[Any],
+def where[ConditionShape: IntTuple, InputShape: IntTuple](
+    condition: Tensor[ConditionShape],
+    input: Tensor[InputShape],
     other: builtins.bool | builtins.int | builtins.float | builtins.complex,
-) -> Tensor: ...
+) -> Tensor[broadcast(ConditionShape, InputShape)]: ...
 
 # PyTorch names a scalar value parameter `self`, not `input`.
 @overload
-def where(
-    condition: Tensor[Any],
+def where[ConditionShape: IntTuple, OtherShape: IntTuple](
+    condition: Tensor[ConditionShape],
     self: builtins.bool | builtins.int | builtins.float | builtins.complex,
-    other: Tensor[Any],
-) -> Tensor: ...
+    other: Tensor[OtherShape],
+) -> Tensor[broadcast(ConditionShape, OtherShape)]: ...
 @overload
-def where(
-    condition: Tensor[Any],
+def where[ConditionShape: IntTuple](
+    condition: Tensor[ConditionShape],
     self: builtins.bool | builtins.int | builtins.float | builtins.complex,
     other: builtins.bool | builtins.int | builtins.float | builtins.complex,
 ) -> Tensor: ...

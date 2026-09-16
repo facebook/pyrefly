@@ -14,6 +14,12 @@ from torch import Tensor
 # ==== torch.linalg.eig ====
 
 
+def test_linalg_norm_variadic_receiver[Shape: IntTuple](
+    value: Tensor[[*Elements[Shape], 3]],
+) -> None:
+    assert_type(torch.linalg.norm(value, dim=-1), Tensor[Shape])
+
+
 def test_eig_2d():
     """Eigenvalue decomposition"""
     A: Tensor[[4, 4]] = torch.randn(4, 4)

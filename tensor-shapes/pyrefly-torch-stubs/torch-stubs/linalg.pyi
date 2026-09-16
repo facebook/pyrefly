@@ -6,9 +6,9 @@
 # Type stubs for torch.linalg module (Phase 4: Advanced Linear Algebra)
 from typing import Any, overload
 
-from shape_extensions import Elements, IntTuple, IntVar
+from shape_extensions import Elements, Flag, IntTuple, IntVar
 from torch import Tensor
-from torch._shapes import eig_shape, eigvals_shape, slogdet_shape
+from torch._shapes import eig_shape, eigvals_shape, reduce_shape, slogdet_shape
 
 # Eigenvalue decomposition
 @overload
@@ -90,12 +90,12 @@ def matrix_rank[Batch: IntTuple, M: IntVar, N: IntVar](
 ) -> Tensor[Batch]: ...
 
 # Vector/matrix norm
-def norm(
-    A: Tensor,
+def norm[Shape: IntTuple, Dim: Flag[int | tuple[int, ...] | None], Keepdim: Flag[bool]](
+    A: Tensor[Shape],
     ord: int | float | str | None = None,
-    dim: int | tuple[int, ...] | None = None,
-    keepdim: bool = False,
-) -> Tensor: ...
+    dim: Dim = None,
+    keepdim: Keepdim = False,
+) -> Tensor[reduce_shape(Shape, Dim, Keepdim)]: ...
 def vector_norm(
     x: Tensor,
     ord: int | float = 2,

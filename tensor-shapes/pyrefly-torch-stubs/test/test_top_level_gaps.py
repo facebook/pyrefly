@@ -106,7 +106,7 @@ def test_gradual_creation_and_stack(x: Tensor, tensors: list[Tensor]):
 
 def test_linalg_norm():
     x = torch.zeros(3, 3)
-    assert_type(torch.linalg.norm(x, dim=-1), Tensor)
+    assert_type(torch.linalg.norm(x, dim=-1), Tensor[[3]])
 
 
 def test_deg2rad_inplace():
