@@ -3033,6 +3033,20 @@ reveal_type(df.with_columns(pl.col("a").alias("x"), [1]))  # E: revealed type: D
 "#,
 );
 
+// `select` follows the same sole-argument rule as `with_columns`: a list alongside another
+// positional is one anonymous value column, so its elements are neither column specs nor
+// separate outputs. A sole list argument still flattens, as the tests above cover.
+polars_testcase!(
+    test_select_multi_positional_list_literal_is_unknown,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": ["x"]})
+reveal_type(df.select(pl.col("a"), [1]))  # E: revealed type: DataFrame[a: Int64, literal: Unknown]
+reveal_type(df.select(pl.col("a"), ["b"]))  # E: revealed type: DataFrame[a: Int64, literal: Unknown]
+"#,
+);
+
 polars_testcase!(
     test_with_columns_spread_falls_back,
     r#"

@@ -504,6 +504,19 @@ fn positional_elements(arg: &Expr) -> &[Expr] {
     literal_sequence(arg).unwrap_or_else(|| std::slice::from_ref(arg))
 }
 
+/// The column expressions a `select` or `with_columns` call passes positionally.
+///
+/// A bare list/tuple display is a shorthand for a sequence of expressions only when it is the
+/// sole positional argument: `select([e1, e2])` flattens, but `select(e0, [e1])` does not — there
+/// the list is one opaque value, not two column specs. `drop` is different, flattening every
+/// iterable argument, so it does its own expansion with `positional_elements`.
+fn positional_expressions(args: &Arguments) -> Vec<&Expr> {
+    match &args.args[..] {
+        [arg] => positional_elements(arg).iter().collect(),
+        args => args.iter().collect(),
+    }
+}
+
 /// A pinned dtype or a numeric literal that can adapt to its other operand.
 #[derive(Clone)]
 enum ExprValue {
@@ -2190,11 +2203,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if schema.kind != DataFrameKind::Polars {
             return None;
         }
-        let positional = args
-            .args
-            .iter()
-            .flat_map(positional_elements)
-            .collect::<Vec<_>>();
+        let positional = positional_expressions(args);
         if let [arg] = &positional[..]
             && args.keywords.is_empty()
             && let Type::Literal(lit) = &self.expr_infer(arg, &self.error_swallower())
@@ -2644,11 +2653,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 literal_value(expr).map(|_| Name::new_static(POLARS_LITERAL_OUTPUT_NAME))
             }
             Expr::Attribute(_) => self.polars_col_attribute_name(expr),
-            // A bare list/tuple display passed alongside other positional arguments (not as
-            // the sole argument, which `positional_elements` already flattens into individual
-            // column specs) becomes an anonymous value column in Polars too, regardless of its
-            // element types — its dtype is left to fall back to Unknown since nested/list
-            // dtypes aren't modeled.
+            // Polars wraps a list/tuple display that reaches this far in `pl.lit`, which builds a
+            // one-row `Series` named `literal` holding the whole display as a single `List` value.
+            // `eval_polars_expr` does not compute the element dtype, so the column reads as
+            // Unknown rather than the `List(...)` it really is.
             Expr::List(_) | Expr::Tuple(_) => Some(Name::new_static(POLARS_LITERAL_OUTPUT_NAME)),
             _ => None,
         }
@@ -2674,14 +2682,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         if schema.kind != DataFrameKind::Polars {
             return None;
         }
-        // A bare list/tuple literal is only a shorthand for a sequence of expressions when
-        // it's the receiver's *sole* positional argument, matching Polars' actual behavior:
-        // `with_columns([e1, e2])` flattens, but `with_columns(e0, [e1])` does not — there,
-        // the list is one opaque value (e.g. a `List`-dtype column), not two column specs.
-        let positional: Vec<&Expr> = match &args.args[..] {
-            [arg] => positional_elements(arg).iter().collect(),
-            args => args.iter().collect(),
-        };
+        let positional = positional_expressions(args);
         // Validate names before inference so fallback does not duplicate diagnostics. A
         // positional arg with no well-defined output name is ambiguous in shape (it could
         // expand to any number of columns), so it degrades the whole call, the same as select.
