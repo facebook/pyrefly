@@ -2085,15 +2085,22 @@ impl Solver {
             type_order,
             WitnessCaptures::default(),
         )
+        .0
     }
 
     /// Finish every quantified set registered with a call boundary.
+    ///
+    /// The returned set records parameters that were still unsolved and therefore consumed their
+    /// declared defaults.
     pub(crate) fn finish_call_boundary<Ans: LookupAnswer>(
         &self,
         infer_with_first_use: bool,
         type_order: TypeOrder<Ans>,
         boundary: CallBoundary,
-    ) -> Result<(), Vec1<TypeVarSpecializationError>> {
+    ) -> (
+        Result<(), Vec1<TypeVarSpecializationError>>,
+        SmallSet<Quantified>,
+    ) {
         let (handles, captures) = boundary.into_parts();
         let overload_capture_vars = captures
             .overload
@@ -2120,9 +2127,12 @@ impl Solver {
         infer_with_first_use: bool,
         type_order: TypeOrder<Ans>,
         mut captures: WitnessCaptures,
-    ) -> Result<(), Vec1<TypeVarSpecializationError>> {
+    ) -> (
+        Result<(), Vec1<TypeVarSpecializationError>>,
+        SmallSet<Quantified>,
+    ) {
         if vs.0.is_empty() {
-            return Ok(());
+            return (Ok(()), SmallSet::new());
         }
         let boundary_vars = vs.0.clone();
         let mut subset = self.subset(type_order);
@@ -2175,8 +2185,12 @@ impl Solver {
         infer_with_first_use: bool,
         check_subset: &mut dyn FnMut(&[(Type, Type)], OverloadPruningSubsetMode) -> bool,
         captures: &mut WitnessCaptures,
-    ) -> Result<(), Vec1<TypeVarSpecializationError>> {
+    ) -> (
+        Result<(), Vec1<TypeVarSpecializationError>>,
+        SmallSet<Quantified>,
+    ) {
         let mut err = Vec::new();
+        let mut defaults_used = SmallSet::new();
         let has_overload_captures = !captures.overload.is_empty();
         let mut solved_quantified_names_by_var: SmallMap<Var, Name> = SmallMap::new();
         let lock = self.variables.lock();
@@ -2376,18 +2390,25 @@ impl Solver {
                 } else if self.is_from_generic_argument(v, &captures.generic, &root_map) {
                     Variable::answer(self.heap.mk_quantified(q.clone().with_needs_finalization()))
                 } else if infer_with_first_use {
+                    if q.default().is_some() {
+                        defaults_used.insert(q.clone());
+                    }
                     Variable::finished(q)
                 } else {
+                    if q.default().is_some() {
+                        defaults_used.insert(q.clone());
+                    }
                     Variable::answer(quantified_gradual_type(q))
                 };
             }
         }
         drop(lock);
 
-        match Vec1::try_from_vec(err) {
+        let result = match Vec1::try_from_vec(err) {
             Ok(err) => Err(err),
             Err(_) => Ok(()),
-        }
+        };
+        (result, defaults_used)
     }
 
     /// Given targs which contain quantified (as come from `instantiate`), replace the quantifieds
@@ -4696,6 +4717,7 @@ mod tests {
                 &mut |_, _| true,
                 &mut WitnessCaptures::default(),
             )
+            .0
             .expect_err("the violation recorded while matching arguments is reported");
 
         assert!(matches!(

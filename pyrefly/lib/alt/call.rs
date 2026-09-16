@@ -1975,6 +1975,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             &call_errors_no_hint,
             context,
             None,
+            None,
             ctor_targs_no_hint.as_mut(),
         );
         // If the call succeeds, attempt contextual typing with the hint.
@@ -1998,6 +1999,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     &call_errors_with_hint,
                     context,
                     hint,
+                    Some(&res_no_hint.4),
                     ctor_targs_with_hint.as_mut(),
                 );
                 if !call_errors_with_hint.has_hard()
@@ -2032,7 +2034,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         {
             *targs = chosen_targs;
         }
-        let (ty, specialization_errors, return_type_errors, _expected_types) = chosen_res;
+        let (ty, specialization_errors, return_type_errors, _expected_types, _) = chosen_res;
         if let Ok(errors) = Vec1::try_from_vec(specialization_errors) {
             self.add_specialization_errors(errors, arguments_range, call_errors, context);
         }
