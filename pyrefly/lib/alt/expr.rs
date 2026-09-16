@@ -4544,7 +4544,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     expr.range(),
                     ErrorKind::InvalidAnnotation,
                     format!(
-                        "Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `{}`",
+                        "Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `{}`",
                         self.for_display(expr_type)
                     ),
                 );
@@ -4576,7 +4576,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     }
 
     /// Parse a list of dimension expressions, simplifying and validating each one.
-    /// Returns None if any dimension fails to parse or is non-positive.
+    /// Returns None if any dimension fails to parse or is negative.
     pub(super) fn parse_dimension_list(
         &self,
         args: &[Expr],
@@ -4616,7 +4616,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
         context: DimensionExprContext,
-        require_positive: bool,
+        require_nonnegative: bool,
     ) -> Result<Vec<Type>, DimensionExprError> {
         let mut dims = Vec::new();
         for arg in args {
@@ -4652,16 +4652,16 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             };
             let simplified = canonicalize(dim);
 
-            // Tensor dimensions require positive literals; generic integers can be signed.
-            if require_positive
+            // Tensor dimensions require non-negative literals; generic integers can be signed.
+            if require_nonnegative
                 && let Type::Int(Int::Literal(value)) = &simplified
-                && value <= &0
+                && value < &0
             {
                 self.error(
                     errors,
                     arg.range(),
                     ErrorKind::InvalidAnnotation,
-                    format!("Tensor shape dimension must be positive, got {}", value),
+                    format!("Tensor shape dimension must be non-negative, got {}", value),
                 );
                 return Err(DimensionExprError::Invalid);
             }

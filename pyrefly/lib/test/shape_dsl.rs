@@ -1268,7 +1268,7 @@ def direct_int_tuple_form[N: Int, M: IntVar](
     direct_literal: Array[IntTuple[5], int],
     direct_int_var: Array[IntTuple[M], int],
     direct_arithmetic: Array[IntTuple[M + 1], int],
-    direct_explicit_int: Array[IntTuple[Int[5]], int],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
+    direct_explicit_int: Array[IntTuple[Int[5]], int],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
     direct_ordinary: Array[IntTuple[N], int],  # E: `N` must be an `IntVar` to be used as a shape dimension
 ) -> None:
     assert_type(direct_literal, Array[[5], int])
@@ -1282,7 +1282,7 @@ def direct_int_tuple_form[N: Int, M: IntVar](
 def bare_list_form[N: Int, M: IntVar](
     raw: Array[[5, M], int],
     arithmetic: Array[[M + 1], int],
-    bare_explicit_int: Array[[Int[5]], int],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
+    bare_explicit_int: Array[[Int[5]], int],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[5]]`
     bare_ordinary: Array[[N], int],  # E: `N` must be an `IntVar` to be used as a shape dimension
 ) -> None:
     assert_type(raw, Array[[5, M], int])
@@ -1318,7 +1318,7 @@ type Dim[N: IntVar] = Int[N]
 def explicit_class(bad: Box[str]) -> None:  # E: Tensor shape dimensions must be integer literals or type variables
     reveal_type(bad.dim)  # E: revealed type: Int[int]
 
-def explicit_class_non_shape_arg(bad: Box[list[int]]) -> None:  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions
+def explicit_class_non_shape_arg(bad: Box[list[int]]) -> None:  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions
     reveal_type(bad.dim)  # E: revealed type: Int[int]
 
 def explicit_alias(x: Dim[str]) -> None:  # E: Tensor shape dimensions must be integer literals or type variables
@@ -1956,9 +1956,9 @@ def check(two: Tensor[[2]], three: Tensor[[3]], gradual: Tensor[[int]], matrix: 
     assert_type(wrapped_two_symbols(two, three), Tensor[[5]])
     assert_type(svd_min(matrix), Tensor[[2]])
 
-def ordinary_shape[N: IntVar](x: Tensor[[Int[N] + 1]]) -> None: ...  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
+def ordinary_shape[N: IntVar](x: Tensor[[Int[N] + 1]]) -> None: ...  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
 def invalid_wrapper() -> Tensor[[identity(Int[str])]]: ...  # E: Tensor shape dimensions must be integer literals or type variables, got `type[str]`
-def invalid_nested_wrapper[N: IntVar]() -> Tensor[[identity(Int[Int[N]])]]: ...  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
+def invalid_nested_wrapper[N: IntVar]() -> Tensor[[identity(Int[Int[N]])]]: ...  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Int[N]]`
 def invalid_bare_typevar[T]() -> Tensor[[identity(D[T])]]: ...  # E: `T` must be an `IntVar` to be used as a shape dimension
 "#,
 );
@@ -4526,6 +4526,8 @@ def int_identity(x: Int) -> Int:
 def shape_identity(x: IntTuple) -> IntTuple:
     return x
 
+zero_extent: Tensor[[0]]
+
 def missing[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity()]: ...  # E: Expected 1 argument for `shape_identity`, got 0
 def extra[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(S, S)]: ...  # E: Expected 1 argument for `shape_identity`, got 2
 def keyword[S: IntTuple](x: Tensor[S]) -> Tensor[shape_identity(x=S)]: ...  # E: `shape_identity` does not accept keyword arguments
@@ -4536,7 +4538,7 @@ def nested_wrong_domain(x: Tensor[[2]]) -> Tensor[shape_identity(int_identity(In
 def malformed_int(x: Tensor[[2]]) -> Tensor[[int_identity("x")]]: ...  # E: String literals are not valid tensor dimensions
 def recovered_dimension[N: IntVar]() -> Tensor[[int_identity(Int[N + MissingDim])]]: ...  # E: Could not find name `MissingDim`
 def recovered_ordinary() -> Tensor[[int_identity(list[MissingType])]]: ...  # E: Could not find name `MissingType`  # E: Expected an `Int` argument for parameter `x` (position 1) of `int_identity`, got `list[Unknown]`
-def nonpositive_int(x: Tensor[[2]]) -> Tensor[[int_identity(-1)]]: ...  # E: Tensor shape dimension must be positive, got -1
+def negative_int(x: Tensor[[2]]) -> Tensor[[int_identity(-1)]]: ...  # E: Tensor shape dimension must be non-negative, got -1
 def malformed_shape(x: Tensor[[2]]) -> Tensor[shape_identity(IntTuple["x"])]: ...  # E: String literals are not valid tensor dimensions
 def unbound_shape(x: Tensor[[2]]) -> Tensor[shape_identity(MissingShape)]: ...  # E: Could not find name `MissingShape`
 
@@ -7193,8 +7195,8 @@ testcase!(
 from torch import Tensor
 
 def invalid(
-    zero: Tensor[[0]],  # E: Tensor shape dimension must be positive, got 0
-    negative: Tensor[[-1]],  # E: Tensor shape dimension must be positive, got -1
+    zero: Tensor[[0]],
+    negative: Tensor[[-1]],  # E: Tensor shape dimension must be non-negative, got -1
 ) -> None: ...
 "#,
 );
@@ -7315,8 +7317,8 @@ def f[N, M](
     no_arg: Tensor[[D()]],  # E: Expected 1 positional argument for `D`, got 0
     too_many: Tensor[[D(N, M)]],  # E: Expected 1 positional argument for `D`, got 2
     keyword: Tensor[[D(N, dim=M)]],  # E: `D` accepts exactly 1 positional argument and no keyword arguments, got 1 positional and 1 keyword
-    non_d_subscript: Tensor[[Box[N]]],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `type[Box[N]]`
-    non_d_call: Tensor[[Factory(N)]],  # E: Tensor shape dimensions must be positive integer literals, string literals, type variables, or expressions, got `Factory`
+    non_d_subscript: Tensor[[Box[N]]],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `type[Box[N]]`
+    non_d_call: Tensor[[Factory(N)]],  # E: Tensor shape dimensions must be integer literals, string literals, type variables, or expressions, got `Factory`
 ) -> None:
     pass
 "#,
