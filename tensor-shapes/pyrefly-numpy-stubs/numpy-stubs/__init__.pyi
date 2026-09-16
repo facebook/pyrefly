@@ -671,7 +671,9 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
     @overload
     def __ge__(self, other: ArrayLike, /) -> ndarray[IntTuple, _dtype[bool_]]: ...
     @overload
-    def __eq__[OtherShape: _Shape](  # type: ignore[bad-override]
+    def __eq__(self: ndarray[[]], other: Any, /) -> Any: ...  # type: ignore[bad-override]
+    @overload
+    def __eq__[OtherShape: _Shape](
         self, other: ndarray[OtherShape], /
     ) -> ndarray[_broadcast_shape(Shape, OtherShape), _dtype[bool_]]: ...
     @overload
@@ -681,7 +683,9 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
     @overload
     def __eq__(self, other: ArrayLike, /) -> ndarray[IntTuple, _dtype[bool_]]: ...
     @overload
-    def __ne__[OtherShape: _Shape](  # type: ignore[bad-override]
+    def __ne__(self: ndarray[[]], other: Any, /) -> Any: ...  # type: ignore[bad-override]
+    @overload
+    def __ne__[OtherShape: _Shape](
         self, other: ndarray[OtherShape], /
     ) -> ndarray[_broadcast_shape(Shape, OtherShape), _dtype[bool_]]: ...
     @overload

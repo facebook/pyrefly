@@ -60,6 +60,9 @@ def test_comparisons_and_boolean_masks() -> None:
     assert_shape((values <= row).shape, (2, 3))
     assert_shape((values == row).shape, (2, 3))
     assert_shape((values != row).shape, (2, 3))
+    equal = np.equal(values, row)
+    assert_shape(equal.shape, (2, 3))
+    assert not equal.any()
     valid = ~np.isnan(values)
     assert_shape(valid.shape, (2, 3))
     values[valid & greater] = 2
@@ -86,6 +89,10 @@ def test_scalar_conversion_after_reduction() -> None:
     assert math.floor(total) == 3
     assert not math.isnan(total)
     assert total > 0
+    assert_type(total == 3, Any)
+    assert_type(total != 0, Any)
+    assert total == 3
+    assert total != 0
     assert max(1.0, total) == 3.0
     assert min(total, 4.0) == 3.0
     assert float(values[0]) == 1.0
