@@ -49,6 +49,7 @@ use ruff_text_size::TextRange;
 use starlark_map::small_map::Entry;
 use starlark_map::small_map::SmallMap;
 use starlark_map::small_set::SmallSet;
+use starlark_map::smallmap;
 use vec1::Vec1;
 
 use crate::alt::answers::LookupAnswer;
@@ -206,7 +207,7 @@ enum OverloadPruningSubsetMode {
     Commit,
 }
 
-type OverloadPruningByWitness = HashMap<OverloadResidualIdentity, OverloadWitnessPruningDecision>;
+type OverloadPruningByWitness = SmallMap<ArgumentKey, OverloadWitnessPruningDecision>;
 
 #[derive(Clone, Debug)]
 struct OverloadSolvedConstraint {
@@ -1809,7 +1810,7 @@ impl Solver {
         let identity = OverloadResidualIdentity {
             argument_index: argument.index(),
         };
-        let pruning_decision = overload_pruning_by_witness.get(&identity);
+        let pruning_decision = overload_pruning_by_witness.get(&argument);
         let surviving_branch_indices = match pruning_decision {
             Some(OverloadWitnessPruningDecision::AllPruned(_)) => {
                 // All candidate branches were pruned for this witness.
@@ -1961,16 +1962,13 @@ impl Solver {
     ) -> OverloadPruningByWitness {
         let mut witnesses = overload_witness_captures.iter();
         let (Some((argument, branch_captures)), None) = (witnesses.next(), witnesses.next()) else {
-            return HashMap::new();
-        };
-        let identity = OverloadResidualIdentity {
-            argument_index: argument.index(),
+            return SmallMap::new();
         };
         let Some(decision) = self.prune_one_argument(solved_vars, branch_captures, check_subset)
         else {
-            return HashMap::new();
+            return SmallMap::new();
         };
-        HashMap::from([(identity, decision)])
+        smallmap! { *argument => decision }
     }
 
     /// The branches of one overloaded argument that survive the types its variables solved to,
@@ -2252,7 +2250,7 @@ impl Solver {
             }
             pruning
         } else {
-            HashMap::new()
+            SmallMap::new()
         };
         for decision in overload_pruning_by_witness.values() {
             let OverloadWitnessPruningDecision::AllPruned(all_pruned_cause) = decision else {
@@ -2325,9 +2323,7 @@ impl Solver {
                     None
                 };
                 let all_pruned_witness = witness_argument.and_then(|argument| {
-                    match overload_pruning_by_witness.get(&OverloadResidualIdentity {
-                        argument_index: argument.index(),
-                    }) {
+                    match overload_pruning_by_witness.get(&argument) {
                         Some(OverloadWitnessPruningDecision::AllPruned(cause)) => {
                             Some((argument, cause))
                         }
