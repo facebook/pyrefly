@@ -50,7 +50,7 @@ jobs:
     # by the user's own interpreter rather than by the extension host, so it is
     # tested here instead of in test_extension.yml.
     - name: Test the Pyrefly binary finder
-      run: python -m unittest discover -s lsp/test
+      run: python -m unittest discover -s lsp/resources/test
     # Type checking needs nothing but the sources, so it runs before the Rust
     # steps and catches simple errors without waiting for a build. It is
     # platform-independent, so one runner is enough.

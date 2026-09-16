@@ -13,7 +13,7 @@ client/node_modules/**
 node_modules
 out/**
 src/**
-test/**
+resources/test/**
 esbuild.js
 build-pyrefly.js
 **/.fingerprint/
