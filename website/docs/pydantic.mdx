@@ -208,15 +208,9 @@ Model(x=0)
 Model(y=0)
 ```
 
----
-
-## Features Not Yet Supported
-
-These are some Pydantic features that are **not yet supported**:
-
 ### Alias Generators
 
-Pyrefly does not yet recognize `alias_generator` (or `AliasGenerator`) configured via `ConfigDict`. Fields will be type-checked using their original names rather than the generated aliases.
+Pyrefly recognizes `to_camel`, `to_pascal`, and `to_snake` from `pydantic.alias_generators` when `alias_generator` is set on `ConfigDict`. Constructor calls accept the generated alias.
 
 ```python
 from pydantic import BaseModel, ConfigDict
@@ -226,6 +220,7 @@ class Voice(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel)
     first_name: str
 
-# Not yet supported: pyrefly reports a missing-argument error for `first_name`
 Voice(firstName="Alice")
 ```
+
+Pyrefly does not recognize a custom callable or an `AliasGenerator` instance. For those configurations, Pyrefly type-checks the original field names.
