@@ -7,7 +7,8 @@
 
 //! A flat, source-order table of definitions used to find nested workspace
 //! symbols: functions, classes, methods, type aliases, and simple module/class
-//! assignments. It is cached on `Exports` for first-party modules because the
+//! assignments, including attributes assigned through a method's receiver.
+//! It is cached on `Exports` for first-party modules because the
 //! export table itself contains only top-level names and therefore cannot
 //! provide nested definitions.
 //!
@@ -73,6 +74,7 @@ impl FlatSymbols {
             Scope {
                 parent: None,
                 kind: ScopeKind::Module,
+                receiver: None,
             },
             &mut out,
         );
@@ -99,10 +101,13 @@ enum ScopeKind {
 
 /// Where a run of statements sits and which definition encloses it.
 #[derive(Clone, Copy)]
-struct Scope {
+struct Scope<'a> {
     /// Index of the enclosing definition; `None` at module level.
     parent: Option<FlatSymbolIndex>,
     kind: ScopeKind,
+    /// A bound method's first positional parameter and its enclosing class.
+    /// Nested functions and classes establish their own receiver scope.
+    receiver: Option<(&'a Name, FlatSymbolIndex)>,
 }
 
 fn push_symbol(
@@ -116,7 +121,7 @@ fn push_symbol(
     idx
 }
 
-fn assignment_kind(name: &Name, scope: Scope) -> SymbolKind {
+fn assignment_kind(name: &Name, scope: Scope<'_>) -> SymbolKind {
     if is_constant_name(name) {
         SymbolKind::Constant
     } else if scope.kind == ScopeKind::Class {
@@ -126,15 +131,45 @@ fn assignment_kind(name: &Name, scope: Scope) -> SymbolKind {
     }
 }
 
-fn push_assignment_targets(out: &mut Vec<FlatSymbol>, target: &Expr, scope: Scope) {
-    Ast::expr_lvalue(target, &mut |name| {
-        push_symbol(
-            out,
-            ShortIdentifier::expr_name(name),
-            assignment_kind(&name.id, scope),
-            scope.parent,
-        );
-    });
+fn push_assignment_targets(out: &mut Vec<FlatSymbol>, target: &Expr, scope: Scope<'_>) {
+    match target {
+        Expr::Name(name)
+            if scope.kind != ScopeKind::Function && !Ast::is_synthesized_empty_name(name) =>
+        {
+            push_symbol(
+                out,
+                ShortIdentifier::expr_name(name),
+                assignment_kind(&name.id, scope),
+                scope.parent,
+            );
+        }
+        Expr::Attribute(attr) => {
+            if let Some((receiver, class)) = scope.receiver
+                && let Expr::Name(value) = &*attr.value
+                && &value.id == receiver
+                && !Ast::is_synthesized_empty_identifier(&attr.attr)
+            {
+                push_symbol(
+                    out,
+                    ShortIdentifier::new(&attr.attr),
+                    SymbolKind::Attribute,
+                    Some(class),
+                );
+            }
+        }
+        Expr::Tuple(tuple) => {
+            for target in &tuple.elts {
+                push_assignment_targets(out, target, scope);
+            }
+        }
+        Expr::List(list) => {
+            for target in &list.elts {
+                push_assignment_targets(out, target, scope);
+            }
+        }
+        Expr::Starred(starred) => push_assignment_targets(out, &starred.value, scope),
+        _ => {}
+    }
 }
 
 /// Walk `stmts` appending symbols to `out`.
@@ -142,7 +177,7 @@ fn push_assignment_targets(out: &mut Vec<FlatSymbol>, target: &Expr, scope: Scop
 /// Functions and classes are recorded at any depth, including inside a function
 /// body. Control-flow statements are descended into with the scope unchanged, so
 /// a class attribute guarded by an `if` still attaches to its class.
-fn build(stmts: &[Stmt], scope: Scope, out: &mut Vec<FlatSymbol>) {
+fn build<'a>(stmts: &'a [Stmt], scope: Scope<'a>, out: &mut Vec<FlatSymbol>) {
     for stmt in stmts {
         match stmt {
             Stmt::FunctionDef(f) => {
@@ -164,11 +199,32 @@ fn build(stmts: &[Stmt], scope: Scope, out: &mut Vec<FlatSymbol>) {
                         scope.parent,
                     ))
                 };
+                // The export pass is syntactic: recognize spelled-out staticmethod
+                // decorators without resolving imports or evaluating decorators.
+                let is_staticmethod =
+                    f.decorator_list
+                        .iter()
+                        .any(|decorator| match &decorator.expression {
+                            Expr::Name(name) => name.id == "staticmethod",
+                            Expr::Attribute(attr) => attr.attr.id == "staticmethod",
+                            _ => false,
+                        });
+                let receiver = if scope.kind == ScopeKind::Class && !is_staticmethod {
+                    f.parameters
+                        .posonlyargs
+                        .first()
+                        .or_else(|| f.parameters.args.first())
+                        .zip(scope.parent)
+                        .map(|(parameter, class)| (&parameter.parameter.name.id, class))
+                } else {
+                    None
+                };
                 build(
                     &f.body,
                     Scope {
                         parent: body_parent,
                         kind: ScopeKind::Function,
+                        receiver,
                     },
                     out,
                 );
@@ -189,16 +245,17 @@ fn build(stmts: &[Stmt], scope: Scope, out: &mut Vec<FlatSymbol>) {
                     Scope {
                         parent: body_parent,
                         kind: ScopeKind::Class,
+                        receiver: None,
                     },
                     out,
                 );
             }
-            Stmt::Assign(a) if scope.kind != ScopeKind::Function => {
+            Stmt::Assign(a) => {
                 for target in &a.targets {
                     push_assignment_targets(out, target, scope);
                 }
             }
-            Stmt::AnnAssign(a) if scope.kind != ScopeKind::Function => {
+            Stmt::AnnAssign(a) => {
                 push_assignment_targets(out, &a.target, scope);
             }
             Stmt::TypeAlias(t) if scope.kind != ScopeKind::Function => {
@@ -279,6 +336,99 @@ mod tests {
         assert_eq!(
             walk("def f():\n  local = 1\n  def g(): pass\n  class D:\n    z = 2\n"),
             vec!["Function f", ".Function g", ".Class D", "..Attribute z"]
+        );
+    }
+
+    #[test]
+    fn test_receiver_attribute_assignment_targets() {
+        assert_eq!(
+            walk(
+                r#"
+class Example:
+    def __init__(this, /):
+        this._private = this.public = 1
+        this.annotated: int = 2
+        this.first, [this.second, *this.rest] = values
+        if condition:
+            this.conditional = 3
+        local = 4
+        other.unrelated = 5
+        this.child.unrelated = 6
+        this.items[0] = 7
+"#
+            ),
+            vec![
+                "Class Example",
+                ".Method __init__",
+                ".Attribute _private",
+                ".Attribute public",
+                ".Attribute annotated",
+                ".Attribute first",
+                ".Attribute second",
+                ".Attribute rest",
+                ".Attribute conditional",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_receiver_scope_does_not_leak_into_nested_definitions() {
+        assert_eq!(
+            walk(
+                r#"
+def top_level(self):
+    self.unrelated = 1
+class Example:
+    def method(self):
+        def nested(self):
+            self.unrelated = 2
+        class Inner:
+            self.unrelated = 3
+            def method(this):
+                this.inner = 4
+        self.outer = 5
+"#
+            ),
+            vec![
+                "Function top_level",
+                "Class Example",
+                ".Method method",
+                "..Function nested",
+                "..Class Inner",
+                "...Method method",
+                "...Attribute inner",
+                ".Attribute outer",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_static_methods_have_no_receiver() {
+        assert_eq!(
+            walk(
+                r#"
+class Example:
+    @staticmethod
+    def static(self):
+        self.unrelated = 1
+    @builtins.staticmethod
+    def qualified_static(self):
+        self.unrelated = 2
+    def no_positional_parameter(*, self):
+        self.unrelated = 3
+    @classmethod
+    def class_method(cls):
+        cls.class_attribute = 4
+"#
+            ),
+            vec![
+                "Class Example",
+                ".Method static",
+                ".Method qualified_static",
+                ".Method no_positional_parameter",
+                ".Method class_method",
+                ".Attribute class_attribute",
+            ]
         );
     }
 
