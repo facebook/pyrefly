@@ -8,23 +8,24 @@ from __future__ import annotations
 import math
 from typing import assert_type, TYPE_CHECKING
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from shape_extensions import assert_shape, IntTuple
 
 
 def check_array_and_asarray_list_literal_types() -> None:
-    assert_type(jnp.array(1), jnp.Array[[]])
-    assert_type(jnp.array([1, 2, 3]), jnp.Array[[3]])
-    assert_type(jnp.asarray([[1, 2], [3, 4]]), jnp.Array[[2, 2]])
-    assert_type(jnp.asarray([[], []]), jnp.Array[[2, 0]])
-    assert_type(jnp.array([1, 2], dtype=jnp.float32), jnp.Array[[2]])
+    assert_type(jnp.array(1), jax.Array[[]])
+    assert_type(jnp.array([1, 2, 3]), jax.Array[[3]])
+    assert_type(jnp.asarray([[1, 2], [3, 4]]), jax.Array[[2, 2]])
+    assert_type(jnp.asarray([[], []]), jax.Array[[2, 0]])
+    assert_type(jnp.array([1, 2], dtype=jnp.float32), jax.Array[[2]])
 
 
-def check_context_does_not_override_scalar_shape(_x: jnp.Array[[2, 2]]) -> None:
+def check_context_does_not_override_scalar_shape(_x: jax.Array[[2, 2]]) -> None:
     _x = jnp.array(1)  # E: is not assignable to variable `_x`
     _x = jnp.asarray(1)  # E: is not assignable to variable `_x`
-    assert_type(_x, jnp.Array[[2, 2]])
+    assert_type(_x, jax.Array[[2, 2]])
 
 
 def test_array_and_asarray_list_literals() -> None:
@@ -36,15 +37,15 @@ def test_array_and_asarray_list_literals() -> None:
     assert_shape(jnp.asarray([[], []]).shape, (2, 0))
 
 
-def check_array_compatibility(array: jnp.Array[[2, 3]], raw: list[int]) -> None:
-    assert_type(jnp.array(array), jnp.Array[[2, 3]])
-    assert_type(jnp.array(raw), jnp.Array[IntTuple])
-    assert_type(jnp.array([1, 2], ndmin=2), jnp.Array[IntTuple])
+def check_array_compatibility(array: jax.Array[[2, 3]], raw: list[int]) -> None:
+    assert_type(jnp.array(array), jax.Array[[2, 3]])
+    assert_type(jnp.array(raw), jax.Array[IntTuple])
+    assert_type(jnp.array([1, 2], ndmin=2), jax.Array[IntTuple])
 
 
 if TYPE_CHECKING:
-    assert_type(jnp.array([[1], [2, 3]]), jnp.Array[IntTuple])
-    assert_type(jnp.asarray(["not", "numeric"]), jnp.Array[IntTuple])
+    assert_type(jnp.array([[1], [2, 3]]), jax.Array[IntTuple])
+    assert_type(jnp.asarray(["not", "numeric"]), jax.Array[IntTuple])
 
 
 def test_zeros_ones_and_empty() -> None:
