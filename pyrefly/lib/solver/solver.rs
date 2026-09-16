@@ -1966,6 +1966,21 @@ impl Solver {
         let identity = OverloadResidualIdentity {
             argument_index: argument.index(),
         };
+        let Some(decision) = self.prune_one_argument(solved_vars, branch_captures, check_subset)
+        else {
+            return HashMap::new();
+        };
+        HashMap::from([(identity, decision)])
+    }
+
+    /// The branches of one overloaded argument that survive the types its variables solved to,
+    /// or `None` when this argument cannot be pruned.
+    fn prune_one_argument(
+        &self,
+        solved_vars: &SmallMap<Var, SolvedVarInfo>,
+        branch_captures: &[OverloadBranchCapture],
+        check_subset: &mut dyn FnMut(&[(Type, Type)], OverloadPruningSubsetMode) -> bool,
+    ) -> Option<OverloadWitnessPruningDecision> {
         let solved_vars_in_witness = solved_vars
             .iter()
             .filter_map(|(&var, solved_var)| {
@@ -1976,7 +1991,7 @@ impl Solver {
             })
             .collect::<Vec<_>>();
         if solved_vars_in_witness.is_empty() {
-            return HashMap::new();
+            return None;
         }
 
         let surviving_branches = branch_captures
@@ -2003,7 +2018,7 @@ impl Solver {
             // A later rejected probe can consume the remaining subset gas, so commit may fail
             // even though this branch's earlier probe succeeded. Abandon pruning rather than
             // report resource exhaustion as an incompatible overload.
-            return HashMap::new();
+            return None;
         }
 
         let surviving_branch_indices = surviving_branches
@@ -2037,7 +2052,7 @@ impl Solver {
         } else {
             OverloadWitnessPruningDecision::Surviving(surviving_branch_indices)
         };
-        HashMap::from([(identity, decision)])
+        Some(decision)
     }
 
     /// Finish a specific quantified set, resolving type variables to their
