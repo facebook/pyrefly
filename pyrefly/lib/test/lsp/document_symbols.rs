@@ -1979,3 +1979,29 @@ class Container:
         ]
     );
 }
+
+/// Parser recovery gives `def ():` an empty name. Document symbols show the
+/// function as `unknown` and keep valid body symbols inside it.
+#[test]
+fn test_parser_recovery_keeps_body_symbols_under_unknown_function() {
+    let report = get_batched_lsp_operations_report_no_cursor_allow_error(
+        &[("main", "def ():\n    recovered = 1\n")],
+        get_combined_report,
+    );
+
+    let flat: Vec<lsp_types::SymbolInformation> =
+        serde_json::from_str(extract_section(&report, "Flat")).unwrap();
+    assert_eq!(
+        flat.iter()
+            .map(|symbol| (
+                symbol.name.as_str(),
+                symbol.kind,
+                symbol.container_name.as_deref(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("unknown", SymbolKind::FUNCTION, None),
+            ("recovered", SymbolKind::VARIABLE, Some("unknown")),
+        ]
+    );
+}
