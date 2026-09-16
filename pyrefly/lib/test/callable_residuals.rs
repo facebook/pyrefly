@@ -180,7 +180,7 @@ def id_cb[X](cb: Callable[[X], X]) -> Callable[[X], X]:
     return cb
 
 out = choose(id_cb)
-reveal_type(out)  # E: revealed type: (Unknown) -> Unknown
+reveal_type(out)  # E: revealed type: [T](T) -> T
 
 def bad(cb: Callable[[int], str]) -> int:
     return 0
@@ -351,7 +351,7 @@ assert_type(wrapper(1), int)
 );
 
 testcase!(
-    bug = "Need better display for callback protocol residuals in class targs",
+    bug = "Class targs display a type parameter that nothing has declared",
     test_callable_class_wrapper_display_without_field,
     r#"
 from typing import Callable, reveal_type
@@ -362,7 +362,7 @@ class Wrapper[**P, R]:
 
 def f[S](x: S) -> S: ...
 wrapper = Wrapper(f)
-reveal_type(wrapper)  # E: revealed type: Wrapper[[x: GenericResidual@R], GenericResidual@R]
+reveal_type(wrapper)  # E: revealed type: Wrapper[[x: R], R]
 reveal_type(wrapper.__call__)  # E: [R](x: R) -> R
 "#,
 );
@@ -1161,5 +1161,57 @@ assert_type(
     pair(f=h, g=h),
     tuple[Callable[[int | str], int | str], Callable[[int | str], int | str]],
 )
+    "#,
+);
+
+testcase!(
+    test_scope_free_quantified_to_returned_callable,
+    r#"
+from typing import Callable, reveal_type
+def defer[**P, R](f: Callable[P, R]) -> Callable[[], Callable[P, R]]: ...
+def identity[T](x: T) -> T: ...
+reveal_type(defer(identity))  # E: () -> [R](x: R) -> R
+    "#,
+);
+
+testcase!(
+    test_sibling_callables_have_independent_scopes,
+    r#"
+from typing import Callable, reveal_type
+def duplicate[**P, R](
+    f: Callable[P, R],
+) -> Callable[[], tuple[Callable[P, R], Callable[P, R]]]: ...
+def identity[T](x: T) -> T: ...
+reveal_type(duplicate(identity))  # E: () -> tuple[[R](x: R) -> R, [R](x: R) -> R]
+    "#,
+);
+
+testcase!(
+    test_multiple_generic_arguments,
+    r#"
+from typing import Callable, reveal_type
+def pair[A, R](
+    first: Callable[[A], R],
+    second: Callable[[A], R],
+) -> tuple[Callable[[A], R], Callable[[A], R]]: ...
+
+def id1[T](x: T) -> T: ...
+def id2[U](x: U) -> U: ...
+
+first, second = pair(id1, id2)
+reveal_type(first)  # E: [U](U) -> U
+reveal_type(second)  # E: [U](U) -> U
+    "#,
+);
+
+testcase!(
+    test_erase_free_quantified_with_no_scope,
+    r#"
+from typing import Callable, reveal_type
+def returner[A](f: Callable[[A], A]) -> Callable[[], A]: ...
+def identity[T](x: T) -> T: ...
+# `Callable[[], A]` does not refer to `A` in its parameters, so there's no way for it to be generic
+# over `A`. We erase to `Unknown`.
+reveal_type(returner(identity))  # E: () -> Unknown
     "#,
 );

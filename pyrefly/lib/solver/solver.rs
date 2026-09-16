@@ -1661,13 +1661,13 @@ impl Solver {
         drop(e);
         drop(lock);
         // Generic residuals are fallback-only and cannot make a concrete bound inconsistent.
-        let opposite_bound = if bound.is_generic_callable_residual() {
+        let opposite_bound = if bound.is_generic_placeholder() {
             None
         } else {
             self.get_current_bound(
                 opposite_bounds
                     .into_iter()
-                    .filter(|bound| !bound.is_generic_callable_residual())
+                    .filter(|bound| !bound.is_generic_placeholder())
                     .collect(),
             )
         };
@@ -1739,13 +1739,8 @@ impl Solver {
         if bounds.is_empty() {
             return None;
         }
-        // Callable residual bounds are fallback-only. If we also learned a concrete
-        // non-Any bound, prefer that and discard residual markers.
-        if bounds
-            .iter()
-            .any(|t| !t.is_any() && !matches!(t, Type::CallableResidual(_)))
-        {
-            bounds.retain(|t| !t.is_any() && !matches!(t, Type::CallableResidual(_)));
+        if bounds.iter().any(|t| !t.is_any() && !t.is_placeholder()) {
+            bounds.retain(|t| !t.is_any() && !t.is_placeholder());
         }
         // Keeping `Any` bounds causes `Any` to propagate to too many places,
         // so we filter them out unless `Any` is the only solution.
@@ -1761,14 +1756,10 @@ impl Solver {
             .lower
             .iter()
             .chain(&bounds.upper)
-            .any(|bound| !bound.is_any() && !matches!(bound, Type::CallableResidual(_)))
+            .any(|bound| !bound.is_any() && !bound.is_placeholder())
         {
-            bounds
-                .lower
-                .retain(|bound| !bound.is_generic_callable_residual());
-            bounds
-                .upper
-                .retain(|bound| !bound.is_generic_callable_residual());
+            bounds.lower.retain(|bound| !bound.is_generic_placeholder());
+            bounds.upper.retain(|bound| !bound.is_generic_placeholder());
         }
         // Prefer non-Any lower bound > upper bound > Any lower bound.
         // TODO(https://github.com/facebook/pyrefly/issues/105): consider using polarity to
@@ -1793,7 +1784,9 @@ impl Solver {
                     return bound;
                 }
                 if has_generic_residual {
-                    return Type::callable_residual_generic(quantified.clone());
+                    return self
+                        .heap
+                        .mk_quantified(quantified.clone().with_needs_finalization());
                 }
                 quantified_gradual_type(quantified)
             }
@@ -2134,29 +2127,19 @@ impl Solver {
         self.finish_quantified(vs, self.config.infer_with_first_use, type_order)
     }
 
-    /// Find the unique generic witness capture whose `witness_vars` share a
-    /// union-find root with `v`. Returns `None` if zero or multiple captures match
-    /// (ambiguous matches cannot produce a residual).
-    fn find_unique_generic_witness(
+    /// Whether a generic argument constrained this var.
+    fn is_from_generic_argument(
         &self,
         v: Var,
         captures: &[GenericWitnessCapture],
         root_map: &SmallMap<Var, Var>,
-    ) -> Option<SmallSet<Var>> {
+    ) -> bool {
         let v_root = root_map.get(&v).copied().unwrap_or(v);
-        let mut found = None;
-        for c in captures {
-            if c.witness_vars
-                .iter()
-                .any(|wv| root_map.get(wv).copied().unwrap_or(*wv) == v_root)
-            {
-                if found.is_some() {
-                    return None;
-                }
-                found = Some(c.target_vars.clone());
-            }
-        }
-        found
+        captures.iter().any(|capture| {
+            capture.witness_vars.iter().any(|argument_var| {
+                root_map.get(argument_var).copied().unwrap_or(*argument_var) == v_root
+            })
+        })
     }
 
     /// Core quantified-finishing implementation.
@@ -2369,13 +2352,8 @@ impl Solver {
                         &overload_pruning_by_witness,
                     );
                     Variable::residual_answer(target_vars, ty)
-                } else if let Some(target_vars) =
-                    self.find_unique_generic_witness(v, &captures.generic, &root_map)
-                {
-                    Variable::residual_answer(
-                        target_vars,
-                        Type::callable_residual_generic(q.clone()),
-                    )
+                } else if self.is_from_generic_argument(v, &captures.generic, &root_map) {
+                    Variable::answer(self.heap.mk_quantified(q.clone().with_needs_finalization()))
                 } else if infer_with_first_use {
                     Variable::finished(q)
                 } else {
@@ -4359,7 +4337,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                             bounds
                                 .upper
                                 .iter()
-                                .filter(|bound| !bound.is_generic_callable_residual())
+                                .filter(|bound| !bound.is_generic_placeholder())
                                 .cloned()
                                 .collect(),
                         );
@@ -4609,7 +4587,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_type_vars_freezes_through_residual_answers() {
+    fn sanitize_type_vars_freezes_through_a_quantified_needing_finalization() {
         let solver = Solver::new(SolverConfig {
             tensor_shapes: true,
             ..Default::default()
@@ -4617,36 +4595,36 @@ mod tests {
         let uniques = UniqueFactory::new();
         let range = TextRange::new(TextSize::new(1), TextSize::new(3));
         let partial = solver.fresh_partial_contained(&uniques, range);
-        let residual = Var::new(&uniques);
-        // The partial var sits in the quantified's restriction, which the residual's flattened
-        // read discards. Only a direct traversal of the stored answer can reach it.
-        let ty = Type::callable_residual_generic(quantified_with_restriction(
-            QuantifiedKind::TypeVar,
-            0,
-            Restriction::Bound(Type::Var(partial)),
-        ));
+        let answer = Var::new(&uniques);
+        // The partial var sits in the quantified's restriction, which only a traversal of the
+        // stored answer reaches.
+        let ty = solver.heap.mk_quantified(
+            quantified_with_restriction(
+                QuantifiedKind::TypeVar,
+                0,
+                Restriction::Bound(Type::Var(partial)),
+            )
+            .with_needs_finalization(),
+        );
         solver
             .variables
             .lock()
-            .insert_fresh(residual, Variable::residual_answer(SmallSet::new(), ty));
+            .insert_fresh(answer, Variable::answer(ty));
 
-        let errors = solver.sanitize_type_vars(&Type::Var(residual), true);
+        let errors = solver.sanitize_type_vars(&Type::Var(answer), true);
 
         assert!(
             matches!(
                 errors.as_slice(),
                 [PinError::ImplicitPartialContained(error_range)] if *error_range == range
             ),
-            "sanitizing must traverse into the residual answer and pin the partial var it holds"
+            "sanitizing must traverse into the stored answer and pin the partial var it holds"
         );
         let variables = solver.variables.lock();
-        assert!(
-            matches!(
-                &*variables.get(residual),
-                Variable::ResidualAnswer { frozen: true, .. }
-            ),
-            "a residual answer is a final answer, so it freezes like a plain answer"
-        );
+        assert!(matches!(
+            &*variables.get(answer),
+            Variable::Answer { frozen: true, .. }
+        ));
         assert!(matches!(
             &*variables.get(partial),
             Variable::Answer { frozen: true, .. }
