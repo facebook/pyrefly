@@ -38,6 +38,9 @@ use clap::ValueEnum;
 use dupe::Dupe;
 use enum_iterator::Sequence;
 use pyrefly_util::lined_buffer::LineNumber;
+use ruff_python_ast::token::TokenKind;
+use ruff_python_parser::Mode;
+use ruff_python_parser::lexer::lex;
 use serde::Deserialize;
 use serde::Serialize;
 use starlark_map::small_map::SmallMap;
@@ -381,12 +384,55 @@ impl Ignore {
 
     fn parse_ignores(code: &str) -> SmallMap<LineNumber, Vec<Suppression>> {
         let mut ignores: SmallMap<LineNumber, Vec<Suppression>> = SmallMap::new();
+        // The lightweight scanner does not understand expression strings inside
+        // f-strings. Use the Python lexer when a multiline string and an f-string
+        // can coexist, so nested quotes cannot hide later comments.
+        let needs_lexer = (code.contains("\"\"\"") || code.contains("'''"))
+            && [
+                "f'", "f\"", "F'", "F\"", "fr'", "fr\"", "Fr'", "Fr\"", "fR'", "fR\"", "FR'",
+                "FR\"",
+            ]
+            .iter()
+            .any(|prefix| code.contains(prefix));
+        let lexed_comments = if needs_lexer {
+            let mut line_starts = vec![0];
+            let bytes = code.as_bytes();
+            let mut pos = 0;
+            while pos < bytes.len() {
+                if bytes[pos] == b'\r' || bytes[pos] == b'\n' {
+                    if bytes[pos] == b'\r' && bytes.get(pos + 1) == Some(&b'\n') {
+                        pos += 1;
+                    }
+                    line_starts.push(pos + 1);
+                }
+                pos += 1;
+            }
+            let mut comments = vec![None; line_starts.len()];
+            let mut lexer = lex(code, Mode::Module);
+            loop {
+                let kind = lexer.next_token();
+                if kind == TokenKind::EndOfFile {
+                    break;
+                }
+                if kind == TokenKind::Comment {
+                    let start = lexer.current_range().start().to_usize();
+                    let line = line_starts.partition_point(|&line_start| line_start <= start) - 1;
+                    comments[line] = Some(start - line_starts[line]);
+                }
+            }
+            Some(comments)
+        } else {
+            None
+        };
         // If we see a comment on a non-code line, apply it to the next non-comment line.
         let mut pending = Vec::new();
         let mut line = LineNumber::default();
         let mut in_triple_quote = None;
         for (idx, line_str) in code.lines().enumerate() {
-            let (comment_start, new_state) = find_comment_start(line_str, in_triple_quote);
+            let (comment_start, new_state) = match &lexed_comments {
+                Some(comments) => (comments[idx], None),
+                None => find_comment_start(line_str, in_triple_quote),
+            };
             in_triple_quote = new_state;
             let is_comment_only_line = comment_start
                 .is_some_and(|comment_start| line_str[..comment_start].trim_start().is_empty());
@@ -823,6 +869,20 @@ x = """
             &[(Tool::Pyrefly, 3)],
         );
         f("x = ''''''  # pyrefly: ignore", &[(Tool::Pyrefly, 1)]);
+        // A triple-quoted expression inside an f-string must not leave the
+        // following line looking like part of a multiline string.
+        f(
+            "x = f'start{\"\"\"message\n\"\"\"}end'\ny: int = \"hello\"  # pyrefly: ignore[bad-assignment]",
+            &[(Tool::Pyrefly, 3)],
+        );
+        f(
+            "x = fr'start{\"\"\"# pyrefly: ignore\n\"\"\"}end'\ny: int = \"hello\"  # pyrefly: ignore[bad-assignment]",
+            &[(Tool::Pyrefly, 3)],
+        );
+        f(
+            "x = f'start{\"\"\"message\r\n\"\"\"}end'\r\ny: int = \"hello\"  # pyrefly: ignore[bad-assignment]",
+            &[(Tool::Pyrefly, 3)],
+        );
     }
 
     #[test]
