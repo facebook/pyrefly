@@ -5346,7 +5346,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let dim = dims.into_iter().next().expect(
             "parse_dimension_list returns a non-empty list for a single validated argument",
         );
-        // `Dim[Any]`/`Size[Any]` desugar to plain `Any` since it's maximally gradual.
+        // `Int[Any]` desugars to plain `Any` since it's maximally gradual.
         if matches!(dim, Type::Any(_)) {
             return dim;
         }

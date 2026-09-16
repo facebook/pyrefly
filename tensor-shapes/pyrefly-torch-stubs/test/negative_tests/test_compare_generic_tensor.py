@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Compare regular generics vs Tensor+Dim generics"""
+"""Compare regular generics vs Tensor+IntVar generics"""
 
 from typing import assert_type, TYPE_CHECKING
 
@@ -23,7 +23,7 @@ result1 = identity_regular(5)
 assert_type(result1, int)
 
 
-# Test 2: Generic function with Tensor using Dim
+# Test 2: Generic function with Tensor using IntVar
 def identity_tensor[N: IntVar](x: Tensor[[N, 3]]) -> Tensor[[N, 3]]:
     return x
 

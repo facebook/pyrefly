@@ -10,7 +10,7 @@ from shape_extensions import Int, IntVar
 from torch import Tensor
 
 
-# Dim tests
+# IntVar tests
 def numel_returns_implicit_int[N: IntVar, M: IntVar](x: Tensor[[N, M]]):
     s = x.numel()
     assert_type(s, Int[N * M])

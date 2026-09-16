@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Debug test for Dim-bounded type parameter binding to expressions"""
+"""Debug test for IntVar-bounded type parameter binding to expressions"""
 
 from typing import assert_type, TYPE_CHECKING
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 def simple_identity[D: IntVar](x: Tensor[[D]]) -> Tensor[[D]]:
-    """Simple identity function with Dim-bounded type parameter"""
+    """Simple identity function with IntVar-bounded type parameter"""
     return x
 
 
@@ -28,7 +28,7 @@ def generic_func[D1: IntVar, D2: IntVar](
     x: Tensor[[D1]],
     y: Tensor[[D2]],
 ) -> Tensor[[D1, D2]]:
-    """Function with two Dim-bounded type parameters"""
+    """Function with two IntVar-bounded type parameters"""
     ...
 
 

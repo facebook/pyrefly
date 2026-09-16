@@ -6,7 +6,7 @@
 """
 Type stubs for torch.distributions.
 
-Distribution classes track event shape via *EventShape TypeVarTuple.
+Distribution classes track event shape via an `IntTuple`-bound `EventShape`.
 rsample() and log_prob() preserve the event shape of the distribution.
 
 Submodules re-exported to support original import patterns:

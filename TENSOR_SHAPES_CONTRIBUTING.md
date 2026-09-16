@@ -55,29 +55,33 @@ A fixture stub provides a shape-generic type signature. For example,
 `nn.Linear`:
 
 ```python
-class Linear[N, M](Module):
+class Linear[IN: IntVar, OUT: IntVar](Module):
     def __init__(
         self,
-        in_features: SymInt[N],
-        out_features: SymInt[M],
+        in_features: Int[IN],
+        out_features: Int[OUT],
         bias: bool = True,
     ) -> None: ...
 
-    def forward[*Xs](self, input: Tensor[*Xs, N]) -> Tensor[*Xs, M]: ...
+    def forward[Bs: IntTuple](
+        self, input: Tensor[[*Elements[Bs], IN]]
+    ) -> Tensor[[*Elements[Bs], OUT]]: ...
 ```
 
-The constructor captures input and output dimensions as type parameters. The
-`forward` method uses those parameters plus a variadic `*Xs` for batch
-dimensions.
+The constructor captures input and output dimensions as type parameters bound
+by `IntVar`. The `forward` method uses those parameters plus an `IntTuple`-bound
+parameter, unpacked with `Elements[...]`, for the batch dimensions.
 
 ### Writing a New Stub
 
 1. Identify the shape signature: input dimensions, output dimensions, and how
    they relate.
-2. Use `SymInt[X]` for parameters that determine tensor dimensions. Non-shape
-   parameters like `bias` and `dropout` stay as their original types.
+2. Use `Int[X]`, with `X` bound by `IntVar`, for parameters that determine
+   tensor dimensions. Non-shape parameters like `bias` and `dropout` stay as
+   their original types.
 3. Write the method or function signature expressing the shape transform. Use
-   `*Xs` or `*Bs` for batch dimensions that pass through unchanged.
+   an `IntTuple`-bound parameter, spliced with `*Elements[...]`, for batch
+   dimensions that pass through unchanged.
 4. Add the stub to the appropriate `.pyi` file in `tensor-shapes/pyrefly-torch-stubs/torch-stubs`.
 5. Add or update focused tests under `tensor-shapes/pyrefly-torch-stubs/test/`.
 
@@ -86,20 +90,20 @@ dimensions.
 Suppose you want to add `nn.GroupNorm`, which preserves spatial dimensions:
 
 ```python
-class GroupNorm[NumGroups, NumChannels](Module):
+class GroupNorm[NumGroups: IntVar, NumChannels: IntVar](Module):
     def __init__(
         self,
-        num_groups: SymInt[NumGroups],
-        num_channels: SymInt[NumChannels],
+        num_groups: Int[NumGroups],
+        num_channels: Int[NumChannels],
         eps: float = 1e-5,
         affine: bool = True,
     ) -> None: ...
 
-    def forward[*S](self, input: Tensor[*S]) -> Tensor[*S]: ...
+    def forward[Shape: IntTuple](self, input: Tensor[Shape]) -> Tensor[Shape]: ...
 ```
 
 Since `GroupNorm` does not change shape, the forward signature is simply
-`Tensor[*S] -> Tensor[*S]`.
+`Tensor[Shape] -> Tensor[Shape]`.
 
 ## Shape DSL Functions
 
