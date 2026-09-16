@@ -18,6 +18,7 @@ import numpy as np
 from jax._array import Array as Array, Array as ndarray, ArrayLike as _ArrayLike
 from jax._shapes import (
     append_shape,
+    arange_stop,
     atleast_1d_shape,
     atleast_2d_shape,
     atleast_3d_shape,
@@ -430,7 +431,7 @@ def full_like(
 @overload
 def arange[N: IntVar](
     start: Int[N], *, dtype: DTypeLike | None = ..., device: Any = ...
-) -> Array[[N]]: ...
+) -> Array[[arange_stop(Int[N])]]: ...
 @overload
 def arange(
     start: float, *, dtype: DTypeLike | None = ..., device: Any = ...

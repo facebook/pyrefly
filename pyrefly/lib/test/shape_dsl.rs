@@ -632,7 +632,7 @@ fn test_invalid_type_shape_dsl_function_recovers_as_def() {
     env.add(
         "main",
         r#"
-from shape_extensions import Int, type_shape_dsl_function
+from shape_extensions import Int, IntVar, type_shape_dsl_function
 
 @type_shape_dsl_function
 def invalid(x: Int) -> Int:
@@ -1962,6 +1962,31 @@ class Other:
 def invalid_same_named_bound[N: Other.Int]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
 def invalid_constraints[N: (Int, str)]() -> Tensor[[identity(N)]]: ...  # E: Expected an `Int` argument for parameter `x` (position 1) of `identity`, got `N`
 def raw_arithmetic[N: Int]() -> Tensor[[identity(N + N)]]: ...  # E: `N` must be an `IntVar` to be used in shape arithmetic  # E: `N` must be an `IntVar` to be used in shape arithmetic
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_arange_stop,
+    shape_extensions_env_with_torch(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntVar, type_shape_dsl_function
+from torch import Tensor
+from typing import assert_type
+
+@type_shape_dsl_function
+def arange_stop(stop: Int) -> Int:
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    if dsl.is_concrete_int(stop) and stop < zero:
+        return zero
+    return stop
+
+def single[N: IntVar](stop: Int[N]) -> Tensor[[arange_stop(Int[N])]]: ...
+
+def check() -> None:
+    assert_type(single(5), Tensor[[5]])
+    assert_type(single(-3), Tensor[[0]])
 "#,
 );
 

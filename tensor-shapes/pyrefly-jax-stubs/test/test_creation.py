@@ -175,12 +175,9 @@ def test_window_functions() -> None:
 
 
 def test_multi_argument_arange_length_is_gradual() -> None:
-    # The rank is known and only the length is gradual, so the static type is
-    # `[int]` rather than a fully gradual shape. The empty cases are why the
-    # length is not computed: the DSL cannot clamp a negative span to zero, and
-    # claiming a negative dimension would be worse.
-    # TODO(stroxler): Compute the integer lengths. See `arange` in
-    # `jax/numpy/__init__.pyi`; the float forms can never be exact.
+    # The rank is known and only the length is gradual. Integer lengths can be
+    # computed by a follow-up; floating-point rounding remains out of scope.
+    # TODO(stroxler): Compute integer lengths in `jax/numpy/__init__.pyi`.
     assert_shape(jnp.arange(2, 7).shape, (int,), runtime=(5,))
     assert_shape(jnp.arange(5.0).shape, (int,), runtime=(5,))
     assert_shape(jnp.arange(0.0, 1.0, 0.2).shape, (int,), runtime=(5,))
@@ -189,14 +186,8 @@ def test_multi_argument_arange_length_is_gradual() -> None:
     assert_shape(jnp.arange(7, 2).shape, (int,), runtime=(0,))
 
 
-def test_single_argument_arange_infers_a_negative_dimension() -> None:
-    # A known bug, recorded rather than hidden: the single-argument form carries
-    # its argument through as the length, so a negative literal infers a negative
-    # dimension where JAX returns an empty array. `runtime=` is what lets the test
-    # state both, and it will fail once the inferred shape changes.
-    # TODO(stroxler): See `arange` in `jax/numpy/__init__.pyi`. The fix needs a
-    # shape domain that can represent an empty dimension.
-    assert_shape(jnp.arange(-3).shape, (-3,), runtime=(0,))
+def test_single_argument_arange_clamps_a_negative_dimension() -> None:
+    assert_shape(jnp.arange(-3).shape, (0,))
 
 
 def test_dtype_argument_preserves_shape() -> None:
