@@ -667,6 +667,38 @@ mark("database", "cache")
     );
 }
 
+#[test]
+fn test_parameter_name_hints_for_method_with_nonstandard_self_name() {
+    let code = r#"
+class Logger:
+    def info(__self, __message: str, *args: object) -> None:
+        pass
+
+logger = Logger()
+logger.info("hello", 42)
+"#;
+    assert_eq!(
+        r#"
+# main.py
+7 | logger.info("hello", 42)
+                ^ inlay-hint: `__message= `
+
+7 | logger.info("hello", 42)
+                         ^ inlay-hint: `*args= `
+"#
+        .trim(),
+        generate_inlay_hint_report(
+            code,
+            InlayHintConfig {
+                call_argument_names: AllOffPartial::All,
+                variable_types: false,
+                ..Default::default()
+            }
+        )
+        .trim()
+    );
+}
+
 /// todo(jvansch): Update test once parameter hints have locations.
 #[test]
 fn test_parameter_hints_do_not_have_locations() {
