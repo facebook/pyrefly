@@ -2528,3 +2528,15 @@ testcase!(
 from bar import c  # E: `c` is not exported from module `bar`
 "#,
 );
+
+// A directory import without an alias binds its first component, like any other
+// dotted import.
+testcase!(
+    test_import_files_directory_no_alias,
+    r#"
+import myproject.schemas.__files__
+import some.dir.__recursefiles__
+x = myproject
+y = some
+"#,
+);

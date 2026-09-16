@@ -1526,26 +1526,16 @@ impl<'a> BindingsBuilder<'a> {
             Stmt::Import(x) => {
                 for x in x.names {
                     let m = ModuleName::from_name(&x.name.id);
-                    // Handle __files__/__recursefiles__ directory imports.
-                    // These import all files from a directory into a namespace object.
-                    // We bind the alias as Module to enable navigation to the parent module,
-                    // passing None for TextRange to suppress missing-module diagnostics.
-                    if is_directory_import(m) {
-                        if let Some(asname) = x.asname {
-                            self.scopes.register_import(&asname);
-                            self.bind_definition(
-                                &asname,
-                                Binding::Module(Box::new((
-                                    m,
-                                    m.components().into_boxed_slice(),
-                                    None,
-                                    None,
-                                ))),
-                                FlowStyle::ImportAs(m),
-                            );
-                        }
-                        continue;
-                    }
+                    // A `__files__`/`__recursefiles__` directory import names a directory
+                    // rather than a module on disk, so it has no missing-module diagnostic
+                    // range. Every import still binds a name, which the static definitions
+                    // pass has already declared; skipping the binding would leave that
+                    // declaration without one.
+                    let diagnostic_range = if is_directory_import(m) {
+                        None
+                    } else {
+                        Some(x.range)
+                    };
 
                     match x.asname {
                         Some(asname) => {
@@ -1562,7 +1552,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     m.components().into_boxed_slice(),
                                     None,
-                                    Some(x.range),
+                                    diagnostic_range,
                                 ))),
                                 FlowStyle::ImportAs(m),
                             );
@@ -1576,7 +1566,7 @@ impl<'a> BindingsBuilder<'a> {
                                     m,
                                     Box::new([first.clone()]),
                                     module_key,
-                                    Some(x.range),
+                                    diagnostic_range,
                                 ))),
                             );
                             // Register the import using the first component (e.g., "os" from "os.path")
