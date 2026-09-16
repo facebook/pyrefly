@@ -3394,6 +3394,7 @@ output-format = "omit-errors"
             errors.severity(ErrorKind::MissingOverrideDecorator),
             Severity::Error
         );
+        assert_eq!(errors.severity(ErrorKind::MethodAssign), Severity::Error);
         assert_eq!(errors.severity(ErrorKind::OpenUnpacking), Severity::Error);
         // Pyrefly infers concrete return types in most cases, so we don't
         // ask users for an explicit annotation in strict mode.

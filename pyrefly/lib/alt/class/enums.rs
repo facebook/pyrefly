@@ -154,8 +154,19 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         metadata: &ClassMetadata,
         attr_name: &Name,
     ) -> Option<ClassAttribute> {
+        self.get_enum_or_instance_attribute_with_method(class, metadata, attr_name)
+            .map(|(attr, _)| attr)
+    }
+
+    pub fn get_enum_or_instance_attribute_with_method(
+        &self,
+        class: &ClassType,
+        metadata: &ClassMetadata,
+        attr_name: &Name,
+    ) -> Option<(ClassAttribute, bool)> {
         self.special_case_enum_attr_lookup(class, None, metadata, attr_name)
-            .or_else(|| self.get_instance_attribute(class, attr_name))
+            .map(|attr| (attr, false))
+            .or_else(|| self.get_instance_attribute_with_method(class, attr_name))
     }
 
     /// Checks for a special-cased enum attribute on an enum literal, falling back to a regular instance attribute lookup.
@@ -165,9 +176,20 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         metadata: &ClassMetadata,
         attr_name: &Name,
     ) -> Option<ClassAttribute> {
+        self.get_enum_literal_or_instance_attribute_with_method(lit, metadata, attr_name)
+            .map(|(attr, _)| attr)
+    }
+
+    pub fn get_enum_literal_or_instance_attribute_with_method(
+        &self,
+        lit: &LitEnum,
+        metadata: &ClassMetadata,
+        attr_name: &Name,
+    ) -> Option<(ClassAttribute, bool)> {
         let class = &lit.class;
         self.special_case_enum_attr_lookup(class, Some(lit), metadata, attr_name)
-            .or_else(|| self.get_instance_attribute(class, attr_name))
+            .map(|attr| (attr, false))
+            .or_else(|| self.get_instance_attribute_with_method(class, attr_name))
     }
 
     /// Special-case enum attribute lookups. Dispatches to the appropriate helper
