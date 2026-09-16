@@ -228,6 +228,20 @@ def test_eq_method():
     assert_type(result, Tensor[[2, 3]])
 
 
+def test_comparisons_with_scalars():
+    a: Tensor[[2, 3]] = torch.randn(2, 3)
+    assert_type(torch.ne(a, 0), Tensor[[2, 3]])
+    assert_type(torch.lt(a, 0), Tensor[[2, 3]])
+    assert_type(torch.le(a, 0), Tensor[[2, 3]])
+    assert_type(torch.gt(a, 0), Tensor[[2, 3]])
+    assert_type(torch.ge(a, 0), Tensor[[2, 3]])
+    assert_type(a.ne(0), Tensor[[2, 3]])
+    assert_type(a.lt(0), Tensor[[2, 3]])
+    assert_type(a.le(0), Tensor[[2, 3]])
+    assert_type(a.gt(0), Tensor[[2, 3]])
+    assert_type(a.ge(0), Tensor[[2, 3]])
+
+
 # ==== Logical Operations ====
 
 
