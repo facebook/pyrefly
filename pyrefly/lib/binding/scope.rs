@@ -3082,71 +3082,85 @@ impl Scopes {
             })
             .collect();
 
-        class_body.stat.0.iter_hashed().for_each(
-            |(name, static_info)| {
-            if matches!(static_info.style, StaticStyle::MutableCapture(..)) {
-                // Mutable captures are not actually owned by the class scope, and do not become attributes.
-            } else if let Some(value) = class_body.flow.get_info_hashed(name).and_then(|flow| flow.value()) {
-                let definition = match &value.style {
-                    FlowStyle::FunctionDef {
-                        has_return_annotation,
-                        ..
-                    } => ClassFieldDefinition::MethodLike {
-                        definition: value.idx,
-                        has_return_annotation: *has_return_annotation,
-                        annotation: static_info.annotation(),
-                    },
-                    // Only treat pristine class definitions as nested classes.
-                    // A non-pristine `ClassDef` carries the class identity for
-                    // receiver checking but its visible binding is a
-                    // `Binding::NameAssign`, so it must not become a nested
-                    // class. (This case is unreachable in current code because
-                    // class-body assignments always produce `ClassField`, but
-                    // the pattern is restricted here so that lifting that
-                    // restriction in a follow-up does not silently promote
-                    // rebound names to nested-class semantics.)
-                    FlowStyle::ClassDef { pristine: true, .. } => ClassFieldDefinition::NestedClass {
-                        definition: value.idx,
-                    },
-                    FlowStyle::ClassField {
-                        initial_value: Some(e),
-                    } => {
-                        // Detect if this is an alias (value is a simple name referring to another field
-                        // that was defined before this one in source order).
-                        let mut alias_of = None;
-                        if let Expr::Name(name_expr) = &e {
-                            let target_name = &name_expr.id;
-                            // Check if this name is another field in the class defined before this one.
-                            // We use source order (target ends before this field starts) to ensure
-                            // deterministic behavior regardless of hash map iteration order.
-                            if let Some(target_info) = class_body.stat.0.get(target_name)
-                                && target_info.range.end() <= static_info.range.start()
-                            {
-                                alias_of = Some(target_name.clone());
+        class_body
+            .stat
+            .0
+            .iter_hashed()
+            .for_each(|(name, static_info)| {
+                if matches!(static_info.style, StaticStyle::MutableCapture(..)) {
+                    // Mutable captures are not actually owned by the class scope, and do not become attributes.
+                } else if let Some(value) = class_body
+                    .flow
+                    .get_info_hashed(name)
+                    .and_then(|flow| flow.value())
+                {
+                    let definition = match &value.style {
+                        FlowStyle::FunctionDef {
+                            has_return_annotation,
+                            ..
+                        } => ClassFieldDefinition::MethodLike {
+                            definition: value.idx,
+                            has_return_annotation: *has_return_annotation,
+                            annotation: static_info.annotation(),
+                        },
+                        // Only treat pristine class definitions as nested classes.
+                        // A non-pristine `ClassDef` carries the class identity for
+                        // receiver checking but its visible binding is a
+                        // `Binding::NameAssign`, so it must not become a nested
+                        // class. (This case is unreachable in current code because
+                        // class-body assignments always produce `ClassField`, but
+                        // the pattern is restricted here so that lifting that
+                        // restriction in a follow-up does not silently promote
+                        // rebound names to nested-class semantics.)
+                        FlowStyle::ClassDef { pristine: true, .. } => {
+                            ClassFieldDefinition::NestedClass {
+                                definition: value.idx,
                             }
                         }
-                        ClassFieldDefinition::AssignedInBody {
-                            value: Box::new(ExprOrBinding::Expr(e.clone())),
-                            annotation: static_info.annotation(),
-                            alias_of,
+                        FlowStyle::ClassField {
+                            initial_value: Some(e),
+                        } => {
+                            // Detect if this is an alias (value is a simple name referring to another field
+                            // that was defined before this one in source order).
+                            let mut alias_of = None;
+                            if let Expr::Name(name_expr) = &e {
+                                let target_name = &name_expr.id;
+                                // Check if this name is another field in the class defined before this one.
+                                // We use source order (target ends before this field starts) to ensure
+                                // deterministic behavior regardless of hash map iteration order.
+                                if let Some(target_info) = class_body.stat.0.get(target_name)
+                                    && target_info.range.end() <= static_info.range.start()
+                                {
+                                    alias_of = Some(target_name.clone());
+                                }
+                            }
+                            ClassFieldDefinition::AssignedInBody {
+                                value: Box::new(ExprOrBinding::Expr(e.clone())),
+                                annotation: static_info.annotation(),
+                                alias_of,
+                            }
                         }
-                    }
-                    FlowStyle::ClassField {
-                        initial_value: None,
-                    } => ClassFieldDefinition::DeclaredByAnnotation {
-                        annotation: static_info.annotation().unwrap_or_else(
-                            || panic!("A class field known in the body but uninitialized always has an annotation.")
-                        ),
-                        initialized_in_recognized_method: recognized_instance_attrs
-                            .contains(name.key().as_str()),
-                    },
-                    _ => ClassFieldDefinition::DefinedWithoutAssign {
-                        definition: value.idx,
-                    },
-                };
-                field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
-            }
-        });
+                        FlowStyle::ClassField {
+                            initial_value: None,
+                        } => match static_info.annotation() {
+                            Some(annotation) => ClassFieldDefinition::DeclaredByAnnotation {
+                                annotation,
+                                initialized_in_recognized_method: recognized_instance_attrs
+                                    .contains(name.key().as_str()),
+                            },
+                            // A `global` or `nonlocal` declaration makes the name a mutable
+                            // capture of a binding in another scope, which carries no
+                            // annotation of its own. Python rejects annotating such a name,
+                            // but we still have to describe the field it leaves behind.
+                            None => ClassFieldDefinition::DeclaredWithoutAnnotation,
+                        },
+                        _ => ClassFieldDefinition::DefinedWithoutAssign {
+                            definition: value.idx,
+                        },
+                    };
+                    field_definitions.insert_hashed(name.owned(), (definition, static_info.range));
+                }
+            });
         // Merge assignments from different methods.
         // `method_attrs` yields attributes from recognized constructor methods first (e.g. __init__),
         // followed by other helper methods.
