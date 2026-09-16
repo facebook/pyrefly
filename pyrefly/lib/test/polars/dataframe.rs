@@ -2987,6 +2987,16 @@ reveal_type(df.select(pl.when(pl.col("a") > 0).then(pl.col("a", "b")).otherwise(
 "#,
 );
 
+polars_testcase!(
+    test_select_when_multi_output_predicate_falls_back,
+    r#"
+import polars as pl
+from typing import reveal_type
+df = pl.DataFrame({"a": [1], "b": [2]})
+reveal_type(df.select(pl.when(pl.col("a", "b") > 0).then(1).otherwise(0).alias("x")))  # E: revealed type: DataFrame
+"#,
+);
+
 // Review feedback on #4571: same issue via a keyword instead of an alias.
 polars_testcase!(
     test_select_keyword_multi_output_falls_back,

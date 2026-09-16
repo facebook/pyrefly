@@ -257,6 +257,7 @@ enum PolarsFunction {
     Csv(PolarsCsvFunction),
     Len,
     Lit,
+    When,
     Unmodeled,
 }
 
@@ -325,6 +326,7 @@ impl PolarsFunction {
             ("concat", "polars.functions.eager") => Self::Concat,
             ("len", "polars.functions.len") => Self::Len,
             ("lit", "polars.functions.lit") => Self::Lit,
+            ("when", "polars.functions.whenthen") => Self::When,
             ("read_csv", "polars.io.csv.functions") => Self::Csv(PolarsCsvFunction::Read),
             ("scan_csv", "polars.io.csv.functions") => Self::Csv(PolarsCsvFunction::Scan),
             _ => Self::Unmodeled,
@@ -2436,9 +2438,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         };
                         literal_value(value)
                     }
-                    PolarsFunction::Concat | PolarsFunction::Csv(_) | PolarsFunction::Unmodeled => {
-                        None
-                    }
+                    PolarsFunction::Concat
+                    | PolarsFunction::Csv(_)
+                    | PolarsFunction::When
+                    | PolarsFunction::Unmodeled => None,
                 }
             }
             Expr::BinOp(binop) => {
@@ -2529,23 +2532,38 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    /// Check that every branch value in a `when(...).then(...)[.when(...).then(...)]*
-    /// .otherwise(...)` chain is itself single-output. The chain's own `when`/`then`/
-    /// `otherwise` calls are a builder, not a data value, so only the branch *arguments*
-    /// need checking — an unrecognized receiver (e.g. the base `pl.when(...)` call) is
-    /// trivially fine since it isn't a data value either.
+    /// Check that every predicate and branch in a Polars conditional is single-output.
     fn polars_when_chain_has_single_output(&self, expr: &Expr) -> bool {
-        let Expr::Call(call) = expr else { return true };
+        let Expr::Call(call) = expr else {
+            return false;
+        };
+        let arguments_have_single_output = || {
+            call.arguments
+                .args
+                .iter()
+                .all(|arg| self.polars_expr_has_single_output(arg))
+                && call
+                    .arguments
+                    .keywords
+                    .iter()
+                    .all(|kw| kw.arg.is_some() && self.polars_expr_has_single_output(&kw.value))
+        };
         let Expr::Attribute(attr) = &*call.func else {
-            return true;
+            return self.polars_function(&call.func) == Some(PolarsFunction::When)
+                && arguments_have_single_output();
         };
         match attr.attr.id.as_str() {
             "then" | "otherwise" => {
-                matches!(&call.arguments.args[..], [value] if self.polars_expr_has_single_output(value))
+                call.arguments.keywords.is_empty()
+                    && matches!(&call.arguments.args[..], [value] if self.polars_expr_has_single_output(value))
                     && self.polars_when_chain_has_single_output(&attr.value)
             }
-            "when" => self.polars_when_chain_has_single_output(&attr.value),
-            _ => true,
+            "when" => {
+                arguments_have_single_output()
+                    && (self.polars_function(&call.func) == Some(PolarsFunction::When)
+                        || self.polars_when_chain_has_single_output(&attr.value))
+            }
+            _ => false,
         }
     }
 
@@ -2591,9 +2609,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         // `pl.lit(series)` takes the runtime Series name.
                         literal_value(value).map(|_| Name::new_static(POLARS_LITERAL_OUTPUT_NAME))
                     }
-                    PolarsFunction::Concat | PolarsFunction::Csv(_) | PolarsFunction::Unmodeled => {
-                        None
-                    }
+                    PolarsFunction::Concat
+                    | PolarsFunction::Csv(_)
+                    | PolarsFunction::When
+                    | PolarsFunction::Unmodeled => None,
                 }
             }
             Expr::BinOp(binop) => {
