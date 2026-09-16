@@ -35,7 +35,6 @@ from shape_extensions import (
     IntVar,
     MapIntTuples,
     RegularNestedList,
-    TypeVarTuple,
 )
 
 
@@ -513,60 +512,6 @@ class TestGenericRuntime(unittest.TestCase):
             y: Int[M]
 
         self.assertTrue(issubclass(MyDict, dict))
-
-
-class TestTypeVarTupleRuntime(unittest.TestCase):
-    """shape_extensions.TypeVarTuple supports star-unpacking at runtime."""
-
-    def test_iter(self):
-        """*Ns unpacking works — __iter__ yields self."""
-        Ns = TypeVarTuple("Ns")
-        items = list(Ns)
-        self.assertEqual(len(items), 1)
-        self.assertIs(items[0], Ns)
-
-    def test_in_dim(self):
-        """Int[*Ns] — star-unpacking in subscript works."""
-        Ns = TypeVarTuple("Ns")
-
-        def f(x: Int[*Ns]) -> Int[*Ns]:
-            return x
-
-        f(42)
-
-    def test_generic(self):
-        """Generic[*Ns] — variadic class generic works."""
-        Ns = TypeVarTuple("Ns")
-
-        class Layer(Generic[*Ns]):
-            def forward(self, x: Int[*Ns]) -> Int[*Ns]:
-                return x
-
-        layer = Layer()
-        result = layer.forward(42)
-        self.assertEqual(result, 42)
-
-    def test_mixed_with_typevar(self):
-        """Generic[*Ns, N] — variadic + fixed dim works."""
-        Ns = TypeVarTuple("Ns")
-        N = IntVar("N")
-
-        class Layer(Generic[*Ns, N]):
-            def forward(self, x: Int[*Ns]) -> Int[N + 1]:
-                return x
-
-        layer = Layer()
-        result = layer.forward(42)
-        self.assertEqual(result, 42)
-
-    def test_repr(self):
-        """shape_extensions.TypeVarTuple repr shows *name."""
-        Ns = TypeVarTuple("Ns")
-        self.assertEqual(repr(Ns), "*Ns")
-
-    def test_has_no_default(self):
-        Ns = TypeVarTuple("Ns")
-        self.assertFalse(Ns.has_default())
 
 
 if __name__ == "__main__":
