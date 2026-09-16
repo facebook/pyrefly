@@ -2408,3 +2408,19 @@ class A:
 reveal_type(A.__init__)  # E: revealed type: (self: A) -> None
 "#,
 );
+
+// A `@<field>.default` decorator with no method after it: parse-error recovery
+// produces a nameless function, which defines no method to check the return
+// type of.
+attrs_testcase!(
+    test_attrs_default_decorator_with_no_method,
+    r#"
+from attrs import define, field
+
+@define
+class C:
+    a: int = field()
+    @a.default
+    b: int = field()  # E: Parse error: Expected class, function definition or async function definition after decorator
+"#,
+);
