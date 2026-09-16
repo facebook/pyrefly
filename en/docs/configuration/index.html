@@ -39,8 +39,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
 <script src="/js/code-block-buttons.js"></script>
 <script src="/js/gtag-fragment-tracking.js"></script><link rel="stylesheet" href="/assets/css/styles.caa578e5.css">
-<script src="/assets/js/runtime~main.0085e739.js" defer="defer"></script>
-<script src="/assets/js/main.22accfcf.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.87056e59.js" defer="defer"></script>
+<script src="/assets/js/main.a678cf35.js" defer="defer"></script>
 </head>
 <body class="navigation-with-keyboard">
 <script>!function(){function t(t){document.documentElement.setAttribute("data-theme",t)}var e=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();t(null!==e?e:"dark")}(),function(){try{const n=new URLSearchParams(window.location.search).entries();for(var[t,e]of n)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script>
@@ -748,7 +748,8 @@ at the cost of some language server features that rely on a full project index.<
 with <code>typing.Any</code> and ignore import errors for the module. For example,
 with <code>from x.y import z</code> in a file, adding <code>x.*</code>, <code>*.y</code>, or <code>x.y</code> to this config will
 silence those import errors and replace the module with <code>typing.Any</code>. If the module
-can be found, its type information will still be replaced with <code>typing.Any</code>.</p>
+can be found, its type information will still be replaced with <code>typing.Any</code>. Go-to-definition
+can still open the module source when source is available.</p>
 <p>This is different from <a href="#ignore-missing-imports"><code>ignore-missing-imports</code></a>, which only
 replaces the import with <code>typing.Any</code> if it can&#x27;t be found.</p>
 <ul>
