@@ -12,14 +12,6 @@ import jax.numpy as jnp
 import numpy as np
 from shape_extensions import assert_shape, IntTuple
 
-# A multi-argument `arange` has a length the DSL cannot compute, and a shape
-# outside the exact ranks is gradual, so `assert_shape` cannot be used for
-# either. See `arange` and the constructors in `jax/numpy/__init__.pyi`.
-GRADUAL_SHAPE_RUNTIME_TESTS = {
-    "test_multi_argument_arange_length_is_gradual",
-    "test_shapes_outside_the_exact_ranks_are_gradual",
-}
-
 
 def check_array_and_asarray_list_literal_types() -> None:
     assert_type(jnp.array(1), jnp.Array[[]])
@@ -100,14 +92,15 @@ def test_like_constructors() -> None:
     assert_shape(jnp.full_like(x23, 7.0, shape=(2, 3, 4, 5)).shape, (2, 3, 4, 5))
 
 
-def test_shapes_outside_the_exact_ranks_are_gradual() -> None:
-    # Ranks 1 through 3 given as a tuple are exact; anything else -- a longer
-    # tuple, or any non-tuple sequence -- is accepted but gradual.
-    assert jnp.zeros((2, 3, 4, 5)).shape == (2, 3, 4, 5)
-    assert jnp.zeros([2, 3]).shape == (2, 3)
-    assert jnp.ones([2, 3]).shape == (2, 3)
-    assert jnp.empty([2, 3]).shape == (2, 3)
-    assert jnp.full([2, 3], 1.0).shape == (2, 3)
+def test_non_tuple_shapes_are_gradual() -> None:
+    # A tuple is exact at any rank. Not a TODO for the rest: only a tuple is a
+    # `Flag` domain, and a sequence in general -- `range(n)` for a computed `n` --
+    # has no statically knowable content.
+    assert_shape(jnp.zeros((2, 3, 4, 5)).shape, (2, 3, 4, 5))
+    assert_shape(jnp.zeros([2, 3]).shape, IntTuple, runtime=(2, 3))
+    assert_shape(jnp.ones([2, 3]).shape, IntTuple, runtime=(2, 3))
+    assert_shape(jnp.empty([2, 3]).shape, IntTuple, runtime=(2, 3))
+    assert_shape(jnp.full([2, 3], 1.0).shape, IntTuple, runtime=(2, 3))
 
 
 def test_full() -> None:
@@ -182,15 +175,28 @@ def test_window_functions() -> None:
 
 
 def test_multi_argument_arange_length_is_gradual() -> None:
-    # Statically rank-1 with an unknown length, so assert the runtime shape only.
-    # The empty cases are why the length is not computed: the DSL cannot clamp a
-    # negative span to zero, and claiming a negative dimension would be worse.
-    assert jnp.arange(2, 7).shape == (5,)
-    assert jnp.arange(5.0).shape == (5,)
-    assert jnp.arange(0.0, 1.0, 0.2).shape == (5,)
-    assert jnp.arange(0, 10, 2).shape == (5,)
-    assert jnp.arange(10, 0, -2).shape == (5,)
-    assert jnp.arange(7, 2).shape == (0,)
+    # The rank is known and only the length is gradual, so the static type is
+    # `[int]` rather than a fully gradual shape. The empty cases are why the
+    # length is not computed: the DSL cannot clamp a negative span to zero, and
+    # claiming a negative dimension would be worse.
+    # TODO(stroxler): Compute the integer lengths. See `arange` in
+    # `jax/numpy/__init__.pyi`; the float forms can never be exact.
+    assert_shape(jnp.arange(2, 7).shape, (int,), runtime=(5,))
+    assert_shape(jnp.arange(5.0).shape, (int,), runtime=(5,))
+    assert_shape(jnp.arange(0.0, 1.0, 0.2).shape, (int,), runtime=(5,))
+    assert_shape(jnp.arange(0, 10, 2).shape, (int,), runtime=(5,))
+    assert_shape(jnp.arange(10, 0, -2).shape, (int,), runtime=(5,))
+    assert_shape(jnp.arange(7, 2).shape, (int,), runtime=(0,))
+
+
+def test_single_argument_arange_infers_a_negative_dimension() -> None:
+    # A known bug, recorded rather than hidden: the single-argument form carries
+    # its argument through as the length, so a negative literal infers a negative
+    # dimension where JAX returns an empty array. `runtime=` is what lets the test
+    # state both, and it will fail once the inferred shape changes.
+    # TODO(stroxler): See `arange` in `jax/numpy/__init__.pyi`. The fix needs a
+    # shape domain that can represent an empty dimension.
+    assert_shape(jnp.arange(-3).shape, (-3,), runtime=(0,))
 
 
 def test_dtype_argument_preserves_shape() -> None:

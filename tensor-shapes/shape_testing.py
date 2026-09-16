@@ -329,13 +329,13 @@ def run_suites(
 
 def _run_test_file(*, library: str, path: Path, shape_extensions: Any) -> int:
     current_test: str | None = None
-    assert_shape_calls: dict[str, int] = {}
+    assertions: dict[str, int] = {}
     original_assert_shape: Callable[..., Any] = shape_extensions.assert_shape
 
-    def counting_assert_shape(x: Any, shape: Any) -> Any:
+    def counting_assert_shape(x: Any, shape: Any, **kwargs: Any) -> Any:
         if current_test is not None:
-            assert_shape_calls[current_test] += 1
-        return original_assert_shape(x, shape)
+            assertions[current_test] += 1
+        return original_assert_shape(x, shape, **kwargs)
 
     # Patch before importing so that a module-level
     # `from shape_extensions import assert_shape` binds the counting wrapper.
@@ -349,28 +349,22 @@ def _run_test_file(*, library: str, path: Path, shape_extensions: Any) -> int:
         ]
         if not tests:
             raise AssertionError(f"{path} does not define any test functions")
-        # A module lists in GRADUAL_SHAPE_RUNTIME_TESTS the tests whose static
-        # shape is gradual. Those may fall back to plain runtime assertions,
-        # because assert_shape currently also demands an exact static shape.
-        # TODO(stroxler): Define how assert_shape should handle gradual static shapes.
-        gradual_shape_tests = set(getattr(module, "GRADUAL_SHAPE_RUNTIME_TESTS", ()))
-        unknown_markers = gradual_shape_tests - {name for name, _ in tests}
-        if unknown_markers:
-            raise AssertionError(
-                f"{path} marks unknown gradual-shape tests: {sorted(unknown_markers)}"
-            )
         for name, test in tests:
             current_test = name
-            assert_shape_calls[name] = 0
+            assertions[name] = 0
             test()
             current_test = None
             # A test that asserts no shapes passes vacuously and would hide a
             # regression, so treat it as a failure rather than a pass.
-            if assert_shape_calls[name] == 0 and name not in gradual_shape_tests:
-                raise AssertionError(f"{path}::{name} did not execute assert_shape")
+            if assertions[name] == 0:
+                raise AssertionError(
+                    f"{path}::{name} asserted no shapes. Call `assert_shape`, "
+                    "passing `runtime=` where the runtime shape differs from the "
+                    "static one."
+                )
     finally:
         shape_extensions.assert_shape = original_assert_shape
 
-    shapes = sum(assert_shape_calls.values())
+    shapes = sum(assertions.values())
     print(f"PASS {path.name} ({len(tests)} tests, {shapes} shapes)", flush=True)
     return len(tests)

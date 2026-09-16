@@ -297,17 +297,12 @@ def defines_assert_shape(fn: typing.Callable) -> typing.Callable:
     return fn
 
 
-@defines_assert_shape
-def assert_shape(actual, shape):
-    """
-    At runtime, assert that a tuple-like shape has the expected value.
+def _check_runtime_shape(actual, shape):
+    """Compare `actual` against `shape`, raising on a mismatch.
 
-    Pyrefly will validate that the statically modeled shape matches, similar to
-    `assert_type`.
-
-    TODO(stroxler): for now, symbolic dimensions are skipped at runtime,
-    so in the case of a symbolic `shape` the runtime validation is only checking
-    the rank for those axes. But the static analysis will fully validate.
+    Split out from `assert_shape` so the runtime comparison reads on its own.
+    Kept private because the test harness counts calls to `assert_shape`, and a
+    public helper reachable from it would be counted twice.
     """
 
     # Preserve legacy calls that pass an array object rather than its shape.
@@ -324,6 +319,34 @@ def assert_shape(actual, shape):
     elif actual_tuple != expected:
         raise AssertionError(f"expected shape {expected}, got {actual_tuple}")
     return actual
+
+
+@defines_assert_shape
+def assert_shape(actual, shape, *, runtime=None):
+    """
+    At runtime, assert that a tuple-like shape has the expected value.
+
+    Pyrefly will validate that the statically modeled shape matches, similar to
+    `assert_type`.
+
+    `shape` is the shape Pyrefly infers, and normally the library produces it too,
+    so one argument pins both behaviors. `runtime` is for the cases where the two
+    disagree: pass it the shape the library actually produces, and the runtime
+    check uses it instead of `shape`. Two things need it:
+
+    - An expression Pyrefly infers gradually: spell `shape` as `IntTuple` when it
+      has no shape at all, or as a tuple such as `(int,)` when the rank is known
+      and only a dimension is not.
+    - A known bug, where Pyrefly infers a shape the library does not produce.
+      Writing that wrong shape as `shape` documents it and makes the test fail
+      once it is fixed, rather than leaving the discrepancy unrecorded.
+
+    TODO(stroxler): for now, symbolic dimensions are skipped at runtime,
+    so in the case of a symbolic `shape` the runtime validation is only checking
+    the rank for those axes. But the static analysis will fully validate.
+    """
+
+    return _check_runtime_shape(actual, shape if runtime is None else runtime)
 
 
 def index_shape(_shape: IntTuple, _index: typing.Any) -> IntTuple:

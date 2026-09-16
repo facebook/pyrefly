@@ -383,6 +383,30 @@ python3 test.py --no-fmt --no-lint --no-test --tensor-shapes --no-conformance --
 Runtime tests validate that the annotation helpers and runnable example models
 behave correctly in Python, not just in Pyrefly's static checker.
 
+Every test must call `assert_shape` at least once, so that a test cannot pass
+vacuously. A bare `assert x.shape == (...)` does not count, because the runner
+cannot see it, and a test that asserts no shapes fails rather than passing.
+
+`assert_shape(x.shape, shape)` verifies the runtime shape and the statically
+inferred shape together. The positional `shape` is always the shape Pyrefly is
+expected to infer. Where the library produces a different one, pass it as
+`runtime=`; only the runtime check uses it. Two situations need it:
+
+- An expression Pyrefly infers gradually. Write the expected shape as a bare
+  `IntTuple` when it has no shape at all, or as a tuple such as `(int,)` when
+  the rank is known and only a dimension is not. A bare `IntTuple` holds only
+  when nothing was inferred, so it cannot quietly paper over a known shape.
+- A known bug, where Pyrefly infers a shape the library does not produce.
+  Recording it makes the discrepancy visible and makes the test fail once the
+  inferred shape changes, instead of leaving it undocumented. Unlike a shape
+  annotation, the expected shape accepts a degenerate dimension, because the
+  point is to record what Pyrefly currently infers.
+
+Reach for `runtime=` only when the shapes really differ. Without it one call
+pins both behaviors, which is what most tests want. Add a TODO next to it when
+the gradual result is expected to become exact; some cannot, and saying which
+is which is the useful part.
+
 The tests live in:
 
 ```text

@@ -4649,12 +4649,27 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         type_form_context: TypeFormContext<'_>,
         errors: &ErrorCollector,
     ) -> Option<Vec<Type>> {
+        self.parse_dimension_list_inner(args, type_form_context, errors, true)
+    }
+
+    /// `require_positive` is false only for the positional shape argument of
+    /// `assert_shape`, which records the shape Pyrefly currently infers. That may
+    /// be a degenerate shape the checker would refuse in an annotation -- for
+    /// instance `jnp.arange(-3)` infers `[-3]` where JAX returns an empty array --
+    /// and recording it is the point.
+    fn parse_dimension_list_inner(
+        &self,
+        args: &[Expr],
+        type_form_context: TypeFormContext<'_>,
+        errors: &ErrorCollector,
+        require_positive: bool,
+    ) -> Option<Vec<Type>> {
         self.parse_dimension_list_with_context(
             args,
             type_form_context,
             errors,
             DimensionExprContext::Bare,
-            true,
+            require_positive,
         )
         .ok()
     }
@@ -4737,21 +4752,33 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         Ok(dims)
     }
 
+    /// Parse the `shape` argument of `assert_shape`: the shape Pyrefly is expected
+    /// to infer, written either as a tuple of dimensions or as a bare `IntTuple`
+    /// for an expression that carries no shape at all.
+    ///
+    /// Dimensions are not required to be positive here. Unlike an annotation, this
+    /// records a shape that was observed rather than one being declared, and both a
+    /// genuinely empty array and a shape Pyrefly gets wrong are worth writing down.
     pub fn parse_assert_shape_expr(
         &self,
         expr: &Expr,
         errors: &ErrorCollector,
     ) -> Option<IntTuple> {
+        if let Type::ClassDef(cls) = &self.expr_infer(expr, &self.error_swallower())
+            && self.is_int_tuple_class(cls)
+        {
+            return Some(IntTuple::shapeless());
+        }
         match expr {
             Expr::Tuple(ExprTuple { elts, .. }) => self
-                .parse_dimension_list(elts, TypeFormContext::TypeExpression, errors)
+                .parse_dimension_list_inner(elts, TypeFormContext::TypeExpression, errors, false)
                 .map(IntTuple::from_types),
             _ => {
                 self.error(
                     errors,
                     expr.range(),
                     ErrorKind::BadArgumentType,
-                    "Second argument to `assert_shape` must be a tuple of tensor dimensions"
+                    "Second argument to `assert_shape` must be a tuple of tensor dimensions, or `IntTuple`"
                         .to_owned(),
                 );
                 None

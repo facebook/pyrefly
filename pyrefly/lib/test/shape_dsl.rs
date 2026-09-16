@@ -51,7 +51,7 @@ class IntTuple: ...
 class IntTuples: ...
 class IntVar: ...
 
-def assert_shape(actual: Any, shape: Any) -> Any: ...
+def assert_shape(actual: Any, shape: Any, *, runtime: Any = None) -> Any: ...
 def shaped_array(
     *, shape: str, builtin_indexing: bool = True
 ) -> Callable[[type], type]: ...
@@ -1300,6 +1300,79 @@ def inexact_bounds[C: (Int[2], Int[3]), L: Int[5], B: int, O: Int | None](
     direct_builtin_int: Array[IntTuple[B], int],  # E: `B` must be an `IntVar` to be used as a shape dimension
     direct_optional: Array[IntTuple[O], int],  # E: `O` must be an `IntVar` to be used as a shape dimension
 ) -> None: ...
+"#,
+);
+
+testcase!(
+    test_assert_shape_runtime_argument,
+    legacy_shaped_array_env(),
+    r#"
+from typing import Any
+from shape_extensions import IntTuple, assert_shape, shaped_array
+
+type _Shape = IntTuple
+type _AnyShape = tuple[Any, ...]
+
+@shaped_array(shape="Shape")
+class Array[Shape: _Shape = _AnyShape, DType = Any]:
+    shape: Shape
+
+def exact(x: Array[[2, 3], int]) -> None:
+    # The positional shape is the static expectation, with or without `runtime`.
+    assert_shape(x, (2, 3))
+    assert_shape(x, (6,))  # E: assert_shape((2, 3), (6,)) failed
+    assert_shape(x, (2, 3), runtime=(6,))
+    assert_shape(x, (3, 2), runtime=(6,))  # E: assert_shape((2, 3), (3, 2)) failed
+    assert_shape(x, (2, 3), runtime=missing)  # E: Could not find name `missing`
+
+def gradual(x: Array) -> None:
+    # A bare `IntTuple` says nothing was inferred, and holds only when that is so.
+    assert_shape(x, IntTuple, runtime=(2, 3))
+
+def gradual_claim_must_be_true(x: Array[[2, 3], int]) -> None:
+    assert_shape(x, IntTuple, runtime=(2, 3))  # E: assert_shape((2, 3), (*IntTuple)) failed
+
+def degenerate(x: Array[[3], int]) -> None:
+    # The expected shape records what Pyrefly infers, so unlike an annotation it
+    # accepts a negative dimension. The comparison still runs.
+    assert_shape(x, (-3,), runtime=(0,))  # E: assert_shape((3,), (-3,)) failed
+
+def empty_extent(x: Array) -> None:
+    # Zero extents are valid in both runtime shapes and annotations.
+    assert_shape(x, IntTuple, runtime=(0,))
+
+def rejects_a_non_shape(x: Array[[2, 3], int]) -> None:
+    assert_shape(x, 0, runtime=(2, 3))  # E: Second argument to `assert_shape` must be a tuple of tensor dimensions, or `IntTuple`
+
+def rejects_other_keywords(x: Array[[3], int]) -> None:
+    assert_shape(x, (3,), bogus=(3,))  # E: unexpected keyword argument `bogus`
+    assert_shape(x, (3,), bogus=missing)  # E: Could not find name `missing`  # E: unexpected keyword argument `bogus`
+"#,
+);
+
+testcase!(
+    test_assert_shape_runtime_requires_a_declared_keyword,
+    shape_extensions_env_with_torch(),
+    r#"
+from shape_extensions import IntTuple, defines_assert_shape
+from typing import Any
+from torch import Tensor
+
+@defines_assert_shape
+def check_shape(x: IntTuple, shape: tuple[Any, ...]) -> IntTuple: ...
+
+@defines_assert_shape
+def check_shape_with_runtime(
+    x: IntTuple, shape: tuple[Any, ...], *, runtime: tuple[int, ...] = ()
+) -> IntTuple: ...
+
+def f(x: Tensor[[2, 3]]) -> None:
+    # Python would raise `TypeError` here, so Pyrefly rejects it too. The
+    # positional shape matches, isolating the keyword error from a comparison
+    # failure.
+    check_shape(x.shape, (2, 3), runtime=(6,))  # E: unexpected keyword argument `runtime`
+    check_shape_with_runtime(x.shape, (2, 3), runtime=(6,))
+    check_shape_with_runtime(x.shape, (2, 3), runtime="bad")  # E: is not assignable to parameter `runtime`
 "#,
 );
 

@@ -10,11 +10,6 @@ from typing import Any, assert_type, TYPE_CHECKING
 import numpy as np
 from shape_extensions import assert_shape, IntTuple, IntVar
 
-GRADUAL_SHAPE_RUNTIME_TESTS = {
-    "test_diag_dtype_and_broad_offset",
-    "test_diag_matrix_runtime_shape",
-}
-
 
 def check_array_and_asarray_list_literal_types() -> None:
     assert_type(np.array(1), np.ndarray[[], Any])
@@ -137,7 +132,7 @@ def test_diag_dtype_and_broad_offset() -> None:
 
     assert_type(result, np.ndarray[[int, int], np.dtype[np.float32]])
     assert_type(result.dtype, np.dtype[np.float32])
-    assert result.shape == (6, 6)
+    assert_shape(result.shape, (int, int), runtime=(6, 6))
 
 
 def check_diag_general_rank[DType](matrix: np.ndarray[[2, 3], DType]) -> None:
@@ -163,7 +158,7 @@ def check_diag_rank_three_falls_back[DType](
 def test_diag_matrix_runtime_shape() -> None:
     result = np.diag(np.ones((2, 3)))
     assert_type(result, np.ndarray[[int], np.dtype[np.float64]])
-    assert result.shape == (2,)
+    assert_shape(result.shape, (int,), runtime=(2,))
 
 
 def test_stack_axis0() -> None:

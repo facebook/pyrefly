@@ -7,14 +7,10 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-from shape_extensions import assert_shape, IntVar
+from shape_extensions import assert_shape, IntTuple, IntVar
 
 N = IntVar("N")
 M = IntVar("M")
-
-
-# Only a tuple is a Flag domain, so any other sequence axis is gradual.
-GRADUAL_SHAPE_RUNTIME_TESTS = {"test_non_tuple_sequence_axis_is_accepted"}
 
 
 def reject_out_of_bounds_axis(x: jax.Array[[N, M]]) -> None:
@@ -91,10 +87,12 @@ def test_reduce_methods() -> None:
 def test_non_tuple_sequence_axis_is_accepted() -> None:
     c = jnp.ones((2, 3, 4))
 
-    assert jnp.sum(c, axis=[0, 2]).shape == (3,)
-    assert jnp.sum(c, axis=range(2)).shape == (4,)
-    assert c.mean(axis=[0, 2]).shape == (3,)
-    assert c.mean(axis=range(2)).shape == (4,)
+    # Not a TODO: only a tuple is a `Flag` domain, and `range(n)` for a computed
+    # `n` has no statically knowable content.
+    assert_shape(jnp.sum(c, axis=[0, 2]).shape, IntTuple, runtime=(3,))
+    assert_shape(jnp.sum(c, axis=range(2)).shape, IntTuple, runtime=(4,))
+    assert_shape(c.mean(axis=[0, 2]).shape, IntTuple, runtime=(3,))
+    assert_shape(c.mean(axis=range(2)).shape, IntTuple, runtime=(4,))
 
 
 def test_reduce_rejects_out_of_bounds_axis() -> None:

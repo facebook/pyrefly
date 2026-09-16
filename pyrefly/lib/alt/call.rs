@@ -2460,6 +2460,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     meta.flags.is_assert_shape || meta.kind == FunctionKind::AssertShape
                 }) => self
                     .call_assert_shape(
+                        ty,
                         &x.arguments.args,
                         &x.arguments.keywords,
                         x.arguments.range,
