@@ -3277,26 +3277,8 @@ class dtype:
 # ==============================================================================
 
 @overload
-def tensor[Shape: IntTuple](
-    data: Tensor[Shape],
-    *,
-    dtype: Any = None,
-    device: Any = None,
-    requires_grad: builtins.bool = False,
-    pin_memory: builtins.bool = False,
-) -> Tensor[Shape]: ...
-@overload
-def tensor(
-    data: _TensorScalar,
-    *,
-    dtype: Any = None,
-    device: Any = None,
-    requires_grad: builtins.bool = False,
-    pin_memory: builtins.bool = False,
-) -> Tensor[[]]: ...
-@overload
-def tensor[Shape: IntTuple](
-    data: RegularNestedList[Shape, _TensorScalar],
+def tensor[Shape: IntTuple = []](
+    data: Tensor[Shape] | _TensorScalar | RegularNestedList[Shape, _TensorScalar],
     *,
     dtype: Any = None,
     device: Any = None,

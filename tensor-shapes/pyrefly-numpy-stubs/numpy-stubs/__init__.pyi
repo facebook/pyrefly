@@ -1168,19 +1168,8 @@ def array[Shape: _Shape](
     like: None = None,
 ) -> ndarray[Shape]: ...
 @overload
-def array(
-    object: _ArrayScalar,
-    dtype: Any = ...,
-    *,
-    copy: bool | None = ...,
-    order: str | None = None,
-    subok: bool = ...,
-    ndmin: Literal[0] = 0,
-    like: None = None,
-) -> ndarray[[], Any]: ...
-@overload
-def array[Shape: _Shape](
-    object: RegularNestedList[Shape, _ArrayScalar],
+def array[Shape: _Shape = []](
+    object: _ArrayScalar | RegularNestedList[Shape, _ArrayScalar],
     dtype: Any = ...,
     *,
     copy: bool | None = ...,
@@ -1232,18 +1221,8 @@ def asarray[Shape: _Shape](
     like: None = None,
 ) -> ndarray[Shape]: ...
 @overload
-def asarray(
-    a: _ArrayScalar,
-    dtype: Any = ...,
-    order: str | None = None,
-    *,
-    device: Any = ...,
-    copy: bool | None = ...,
-    like: None = None,
-) -> ndarray[[], Any]: ...
-@overload
-def asarray[Shape: _Shape](
-    a: RegularNestedList[Shape, _ArrayScalar],
+def asarray[Shape: _Shape = []](
+    a: _ArrayScalar | RegularNestedList[Shape, _ArrayScalar],
     dtype: Any = ...,
     order: str | None = None,
     *,

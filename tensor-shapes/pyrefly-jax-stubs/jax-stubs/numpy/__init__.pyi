@@ -128,19 +128,8 @@ type _Scalar = bool | int | float | complex | np.number
 type _ShapedArrayLike[Shape: _Shape] = Array[Shape] | np.ndarray[Shape]
 
 @overload
-def array(
-    object: _Scalar,
-    dtype: DTypeLike | None = ...,
-    copy: bool | None = ...,
-    order: str | None = ...,
-    ndmin: Literal[0] = 0,
-    *,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[]]: ...
-@overload
-def array[Shape: _Shape](
-    object: _ShapedArrayLike[Shape] | RegularNestedList[Shape, _Scalar],
+def array[Shape: _Shape = []](
+    object: _Scalar | _ShapedArrayLike[Shape] | RegularNestedList[Shape, _Scalar],
     dtype: DTypeLike | None = ...,
     copy: bool | None = ...,
     order: str | None = ...,
@@ -161,18 +150,8 @@ def array(
     out_sharding: Any = ...,
 ) -> Array[IntTuple]: ...
 @overload
-def asarray(
-    a: _Scalar,
-    dtype: DTypeLike | None = ...,
-    order: str | None = ...,
-    *,
-    copy: bool | None = ...,
-    device: Any = ...,
-    out_sharding: Any = ...,
-) -> Array[[]]: ...
-@overload
-def asarray[Shape: _Shape](
-    a: _ShapedArrayLike[Shape] | RegularNestedList[Shape, _Scalar],
+def asarray[Shape: _Shape = []](
+    a: _Scalar | _ShapedArrayLike[Shape] | RegularNestedList[Shape, _Scalar],
     dtype: DTypeLike | None = ...,
     order: str | None = ...,
     *,
