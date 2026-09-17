@@ -91,7 +91,7 @@ impl FlatSymbols {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum ScopeKind {
+pub(crate) enum ScopeKind {
     Module,
     Class,
     Function,
@@ -116,10 +116,13 @@ fn push_symbol(
     idx
 }
 
-fn assignment_kind(name: &Name, scope: Scope) -> SymbolKind {
+/// Classify an assignment target by name and enclosing scope. Shared with
+/// document symbols, which walk the same AST shapes to build a hierarchical
+/// (rather than flat) view.
+pub(crate) fn assignment_kind(name: &Name, scope: ScopeKind) -> SymbolKind {
     if is_constant_name(name) {
         SymbolKind::Constant
-    } else if scope.kind == ScopeKind::Class {
+    } else if scope == ScopeKind::Class {
         SymbolKind::Attribute
     } else {
         SymbolKind::Variable
@@ -131,7 +134,7 @@ fn push_assignment_targets(out: &mut Vec<FlatSymbol>, target: &Expr, scope: Scop
         push_symbol(
             out,
             ShortIdentifier::expr_name(name),
-            assignment_kind(&name.id, scope),
+            assignment_kind(&name.id, scope.kind),
             scope.parent,
         );
     });
