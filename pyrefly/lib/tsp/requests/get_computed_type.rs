@@ -12,10 +12,10 @@ use tsp_types::GetTypeParams;
 use tsp_types::Type;
 
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::tsp::server::TspConnection;
+use crate::tsp::server::TspServer;
 use crate::tsp::validation::parse_uri;
 
-impl<T: TspInterface> TspConnection<T> {
+impl<T: TspInterface> TspServer<T> {
     /// Return the computed (inferred) type at the given position.
     ///
     /// The computed type reflects the type checker's analysis of the code
