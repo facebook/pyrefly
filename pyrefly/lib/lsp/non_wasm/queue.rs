@@ -67,6 +67,43 @@ pub enum LspEvent {
     Exit,
 }
 
+/// An LSP event with the identity and enqueue time from its first queue entry.
+pub struct QueuedEvent {
+    id: usize,
+    event: LspEvent,
+    enqueued_at: Instant,
+}
+
+impl QueuedEvent {
+    pub(crate) fn from_parts(id: usize, event: LspEvent, enqueued_at: Instant) -> Self {
+        Self {
+            id,
+            event,
+            enqueued_at,
+        }
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    pub fn event(&self) -> &LspEvent {
+        &self.event
+    }
+
+    pub fn enqueued_at(&self) -> Instant {
+        self.enqueued_at
+    }
+
+    pub fn describe(&self) -> String {
+        self.event.describe()
+    }
+
+    pub fn into_parts(self) -> (usize, LspEvent, Instant) {
+        (self.id, self.event, self.enqueued_at)
+    }
+}
+
 impl LspEvent {
     pub fn describe(&self) -> String {
         match self {
@@ -149,12 +186,11 @@ pub struct LspQueue {
     /// against, so queries run immediately (e.g. right after server startup).
     last_edit_time: Mutex<Option<Instant>>,
     /// A single query request (an inlay hint) held back to debounce it, paired
-    /// with the instant it becomes ready and the instant it was enqueued. `recv`
-    /// delivers it once the ready instant passes if nothing else arrives first,
-    /// reporting the enqueue instant as its queue time so queue-latency metrics
-    /// reflect the full debounce wait (matching how `send` timestamps events).
+    /// with the instant it becomes ready. `recv` delivers it once that instant
+    /// passes if nothing else arrives first. The entry keeps the enqueue time it
+    /// was first given, so queue-latency metrics reflect the full debounce wait.
     /// Only one is held at a time; see [`LspQueue::send_delayed`].
-    delayed: Mutex<Option<(Request, Instant, Instant)>>,
+    delayed: Mutex<Option<(QueuedEvent, Instant)>>,
     normal: (
         Sender<(usize, LspEvent, Instant)>,
         Receiver<(usize, LspEvent, Instant)>,
@@ -202,21 +238,13 @@ impl LspQueue {
         }
     }
 
-    /// Return a bool indicating whether there is a subsequent mutation event in the queue,
-    /// and the event itself.
-    ///
-    /// Due to race conditions, we might say false when there is a subsequent mutation,
-    /// but we will never say true when there is not.
-    pub fn recv(&self) -> Result<(bool, LspEvent, Instant), RecvError> {
+    /// Return the next event with its original queue metadata.
+    pub fn recv(&self) -> Result<QueuedEvent, RecvError> {
         // If a delayed request is held, wake once its window expires so we can
         // deliver it. The slot is only written by the same thread that calls
         // `recv` (via `send_delayed` during event processing), so it can't change
         // while we block here.
-        let deadline = self
-            .delayed
-            .lock()
-            .as_ref()
-            .map(|(_, ready_at, _)| *ready_at);
+        let deadline = self.delayed.lock().as_ref().map(|(_, ready_at)| *ready_at);
 
         let mut event_receiver_selector = Select::new_biased();
         // Biased selector will pick the receiver with lower index over higher ones,
@@ -228,19 +256,12 @@ impl LspQueue {
             Some(deadline) => match event_receiver_selector.select_deadline(deadline) {
                 Ok(selected) => selected,
                 Err(_) => {
-                    let (request, _ready_at, enqueued_at) = self
+                    let (event, _ready_at) = self
                         .delayed
                         .lock()
                         .take()
                         .expect("a deadline is only set while a delayed request is held");
-                    let last_mutation = self.last_mutation.load(Ordering::Relaxed);
-                    // Report the enqueue instant (not `ready_at`) as the queue
-                    // time so downstream latency metrics see the full wait.
-                    return Ok((
-                        last_mutation != 0,
-                        LspEvent::LspRequest(request),
-                        enqueued_at,
-                    ));
+                    return Ok(event);
                 }
             },
             None => event_receiver_selector.select(),
@@ -250,25 +271,31 @@ impl LspQueue {
             i if i == queued_events_receiver_index => selected.recv(&self.normal.1)?,
             _ => unreachable!(),
         };
-        let mut last_mutation = self.last_mutation.load(Ordering::Relaxed);
+        let last_mutation = self.last_mutation.load(Ordering::Relaxed);
         if id == last_mutation {
             self.last_mutation.store(0, Ordering::Relaxed);
-            last_mutation = 0;
         }
-        Ok((last_mutation != 0, x, queue_time))
+        Ok(QueuedEvent::from_parts(id, x, queue_time))
     }
 
-    /// Hold `request` until `ready_at`, after which `recv` delivers it. This
+    /// Return whether an observed mutation follows `event` in the live queue.
+    /// A concurrent send can cause a false negative, but never a false positive.
+    pub fn has_subsequent_mutation(&self, event: &QueuedEvent) -> bool {
+        let last_mutation = self.last_mutation.load(Ordering::Relaxed);
+        last_mutation > event.id
+    }
+
+    /// Hold `event` until `ready_at`, after which `recv` delivers it. This
     /// debounces queries (inlay hints) that shouldn't recompute on every
-    /// keystroke. The current instant is recorded as the request's enqueue time
-    /// so it is reported as the queue time on delivery. At most one request is
-    /// held; a second call displaces and returns the previous one so the caller
-    /// can respond to the now-superseded request.
-    pub fn send_delayed(&self, request: Request, ready_at: Instant) -> Option<Request> {
+    /// keystroke. The event keeps its original enqueue time so delivery metrics
+    /// include all holding periods. At most one event is held; a second call
+    /// displaces and returns the previous one so the caller can respond to the
+    /// superseded request.
+    pub fn send_delayed(&self, event: QueuedEvent, ready_at: Instant) -> Option<QueuedEvent> {
         self.delayed
             .lock()
-            .replace((request, ready_at, Instant::now()))
-            .map(|(request, ..)| request)
+            .replace((event, ready_at))
+            .map(|(event, ..)| event)
     }
 
     /// How long since the most recent document edit was enqueued, or `None` if
@@ -373,6 +400,7 @@ impl HeavyTaskQueue {
 
 #[cfg(test)]
 mod tests {
+    use lsp_server::RequestId;
     use lsp_types::TextDocumentItem;
     use lsp_types::Url;
     use lsp_types::VersionedTextDocumentIdentifier;
@@ -393,6 +421,35 @@ mod tests {
         LspEvent::DidChangeConfiguration(DidChangeConfigurationParams {
             settings: serde_json::Value::Null,
         })
+    }
+
+    fn request() -> LspEvent {
+        LspEvent::LspRequest(Request {
+            id: RequestId::from(1),
+            method: "test/query".to_owned(),
+            params: serde_json::Value::Null,
+            activity_key: None,
+        })
+    }
+
+    #[test]
+    fn test_delayed_request_preserves_enqueue_time() {
+        let queue = LspQueue::new();
+        queue.send(request()).unwrap();
+        let queued = queue.recv().unwrap();
+        let enqueued_at = queued.enqueued_at();
+        let (id, event, _) = queued.into_parts();
+        let LspEvent::LspRequest(request) = event else {
+            panic!("expected a request");
+        };
+
+        queue.send_delayed(
+            QueuedEvent::from_parts(id, LspEvent::LspRequest(request), enqueued_at),
+            Instant::now(),
+        );
+        let delivered_enqueue_time = queue.recv().unwrap().enqueued_at();
+
+        assert_eq!(delivered_enqueue_time, enqueued_at);
     }
 
     #[test]
@@ -453,18 +510,18 @@ mod tests {
             )))
             .unwrap();
 
-        let (subsequent_mutation, event, _) = queue.recv().unwrap();
-        assert!(matches!(event, LspEvent::DidOpenTextDocument(_)));
+        let queued = queue.recv().unwrap();
+        assert!(matches!(queued.event(), LspEvent::DidOpenTextDocument(_)));
         assert!(
-            !subsequent_mutation,
+            !queue.has_subsequent_mutation(&queued),
             "a client response must not suppress didOpen validation"
         );
 
-        let (subsequent_mutation, event, _) = queue.recv().unwrap();
-        assert!(!subsequent_mutation);
+        let queued = queue.recv().unwrap();
+        assert!(!queue.has_subsequent_mutation(&queued));
         assert!(matches!(
-            event,
-            LspEvent::LspResponse(Response { id, .. }) if id == response_id
+            queued.event(),
+            LspEvent::LspResponse(Response { id, .. }) if *id == response_id
         ));
     }
 }
