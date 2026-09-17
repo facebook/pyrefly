@@ -3,9 +3,21 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from typing import assert_type
+
 import jax.numpy as jnp
 import numpy as np
-from einops import einsum, rearrange, reduce, repeat
+from einops import (
+    asnumpy,
+    EinopsError,
+    einsum,
+    pack,
+    parse_shape,
+    rearrange,
+    reduce,
+    repeat,
+    unpack,
+)
 from shape_extensions import assert_shape, IntTuple
 from torch import ones
 
@@ -60,3 +72,21 @@ def test_einsum() -> None:
         IntTuple,
         runtime=(2,),
     )
+
+
+def test_auxiliary_api() -> None:
+    tensor = ones((2, 3, 5))
+    assert parse_shape(tensor, "batch channel width") == {
+        "batch": 2,
+        "channel": 3,
+        "width": 5,
+    }
+    assert_type(parse_shape(tensor, "batch channel width"), dict[str, int])
+    assert_shape(asnumpy(tensor).shape, (2, 3, 5))
+
+    packed, packed_shapes = pack([ones((2, 3)), ones((2, 5))], "batch *")
+    assert_shape(packed.shape, IntTuple, runtime=(2, 8))
+    first, second = unpack(packed, packed_shapes, "batch *")
+    assert_shape(first.shape, IntTuple, runtime=(2, 3))
+    assert_shape(second.shape, IntTuple, runtime=(2, 5))
+    assert issubclass(EinopsError, RuntimeError)

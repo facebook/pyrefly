@@ -3,23 +3,31 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+from collections.abc import Sequence
 from typing import Any, overload, Protocol
 
 from shape_extensions import Flag, IntTuple
 
 from ._shapes import einsum_shape, rearrange_shape, reduce_shape, repeat_shape
 
-# TODO: Replace these placeholders with precise signatures in follow-up diffs.
-EinopsError: Any
-asnumpy: Any
-pack: Any
-parse_shape: Any
-unpack: Any
-
 class _Array[Shape: IntTuple = IntTuple](Protocol):
     @property
     def shape(self) -> Shape: ...
 
+class EinopsError(RuntimeError): ...
+
+def asnumpy[Shape: IntTuple](tensor: _Array[Shape]) -> _Array[Shape]: ...
+def parse_shape(tensor: _Array, pattern: str) -> dict[str, int]: ...
+
+# TODO: Add shape primitives for the `*` packing pattern so these return precise shapes.
+def pack(
+    tensors: Sequence[_Array], pattern: str
+) -> tuple[_Array, list[tuple[int, ...]]]: ...
+def unpack(
+    tensor: _Array,
+    packed_shapes: Sequence[Sequence[int]],
+    pattern: str,
+) -> list[_Array]: ...
 @overload
 def rearrange[Shape: IntTuple, Pattern: Flag[str]](
     tensor: _Array[Shape], pattern: Pattern
