@@ -12,13 +12,16 @@ use lsp_types::request::Request as _;
 use lsp_types::request::TypeHierarchyPrepare;
 use lsp_types::request::TypeHierarchySubtypes;
 use lsp_types::request::TypeHierarchySupertypes;
-use pyrefly::lsp::non_wasm::protocol::Message;
-use pyrefly::lsp::non_wasm::protocol::Request;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::Request;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 fn test_type_hierarchy_basic() {
@@ -100,6 +103,69 @@ fn test_type_hierarchy_basic() {
                 return false;
             };
             items.iter().any(|item| item.name == "C")
+        })
+        .unwrap();
+
+    interaction.shutdown().unwrap();
+}
+
+/// A subtype declared in another module must be discovered through workspace indexing.
+#[test]
+fn test_type_hierarchy_subtypes_in_another_module() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("type_hierarchy_test");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    // Reverse-dependency indexing is required to discover subclasses in unopened files.
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri)]),
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .unwrap();
+
+    interaction.client.did_open("classes.py");
+    let classes_uri = Url::from_file_path(root_path.join("classes.py")).unwrap();
+    let derived_uri = Url::from_file_path(root_path.join("derived.py")).unwrap();
+
+    let class_b_item = json!({
+        "name": "B",
+        "kind": SymbolKind::CLASS,
+        "uri": classes_uri.to_string(),
+        "range": {
+            "start": {"line": 10, "character": 0},
+            "end": {"line": 11, "character": 8}
+        },
+        "selectionRange": {
+            "start": {"line": 10, "character": 6},
+            "end": {"line": 10, "character": 7}
+        }
+    });
+
+    interaction
+        .client
+        .send_request::<TypeHierarchySubtypes>(json!({
+            "item": class_b_item
+        }))
+        .expect_response_with(|result| {
+            let Some(items) = result else {
+                return false;
+            };
+            items.len() == 2
+                && items
+                    .iter()
+                    .any(|item| item.name == "C" && item.uri == classes_uri)
+                && items
+                    .iter()
+                    .any(|item| item.name == "D" && item.uri == derived_uri)
         })
         .unwrap();
 

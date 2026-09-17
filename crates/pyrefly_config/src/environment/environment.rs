@@ -21,6 +21,7 @@ use pyrefly_util::lock::Mutex;
 use pyrefly_util::stdlib::register_stdlib_paths;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_with::skip_serializing_none;
 use starlark_map::small_map::SmallMap;
 use tracing::warn;
 
@@ -37,13 +38,12 @@ static INTERPRETER_ENV_REGISTRY: LazyLock<
 /// on config parsing, since we also won't know if an executable
 /// other than the first available on the path should be used (i.e.
 /// should we always look at a venv/conda environment instead?)
+#[skip_serializing_none]
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone, Default)]
 #[serde(rename_all = "kebab-case")]
 pub struct PythonEnvironment {
     /// The platform any `sys.platform` check should evaluate against.
     #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
         // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
         // alias while we migrate existing fields from snake case to kebab case.
         alias = "python_platform"
@@ -52,8 +52,6 @@ pub struct PythonEnvironment {
 
     /// The platform any `sys.version` check should evaluate against.
     #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
         // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
         // alias while we migrate existing fields from snake case to kebab case.
         alias = "python_version"
@@ -63,15 +61,13 @@ pub struct PythonEnvironment {
     /// Directories containing third-party package imports, searched
     /// after first checking `search_path` and `typeshed`.
     #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
         // TODO(connernilsen): DON'T COPY THIS TO NEW FIELDS. This is a temporary
         // alias while we migrate existing fields from snake case to kebab case.
         alias = "site_package_path"
     )]
     pub site_package_path: Option<Vec<PathBuf>>,
 
-    #[serde(skip, default)]
+    #[serde(skip)]
     pub interpreter_site_package_path: Vec<PathBuf>,
 
     #[serde(alias = "stdlib_paths", default, skip_serializing)]
@@ -95,12 +91,10 @@ impl PythonEnvironment {
             self.python_version = Some(PythonVersion::default());
         }
         if self.site_package_path.is_none() {
-            let typings = PathBuf::from("./typings");
-            if typings.exists() {
-                self.site_package_path = Some(vec![PathBuf::from("./typings")]);
-            } else {
-                self.site_package_path = Some(Vec::new());
-            }
+            // The `typings/` default is applied in `ConfigFile::configure()` so it
+            // can be resolved relative to the config root and applied regardless
+            // of whether an interpreter was queried.
+            self.site_package_path = Some(Vec::new());
         }
     }
 

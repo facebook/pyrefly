@@ -16,7 +16,6 @@ class ModelAllow(BaseModel, extra="allow"):
     x: int
 
 ModelAllow(x=1, y=2)
-
 "#,
 );
 
@@ -90,7 +89,6 @@ class ModelAllow(BaseModel):
     x: int
 
 ModelAllow(x=1, y=2)
-
 "#,
 );
 

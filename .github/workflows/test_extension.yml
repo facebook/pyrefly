@@ -3,9 +3,20 @@ on:
   workflow_dispatch:
   workflow_call:
   push:
+    branches: [ main ]
     paths:
       - '**/*'
       - '!.*'
+      - '.github/workflows/build_extension.yml'
+      - '.github/workflows/test_extension.yml'
+  # Narrower than the push trigger above, because a pull request pays for the
+  # whole nine-platform binary build before any test runs. Server changes are
+  # already covered per pull request by the Rust and Scrut suites in
+  # pyrefly.yml; what only this workflow can check is the extension itself,
+  # against the packaged VSIX.
+  pull_request:
+    paths:
+      - 'lsp/**'
       - '.github/workflows/build_extension.yml'
       - '.github/workflows/test_extension.yml'
 
@@ -41,7 +52,7 @@ jobs:
           - os: ubuntu-24.04-arm
             platform: alpine
             arch: arm64
-          - os: macos-14
+          - os: macos-15-intel
             platform: darwin
             arch: x64
           - os: macos-14

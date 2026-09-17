@@ -5,28 +5,39 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use lsp_server::ErrorCode;
 use lsp_server::RequestId;
+use lsp_server::ResponseError;
 use lsp_types::InitializeParams;
 use pyrefly_util::telemetry::QueueName;
 use pyrefly_util::telemetry::Telemetry;
 use pyrefly_util::telemetry::TelemetryEvent;
 use pyrefly_util::telemetry::TelemetryEventKind;
+use serde::Serialize;
 use tracing::info;
 use tracing::warn;
+use tsp_types::ConnectionRequestParams;
+use tsp_types::ConnectionRequestResult;
+use tsp_types::ConnectionTransportKind;
 use tsp_types::GetTypeParams;
 use tsp_types::TSPNotificationMethods;
 use tsp_types::TSPRequests;
 
 use crate::commands::lsp::IndexingMode;
+use crate::lsp::non_wasm::lsp::new_response;
 use crate::lsp::non_wasm::protocol::Message;
 use crate::lsp::non_wasm::protocol::Notification;
 use crate::lsp::non_wasm::protocol::Request;
 use crate::lsp::non_wasm::protocol::Response;
 use crate::lsp::non_wasm::queue::LspEvent;
+use crate::lsp::non_wasm::queue::QueuedEvent;
+use crate::lsp::non_wasm::server::Connection;
 use crate::lsp::non_wasm::server::InitializeInfo;
 use crate::lsp::non_wasm::server::MessageReader;
 use crate::lsp::non_wasm::server::ProcessEvent;
@@ -34,165 +45,224 @@ use crate::lsp::non_wasm::server::ServerCapabilitiesWithTypeHierarchy;
 use crate::lsp::non_wasm::server::TspInterface;
 use crate::lsp::non_wasm::server::capabilities;
 use crate::lsp::non_wasm::transaction_manager::TransactionManager;
-use crate::tsp::type_conversion::convert_type_with_resolver;
+use crate::tsp::validation::internal_error;
+use crate::tsp::validation::invalid_params_error;
+use crate::tsp::validation::snapshot_outdated_error;
 
-/// TSP server that delegates to LSP server infrastructure while handling only TSP requests
-pub struct TspServer<T: TspInterface> {
-    pub inner: T,
-    /// Current snapshot version, updated on RecheckFinished events
-    pub(crate) current_snapshot: Arc<Mutex<i32>>,
+struct ExtraConnectionHandle {
+    close_tx: crossbeam_channel::Sender<()>,
 }
 
-impl<T: TspInterface> TspServer<T> {
-    pub fn new(lsp_server: T) -> Self {
-        Self {
-            inner: lsp_server,
-            current_snapshot: Arc::new(Mutex::new(0)), // Start at 0, increments on RecheckFinished
-        }
-    }
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum IpcTransportNames {
+    Single {
+        name: String,
+    },
+    Split {
+        input_name: String,
+        output_name: String,
+    },
+}
 
-    /// Convert a pyrefly `Type` to a TSP protocol `Type`, resolving function
-    /// declaration ranges via the binding table.
-    pub(crate) fn convert_type(&self, ty: &pyrefly_types::types::Type) -> tsp_types::Type {
-        let resolver =
-            |func_id: &pyrefly_types::callable::FuncId| self.inner.resolve_func_def_range(func_id);
-        convert_type_with_resolver(ty, &resolver)
-    }
-
-    pub fn process_event<'a>(
-        &'a self,
-        ide_transaction_manager: &mut TransactionManager<'a>,
-        canceled_requests: &mut HashSet<RequestId>,
-        telemetry: &'a impl Telemetry,
-        telemetry_event: &mut TelemetryEvent,
-        subsequent_mutation: bool,
-        event: LspEvent,
-    ) -> anyhow::Result<ProcessEvent> {
-        // Remember if this event should increment the snapshot after processing
-        let should_increment_snapshot = match &event {
-            LspEvent::RecheckFinished => true,
-            // Increment on DidChange since it affects type checker state via synchronous validation
-            LspEvent::DidChangeTextDocument(_) => true,
-            // Don't increment on DidChangeWatchedFiles directly since it triggers RecheckFinished
-            // LspEvent::DidChangeWatchedFiles => true,
-            // Don't increment on DidOpen since it triggers RecheckFinished events that will increment
-            // LspEvent::DidOpenTextDocument(_) => true,
-            _ => false,
-        };
-
-        // For TSP requests, handle them specially
-        if let LspEvent::LspRequest(ref request) = event {
-            if self.handle_tsp_request(ide_transaction_manager, request)? {
-                return Ok(ProcessEvent::Continue);
-            }
-            // If it's not a TSP request, let the LSP server reject it since TSP server shouldn't handle LSP requests
-            self.inner.send_response(Response::new_err(
-                request.id.clone(),
-                lsp_server::ErrorCode::MethodNotFound as i32,
-                format!("TSP server does not support LSP method: {}", request.method),
+impl IpcTransportNames {
+    fn from_connection_request(params: &ConnectionRequestParams) -> Result<Self, ResponseError> {
+        if params.kind != ConnectionTransportKind::Ipc {
+            return Err(invalid_params_error(
+                "Only IPC extra connections are supported",
             ));
-            return Ok(ProcessEvent::Continue);
         }
 
-        // For all other events (notifications, responses, etc.), delegate to inner server
-        let result = self.inner.process_event(
-            ide_transaction_manager,
-            canceled_requests,
-            telemetry,
-            telemetry_event,
-            subsequent_mutation,
-            event,
-        )?;
-
-        // Increment snapshot after the inner server has processed the event
-        if should_increment_snapshot && let Ok(mut current) = self.current_snapshot.lock() {
-            let old_snapshot = *current;
-            *current += 1;
-            let new_snapshot = *current;
-            drop(current); // Release the lock before sending the notification
-            self.send_snapshot_changed_notification(old_snapshot, new_snapshot);
+        match params.args.as_deref() {
+            Some([name]) if !name.is_empty() => Ok(Self::Single { name: name.clone() }),
+            Some([input_name, output_name])
+                if !input_name.is_empty() && !output_name.is_empty() =>
+            {
+                Ok(Self::Split {
+                    input_name: input_name.clone(),
+                    output_name: output_name.clone(),
+                })
+            }
+            _ => Err(invalid_params_error(
+                "Connection request args must include one IPC endpoint name, or two IPC endpoint names in server input-then-output order",
+            )),
         }
-
-        Ok(result)
     }
 
-    /// Send a `typeServer/snapshotChanged` notification to the client.
-    ///
-    /// Called whenever the snapshot counter increments, so the client knows
-    /// any previously-returned types are stale.
-    fn send_snapshot_changed_notification(&self, old_snapshot: i32, new_snapshot: i32) {
-        let method = serde_json::to_value(TSPNotificationMethods::TypeServerSnapshotChanged)
-            .expect("TSPNotificationMethods serialization is infallible");
-        let method_str = method
-            .as_str()
-            .expect("TSPNotificationMethods serializes to a string")
-            .to_owned();
+    fn description(&self) -> String {
+        match self {
+            Self::Single { name } => name.clone(),
+            Self::Split {
+                input_name,
+                output_name,
+            } => {
+                format!("input={input_name}, output={output_name}")
+            }
+        }
+    }
 
-        if let Err(e) = self
-            .inner
-            .sender()
-            .send(Message::Notification(Notification {
-                method: method_str,
-                params: serde_json::json!({ "old": old_snapshot, "new": new_snapshot }),
-                activity_key: None,
-            }))
-        {
+    fn open_with<T>(
+        &self,
+        open_single: impl FnOnce(&str) -> T,
+        open_split: impl FnOnce(&str, &str) -> T,
+    ) -> T {
+        match self {
+            Self::Single { name } => open_single(name),
+            Self::Split {
+                input_name,
+                output_name,
+            } => open_split(input_name, output_name),
+        }
+    }
+}
+
+pub struct TspServer<T: TspInterface> {
+    inner: Arc<T>,
+    /// Current snapshot version, updated on RecheckFinished events.
+    pub(crate) current_snapshot: Arc<Mutex<i32>>,
+    extra_connections: Mutex<HashMap<IpcTransportNames, ExtraConnectionHandle>>,
+}
+
+// Runs the TSP server.
+impl<T: TspInterface> TspServer<T> {
+    fn new(lsp_server: T) -> Arc<Self> {
+        Arc::new(Self {
+            inner: Arc::new(lsp_server),
+            current_snapshot: Arc::new(Mutex::new(0)),
+            extra_connections: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// Convenience accessor for the inner LSP server.
+    pub(crate) fn inner(&self) -> &T {
+        &self.inner
+    }
+
+    /// Validate that the client-supplied snapshot matches the server's current
+    /// snapshot. Returns `Ok(())` on match or `Err(ResponseError)` on mismatch.
+    pub(crate) fn validate_snapshot(&self, client_snapshot: i32) -> Result<(), ResponseError> {
+        let current = self.get_snapshot();
+        if client_snapshot != current {
+            Err(snapshot_outdated_error(client_snapshot, current))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Send a `snapshotChanged` notification to the main connection.
+    fn broadcast_snapshot_changed(
+        &self,
+        main_sender: &crossbeam_channel::Sender<Message>,
+        old_snapshot: i32,
+        new_snapshot: i32,
+    ) {
+        let notification = snapshot_changed_notification(old_snapshot, new_snapshot);
+        if let Err(e) = main_sender.send(Message::Notification(notification.clone())) {
             warn!("Failed to send snapshotChanged notification: {e}");
         }
     }
+}
 
-    fn handle_tsp_request<'a>(
+/// A single JSON-RPC connection to the TSP server.
+///
+/// Each connection has its own response channel but shares the underlying
+/// `TspServer` core with all other connections.
+pub struct TspConnection<T: TspInterface> {
+    pub(crate) server: Arc<TspServer<T>>,
+    response_sender: crossbeam_channel::Sender<Message>,
+}
+
+impl<T: TspInterface> TspConnection<T> {
+    fn new(server: Arc<TspServer<T>>, response_sender: crossbeam_channel::Sender<Message>) -> Self {
+        Self {
+            server,
+            response_sender,
+        }
+    }
+}
+
+/// Where one request's response is written.
+///
+/// A handler is handed the reply channel of the connection that asked, so it
+/// cannot answer a different client, and the server itself owns no channel to
+/// answer through.
+pub(crate) struct Reply<'a>(pub(crate) &'a crossbeam_channel::Sender<Message>);
+
+impl Reply<'_> {
+    fn send(&self, response: Response) {
+        if let Err(error) = self.0.send(Message::Response(response)) {
+            warn!("Failed to send TSP response: {error}");
+        }
+    }
+
+    /// Send a successful JSON-RPC response for `id` with `result`.
+    pub(crate) fn ok<R: Serialize>(&self, id: RequestId, result: R) {
+        self.send(new_response(id, Ok(result)));
+    }
+
+    /// Send a JSON-RPC error response for `id`.
+    pub(crate) fn err(&self, id: RequestId, error: ResponseError) {
+        self.send(Response {
+            id,
+            result: None,
+            error: Some(error),
+        });
+    }
+}
+
+impl<T: TspInterface> TspServer<T> {
+    /// Handle one TSP request, answering on `reply` -- the channel belonging to
+    /// the connection that sent it.
+    ///
+    /// Infallible: a request that cannot be served is reported to its own
+    /// client as an error response. Every connection shares one event loop, so
+    /// returning an error here would take down every other client with it.
+    fn dispatch_tsp_request<'a>(
         &'a self,
         ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
+        reply: Reply,
         request: &Request,
-    ) -> anyhow::Result<bool> {
-        // Convert the request into a TSPRequests enum
-        let wrapper = serde_json::json!({
-            "method": request.method,
-            "id": request.id,
-            "params": request.params
-        });
-
-        let Ok(msg) = serde_json::from_value::<TSPRequests>(wrapper) else {
-            // Not a TSP request
-            return Ok(false);
-        };
-
+        msg: TSPRequests,
+    ) {
         match msg {
             TSPRequests::GetSupportedProtocolVersionRequest { .. } => {
-                self.send_ok(request.id.clone(), self.get_supported_protocol_version());
-                Ok(true)
+                reply.ok(request.id.clone(), self.get_supported_protocol_version());
             }
             TSPRequests::GetSnapshotRequest { .. } => {
                 // Get snapshot doesn't need a transaction since it just returns the cached value
-                self.send_ok(request.id.clone(), self.get_snapshot());
-                Ok(true)
+                reply.ok(request.id.clone(), self.get_snapshot());
             }
             TSPRequests::ResolveImportRequest { params, .. } => {
-                self.handle_resolve_import(request.id.clone(), params, ide_transaction_manager);
-                Ok(true)
+                self.handle_resolve_import(
+                    request.id.clone(),
+                    params,
+                    ide_transaction_manager,
+                    telemetry_event,
+                    reply,
+                );
             }
             TSPRequests::GetPythonSearchPathsRequest { params, .. } => {
-                self.handle_get_python_search_paths(request.id.clone(), params);
-                Ok(true)
+                self.handle_get_python_search_paths(request.id.clone(), params, reply);
             }
             TSPRequests::GetDeclaredTypeRequest { params, .. } => {
-                self.dispatch_get_type_request(request.id.clone(), params, |s, p| {
-                    s.handle_get_declared_type(p)
+                self.dispatch_get_type_request(request.id.clone(), params, reply, |p| {
+                    self.handle_get_declared_type(ide_transaction_manager, telemetry_event, p)
                 });
-                Ok(true)
             }
             TSPRequests::GetComputedTypeRequest { params, .. } => {
-                self.dispatch_get_type_request(request.id.clone(), params, |s, p| {
-                    s.handle_get_computed_type(p)
+                self.dispatch_get_type_request(request.id.clone(), params, reply, |p| {
+                    self.handle_get_computed_type(ide_transaction_manager, telemetry_event, p)
                 });
-                Ok(true)
             }
             TSPRequests::GetExpectedTypeRequest { params, .. } => {
-                self.dispatch_get_type_request(request.id.clone(), params, |s, p| {
-                    s.handle_get_expected_type(p)
+                self.dispatch_get_type_request(request.id.clone(), params, reply, |p| {
+                    self.handle_get_expected_type(ide_transaction_manager, telemetry_event, p)
                 });
-                Ok(true)
+            }
+            TSPRequests::ConnectionRequest { .. } => {
+                // Multi-connection management is handled at the transport layer,
+                // not inside the TSP request loop.
+                unreachable!("ConnectionRequest should be handled before reaching the TSP server")
             }
         }
     }
@@ -204,30 +274,344 @@ impl<T: TspInterface> TspServer<T> {
         &self,
         id: RequestId,
         raw_params: serde_json::Value,
+        reply: Reply,
         handler: impl FnOnce(
-            &Self,
             GetTypeParams,
         ) -> Result<Option<tsp_types::Type>, lsp_server::ResponseError>,
     ) {
         let params: GetTypeParams = match serde_json::from_value::<GetTypeParams>(raw_params) {
             Ok(p) => p,
             Err(e) => {
-                self.send_err(
-                    id,
-                    crate::tsp::validation::invalid_params_error(&e.to_string()),
-                );
+                reply.err(id, invalid_params_error(&e.to_string()));
                 return;
             }
         };
-        match handler(self, params) {
+        match handler(params) {
             Ok(result) => {
-                self.send_ok(id, result);
+                reply.ok(id, result);
             }
             Err(err) => {
-                self.send_err(id, err);
+                reply.err(id, err);
             }
         }
     }
+}
+
+impl<T: TspInterface> TspServer<T> {
+    /// Process a single event.
+    fn process_event<'a>(
+        self: &'a Arc<Self>,
+        // The channel of the connection that sent this event.
+        reply: Reply,
+        // The main connection, where broadcasts and connection management go
+        // regardless of who asked.
+        main_reply: Reply,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        canceled_requests: &mut HashSet<RequestId>,
+        telemetry: &'a impl Telemetry,
+        telemetry_event: &mut TelemetryEvent,
+        subsequent_mutation: bool,
+        event: QueuedEvent,
+    ) -> anyhow::Result<ProcessEvent> {
+        // Remember if this event should increment the snapshot after processing
+        let should_increment_snapshot = match event.event() {
+            LspEvent::RecheckFinished => true,
+            // Increment on DidChange since it affects type checker state via synchronous validation
+            LspEvent::DidChangeTextDocument(_) => true,
+            // Don't increment on DidChangeWatchedFiles directly since it triggers RecheckFinished
+            // LspEvent::DidChangeWatchedFiles => true,
+            // Don't increment on DidOpen since it triggers RecheckFinished events that will increment
+            // LspEvent::DidOpenTextDocument(_) => true,
+            _ => false,
+        };
+
+        // For TSP requests, handle them specially
+        let tsp_request = match event.event() {
+            LspEvent::LspRequest(request) => Some(request),
+            LspEvent::TspExtraRequest { request, .. } => Some(request),
+            _ => None,
+        };
+        if let Some(request) = tsp_request {
+            match parse_tsp_request(request) {
+                Some(TSPRequests::ConnectionRequest { params, .. }) => {
+                    self.handle_connection_request(request.id.clone(), params, reply);
+                }
+                Some(msg) => {
+                    self.dispatch_tsp_request(
+                        ide_transaction_manager,
+                        telemetry_event,
+                        reply,
+                        request,
+                        msg,
+                    );
+                }
+                None => {
+                    reply.send(Response::new_err(
+                        request.id.clone(),
+                        ErrorCode::MethodNotFound as i32,
+                        format!("TSP server does not support LSP method: {}", request.method),
+                    ));
+                }
+            }
+            return Ok(ProcessEvent::Continue);
+        }
+
+        let result = self.inner.process_event(
+            ide_transaction_manager,
+            canceled_requests,
+            telemetry,
+            telemetry_event,
+            subsequent_mutation,
+            event,
+        )?;
+
+        // Increment snapshot after the inner server has processed the event
+        if should_increment_snapshot {
+            let mut current = self
+                .current_snapshot
+                .lock()
+                .expect("current_snapshot mutex poisoned");
+            let old_snapshot = *current;
+            *current += 1;
+            let new_snapshot = *current;
+            drop(current);
+            self.broadcast_snapshot_changed(main_reply.0, old_snapshot, new_snapshot);
+        }
+
+        Ok(result)
+    }
+
+    fn handle_connection_request(
+        self: &Arc<Self>,
+        id: RequestId,
+        params: ConnectionRequestParams,
+        reply: Reply,
+    ) {
+        let result = match params.type_.as_str() {
+            "open" => self.open_extra_connection(params),
+            "close" => self.close_extra_connection(params),
+            other => Err(invalid_params_error(&format!(
+                "Unsupported connection request type: {other}"
+            ))),
+        };
+
+        match result {
+            Ok(connection_result) => reply.ok(id, connection_result),
+            Err(error) => reply.err(id, error),
+        }
+    }
+
+    fn open_extra_connection(
+        self: &Arc<Self>,
+        params: ConnectionRequestParams,
+    ) -> Result<ConnectionRequestResult, ResponseError> {
+        let transport = IpcTransportNames::from_connection_request(&params)?;
+        let description = transport.description();
+
+        let mut extra_connections = self
+            .extra_connections
+            .lock()
+            .map_err(|_| internal_error("extra connection state was poisoned"))?;
+
+        if extra_connections.contains_key(&transport) {
+            return Ok(ConnectionRequestResult {
+                success: true,
+                message: Some(format!("Extra connection already open: {description}")),
+            });
+        }
+
+        // IoThread owns the writer JoinHandle. Dropping it detaches the thread
+        // (no Drop impl), but the writer stays alive as long as the channel
+        // sender (`extra_sender`) is alive — stored in ExtraConnectionHandle.
+        let connection = transport.open_with(Connection::ipc, Connection::ipc_split);
+        let (ipc_connection, reader, _io_thread) = match connection {
+            Ok(connection) => connection,
+            Err(error) => {
+                return Ok(ConnectionRequestResult {
+                    success: false,
+                    message: Some(format!(
+                        "Failed to connect to IPC endpoint {description}: {error}"
+                    )),
+                });
+            }
+        };
+
+        let extra_sender = ipc_connection.sender.clone();
+        let extra_conn = TspExtraConnection::new(self.clone(), extra_sender.clone());
+        let (close_tx, close_rx) = crossbeam_channel::bounded::<()>(1);
+
+        extra_connections.insert(transport.clone(), ExtraConnectionHandle { close_tx });
+        drop(extra_connections);
+
+        extra_conn.run(reader, close_rx, transport.clone());
+
+        Ok(ConnectionRequestResult {
+            success: true,
+            message: Some(format!("Opened extra IPC connection: {description}")),
+        })
+    }
+
+    /// Close is idempotent: closing an already-closed connection succeeds.
+    fn close_extra_connection(
+        &self,
+        params: ConnectionRequestParams,
+    ) -> Result<ConnectionRequestResult, ResponseError> {
+        let transport = IpcTransportNames::from_connection_request(&params)?;
+        let description = transport.description();
+
+        let handle = self
+            .extra_connections
+            .lock()
+            .expect("extra_connections mutex poisoned")
+            .remove(&transport);
+
+        if let Some(handle) = handle {
+            let _ = handle.close_tx.send(());
+            Ok(ConnectionRequestResult {
+                success: true,
+                message: Some(format!("Closing extra IPC connection: {description}")),
+            })
+        } else {
+            Ok(ConnectionRequestResult {
+                success: true,
+                message: Some(format!(
+                    "Extra IPC connection already closed: {description}"
+                )),
+            })
+        }
+    }
+}
+
+/// An extra (IPC) connection. Can handle TSP query requests but cannot
+/// manage connections or process LSP lifecycle events.
+struct TspExtraConnection<T: TspInterface>(TspConnection<T>);
+
+impl<T: TspInterface> TspExtraConnection<T> {
+    fn new(server: Arc<TspServer<T>>, response_sender: crossbeam_channel::Sender<Message>) -> Self {
+        Self(TspConnection::new(server, response_sender))
+    }
+}
+
+impl<T: TspInterface> TspExtraConnection<T> {
+    /// Run the request loop for this extra connection until closed or
+    /// the IPC pipe disconnects. Consumes `self` because the connection
+    /// is moved into the spawned thread.
+    fn run(
+        self,
+        mut reader: MessageReader,
+        close_rx: crossbeam_channel::Receiver<()>,
+        transport: IpcTransportNames,
+    ) {
+        // The reader runs on its own thread because `recv` blocks and this loop has
+        // to stay responsive to `close_rx`. A rendezvous rather than a buffer: every
+        // message is forwarded to the unbounded main queue immediately, so buffering
+        // here would only duplicate that queue.
+        let (message_tx, message_rx) = crossbeam_channel::bounded(0);
+        std::thread::spawn(move || {
+            while let Some(message) = reader.recv() {
+                if message_tx.send(message).is_err() {
+                    break;
+                }
+            }
+        });
+
+        std::thread::spawn(move || {
+            let mut selector = crossbeam_channel::Select::new();
+            let close_index = selector.recv(&close_rx);
+            let message_index = selector.recv(&message_rx);
+            loop {
+                let selected = selector.select();
+                match selected.index() {
+                    i if i == close_index => {
+                        let _ = selected.recv(&close_rx);
+                        break;
+                    }
+                    i if i == message_index => {
+                        let Ok(message) = selected.recv(&message_rx) else {
+                            break;
+                        };
+
+                        match message {
+                            Message::Request(request) => {
+                                match parse_tsp_request(&request) {
+                                    Some(TSPRequests::ConnectionRequest { .. }) => {
+                                        Reply(&self.response_sender).err(
+                                            request.id,
+                                            ResponseError {
+                                                code: ErrorCode::InvalidRequest as i32,
+                                                message: format!(
+                                                    "TSP method {} is only allowed on the main connection",
+                                                    request.method
+                                                ),
+                                                data: None,
+                                            },
+                                        );
+                                    }
+                                    // Everything else joins the main queue,
+                                    // stamped with this connection's channel so
+                                    // the loop answers the right client.
+                                    _ => {
+                                        if self
+                                            .server
+                                            .inner
+                                            .lsp_queue()
+                                            .send(LspEvent::TspExtraRequest {
+                                                request,
+                                                response_sender: self.response_sender.clone(),
+                                            })
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            Message::Notification(_) | Message::Response(_) => {}
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+
+            self.server
+                .extra_connections
+                .lock()
+                .expect("extra_connections mutex poisoned")
+                .remove(&transport);
+        });
+    }
+}
+
+impl<T: TspInterface> Deref for TspExtraConnection<T> {
+    type Target = TspConnection<T>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// Build a `typeServer/snapshotChanged` notification.
+fn snapshot_changed_notification(old_snapshot: i32, new_snapshot: i32) -> Notification {
+    let method = serde_json::to_value(TSPNotificationMethods::TypeServerSnapshotChanged)
+        .expect("TSPNotificationMethods serialization is infallible");
+    let method_str = method
+        .as_str()
+        .expect("TSPNotificationMethods serializes to a string")
+        .to_owned();
+    Notification {
+        method: method_str,
+        params: serde_json::json!({ "old": old_snapshot, "new": new_snapshot }),
+        activity_key: None,
+    }
+}
+
+/// Try to parse a request as a `TSPRequests` enum variant.
+fn parse_tsp_request(request: &Request) -> Option<TSPRequests> {
+    let wrapper = serde_json::json!({
+        "method": request.method,
+        "id": request.id,
+        "params": request.params
+    });
+    serde_json::from_value::<TSPRequests>(wrapper).ok()
 }
 
 pub fn tsp_loop(
@@ -237,9 +621,9 @@ pub fn tsp_loop(
     telemetry: &impl Telemetry,
 ) -> anyhow::Result<()> {
     let server = TspServer::new(lsp_server);
+    let main_sender = server.inner.sender().clone();
 
     std::thread::scope(|scope| {
-        // Start the recheck queue thread to process async tasks
         scope.spawn(|| server.inner.run_recheck_queue(telemetry));
 
         scope.spawn(|| {
@@ -250,19 +634,30 @@ pub fn tsp_loop(
         let mut canceled_requests = HashSet::new();
         let mut next_task_id = 0_usize;
 
-        while let Ok((subsequent_mutation, event, enqueued_at)) = server.inner.lsp_queue().recv() {
+        while let Ok(event) = server.inner.lsp_queue().recv() {
+            let subsequent_mutation = server.inner.lsp_queue().has_subsequent_mutation(&event);
             let task_id = next_task_id;
             next_task_id += 1;
             let (mut event_telemetry, queue_duration) = TelemetryEvent::new_dequeued(
                 TelemetryEventKind::LspEvent(event.describe()),
-                enqueued_at,
+                event.enqueued_at(),
                 server.inner.telemetry_state(),
                 QueueName::LspQueue,
                 task_id,
             );
             let event_description = event.describe();
 
+            // Answer on the channel of whichever connection sent this request.
+            let reply_sender = match event.event() {
+                LspEvent::TspExtraRequest {
+                    response_sender, ..
+                } => response_sender.clone(),
+                _ => main_sender.clone(),
+            };
+
             let result = server.process_event(
+                Reply(&reply_sender),
+                Reply(&main_sender),
                 &mut ide_transaction_manager,
                 &mut canceled_requests,
                 telemetry,
@@ -290,12 +685,113 @@ pub fn tsp_loop(
     })
 }
 
-/// Generate TSP-specific server capabilities using the same capabilities as LSP
+/// Generate TSP-specific server capabilities.
 pub fn tsp_capabilities(
     indexing_mode: IndexingMode,
     initialization_params: &InitializeParams,
 ) -> ServerCapabilitiesWithTypeHierarchy {
-    // Use the same capabilities as LSP - TSP server supports the same features
-    // but will only respond to TSP protocol requests
-    capabilities(indexing_mode, initialization_params)
+    let mut result = capabilities(indexing_mode, initialization_params);
+    result.set_experimental(serde_json::json!({
+        "typeServerMultiConnection": {
+            "supportedTransports": ["ipc"]
+        }
+    }));
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use tsp_types::ConnectionRequestParams;
+    use tsp_types::ConnectionTransportKind;
+
+    use super::IpcTransportNames;
+
+    fn ipc_params(args: &[&str]) -> ConnectionRequestParams {
+        ConnectionRequestParams {
+            args: Some(args.iter().map(|arg| (*arg).to_owned()).collect()),
+            kind: ConnectionTransportKind::Ipc,
+            type_: "open".to_owned(),
+        }
+    }
+
+    #[test]
+    fn test_ipc_transport_names_single_name_uses_single_endpoint() {
+        let transport = IpcTransportNames::from_connection_request(&ipc_params(&["pipe"]))
+            .expect("single pipe name should parse");
+
+        assert_eq!(
+            transport,
+            IpcTransportNames::Single {
+                name: "pipe".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_ipc_transport_names_two_names_use_input_then_output_order() {
+        let transport =
+            IpcTransportNames::from_connection_request(&ipc_params(&["input", "output"]))
+                .expect("two pipe names should parse");
+
+        assert_eq!(
+            transport,
+            IpcTransportNames::Split {
+                input_name: "input".to_owned(),
+                output_name: "output".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_ipc_transport_names_two_equal_names_still_use_split_endpoints() {
+        let transport = IpcTransportNames::from_connection_request(&ipc_params(&["pipe", "pipe"]))
+            .expect("two endpoint names should preserve split transport semantics");
+
+        assert_eq!(
+            transport,
+            IpcTransportNames::Split {
+                input_name: "pipe".to_owned(),
+                output_name: "pipe".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_ipc_transport_names_single_endpoint_opens_single_connection() {
+        let opened = IpcTransportNames::Single {
+            name: "pipe".to_owned(),
+        }
+        .open_with(
+            |name| format!("single:{name}"),
+            |input_name, output_name| format!("split:{input_name}:{output_name}"),
+        );
+
+        assert_eq!(opened, "single:pipe");
+    }
+
+    #[test]
+    fn test_ipc_transport_names_two_equal_names_still_open_split_connection() {
+        let opened = IpcTransportNames::from_connection_request(&ipc_params(&["pipe", "pipe"]))
+            .expect("two endpoint names should preserve split transport semantics")
+            .open_with(
+                |name| format!("single:{name}"),
+                |input_name, output_name| format!("split:{input_name}:{output_name}"),
+            );
+
+        assert_eq!(opened, "split:pipe:pipe");
+    }
+
+    #[test]
+    fn test_ipc_transport_names_rejects_missing_names() {
+        let params = ConnectionRequestParams {
+            args: None,
+            kind: ConnectionTransportKind::Ipc,
+            type_: "open".to_owned(),
+        };
+
+        assert!(IpcTransportNames::from_connection_request(&params).is_err());
+        assert!(IpcTransportNames::from_connection_request(&ipc_params(&[])).is_err());
+        assert!(IpcTransportNames::from_connection_request(&ipc_params(&["reader", ""])).is_err());
+        assert!(IpcTransportNames::from_connection_request(&ipc_params(&["a", "b", "c"])).is_err());
+    }
 }

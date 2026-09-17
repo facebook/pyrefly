@@ -1,0 +1,52 @@
+name: Label new PRs
+
+on:
+  pull_request_target:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  label-new-prs:
+    permissions:
+      pull-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add labels based on PR author
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+            const labels = [];
+
+            // Google team members
+            const googleMembers = ['hurryabit', 'QEDady', 'jakevdp', 'superbobry', 'h-joo'];
+            if (googleMembers.includes(author)) {
+              labels.push('google');
+            }
+
+            // Quansight
+            const quansightMembers = ['MarcoGorelli', 'jorenham'];
+            if (quansightMembers.includes(author)) {
+              labels.push('quansight');
+            }
+
+            if (labels.length > 0) {
+              for (const label of labels) {
+                try {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pr.number,
+                    labels: [label]
+                  });
+                  console.log(`Added label '${label}' to PR #${pr.number}`);
+                } catch (error) {
+                  console.log(`Failed to add label '${label}' to PR #${pr.number}: ${error.message}`);
+                }
+              }
+            } else {
+              console.log(`No labels to add for PR #${pr.number}: ${pr.title}`);
+            }

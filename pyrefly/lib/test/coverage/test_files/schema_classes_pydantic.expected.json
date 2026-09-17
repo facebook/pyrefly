@@ -1,0 +1,89 @@
+{
+  "name": "test",
+  "path": "test.py",
+  "names": [
+    "test.User.name",
+    "test.User.age",
+    "test.AdminUser.role",
+    "test.AdminUser",
+    "test.User"
+  ],
+  "line_count": 18,
+  "symbol_reports": [
+    {
+      "kind": "attr",
+      "name": "test.User.name",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 12,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.User.age",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 13,
+        "column": 5
+      }
+    },
+    {
+      "kind": "attr",
+      "name": "test.AdminUser.role",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 17,
+        "column": 5
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.AdminUser",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 16,
+        "column": 1
+      }
+    },
+    {
+      "kind": "class",
+      "name": "test.User",
+      "n_typable": 0,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 0,
+      "location": {
+        "line": 11,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 0,
+  "n_typed": 0,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 0,
+  "n_methods": 0,
+  "n_function_params": 0,
+  "n_method_params": 0,
+  "n_classes": 2,
+  "n_attrs": 3,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

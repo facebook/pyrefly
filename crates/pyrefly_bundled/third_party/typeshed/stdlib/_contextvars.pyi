@@ -3,8 +3,8 @@
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from types import GenericAlias, TracebackType
-from typing import Any, ClassVar, Generic, TypeVar, final, overload
-from typing_extensions import ParamSpec, Self
+from typing import Any, ClassVar, Generic, ParamSpec, TypeVar, final, overload
+from typing_extensions import Self
 
 _T = TypeVar("_T")
 _D = TypeVar("_D")
@@ -16,11 +16,13 @@ class ContextVar(Generic[_T]):
     def __new__(cls, name: str) -> Self: ...
     @overload
     def __new__(cls, name: str, *, default: _T) -> Self: ...
+
     def __hash__(self) -> int:
         """Return hash(self)."""
         ...
     @property
     def name(self) -> str: ...
+
     @overload
     def get(self) -> _T:
         """
@@ -57,6 +59,7 @@ class ContextVar(Generic[_T]):
          * raise a LookupError.
         """
         ...
+
     def set(self, value: _T, /) -> Token[_T]:
         """
         Call to set a new value for the context variable in the current context.
@@ -103,6 +106,7 @@ def copy_context() -> Context: ...
 @final
 class Context(Mapping[ContextVar[Any], Any]):
     def __init__(self) -> None: ...
+
     @overload
     def get(self, key: ContextVar[_T], default: None = None, /) -> _T | None:
         """
@@ -130,6 +134,7 @@ class Context(Mapping[ContextVar[Any], Any]):
         return None.
         """
         ...
+
     def run(self, callable: Callable[_P, _T], *args: _P.args, **kwargs: _P.kwargs) -> _T: ...
     def copy(self) -> Context:
         """Return a shallow copy of the context object."""

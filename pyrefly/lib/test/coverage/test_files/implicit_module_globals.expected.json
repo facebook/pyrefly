@@ -1,0 +1,22 @@
+{
+  "name": "test",
+  "path": "test.py",
+  "names": [],
+  "line_count": 17,
+  "symbol_reports": [],
+  "type_ignores": [],
+  "n_typable": 0,
+  "n_typed": 0,
+  "n_any": 0,
+  "n_untyped": 0,
+  "coverage": 100.0,
+  "strict_coverage": 100.0,
+  "n_functions": 0,
+  "n_methods": 0,
+  "n_function_params": 0,
+  "n_method_params": 0,
+  "n_classes": 0,
+  "n_attrs": 0,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

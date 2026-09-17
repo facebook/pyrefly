@@ -83,6 +83,7 @@ def iter_unpack(format: str | bytes, buffer: ReadableBuffer, /) -> Iterator[tupl
 def calcsize(format: str | bytes, /) -> int:
     """Return size in bytes of the struct described by the format string."""
     ...
+
 @disjoint_base
 class Struct:
     """Struct(fmt) --> compiled struct object"""

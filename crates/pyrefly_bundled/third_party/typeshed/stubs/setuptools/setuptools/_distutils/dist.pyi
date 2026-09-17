@@ -1,10 +1,10 @@
 from _typeshed import Incomplete, StrOrBytesPath, StrPath, SupportsWrite
 from collections.abc import Iterable, MutableMapping
 from re import Pattern
-from typing import IO, ClassVar, Literal, TypeVar, overload
-from typing_extensions import TypeAlias
+from typing import IO, ClassVar, Literal, TypeAlias, TypeVar, overload
 
 from .cmd import Command
+from .extension import Extension
 
 command_re: Pattern[str]
 
@@ -79,18 +79,18 @@ class Distribution:
     script_args: list[str] | None
     command_options: dict[str, dict[str, tuple[str, str]]]
     dist_files: list[tuple[str, str, str]]
-    packages: Incomplete
+    packages: list[str] | None
     package_data: dict[str, list[str]]
-    package_dir: Incomplete
-    py_modules: Incomplete
+    package_dir: dict[str, str] | None
+    py_modules: list[str] | None
     libraries: Incomplete
     headers: Incomplete
-    ext_modules: Incomplete
+    ext_modules: list[Extension] | None
     ext_package: Incomplete
     include_dirs: Incomplete
     extra_path: Incomplete
     scripts: Incomplete
-    data_files: Incomplete
+    data_files: list[str | tuple[Incomplete, ...]] | None
     password: str
     command_obj: dict[str, Command]
     have_run: dict[str, bool]
@@ -105,17 +105,21 @@ class Distribution:
     def print_commands(self) -> None: ...
     def get_command_list(self): ...
     def get_command_packages(self): ...
+
     # NOTE: Because this is private setuptools implementation and we don't re-expose all commands here,
     # we're not overloading each and every command possibility.
     @overload
     def get_command_obj(self, command: str, create: Literal[True] = True) -> Command: ...
     @overload
     def get_command_obj(self, command: str, create: Literal[False]) -> Command | None: ...
+
     def get_command_class(self, command: str) -> type[Command]: ...
+
     @overload
     def reinitialize_command(self, command: str, reinit_subcommands: bool = False) -> Command: ...
     @overload
     def reinitialize_command(self, command: _CommandT, reinit_subcommands: bool = False) -> _CommandT: ...
+
     def announce(self, msg, level: int = 20) -> None: ...
     def run_commands(self) -> None: ...
     def run_command(self, command: str) -> None: ...

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agentskills.io/schema/v0.2.0/index.json",
+  "skills": [
+    {
+      "name": "pyrefly-docs",
+      "type": "documentation",
+      "description": "Pyrefly Python type checker documentation - fast, incremental type checking for Python. Access LLM-optimized documentation via llms.txt.",
+      "url": "https://pyrefly.org/llms.txt"
+    }
+  ]
+}

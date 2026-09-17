@@ -11,7 +11,7 @@ import {execFile} from 'child_process';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {ExtensionContext} from 'vscode';
-import {PythonExtension} from '@vscode/python-extension';
+import {PythonEnvironment} from './python-environment';
 
 type CodeLensPosition = {
   line: number;
@@ -89,16 +89,6 @@ function parseUri(rawUri: string | undefined): vscode.Uri | undefined {
   } catch {
     return undefined;
   }
-}
-
-async function interpreterForUri(
-  uri: vscode.Uri,
-  pythonExtension: PythonExtension,
-): Promise<string | undefined> {
-  const envPath = await pythonExtension.environments.getActiveEnvironmentPath(
-    uri,
-  );
-  return envPath.path.length > 0 ? envPath.path : undefined;
 }
 
 function configurationTargetForUri(uri: vscode.Uri): vscode.ConfigurationTarget {
@@ -227,13 +217,13 @@ async function executeProcessTask(
 
 async function runMainFile(
   args: RunMainArgs,
-  pythonExtension: PythonExtension,
+  pythonEnv: PythonEnvironment,
 ): Promise<void> {
   const uri = parseUri(args.uri);
   if (!uri) {
     return;
   }
-  const interpreter = await interpreterForUri(uri, pythonExtension);
+  const interpreter = await pythonEnv.getInterpreterPath(uri);
   if (!interpreter) {
     void showRunnableCodeLensError(
       uri,
@@ -254,7 +244,7 @@ async function runMainFile(
 
 async function runTestAtLocation(
   args: RunTestArgs,
-  pythonExtension: PythonExtension,
+  pythonEnv: PythonEnvironment,
 ): Promise<void> {
   const uri = parseUri(args.uri);
   if (!uri) {
@@ -269,7 +259,7 @@ async function runTestAtLocation(
     return;
   }
 
-  const interpreter = await interpreterForUri(uri, pythonExtension);
+  const interpreter = await pythonEnv.getInterpreterPath(uri);
   if (!interpreter) {
     void showRunnableCodeLensError(
       uri,
@@ -331,7 +321,7 @@ async function runTestAtLocation(
 
 export function registerCodeLensCommands(
   context: ExtensionContext,
-  pythonExtension: PythonExtension,
+  pythonEnv: PythonEnvironment,
 ): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('pyrefly.runTest', async args => {
@@ -339,7 +329,7 @@ export function registerCodeLensCommands(
       if (!parsedArgs) {
         return;
       }
-      await runTestAtLocation(parsedArgs, pythonExtension);
+      await runTestAtLocation(parsedArgs, pythonEnv);
     }),
   );
 
@@ -349,7 +339,7 @@ export function registerCodeLensCommands(
       if (!parsedArgs) {
         return;
       }
-      await runMainFile(parsedArgs, pythonExtension);
+      await runMainFile(parsedArgs, pythonEnv);
     }),
   );
 }

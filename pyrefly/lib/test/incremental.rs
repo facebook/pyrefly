@@ -20,6 +20,7 @@ use pyrefly_python::sys_info::SysInfo;
 use pyrefly_util::arc_id::ArcId;
 use pyrefly_util::lock::Mutex;
 use pyrefly_util::prelude::SliceExt;
+use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
 use starlark_map::small_map::SmallMap;
 
 use crate::config::config::ConfigFile;
@@ -30,7 +31,6 @@ use crate::state::load::FileContents;
 use crate::state::require::Require;
 use crate::state::state::State;
 use crate::state::subscriber::TestSubscriber;
-use crate::test::util::TEST_THREAD_COUNT;
 use crate::test::util::init_test;
 
 #[derive(Default, Clone, Dupe, Debug)]
@@ -39,6 +39,7 @@ struct IncrementalData(Arc<Mutex<SmallMap<ModuleName, Arc<String>>>>);
 /// Helper for writing incrementality tests.
 struct Incremental {
     data: IncrementalData,
+    files: Vec<String>,
     require: Option<Require>,
     state: State,
     to_set: Vec<(String, String)>,
@@ -74,13 +75,17 @@ impl Incremental {
     const USER_FILES: &[&str] = &["main", "foo", "bar", "baz"];
 
     fn new() -> Self {
+        Self::with_files(Self::USER_FILES.map(|x| (*x).to_owned()))
+    }
+
+    fn with_files(files: Vec<String>) -> Self {
         init_test();
         let data = IncrementalData::default();
 
         let mut config = ConfigFile::default();
         config.python_environment.set_empty_to_default();
         let mut sourcedb = MapDatabase::new(config.get_sys_info());
-        for file in Self::USER_FILES {
+        for file in &files {
             sourcedb.insert(
                 ModuleName::from_str(file),
                 ModulePath::memory(PathBuf::from(file)),
@@ -92,6 +97,7 @@ impl Incremental {
 
         Self {
             data: data.dupe(),
+            files,
             require: None,
             state: State::new(ConfigFinder::new_constant(config), TEST_THREAD_COUNT),
             to_set: Vec::new(),
@@ -113,8 +119,12 @@ impl Incremental {
 
     fn unchecked(&mut self, want: &[&str]) -> IncrementalResult {
         let subscriber = TestSubscriber::new();
+        // Transitive deps default to `Require::Exports` so they stay
+        // lazy (matching demand-driven solving in real-world usage).
+        // Tests that need a higher level for transitive deps can set
+        // `i.require` to override.
         let mut transaction = self.state.new_committable_transaction(
-            self.require.unwrap_or(Require::Errors),
+            self.require.unwrap_or(Require::Exports),
             Some(Box::new(subscriber.dupe())),
         );
         for (file, contents) in mem::take(&mut self.to_set) {
@@ -137,7 +147,11 @@ impl Incremental {
             None,
             None,
         );
-        let loaded = Self::USER_FILES.map(|x| self.handle(x));
+        let loaded = self
+            .files
+            .iter()
+            .map(|x| self.handle(x))
+            .collect::<Vec<_>>();
         let errors = self.state.transaction().get_errors(&loaded);
         let project_root = PathBuf::new();
         print_errors(project_root.as_path(), &errors.collect_display_errors());
@@ -173,6 +187,517 @@ impl Incremental {
         res.check_recompute(recompute);
         res
     }
+}
+
+#[test]
+fn test_index_shape_argument_edit_invalidates_consumer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+from typing import Any
+class IntTuple: pass
+class Index: pass
+def index_shape(shape: IntTuple, index: Any) -> IntTuple: ...
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from typing import Literal
+from shape_extensions import IntTuple, index_shape
+
+class Array[Shape: IntTuple]: ...
+def selected() -> Array[index_shape(IntTuple[10, 20], slice[Literal[1], Literal[5], None])]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from typing import assert_type
+from shape_extensions import IntTuple
+from main import Array, selected
+
+assert_type(selected(), Array[IntTuple[4, 20]])
+"#,
+    );
+    i.check(&["consumer"], &["consumer", "main", "shape_extensions"]);
+
+    i.set(
+        "main",
+        r#"
+from typing import Literal
+from shape_extensions import IntTuple, index_shape
+
+class Array[Shape: IntTuple]: ...
+def selected() -> Array[index_shape(IntTuple[10, 20], slice[Literal[1], Literal[7], None])]: ...
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0]
+            .msg()
+            .contains("assert_type(Array[[6, 20]], Array[[4, 20]]) failed")
+    );
+}
+
+#[test]
+fn test_type_shape_dsl_body_edit_invalidates_importer() {
+    let mut i = Incremental::with_files(vec![
+        "foo".to_owned(),
+        "main".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "foo",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def identity(x: Int) -> Int:
+    return x  # version 1
+"#,
+    );
+    i.set("main", "from foo import identity as identity");
+    i.check(&["main"], &["foo", "main", "shape_extensions"]);
+
+    i.set(
+        "foo",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def identity(x: Int) -> Int:
+    return (x)  # version 2
+"#,
+    );
+    i.check(&["main"], &["foo", "main"]);
+}
+
+/// A list literal is inverted from its elements rather than its joined `list` type, so edits
+/// to the elements must invalidate and recompute the call result.
+#[test]
+fn test_map_int_tuples_pattern_list_literal_edits_invalidate_consumer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class IntTuple: pass
+class IntTuples: pass
+class MapIntTuples: pass
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from shape_extensions import IntTuple, IntTuples, MapIntTuples
+
+class Box[Shape: IntTuple]: ...
+
+def shapes[Shapes: IntTuples](
+    values: MapIntTuples[lambda S: Box[S], Shapes],
+) -> Shapes: ...
+
+def box2() -> Box[IntTuple[2]]: ...
+def box34() -> Box[IntTuple[3, 4]]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import box2, shapes
+from shape_extensions import IntTuple
+from typing import assert_type
+
+assert_type(shapes([box2()]), tuple[IntTuple[2]])
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "consumer",
+        r#"
+from main import box34, shapes
+from shape_extensions import IntTuple
+from typing import assert_type
+
+assert_type(shapes([box34()]), tuple[IntTuple[2]])
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].msg().contains("assert_type("));
+
+    i.set(
+        "consumer",
+        r#"
+from main import box2, shapes
+from shape_extensions import IntTuple
+from typing import assert_type
+
+assert_type(shapes([box2(), box2()]), tuple[IntTuple[2], IntTuple[2]])
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer"]);
+    let errors = changed.errors.collect_display_errors();
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
+fn test_shape_flag_constructor_source_edit_invalidates_consumers() {
+    let mut i = Incremental::with_files(vec!["consumer".to_owned(), "main".to_owned()]);
+    let main = |annotation: &str| {
+        format!(
+            r#"
+type Carrier[T] = T
+from shape_extensions import Flag
+
+class Control[T: Flag[int]]:
+    def __init__(self, value: {annotation}) -> None: ...
+"#,
+        )
+    };
+    i.set("main", &main("T"));
+    i.set(
+        "consumer",
+        r#"
+from main import Control
+
+control = Control(value=1)
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    // The alias resolves to the same parameter type, so constructor-source metadata is the only
+    // exported type information that changes.
+    i.set("main", &main("Carrier[T]"));
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main"]);
+    assert!(changed.errors.collect_display_errors().is_empty());
+}
+
+#[test]
+fn test_shape_flag_constructor_source_after_paramspec_edit_invalidates_consumers() {
+    let mut i = Incremental::with_files(vec!["consumer".to_owned(), "main".to_owned()]);
+    let main = |annotation: &str| {
+        format!(
+            r#"
+type Carrier[T] = T
+from shape_extensions import Flag
+
+class Control[T: Flag[int]]:
+    def __init__[**P](
+        self, *args: P.args, value: {annotation}, **kwargs: P.kwargs
+    ) -> None: ...
+"#,
+        )
+    };
+    i.set("main", &main("T"));
+    i.set(
+        "consumer",
+        r#"
+from main import Control
+
+control = Control(value=1)
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    // ParamSpec variadics are removed from the lowered parameter list. Match the remaining
+    // parameter to its source by name so this provenance change still invalidates consumers.
+    i.set("main", &main("Carrier[T]"));
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main"]);
+    assert!(changed.errors.collect_display_errors().is_empty());
+}
+
+#[test]
+fn test_type_shape_dsl_helper_edit_invalidates_caller() {
+    let mut i = Incremental::with_files(vec![
+        "helpers".to_owned(),
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+from typing import Callable
+
+class Int: pass
+class IntTuple: pass
+def shaped_array[T](*, shape: str) -> Callable[[type[T]], type[T]]: ...
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def leaf(first: Int, second: Int) -> Int:
+    return first
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from helpers import leaf
+from shape_extensions import Int, IntTuple, shaped_array, type_shape_dsl_function
+
+@shaped_array(shape="Shape")
+class Tensor[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def middle(first: Int, second: Int) -> Int:
+    return leaf(first, second)
+
+@type_shape_dsl_function
+def root(first: Int, second: Int) -> Int:
+    return middle(first, second)
+
+def chosen() -> Tensor[[root(Int[2], Int[3])]]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import Tensor, chosen
+
+result: Tensor[[2]] = chosen()
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def leaf(first: Int, second: Int) -> Int:
+    return second
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "helpers", "main"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].msg().contains("not assignable to `Tensor[[2]]`"));
+}
+
+#[test]
+fn test_type_shape_dsl_broadcast_edit_invalidates_importer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class IntTuple: pass
+def shaped_array[T](*, shape: str): ...
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+
+@type_shape_dsl_function
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    return left
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from shape_extensions import IntTuple, broadcast, shaped_array
+
+@shaped_array(shape="Shape")
+class Tensor[Shape: IntTuple]: ...
+
+def chosen() -> Tensor[broadcast(IntTuple[2], IntTuple[3])]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import Tensor, chosen
+
+result: Tensor[[2]] = chosen()
+"#,
+    );
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "shape_extensions",
+        r#"
+class IntTuple: pass
+def shaped_array[T](*, shape: str): ...
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+
+@type_shape_dsl_function
+def broadcast(left: IntTuple, right: IntTuple) -> IntTuple:
+    return right
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "main", "shape_extensions"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].msg().contains("not assignable to `Tensor[[2]]`"));
+}
+
+#[test]
+fn test_type_shape_dsl_cross_module_helper_cycle_is_rejected() {
+    let mut i = Incremental::with_files(vec![
+        "left".to_owned(),
+        "right".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "left",
+        r#"
+from right import right
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def left(x: Int) -> Int:
+    return right(x)
+"#,
+    );
+    i.set(
+        "right",
+        r#"
+from left import left
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def right(x: Int) -> Int:
+    return left(x)
+"#,
+    );
+
+    let result = i.unchecked(&["left"]);
+    let errors = result.errors.collect_display_errors();
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one cycle diagnostic, got {errors:?}"
+    );
+    // Neither side of a helper cycle can become a validated DSL function, so cycles surface at
+    // the ordinary helper-validation boundary rather than through an evaluator-specific error.
+    assert!(
+        errors[0]
+            .msg()
+            .contains("DSL helper callee must be a validated"),
+        "expected the cross-module helper cycle to be rejected, got {errors:?}"
+    );
+}
+
+#[test]
+fn test_type_shape_dsl_gradual_reexport_target_invalidates_importer() {
+    let mut i = Incremental::with_files(vec![
+        "main".to_owned(),
+        "reexport".to_owned(),
+        "shape_extensions".to_owned(),
+        "shape_extensions.dsl".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+class IntTuple: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "shape_extensions.dsl",
+        r#"
+from typing import Any
+class Int:
+    @staticmethod
+    def gradual() -> Any: ...
+class IntTuple:
+    @staticmethod
+    def gradual() -> Any: ...
+"#,
+    );
+    i.set(
+        "reexport",
+        "from shape_extensions.dsl import Int as Gradual\n",
+    );
+    i.set(
+        "main",
+        r#"
+from reexport import Gradual
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def gradual(x: Int) -> Int:
+    return Gradual.gradual()
+"#,
+    );
+    i.check(
+        &["main"],
+        &[
+            "main",
+            "reexport",
+            "shape_extensions",
+            "shape_extensions.dsl",
+        ],
+    );
+
+    i.set(
+        "reexport",
+        "from shape_extensions.dsl import IntTuple as Gradual\n",
+    );
+    let changed = i.unchecked(&["main"]);
+    changed.check_recompute(&["main", "reexport"]);
+    assert!(changed.errors.collect_display_errors().iter().any(|error| {
+        error
+            .msg()
+            .contains("declares return domain `Int`, but `shape_extensions.dsl.IntTuple.gradual()` returns `IntTuple`")
+    }));
+
+    // The restore leg covers re-resolving the intrinsic after an edit outside the declaration,
+    // and that changing then restoring the reexport invalidates and recovers the importer result.
+    i.set(
+        "reexport",
+        "from shape_extensions.dsl import Int as Gradual\n",
+    );
+    i.check(&["main"], &["main", "reexport"]);
 }
 
 #[test]
@@ -228,7 +753,10 @@ fn test_incremental_cyclic() {
     let mut i = Incremental::new();
     i.set("foo", "import bar; x = 1; y = bar.x");
     i.set("bar", "import foo; x = True; y = foo.x");
-    i.check(&["foo"], &["foo", "bar"]);
+    // Initial check fully checks both modules so deps get recorded
+    // both ways; subsequent checks rely on those recorded deps to
+    // drive invalidation.
+    i.check(&["foo", "bar"], &["foo", "bar"]);
     i.set("foo", "import bar; x = 1; y = bar.x # still");
     i.check(&["foo"], &["foo"]);
     i.set("foo", "import bar; x = 'test'; y = bar.x");
@@ -417,17 +945,18 @@ fn test_failed_import_invalidation_via_rdeps() {
     i.set("bar", "from foo import y"); // bar tries to import y - FAILS
     i.set("main", "import bar"); // main imports bar
 
-    // Initial check - all modules computed
-    i.unchecked(&["main"]);
+    // Initial check fully checks bar so its failed import gets
+    // registered for `invalidate_failed_imports_from` to find later.
+    i.unchecked(&["main", "bar"]);
 
     // Now foo exports `y` - bar's failed import should now succeed
     i.set("foo", "y = 2");
 
     // Only request main, NOT bar directly.
-    // Before the fix: bar wouldn't be invalidated because:
+    // bar wouldn't be invalidated through normal rdeps because:
     //   - bar is not in foo's rdeps (the import failed)
     //   - bar is not in the `want` list
-    // After the fix: invalidate_failed_imports_from scans for failed imports and invalidates bar
+    // But invalidate_failed_imports_from scans for failed imports and invalidates bar.
     let res = i.unchecked(&["main"]);
 
     // bar should be recomputed because its failed import now succeeds
@@ -444,7 +973,10 @@ fn test_stale_class() {
     i.set("foo", "class C: x: int = 1");
     i.set("bar", "from foo import C; c = C");
     i.set("main", "from bar import c; v = c.x");
-    i.check(&["main"], &["main", "foo", "bar"]);
+    // Initial check fully checks bar so its `c = C` binding gets
+    // solved and a TypeEq dep on `foo::C` is recorded; that dep is
+    // what drives bar's invalidation when `C` is removed.
+    i.check(&["main", "bar"], &["main", "foo", "bar"]);
 
     i.set("foo", "");
     i.set("main", "from bar import c; v = c.x # hello");
@@ -479,47 +1011,75 @@ fn test_stale_typed_dict() {
 }
 
 #[test]
-fn test_dueling_typevar() {
-    // TypeVar (and ParamSpec, TypeVarTuple) are implemented in a way that means
-    // grabbing the same value from different modules in conjunction with incremental
-    // updates can lead to equal TypeVar's being considered non-equal.
-    //
-    // Is that a problem? Yes. Is it a real problem? Perhaps no? If you write code
-    // that relies on the equality of a single TypeVar imported through two routes,
-    // you are really confusing the users.
-    //
-    // Why does it occur? Because TypeVar has equality via ArcId, so each created
-    // TypeVar is different from all others. To check for interface stability
-    // we try and find a mapping for equivalent TypeVar values, using TypeEq.
-    // So even though your TypeVar changes, it doesn't invalidate your interface.
-    // But that means you can construct an example where someone else exports
-    // your TypeVar, and they don't invalidate, and then you can have a third
-    // module import both and see a discrepancy.
-    //
-    // How to fix it? Stop TypeVar using ArcId and instead make it identified by
-    // an index within the module and the QName, just like we did for class.
-    //
-    // Should we make that fix? Maybe? But it's not high on the priority list.
-    // And the new generic syntax makes it even less important.
+fn test_type_shape_dsl_body_edit_invalidates_consumer() {
+    let mut i = Incremental::with_files(vec![
+        "definitions".to_owned(),
+        "main".to_owned(),
+        "consumer".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+class IntTuple: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "definitions",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
 
-    let mut i = Incremental::new();
-    i.set("foo", "from typing import TypeVar\nT = TypeVar('T')");
-    i.set("bar", "from foo import T");
+@type_shape_dsl_function
+def select(first: Int, second: Int) -> Int:
+    return first
+"#,
+    );
     i.set(
         "main",
-        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x  # E: Type variable `T` is not in scope  # E: Type variable `T` is not in scope",
+        r#"
+from definitions import select
+from shape_extensions import Int, IntTuple
+
+class Tensor[Shape: IntTuple]: ...
+def result() -> Tensor[[select(Int[2], Int[3])]]: ...
+"#,
     );
-    i.check(&["main"], &["main", "foo", "bar"]);
-
-    i.set("foo", "from typing import TypeVar\nT = TypeVar('T') #");
-    i.check(&["main"], &["foo"]);
-
-    // Observe that foo.T and bar.T are no longer equal.
     i.set(
-        "main",
-        "import foo\nimport bar\nfrom typing import Any\ndef f() -> Any: ...; x: foo.T = f(); y: bar.T = x  # E: `TypeVar[T]` is not assignable to `TypeVar[T]`  # E: Type variable `T` is not in scope  # E: Type variable `T` is not in scope",
+        "consumer",
+        r#"
+from main import Tensor, result
+
+expected: Tensor[[2]] = result()
+"#,
     );
-    i.check(&["main"], &["main"]);
+    let initial = i.unchecked(&["consumer"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "definitions",
+        r#"
+from shape_extensions import Int, type_shape_dsl_function
+
+@type_shape_dsl_function
+def select(first: Int, second: Int) -> Int:
+    return second
+"#,
+    );
+    let changed = i.unchecked(&["consumer"]);
+    changed.check_recompute(&["consumer", "definitions", "main"]);
+    let errors = changed.errors.collect_display_errors();
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one consumer mismatch, got {errors:?}"
+    );
+    assert_eq!(errors[0].module().name(), ModuleName::from_str("consumer"),);
+    assert!(
+        errors[0].msg().contains("not assignable to `Tensor[[2]]`"),
+        "expected a consumer assignment mismatch, got {errors:?}",
+    );
 }
 
 #[test]
@@ -599,6 +1159,28 @@ fn test_fine_grained_unrelated_export_no_recompute() {
     i.check(&["main"], &["foo"]);
 }
 
+/// Changing an export's type (not its existence) shouldn't invalidate
+/// consumers whose only edge on it is an `export_exists` check.
+///
+/// `bar`'s `from foo import Foo` calls `export_exists(foo, "Foo")`
+/// during binding. `main` only imports `value` from `bar`, so `bar`'s
+/// `Binding::Import(foo, Foo)` is never solved and no TypeEq dep on
+/// `foo::Foo` is recorded — leaving the `export_exists` call as the
+/// only edge. Foo's type changing should not invalidate bar.
+#[test]
+fn test_export_exists_is_existence_level() {
+    let mut i = Incremental::new();
+    i.set("foo", "Foo: int = 1");
+    i.set("bar", "from foo import Foo\nvalue: int = 42");
+    i.set("main", "from bar import value\nresult = value");
+    // `foo` is also requested so its TypeEq changes get diffed at
+    // Solutions level — otherwise the change-detection machinery
+    // never fires.
+    i.check(&["main", "foo"], &["main", "foo", "bar"]);
+
+    i.set("foo", "Foo: str = 'changed'");
+    i.check(&["foo"], &["foo"]);
+}
 /// Test fine-grained dependency tracking: changing the imported export SHOULD
 /// trigger recomputation.
 #[test]
@@ -820,7 +1402,8 @@ fn test_overlapping_exports_cycle_detected() {
     // values that depend on each other.
     i.set("foo", "import bar\nx: int = 1\ny = bar.x");
     i.set("bar", "import foo\nx: int = 2\ny = foo.x");
-    i.check(&["foo"], &["foo", "bar"]);
+    // Fully check both modules so the cycle deps get recorded.
+    i.check(&["foo", "bar"], &["foo", "bar"]);
 
     // Changing `x` in foo should propagate to bar (which uses foo.x),
     // and potentially back to foo (if bar.x changes). The same export `x`
@@ -834,6 +1417,64 @@ fn test_overlapping_exports_cycle_detected() {
     // Both modules should be recomputed to reach stable state
     assert!(res.changed.contains(&"foo".to_owned()));
     assert!(res.changed.contains(&"bar".to_owned()));
+}
+
+// Synthetic defense-in-depth reproducer for https://github.com/facebook/pyrefly/issues/4171.
+#[test]
+#[should_panic(expected = "Transaction has uncommitted changes")]
+fn test_deep_scc_chain_stabilizes_after_epoch_cap() {
+    const LEVELS: usize = 208;
+
+    let mut files = vec!["leaf".to_owned(), "main".to_owned()];
+    for level in 0..LEVELS {
+        files.push(format!("a_{level}"));
+        files.push(format!("b_{level}"));
+    }
+    let mut i = Incremental::with_files(files);
+
+    i.set("leaf", "value: int = 0");
+    for level in 0..LEVELS {
+        let previous = if level == 0 {
+            "leaf".to_owned()
+        } else {
+            format!("a_{}", level - 1)
+        };
+        i.set(
+            &format!("a_{level}"),
+            &format!(
+                "from typing import TYPE_CHECKING\nfrom {previous} import value as value\nif TYPE_CHECKING:\n    from b_{level} import Marker\n"
+            ),
+        );
+        i.set(
+            &format!("b_{level}"),
+            &format!(
+                "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from a_{level} import value\nclass Marker: pass\n"
+            ),
+        );
+    }
+    i.set(
+        "main",
+        &format!(
+            "from a_{} import value\nobserved: int = value\n",
+            LEVELS - 1
+        ),
+    );
+
+    let initial = i.unchecked(&["main"]);
+    assert_eq!(initial.errors.collect_display_errors().len(), 0);
+
+    i.set("leaf", "value: str = 'changed'");
+    let changed = i.unchecked(&["main"]);
+    let errors = changed
+        .errors
+        .collect_display_errors()
+        .map(|error| error.msg().to_owned());
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected final importer error, got {errors:?}"
+    );
+    assert!(errors[0].contains("not assignable to `int`"), "{errors:?}");
 }
 
 /// Test a more complex non-overlapping case with a chain of re-exports.
@@ -1024,7 +1665,11 @@ fn test_class_field_removal_propagates() {
         "main",
         "from bar import B\ndef f(b: B) -> int:\n    return b.a.y # E: Object of class `A` has no attribute `y`",
     );
-    i.check(&["main"], &["main", "foo", "bar"]);
+    // Only foo and main recompute: foo because it changed, main
+    // because it has a `Class` dep on `foo::A` (it queries `A.y`).
+    // bar doesn't need to be recomputed — its `class B: a: A`
+    // binding doesn't depend on A's field set, only on `KeyExport(A)`.
+    i.check(&["main"], &["foo", "main"]);
 }
 
 /// Test that method signature changes propagate through the dependency chain.
@@ -1157,12 +1802,15 @@ fn test_four_level_class_field_chain() {
     i.check_ignoring_expectations(&["main"], &["main", "foo", "bar"]);
 }
 
-/// Test that star import properly invalidates on any export change.
+/// Test that star import invalidates when the export *set* changes.
 ///
-/// Modules using `from X import *` should be invalidated when ANY export
-/// in X changes, including class-related exports.
+/// `from X import *` records a wildcard dependency on X's export set:
+/// adding or removing an exported name changes the set and invalidates
+/// the importer. Changes to the *content* of an export that's already
+/// in the set don't invalidate via the wildcard — only via that
+/// specific name's dep, if it's used.
 #[test]
-fn test_star_import_invalidates_on_class_change() {
+fn test_star_import_invalidates_on_export_set_change() {
     let mut i = Incremental::new();
 
     // bar uses star import from foo
@@ -1174,15 +1822,24 @@ fn test_star_import_invalidates_on_class_change() {
     );
     i.check(&["main"], &["main", "foo", "bar"]);
 
-    // Change B (not A) - bar should still be recomputed because of star import
+    // Change B's *content* (not its existence). bar doesn't actually
+    // use B, so the wildcard dep doesn't fire and bar is not
+    // recomputed; main is also unaffected.
     i.set(
         "foo",
         "class A:\n    x: int = 1\nclass B:\n    y: str = 'changed'",
     );
-    // bar should be recomputed even though it only uses A, because star import
-    // means it depends on all exports
-    // Main should not be recomputed because it doesn't use B
-    i.check_ignoring_expectations(&["main"], &["foo", "bar"]);
+    i.check_ignoring_expectations(&["main"], &["foo"]);
+
+    // Add a new export to foo. The wildcard *set* changes, which
+    // invalidates bar (via its wildcard dep). bar's exports
+    // consequently gain `D`, which is an existence change in bar's
+    // exports — so main is also invalidated.
+    i.set(
+        "foo",
+        "class A:\n    x: int = 1\nclass B:\n    y: str = 'changed'\nclass D:\n    z: int = 3",
+    );
+    i.check_ignoring_expectations(&["main"], &["foo", "bar", "main"]);
 }
 
 /// Test that enum member changes propagate correctly.
@@ -1270,6 +1927,87 @@ fn test_mixed_import_failed_export_invalidated() {
         errors_after.ordinary.is_empty(),
         "Expected error after foo exports y"
     );
+}
+
+/// Test that disjoint-base changes propagate to downstream inheritance.
+///
+/// When a base class gains or loses disjoint-base status, modules that
+/// inherit through it alongside another disjoint base should gain or clear
+/// an `incompatible disjoint bases` diagnostic.
+#[test]
+fn test_disjoint_base_change_propagates_to_inheritance() {
+    let mut i = Incremental::new();
+
+    // foo.Left is NOT a disjoint base initially - no error for class Combined(Left, Right)
+    i.set("foo", "class Left: pass");
+    i.set(
+        "bar",
+        "from typing_extensions import disjoint_base\n@disjoint_base\nclass Right: pass",
+    );
+    i.set(
+        "main",
+        "from foo import Left\nfrom bar import Right\nclass Combined(Left, Right): pass",
+    );
+    i.check(&["main"], &["main", "foo", "bar"]);
+
+    // Make Left disjoint - main should be recomputed and gain incompatible-disjoint-bases error
+    i.set(
+        "foo",
+        "from typing_extensions import disjoint_base\n@disjoint_base\nclass Left: pass",
+    );
+    i.set(
+        "main",
+        "from foo import Left\nfrom bar import Right\nclass Combined(Left, Right): pass # E: incompatible disjoint bases",
+    );
+    i.check(&["main"], &["foo", "main"]);
+}
+
+/// Test that disjoint-base changes propagate to downstream narrowing.
+///
+/// When a base class gains disjoint-base status, modules narrowing against
+/// it via `isinstance` should be recomputed: an intersection that was
+/// previously inhabited should narrow to `Never`.
+#[test]
+fn test_disjoint_base_change_propagates_to_narrowing() {
+    let mut i = Incremental::new();
+
+    // foo.Base is NOT a disjoint base initially; the intersection with Other can be non-empty,
+    // so `assert_never` should error.
+    i.set("foo", "class Base: pass");
+    i.set(
+        "bar",
+        "from typing_extensions import disjoint_base, assert_never\n@disjoint_base\nclass Other: pass",
+    );
+    i.set(
+        "main",
+        r#"
+from typing_extensions import assert_never
+from foo import Base
+from bar import Other
+def f(x: Base) -> None:
+    if isinstance(x, Other):
+        assert_never(x) # E: not assignable to parameter `arg` with type `Never`
+"#,
+    );
+    i.check(&["main"], &["main", "foo", "bar"]);
+
+    // Make Base a disjoint base - the intersection is now Never, so assert_never should accept.
+    i.set(
+        "foo",
+        "from typing_extensions import disjoint_base\n@disjoint_base\nclass Base: pass",
+    );
+    i.set(
+        "main",
+        r#"
+from typing_extensions import assert_never
+from foo import Base
+from bar import Other
+def f(x: Base) -> None:
+    if isinstance(x, Other):
+        assert_never(x)
+"#,
+    );
+    i.check(&["main"], &["foo", "main"]);
 }
 
 /// Test that abstract class check changes propagate correctly (KeyAbstractClassCheck).
@@ -1924,7 +2662,7 @@ fn test_class_deprecation_metadata_change_invalidates() {
 
 /// Test that when an export changes from direct definition to re-export, dependents are invalidated.
 ///
-/// This tests the `is_reexport` metadata dependency. When an export changes from being
+/// This tests the `reexport_source` metadata dependency. When an export changes from being
 /// defined in this module to being re-exported from another module, dependents should
 /// be recomputed.
 #[test]
@@ -2075,4 +2813,70 @@ fn test_dunder_all_module_entry_change_invalidates() {
     );
     // main should be recomputed because the wildcard set changed
     i.check_ignoring_expectations(&["foo"], &["foo", "main"]);
+}
+
+#[test]
+fn test_type_shape_dsl_parameter_domain_edit_revalidates_indexed_locals() {
+    let mut i = Incremental::with_files(vec![
+        "consumer".to_owned(),
+        "helpers".to_owned(),
+        "main".to_owned(),
+        "shape_extensions".to_owned(),
+    ]);
+    i.set(
+        "shape_extensions",
+        r#"
+class Int: pass
+class IntTuple: pass
+class IntTuples: pass
+def type_shape_dsl_function[F](fn: F) -> F: return fn
+"#,
+    );
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import IntTuple, IntTuples, type_shape_dsl_function
+
+@type_shape_dsl_function
+def first(shapes: IntTuples) -> IntTuple:
+    selected = shapes[0]
+    return selected
+"#,
+    );
+    i.set(
+        "main",
+        r#"
+from helpers import first
+from shape_extensions import IntTuple
+
+class ShapeBox[Shape: IntTuple]: ...
+def result() -> ShapeBox[first(tuple[IntTuple[2, 3], IntTuple[4]])]: ...
+"#,
+    );
+    i.set(
+        "consumer",
+        r#"
+from main import ShapeBox, result
+from shape_extensions import IntTuple
+
+expected: ShapeBox[IntTuple[2, 3]] = result()
+"#,
+    );
+    let initial = i.unchecked(&["consumer", "helpers"]);
+    assert!(initial.errors.collect_display_errors().is_empty());
+
+    i.set(
+        "helpers",
+        r#"
+from shape_extensions import IntTuple, type_shape_dsl_function
+
+@type_shape_dsl_function
+def first(shapes: IntTuple) -> IntTuple:
+    selected = shapes[0]
+    return selected  # E: local return domain must match  # E: Returned type `Int[int]` is not assignable
+"#,
+    );
+    let changed = i.unchecked(&["consumer", "helpers"]);
+    changed.check_recompute(&["consumer", "helpers", "main"]);
+    changed.check_errors();
 }

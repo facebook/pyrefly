@@ -1,0 +1,15 @@
+runtime_package = "torch"
+stub_directory = "torch-stubs"
+skip_modules = ["torch._shapes"]
+
+[[member_targets]]
+stub_module = "torch"
+stub_class = "Tensor"
+runtime_module = "torch"
+runtime_class = "Tensor"
+
+[[member_targets]]
+stub_module = "torch"
+stub_class = "device"
+runtime_module = "torch"
+runtime_class = "device"

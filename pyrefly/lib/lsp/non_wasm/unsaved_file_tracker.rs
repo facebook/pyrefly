@@ -12,6 +12,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 
 use lsp_types::Url;
+use pyrefly_util::absolutize::Absolutize as _;
 use pyrefly_util::lock::RwLock;
 
 const VIRTUAL_DOCUMENT_ROOT: &str = "__pyrefly_virtual__";
@@ -77,15 +78,22 @@ impl UnsavedFileTracker {
             }
         } else if matches!(language_id, "python") {
             file_name.push_str(".py");
+        } else if matches!(language_id, "jupyter") {
+            file_name.push_str(".ipynb");
         }
         path.push(file_name);
-
+        // Absolutize file path before storing
+        let path = path.absolutize();
         self.remember_uri_path(uri, &path);
         path
     }
 
     pub fn path_for_uri(&self, uri: &Url) -> Option<PathBuf> {
         self.uri_to_path.read().get(uri).cloned()
+    }
+
+    pub fn uri_for_path(&self, path: &Path) -> Option<Url> {
+        self.open_file_uris.read().get(path).cloned()
     }
 
     pub fn forget_uri_path(&self, uri: &Url) -> Option<PathBuf> {

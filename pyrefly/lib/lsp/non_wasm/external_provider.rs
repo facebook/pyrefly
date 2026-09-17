@@ -35,7 +35,7 @@ pub trait ExternalProvider: Send + Sync {
         source_uri: &Url,
         timeout: Duration,
         telemetry: Option<SubTaskTelemetry>,
-    ) -> Vec<(Url, Vec<Range>)>;
+    ) -> anyhow::Result<Vec<(Url, Vec<Range>)>>;
 
     /// Search for workspace symbols matching `query` using an external index.
     /// `workspace_uri` is a workspace folder URI used to identify which
@@ -46,7 +46,7 @@ pub trait ExternalProvider: Send + Sync {
         workspace_uri: &Url,
         timeout: Duration,
         telemetry: Option<SubTaskTelemetry>,
-    ) -> Vec<SymbolInformation>;
+    ) -> anyhow::Result<Vec<SymbolInformation>>;
 }
 
 pub struct NoExternalProvider;
@@ -58,8 +58,8 @@ impl ExternalProvider for NoExternalProvider {
         _source_uri: &Url,
         _timeout: Duration,
         _telemetry: Option<SubTaskTelemetry>,
-    ) -> Vec<(Url, Vec<Range>)> {
-        Vec::new()
+    ) -> anyhow::Result<Vec<(Url, Vec<Range>)>> {
+        Ok(Vec::new())
     }
 
     fn workspace_symbols(
@@ -68,8 +68,8 @@ impl ExternalProvider for NoExternalProvider {
         _workspace_uri: &Url,
         _timeout: Duration,
         _telemetry: Option<SubTaskTelemetry>,
-    ) -> Vec<SymbolInformation> {
-        Vec::new()
+    ) -> anyhow::Result<Vec<SymbolInformation>> {
+        Ok(Vec::new())
     }
 }
 
@@ -183,11 +183,11 @@ mod tests {
 
     use pyrefly_python::module::Module;
     use pyrefly_python::module_path::ModulePath;
+    use pyrefly_util::thread_pool::TEST_THREAD_COUNT;
     use ruff_text_size::TextRange;
 
     use super::*;
     use crate::state::state::State;
-    use crate::test::util::TEST_THREAD_COUNT;
     use crate::test::util::TestEnv;
 
     fn parse_and_qname(code: &str, module: &str, position: TextSize, name: &str) -> String {

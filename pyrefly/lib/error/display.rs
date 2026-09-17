@@ -6,7 +6,7 @@
  */
 
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_types::callable::FunctionKind;
+use pyrefly_types::function::FunctionKind;
 
 use crate::error::context::ErrorContext;
 use crate::error::context::TypeCheckKind;
@@ -159,6 +159,19 @@ impl TypeCheckKind {
                 ctx.display(want),
                 function_suffix(func_id.as_ref(), current_module),
             ),
+            Self::CallExtraItems(_, param, func_id) => {
+                let param_desc = match param {
+                    Some(param) => format!("parameter `{param}` with type"),
+                    None => "`**kwargs` of type".to_owned(),
+                };
+                format!(
+                    "Extra items of type `{}` are not assignable to {} `{}`{}",
+                    ctx.display(got),
+                    param_desc,
+                    ctx.display(want),
+                    function_suffix(func_id.as_ref(), current_module),
+                )
+            }
             Self::FunctionParameterDefault(param) => format!(
                 "Default `{}` is not assignable to parameter `{}` with type `{}`",
                 ctx.display(got),
@@ -171,16 +184,31 @@ impl TypeCheckKind {
                 param,
                 ctx.display(want),
             ),
-            Self::TypedDictKey(key) => format!(
-                "`{}` is not assignable to TypedDict key{} with type `{}`",
+            Self::DictKey => format!(
+                "`{}` is not assignable to dict key type `{}`",
                 ctx.display(got),
-                if let Some(key) = key {
+                ctx.display(want),
+            ),
+            Self::DictValue => format!(
+                "`{}` is not assignable to dict value type `{}`",
+                ctx.display(got),
+                ctx.display(want),
+            ),
+            Self::TypedDictKey(key, is_anonymous) => {
+                let key_str = if let Some(key) = key {
                     format!(" `{key}`")
                 } else {
                     "".to_owned()
-                },
-                ctx.display(want),
-            ),
+                };
+                let kind = if *is_anonymous { "dict" } else { "TypedDict" };
+                format!(
+                    "`{}` is not assignable to {} key{} with type `{}`",
+                    ctx.display(got),
+                    kind,
+                    key_str,
+                    ctx.display(want),
+                )
+            }
             Self::TypedDictUnpacking | Self::TypedDictOpenUnpacking => format!(
                 "Unpacked `{}` is not assignable to `{}`",
                 ctx.display(got),
@@ -240,11 +268,14 @@ impl TypeCheckKind {
                 ctx.display(got),
                 ctx.display(want),
             ),
-            Self::OverloadReturn => format!(
-                "Overload return type `{}` is not assignable to implementation return type `{}`",
-                ctx.display(got),
-                ctx.display(want),
-            ),
+            Self::OverloadReturn(overload_return) => {
+                ctx.add(overload_return);
+                format!(
+                    "Overload return type `{}` is not assignable to implementation return type `{}`",
+                    ctx.display(overload_return),
+                    ctx.display(want),
+                )
+            }
             Self::OverloadInput(overload_sig, impl_sig) => {
                 format!(
                     "Implementation signature `{impl_sig}` does not accept all arguments that overload signature `{overload_sig}` accepts"

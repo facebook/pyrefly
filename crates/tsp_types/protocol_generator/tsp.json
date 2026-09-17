@@ -66,6 +66,20 @@
     ],
     "requests": [
         {
+            "method": "typeServer/connection",
+            "typeName": "ConnectionRequest",
+            "messageDirection": "clientToServer",
+            "documentation": "Main-connection-only request used to open or close an extra TSP transport. Extra transports must remain read-only and must not be used for LSP traffic.",
+            "params": {
+                "kind": "reference",
+                "name": "ConnectionRequestParams"
+            },
+            "result": {
+                "kind": "reference",
+                "name": "ConnectionRequestResult"
+            }
+        },
+        {
             "method": "typeServer/getComputedType",
             "typeName": "GetComputedTypeRequest",
             "messageDirection": "clientToServer",
@@ -301,13 +315,21 @@
                 "v0_1_0": "0.1.0",
                 "v0_2_0": "0.2.0",
                 "v0_3_0": "0.3.0",
-                "current": "0.4.0"
+                "v0_4_0": "0.4.0",
+                "current": "0.4.1"
             },
             "valueDocumentation": {
                 "v0_1_0": "Initial protocol version",
                 "v0_2_0": "Added new request types and fields",
                 "v0_3_0": "Switch to more complex types",
-                "current": "Switch to Type union and using stubs"
+                "v0_4_0": "Switch to Type union and using stubs",
+                "current": "Add multi-connection negotiation and control requests"
+            }
+        },
+        "ConnectionTransportKind": {
+            "kind": "stringEnum",
+            "values": {
+                "Ipc": "ipc"
             }
         },
         "Variance": {
@@ -344,6 +366,77 @@
                 }
             ],
             "documentation": "Represents a location in source code (a node in the AST). Used to point to specific declarations, expressions, or statements in Python source files. Used for: - Pointing to where a type is declared - Identifying the location of expressions for type inference - Error reporting and diagnostics - Linking types back to their source definitions Examples: - For `def foo():`, the node points to the function declaration - For a variable `x = 42`, the node points to the assignment - For default parameter values in functions"
+        },
+        "TypeServerMultiConnectionCapability": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "supportedTransports",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "reference",
+                            "name": "ConnectionTransportKind"
+                        }
+                    },
+                    "optional": false
+                }
+            ],
+            "documentation": "Capability shape exchanged via the LSP initialize request/response under `capabilities.experimental.typeServerMultiConnection`."
+        },
+        "ConnectionRequestParams": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "type",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": false
+                },
+                {
+                    "name": "kind",
+                    "type": {
+                        "kind": "reference",
+                        "name": "ConnectionTransportKind"
+                    },
+                    "optional": false
+                },
+                {
+                    "name": "args",
+                    "type": {
+                        "kind": "array",
+                        "element": {
+                            "kind": "base",
+                            "name": "string"
+                        }
+                    },
+                    "optional": true
+                }
+            ],
+            "documentation": "Main-connection-only control request used to open or close extra read-only TSP channels after LSP initialization has completed."
+        },
+        "ConnectionRequestResult": {
+            "kind": "interface",
+            "properties": [
+                {
+                    "name": "success",
+                    "type": {
+                        "kind": "base",
+                        "name": "boolean"
+                    },
+                    "optional": false
+                },
+                {
+                    "name": "message",
+                    "type": {
+                        "kind": "base",
+                        "name": "string"
+                    },
+                    "optional": true
+                }
+            ]
         },
         "ModuleName": {
             "kind": "interface",
@@ -501,8 +594,8 @@
                 {
                     "name": "returnType",
                     "type": {
-                                "kind": "reference",
-                                "name": "Type"
+                        "kind": "reference",
+                        "name": "Type"
                     },
                     "optional": true,
                     "documentation": "Specialized type of the declared return type. Undefined if there is no declared return type. Example: For `def foo[T](x: T) -> T` specialized to `T=int`, returnType=int."
@@ -589,7 +682,7 @@
                     "documentation": "Discriminator field that determines which declaration variant this is. Regular: Has source code and AST node Synthesized: Created by type checker, no source node"
                 }
             ],
-            "documentation": "Base interface for all declaration types. Provides the discriminator field for the Declaration union."
+            "documentation": "Base interface for all declaration types. Provides the discriminator field for the Declaration union. This is a generic interface that is extended by: - RegularDeclaration (kind = Regular) - SynthesizedDeclaration (kind = Synthesized) The type parameter T ensures that the kind field matches the implementing interface. Used for type-safe discrimination: ```typescript if (declaration.kind === DeclarationKind.Regular) { // TypeScript knows this is RegularDeclaration const node = declaration.node; } ```"
         },
         "RegularDeclaration": {
             "kind": "interface",
@@ -615,8 +708,8 @@
                 {
                     "name": "name",
                     "type": {
-                                "kind": "base",
-                                "name": "string"
+                        "kind": "base",
+                        "name": "string"
                     },
                     "optional": true,
                     "documentation": "Name of the declared symbol, or undefined for anonymous declarations. Example: \"foo\" for `def foo():`, undefined for lambda functions."

@@ -39,18 +39,45 @@ let docsSidebar = [
         description:
             'Never used a type system before or just new to Pyrefly? Start here!',
         collapsed: false,
-        items: ['installation', 'configuration'],
+        items: ['installation', 'shell-completion', 'configuration', 'wasm'],
+    },
+    {
+        type: 'doc' as const,
+        id: 'compare',
+        label: 'Compare Type Checkers',
     },
     {
         type: 'category' as const,
         label: 'Migrating to Pyrefly',
         description:
-            'Never used a type system before or just new to Pyrefly? Start here!',
+            'Move an existing project from mypy or Pyright, one step at a time',
         collapsed: false,
         items: [
-            'migrating-to-pyrefly',
-            'migrating-from-mypy',
-            'migrating-from-pyright',
+            'migrate/index',
+            {
+                type: 'category' as const,
+                label: 'From mypy',
+                items: [
+                    'migrate/mypy/index',
+                    'migrate/mypy/plugins',
+                    'migrate/mypy/strict-mode',
+                    'migrate/mypy/ignore-missing-imports',
+                    'migrate/mypy/config-reference',
+                    'migrate/mypy/error-codes',
+                ],
+            },
+            {
+                type: 'category' as const,
+                label: 'From Pyright',
+                items: [
+                    'migrate/pyright/index',
+                    'migrate/pyright/strict-mode',
+                    'migrate/pyright/missing-imports',
+                    'migrate/pyright/unknown-member-type',
+                    'migrate/pyright/config-reference',
+                    'migrate/pyright/diagnostics-reference',
+                ],
+            },
         ],
     },
     {
@@ -79,6 +106,21 @@ let docsSidebar = [
                         label: 'Lax Mode Type Conversions',
                     },
                 ],
+            },
+            {
+                type: 'doc' as const,
+                id: 'dataframes',
+                label: 'DataFrames (polars, pandas)',
+            },
+            {
+                type: 'doc' as const,
+                id: 'attrs',
+                label: 'attrs Support',
+            },
+            {
+                type: 'doc' as const,
+                id: 'pytest',
+                label: 'Pytest Support',
             },
             {
                 type: 'doc' as const,
@@ -111,6 +153,23 @@ let docsSidebar = [
     },
     {
         type: 'category' as const,
+        label: 'Build System Integration',
+        collapsed: false,
+        items: [
+            {
+                type: 'doc' as const,
+                id: 'bazel',
+                label: 'Bazel',
+            },
+            {
+                type: 'doc' as const,
+                id: 'pants',
+                label: 'Pants',
+            },
+        ],
+    },
+    {
+        type: 'category' as const,
         label: 'Tools',
         collapsed: false,
         items: [
@@ -128,6 +187,66 @@ let docsSidebar = [
                 type: 'doc' as const,
                 id: 'stubgen',
                 label: 'Generating Stub Files',
+            },
+        ],
+    },
+    {
+        type: 'category' as const,
+        label: 'Tensor Shapes',
+        description:
+            'Static type checking of tensor shapes in PyTorch models',
+        collapsed: false,
+        items: [
+            {
+                type: 'doc' as const,
+                id: 'tensor-shapes',
+                label: 'Overview',
+            },
+            {
+                type: 'doc' as const,
+                id: 'tensor-shapes-setup',
+                label: 'Getting Started',
+            },
+            {
+                type: 'category' as const,
+                label: 'Tutorials',
+                items: [
+                    {
+                        type: 'doc' as const,
+                        id: 'tensor-shapes-tutorial-basics',
+                        label: '1. Your First Port',
+                    },
+                    {
+                        type: 'doc' as const,
+                        id: 'tensor-shapes-tutorial-loops',
+                        label: '2. Loops and Stacking',
+                    },
+                    {
+                        type: 'doc' as const,
+                        id: 'tensor-shapes-tutorial-architectures',
+                        label: '3. Complex Architectures',
+                    },
+                    {
+                        type: 'doc' as const,
+                        id: 'tensor-shapes-tutorial-advanced',
+                        label: '4. Configs and Dynamic Patterns',
+                    },
+                ],
+            },
+            {
+                type: 'doc' as const,
+                id: 'tensor-shapes-ai-porting',
+                label: 'Agent Skill',
+            },
+            {
+                type: 'doc' as const,
+                id: 'tensor-shapes-reference',
+                label: 'API Reference',
+            },
+            {
+                type: 'doc' as const,
+                id: 'tensor-shapes-contributing',
+                label: 'Contributing',
             },
         ],
     },

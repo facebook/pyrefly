@@ -16,7 +16,7 @@ use pyrefly_python::dunder;
 use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::Deprecation;
+use pyrefly_types::function::Deprecation;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
@@ -29,6 +29,7 @@ use crate::export::definitions::Definitions;
 use crate::export::definitions::DunderAllEntry;
 use crate::export::definitions::DunderAllKind;
 use crate::export::special::SpecialExport;
+use crate::export::symbols::FlatSymbols;
 use crate::module::module_info::ModuleInfo;
 use crate::state::loader::FindingOrError;
 use crate::state::state::ModuleChanges;
@@ -55,8 +56,13 @@ pub trait LookupExport {
     /// Get deprecation info for an export. Records a dependency on `name` from `module` regardless of if it exists.
     fn get_deprecated(&self, module: ModuleName, name: &Name) -> Option<Deprecation>;
 
-    /// Check if an export is a re-export from another module. Records a dependency on `name` from `module` regardless of if it exists.
-    fn is_reexport(&self, module: ModuleName, name: &Name) -> bool;
+    /// If `name` is a re-export, return the module it is re-exported from. Records a dependency on `name` from `module` regardless of if it exists.
+    fn reexport_source(&self, module: ModuleName, name: &Name) -> Option<ModuleName>;
+
+    /// Check if a name is only an *implicit* re-export (available via a plain
+    /// import, not part of the module's public interface). Records a dependency
+    /// on `name` from `module` regardless of if it exists.
+    fn is_implicit_reexport(&self, module: ModuleName, name: &Name) -> bool;
 
     /// Check if an export is a special export. Records a dependency on `name` from `module` regardless of if it exists.
     fn is_special_export(&self, module: ModuleName, name: &Name) -> Option<SpecialExport>;
@@ -64,8 +70,16 @@ pub trait LookupExport {
     /// Get the docstring range for an export. Records a dependency on `name` from `module` regardless of if it exists.
     fn docstring_range(&self, module: ModuleName, name: &Name) -> Option<TextRange>;
 
-    /// Check if an export is marked as `Final`. Records a dependency on `name` from `module` regardless of if it exists.
-    fn is_final(&self, module: ModuleName, name: &Name) -> bool;
+    /// Get where an export originates. Records a dependency on `name` from `module` regardless of if it exists.
+    fn export_origin(&self, module: ModuleName, name: &Name) -> ExportOrigin;
+}
+
+/// Result of checking whether an export is `Final`, including the defining module and name
+/// found by following re-export chains.
+pub struct ExportOrigin {
+    /// The module and name where the export is ultimately defined.
+    pub origin: (ModuleName, Name),
+    pub is_final: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -97,15 +111,25 @@ pub struct Exports {
     /// but they take up very little space, so not worth the hassle to detect when
     /// calculation completes.
     definitions: Definitions,
+    /// Names statically known to be in a partially resolvable explicit `__all__`.
+    partially_known_dunder_all: SmallSet<Name>,
+    /// Names statically known to be in a user-defined explicit `__all__`.
+    explicit_dunder_all_names: Option<SmallSet<Name>>,
     /// Names that are available via `from <this_module> import *`
     wildcard: Calculation<Arc<SmallSet<Name>>>,
     /// Names that are available via `from <this_module> import <name>` along with their locations
     exports: Calculation<Arc<SmallMap<Name, ExportLocation>>>,
-    /// If this module has a docstring, the range is stored here. Docstrings for exports themselves are stored in exports.
-    /// While putting the module docstring range on exports is a bit weird (it doesn't actually have much to do with exports),
-    /// we can't put it on the Module as that doesn't have the AST, and we can't get it from the AST as we often throw that away,
-    /// so here makes sense.
+    // The fields below are derived from the AST but are not exports. They live
+    // here because `Exports` is the only per-module artifact that is always
+    // available: `Module` does not carry the AST, and the AST itself is evicted
+    // once answers are computed unless the module is required at `Everything`.
+    /// The range of this module's docstring, if it has one. Docstrings for the
+    /// exports themselves are stored in `exports`.
     docstring_range: Option<TextRange>,
+    /// Flat table of supported source declarations, including nested ones such
+    /// as methods, backing IDE symbol features. Built only while indexing a
+    /// first-party module; `None` everywhere else.
+    symbols: Option<FlatSymbols>,
 }
 
 impl Display for Exports {
@@ -122,7 +146,14 @@ impl Display for Exports {
 }
 
 impl Exports {
-    pub fn new(x: &[Stmt], module_info: &ModuleInfo, sys_info: SysInfo) -> Self {
+    /// When `build_symbols` is true, retain the flat table of supported source
+    /// declarations used by IDE symbol features; exports are always built.
+    pub fn new(
+        x: &[Stmt],
+        module_info: &ModuleInfo,
+        sys_info: SysInfo,
+        build_symbols: bool,
+    ) -> Self {
         let mut definitions = Definitions::new(
             x,
             module_info.name(),
@@ -130,6 +161,8 @@ impl Exports {
             sys_info,
         );
         definitions.inject_implicit_globals();
+        let partially_known_dunder_all = Self::get_partially_known_dunder_all(&definitions);
+        let explicit_dunder_all_names = Self::compute_explicit_dunder_all_names(&definitions);
         definitions.ensure_dunder_all(module_info.path().style());
         if module_info.name() == ModuleName::builtins() {
             // The `builtins` module is a bit weird. It has no `__all__` in TypeShed,
@@ -144,14 +177,24 @@ impl Exports {
             ]);
         }
 
+        let symbols = build_symbols.then(|| FlatSymbols::new(x));
+
         Self {
             module_name: module_info.name(),
             is_init: module_info.path().is_init(),
             definitions,
+            partially_known_dunder_all,
+            explicit_dunder_all_names,
             wildcard: Calculation::new(),
             exports: Calculation::new(),
             docstring_range: Docstring::range_from_stmts(x),
+            symbols,
         }
+    }
+
+    /// The flat symbol table, if one was built for this module.
+    pub fn symbols(&self) -> Option<&FlatSymbols> {
+        self.symbols.as_ref()
     }
 
     /// What symbols will I get if I do `from <this_module> import *`?
@@ -161,6 +204,17 @@ impl Exports {
             for x in &self.definitions.dunder_all.entries {
                 match x {
                     DunderAllEntry::Name(_, x) => {
+                        // A name listed in `__all__` but only defined inside an
+                        // `if __name__ == "__main__":` guard is not importable, so it must be
+                        // excluded from the wildcard surface to match `exports()`.
+                        if self
+                            .definitions
+                            .definitions
+                            .get(x)
+                            .is_some_and(|def| def.main_guard_only)
+                        {
+                            continue;
+                        }
                         result.insert(x.clone());
                     }
                     DunderAllEntry::Module(_, x) => {
@@ -189,9 +243,9 @@ impl Exports {
     ///   Recorded as a default NameDep (both flags false) — presence in the
     ///   names map denotes an existence change, which overlaps with any dep
     ///   on that name.
-    /// - Metadata: is_import status, implicitly_imported_submodules, deprecation,
-    ///   or special_exports changed for a name that exists in both. Sets the
-    ///   metadata flag.
+    /// - Metadata: is_import status, import style, final_names,
+    ///   implicitly_imported_submodules, deprecation, or special_exports changed
+    ///   for a name that exists in both. Sets the metadata flag.
     /// - Wildcard set: the set of names exported via `from M import *` changed.
     ///   Sets the wildcard flag. Only checked if the old wildcard was previously
     ///   forced (meaning some rdep depends on it); if not, no rdep can be
@@ -211,11 +265,26 @@ impl Exports {
                 Some(other_def) => {
                     // Name exists in both. Check metadata.
                     if self_def.style.is_import() != other_def.style.is_import()
+                        // Both sides are imports here; full equality is safe (and necessary) only
+                        // for import variants — others carry positional data
+                        || (self_def.style.is_import() && self_def.style != other_def.style)
+                        || self_defs.final_names.get(name) != other_defs.final_names.get(name)
                         || self_defs.implicitly_imported_submodules.contains(name)
                             != other_defs.implicitly_imported_submodules.contains(name)
                         || self_defs.deprecated.get(name) != other_defs.deprecated.get(name)
                         || self_defs.special_exports.get(name)
                             != other_defs.special_exports.get(name)
+                        || self_def.main_guard_only != other_def.main_guard_only
+                        || self.partially_known_dunder_all.contains(name)
+                            != other.partially_known_dunder_all.contains(name)
+                        || self
+                            .explicit_dunder_all_names
+                            .as_ref()
+                            .is_some_and(|all| all.contains(name))
+                            != other
+                                .explicit_dunder_all_names
+                                .as_ref()
+                                .is_some_and(|all| all.contains(name))
                     {
                         changed.0.names.entry(name.clone()).or_default().metadata = true;
                     }
@@ -270,21 +339,55 @@ impl Exports {
             .contains(name)
     }
 
-    /// Return an iterator with entries in `__all__` that are user-defined or None if `__all__` was not present.
-    pub fn get_explicit_dunder_all_names_iter(&self) -> Option<impl Iterator<Item = &Name>> {
-        match self.definitions.dunder_all.kind {
-            DunderAllKind::Specified => Some(
-                self.definitions
-                    .dunder_all
-                    .entries
-                    .iter()
-                    .filter_map(|entry| match entry {
-                        DunderAllEntry::Name(_, name) => Some(name),
-                        _ => None,
-                    }),
-            ),
-            _ => None,
+    /// Returns the entries in a user-defined `__all__`, or `None` if `__all__` was not present.
+    pub fn explicit_dunder_all_names(&self) -> Option<&SmallSet<Name>> {
+        self.explicit_dunder_all_names.as_ref()
+    }
+
+    /// Returns statically known entries in an explicit `__all__`.
+    fn compute_explicit_dunder_all_names(definitions: &Definitions) -> Option<SmallSet<Name>> {
+        if definitions.dunder_all.kind != DunderAllKind::Specified {
+            return None;
         }
+
+        let mut names = SmallSet::new();
+
+        for entry in &definitions.dunder_all.entries {
+            match entry {
+                DunderAllEntry::Name(_, name) => {
+                    names.insert(name.clone());
+                }
+                DunderAllEntry::Remove(_, name) => {
+                    names.shift_remove(name);
+                }
+                DunderAllEntry::Module(..) => {}
+            }
+        }
+
+        Some(names)
+    }
+
+    // Returns statically known entries in an unresolvable `__all__`.
+    pub fn get_partially_known_dunder_all(definitions: &Definitions) -> SmallSet<Name> {
+        let mut names = SmallSet::new();
+
+        if !matches!(definitions.dunder_all.kind, DunderAllKind::Unresolvable(_)) {
+            return names;
+        }
+
+        for entry in &definitions.dunder_all.entries {
+            match entry {
+                DunderAllEntry::Name(_, name) => {
+                    names.insert(name.clone());
+                }
+                DunderAllEntry::Remove(_, name) => {
+                    names.shift_remove(name);
+                }
+                DunderAllEntry::Module(..) => {}
+            }
+        }
+
+        names
     }
 
     /// Returns entries in `__all__` that don't exist in the module's definitions.
@@ -336,6 +439,9 @@ impl Exports {
         let f = || {
             let mut result: SmallMap<Name, ExportLocation> = SmallMap::new();
             for (name, definition) in self.definitions.definitions.iter_hashed() {
+                if definition.main_guard_only {
+                    continue;
+                }
                 let deprecation = self.definitions.deprecated.get_hashed(name).cloned();
                 let special_export = self.definitions.special_exports.get_hashed(name).copied();
                 let is_final = self.definitions.final_names.contains_key_hashed(name);
@@ -419,6 +525,33 @@ impl Exports {
             .is_some_and(|definition| matches!(definition.style, DefinitionStyle::ImportAsEq(_)))
     }
 
+    /// Returns true if `name` is available from this module only as an *implicit*
+    /// re-export: it was brought in by a plain `import`/`from ... import ...`
+    /// (without a redundant `as` alias) and is not listed in an explicit `__all__`.
+    /// Per the typing spec such names are not part of the module's public interface.
+    /// Names defined locally, redundantly aliased (`as` same-name), or introduced
+    /// via a wildcard import are not implicit re-exports.
+    pub fn is_implicit_reexport(&self, name: &Name) -> bool {
+        if self.partially_known_dunder_all.contains(name) {
+            return false;
+        }
+        if self
+            .explicit_dunder_all_names
+            .as_ref()
+            .is_some_and(|all| all.contains(name))
+        {
+            return false;
+        }
+        self.definitions.definitions.get(name).is_some_and(|def| {
+            matches!(
+                def.style,
+                DefinitionStyle::Import(_)
+                    | DefinitionStyle::ImportModule(_)
+                    | DefinitionStyle::ImportAs(..)
+            )
+        })
+    }
+
     /// Returns the range of the unresolvable `__all__` RHS, if applicable.
     pub fn unresolvable_dunder_all_range(&self) -> Option<TextRange> {
         match self.definitions.dunder_all.kind {
@@ -470,7 +603,11 @@ mod tests {
             None
         }
 
-        fn is_reexport(&self, _module: ModuleName, _name: &Name) -> bool {
+        fn reexport_source(&self, _module: ModuleName, _name: &Name) -> Option<ModuleName> {
+            None
+        }
+
+        fn is_implicit_reexport(&self, _module: ModuleName, _name: &Name) -> bool {
             false
         }
 
@@ -486,8 +623,11 @@ mod tests {
             false
         }
 
-        fn is_final(&self, _module: ModuleName, _name: &Name) -> bool {
-            false
+        fn export_origin(&self, module: ModuleName, name: &Name) -> ExportOrigin {
+            ExportOrigin {
+                origin: (module, name.clone()),
+                is_final: false,
+            }
         }
     }
 
@@ -503,7 +643,33 @@ mod tests {
             path,
             Arc::new(contents.to_owned()),
         );
-        Arc::new(Exports::new(&ast.body, &module_info, SysInfo::default()))
+        Arc::new(Exports::new(
+            &ast.body,
+            &module_info,
+            SysInfo::default(),
+            true,
+        ))
+    }
+
+    #[test]
+    fn test_build_symbols_gate() {
+        let ast = Ast::parse("class C:\n  def method(self): pass\n", PySourceType::Python).0;
+        let module_info = ModuleInfo::new(
+            ModuleName::from_str("foo"),
+            ModulePath::filesystem(PathBuf::from("foo.py")),
+            Arc::new("class C:\n  def method(self): pass\n".to_owned()),
+        );
+
+        assert!(
+            Exports::new(&ast.body, &module_info, SysInfo::default(), false)
+                .symbols()
+                .is_none()
+        );
+        assert!(
+            Exports::new(&ast.body, &module_info, SysInfo::default(), true)
+                .symbols()
+                .is_some()
+        );
     }
 
     fn eq_wildcards(exports: &Exports, lookup: &dyn LookupExport, all: &[&str]) {
@@ -592,5 +758,39 @@ _x = 2
         eq_wildcards(&b, &imports, &[]);
         assert!(!contains(&a, &imports, "magic"));
         assert!(contains(&b, &imports, "magic"));
+    }
+
+    #[test]
+    fn changed_exports_detects_finality_change() {
+        let old = mk_exports("x: Final = 1", ModuleStyle::Executable);
+        let new = mk_exports("x = 1", ModuleStyle::Executable);
+        let lookup = SmallMap::new();
+        let mut changed = ModuleChanges::default();
+        old.changed_exports(&new, &lookup, &mut changed);
+        assert!(
+            changed
+                .0
+                .names
+                .get(&Name::new("x"))
+                .is_some_and(|dep| dep.metadata),
+            "changing Final status should be detected as a metadata change"
+        );
+    }
+
+    #[test]
+    fn changed_exports_detects_import_target_change() {
+        let old = mk_exports("from a import x", ModuleStyle::Executable);
+        let new = mk_exports("from b import x", ModuleStyle::Executable);
+        let lookup = SmallMap::new();
+        let mut changed = ModuleChanges::default();
+        old.changed_exports(&new, &lookup, &mut changed);
+        assert!(
+            changed
+                .0
+                .names
+                .get(&Name::new("x"))
+                .is_some_and(|dep| dep.metadata),
+            "changing import target should be detected as a metadata change"
+        );
     }
 }

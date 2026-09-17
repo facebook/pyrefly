@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 // At some point in the past, this test took many minutes and consumed 50Gb of RAM.
@@ -175,3 +176,129 @@ def test() -> None:
     f(A())  # E: Argument `A` is not assignable to parameter `x` with type `P1 | P2`
 "#,
 );
+
+// A protocol-member guard can be entered outside a `Subset` while checking for unsafe overlap.
+// The nested protocol result must not be cached because it depends on that guard.
+testcase!(
+    test_getattr_coinductive_protocol_cache_soundness,
+    r#"
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class P(Protocol):
+    @property
+    def x(self) -> str: ...
+
+class C:
+    def __getattr__(self: P, name: str) -> int:
+        return 0
+
+def check(x: C) -> None:
+    isinstance(x, P)  # E: Runtime checkable protocol `P` has an unsafe overlap with type `C`
+
+def use(x: P) -> None: ...
+use(C())  # E: Argument `C` is not assignable to parameter `x` with type `P` in function `use`
+"#,
+);
+
+// SCC restarts must not retain protocol results computed from recursive Answer fallbacks.
+testcase!(
+    test_protocol_cache_ignores_answers_scc,
+    r#"
+from __future__ import annotations
+
+from typing import Any, Generic, Protocol, Self, TypeVar
+
+P = TypeVar("P", bound="ProtoWithFactory")
+
+class ProtoWithFactory(Protocol):
+    @property
+    def factory(self) -> Factory[Self]: ...
+    @factory.setter
+    def factory(self, value: Any) -> None: ...
+
+class Factory(Generic[P]): ...
+
+class Base:
+    factory: Factory[Base]
+
+class Child(Base):
+    factory: Factory[Child]  # type: ignore
+
+class ChildFactory(Factory[Child]): ...
+"#,
+);
+
+// Soundness test for typed_dict_cache with coinductive assumptions.
+//
+// Similar to test_protocol_coinductive_cache_soundness, but the stale cache
+// entry lives in the persistent typed_dict_cache rather than the per-query
+// subset_cache. The fields are ReadOnly so comparisons are covariant
+// (one-direction is_subset_eq), avoiding the invariant is_consistent check
+// that would independently catch the failure.
+//
+// The scenario:
+//   1. Check `A <: P1 | P2` — union tries `A <: P1`.
+//   2. `A <: P1` inserts InProgress(A, P1). Method `foo` return type: `ATD <: TD1`.
+//   3. TypedDict ReadOnly field: `A <: P2`. Inserts InProgress(A, P2).
+//   4. Method `foo` return type: `ATD <: TD2`. ReadOnly field: `A <: P1`.
+//   5. `A <: P1` is InProgress → coinductive Ok. `ATD <: TD2` succeeds,
+//      stored in typed_dict_cache.
+//   6. `A <: P2` succeeds. `ATD <: TD1` succeeds, also cached.
+//   7. Back in `A <: P1`: method `bar` fails (A lacks `bar`). `A <: P1` fails.
+//   8. subset_cache rolls back, but typed_dict_cache retains `ATD <: TD2 → Ok`.
+//   9. Union tries `A <: P2`. Method `foo`: `ATD <: TD2` — hits stale cache → Ok.
+//  10. `A <: P2` incorrectly succeeds — false positive!
+//
+// The fix: track coinductive_assumptions_used in is_subset_typed_dict and skip
+// caching when coinductive assumptions were involved.
+testcase!(
+    test_typed_dict_coinductive_cache_soundness,
+    r#"
+from typing import Protocol, TypedDict, ReadOnly
+
+class P1(Protocol):
+    def foo(self) -> "TD1": ...
+    def bar(self) -> int: ...
+
+class P2(Protocol):
+    def foo(self) -> "TD2": ...
+
+class TD1(TypedDict):
+    field: ReadOnly[P2]
+
+class TD2(TypedDict):
+    field: ReadOnly[P1]
+
+class ATD(TypedDict):
+    field: ReadOnly["A"]
+
+class A:
+    def foo(self) -> ATD: ...
+
+def f(x: P1 | P2) -> None: ...
+
+def test() -> None:
+    f(A())  # E: Argument `A` is not assignable to parameter `x` with type `P1 | P2`
+"#,
+);
+
+// A long operator chain nests one expression per operand while the parser's own
+// recursion stays flat, so nothing bounds the depth of the tree it produces.
+// Analyzing it used to overflow the stack and abort the process.
+#[test]
+fn test_deeply_nested_expression_is_rejected() {
+    let code = format!("x = {}\n", vec!["1"; 5000].join("+"));
+    let (state, handle) = TestEnv::one("main", &code).to_state();
+    let errors = state
+        .transaction()
+        .get_errors([&handle("main")])
+        .collect_errors()
+        .ordinary;
+    assert_eq!(errors.len(), 1, "got: {errors:#?}");
+    assert!(
+        errors[0].msg().contains("too deeply nested"),
+        "got: {:?}",
+        errors[0].msg()
+    );
+}

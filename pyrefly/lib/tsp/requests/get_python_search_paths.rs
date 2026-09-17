@@ -16,6 +16,7 @@ use lsp_types::Url;
 use tsp_types::protocol::GetPythonSearchPathsParams;
 
 use crate::lsp::non_wasm::server::TspInterface;
+use crate::tsp::server::Reply;
 use crate::tsp::server::TspServer;
 use crate::tsp::validation::internal_error;
 use crate::tsp::validation::parse_uri;
@@ -33,10 +34,11 @@ impl<T: TspInterface> TspServer<T> {
         &self,
         id: RequestId,
         params: GetPythonSearchPathsParams,
+        reply: Reply,
     ) {
         // --- 1. Validate snapshot ---
         if let Err(err) = self.validate_snapshot(params.snapshot) {
-            self.send_err(id, err);
+            reply.err(id, err);
             return;
         }
 
@@ -44,7 +46,7 @@ impl<T: TspInterface> TspServer<T> {
         let url = match parse_uri(&params.from_uri) {
             Ok(url) => url,
             Err(err) => {
-                self.send_err(id, err);
+                reply.err(id, err);
                 return;
             }
         };
@@ -53,14 +55,14 @@ impl<T: TspInterface> TspServer<T> {
         // notebook's filesystem path so we return the right search paths.
         let resolved_url = if url.scheme() != "file" {
             match self
-                .inner
+                .inner()
                 .resolve_uri_to_path(&url)
                 .and_then(|p| Url::from_file_path(p).ok())
             {
                 Some(file_url) => file_url,
                 None => {
                     // Cannot resolve to a filesystem path — return empty list.
-                    self.send_ok::<Vec<String>>(id, vec![]);
+                    reply.ok::<Vec<String>>(id, vec![]);
                     return;
                 }
             }
@@ -68,9 +70,9 @@ impl<T: TspInterface> TspServer<T> {
             url
         };
 
-        match self.inner.get_python_search_paths(&resolved_url) {
-            Ok(paths) => self.send_ok(id, paths),
-            Err(detail) => self.send_err(id, internal_error(&detail)),
+        match self.inner().get_python_search_paths(&resolved_url) {
+            Ok(paths) => reply.ok(id, paths),
+            Err(detail) => reply.err(id, internal_error(&detail)),
         }
     }
 }

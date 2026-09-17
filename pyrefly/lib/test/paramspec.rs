@@ -70,44 +70,12 @@ class CORSMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         pass
 
-
 def use_middleware() -> None:
     app = FastAPI()
     app.add_middleware(
         CORSMiddleware,
         x="",  # E: Unexpected keyword argument `x`
     )
-"#,
-);
-
-testcase!(
-    bug = "Generic functions don't work with ParamSpec",
-    test_param_spec_generic_function,
-    r#"
-from typing import Callable, reveal_type
-def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
-    return x
-def foo[T](x: T, y: T) -> T:
-    return x
-foo2 = identity(foo)
-reveal_type(foo2)  # E: revealed type: (x: Unknown, y: Unknown) -> Unknown
-"#,
-);
-
-testcase!(
-    bug = "Generic class constructors don't work with ParamSpec",
-    test_param_spec_generic_constructor,
-    r#"
-from typing import Callable, reveal_type
-def identity[**P, R](x: Callable[P, R]) -> Callable[P, R]:
-  return x
-class C[T]:
-  x: T
-  def __init__(self, x: T) -> None:
-    self.x = x
-c2 = identity(C)
-reveal_type(c2)  # E: revealed type: (x: Unknown) -> C[Unknown]
-x: C[int] = c2(1)
 "#,
 );
 
@@ -160,12 +128,12 @@ from typing import Callable, Concatenate, ParamSpec
 
 P = ParamSpec("P")
 
-def foo(x: P) -> P: ...                           # E: `ParamSpec` is not allowed in this context # E: `ParamSpec` is not allowed in this context
+def foo(x: P) -> P: ...                           # E: `P` is not allowed in this context # E: `P` is not allowed in this context
 def foo(x: Concatenate[int, P]) -> int: ...       # E: `Concatenate[int, P]` is not allowed in this context
-def foo(x: Callable[Concatenate[P, P], int]) -> int: ...  # E: `ParamSpec` is not allowed in this context
+def foo(x: Callable[Concatenate[P, P], int]) -> int: ...  # E: `P` is not allowed in this context
 def foo(x: list[P]) -> None: ...                  # E: `ParamSpec` cannot be used for type parameter
-def foo(x: Callable[[int, str], P]) -> None: ...  # E: `ParamSpec` is not allowed in this context
-def foo(x: Callable[[P, str], int]) -> None: ...  # E: `ParamSpec` is not allowed in this context
+def foo(x: Callable[[int, str], P]) -> None: ...  # E: `P` is not allowed in this context
+def foo(x: Callable[[P, str], int]) -> None: ...  # E: `P` is not allowed in this context
 "#,
 );
 
@@ -375,6 +343,33 @@ def outer(f: Callable[P, None]) -> Callable[P, None]:
     foo(x=1, *args, **kwargs) # Rejected # E: Expected argument `x` to be positional
 
   return bar
+"#,
+);
+
+// A `Concatenate`-constrained `self` method cannot discard keyword capability: replacing the
+// callback through `self` would make the later keyword call fail at runtime.
+testcase!(
+    test_paramspec_self_constraint_preserves_keyword_capability,
+    r#"
+from collections.abc import Callable
+from typing import Concatenate
+
+class Box[**P]:
+    def __init__(self, callback: Callable[P, None]) -> None:
+        self.callback = callback
+
+    def replace[**Q](
+        self: Box[Concatenate[int, Q]],
+        callback: Callable[Concatenate[int, Q], None],
+    ) -> None:
+        self.callback = callback
+
+def named(first: int) -> None: ...
+def positional(first: int, /) -> None: ...
+
+box = Box(named)
+box.replace(positional)  # E: is not assignable to parameter `self`
+box.callback(first=1)
 "#,
 );
 
@@ -855,6 +850,41 @@ call_with_retry(compute, 3, 1, "hello")
 "#,
 );
 
+// Regression test for https://github.com/facebook/pyrefly/issues/3054
+testcase!(
+    test_paramspec_forwarding_with_overloaded_callable,
+    r#"
+from typing import ParamSpec, overload, Callable, Any
+
+P = ParamSpec("P")
+
+@overload
+def assert_raises(
+    exception_class: type[BaseException],
+    /,
+) -> None: ...
+@overload
+def assert_raises(
+    exception_class: type[BaseException],
+    callable: Callable[P, Any],
+    /,
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> None: ...
+def assert_raises(*args: Any, **kwargs: Any) -> None:
+    pass
+
+@overload
+def compute(x: int, y: int) -> int: ...
+@overload
+def compute(x: str, y: str) -> str: ...
+def compute(x: int | str, y: int | str) -> int | str:
+    return x
+
+assert_raises(ValueError, compute, "hello", "world")
+"#,
+);
+
 testcase!(
     test_paramspec_forwarding_prefix_param_keyword,
     r#"
@@ -868,5 +898,168 @@ def call_fn(f: Callable[P, None], x: int, *args: P.args, **kwargs: P.kwargs) -> 
 
 def forward(g: Callable[Q, None], *args: Q.args, **kwargs: Q.kwargs) -> None:
     call_fn(g, x=1, *args, **kwargs)
+"#,
+);
+
+// Reproduces pyinfra's @operation decorator pattern: a Protocol whose __call__
+// mixes explicit "global" params with *args: P.args / **kwargs: P.kwargs, and
+// the decorator returns cast(Protocol[P], wrapped_func). Mypy 1.17 handles
+// this correctly.
+testcase!(
+    test_paramspec_protocol_cast_preserves_binding,
+    r#"
+from typing import Protocol, Generic, Callable, Iterator, cast
+from typing_extensions import ParamSpec
+
+P = ParamSpec("P")
+
+class OperationResult:
+    changed: bool
+
+class OperationProtocol(Generic[P], Protocol):
+    def __call__(
+        self,
+        _sudo: bool = False,
+        name: str | None = None,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> OperationResult: ...
+
+def make_operation(func: Callable[P, Iterator[str]]) -> OperationProtocol[P]:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> OperationResult:
+        return OperationResult()
+    return cast(OperationProtocol[P], wrapper)
+
+def _service_impl(service_name: str, running: bool = True) -> Iterator[str]:
+    yield "test"
+
+service = make_operation(_service_impl)
+
+# P-bound params work correctly:
+service(service_name="nginx")
+service(service_name="nginx", running=True)
+
+# Protocol's explicit params also work:
+service(service_name="nginx", _sudo=True)
+service(service_name="nginx", running=True, _sudo=True, name="Start nginx")
+
+# Correctly rejected — not on the Protocol or in P:
+service(nonexistent_param=True)  # E: Missing argument `service_name` # E: Unexpected keyword argument `nonexistent_param`
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3706
+testcase!(
+    test_concatenate_paramspec_tail_in_class_targ,
+    r#"
+from typing import Concatenate, reveal_type
+
+class A[**P]:
+    def transform(self) -> A[Concatenate[int, P]]:
+        raise NotImplementedError
+
+reveal_type(A[int]().transform())  # E: revealed type: A[[int, int]]
+"#,
+);
+
+// Regression test for https://github.com/facebook/pyrefly/issues/3828
+testcase!(
+    test_concatenate_paramspec_tail_in_class_param,
+    r#"
+from typing import Concatenate, reveal_type
+
+class A[**P]:
+    pass
+
+class B[**P]:
+    pass
+
+def transform[**P](arg: A[Concatenate[int, P]]) -> B[P]:
+    raise NotImplementedError
+
+a1: A[[int]] = A()
+reveal_type(transform(a1))  # E: revealed type: B[[]]
+
+a2: A[[int, str, int]] = A()
+reveal_type(transform(a2))  # E: revealed type: B[[str, int]]
+"#,
+);
+
+// Nesting exercises the `Concatenate[..., Concatenate[...]]` collapse in the solver, which
+// could not fire while the ParamSpec tail was unreachable.
+testcase!(
+    test_concatenate_paramspec_tail_nested,
+    r#"
+from typing import Concatenate, reveal_type
+
+class A[**P]:
+    pass
+
+def add_int[**P](x: A[P]) -> A[Concatenate[int, P]]: ...
+def add_str[**P](x: A[P]) -> A[Concatenate[str, P]]: ...
+def drop_int[**P](x: A[Concatenate[int, P]]) -> A[P]: ...
+
+a: A[[bool]] = A()
+reveal_type(add_int(a))                        # E: revealed type: A[[int, bool]]
+reveal_type(add_str(add_int(a)))               # E: revealed type: A[[str, int, bool]]
+reveal_type(add_str(add_str(add_int(a))))      # E: revealed type: A[[str, str, int, bool]]
+reveal_type(drop_int(add_int(a)))              # E: revealed type: A[[bool]]
+"#,
+);
+
+// A bare `Concatenate` in a class type argument is the only thing that reaches the
+// `Type::Concatenate` arm of `tvars_to_tparams_for_type_alias`.
+testcase!(
+    test_concatenate_paramspec_tail_in_type_alias,
+    r#"
+from typing import Concatenate, ParamSpec, reveal_type
+
+class A[**P2]:
+    pass
+
+P = ParamSpec("P")
+Legacy = A[Concatenate[int, P]]
+
+type Modern[**Q] = A[Concatenate[str, Q]]
+
+def f(x: Legacy[[bool]]) -> None:
+    reveal_type(x)  # E: revealed type: A[[int, bool]]
+
+def g(x: Modern[[bool]]) -> None:
+    reveal_type(x)  # E: revealed type: A[[str, bool]]
+"#,
+);
+
+// A `ParamSpec` reachable only through a `Concatenate` tail still counts as a type variable.
+testcase!(
+    test_concatenate_paramspec_tail_is_a_type_variable,
+    r#"
+from typing import ClassVar, Concatenate
+
+class A[**P]:
+    pass
+
+class C[**P]:
+    bad: ClassVar[A[Concatenate[int, P]]]  # E: `ClassVar` arguments may not contain any type variables
+"#,
+);
+
+// `Callable[..., int]` binds `P` in `Callable[Concatenate[int, P], int]`, but the equivalent
+// user-defined generic does not; see `test_param_spec_solve` for the working `Callable` case.
+testcase!(
+    bug = "`...` should bind the tail, giving `A[Concatenate[int, ...]]` and `A[...]`",
+    test_concatenate_paramspec_tail_gradual,
+    r#"
+from typing import Concatenate, reveal_type
+
+class A[**P]:
+    pass
+
+def add_int[**P](x: A[P]) -> A[Concatenate[int, P]]: ...
+def drop_int[**P](x: A[Concatenate[int, P]]) -> A[P]: ...
+
+g: A[...] = A()
+reveal_type(add_int(g))   # E: revealed type: A[Concatenate[int, ...]]
+reveal_type(drop_int(g))  # E: revealed type: A[@_]
 "#,
 );

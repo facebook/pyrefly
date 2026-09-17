@@ -1,12 +1,10 @@
 import enum
-import sre_compile
-import sre_constants
 import sys
 from _typeshed import MaybeNone, ReadableBuffer
 from collections.abc import Callable, Iterator, Mapping
 from types import GenericAlias
-from typing import Any, AnyStr, Final, Generic, Literal, TypeVar, final, overload
-from typing_extensions import TypeAlias, deprecated
+from typing import Any, AnyStr, Final, Generic, Literal, TypeAlias, TypeVar, final, overload
+from typing_extensions import deprecated
 
 __all__ = [
     "match",
@@ -38,6 +36,8 @@ __all__ = [
     "Match",
     "Pattern",
 ]
+if sys.version_info >= (3, 15):
+    __all__ += ["prefixmatch"]
 if sys.version_info < (3, 13):
     __all__ += ["template"]
 
@@ -46,8 +46,6 @@ if sys.version_info >= (3, 11):
 
 if sys.version_info >= (3, 13):
     __all__ += ["PatternError"]
-
-    PatternError = sre_constants.error
 
 _T = TypeVar("_T")
 
@@ -60,6 +58,9 @@ class error(Exception):
     lineno: int
     colno: int
     def __init__(self, msg: str, pattern: str | bytes | None = None, pos: int | None = None) -> None: ...
+
+if sys.version_info >= (3, 13):
+    PatternError = error
 
 @final
 class Match(Generic[AnyStr]):
@@ -90,6 +91,7 @@ class Match(Generic[AnyStr]):
     def re(self) -> Pattern[AnyStr]:
         """The regular expression object."""
         ...
+
     @overload
     def expand(self: Match[str], template: str) -> str:
         """Return the string obtained by doing backslash substitution on the string template, as done by the sub() method."""
@@ -102,6 +104,7 @@ class Match(Generic[AnyStr]):
     def expand(self, template: AnyStr) -> AnyStr:
         """Return the string obtained by doing backslash substitution on the string template, as done by the sub() method."""
         ...
+
     # group() returns "AnyStr" or "AnyStr | None", depending on the pattern.
     @overload
     def group(self, group: Literal[0] = 0, /) -> AnyStr:
@@ -127,6 +130,7 @@ class Match(Generic[AnyStr]):
         For 0 returns the entire match.
         """
         ...
+
     # Each item of groups()'s return tuple is either "AnyStr" or
     # "AnyStr | None", depending on the pattern.
     @overload
@@ -147,6 +151,7 @@ class Match(Generic[AnyStr]):
           Is used for groups that did not participate in the match.
         """
         ...
+
     # Each value in groupdict()'s return dict is either "AnyStr" or
     # "AnyStr | None", depending on the pattern.
     @overload
@@ -167,6 +172,7 @@ class Match(Generic[AnyStr]):
           Is used for groups that did not participate in the match.
         """
         ...
+
     def start(self, group: int | str = 0, /) -> int:
         """Return index of the start of the substring matched by group."""
         ...
@@ -178,6 +184,7 @@ class Match(Generic[AnyStr]):
         ...
     @property
     def regs(self) -> tuple[tuple[int, int], ...]: ...  # undocumented
+
     # __getitem__() returns "AnyStr" or "AnyStr | None", depending on the pattern.
     @overload
     def __getitem__(self, key: Literal[0], /) -> AnyStr:
@@ -187,6 +194,7 @@ class Match(Generic[AnyStr]):
     def __getitem__(self, key: int | str, /) -> AnyStr | MaybeNone:
         """Return self[key]."""
         ...
+
     def __copy__(self) -> Match[AnyStr]: ...
     def __deepcopy__(self, memo: Any, /) -> Match[AnyStr]: ...
     def __class_getitem__(cls, item: Any, /) -> GenericAlias:
@@ -211,6 +219,7 @@ class Pattern(Generic[AnyStr]):
     def pattern(self) -> AnyStr:
         """The pattern string from which the RE object was compiled."""
         ...
+
     @overload
     def search(self: Pattern[str], string: str, pos: int = 0, endpos: int = sys.maxsize) -> Match[str] | None:
         """
@@ -235,6 +244,7 @@ class Pattern(Generic[AnyStr]):
         Return None if no position in the string matches.
         """
         ...
+
     @overload
     def match(self: Pattern[str], string: str, pos: int = 0, endpos: int = sys.maxsize) -> Match[str] | None:
         """Matches zero or more characters at the beginning of the string."""
@@ -247,6 +257,10 @@ class Pattern(Generic[AnyStr]):
     def match(self, string: AnyStr, pos: int = 0, endpos: int = sys.maxsize) -> Match[AnyStr] | None:
         """Matches zero or more characters at the beginning of the string."""
         ...
+
+    if sys.version_info >= (3, 15):
+        prefixmatch = match
+
     @overload
     def fullmatch(self: Pattern[str], string: str, pos: int = 0, endpos: int = sys.maxsize) -> Match[str] | None:
         """Matches against all of the string."""
@@ -261,6 +275,7 @@ class Pattern(Generic[AnyStr]):
     def fullmatch(self, string: AnyStr, pos: int = 0, endpos: int = sys.maxsize) -> Match[AnyStr] | None:
         """Matches against all of the string."""
         ...
+
     @overload
     def split(self: Pattern[str], string: str, maxsplit: int = 0) -> list[str | MaybeNone]:
         """Split string by the occurrences of pattern."""
@@ -273,6 +288,7 @@ class Pattern(Generic[AnyStr]):
     def split(self, string: AnyStr, maxsplit: int = 0) -> list[AnyStr | MaybeNone]:
         """Split string by the occurrences of pattern."""
         ...
+
     # return type depends on the number of groups in the pattern
     @overload
     def findall(self: Pattern[str], string: str, pos: int = 0, endpos: int = sys.maxsize) -> list[Any]:
@@ -286,6 +302,7 @@ class Pattern(Generic[AnyStr]):
     def findall(self, string: AnyStr, pos: int = 0, endpos: int = sys.maxsize) -> list[AnyStr]:
         """Return a list of all non-overlapping matches of pattern in string."""
         ...
+
     @overload
     def finditer(self: Pattern[str], string: str, pos: int = 0, endpos: int = sys.maxsize) -> Iterator[Match[str]]:
         """
@@ -312,6 +329,7 @@ class Pattern(Generic[AnyStr]):
         For each match, the iterator returns a match object.
         """
         ...
+
     @overload
     def sub(self: Pattern[str], repl: str | Callable[[Match[str]], str], string: str, count: int = 0) -> str:
         """Return the string obtained by replacing the leftmost non-overlapping occurrences of pattern in string by the replacement repl."""
@@ -329,6 +347,7 @@ class Pattern(Generic[AnyStr]):
     def sub(self, repl: AnyStr | Callable[[Match[AnyStr]], AnyStr], string: AnyStr, count: int = 0) -> AnyStr:
         """Return the string obtained by replacing the leftmost non-overlapping occurrences of pattern in string by the replacement repl."""
         ...
+
     @overload
     def subn(self: Pattern[str], repl: str | Callable[[Match[str]], str], string: str, count: int = 0) -> tuple[str, int]:
         """Return the tuple (new_string, number_of_subs_made) found by replacing the leftmost non-overlapping occurrences of pattern with the replacement repl."""
@@ -346,6 +365,7 @@ class Pattern(Generic[AnyStr]):
     def subn(self, repl: AnyStr | Callable[[Match[AnyStr]], AnyStr], string: AnyStr, count: int = 0) -> tuple[AnyStr, int]:
         """Return the tuple (new_string, number_of_subs_made) found by replacing the leftmost non-overlapping occurrences of pattern with the replacement repl."""
         ...
+
     def __copy__(self) -> Pattern[AnyStr]: ...
     def __deepcopy__(self, memo: Any, /) -> Pattern[AnyStr]: ...
     def __eq__(self, value: object, /) -> bool:
@@ -361,23 +381,23 @@ class Pattern(Generic[AnyStr]):
 # ----- re variables and constants -----
 
 class RegexFlag(enum.IntFlag):
-    A = sre_compile.SRE_FLAG_ASCII
+    A = 256
     ASCII = A
-    DEBUG = sre_compile.SRE_FLAG_DEBUG
-    I = sre_compile.SRE_FLAG_IGNORECASE
+    DEBUG = 128
+    I = 2
     IGNORECASE = I
-    L = sre_compile.SRE_FLAG_LOCALE
+    L = 4
     LOCALE = L
-    M = sre_compile.SRE_FLAG_MULTILINE
+    M = 8
     MULTILINE = M
-    S = sre_compile.SRE_FLAG_DOTALL
+    S = 16
     DOTALL = S
-    X = sre_compile.SRE_FLAG_VERBOSE
+    X = 64
     VERBOSE = X
-    U = sre_compile.SRE_FLAG_UNICODE
+    U = 32
     UNICODE = U
     if sys.version_info < (3, 13):
-        T = sre_compile.SRE_FLAG_TEMPLATE
+        T = 1
         TEMPLATE = T
     if sys.version_info >= (3, 11):
         NOFLAG = 0
@@ -415,32 +435,45 @@ _FlagsType: TypeAlias = int | RegexFlag
 def compile(pattern: AnyStr, flags: _FlagsType = 0) -> Pattern[AnyStr]: ...
 @overload
 def compile(pattern: Pattern[AnyStr], flags: _FlagsType = 0) -> Pattern[AnyStr]: ...
+
 @overload
 def search(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> Match[str] | None: ...
 @overload
 def search(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: _FlagsType = 0) -> Match[bytes] | None: ...
+
 @overload
 def match(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> Match[str] | None: ...
 @overload
 def match(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: _FlagsType = 0) -> Match[bytes] | None: ...
+
+if sys.version_info >= (3, 15):
+    @overload
+    def prefixmatch(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> Match[str] | None: ...
+    @overload
+    def prefixmatch(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: _FlagsType = 0) -> Match[bytes] | None: ...
+
 @overload
 def fullmatch(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> Match[str] | None: ...
 @overload
 def fullmatch(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: _FlagsType = 0) -> Match[bytes] | None: ...
+
 @overload
 def split(pattern: str | Pattern[str], string: str, maxsplit: int = 0, flags: _FlagsType = 0) -> list[str | MaybeNone]: ...
 @overload
 def split(
     pattern: bytes | Pattern[bytes], string: ReadableBuffer, maxsplit: int = 0, flags: _FlagsType = 0
 ) -> list[bytes | MaybeNone]: ...
+
 @overload
 def findall(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> list[Any]: ...
 @overload
 def findall(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: _FlagsType = 0) -> list[Any]: ...
+
 @overload
 def finditer(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> Iterator[Match[str]]: ...
 @overload
 def finditer(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: _FlagsType = 0) -> Iterator[Match[bytes]]: ...
+
 @overload
 def sub(
     pattern: str | Pattern[str], repl: str | Callable[[Match[str]], str], string: str, count: int = 0, flags: _FlagsType = 0
@@ -453,6 +486,7 @@ def sub(
     count: int = 0,
     flags: _FlagsType = 0,
 ) -> bytes: ...
+
 @overload
 def subn(
     pattern: str | Pattern[str], repl: str | Callable[[Match[str]], str], string: str, count: int = 0, flags: _FlagsType = 0
@@ -465,12 +499,10 @@ def subn(
     count: int = 0,
     flags: _FlagsType = 0,
 ) -> tuple[bytes, int]: ...
+
 def escape(pattern: AnyStr) -> AnyStr: ...
 def purge() -> None: ...
 
 if sys.version_info < (3, 13):
-    if sys.version_info >= (3, 11):
-        @deprecated("Deprecated since Python 3.11; removed in Python 3.13. Use `re.compile()` instead.")
-        def template(pattern: AnyStr | Pattern[AnyStr], flags: _FlagsType = 0) -> Pattern[AnyStr]: ...  # undocumented
-    else:
-        def template(pattern: AnyStr | Pattern[AnyStr], flags: _FlagsType = 0) -> Pattern[AnyStr]: ...  # undocumented
+    @deprecated("Deprecated since Python 3.11; removed in Python 3.13. Use `re.compile()` instead.")
+    def template(pattern: AnyStr | Pattern[AnyStr], flags: _FlagsType = 0) -> Pattern[AnyStr]: ...  # undocumented
