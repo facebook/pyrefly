@@ -5,30 +5,23 @@
 
 from __future__ import annotations
 
-from typing import assert_type
+from typing import assert_type, TYPE_CHECKING
 
-import torch
-from torch import Tensor
+import microtorch as torch
+from microtorch import Tensor
 
-# Tensor types carry their shape as type parameters
-x = torch.randn(3, 4)
-assert_type(x, Tensor[3, 4])
+x = torch.randn((3, 4))
+assert_type(x, Tensor[[3, 4]])
+assert_type(torch.relu(x + x), Tensor[[3, 4]])
 
+product = torch.randn((2, 3)) @ torch.randn((3, 5))
+assert_type(product, Tensor[[2, 5]])
 
-# Shape-polymorphic function with variadic batch dims
-def add_bias[*Batch, D](x: Tensor[*Batch, D], bias: Tensor[D]) -> Tensor[*Batch, D]:
-    return x + bias
+matrix = torch.diagonal(torch.ones((4,)), offset=1)
+assert_type(matrix, Tensor[[5, 5]])
 
+joined = torch.concatenate((torch.zeros((2, 3)), torch.ones((2, 4))), axis=1)
+assert_type(joined, Tensor[[2, 7]])
 
-y = add_bias(torch.randn(2, 5, 8), torch.randn(8))
-assert_type(y, Tensor[2, 5, 8])
-
-# Transpose tracks dimension reordering
-m = torch.randn(3, 5)
-mt = m.transpose(0, 1)
-assert_type(mt, Tensor[5, 3])
-
-
-# ERROR: return type has wrong shape -- pyrefly catches it!
-def broken[B, D](x: Tensor[B, D]) -> Tensor[D, B]:
-    return x  # Tensor[B, D] is not Tensor[D, B]
+if TYPE_CHECKING:
+    torch.randn((2, 3)) @ torch.randn((4, 5))  # E: is not assignable

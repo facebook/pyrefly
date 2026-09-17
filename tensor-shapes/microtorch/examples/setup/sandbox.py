@@ -7,40 +7,20 @@ from __future__ import annotations
 
 from typing import assert_type, TYPE_CHECKING
 
-import torch
+import microtorch as torch
+from microtorch import Tensor
 
 if TYPE_CHECKING:
-    from shape_extensions import Int
-    from torch import Tensor
+    from shape_extensions import Int, IntVar
 
 
-# Int arithmetic: compute dimensions at the type level
-def split_and_combine[D](x: Tensor[D], half: Int[D // 2]) -> Tensor[D // 2]:
-    return torch.randn(half)
+def make_pair[D: IntVar](dimension: Int[D]) -> tuple[Tensor[[D]], Tensor[[D, D]]]:
+    return torch.randn((dimension,)), torch.randn((dimension, dimension))
 
 
-a = torch.randn(8)
-result = split_and_combine(a, 4)
-assert_type(result, Tensor[4])
+vector, matrix = make_pair(4)
+assert_type(vector, Tensor[[4]])
+assert_type(matrix, Tensor[[4, 4]])
 
-
-# Int values compose through functions
-def double_dim[N](n: Int[N]) -> Int[N * 2]:
-    return n * 2
-
-
-doubled = double_dim(5)
-assert_type(doubled, Int[10])
-
-
-# Use Int to build tensors with matching shapes
-def make_pair[D](d: Int[D]) -> tuple[Tensor[D], Tensor[D, D]]:
-    return torch.randn(d), torch.randn(d, d)
-
-
-vec, mat = make_pair(4)
-assert_type(vec, Tensor[4])
-assert_type(mat, Tensor[4, 4])
-
-# ERROR: wrong assert_type -- doubled is Int[10], not Int[20]
-assert_type(doubled, Int[20])
+if TYPE_CHECKING:
+    assert_type(vector, Tensor[[5]])  # E: assert_type

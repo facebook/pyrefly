@@ -7,32 +7,28 @@ from __future__ import annotations
 
 from typing import assert_type, TYPE_CHECKING
 
-import torch
+import microtorch as torch
+from microtorch import Tensor
 
 if TYPE_CHECKING:
-    from shape_extensions import Int
-    from torch import Tensor
+    from shape_extensions import Int, IntVar
 
 
-# Step 1: Use Int to capture dimensions at construction
-class Actor[S, A]:
-    def __init__(self, state_size: Int[S], action_size: Int[A]):
-        self.w1: Tensor[S, 128] = torch.randn(state_size, 128)
-        self.w2: Tensor[128, A] = torch.randn(128, action_size)
+class Actor[State: IntVar, Action: IntVar]:
+    def __init__(self, state_size: Int[State], action_size: Int[Action]):
+        self.w1: Tensor[[State, 128]] = torch.randn((state_size, 128))
+        self.w2: Tensor[[128, Action]] = torch.randn((128, action_size))
 
-    # Step 2: Method-level type param B for batch size
-    def forward[B](self, state: Tensor[B, S]) -> Tensor[B, A]:
-        h: Tensor[B, 128] = torch.matmul(state, self.w1)
-        h = torch.relu(h)
-        return torch.matmul(h, self.w2)
+    def forward[Batch: IntVar](
+        self, state: Tensor[[Batch, State]]
+    ) -> Tensor[[Batch, Action]]:
+        return torch.relu(state @ self.w1) @ self.w2
 
 
-# Step 3: Verify shapes with concrete dimensions
 actor = Actor(24, 4)
-state = torch.randn(8, 24)
-action = actor.forward(state)
-assert_type(action, Tensor[8, 4])
+action = actor.forward(torch.randn((8, 24)))
+assert_type(action, Tensor[[8, 4]])
 
-# ERROR: wrong input shape -- state is [8, 24], not [8, 10]
-bad_state: Tensor[8, 10] = torch.randn(8, 10)
-actor.forward(bad_state)
+if TYPE_CHECKING:
+    bad_state: Tensor[[8, 10]] = torch.randn((8, 10))
+    actor.forward(bad_state)  # E: is not assignable

@@ -226,7 +226,7 @@ describe('buildSandboxUrl', () => {
         const files = readSandboxFiles(examplesDir, sharedDir);
         expect(files['sandbox.py']).toBeDefined();
         expect(files['pyrefly.toml']).toBeDefined();
-        expect(files['torch.pyi']).toBeDefined();
+        expect(files['microtorch.pyi']).toBeDefined();
 
         const decoded = decodeSandboxUrl(buildSandboxUrl(files, 'sandbox.py'));
         expect(decoded!.files['sandbox.py']).toContain('assert_type');
