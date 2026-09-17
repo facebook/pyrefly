@@ -25,6 +25,7 @@ use which::which_in;
 
 use crate::environment::active_environment::ActiveEnvironment;
 use crate::environment::conda;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::environment::environment::PythonEnvironment;
 use crate::environment::venv;
 use crate::util::ConfigOrigin;

@@ -84,9 +84,9 @@ fn setup_dummy_interpreter(custom_interpreter_path: &Path) -> PathBuf {
     // This simulates what a real Python interpreter would return when queried with the env script
     let python_script = format!(
         r#"#!/usr/bin/env bash
-if [[ "$1" == "-c" && "$2" == *"import json, sys"* ]]; then
+if [[ "$1" == "-c" && "$2" == *"import importlib.metadata, json, sys, sysconfig"* ]]; then
     cat << 'EOF'
-{{"python_platform": "linux", "python_version": "3.12.0", "site_package_path": ["{site_packages}"]}}
+{{"python_platform": "linux", "python_version": "3.12.0", "site_package_path": ["{site_packages}"], "distribution_urls": []}}
 EOF
 else
     echo "Mock python interpreter - args: $@" >&2
