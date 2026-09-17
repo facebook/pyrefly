@@ -7,7 +7,33 @@
 
 import { defineConfig } from '@vscode/test-cli';
 
-export default defineConfig({
-	files: 'dist/test/**/*.test.js',
-    workspaceFolder: "../pyrefly/lib/test/lsp/test_files"
-});
+// One configuration per window shape. The failed-start tests open a workspace
+// whose settings break the first launch, and VS Code caches that failure for the
+// lifetime of the window, so sharing one with the rest of the suite would leave
+// every later activation rejecting. The globs are disjoint — note the single
+// star, so the default set does not reach into the subdirectory — and `--label`
+// picks one configuration.
+// Writing a setting makes the extension re-resolve its binary and restart, so a
+// test that awaits `configuration.update` is also waiting on a server launch.
+// Mocha's 2s default is not enough for that on the slower CI runners.
+const mocha = {timeout: 20000};
+
+export default defineConfig([
+	{
+		label: 'single-root',
+		files: 'dist/test/*.test.js',
+		workspaceFolder: "../pyrefly/lib/test/lsp/test_files",
+		mocha
+	},
+	{
+		label: 'failed-start',
+		files: 'dist/test/failed-start/*.test.js',
+		mocha,
+		// Workspace settings are read before activation, so this is how the very
+		// first `client.start()` is made to fail.
+		workspaceFolder: "./src/test/fixtures/failed-start",
+		// The manifest declares `untrustedWorkspaces.supported: false`, and a
+		// trust prompt would leave the extension restricted.
+		launchArgs: ['--disable-workspace-trust']
+	}
+]);
