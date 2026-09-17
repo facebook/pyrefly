@@ -8,7 +8,7 @@ across all cores. They cover interactive LSP latency (`cold_start`,
 its section below.
 
 For the full command reference (all flags, micro benchmarks, cargo/buck forms),
-see `.claude/skills/benchmark-pyrefly/SKILL.md`.
+see `.agents/skills/benchmark-pyrefly/SKILL.md`.
 
 ## The pin
 
