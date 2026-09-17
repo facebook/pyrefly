@@ -49,12 +49,15 @@ if TYPE_CHECKING:
 
 
 def test_zeros_ones_and_empty() -> None:
+    assert_shape(jnp.zeros(()).shape, ())
     assert_shape(jnp.zeros(4).shape, (4,))
     assert_shape(jnp.zeros((3, 4)).shape, (3, 4))
     assert_shape(jnp.zeros((2, 3, 4)).shape, (2, 3, 4))
+    assert_shape(jnp.ones(()).shape, ())
     assert_shape(jnp.ones(4).shape, (4,))
     assert_shape(jnp.ones((3, 4)).shape, (3, 4))
     assert_shape(jnp.ones((2, 3, 4)).shape, (2, 3, 4))
+    assert_shape(jnp.empty(()).shape, ())
     assert_shape(jnp.empty(4).shape, (4,))
     assert_shape(jnp.empty((3, 4)).shape, (3, 4))
     assert_shape(jnp.empty((2, 3, 4)).shape, (2, 3, 4))
@@ -105,6 +108,7 @@ def test_non_tuple_shapes_are_gradual() -> None:
 
 
 def test_full() -> None:
+    assert_shape(jnp.full((), 2.0).shape, ())
     assert_shape(jnp.full(4, 2.0).shape, (4,))
     assert_shape(jnp.full((3, 4), 2.0).shape, (3, 4))
     assert_shape(jnp.full((2, 3, 4), 2.0).shape, (2, 3, 4))
@@ -120,9 +124,31 @@ def test_arange_and_eye() -> None:
 
 
 def test_linspace_logspace_geomspace() -> None:
+    assert_shape(jnp.linspace(0.0, 1.0).shape, (50,))
     assert_shape(jnp.linspace(0.0, 1.0, 10).shape, (10,))
     assert_shape(jnp.logspace(0.0, 2.0, 20).shape, (20,))
     assert_shape(jnp.geomspace(1.0, 100.0, 15).shape, (15,))
+
+    start = jnp.zeros((2, 1))
+    stop = jnp.ones((1, 3))
+    assert_shape(jnp.linspace(start, stop, 10).shape, (10, 2, 3))
+    assert_shape(jnp.linspace(start, stop, 10, axis=1).shape, (2, 10, 3))
+    assert_shape(jnp.linspace(start, stop, 10, axis=-1).shape, (2, 3, 10))
+    samples, step = jnp.linspace(start, stop, 10, retstep=True)
+    assert_shape(samples.shape, (10, 2, 3))
+    assert_shape(step.shape, (2, 3))
+    samples_pos, step_pos = jnp.linspace(start, stop, 10, True, True)
+    assert_shape(samples_pos.shape, (10, 2, 3))
+    assert_shape(step_pos.shape, (2, 3))
+    n: int = 10
+    assert_shape(
+        jnp.linspace(start, stop, n, axis=-1).shape, (2, 3, int), runtime=(2, 3, 10)
+    )
+    assert_shape(jnp.logspace(start, stop, 20, axis=-1).shape, (2, 3, 20))
+    assert_shape(
+        jnp.geomspace(jnp.ones((2, 1)), jnp.full((1, 3), 10.0), 15, axis=-1).shape,
+        (2, 3, 15),
+    )
 
 
 def test_diag_and_triangular() -> None:

@@ -46,6 +46,7 @@ from jax._shapes import (
     int_min,
     ix_shapes,
     kron_shape,
+    linspace_shape,
     matmul_shape,
     matvec_shape,
     moveaxis_shape,
@@ -180,10 +181,6 @@ def copy[Shape: _Shape = []](
 # through downstream array operations without degrading to unknown. The NumPy
 # stubs carry the same limitation.
 @overload
-def zeros(
-    shape: tuple[()], dtype: DTypeLike | None = ..., *, device: Any = ...
-) -> _Array[[]]: ...
-@overload
 def zeros[N: IntVar](
     shape: Int[N], dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> _Array[[N]]: ...
@@ -195,10 +192,6 @@ def zeros[Shape: _Shape](
 def zeros(
     shape: Sequence[int] | int, dtype: DTypeLike | None = ..., *, device: Any = ...
 ) -> _Array[IntTuple]: ...
-@overload
-def ones(
-    shape: tuple[()], dtype: DTypeLike | None = ..., *, device: Any = ...
-) -> _Array[[]]: ...
 @overload
 def ones[N: IntVar](
     shape: Int[N], dtype: DTypeLike | None = ..., *, device: Any = ...
@@ -235,14 +228,6 @@ def empty(
     device: Any = ...,
     out_sharding: Any = ...,
 ) -> _Array[IntTuple]: ...
-@overload
-def full(
-    shape: tuple[()],
-    fill_value: Any,
-    dtype: DTypeLike | None = ...,
-    *,
-    device: Any = ...,
-) -> _Array[[]]: ...
 @overload
 def full[N: IntVar](
     shape: Int[N], fill_value: Any, dtype: DTypeLike | None = ..., *, device: Any = ...
@@ -437,57 +422,49 @@ def arange(
     dtype: DTypeLike | None = ...,
 ) -> _Array[[int]]: ...
 @overload
-def linspace[N: IntVar](
-    start: _ArrayLike[Any],
-    stop: _ArrayLike[Any],
-    num: Int[N],
+def linspace[
+    StartShape: _Shape = [],
+    StopShape: _Shape = [],
+    N: IntVar = 50,
+    Axis: Flag[int] = 0,
+](
+    start: _ArrayLike[StartShape],
+    stop: _ArrayLike[StopShape],
+    num: Int[N] = 50,
     endpoint: bool = True,
     retstep: Literal[False] = False,
     dtype: DTypeLike | None = None,
-    axis: int = 0,
+    axis: Axis = 0,
     *,
     device: Any = None,
-) -> _Array[[N]]: ...
+) -> _Array[linspace_shape(broadcast(StartShape, StopShape), Int[N], Axis)]: ...
 @overload
-def linspace[N: IntVar](
-    start: _ArrayLike[Any],
-    stop: _ArrayLike[Any],
-    num: Int[N],
-    endpoint: bool,
-    retstep: Literal[True],
-    dtype: DTypeLike | None = None,
-    axis: int = 0,
-    *,
-    device: Any = None,
-) -> tuple[_Array[[N]], _Array[[]]]: ...
-@overload
-def linspace(
-    start: _ArrayLike[Any],
-    stop: _ArrayLike[Any],
-    num: int = 50,
+def linspace[
+    StartShape: _Shape = [],
+    StopShape: _Shape = [],
+    N: IntVar = 50,
+    Axis: Flag[int] = 0,
+](
+    start: _ArrayLike[StartShape],
+    stop: _ArrayLike[StopShape],
+    num: Int[N] = 50,
     endpoint: bool = True,
-    retstep: Literal[False] = False,
+    retstep: Literal[True] = ...,
     dtype: DTypeLike | None = None,
-    axis: int = 0,
+    axis: Axis = 0,
     *,
     device: Any = None,
-) -> _Array[[int]]: ...
+) -> tuple[
+    _Array[linspace_shape(broadcast(StartShape, StopShape), Int[N], Axis)],
+    _Array[broadcast(StartShape, StopShape)],
+]: ...
 @overload
-def linspace(
-    start: _ArrayLike[Any],
-    stop: _ArrayLike[Any],
-    num: int,
-    endpoint: bool,
-    retstep: Literal[True],
-    dtype: DTypeLike | None = None,
-    axis: int = 0,
-    *,
-    device: Any = None,
-) -> tuple[_Array[[int]], _Array[[]]]: ...
-@overload
-def linspace(
-    start: _ArrayLike[Any],
-    stop: _ArrayLike[Any],
+def linspace[
+    StartShape: _Shape = [],
+    StopShape: _Shape = [],
+](
+    start: _ArrayLike[StartShape],
+    stop: _ArrayLike[StopShape],
     num: int = 50,
     endpoint: bool = True,
     retstep: bool = False,
@@ -495,36 +472,48 @@ def linspace(
     axis: int = 0,
     *,
     device: Any = None,
-) -> _Array[IntTuple] | tuple[_Array[IntTuple], _Array[[]]]: ...
+) -> (
+    _Array[IntTuple] | tuple[_Array[IntTuple], _Array[broadcast(StartShape, StopShape)]]
+): ...
 @overload
-def logspace[N: IntVar](
-    start: _ArrayLike[Any],
-    stop: _ArrayLike[Any],
-    num: Int[N],
+def logspace[
+    StartShape: _Shape = [],
+    StopShape: _Shape = [],
+    N: IntVar = 50,
+    Axis: Flag[int] = 0,
+](
+    start: _ArrayLike[StartShape],
+    stop: _ArrayLike[StopShape],
+    num: Int[N] = 50,
     endpoint: bool = True,
-    base: Any = 10.0,
+    base: _ArrayLike[Any] = 10.0,
     dtype: DTypeLike | None = None,
-    axis: int = 0,
-) -> _Array[[N]]: ...
+    axis: Axis = 0,
+) -> _Array[linspace_shape(broadcast(StartShape, StopShape), Int[N], Axis)]: ...
 @overload
 def logspace(
     start: _ArrayLike[Any],
     stop: _ArrayLike[Any],
     num: int = 50,
     endpoint: bool = True,
-    base: Any = 10.0,
+    base: _ArrayLike[Any] = 10.0,
     dtype: DTypeLike | None = None,
     axis: int = 0,
-) -> _Array[[int]]: ...
+) -> _Array[IntTuple]: ...
 @overload
-def geomspace[N: IntVar](
-    start: _ArrayLike[Any],
-    stop: _ArrayLike[Any],
-    num: Int[N],
+def geomspace[
+    StartShape: _Shape = [],
+    StopShape: _Shape = [],
+    N: IntVar = 50,
+    Axis: Flag[int] = 0,
+](
+    start: _ArrayLike[StartShape],
+    stop: _ArrayLike[StopShape],
+    num: Int[N] = 50,
     endpoint: bool = True,
     dtype: DTypeLike | None = None,
-    axis: int = 0,
-) -> _Array[[N]]: ...
+    axis: Axis = 0,
+) -> _Array[linspace_shape(broadcast(StartShape, StopShape), Int[N], Axis)]: ...
 @overload
 def geomspace(
     start: _ArrayLike[Any],
@@ -533,7 +522,7 @@ def geomspace(
     endpoint: bool = True,
     dtype: DTypeLike | None = None,
     axis: int = 0,
-) -> _Array[[int]]: ...
+) -> _Array[IntTuple]: ...
 
 # `eye`, `identity`, `diag`, `diagflat`, `tri`, `tril`, `triu`, `vander`
 @overload
