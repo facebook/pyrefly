@@ -86,5 +86,18 @@ class ShapedArrayCorpusGuardTest(unittest.TestCase):
                         "/venv/bin/python",
                     ]
                 ),
+                call(
+                    [
+                        run_tests.sys.executable,
+                        str(
+                            run_tests.TENSOR_SHAPES_ROOT
+                            / "pyrefly-einops-stubs/run_pyrefly.py"
+                        ),
+                        "--pyrefly",
+                        "pyrefly",
+                        "--python",
+                        "/venv/bin/python",
+                    ]
+                ),
             ],
         )
