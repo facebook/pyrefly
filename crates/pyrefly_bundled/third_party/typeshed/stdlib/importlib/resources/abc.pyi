@@ -38,6 +38,7 @@ if sys.version_info >= (3, 11):
         @overload
         @abstractmethod
         def open(self, mode: Literal["rb"]) -> IO[bytes]: ...
+
         @property
         @abstractmethod
         def name(self) -> str:
@@ -46,8 +47,13 @@ if sys.version_info >= (3, 11):
         def __truediv__(self, child: StrPath, /) -> Traversable: ...
         @abstractmethod
         def read_bytes(self) -> bytes: ...
-        @abstractmethod
-        def read_text(self, encoding: str | None = None) -> str: ...
+
+        if sys.version_info >= (3, 15):
+            @abstractmethod
+            def read_text(self, encoding: str | None = None, errors: str | None = None) -> str: ...
+        else:
+            @abstractmethod
+            def read_text(self, encoding: str | None = None) -> str: ...
 
     class TraversableResources(ResourceReader):
         @abstractmethod

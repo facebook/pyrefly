@@ -6,17 +6,17 @@
  */
 
 use lsp_server::RequestId;
-use lsp_types::Url;
-use lsp_types::notification::DidChangeTextDocument;
-use lsp_types::notification::DidOpenTextDocument;
-use lsp_types::request::DocumentDiagnosticRequest;
-use pyrefly::lsp::non_wasm::protocol::Message;
-use pyrefly::lsp::non_wasm::protocol::Request;
+use lsp_types::DidChangeTextDocumentNotification;
+use lsp_types::DidOpenTextDocumentNotification;
+use lsp_types::DocumentDiagnosticRequest;
+use lsp_types::Uri;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::Request;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 #[test]
 #[allow(deprecated)]
@@ -32,11 +32,15 @@ fn test_initialize_basic() {
         )
         .expect_response(json!({"capabilities": {
             "positionEncoding": "utf-16",
-            "textDocumentSync": 2,
+            "textDocumentSync": {
+                "openClose": true,
+                "change": 2,
+                "save": { "includeText": false }
+            },
             "definitionProvider": true,
             "typeDefinitionProvider": true,
             "codeActionProvider": {
-                "codeActionKinds": ["quickfix", "refactor.extract", "refactor.rewrite", "refactor.delete", "refactor.move", "refactor.inline", "source.fixAll"]
+                "codeActionKinds": ["quickfix", "refactor.extract", "refactor.rewrite", "refactor.delete", "refactor.move", "refactor.inline", "source.fixAll", "source.fixAll.pyrefly"]
             },
             "codeLensProvider": {
                 "resolveProvider": false,
@@ -56,6 +60,7 @@ fn test_initialize_basic() {
             "notebookDocumentSync":{"notebookSelector":[{"cells":[{"language":"python"}]}]},
             "documentSymbolProvider": true,
             "foldingRangeProvider":true,
+            "selectionRangeProvider": true,
             "workspaceSymbolProvider": true,
             "workspace": {
                 "workspaceFolders": {
@@ -114,7 +119,7 @@ fn test_shutdown_with_messages_in_between() {
         .unwrap();
 
     let test_file = root.join("foo.py");
-    let uri = Url::from_file_path(&test_file).unwrap();
+    let uri = Uri::from_file_path(&test_file).unwrap();
 
     // Open a file
     interaction.client.did_open("foo.py");
@@ -140,7 +145,7 @@ fn test_shutdown_with_messages_in_between() {
         }))
         .expect_response_error(json!({
             "code": -32600,
-            "message": "Shutdown already requested",
+            "message": "ShutdownRequest already requested",
             "data": null,
         }))
         .unwrap();
@@ -163,7 +168,7 @@ fn test_exit_without_shutdown() {
 #[test]
 #[allow(deprecated)]
 fn test_initialize_with_python_path() {
-    let scope_uri = Url::from_file_path(get_test_files_root()).unwrap();
+    let scope_uri = Uri::from_file_path(get_test_files_root()).unwrap();
     let python_path = "/path/to/python/interpreter";
 
     let interaction = LspInteraction::new();
@@ -202,9 +207,9 @@ fn test_nonexistent_file() {
 
     interaction
         .client
-        .send_notification::<DidOpenTextDocument>(json!({
+        .send_notification::<DidOpenTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string(),
+                "uri": Uri::from_file_path(&nonexistent_filename).unwrap().to_string(),
                 "languageId": "python",
                 "version": 1,
                 "text": String::default(),
@@ -215,7 +220,7 @@ fn test_nonexistent_file() {
         .client
         .send_request::<DocumentDiagnosticRequest>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string()
+                "uri": Uri::from_file_path(&nonexistent_filename).unwrap().to_string()
             },
         }))
         .expect_response(json!({"items":[],"kind":"full"}))
@@ -224,9 +229,9 @@ fn test_nonexistent_file() {
     let notebook_content = std::fs::read_to_string(root.path().join("notebook.py")).unwrap();
     interaction
         .client
-        .send_notification::<DidChangeTextDocument>(json!({
+        .send_notification::<DidChangeTextDocumentNotification>(json!({
             "textDocument": {
-                "uri": Url::from_file_path(&nonexistent_filename).unwrap().to_string(),
+                "uri": Uri::from_file_path(&nonexistent_filename).unwrap().to_string(),
                 "languageId": "python",
                 "version": 2
             },

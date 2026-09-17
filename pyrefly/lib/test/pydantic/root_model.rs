@@ -22,6 +22,22 @@ m5 = IntRootModel(123, 456)  # E: Expected 1 positional argument, got 2
 );
 
 pydantic_testcase!(
+    test_root_model_field_default,
+    r#"
+from pydantic import Field, RootModel
+
+class DefaultRootModel(RootModel[int]):
+    root: int = Field(default=0)
+
+class DefaultFactoryRootModel(RootModel[int]):
+    root: int = Field(default_factory=int)
+
+DefaultRootModel()
+DefaultFactoryRootModel()
+"#,
+);
+
+pydantic_testcase!(
     test_root_model_generic,
     r#"
 from pydantic import RootModel
@@ -102,8 +118,7 @@ m3 = B(3)
 );
 
 pydantic_testcase!(
-    bug =
-        "we should not error on the call with a str argument because it could be coercible to int ",
+    bug = "we should not error on the call with a str argument since it is coercible to int",
     test_directly_use_root_model,
     r#"
 from typing import Any, assert_type
@@ -251,7 +266,25 @@ class Model(BaseModel, strict=True):
     x: OuterModel
 
 m1 = Model(x=OuterModel(InnerModel(5)))
-m2 = Model(x=InnerModel(5))  
+m2 = Model(x=InnerModel(5))
 m3 = Model(x=5)
+    "#,
+);
+
+pydantic_testcase!(
+    test_root_model_dict_field,
+    r#"
+from pydantic import BaseModel, RootModel
+
+class InnerModel(BaseModel):
+    a: int
+
+InnerModelDict = RootModel[dict[str, InnerModel]]
+
+class OuterModel(BaseModel):
+    data: InnerModelDict
+
+def serialize(d: InnerModelDict) -> OuterModel:
+    return OuterModel(data=d)
     "#,
 );

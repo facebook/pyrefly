@@ -40,7 +40,7 @@
       "source": "GitHub",
       "repository": "https://github.com/microsoft/python-type-stubs",
       "path_in_repo": "stubs/sklearn",
-      "commit": "ee6d039e893b5401e4b85c6229bafed3b984a941",
+      "commit": "dc5b8e762867e388c2a3159b457b5a8cd373b637",
       "notes": "Type stubs for scikit-learn from Microsoft's python-type-stubs repo"
     },
     "sympy-stubs": {

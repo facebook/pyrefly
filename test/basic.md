@@ -3,7 +3,8 @@
 ## No errors on the empty file
 
 ```scrut {output_stream: stderr}
-$ echo "" > $TMPDIR/empty.py && $PYREFLY check --python-version 3.13.0 $TMPDIR/empty.py -a
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "" > $TMPDIR/empty.py && $PYREFLY check --python-version 3.13.0 $TMPDIR/empty.py -a
  INFO 0 errors* (glob)
 [0]
 ```
@@ -11,7 +12,8 @@ $ echo "" > $TMPDIR/empty.py && $PYREFLY check --python-version 3.13.0 $TMPDIR/e
 ## No errors on reveal_type
 
 ```scrut {output_stream: stderr}
-$ echo -e "from typing import reveal_type\nreveal_type(1)" > $TMPDIR/empty.py && $PYREFLY check --python-version 3.13.0 $TMPDIR/empty.py -a
+$ touch $TMPDIR/pyrefly.toml && \
+> echo -e "from typing import reveal_type\nreveal_type(1)" > $TMPDIR/empty.py && $PYREFLY check --python-version 3.13.0 $TMPDIR/empty.py -a
  INFO 0 errors* (glob)
 [0]
 ```
@@ -19,7 +21,8 @@ $ echo -e "from typing import reveal_type\nreveal_type(1)" > $TMPDIR/empty.py &&
 ## No errors on our test script
 
 ```scrut {output_stream: stderr}
-$ cp $TEST_PY $TMPDIR/test.py && $PYREFLY check $TMPDIR/test.py
+$ touch $TMPDIR/pyrefly.toml && \
+> cp $TEST_PY $TMPDIR/test.py && $PYREFLY check $TMPDIR/test.py
  INFO Loading new build system at * (glob?)
  INFO Querying Buck for source DB (glob?)
  INFO Source DB build ID: * (glob?)
@@ -31,7 +34,7 @@ $ cp $TEST_PY $TMPDIR/test.py && $PYREFLY check $TMPDIR/test.py
 ## No errors on our Python code
 
 ```scrut {output_stream: stderr}
-$ $PYREFLY check $PYREFLY_PY
+$ touch $(dirname $PYREFLY_PY)/pyrefly.toml && $PYREFLY check $PYREFLY_PY
  INFO 0 errors
 [0]
 ```
@@ -39,7 +42,8 @@ $ $PYREFLY check $PYREFLY_PY
 ## Text output on stdout
 
 ```scrut
-$ echo "x: str = 42" > $TMPDIR/test.py && $PYREFLY check $TMPDIR/test.py --output-format=min-text
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 42" > $TMPDIR/test.py && $PYREFLY check $TMPDIR/test.py --output-format=min-text
 ERROR */test.py:1:* (glob)
 [1]
 ```
@@ -47,7 +51,8 @@ ERROR */test.py:1:* (glob)
 ## JSON output on stdout
 
 ```scrut
-$ echo "x: str = 42" > $TMPDIR/test.py && $PYREFLY check $TMPDIR/test.py --output-format json | $JQ '.[] | length'
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 42" > $TMPDIR/test.py && $PYREFLY check $TMPDIR/test.py --output-format json | $JQ '.[] | length'
 1
 [0]
 ```
@@ -55,7 +60,8 @@ $ echo "x: str = 42" > $TMPDIR/test.py && $PYREFLY check $TMPDIR/test.py --outpu
 ## We can typecheck two files with the same name
 
 ```scrut
-$ echo "x: str = 12" > $TMPDIR/same_name.py && \
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 12" > $TMPDIR/same_name.py && \
 > echo "x: str = True" > $TMPDIR/same_name.pyi && \
 > $PYREFLY check --python-version 3.13.0 $TMPDIR/same_name.py $TMPDIR/same_name.pyi --output-format=min-text
 ERROR */same_name.py*:1:10-* (glob)
@@ -66,25 +72,12 @@ ERROR */same_name.py*:1:10-* (glob)
 ## We don't report from nested files
 
 ```scrut
-$ echo "x: str = 12" > $TMPDIR/hidden1.py && \
+$ touch $TMPDIR/pyrefly.toml && \
+> echo "x: str = 12" > $TMPDIR/hidden1.py && \
 > echo "import hidden1; y: int = hidden1.x" > $TMPDIR/hidden2.py && \
 > $PYREFLY check --python-version 3.13.0 $TMPDIR/hidden2.py --output-format=min-text
 ERROR */hidden2.py:1:26-35: `str` is not assignable to `int` [bad-assignment] (glob)
 [1]
-```
-
-## We can find a venv interpreter, even when not sourced
-
-```scrut {output_stream: stderr}
-$ python3 -m venv $TMPDIR/venv && \
-> echo "import third_party.test2" > $TMPDIR/test.py && \
-> export site_packages=$($TMPDIR/venv/bin/python -c "import site; print(site.getsitepackages()[0])") && \
-> mkdir $site_packages/third_party && \
-> echo "x = 1" > $site_packages/third_party/test2.py && \
-> touch $TMPDIR/pyrefly.toml && \
-> $PYREFLY check $TMPDIR/test.py
- INFO 0 errors* (glob)
-[0]
 ```
 
 ## We show how many warnings are hidden
@@ -92,6 +85,15 @@ $ python3 -m venv $TMPDIR/venv && \
 ```scrut {output_stream: stderr}
 $ echo "x: str = 0" > $TMPDIR/test.py && \
 > $PYREFLY check $TMPDIR/test.py --warn=bad-assignment
- INFO 0 errors (1 warning not shown)* (glob)
+ INFO 0 errors (1 warning not shown, use `--min-severity=warn` to see it)* (glob)
+[0]
+```
+
+## We show how many warnings are hidden, pluralized
+
+```scrut {output_stream: stderr}
+$ printf 'x: str = 0\ny: str = 0\n' > $TMPDIR/test.py && \
+> $PYREFLY check $TMPDIR/test.py --warn=bad-assignment
+ INFO 0 errors (2 warnings not shown, use `--min-severity=warn` to see them)* (glob)
 [0]
 ```

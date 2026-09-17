@@ -60,7 +60,8 @@ export default function LandingPageHeader(): React.ReactElement {
                         )}
                     >
                         <span>
-                            A fast type checker and language server for Python with powerful IDE features
+                            A fast type checker and language server for Python
+                            with powerful IDE features
                         </span>
                     </p>
                 )}
@@ -79,27 +80,48 @@ export default function LandingPageHeader(): React.ReactElement {
                         )}
                     >
                         <PipInstallPyrefly />
-                        <a
-                            href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
-                            target="_blank"
-                            onClick={() =>
-                                log(LoggingEvent.CLICK, {
-                                    button_id: 'get_vscode_extension',
-                                })
-                            }
-                            onMouseEnter={() =>
-                                log(LoggingEvent.HOVER, {
-                                    button_id: 'get_vscode_extension',
-                                })
-                            }
-                            {...stylex.props(
-                                styles.buttonFullWidth,
-                                typography.p
-                            )}
-                        >
-                            {' '}
-                            Get VSCode Extension{' '}
-                        </a>
+                        <div {...stylex.props(styles.buttonRow)}>
+                            <a
+                                href="https://marketplace.visualstudio.com/items?itemName=meta.pyrefly"
+                                target="_blank"
+                                onClick={() =>
+                                    log(LoggingEvent.CLICK, {
+                                        button_id: 'get_vscode_extension',
+                                    })
+                                }
+                                onMouseEnter={() =>
+                                    log(LoggingEvent.HOVER, {
+                                        button_id: 'get_vscode_extension',
+                                    })
+                                }
+                                {...stylex.props(
+                                    styles.primaryButton,
+                                    typography.p
+                                )}
+                            >
+                                Get VSCode Extension
+                            </a>
+                            <a
+                                href="https://open-vsx.org/extension/meta/pyrefly"
+                                target="_blank"
+                                onClick={() =>
+                                    log(LoggingEvent.CLICK, {
+                                        button_id: 'get_openvsx_extension',
+                                    })
+                                }
+                                onMouseEnter={() =>
+                                    log(LoggingEvent.HOVER, {
+                                        button_id: 'get_openvsx_extension',
+                                    })
+                                }
+                                {...stylex.props(
+                                    styles.secondaryButton,
+                                    typography.p
+                                )}
+                            >
+                                Get OpenVSX Extension
+                            </a>
+                        </div>
                     </section>
                 )}
             </DelayedComponent>
@@ -173,7 +195,7 @@ const styles = stylex.create({
         justifyContent: 'center',
         marginVertical: '20px',
         width: '100%',
-        maxWidth: '430px',
+        maxWidth: '640px',
         marginLeft: 'auto',
         marginRight: 'auto',
         opacity: 0,
@@ -199,11 +221,14 @@ const styles = stylex.create({
     },
     buttonRow: {
         display: 'flex',
-        justifyContent: 'space-between',
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: '10px',
         width: '100%',
         marginTop: '10px',
     },
-    buttonFullWidth: {
+    primaryButton: {
+        flex: '1 1 220px',
         padding: '0.75rem 1.5rem',
         borderRadius: '4px',
         border: '1px solid var(--color-text)',
@@ -212,7 +237,6 @@ const styles = stylex.create({
         fontWeight: 'bold',
         cursor: 'pointer',
         transition: 'all 0.2s',
-        width: '100%',
         textAlign: 'center',
         ':hover': {
             backgroundColor: 'var(--color-primary-hover)',
@@ -220,17 +244,23 @@ const styles = stylex.create({
             transform: 'translateY(-1px)',
         },
     },
-    button: {
+    secondaryButton: {
+        flex: '1 1 220px',
         padding: '0.75rem 1.5rem',
         borderRadius: '4px',
         border: '1px solid var(--color-text)',
         backgroundColor: 'transparent',
         color: 'var(--color-text)',
+        fontWeight: 'bold',
         cursor: 'pointer',
         transition: 'all 0.2s',
-        fontWeight: 'bold',
-        width: 'calc(50% - 5px)', // Each button takes up half the space minus a small gap
         textAlign: 'center',
+        ':hover': {
+            backgroundColor:
+                'var(--color-landing-page-card-background-hovered)',
+            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
+            transform: 'translateY(-1px)',
+        },
     },
     pip: {
         marginTop: '1rem',

@@ -6,30 +6,16 @@
  */
 
 use std::fs;
-use std::path::Path;
 use std::path::PathBuf;
 
-use lsp_types::GotoDefinitionResponse;
+use lsp_types::Definition;
+use lsp_types::DefinitionResponse;
 use lsp_types::Location;
-use pyrefly::module::bundled::BundledStub;
-use pyrefly::module::typeshed::typeshed;
-use pyrefly_util::fs_anyhow;
-use tempfile::TempDir;
+use lsp_types::TypeDefinitionResponse;
 
-pub fn get_test_files_root() -> TempDir {
-    let mut source_files =
-        std::env::current_dir().expect("std:env::current_dir() unavailable for test");
-    let test_files_path = std::env::var("TEST_FILES_PATH")
-        .expect("TEST_FILES_PATH env var not set: cargo or buck should set this automatically");
-    source_files.push(test_files_path);
-
-    // We copy all files over to a separate temp directory so we are consistent between Cargo and Buck.
-    // In particular, given the current directory, Cargo is likely to find a pyproject.toml, but Buck won't.
-    let t = TempDir::with_prefix("pyrefly_lsp_test").unwrap();
-    copy_dir_recursively(&source_files, t.path());
-
-    t
-}
+use crate::module::bundled::BundledStub;
+use crate::module::typeshed::typeshed;
+pub use crate::test::util::get_test_files_root;
 
 pub fn bundled_typeshed_path() -> PathBuf {
     let mut path = std::env::temp_dir();
@@ -37,44 +23,52 @@ pub fn bundled_typeshed_path() -> PathBuf {
     path
 }
 
-fn copy_dir_recursively(src: &Path, dst: &Path) {
-    if !dst.exists() {
-        std::fs::create_dir_all(dst).unwrap();
-    }
-
-    for entry in fs_anyhow::read_dir(src).unwrap() {
-        let entry = entry.unwrap();
-        let file_type = entry.file_type().unwrap();
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-
-        if file_type.is_dir() {
-            copy_dir_recursively(&src_path, &dst_path);
-        } else {
-            std::fs::copy(&src_path, &dst_path).unwrap();
-        }
-    }
-}
-
 /// Validates that a goto definition response points to the expected symbol.
 /// This is resilient to typeshed changes as it validates behavior (correct symbol)
 /// rather than exact position (line/column numbers).
 ///
+/// Extracts plain locations from a definition-like response.
+///
+/// `DefinitionResponse` and `TypeDefinitionResponse` are distinct types with the
+/// same shape; this trait lets the test helper below accept either.
+pub trait DefinitionLocations {
+    fn as_locations(&self) -> Option<&[Location]>;
+}
+
+impl DefinitionLocations for DefinitionResponse {
+    fn as_locations(&self) -> Option<&[Location]> {
+        match self {
+            DefinitionResponse::Definition(Definition::Location(loc)) => {
+                Some(std::slice::from_ref(loc))
+            }
+            DefinitionResponse::Definition(Definition::LocationList(locs)) => Some(locs),
+            // Not expected in our tests
+            DefinitionResponse::DefinitionLinkList(_) => None,
+        }
+    }
+}
+
+impl DefinitionLocations for TypeDefinitionResponse {
+    fn as_locations(&self) -> Option<&[Location]> {
+        match self {
+            TypeDefinitionResponse::Definition(Definition::Location(loc)) => {
+                Some(std::slice::from_ref(loc))
+            }
+            TypeDefinitionResponse::Definition(Definition::LocationList(locs)) => Some(locs),
+            // Not expected in our tests
+            TypeDefinitionResponse::DefinitionLinkList(_) => None,
+        }
+    }
+}
+
 /// Reads the content at the returned location and verifies it contains the expected symbol.
 pub fn expect_definition_points_to_symbol(
-    response: Option<&GotoDefinitionResponse>,
+    response: Option<&impl DefinitionLocations>,
     expected_file_pattern: &str,
     expected_symbol: &str,
 ) -> bool {
-    let response = match response {
-        Some(r) => r,
-        None => return false,
-    };
-
-    let locations: &[Location] = match response {
-        GotoDefinitionResponse::Scalar(loc) => std::slice::from_ref(loc),
-        GotoDefinitionResponse::Array(locs) => locs,
-        GotoDefinitionResponse::Link(_) => return false, // Not expected in our tests
+    let Some(locations) = response.and_then(|response| response.as_locations()) else {
+        return false;
     };
 
     // Check if any location matches our criteria
@@ -121,7 +115,7 @@ pub fn check_inlay_hint_label_values(
     expected: &[(&str, bool)],
 ) -> bool {
     match &hint.label {
-        lsp_types::InlayHintLabel::LabelParts(parts) => {
+        lsp_types::Label::InlayHintLabelPartList(parts) => {
             if parts.len() != expected.len() {
                 return false;
             }

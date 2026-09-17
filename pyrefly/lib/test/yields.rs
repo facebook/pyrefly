@@ -20,14 +20,12 @@ f = yielding()
 next_f = next(f)
 assert_type(next_f, int)
 assert_type(f, Generator[Literal[1], Any, None])
-
 "#,
 );
 
 testcase!(
     test_generator_with_return,
     r#"
-
 from typing import assert_type, Generator, Literal, Any
 
 def gen_with_return():
@@ -36,14 +34,12 @@ def gen_with_return():
     return "done"
 
 assert_type(gen_with_return(), Generator[Literal[1, 2], Any, Literal['done']])
-
 "#,
 );
 
 testcase!(
     test_generator_send,
     r#"
-
 from typing import Generator, assert_type
 
 def accumulate(x: int) -> Generator[int, int, None]:
@@ -52,14 +48,12 @@ def accumulate(x: int) -> Generator[int, int, None]:
 gen = accumulate(10)
 assert_type(gen, Generator[int, int, None])
 gen.send(5)
-
 "#,
 );
 
 testcase!(
     test_generator_send_inference,
     r#"
-
 from typing import Generator, assert_type
 
 class Yield: pass
@@ -78,7 +72,6 @@ def my_generator() -> Generator[Yield, Send, Return]:
     assert_type(y, Return)
 
     return Return()
-
 "#,
 );
 
@@ -224,7 +217,6 @@ from typing import Generator
 
 def bare_yield() -> Generator[int, None, None]:
     yield  # E: Expected to yield a value of type `int`
-
 "#,
 );
 
@@ -236,12 +228,10 @@ from typing import AsyncGenerator, assert_type
 class Yield: pass
 class Send: pass
 
-
 async def my_generator() -> AsyncGenerator[Yield, Send]:
     s = yield Yield()
 
     assert_type(s, Send)
-
 "#,
 );
 
@@ -253,11 +243,9 @@ from typing import AsyncGenerator, assert_type
 class Yield: pass
 class Send: pass
 
-
 def my_generator() -> AsyncGenerator[Yield, Send]: # E: Generator function should return `Generator`
     s = yield Yield()
     assert_type(s, Send)
-
 "#,
 );
 
@@ -429,6 +417,35 @@ class BaseBlock:
         raise ValueError("No output produced")
 
 assert_type(BaseBlock().run({}), AsyncGenerator[tuple[str, str], None])
+"#,
+);
+
+testcase!(
+    test_sync_generator_yield_in_while_false,
+    r#"
+from typing import Generator, assert_type
+
+def gen() -> Generator[int, None, None]:
+    while False:
+        yield 1
+    raise NotImplementedError
+
+assert_type(gen(), Generator[int, None, None])
+"#,
+);
+
+// Only the leading run of `yield`s is exempt; the report starts at the first statement in
+// the suite that is not one.
+testcase!(
+    test_yield_beside_other_dead_code_in_if_false,
+    r#"
+from typing import Generator
+
+def gen() -> Generator[int, None, None]:
+    if False:
+        yield 1
+        print("dead")  # E: This code is unreachable
+    raise NotImplementedError
 "#,
 );
 
@@ -629,4 +646,115 @@ def bar2() -> Iterator[tuple[Any, ...]]:
 reveal_type(bar1)  # E: revealed type: () -> Iterator[dict[str, Any]] | Iterator[tuple[Any, ...]]
 reveal_type(bar2)  # E: revealed type: () -> Iterator[tuple[Any, ...]]
 "#,
+);
+
+testcase!(
+    test_union_of_generators_return_type,
+    r#"
+from typing import Generator
+def f() -> Generator[str, int]: ...
+def g() -> Generator[int, None] | Generator[str, int]:
+    yield from f()
+    "#,
+);
+
+testcase!(
+    test_yield_from_union_of_iterator,
+    r#"
+from typing import Iterator
+def f() -> Iterator[list[int]] | Iterator[list[str]]: ...
+def g() -> Iterator[list[int]] | Iterator[list[str]]:
+    yield from f()
+    "#,
+);
+
+testcase!(
+    test_iterator_annotation_with_return_value,
+    r#"
+from collections.abc import Generator, Iterable, Iterator
+from typing import assert_type
+
+def gen(x: int) -> Iterator[int] | int:
+    yield from range(4)
+    return 5
+
+assert_type(gen(0), Iterator[int] | int)
+
+def iterator() -> Iterator[int]:
+    yield 1
+    return "done"
+
+def iterable() -> Iterable[int]:
+    yield 1
+    return "done"
+
+def bad_yield() -> Iterator[int] | int:
+    yield "oops"  # E: Yielded type `Literal['oops']` is not assignable to declared yield type `int`
+    return 5
+
+def explicit_return_type() -> Generator[int, None, None] | int:
+    yield 1
+    return 5  # E: Returned type `Literal[5]` is not assignable to declared return type `None`
+    "#,
+);
+
+testcase!(
+    test_return_is_incompatible_with_generator,
+    r#"
+from typing import Generator
+def f() -> Generator[int, None, str] | int:
+    yield 1
+    return 42  # E: `Literal[42]` is not assignable to declared return type `str`
+    "#,
+);
+
+testcase!(
+    test_generator_return_annotation,
+    r#"
+def f() -> int:  # E: Generator function should return `Generator`
+    yield 0
+    "#,
+);
+
+testcase!(
+    test_generator_nongenerator_union,
+    r#"
+from typing import Generator
+class A: ...
+# This is a silly return type, but it's technically valid.
+def f1() -> A | Generator[A]:
+    return A()
+def f2() -> A | Generator[A]:
+    yield A()
+    "#,
+);
+
+testcase!(
+    test_async_generator_union,
+    r#"
+from typing import AsyncGenerator
+async def f() -> AsyncGenerator[int] | AsyncGenerator[str]:
+    yield ""
+    "#,
+);
+
+testcase!(
+    test_async_generator_return_annotation,
+    r#"
+async def f() -> int:  # E: Async generator function should return `AsyncGenerator`
+    yield 0
+    "#,
+);
+
+testcase!(
+    test_async_generator_nongenerator_union,
+    r#"
+from typing import AsyncGenerator
+class A: ...
+# This is a silly return type, but it's technically valid.
+async def f1() -> A | AsyncGenerator[A]:
+    return A()
+async def f2() -> A | AsyncGenerator[A]:
+    yield A()
+    "#,
 );

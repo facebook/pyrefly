@@ -1,0 +1,29 @@
+---
+title: Contributing
+description: How to extend tensor shape coverage by adding fixture stubs, DSL specifications, and ported models.
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+# Contributing to Tensor Shapes
+
+Pyrefly's tensor shape tracking is designed so that coverage of the PyTorch
+library can be extended without understanding Pyrefly's internals. There are
+three ways to contribute:
+
+1. **Fixture stubs** — `.pyi` files with shape-generic type signatures for
+   PyTorch modules and functions (e.g., `nn.Linear`, `torch.mm`).
+2. **DSL functions** — shape transform specifications for operators with
+   complex shape logic (e.g., `reshape`, `cat`, `F.interpolate`).
+3. **Ported models** — fully annotated ports of real-world PyTorch models
+   that serve as tests and examples.
+
+For detailed instructions on writing stubs, DSL functions, and porting
+models, see the
+[Tensor Shapes Contributing Guide](https://github.com/facebook/pyrefly/blob/main/TENSOR_SHAPES_CONTRIBUTING.md)
+in the repository.

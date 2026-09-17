@@ -110,6 +110,8 @@ pub enum LSPNull {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
 pub enum TSPRequestMethods {
+    #[serde(rename = "typeServer/connection")]
+    TypeServerConnection,
     #[serde(rename = "typeServer/getComputedType")]
     TypeServerGetComputedType,
     #[serde(rename = "typeServer/getDeclaredType")]
@@ -129,6 +131,11 @@ pub enum TSPRequestMethods {
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
 #[serde(tag = "method")]
 pub enum TSPRequests {
+    #[serde(rename = "typeServer/connection")]
+    ConnectionRequest {
+        id: serde_json::Value,
+        params: ConnectionRequestParams,
+    },
     #[serde(rename = "typeServer/getComputedType")]
     GetComputedTypeRequest {
         id: serde_json::Value,
@@ -347,7 +354,17 @@ pub enum TypeServerVersion {
 
     /// Switch to Type union and using stubs
     #[serde(rename = "0.4.0")]
+    V040,
+
+    /// Add multi-connection negotiation and control requests
+    #[serde(rename = "0.4.1")]
     Current,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
+pub enum ConnectionTransportKind {
+    #[serde(rename = "ipc")]
+    Ipc,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
@@ -416,6 +433,33 @@ pub struct Node {
 
     /// URI of the source file containing this node.
     pub uri: String,
+}
+
+/// Capability shape exchanged via the LSP initialize request/response under `capabilities.experimental.typeServerMultiConnection`.
+#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TypeServerMultiConnectionCapability {
+    pub supported_transports: Vec<ConnectionTransportKind>,
+}
+
+/// Main-connection-only control request used to open or close extra read-only TSP channels after LSP initialization has completed.
+#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConnectionRequestParams {
+    pub args: Option<Vec<String>>,
+
+    pub kind: ConnectionTransportKind,
+
+    #[serde(rename = "type")]
+    pub type_: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConnectionRequestResult {
+    pub message: Option<String>,
+
+    pub success: bool,
 }
 
 /// Represents a Python module name, handling both absolute and relative imports. Used for: - Import statement resolution - Tracking module dependencies - Resolving relative imports (from . import, from .. import) Examples: - `import os.path`: leadingDots=0, nameParts=['os', 'path'] - `from . import utils`: leadingDots=1, nameParts=['utils'] - `from ...parent import module`: leadingDots=3, nameParts=['parent', 'module'] - `import mymodule`: leadingDots=0, nameParts=['mymodule']
@@ -510,7 +554,7 @@ pub struct SentinelLiteral {
     pub module_name: String,
 }
 
-/// Base interface for all declaration types. Provides the discriminator field for the Declaration union.
+/// Base interface for all declaration types. Provides the discriminator field for the Declaration union. This is a generic interface that is extended by: - RegularDeclaration (kind = Regular) - SynthesizedDeclaration (kind = Synthesized) The type parameter T ensures that the kind field matches the implementing interface. Used for type-safe discrimination: ```typescript if (declaration.kind === DeclarationKind.Regular) { // TypeScript knows this is RegularDeclaration const node = declaration.node; } ```
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeclarationBase {
@@ -863,6 +907,25 @@ pub enum LSPIdOptional {
     String(String),
     None,
 }
+
+/// Main-connection-only request used to open or close an extra TSP transport. Extra transports must remain read-only and must not be used for LSP traffic.
+#[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConnectionRequest {
+    /// The version of the JSON RPC protocol.
+    pub jsonrpc: String,
+
+    /// The method to be invoked.
+    pub method: TSPRequestMethods,
+
+    /// The request id.
+    pub id: LSPId,
+
+    pub params: ConnectionRequestParams,
+}
+
+/// Response to the [ConnectionRequest].
+pub type ConnectionResponse = ConnectionRequestResult;
 
 /// Requests and notifications for the type server protocol. Request for the computed type of a declaration or node. Computed type is the type that is inferred based on the code flow. Example: def foo(a: int | str): if instanceof(a, int): b = a + 1  # Computed type of 'b' is 'int'
 #[derive(Serialize, Deserialize, PartialEq, Debug, Eq, Clone)]

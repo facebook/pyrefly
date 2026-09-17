@@ -1,0 +1,40 @@
+name: check_publish
+
+# Gate shared by publish_to_pypi.yml and deploy_extension.yml. For `push`
+# events: publish from `main` only for dev versions (M.m.p-dev.N). Stable
+# version bumps land on main to keep trunk's version current and to keep
+# release notes in trunk history, but the artifact that actually publishes
+# is built from the cherry-picked commit on the release branch -- so we
+# skip the trunk push to avoid a redundant publish from the wrong source.
+# Release branches always publish. `workflow_dispatch` runs are trusted
+# and bypass the gate.
+
+on:
+  workflow_call:
+    outputs:
+      should_publish:
+        description: '"true" if downstream publish jobs should run, "false" otherwise.'
+        value: ${{ jobs.gate.outputs.should_publish }}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_publish: ${{ steps.gate.outputs.should_publish }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: gate
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          VERSION=$(sed -n -e 's/^VERSION = "\(.*\)"/\1/p' version.bzl)
+          if [ "${{ github.ref }}" = "refs/heads/main" ] && \
+             ! python3 scripts/version_helpers.py is-prerelease "$VERSION" >/dev/null; then
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+            echo "Skipping publish: stable version $VERSION on main publishes from the release branch instead."
+          else
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          fi

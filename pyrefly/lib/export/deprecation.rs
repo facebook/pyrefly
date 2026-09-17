@@ -6,7 +6,7 @@
  */
 
 use pyrefly_python::module_name::ModuleName;
-use pyrefly_types::callable::Deprecation;
+use pyrefly_types::function::Deprecation;
 use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprCall;
@@ -17,11 +17,9 @@ use crate::export::special::SpecialExport;
 fn is_deprecated_target(e: &Expr) -> bool {
     let (base, value) = match e {
         Expr::Name(x) => (None, &x.id),
-        Expr::Attribute(ExprAttribute {
-            value: box Expr::Name(base),
-            attr,
-            ..
-        }) => (Some(&base.id), &attr.id),
+        Expr::Attribute(ExprAttribute { value, attr, .. }) if let Expr::Name(base) = &**value => {
+            (Some(&base.id), &attr.id)
+        }
         _ => return false,
     };
     SpecialExport::new(value).is_some_and(|special| {

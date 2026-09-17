@@ -131,7 +131,7 @@ def f(foo: Foo):
         # Why `Foo | object`? Because the lookup on `None` fails, and we fall back to `object`
         # in that branch of the union.
         assert_type(foo.x.x, Foo | object)
-    if isinstance(foo.x.y, Foo) and foo.x.y.x is not None:  # E: Object of class `Foo` has no attribute `y`\nObject of class `NoneType` has no attribute `y`
+    if isinstance(foo.x.y, Foo) and foo.x.y.x is not None:  # E: Object of type `Foo | None` has no attribute `y`
         assert_type(foo.x, Foo | None)
         assert_type(foo.x.y, Foo)
         assert_type(foo.x.y.x, Foo)
@@ -181,8 +181,8 @@ testcase!(
     r#"
 def f(x: int | str):
     if (
-        len(x.missing)  # E: Object of class `int` has no attribute `missing`\nObject of class `str` has no attribute `missing`
-        or x.missing  # E: Object of class `int` has no attribute `missing`\nObject of class `str` has no attribute `missing`
+        len(x.missing)  # E: Object of type `int | str` has no attribute `missing`
+        or x.missing  # E: Object of type `int | str` has no attribute `missing`
     ):
         pass
 "#,
@@ -206,6 +206,23 @@ def test_introduce_narrow_with_assignment(c0: C, c1: C):
     assert_type(c0.x, Literal[42])
     assert_type(c0.y, Literal[43])
     assert_type(c0.z, C)
+"#,
+);
+
+testcase!(
+    test_attr_assignment_optional_augassign,
+    r#"
+from typing import assert_type
+def question() -> bool:
+    return True
+class C:
+    x: int | None
+c = C()
+c.x = abs(int(0))
+assert_type(c.x, int)
+if question():
+    c.x += 2
+    assert_type(c.x, int)
 "#,
 );
 
@@ -643,5 +660,56 @@ def f(v: A | B):
     if hasattr(v, "x"):
         # The facet should preserve `int` from A.x, not widen to bare Any.
         assert_type(v.x, int | Any)
+    "#,
+);
+
+testcase!(
+    test_hasattr_narrowing_del,
+    r#"
+from typing import Final
+
+class Foo: pass
+
+def f(foo: Foo) -> None:
+    if hasattr(foo, "uid"):
+        before = foo.uid
+        del foo.uid
+        after = foo.uid  # E: Object of class `Foo` has no attribute `uid`
+
+def preserves_other_narrows(foo: Foo) -> None:
+    if hasattr(foo, "uid"):
+        if hasattr(foo, "name"):
+            del foo.uid
+            still_present = foo.name
+
+class Locked:
+    uid: Final[int] = 0
+
+def preserves_delete_restrictions(value: Foo | Locked) -> None:
+    if hasattr(value, "uid"):
+        del value.uid  # E: Cannot delete field `uid`
+
+class BadDelattr:
+    def __delattr__(self, name: int) -> None: ...  # E: `BadDelattr.__delattr__` overrides parent class `object` in an inconsistent manner
+
+def validates_delattr(value: BadDelattr) -> None:
+    if hasattr(value, "uid"):
+        del value.uid  # E: Argument `Literal['uid']` is not assignable to parameter `name` with type `int`
+    "#,
+);
+
+testcase!(
+    test_del_attribute_unknown_index_invalidates_narrows,
+    r#"
+from typing import assert_type
+
+class Inner:
+    uid: int | None
+
+def f(xs: list[Inner], i: int) -> None:
+    if xs[0].uid is not None:
+        assert_type(xs[0].uid, int)
+        del xs[i].uid
+        assert_type(xs[0].uid, int | None)
     "#,
 );

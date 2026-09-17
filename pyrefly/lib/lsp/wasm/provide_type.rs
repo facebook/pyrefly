@@ -12,8 +12,8 @@ use dupe::Dupe;
 use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::Position;
+use lsp_types::Request;
 use lsp_types::TextDocumentIdentifier;
-use lsp_types::request::Request;
 use pyrefly_build::handle::Handle;
 use pyrefly_types::display::LspDisplayMode;
 use pyrefly_types::display::TypeDisplayContext;
@@ -29,7 +29,10 @@ pub enum ProvideType {}
 impl Request for ProvideType {
     type Params = ProvideTypeParams;
     type Result = Option<ProvideTypeResponse>;
-    const METHOD: &'static str = "types/provide-type";
+    const METHOD: lsp_types::LspRequestMethod<'static> =
+        lsp_types::LspRequestMethod::Custom("types/provide-type");
+    const MESSAGE_DIRECTION: lsp_types::MessageDirection =
+        lsp_types::MessageDirection::ClientToServer;
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
@@ -48,6 +51,7 @@ pub fn provide_type(
     transaction: &mut Transaction<'_>,
     handle: &Handle,
     positions: Vec<Position>,
+    notebook_cell: Option<usize>,
 ) -> Option<ProvideTypeResponse> {
     // This LSP method works for unopened files.
     // Check if the file is already loaded in memory. If not, load it.
@@ -59,7 +63,7 @@ pub fn provide_type(
     let mut contents = Vec::new();
 
     for position in positions {
-        let text_size = info.from_lsp_position(position, None);
+        let text_size = info.from_lsp_position(position, notebook_cell);
         if let Some(ty) = transaction.get_result_type_at(handle, text_size) {
             let mut c = TypeDisplayContext::new(&[&ty]);
             c.set_lsp_display_mode(LspDisplayMode::ProvideType);

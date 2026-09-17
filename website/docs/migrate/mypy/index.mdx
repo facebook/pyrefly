@@ -1,0 +1,177 @@
+---
+title: Migrate from mypy
+slug: /migrating-from-mypy
+description:
+    'Move a Python project from mypy to Pyrefly: install alongside, convert the
+    config automatically, compare the two outputs, and adopt the backlog with
+    suppressions or a baseline.'
+keywords:
+    - migrate from mypy
+    - mypy to pyrefly
+    - mypy alternative
+    - mypy config migration
+    - pyrefly init
+---
+
+{/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */}
+
+This guide covers the simplest migration path to transition from mypy to
+Pyrefly. It should be suitable for most projects.
+
+If your project uses mypy plugins or sets `strict = true`, follow this page
+first and then read the [linked guide](#going-further) for that case.
+
+## 1. Install Pyrefly and convert your config
+
+```sh
+# uv
+uv add --dev pyrefly
+
+# pip
+python -m pip install pyrefly
+```
+
+```sh
+pyrefly init
+```
+
+The `pyrefly init` command finds your `mypy.ini` or `[tool.mypy]` section and
+writes the equivalent `pyrefly.toml` or `[tool.pyrefly]`, preserving the
+settings it can: project inputs and import roots, Python version and interpreter
+settings, import suppression, selected strictness flags, per-module error
+overrides, and a subset of mypy error codes. Use `pyrefly init --help` for more
+options.
+
+Your mypy config is left in place. Pyrefly only reads its own config once one
+exists, so both checkers keep working and you can back out at any point.
+
+## 2. Check the config was mapped correctly
+
+Read the generated config line by line before committing it. Settings and error
+codes the converter does not recognize are dropped without a warning. The
+[mypy config reference](config-reference.mdx) and
+[mypy error-code reference](error-codes.mdx) show how each mypy option is
+mapped, so you can check anything the generated file does not mention.
+
+Alongside your converted settings, `pyrefly init` writes:
+
+```toml
+preset = "legacy"
+```
+
+The [`legacy` preset](../../configuration.mdx#preset-legacy) disables a few
+checks that mypy does not have, so a migrating project is not immediately
+flooded with errors for classes of issue mypy never flagged.
+
+### Unannotated code
+
+Mypy skips the bodies of completely unannotated functions. Pyrefly checks them
+and can infer their return types, which gives better editor information but
+produces differences during a migration. To keep mypy's treatment while you
+migrate:
+
+```toml
+preset = "legacy"
+check-unannotated-defs = false
+infer-return-types = "never"
+```
+
+If mypy sets `check_untyped_defs = true`, including via `strict = true`, use
+`check-unannotated-defs = true` instead.
+
+:::warning
+
+Both migration paths read `check_untyped_defs`, falling back to `strict`, but
+only at the global level. A `check_untyped_defs` set under a per-module section
+(`[mypy-some.module]`, or a `[[tool.mypy.overrides]]` entry) is dropped, so set
+`check-unannotated-defs` by hand if your config only enables it per module. See
+[mypy strict mode](strict-mode.mdx).
+
+:::
+
+Empty-container inference already matches mypy closely. Pyrefly infers the
+element type from first use, controlled by `infer-with-first-use`, which
+defaults to `true` and is normally left alone for a mypy migration.
+
+## 3. Handle the new errors and drop mypy
+
+With the config settled, run both checkers on the same commit and compare:
+
+```sh
+mypy src
+pyrefly check
+```
+
+You may still find some differences in error output as Pyrefly implements the
+type system independently of mypy and will not reproduce its diagnostics
+exactly.
+
+Classify each difference: a true bug, an inference difference, a framework
+behavior gap, a config gap, or a custom-plugin dependency.
+
+Once you know what the differences are, decide how to absorb the ones you are
+not fixing up front. Start with suppressions: `pyrefly suppress` inserts
+comments across the project for you, and `# pyrefly: ignore[bad-assignment]`
+silences a single line.
+
+```sh
+pyrefly suppress
+```
+
+The comments live next to the code they apply to, so the remaining work stays
+visible and can be cleared file by file.
+
+If your codebase is large enough that suppression comments would mean churn
+across thousands of lines, use a
+[baseline](../../error-suppressions.mdx#baseline-files-experimental) instead:
+
+```sh
+pyrefly check --baseline="pyrefly-baseline.json" --update-baseline
+pyrefly check --baseline="pyrefly-baseline.json"
+```
+
+Or commit it in the configuration:
+
+```toml
+baseline = "pyrefly-baseline.json"
+```
+
+A baseline records the current errors in a file rather than in your source. It
+suppresses matching errors in CLI and CI runs so new errors can be blocked,
+while still showing the suppressed diagnostics in the IDE. That lets the
+migration land before the backlog is cleared.
+
+Whichever you choose, Pyrefly respects `# type: ignore` by default; to also
+honor mypy-specific ignores during the transition:
+
+```toml
+enabled-ignores = ["type", "mypy", "pyrefly"]
+```
+
+Keep that temporary and remove stale tool-specific comments once mypy leaves CI.
+See the [error suppression docs](../../error-suppressions.mdx).
+
+Once CI is green on Pyrefly alone and the team is happy with the editor
+experience, drop mypy: remove it from your dependencies and CI, delete
+`mypy.ini` or the `[tool.mypy]` section, and narrow `enabled-ignores` back to
+`["type", "pyrefly"]`. Then clear the suppressions or the baseline as you go
+with `pyrefly suppress --remove-unused`.
+
+## Going further
+
+| If your project                                            | Read                                                        |
+| ---------------------------------------------------------- | ----------------------------------------------------------- |
+| Sets `plugins = [...]`                                     | [Mypy plugins](plugins.mdx)                                 |
+| Sets `strict = true`                                       | [Mypy strict mode](strict-mode.mdx)                         |
+| Uses `ignore_missing_imports` or `follow_imports = "skip"` | [Mypy `ignore_missing_imports`](ignore-missing-imports.mdx) |
+| Needs the full option-by-option mapping                    | [Mypy config reference](config-reference.mdx)               |
+| Needs the full error-code mapping                          | [Mypy error codes](error-codes.mdx)                         |
+
+If a specific plugin, error code, or configuration option is what stops you from
+adopting Pyrefly, please
+[open an issue](https://github.com/facebook/pyrefly/issues).

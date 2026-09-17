@@ -6,17 +6,19 @@
  */
 
 use lsp_types::DiagnosticSeverity;
+use lsp_types::Notification as _;
+use lsp_types::PublishDiagnosticsNotification;
 use lsp_types::PublishDiagnosticsParams;
-use lsp_types::Url;
-use lsp_types::notification::Notification as _;
-use lsp_types::notification::PublishDiagnostics;
-use pyrefly::commands::lsp::IndexingMode;
-use pyrefly::lsp::non_wasm::protocol::Message;
+use lsp_types::Uri;
+use pyrefly_lsp_test::IndexingMode;
+use pyrefly_lsp_test::LspArgs;
+use pyrefly_lsp_test::Message;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
+use pyrefly_lsp_test::object_model::LspInteractionArgs;
 use serde_json::json;
 
-use crate::object_model::InitializeSettings;
-use crate::object_model::LspInteraction;
-use crate::util::get_test_files_root;
+use crate::test::lsp::lsp_interaction::util::get_test_files_root;
 
 /// Non-open file gets diagnostics in workspace mode.
 ///
@@ -30,13 +32,19 @@ use crate::util::get_test_files_root;
 fn test_workspace_diagnostics_for_non_open_file() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -71,13 +79,19 @@ fn test_workspace_diagnostics_for_non_open_file() {
 fn test_workspace_diagnostics_skip_clean_non_open_file() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -96,18 +110,20 @@ fn test_workspace_diagnostics_skip_clean_non_open_file() {
             "publishDiagnostics for errors.py without any publish for extra_clean.py",
             |msg| {
                 if let Message::Notification(n) = &msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params.clone()).unwrap();
                     let path = params.uri.to_file_path().unwrap();
                     if path == clean_path {
-                        return Some(Err(crate::object_model::LspMessageError::Custom {
-                            description: format!(
-                                "Did not expect publishDiagnostics for clean non-open file {}",
-                                clean_path.display()
-                            ),
-                        }));
+                        return Some(Err(
+                            pyrefly_lsp_test::object_model::LspMessageError::Custom {
+                                description: format!(
+                                    "Did not expect publishDiagnostics for clean non-open file {}",
+                                    clean_path.display()
+                                ),
+                            },
+                        ));
                     }
                     if path == error_path && params.diagnostics.len() == 1 {
                         return Some(Ok(()));
@@ -119,19 +135,19 @@ fn test_workspace_diagnostics_skip_clean_non_open_file() {
         .unwrap();
 
     let shutdown_handle = interaction.client.send_shutdown();
-    let shutdown_id = shutdown_handle.id.clone();
+    let shutdown_id = shutdown_handle.id().clone();
     interaction
         .client
         .expect_message(
             "shutdown response without any later publish for extra_clean.py",
             |msg| {
                 if let Message::Notification(n) = &msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params.clone()).unwrap();
                     if params.uri.to_file_path().unwrap() == clean_path {
-                        return Some(Err(crate::object_model::LspMessageError::Custom {
+                        return Some(Err(pyrefly_lsp_test::object_model::LspMessageError::Custom {
                             description: format!(
                                 "Did not expect a later publishDiagnostics for clean non-open file {}",
                                 clean_path.display()
@@ -165,13 +181,19 @@ fn test_workspace_diagnostics_skip_clean_non_open_file() {
 fn test_workspace_diagnostics_preserved_after_did_close() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -208,7 +230,7 @@ fn test_workspace_diagnostics_preserved_after_did_close() {
             "publishDiagnostics for clean.py (verifying errors.py not cleared)",
             move |msg| {
                 if let Message::Notification(n) = msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params).unwrap();
@@ -244,7 +266,13 @@ fn test_workspace_diagnostics_preserved_after_did_close() {
 fn test_workspace_diagnostics_not_published_without_workspace_folders() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -287,13 +315,19 @@ fn test_workspace_diagnostics_not_published_without_workspace_folders() {
 fn test_workspace_diagnostics_scoped_to_config() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics_scoped");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics_scoped".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -335,7 +369,13 @@ fn test_did_close_clears_diagnostics_outside_workspace_folder() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics_scoped");
     let project_path = root_path.join("project");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -343,7 +383,7 @@ fn test_did_close_clears_diagnostics_outside_workspace_folder() {
             // at the workspace_diagnostics_scoped/ root falls outside.
             workspace_folders: Some(vec![(
                 "project".to_owned(),
-                Url::from_file_path(project_path).unwrap(),
+                Uri::from_file_path(project_path).unwrap(),
             )]),
             // Two configuration entries: one for the project/ workspace folder,
             // one for the default workspace (no scope URI). Both need
@@ -387,13 +427,19 @@ fn test_did_close_clears_diagnostics_outside_workspace_folder() {
 fn test_workspace_diagnostics_multiple_configs() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics_multi_config");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics_multi_config".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -423,7 +469,7 @@ fn test_workspace_diagnostics_multiple_configs() {
                 "publishDiagnostics with 1 error for project_a or project_b",
                 move |msg| {
                     if let Message::Notification(n) = msg
-                        && n.method == PublishDiagnostics::METHOD
+                        && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                     {
                         let params: PublishDiagnosticsParams =
                             serde_json::from_value(n.params).unwrap();
@@ -463,13 +509,19 @@ fn test_workspace_diagnostics_config_above_root() {
     let project_path = root
         .path()
         .join("workspace_diagnostics_config_above/project");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(project_path.clone());
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "project".to_owned(),
-                Url::from_file_path(project_path.clone()).unwrap(),
+                Uri::from_file_path(project_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -504,8 +556,14 @@ fn test_workspace_diagnostics_config_above_root() {
 fn test_workspace_diagnostics_cleared_on_mode_switch() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let scope_uri = Url::from_file_path(root_path.clone()).unwrap();
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let scope_uri = Uri::from_file_path(root_path.clone()).unwrap();
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
@@ -561,13 +619,19 @@ fn test_workspace_diagnostics_cleared_on_mode_switch() {
 fn test_did_close_no_stale_memory_path_errors() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -594,14 +658,14 @@ fn test_did_close_no_stale_memory_path_errors() {
     // shutdown. Drain all messages until the shutdown response, checking every
     // publishDiagnostics notification for the stale error.
     let shutdown_handle = interaction.client.send_shutdown();
-    let shutdown_id = shutdown_handle.id.clone();
+    let shutdown_id = shutdown_handle.id().clone();
     let saw_stale_error = interaction
         .client
         .expect_message(
             "drain all messages until shutdown (checking no stale memory errors)",
             move |msg| {
                 match msg {
-                    Message::Notification(n) if n.method == PublishDiagnostics::METHOD => {
+                    Message::Notification(n) if n.method == PublishDiagnosticsNotification::METHOD.as_str() => {
                         let params: PublishDiagnosticsParams =
                             serde_json::from_value(n.params).unwrap();
                         let path = params.uri.to_file_path().unwrap();
@@ -609,13 +673,13 @@ fn test_did_close_no_stale_memory_path_errors() {
                             && params
                                 .diagnostics
                                 .iter()
-                                .any(|d| d.message.contains("memory path not found"))
+                                .any(|d| matches!(&d.message, lsp_types::Message::String(s) if s.contains("memory path not found")))
                         {
                             return Some(Ok(true));
                         }
                     }
                     Message::Response(r) if r.id == shutdown_id => {
-                        // Shutdown response — all server work is done.
+                        // ShutdownRequest response — all server work is done.
                         return Some(Ok(false));
                     }
                     _ => {}
@@ -635,7 +699,7 @@ fn test_did_close_no_stale_memory_path_errors() {
 /// Deleting a non-open file clears its workspace diagnostics.
 ///
 /// When a non-open file with workspace diagnostics is deleted from disk and
-/// a `DidChangeWatchedFiles` notification fires with `FileChangeType::Deleted`,
+/// a `DidChangeWatchedFilesNotification` notification fires with `FileChangeType::Deleted`,
 /// the server should clear the stale diagnostics. Without explicit handling,
 /// the deleted file's handle disappears from the committed state after the
 /// recheck, so `publish_workspace_diagnostics_if_enabled` never sees it and
@@ -644,13 +708,19 @@ fn test_did_close_no_stale_memory_path_errors() {
 fn test_workspace_diagnostics_cleared_on_file_delete() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -698,13 +768,19 @@ fn test_workspace_diagnostics_cleared_on_file_delete() {
 fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
     let root = get_test_files_root();
     let root_path = root.path().join("workspace_diagnostics_severity");
-    let mut interaction = LspInteraction::new_with_indexing_mode(IndexingMode::LazyBlocking);
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
     interaction.set_root(root_path.clone());
     interaction
         .initialize(InitializeSettings {
             workspace_folders: Some(vec![(
                 "workspace_diagnostics_severity".to_owned(),
-                Url::from_file_path(root_path.clone()).unwrap(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
             )]),
             configuration: Some(Some(
                 json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
@@ -727,7 +803,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
             "publishDiagnostics for non-open warning.py with only error-severity diagnostics",
             move |msg| {
                 if let Message::Notification(n) = msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params).unwrap();
@@ -737,7 +813,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
                         let all_errors = params
                             .diagnostics
                             .iter()
-                            .all(|d| d.severity == Some(DiagnosticSeverity::ERROR));
+                            .all(|d| d.severity == Some(DiagnosticSeverity::Error));
                         if all_errors {
                             return Some(Ok(()));
                         }
@@ -757,7 +833,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
             "publishDiagnostics for opened warning.py with both error and warning",
             move |msg| {
                 if let Message::Notification(n) = msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params).unwrap();
@@ -766,11 +842,11 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
                         let has_error = params
                             .diagnostics
                             .iter()
-                            .any(|d| d.severity == Some(DiagnosticSeverity::ERROR));
+                            .any(|d| d.severity == Some(DiagnosticSeverity::Error));
                         let has_warning = params
                             .diagnostics
                             .iter()
-                            .any(|d| d.severity == Some(DiagnosticSeverity::WARNING));
+                            .any(|d| d.severity == Some(DiagnosticSeverity::Warning));
                         if has_error && has_warning {
                             return Some(Ok(()));
                         }
@@ -791,7 +867,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
             "publishDiagnostics for closed warning.py with only error-severity diagnostics",
             move |msg| {
                 if let Message::Notification(n) = msg
-                    && n.method == PublishDiagnostics::METHOD
+                    && n.method == PublishDiagnosticsNotification::METHOD.as_str()
                 {
                     let params: PublishDiagnosticsParams =
                         serde_json::from_value(n.params).unwrap();
@@ -800,7 +876,7 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
                         let all_errors = params
                             .diagnostics
                             .iter()
-                            .all(|d| d.severity == Some(DiagnosticSeverity::ERROR));
+                            .all(|d| d.severity == Some(DiagnosticSeverity::Error));
                         if all_errors {
                             return Some(Ok(()));
                         }
@@ -810,6 +886,81 @@ fn test_workspace_diagnostics_severity_tracks_open_close_transitions() {
             },
         )
         .expect("Closed warning.py should return to only error-severity diagnostics");
+
+    interaction.shutdown().unwrap();
+}
+
+/// This test asserts that baselined errors are not downgraded to hint-severity
+/// if they belong to non-open workspace files.
+#[test]
+fn test_workspace_baseline_non_open_file_stays_error() {
+    let root = get_test_files_root();
+    let root_path = root.path().join("baseline_hint_workspace");
+    let bad_py = root_path.join("bad.py");
+    let mut interaction = LspInteraction::new_with_args(LspInteractionArgs {
+        args: LspArgs {
+            indexing_mode: IndexingMode::LazyBlocking,
+            ..LspInteractionArgs::default().args
+        },
+        ..Default::default()
+    });
+    interaction.set_root(root_path.clone());
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![(
+                "baseline_hint_workspace".to_owned(),
+                Uri::from_file_path(root_path.clone()).unwrap(),
+            )]),
+            configuration: Some(Some(
+                json!([{"pyrefly": {"diagnosticMode": "workspace", "displayTypeErrors": "force-on"}}]),
+            )),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    // Open clean.py to trigger project indexing, which discovers the non-open
+    // bad.py and publishes its workspace diagnostics.
+    interaction.client.did_open("clean.py");
+
+    interaction
+        .client
+        .expect_message(
+            "publishDiagnostics for non-open bad.py with both baseline errors at ERROR",
+            move |msg| {
+                let Message::Notification(n) = msg else {
+                    return None;
+                };
+                if n.method != PublishDiagnosticsNotification::METHOD.as_str() {
+                    return None;
+                }
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(n.params).unwrap();
+                if params.uri.to_file_path().unwrap() != bad_py {
+                    return None;
+                }
+                let errors = params
+                    .diagnostics
+                    .iter()
+                    .filter(|d| d.severity == Some(DiagnosticSeverity::Error))
+                    .count();
+                let hints = params
+                    .diagnostics
+                    .iter()
+                    .filter(|d| d.severity == Some(DiagnosticSeverity::Hint))
+                    .count();
+                if params.diagnostics.len() == 2 && errors == 2 && hints == 0 {
+                    Some(Ok(()))
+                } else {
+                    Some(Err(pyrefly_lsp_test::object_model::LspMessageError::Custom {
+                        description: format!(
+                            "Expected 2 ERROR and 0 HINT for non-open bad.py, got {errors} ERROR and {hints} HINT ({} total)",
+                            params.diagnostics.len()
+                        ),
+                    }))
+                }
+            },
+        )
+        .expect("Failed to receive workspace diagnostics for non-open bad.py");
 
     interaction.shutdown().unwrap();
 }

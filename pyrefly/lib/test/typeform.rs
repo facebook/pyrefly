@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 testcase!(
@@ -63,6 +64,36 @@ def f(x: TypeForm) -> None:
 
 f(int)
 f(str)
+    "#,
+);
+
+testcase!(
+    test_typeform_string_forward_ref,
+    r#"
+from typing_extensions import TypeForm
+
+def f(x: TypeForm) -> None: ...
+def g(x: TypeForm[int | str]) -> None: ...
+
+f("int")
+g("int")
+g("str")
+f("not a type")  # E: Argument `Literal['not a type']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `f`
+f("UndefinedName")  # E: Argument `Literal['UndefinedName']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `f`
+    "#,
+);
+
+testcase!(
+    test_typeform_string_forward_ref_imported,
+    TestEnv::one("foo", "class MyClass: ..."),
+    r#"
+from typing_extensions import TypeForm
+from foo import MyClass
+
+def f(x: TypeForm) -> None: ...
+
+f("MyClass")
+f("UndefinedClass")  # E: Argument `Literal['UndefinedClass']` is not assignable to parameter `x` with type `TypeForm[Any]` in function `f`
     "#,
 );
 
@@ -127,5 +158,102 @@ import types
 
 # At runtime, str | None creates a types.UnionType object.
 v: types.UnionType = str | None
+    "#,
+);
+
+testcase!(
+    test_typeform_generic_alias,
+    r#"
+import types
+
+# At runtime, list[int] creates a types.GenericAlias object.
+v: types.GenericAlias = list[int]
+    "#,
+);
+
+testcase!(
+    test_typeform_generic_alias_string_type_argument_in_value_context,
+    r#"
+from __future__ import annotations
+
+from typing import assert_type
+from typing import Annotated
+
+class Tomato: ...
+class Cucumber: ...
+
+def main(t: Tomato) -> None:
+    a = list["Tomato | Cucumber"]([t])
+    assert_type(a, list[Tomato | Cucumber])
+
+    b = set["Tomato | Cucumber"]([t])
+    assert_type(b, set[Tomato | Cucumber])
+
+    c = frozenset["Tomato | Cucumber"]([t])
+    assert_type(c, frozenset[Tomato | Cucumber])
+
+x = Annotated[int, "meta"]
+
+# `dict.__dict__` is a runtime mappingproxy; string subscripting is a key lookup.
+dict.__dict__["fromkeys"]
+    "#,
+);
+
+testcase!(
+    test_type_alias_form,
+    r#"
+from typing import Literal
+from typing_extensions import TypeForm
+type Mode = Literal["A", "B"]
+X: TypeForm = Mode
+Y: TypeForm[Literal["A", "B"]] = Mode
+Z: TypeForm[Literal["C"]] = Mode # E:
+    "#,
+);
+
+// Even though a value of type `TypeForm` is a legal type form, we do not allow values to be used
+// as types as a general rule. This matches mypy, pyright, and ty.
+testcase!(
+    test_type_form_value_is_not_type,
+    r#"
+from typing_extensions import TypeForm
+X: TypeForm[int] = int
+x: X = 0  # E: Expected a type form, got instance of `TypeForm[int]`
+    "#,
+);
+
+testcase!(
+    test_typeform_attribute_access,
+    r#"
+import typing
+from typing import TypeVar
+from typing_extensions import TypeForm
+
+T = TypeVar("T")
+
+def field_names(tp: TypeForm[T]):
+    if typing.is_typeddict(tp):
+        return tp.__annotations__.keys()
+    return ()
+    "#,
+);
+
+testcase!(
+    test_typeform_attribute_access_unknown,
+    r#"
+from typing_extensions import TypeForm
+
+def f(tp: TypeForm[int]):
+    tp.not_a_real_attribute  # E: Object of class `object` has no attribute `not_a_real_attribute`
+    "#,
+);
+
+testcase!(
+    test_sentinel,
+    r#"
+from typing_extensions import TypeForm, sentinel
+MISSING = sentinel('MISSING')
+ok: TypeForm[MISSING] = MISSING
+err: TypeForm[int] = MISSING  # E: `MISSING` is not assignable to `TypeForm[int]`
     "#,
 );

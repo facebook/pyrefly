@@ -1,0 +1,37 @@
+{
+  "name": "test",
+  "path": "test.pyi",
+  "names": [
+    "test.only_in_py"
+  ],
+  "line_count": 7,
+  "symbol_reports": [
+    {
+      "kind": "function",
+      "name": "test.only_in_py",
+      "n_typable": 3,
+      "n_typed": 0,
+      "n_any": 0,
+      "n_untyped": 3,
+      "location": {
+        "line": 15,
+        "column": 1
+      }
+    }
+  ],
+  "type_ignores": [],
+  "n_typable": 3,
+  "n_typed": 0,
+  "n_any": 0,
+  "n_untyped": 3,
+  "coverage": 0.0,
+  "strict_coverage": 0.0,
+  "n_functions": 1,
+  "n_methods": 0,
+  "n_function_params": 2,
+  "n_method_params": 0,
+  "n_classes": 0,
+  "n_attrs": 0,
+  "n_properties": 0,
+  "n_type_ignores": 0
+}

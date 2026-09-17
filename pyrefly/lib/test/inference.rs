@@ -50,7 +50,7 @@ testcase!(
     test_implicit_any_no_inference,
     TestEnv::new_with_untyped_def_behavior(UntypedDefBehavior::SkipAndInferReturnAny)
         .enable_unannotated_return_error()
-        .enable_unannotated_parameter_error(),
+        .enable_implicit_any_parameter_error(),
     r#"
 def foo(x, y):  # E: `foo` is missing an annotation for parameter `x` # E: `foo` is missing an annotation for parameter `y` # E: `foo` is missing a return annotation
     return 1
@@ -61,7 +61,7 @@ testcase!(
     test_implicit_any_with_inference,
     TestEnv::new_with_untyped_def_behavior(UntypedDefBehavior::CheckAndInferReturnType)
         .enable_unannotated_return_error()
-        .enable_unannotated_parameter_error(),
+        .enable_implicit_any_parameter_error(),
     r#"
 def foo(x, y):  # E: `foo` is missing an annotation for parameter `x` # E: `foo` is missing an annotation for parameter `y` # E: `foo` is missing a return annotation
     return 1
@@ -85,7 +85,7 @@ class C:
 // https://github.com/facebook/pyrefly/issues/2327
 testcase!(
     test_unannotated_parameter_first_param_by_position,
-    TestEnv::new().enable_unannotated_parameter_error(),
+    TestEnv::new().enable_implicit_any_parameter_error(),
     r#"
 class A:
     def __new__(cls, a: int) -> "A": ...
@@ -126,6 +126,38 @@ def h(cls) -> None: ...  # E: `h` is missing an annotation for parameter `cls`
 "#,
 );
 
+// https://github.com/facebook/pyrefly/issues/3542
+testcase!(
+    test_underscore_params_suppress_implicit_any,
+    TestEnv::new().enable_implicit_any_parameter_error(),
+    r#"
+# Single `_` and `_`-prefixed params (single underscore, not ending with `_`)
+# should not trigger implicit-any-parameter error
+def foo(_) -> int:  # ok - intentionally unused
+    return 1
+
+def bar(_x) -> int:  # ok
+    return 1
+
+# Params starting with `__` or ending with `_` should still error
+def baz(__x) -> int:  # E: `baz` is missing an annotation for parameter `__x`
+    return 1
+
+def qux(x_) -> int:  # E: `qux` is missing an annotation for parameter `x_`
+    return 1
+
+def quux(__x__) -> int:  # E: `quux` is missing an annotation for parameter `__x__`
+    return 1
+
+def corge(_x_) -> int:  # E: `corge` is missing an annotation for parameter `_x_`
+    return 1
+
+# Regular params without annotation should still error
+def grault(x) -> int:  # E: `grault` is missing an annotation for parameter `x`
+    return 1
+"#,
+);
+
 testcase!(
     test_implicit_any_with_complete_annotations,
     TestEnv::new().enable_implicit_any_error(),
@@ -144,6 +176,8 @@ x1 = [] # E: Cannot infer type of empty container
 x2 = {} # E: Cannot infer type of empty container
 x3: Iterable[int] = {} # ok
 x4: Mapping[str, str] = {} # ok
+def f(_symbols=[]): # E: Cannot infer type of empty container
+    pass
 "#,
 );
 
@@ -156,6 +190,8 @@ x1 = [] # E: Cannot infer type of empty container
 x2 = {} # E: Cannot infer type of empty container
 x3: Iterable[int] = {} # ok
 x4: Mapping[str, str] = {} # ok
+def f(_symbols=[]): # E: Cannot infer type of empty container
+    pass
 "#,
 );
 
@@ -172,13 +208,131 @@ x2 = {}
 );
 
 testcase!(
+    test_explicit_any_default_disabled,
+    r#"
+from typing import Any
+
+def f(value: Any) -> Any:
+    print(value.asdfsdf)
+    return value
+"#,
+);
+
+testcase!(
+    test_explicit_any_error,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, TypeAlias
+
+def f(value: Any) -> Any:  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+    print(value.asdfsdf)
+    return value
+
+xs: list[Any] = []  # E: Explicit `Any` is not allowed
+Alias: TypeAlias = dict[str, Any]  # E: Explicit `Any` is not allowed
+    "#,
+);
+
+testcase!(
+    test_explicit_any_in_tparam_default_does_not_leak_to_specialization,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any
+
+class C[T = Any]:  # E: Explicit `Any` is not allowed
+    pass
+
+x: C[int]
+"#,
+);
+
+// Each annotation below denotes a type that an `Any` is reachable from, either by expanding an
+// alias body or by reading a type parameter's bound or default. The `Any` is reported once, at
+// the declaration that writes it, and not again at each use.
+testcase!(
+    test_explicit_any_reported_at_declaration_not_at_uses,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, Callable, TypeVar
+
+class DefaultedTParam[T = Any]:  # E: Explicit `Any` is not allowed
+    pass
+type AliasIsAny = Any  # E: Explicit `Any` is not allowed
+type AliasHasAny = list[Any]  # E: Explicit `Any` is not allowed
+type AliasCallable = Callable[[int], Any]  # E: Explicit `Any` is not allowed
+BoundAny = TypeVar("BoundAny", bound=Any)  # E: Explicit `Any` is not allowed
+DefaultAny = TypeVar("DefaultAny", default=Any)  # E: Explicit `Any` is not allowed
+
+def by_tparam_default(x: DefaultedTParam) -> None: ...
+def by_alias_to_any(x: AliasIsAny) -> None: ...
+def by_alias_containing_any(x: AliasHasAny) -> None: ...
+def by_alias_callable(x: AliasCallable) -> None: ...
+def by_typevar_bound(x: BoundAny) -> None: ...
+def by_typevar_default(x: DefaultAny) -> None: ...
+"#,
+);
+
+// A member's `Any` is not reachable from the type of an annotation naming the class, so these
+// use sites are silent for a different reason than the ones above: nothing reaches the `Any`.
+testcase!(
+    test_explicit_any_in_a_member_is_not_reported_at_uses_of_the_class,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, NamedTuple, Protocol, TypedDict
+
+class TD(TypedDict):
+    f: Any  # E: Explicit `Any` is not allowed
+
+class NT(NamedTuple):
+    f: Any  # E: Explicit `Any` is not allowed
+
+class Proto(Protocol):
+    def m(self) -> Any: ...  # E: Explicit `Any` is not allowed
+
+def by_typed_dict_field(x: TD) -> None: ...
+def by_named_tuple_field(x: NT) -> None: ...
+def by_protocol_member(x: Proto) -> None: ...
+"#,
+);
+
+// Writing `Any` is what gets reported, wherever it is written: nested inside a subscript, as an
+// explicit type argument to a parameter that also defaults to `Any`, and once per occurrence.
+testcase!(
+    test_explicit_any_reported_for_each_written_occurrence,
+    TestEnv::new().enable_explicit_any_error(),
+    r#"
+from typing import Any, Callable
+
+class C[T = Any]:  # E: Explicit `Any` is not allowed
+    pass
+
+def bare(x: Any) -> None: ...  # E: Explicit `Any` is not allowed
+def nested(x: list[Any]) -> None: ...  # E: Explicit `Any` is not allowed
+def deeply_nested(x: dict[str, list[Any]]) -> None: ...  # E: Explicit `Any` is not allowed
+def specialized(x: C[Any]) -> None: ...  # E: Explicit `Any` is not allowed
+def twice(x: Callable[[Any], Any]) -> None: ...  # E: Explicit `Any` is not allowed # E: Explicit `Any` is not allowed
+"#,
+);
+
+testcase!(
     test_warn_on_implicit_any_in_attribute,
-    TestEnv::new().enable_unannotated_attribute_error(),
+    TestEnv::new().enable_implicit_any_attribute_error(),
     r#"
 from typing import Any
 class A:
     def __init__(self):
         self.x = None  # E: implicitly inferred to be `Any | None`
+    "#,
+);
+
+testcase!(
+    test_implicit_any_attribute_slots_excluded,
+    TestEnv::new().enable_implicit_any_attribute_error(),
+    r#"
+class A:
+    __slots__ = ()
+    __match_args__ = ()
+    x = ()  # E: implicitly inferred to be `tuple[Any, ...]`
     "#,
 );
 
@@ -197,5 +351,72 @@ for i, row in enumerate(rows):
 entries: list[Any] = []
 for i, j in entries:
     x[i][j] = "x"
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+y = untyped(1)  # E: The type of `y` is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type_annotated_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+y: int = untyped(1)
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type_known_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+y = 1
+s = "hello"
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type_not_suppressed_by_implicit_any,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+# pyrefly: ignore[implicit-any]
+y = untyped(1)  # E: The type of `y` is unknown
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type_explicit_any_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+from typing import Any, cast
+# An explicit `Any` is intentional, so only implicit `Any` should trigger the rule.
+v = cast(Any, 1)
+"#,
+);
+
+testcase!(
+    test_unknown_variable_type_class_body_no_error,
+    TestEnv::new().enable_unknown_variable_type_error(),
+    r#"
+def untyped(x):
+    return x
+
+# A class-body assignment defines a class attribute, which is reported by
+# implicit-any-attribute, not unknown-variable-type.
+class C:
+    x = untyped(1)
 "#,
 );
