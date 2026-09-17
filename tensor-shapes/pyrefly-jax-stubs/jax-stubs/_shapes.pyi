@@ -47,6 +47,24 @@ def arange_size(start: int, stop: int, step: int) -> Int:
     return zero
 
 @type_shape_dsl_function
+def linspace_shape(base_shape: IntTuple, num: Int, axis: int) -> IntTuple:
+    zero_tuple = dsl.IntTuple((0,))
+    zero = zero_tuple[0]
+    if dsl.is_concrete_int(num) and num < zero:
+        return dsl.Invalid("Number of samples, num, must be non-negative")
+    out_rank = len(base_shape) + 1
+    if axis < 0 - out_rank or axis >= out_rank:
+        return dsl.Invalid("axis out of bounds")
+    if axis < 0:
+        norm_axis = axis + out_rank
+    else:
+        norm_axis = axis + 0
+    return dsl.concat(
+        dsl.concat(base_shape[:norm_axis], dsl.IntTuple((num,))),
+        base_shape[norm_axis:],
+    )
+
+@type_shape_dsl_function
 def matmul_shape(left: IntTuple, right: IntTuple) -> IntTuple:
     if len(left) == 0 or len(right) == 0:
         return dsl.Invalid("matmul expects at least 1-D arrays")
