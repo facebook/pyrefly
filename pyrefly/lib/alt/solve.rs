@@ -2673,6 +2673,26 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 case_range,
                 errors,
             ),
+            BindingExpect::WithFallthroughReachability {
+                contexts,
+                kind,
+                range,
+            } => {
+                if contexts.iter().all(|context| {
+                    self.context_manager_definitely_does_not_suppress(
+                        self.get_idx(*context).ty(),
+                        *kind,
+                    )
+                }) {
+                    errors
+                        .error_builder(
+                            *range,
+                            ErrorKind::Unreachable,
+                            "This code is unreachable".to_owned(),
+                        )
+                        .emit();
+                }
+            }
             BindingExpect::PrivateAttributeAccess(expectation) => {
                 self.check_private_attribute_access(expectation, errors);
             }
@@ -4198,6 +4218,34 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             Type::Literal(lit) if let Lit::Bool(b) = lit.value => b,
             Type::ClassType(cls) => cls == self.stdlib.bool(),
             _ => false, // Default to assuming exceptions are not suppressed
+        }
+    }
+
+    /// Whether `__exit__` is known not to suppress exceptions.
+    ///
+    /// This is deliberately not the negation of `context_manager_suppresses`. That predicate
+    /// answers "definitely suppresses" and treats everything it cannot interpret as
+    /// non-suppressing, which is the right default when inferring an implicit return but the
+    /// wrong one for claiming code is dead: a gradual, erroneous, or merely unusual `__exit__`
+    /// would then be read as proof. Here anything we cannot interpret answers `false`, so both
+    /// predicates default to "cannot tell" and a diagnostic never rests on an unread type.
+    fn context_manager_definitely_does_not_suppress(
+        &self,
+        context_manager_type: &Type,
+        kind: IsAsync,
+    ) -> bool {
+        let exit = self.context_value_exit(
+            context_manager_type,
+            kind,
+            TextRange::default(),
+            &self.error_swallower(),
+            None,
+        );
+        match &exit {
+            Type::None => true,
+            Type::Literal(lit) if let Lit::Bool(b) = lit.value => !b,
+            Type::ClassType(cls) => cls == self.stdlib.none_type(),
+            _ => false,
         }
     }
 

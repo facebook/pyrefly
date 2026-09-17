@@ -716,12 +716,10 @@ def f() -> None:
 );
 
 // Entering a manager after the first can raise and be suppressed by an earlier one, so
-// nothing is reported after a `with` that enters more than one. When no manager can
-// actually suppress, the code after it really is dead — but deciding that needs the
-// `__exit__` types, which are not known until solving, and this diagnostic is emitted
-// during binding.
+// binding leaves the flow reachable after a `with` that enters more than one. The
+// `__exit__` types settle whether any of them really suppresses, so the diagnostic is
+// deferred to solving.
 testcase!(
-    bug = "Dead code after a multi-manager `with` is not reported",
     test_dead_code_after_multi_manager_with,
     r#"
 class NoSuppress:
@@ -731,13 +729,112 @@ class NoSuppress:
 def combined() -> None:
     with NoSuppress(), NoSuppress():
         return
-    print("dead, but not reported")
+    print("dead")  # E: This code is unreachable
 
 def nested() -> None:
     with NoSuppress():
         with NoSuppress():
             return
-    print("dead, but not reported")
+    print("dead")  # E: This code is unreachable
+"#,
+);
+
+// One suppressing manager anywhere in the chain is enough to keep the fall-through alive.
+testcase!(
+    test_live_code_after_multi_manager_with,
+    r#"
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+def outer_suppresses() -> None:
+    with Suppress(), NoSuppress():
+        return
+    print("reachable")
+
+def inner_suppresses() -> None:
+    with NoSuppress(), Suppress():
+        return
+    print("reachable")
+"#,
+);
+
+// A `with` whose body exits under a static test must not make the following code dead: the
+// exit only happens on other configurations. This is why the check is gated on the definite
+// termination flag rather than on `has_terminated`, which a static test also sets.
+testcase!(
+    test_no_report_after_with_exited_by_static_test,
+    r#"
+import sys
+
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def asserted() -> None:
+    with NoSuppress():
+        assert sys.version_info >= (3, 20)
+    print("runs on a new enough Python")
+
+def gated_return() -> None:
+    with NoSuppress(), NoSuppress():
+        if sys.version_info < (3, 20):
+            return
+    print("runs on a new enough Python")
+"#,
+);
+
+// Claiming code is dead requires knowing that no manager suppresses, which is stronger than
+// failing to prove that one does. A manager we cannot read might suppress at runtime.
+testcase!(
+    test_no_report_after_with_when_suppression_is_unknown,
+    r#"
+import contextlib
+from typing import Any
+
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def anything() -> Any: ...
+
+def gradual() -> None:
+    with anything():
+        raise ValueError()
+    print("an `Any` manager might suppress")
+
+def bool_or_none() -> None:
+    with contextlib.ExitStack(), NoSuppress():
+        return
+    print("`__exit__` returning `bool | None` might suppress")
+"#,
+);
+
+// A `yield` is what makes a function a generator, so one in dead code is load-bearing and
+// must not be blamed, exactly as in a definitely-dead region.
+testcase!(
+    test_no_report_of_generator_yield_after_with,
+    r#"
+from typing import Iterator
+
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def never_yields() -> Iterator[int]:
+    with NoSuppress(), NoSuppress():
+        return
+    yield 1
+
+def reports_past_the_yields() -> Iterator[int]:
+    with NoSuppress(), NoSuppress():
+        return
+    yield 1
+    print("dead")  # E: This code is unreachable
 "#,
 );
 

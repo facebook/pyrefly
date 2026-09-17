@@ -1112,6 +1112,8 @@ pub enum KeyExpect {
     ImplicitAliasCheck(TextRange),
     /// Validate an implementation's implicit return against its annotation.
     ValidateImplicitReturn(TextRange),
+    /// Reachability of the code following a `with` whose body ended in a jump.
+    WithFallthroughReachability(TextRange),
 }
 
 impl Ranged for KeyExpect {
@@ -1129,7 +1131,8 @@ impl Ranged for KeyExpect {
             | KeyExpect::UninitializedCheck(range)
             | KeyExpect::ForwardRefUnion(range)
             | KeyExpect::ImplicitAliasCheck(range)
-            | KeyExpect::ValidateImplicitReturn(range) => *range,
+            | KeyExpect::ValidateImplicitReturn(range)
+            | KeyExpect::WithFallthroughReachability(range) => *range,
         }
     }
 }
@@ -1150,6 +1153,7 @@ impl DisplayWith<ModuleInfo> for KeyExpect {
             KeyExpect::ForwardRefUnion(r) => ("ForwardRefUnion", r),
             KeyExpect::ImplicitAliasCheck(r) => ("ImplicitAliasCheck", r),
             KeyExpect::ValidateImplicitReturn(r) => ("ValidateImplicitReturn", r),
+            KeyExpect::WithFallthroughReachability(r) => ("WithFallthroughReachability", r),
         };
         write!(f, "KeyExpect::{}({})", name, ctx.display(range))
     }
@@ -1230,6 +1234,18 @@ pub enum BindingExpect {
         narrowing_subject: Option<NarrowingSubject>,
         narrow_ops_for_case: (Box<NarrowOp>, TextRange),
         case_range: TextRange,
+    },
+    /// Code following a `with` whose body definitely ended in a jump, which therefore only runs
+    /// if one of the context managers suppresses an exception raised before the jump. Whether any
+    /// of them does is a solve-time question, so binding leaves the flow reachable and defers the
+    /// reachability diagnostic to here.
+    WithFallthroughReachability {
+        /// The context expressions of the `with` items. The code is dead only if every one of
+        /// them is known not to suppress.
+        contexts: Box<[Idx<Key>]>,
+        kind: IsAsync,
+        /// The code that follows the `with` in its suite.
+        range: TextRange,
     },
     /// Track private attribute accesses that need semantic validation.
     PrivateAttributeAccess(PrivateAttributeAccessCheck),
@@ -1363,6 +1379,16 @@ impl DisplayWith<Bindings> for BindingExpect {
                     "MatchCaseReachability({}, {})",
                     ctx.display(*subject_idx),
                     ctx.module().display(case_range)
+                )
+            }
+            Self::WithFallthroughReachability {
+                contexts, range, ..
+            } => {
+                write!(
+                    f,
+                    "WithFallthroughReachability({}, {})",
+                    contexts.len(),
+                    ctx.module().display(range)
                 )
             }
             Self::UninitializedCheck {

@@ -69,6 +69,7 @@ use crate::binding::binding::DjangoRelationClass;
 use crate::binding::binding::FirstUse;
 use crate::binding::binding::FunctionParameter;
 use crate::binding::binding::ImportBinding;
+use crate::binding::binding::IsAsync;
 use crate::binding::binding::Key;
 use crate::binding::binding::KeyAnnotation;
 use crate::binding::binding::KeyClass;
@@ -327,6 +328,10 @@ pub struct BindingsBuilder<'a> {
     /// True while binding the outermost known-unreachable suite. The call that sets this flag
     /// owns resetting it after nested `stmts()` calls, suppressing duplicate diagnostics.
     pub(super) in_unreachable_suite: bool,
+    /// Set by a `with` whose body definitely ended in a jump, and consumed by `stmts()` on the
+    /// next statement, which is reachable only if one of the managers suppresses. Holds the
+    /// context expressions that decide it.
+    pub(super) pending_with_suppression: Option<(Box<[Idx<Key>]>, IsAsync)>,
 }
 
 /// An enum tracking whether we are in a generator expression
@@ -682,6 +687,7 @@ impl Bindings {
             promote_ranges: SmallSet::new(),
             type_checking_depth: 0,
             in_unreachable_suite: false,
+            pending_with_suppression: None,
         };
         builder.init_static_scope(&x.body, true);
         if module_info.name() != ModuleName::builtins() {
@@ -1302,8 +1308,21 @@ impl<'a> BindingsBuilder<'a> {
     pub fn stmts(&mut self, xs: ThinVec<Stmt>, parent: &NestingContext) {
         let suite_end = xs.last().map(|x| x.range().end());
         let mut unreachable_start = None;
+        let mut suppression_start = None;
         let mut iter = xs.into_iter().peekable();
         while let Some(x) = iter.next() {
+            // Set while binding the previous statement, if it was a `with` that only falls
+            // through when a manager suppresses. This statement begins that region, unless it is
+            // a leading `yield`, which stays pending so the region starts past it for the same
+            // reason the definitely-dead one does. See `is_empty_generator_yield`.
+            if !is_empty_generator_yield(&x)
+                && let Some(managers) = self.pending_with_suppression.take()
+                && suppression_start.is_none()
+                && unreachable_start.is_none()
+                && !self.in_unreachable_suite
+            {
+                suppression_start = Some((managers, x.range().start()));
+            }
             if unreachable_start.is_none()
                 && !self.in_unreachable_suite
                 && self.scopes.is_definitely_unreachable()
@@ -1329,6 +1348,24 @@ impl<'a> BindingsBuilder<'a> {
             }
             self.stmt(x, parent);
             self.adjacent_namedtuple_defaults = None;
+        }
+        // A `with` in the final position has no following code to judge.
+        self.pending_with_suppression = None;
+        // When the suite also goes definitely unreachable the two regions overlap, and the
+        // certain diagnostic below is the better one to report.
+        if let Some(((contexts, kind), start)) = suppression_start
+            && let Some(end) = suite_end
+            && unreachable_start.is_none()
+        {
+            let range = TextRange::new(start, end);
+            self.insert_binding(
+                KeyExpect::WithFallthroughReachability(range),
+                BindingExpect::WithFallthroughReachability {
+                    contexts,
+                    kind,
+                    range,
+                },
+            );
         }
         if let (Some(start), Some(end)) = (unreachable_start, suite_end) {
             self.error(

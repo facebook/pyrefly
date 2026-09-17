@@ -1484,6 +1484,11 @@ impl<'a> BindingsBuilder<'a> {
                 // A `return`/`break`/`continue` itself cannot be suppressed, but an
                 // earlier exception may prevent the jump from executing.
                 let terminated = self.scopes.has_terminated();
+                // `has_terminated` also covers an exit taken under a static test, such as a
+                // `sys.version_info` guard, which stays reportable-as-live by design. Only a
+                // definite exit can make the code after this `with` dead, so the diagnostic
+                // below uses the stronger flag. Read it before `resume_after_with` clears it.
+                let definitely_terminated = self.scopes.is_definitely_unreachable();
                 // A body that did not terminate syntactically may still end in a `Never`
                 // expression, e.g. a `NoReturn` call, which raises or diverges.
                 let body = if terminated {
@@ -1501,15 +1506,21 @@ impl<'a> BindingsBuilder<'a> {
                     body.is_some()
                 };
                 if reachable && suppressible {
+                    let contexts = contexts.into_boxed_slice();
                     let key = self.insert_binding(
                         Key::SuppressedException(with_range),
                         Binding::SuppressedException(Box::new(SuppressedException {
-                            contexts: contexts.into_boxed_slice(),
+                            contexts: contexts.clone(),
                             kind,
                             body,
                         })),
                     );
                     self.scopes.resume_after_with(key);
+                    if definitely_terminated {
+                        // The flow is now live again, but only conditionally. Let `stmts()`
+                        // ask the solver whether the code that follows can really run.
+                        self.pending_with_suppression = Some((contexts, kind));
+                    }
                 }
             }
             Stmt::Match(x) => {
