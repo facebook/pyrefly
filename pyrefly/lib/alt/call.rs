@@ -2405,6 +2405,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         }
 
+        let django_annotate_call = self.infer_django_annotate_call(&callee_ty, &x.arguments);
         let polars_call = self.infer_polars_call_specialization(&callee_ty, &x.arguments, errors);
 
         let result = if matches!(&callee_ty, Type::ClassDef(cls) if cls.is_builtin("super")) {
@@ -2683,6 +2684,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             }
         };
 
+        let result = self.apply_django_annotate_call(result, django_annotate_call);
         self.apply_polars_call_specialization(result, polars_call)
     }
 

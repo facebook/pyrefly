@@ -609,6 +609,11 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let mut error_messages = Vec::new();
         let mut success = true;
         let (found, not_found, error) = lookup_result.decompose();
+        if found.is_empty()
+            && let Some(ty) = self.django_annotated_fields(base).get(attr_name).cloned()
+        {
+            return ty;
+        }
         // Check if we have a partial union failure (attribute exists on some union members
         // but not others) before consuming the vectors. This helps us decide whether to suggest.
         let is_partial_union_failure = !found.is_empty() && !not_found.is_empty();
@@ -3055,6 +3060,8 @@ pub enum AttrDefinition {
     Submodule {
         module_name: ModuleName,
     },
+    /// An attribute synthesized from a call-site argument and without a source definition.
+    Synthetic,
 }
 
 #[derive(Debug)]
@@ -3354,9 +3361,23 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         expected_attribute_name: Option<&Name>,
         include_types: bool,
     ) -> Vec<AttrInfo> {
+        let annotated_fields = self.django_annotated_fields(&base);
         let mut res = Vec::new();
         if let Some(base) = self.as_attribute_base(base) {
             self.completions_inner(base, expected_attribute_name, include_types, &mut res);
+        }
+        for (name, ty) in annotated_fields {
+            if expected_attribute_name.is_none_or(|expected| expected == &name)
+                && !res.iter().any(|info| info.name == name)
+            {
+                res.push(AttrInfo {
+                    name,
+                    ty: include_types.then_some(ty),
+                    is_deprecated: false,
+                    definition: AttrDefinition::Synthetic,
+                    is_reexport: false,
+                });
+            }
         }
         res
     }
