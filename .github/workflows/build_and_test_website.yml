@@ -35,7 +35,7 @@ jobs:
       - name: Set up Node.js version
         uses: actions/setup-node@v6
         with:
-          node-version: "20.x"
+          node-version: "22.x"
       - name: Install yarn deps
         run: cd website && yarn install
       - name: Install wasm-pack
