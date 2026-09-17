@@ -226,6 +226,21 @@ def outer_c(arg: Tc) -> None:
 // ===== Overloaded targets =====
 
 functools_testcase!(
+    test_partial_generic_overload_inferred_as_class_field,
+    r#"
+from functools import partial
+from itertools import count
+from typing import assert_type
+
+class C:
+    def __init__(self):
+        self.counter = partial(next, count())
+
+assert_type(C().counter(), int)
+"#,
+);
+
+functools_testcase!(
     test_partial_overloaded_constructor_through_awaitable,
     r#"
 import asyncio

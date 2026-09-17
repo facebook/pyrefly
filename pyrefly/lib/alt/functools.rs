@@ -51,7 +51,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         hint: Option<HintRef>,
         errors: &ErrorCollector,
     ) -> Type {
-        let Type::ClassDef(_) = partial_ty else {
+        let Type::ClassDef(partial_cls) = partial_ty else {
             unreachable!("call_functools_partial dispatched on a non-class callee");
         };
         let Some(CallArg::Arg(target)) = args.first() else {
@@ -158,7 +158,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let fallback = |me: &Self| {
             let mut args_with_ty = args.to_vec();
             args_with_ty[0] = CallArg::ty(&target_ty, target.range());
-            me.freeform_call_infer(
+            let result = me.freeform_call_infer(
                 partial_ty.clone(),
                 &args_with_ty,
                 kws,
@@ -166,7 +166,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 arg_range,
                 hint,
                 errors,
-            )
+            );
+            if matches!(&target_ty, Type::Overload(overload) if overload.signatures.iter().any(|x| matches!(x, OverloadType::Forall(_))))
+            {
+                me.specialize(
+                    partial_cls,
+                    vec![me.heap.mk_any_implicit()],
+                    callee_range,
+                    errors,
+                )
+            } else {
+                result
+            }
         };
         // `partial(f)` with nothing bound is a pure forwarder; for an overloaded target hand the
         // overload back unchanged so ordinary overload resolution still applies at the call site (a
@@ -183,20 +194,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // Overloaded target with bound arguments: drop branches the bound arguments can't satisfy and
         // recombine the surviving residuals into an overload, so per-call resolution still works.
         if let Type::Overload(overload) = &target_ty {
-            // Generic branches need per-branch var instantiation we don't do here, so defer.
-            if overload
-                .signatures
-                .iter()
-                .any(|ot| matches!(ot, OverloadType::Forall(_)))
-            {
-                return fallback(self);
-            }
             let mut residuals: Vec<Callable> = Vec::new();
             for ot in overload.signatures.iter() {
-                let OverloadType::Function(func) = ot else {
-                    unreachable!("Forall branches handled above");
+                let (branch_sig, quantified) = match ot {
+                    OverloadType::Function(func) => (func.signature.clone(), None),
+                    OverloadType::Forall(forall) => {
+                        let (qs, sig) = self.instantiate_fresh_callable(
+                            &forall.tparams,
+                            forall.body.signature.clone(),
+                        );
+                        (sig, Some(qs))
+                    }
                 };
-                let branch_sig = &func.signature;
                 // Trial-check the bound arguments against this branch; keep it only if they fit.
                 // Optional params keep the still-unbound parameters from erroring as missing.
                 let mut probe = branch_sig.clone();
@@ -211,12 +220,28 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     None,
                     &trial,
                 );
-                if !trial.is_empty() {
+                let generic = quantified.is_some();
+                // Keep solutions learned from the bound arguments. Variables left unsolved in a
+                // generic branch become gradual rather than escaping without a binder.
+                let specialization_ok = quantified
+                    .map(|qs| self.finish_quantified(qs, false).is_ok())
+                    .unwrap_or(true);
+                if !trial.is_empty() || !specialization_ok {
                     continue;
                 }
+                let branch_sig = if generic {
+                    let mut ty = self.heap.mk_callable_from(branch_sig);
+                    self.solver().expand_mut(&mut ty);
+                    let Type::Callable(callable) = ty else {
+                        unreachable!("built by mk_callable_from");
+                    };
+                    *callable
+                } else {
+                    branch_sig
+                };
                 // Defer the whole overload rather than silently drop a matched branch we can't
                 // represent, which would break a call that only matched that branch.
-                match partial_residual_callable(branch_sig, &args[1..], &bound_kw_names) {
+                match partial_residual_callable(&branch_sig, &args[1..], &bound_kw_names) {
                     Some(residual) => residuals.push(residual),
                     None => return fallback(self),
                 }
