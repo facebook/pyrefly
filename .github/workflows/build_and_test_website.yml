@@ -19,6 +19,13 @@ on:
     paths:
       - 'website/**'
 
+# GitHub sets `head_ref` only for a pull request. A new push to a pull request
+# cancels the previous run. All other events use the unique `run_id`. Each of
+# these runs gets its own group, and no run cancels a different run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   build_and_test:
     runs-on: ubuntu-latest

@@ -8,42 +8,45 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
+    from shape_extensions import Int
     from torch import Tensor
 
 
 def test_view_literals():
     """Test .view() with literal dimensions"""
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
     y = x.view(2, 5, 20)
-    assert_type(y, Tensor[2, 5, 20])
-    assert_type(y, Tensor[2, 5, 20])
+    assert_type(y, Tensor[[2, 5, 20]])
+    assert_type(y, Tensor[[2, 5, 20]])
 
 
 def test_reshape_literals():
     """Test .reshape() with literal dimensions"""
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
     y = x.reshape(2, 5, 20)
-    assert_type(y, Tensor[2, 5, 20])
-    assert_type(y, Tensor[2, 5, 20])
+    assert_type(y, Tensor[[2, 5, 20]])
+    assert_type(y, Tensor[[2, 5, 20]])
 
 
-def test_view_symbolic[N, M](x: Tensor[N, M]) -> Tensor[2, N // 2, M]:
+def test_view_symbolic[N: IntVar, M: IntVar](
+    x: Tensor[[N, M]],
+) -> Tensor[[2, N // 2, M]]:
     """Test .view() with symbolic dimensions
 
     Takes a tensor with shape [N, M] where N is divisible by 2,
     reshapes it to [2, N//2, M]
 
-    The .size() method returns Dim[N] and Dim[M], which can be used
+    The .size() method returns Int[N] and Int[M], which can be used
     in arithmetic operations and passed to .view() for shape transformation.
     """
-    # Get both dimensions from input - these return Dim[N] and Dim[M]
+    # Get both dimensions from input - these return Int[N] and Int[M]
     n = x.size(0)
     m = x.size(1)
-    assert_type(n // 2, Dim[N // 2])
-    assert_type(m, Dim[M])
+    assert_type(n // 2, Int[N // 2])
+    assert_type(m, Int[M])
     # Reshape: split N into 2 and N//2, keep M
     # The meta-shape system tracks the symbolic dimensions
     return x.view(2, n // 2, m)
@@ -51,5 +54,5 @@ def test_view_symbolic[N, M](x: Tensor[N, M]) -> Tensor[2, N // 2, M]:
 
 # Test by calling with concrete tensor
 result = test_view_symbolic(torch.randn(10, 20))
-assert_type(result, Tensor[2, (10 // 2), 20])
-assert_type(result, Tensor[2, 5, 20])
+assert_type(result, Tensor[[2, (10 // 2), 20]])
+assert_type(result, Tensor[[2, 5, 20]])

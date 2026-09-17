@@ -30,6 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 if TYPE_CHECKING:
+    from shape_extensions import IntVar
     from torch import Tensor
 
 
@@ -70,56 +71,56 @@ class FCN(nn.Module):
         self.conv6 = nn.Conv2d(8, 4, 3, stride=1, padding=1)
         self.pixel_shuffle = nn.PixelShuffle(2)
 
-    def forward[B](self, x: Tensor[B, 10]) -> Tensor[B, 128, 128]:
+    def forward[B: IntVar](self, x: Tensor[[B, 10]]) -> Tensor[[B, 128, 128]]:
         # MLP
         h1 = F.relu(self.fc1(x))
-        assert_type(h1, Tensor[B, 512])
+        assert_type(h1, Tensor[[B, 512]])
         h2 = F.relu(self.fc2(h1))
-        assert_type(h2, Tensor[B, 1024])
+        assert_type(h2, Tensor[[B, 1024]])
         h3 = F.relu(self.fc3(h2))
-        assert_type(h3, Tensor[B, 2048])
+        assert_type(h3, Tensor[[B, 2048]])
         h4 = F.relu(self.fc4(h3))
-        assert_type(h4, Tensor[B, 4096])
+        assert_type(h4, Tensor[[B, 4096]])
 
         # Reshape to spatial: [B, 4096] → [B, 16, 16, 16]
         spatial = h4.view(x.size(0), 16, 16, 16)
-        assert_type(spatial, Tensor[B, 16, 16, 16])
+        assert_type(spatial, Tensor[[B, 16, 16, 16]])
 
         # Stage 1: Conv → Conv → PixelShuffle(2)
         # Conv2d(16→32, 3x3, pad=1): spatial-preserving
         s1_a = F.relu(self.conv1(spatial))
-        assert_type(s1_a, Tensor[B, 32, 16, 16])
+        assert_type(s1_a, Tensor[[B, 32, 16, 16]])
         # Conv2d(32→32, 3x3, pad=1): spatial-preserving
         s1_b = self.conv2(s1_a)
-        assert_type(s1_b, Tensor[B, 32, 16, 16])
+        assert_type(s1_b, Tensor[[B, 32, 16, 16]])
         # PixelShuffle(2): [B, 32, 16, 16] → [B, 8, 32, 32]
         s1_ps = self.pixel_shuffle(s1_b)
-        assert_type(s1_ps, Tensor[B, 8, 32, 32])
+        assert_type(s1_ps, Tensor[[B, 8, 32, 32]])
 
         # Stage 2: Conv → Conv → PixelShuffle(2)
         s2_a = F.relu(self.conv3(s1_ps))
-        assert_type(s2_a, Tensor[B, 16, 32, 32])
+        assert_type(s2_a, Tensor[[B, 16, 32, 32]])
         s2_b = self.conv4(s2_a)
-        assert_type(s2_b, Tensor[B, 16, 32, 32])
+        assert_type(s2_b, Tensor[[B, 16, 32, 32]])
         # PixelShuffle(2): [B, 16, 32, 32] → [B, 4, 64, 64]
         s2_ps = self.pixel_shuffle(s2_b)
-        assert_type(s2_ps, Tensor[B, 4, 64, 64])
+        assert_type(s2_ps, Tensor[[B, 4, 64, 64]])
 
         # Stage 3: Conv → Conv → PixelShuffle(2)
         s3_a = F.relu(self.conv5(s2_ps))
-        assert_type(s3_a, Tensor[B, 8, 64, 64])
+        assert_type(s3_a, Tensor[[B, 8, 64, 64]])
         s3_b = self.conv6(s3_a)
-        assert_type(s3_b, Tensor[B, 4, 64, 64])
+        assert_type(s3_b, Tensor[[B, 4, 64, 64]])
         # PixelShuffle(2): [B, 4, 64, 64] → [B, 1, 128, 128]
         s3_ps = self.pixel_shuffle(s3_b)
-        assert_type(s3_ps, Tensor[B, 1, 128, 128])
+        assert_type(s3_ps, Tensor[[B, 1, 128, 128]])
 
         # Sigmoid and reshape: [B, 1, 128, 128] → [B, 128, 128]
         # Original: 1 - torch.sigmoid(x.view(-1, 128, 128))
         s3_flat = torch.sigmoid(s3_ps.view(x.size(0), 128, 128))
-        assert_type(s3_flat, Tensor[B, 128, 128])
+        assert_type(s3_flat, Tensor[[B, 128, 128]])
         result = 1 - s3_flat
-        assert_type(result, Tensor[B, 128, 128])
+        assert_type(result, Tensor[[B, 128, 128]])
         return result
 
 
@@ -131,14 +132,14 @@ class FCN(nn.Module):
 def test_fcn():
     """Test FCN: 10-dim stroke params → 128x128 image."""
     renderer = FCN()
-    params: Tensor[4, 10] = torch.randn(4, 10)
+    params: Tensor[[4, 10]] = torch.randn(4, 10)
     image = renderer(params)
-    assert_type(image, Tensor[4, 128, 128])
+    assert_type(image, Tensor[[4, 128, 128]])
 
 
 def test_fcn_single():
     """Test FCN with single stroke."""
     renderer = FCN()
-    params: Tensor[1, 10] = torch.randn(1, 10)
+    params: Tensor[[1, 10]] = torch.randn(1, 10)
     image = renderer(params)
-    assert_type(image, Tensor[1, 128, 128])
+    assert_type(image, Tensor[[1, 128, 128]])

@@ -291,6 +291,57 @@ def main(c: Sym) -> None:
 );
 
 testcase!(
+    test_subscript_assign_explicit_any_does_not_narrow,
+    r#"
+from typing import Any, assert_type
+
+values: list[float] = []
+frame: Any = object()
+frame["start"] = values
+assert_type(frame["start"], Any)
+frame["end"] = frame["start"].shift(-1)
+"#,
+);
+
+testcase!(
+    test_subscript_assign_implicit_any_does_not_narrow,
+    r#"
+from typing import Any, assert_type
+
+def f(frame):
+    values: list[float] = []
+    frame["start"] = values
+    assert_type(frame["start"], Any)
+"#,
+);
+
+testcase!(
+    test_subscript_assign_error_any_does_not_narrow,
+    r#"
+from typing import Any, assert_type
+
+def f(frame: MissingType) -> None:  # E: Could not find name `MissingType`
+    values: list[float] = []
+    frame["start"] = values
+    assert_type(frame["start"], Any)
+"#,
+);
+
+testcase!(
+    test_subscript_assign_propagated_any_does_not_narrow,
+    r#"
+from typing import Any, assert_type
+
+geopandas: Any = object()
+frame = geopandas.GeoDataFrame()
+values: list[float] = []
+frame["column_a"] = values
+assert_type(frame["column_a"], Any)
+frame["column_a"].shift(-1)
+"#,
+);
+
+testcase!(
     test_dict_get_literal_key_narrow,
     r#"
 from typing import assert_type, Literal

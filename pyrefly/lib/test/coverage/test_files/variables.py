@@ -9,6 +9,9 @@ T = TypeVar("T")
 x = 42
 y: Callable[[int], int] = lambda n: n
 z: str = "hello"
+NO_RESULT = object()
+EMPTY = frozenset()
+DOUBLED = map(str, [1, 2])
 
 
 def some_func() -> None:

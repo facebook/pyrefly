@@ -17,7 +17,6 @@ use pyrefly_python::module_name::ModuleName;
 use pyrefly_python::short_identifier::ShortIdentifier;
 use pyrefly_python::symbol_kind::SymbolKind;
 use pyrefly_python::sys_info::SysInfo;
-use pyrefly_types::callable::FunctionKind;
 use pyrefly_types::literal::Lit;
 use pyrefly_types::types::Type;
 use pyrefly_util::visit::Visit as _;
@@ -27,9 +26,11 @@ use ruff_python_ast::Expr;
 use ruff_python_ast::ExprAttribute;
 use ruff_python_ast::ExprContext;
 use ruff_python_ast::ModModule;
+use ruff_python_ast::Pattern;
 use ruff_python_ast::Stmt;
 use ruff_python_ast::StmtImport;
 use ruff_python_ast::StmtImportFrom;
+use ruff_python_ast::StringFlags as _;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::token::Tokens;
@@ -38,8 +39,15 @@ use ruff_text_size::TextRange;
 use ruff_text_size::TextSize;
 
 use crate::binding::binding::Key;
+use crate::state::lsp::attribute_symbol_kind_from_type;
 
 const SELF_PARAMETER_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("selfParameter");
+const BYTE_STRING_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("byteString");
+const FORMAT_STRING_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("formatString");
+const RAW_STRING_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("rawString");
+const STRING_PREFIX_MODIFIER: SemanticTokenModifier = SemanticTokenModifier::new("stringPrefix");
+const TEMPLATE_STRING_MODIFIER: SemanticTokenModifier =
+    SemanticTokenModifier::new("templateString");
 
 /// Adds the DEFAULT_LIBRARY modifier if the module is a standard library module
 /// (builtins, typing, typing_extensions).
@@ -103,6 +111,11 @@ impl SemanticTokensLegends {
                 SemanticTokenModifier::DOCUMENTATION,
                 SemanticTokenModifier::DEFAULT_LIBRARY,
                 SELF_PARAMETER_MODIFIER.clone(),
+                BYTE_STRING_MODIFIER.clone(),
+                FORMAT_STRING_MODIFIER.clone(),
+                RAW_STRING_MODIFIER.clone(),
+                STRING_PREFIX_MODIFIER.clone(),
+                TEMPLATE_STRING_MODIFIER.clone(),
             ],
         }
     }
@@ -231,13 +244,6 @@ fn syntax_token_type(kind: TokenKind) -> Option<SemanticTokenType> {
     } else {
         match kind {
             TokenKind::Comment => Some(SemanticTokenType::COMMENT),
-            TokenKind::String
-            | TokenKind::FStringStart
-            | TokenKind::FStringMiddle
-            | TokenKind::FStringEnd
-            | TokenKind::TStringStart
-            | TokenKind::TStringMiddle
-            | TokenKind::TStringEnd => Some(SemanticTokenType::STRING),
             TokenKind::Int | TokenKind::Float | TokenKind::Complex => {
                 Some(SemanticTokenType::NUMBER)
             }
@@ -275,20 +281,11 @@ fn attribute_semantic_token_type(ty: Type) -> SemanticTokenType {
             }
         }
         Type::Literal(lit) if matches!(lit.value, Lit::Enum(_)) => SemanticTokenType::ENUM_MEMBER,
-        ty if ty.is_toplevel_callable() => {
-            let is_method = ty.visit_toplevel_func_metadata(
-                &|meta| matches!(&meta.kind, FunctionKind::Def(func) if func.cls.is_some()),
-            );
-            if is_method {
-                SemanticTokenType::METHOD
-            } else {
-                SemanticTokenType::FUNCTION
-            }
+        _ => {
+            attribute_symbol_kind_from_type(&ty)
+                .to_lsp_semantic_token_type_with_modifiers()
+                .0
         }
-        Type::ClassDef(_) | Type::Type(_) => SemanticTokenType::CLASS,
-        Type::TypeAlias(_) | Type::UntypedAlias(_) => SemanticTokenType::INTERFACE,
-        Type::Module(_) => SemanticTokenType::NAMESPACE,
-        _ => SemanticTokenType::PROPERTY,
     }
 }
 
@@ -324,7 +321,7 @@ impl SemanticTokenBuilder {
         token_type: SemanticTokenType,
         token_modifiers: Vec<SemanticTokenModifier>,
     ) {
-        if range_overlaps(self.limit_range, range) {
+        if !range.is_empty() && range_overlaps(self.limit_range, range) {
             self.tokens.push(SemanticTokenWithFullRange {
                 range,
                 token_type,
@@ -339,10 +336,65 @@ impl SemanticTokenBuilder {
             .any(|disabled| disabled.contains_range(range))
     }
 
+    /// Add syntax-level semantic tokens, classifying Python string kinds from lexer metadata.
     pub fn process_syntax_tokens(&mut self, tokens: &Tokens) {
         for token in tokens.iter() {
-            if let Some(token_type) = syntax_token_type(token.kind()) {
-                self.push_if_in_range(token.range(), token_type, Vec::new());
+            let kind = token.kind();
+            match kind {
+                TokenKind::String
+                | TokenKind::FStringStart
+                | TokenKind::FStringMiddle
+                | TokenKind::FStringEnd
+                | TokenKind::TStringStart
+                | TokenKind::TStringMiddle
+                | TokenKind::TStringEnd => {
+                    let flags = token.unwrap_string_flags();
+                    let mut modifiers = Vec::new();
+                    if flags.is_byte_string() {
+                        modifiers.push(BYTE_STRING_MODIFIER.clone());
+                    }
+                    if flags.is_raw_string() {
+                        modifiers.push(RAW_STRING_MODIFIER.clone());
+                    }
+                    match kind {
+                        TokenKind::FStringStart
+                        | TokenKind::FStringMiddle
+                        | TokenKind::FStringEnd => {
+                            modifiers.push(FORMAT_STRING_MODIFIER.clone());
+                        }
+                        TokenKind::TStringStart
+                        | TokenKind::TStringMiddle
+                        | TokenKind::TStringEnd => {
+                            modifiers.push(TEMPLATE_STRING_MODIFIER.clone());
+                        }
+                        _ => {}
+                    }
+                    let prefix_len = if matches!(
+                        kind,
+                        TokenKind::String | TokenKind::FStringStart | TokenKind::TStringStart
+                    ) {
+                        flags.prefix().text_len()
+                    } else {
+                        TextSize::default()
+                    };
+                    if prefix_len > TextSize::default() {
+                        self.push_if_in_range(
+                            TextRange::at(token.start(), prefix_len),
+                            SemanticTokenType::STRING,
+                            vec![STRING_PREFIX_MODIFIER.clone()],
+                        );
+                    }
+                    self.push_if_in_range(
+                        TextRange::new(token.start() + prefix_len, token.end()),
+                        SemanticTokenType::STRING,
+                        modifiers,
+                    );
+                }
+                _ => {
+                    if let Some(token_type) = syntax_token_type(kind) {
+                        self.push_if_in_range(token.range(), token_type, Vec::new());
+                    }
+                }
             }
         }
     }
@@ -353,6 +405,14 @@ impl SemanticTokenBuilder {
                 self.push_if_in_range(arg.range, SemanticTokenType::PARAMETER, Vec::new());
             }
         }
+    }
+
+    fn process_pattern(&mut self, pattern: &Pattern) {
+        Ast::pattern_lvalue(pattern, &mut |name| {
+            if !Ast::is_synthesized_empty_identifier(name) {
+                self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, Vec::new());
+            }
+        });
     }
 
     fn process_attribute_expr(
@@ -540,6 +600,12 @@ impl SemanticTokenBuilder {
                     if let Some(name) = &with_item.optional_vars {
                         self.push_if_in_range(name.range(), SemanticTokenType::VARIABLE, vec![]);
                     }
+                }
+                x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
+            }
+            Stmt::Match(stmt_match) => {
+                for case in &stmt_match.cases {
+                    self.process_pattern(&case.pattern);
                 }
                 x.recurse(&mut |x| self.process_stmt(x, in_class, get_symbol_kind));
             }

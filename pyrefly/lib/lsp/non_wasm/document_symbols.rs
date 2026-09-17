@@ -7,13 +7,17 @@
 
 use lsp_types::DocumentSymbol;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::ast::Ast;
 use pyrefly_python::comment_section::CommentSection;
 use pyrefly_python::module::Module;
+use pyrefly_python::symbol_kind::SymbolKind as PyreflySymbolKind;
 use pyrefly_util::visit::Visit;
 use ruff_python_ast::Expr;
 use ruff_python_ast::Stmt;
 use ruff_text_size::Ranged;
 
+use crate::export::symbols::ScopeKind;
+use crate::export::symbols::assignment_kind;
 use crate::state::state::Transaction;
 
 impl<'a> Transaction<'a> {
@@ -127,10 +131,10 @@ fn build_symbols_with_sections(
         if let Some((_, path)) = section_stack.last() {
             // Navigate to the current section and add symbol as its child
             let current = navigate_to_path_mut(result, path);
-            recurse_stmt_adding_symbols(stmt, current, module_info);
+            recurse_stmt_adding_symbols(stmt, current, module_info, ScopeKind::Module);
         } else {
             // No section context, add at top level
-            recurse_stmt_adding_symbols(stmt, result, module_info);
+            recurse_stmt_adding_symbols(stmt, result, module_info, ScopeKind::Module);
         }
     }
 
@@ -188,84 +192,82 @@ fn navigate_to_path_mut<'a>(
 }
 
 #[allow(deprecated)] // The `deprecated` field
-fn recurse_stmt_adding_symbols<'a>(
-    stmt: &'a Stmt,
-    symbols: &'a mut Vec<DocumentSymbol>,
+fn recurse_stmt_adding_symbols(
+    stmt: &Stmt,
+    symbols: &mut Vec<DocumentSymbol>,
     module_info: &Module,
+    scope: ScopeKind,
 ) {
+    let nested_scope = match stmt {
+        Stmt::FunctionDef(_) => ScopeKind::Function,
+        Stmt::ClassDef(_) => ScopeKind::Class,
+        _ => scope,
+    };
     let mut recursed_symbols = Vec::new();
-    stmt.recurse(&mut |stmt| recurse_stmt_adding_symbols(stmt, &mut recursed_symbols, module_info));
+    stmt.recurse(&mut |stmt| {
+        recurse_stmt_adding_symbols(stmt, &mut recursed_symbols, module_info, nested_scope)
+    });
 
     match stmt {
         Stmt::FunctionDef(stmt_function_def) => {
-            let mut children = Vec::new();
-            children.append(&mut recursed_symbols);
-            // todo(kylei): better approach to filtering out "" for all symbols
-            let name = match stmt_function_def.name.as_str() {
-                "" => "unknown".to_owned(),
-                name => name.to_owned(),
+            let name = if Ast::is_synthesized_empty_identifier(&stmt_function_def.name) {
+                "unknown".to_owned()
+            } else {
+                stmt_function_def.name.to_string()
             };
             symbols.push(DocumentSymbol {
                 name,
                 detail: None,
-                kind: lsp_types::SymbolKind::FUNCTION,
+                kind: if scope == ScopeKind::Class {
+                    PyreflySymbolKind::Method
+                } else {
+                    PyreflySymbolKind::Function
+                }
+                .to_lsp_symbol_kind(),
                 tags: None,
                 deprecated: None,
                 range: module_info.to_lsp_range(stmt_function_def.range),
                 selection_range: module_info.to_lsp_range(stmt_function_def.name.range),
-
-                children: Some(children),
+                children: Some(recursed_symbols),
             });
         }
         Stmt::ClassDef(stmt_class_def) => {
-            let mut children = Vec::new();
-            children.append(&mut recursed_symbols);
-
-            // Functions defined inside a class are methods.
-            for child in &mut children {
-                if child.kind == lsp_types::SymbolKind::FUNCTION {
-                    child.kind = lsp_types::SymbolKind::METHOD;
-                }
-            }
-
-            let name = match stmt_class_def.name.as_str() {
-                "" => "unknown".to_owned(),
-                name => name.to_owned(),
+            let name = if Ast::is_synthesized_empty_identifier(&stmt_class_def.name) {
+                "unknown".to_owned()
+            } else {
+                stmt_class_def.name.to_string()
             };
             symbols.push(DocumentSymbol {
                 name,
                 detail: None,
-                kind: lsp_types::SymbolKind::CLASS,
+                kind: PyreflySymbolKind::Class.to_lsp_symbol_kind(),
                 tags: None,
                 deprecated: None,
                 range: module_info.to_lsp_range(stmt_class_def.range),
                 selection_range: module_info.to_lsp_range(stmt_class_def.name.range),
-                children: Some(children),
+                children: Some(recursed_symbols),
             });
         }
         Stmt::Assign(stmt_assign) => {
             for target in &stmt_assign.targets {
-                if let Expr::Name(name) = target {
-                    if name.id.is_empty() {
-                        continue;
-                    }
-                    // todo(jvansch): Try to reuse DefinitionMetadata here.
+                Ast::expr_lvalue(target, &mut |name| {
                     symbols.push(DocumentSymbol {
                         name: name.id.to_string(),
-                        detail: None, // Todo(jvansch): Could add type info here later
-                        kind: lsp_types::SymbolKind::VARIABLE,
+                        detail: None,
+                        kind: assignment_kind(&name.id, scope).to_lsp_symbol_kind(),
                         tags: None,
                         deprecated: None,
                         range: module_info.to_lsp_range(stmt_assign.range),
                         selection_range: module_info.to_lsp_range(name.range),
                         children: None,
                     });
-                }
+                });
             }
+            symbols.append(&mut recursed_symbols);
         }
         Stmt::AnnAssign(stmt_ann_assign) => {
             if let Expr::Name(name) = &*stmt_ann_assign.target
-                && !name.id.is_empty()
+                && !Ast::is_synthesized_empty_name(name)
             {
                 symbols.push(DocumentSymbol {
                     name: name.id.to_string(),
@@ -274,7 +276,7 @@ fn recurse_stmt_adding_symbols<'a>(
                             .code_at(stmt_ann_assign.annotation.range())
                             .to_owned(),
                     ),
-                    kind: lsp_types::SymbolKind::VARIABLE,
+                    kind: assignment_kind(&name.id, scope).to_lsp_symbol_kind(),
                     tags: None,
                     deprecated: None,
                     range: module_info.to_lsp_range(stmt_ann_assign.range),
@@ -282,10 +284,27 @@ fn recurse_stmt_adding_symbols<'a>(
                     children: None,
                 });
             }
+            symbols.append(&mut recursed_symbols);
         }
-        _ => {}
-    };
-    symbols.append(&mut recursed_symbols);
+        Stmt::TypeAlias(stmt_type_alias) => {
+            if let Expr::Name(name) = &*stmt_type_alias.name
+                && !Ast::is_synthesized_empty_name(name)
+            {
+                symbols.push(DocumentSymbol {
+                    name: name.id.to_string(),
+                    detail: None,
+                    kind: PyreflySymbolKind::TypeAlias.to_lsp_symbol_kind(),
+                    tags: None,
+                    deprecated: None,
+                    range: module_info.to_lsp_range(stmt_type_alias.range),
+                    selection_range: module_info.to_lsp_range(name.range),
+                    children: None,
+                });
+            }
+            symbols.append(&mut recursed_symbols);
+        }
+        _ => symbols.append(&mut recursed_symbols),
+    }
 }
 
 pub fn flatten_to_symbol_information(

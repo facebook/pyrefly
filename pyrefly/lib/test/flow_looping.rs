@@ -59,11 +59,11 @@ def f(my_set: set[int]):
 testcase!(
     test_loop_with_dict_get,
     r#"
-from typing import reveal_type
+from typing import assert_type
 def f(keys: list[str]):
     counters: dict[str, int] = {}
     for k in keys:
-        counters[k] = reveal_type(counters.get(k, 0))  # E: revealed type: int
+        counters[k] = assert_type(counters.get(k, 0), int)
 "#,
 );
 
@@ -365,6 +365,36 @@ def foo(x: list[int]) -> int:
         return 1
     else:
         return 2  # No error - reachable when x is empty
+"#,
+);
+
+// Both analyses that consume `is_definitely_nonempty_iterable` need it to be sound. `range`
+// is resolved through `as_special_export`, so a shadowed one does not count, and a literal
+// needs an element that is not an unpacking.
+testcase!(
+    test_for_definitely_runs_only_when_provably_nonempty,
+    r#"
+from collections.abc import Callable
+
+def starred(xs: list[int]) -> int:
+    for _ in [*xs]:
+        y = 1
+    return y  # E: `y` may be uninitialized
+
+def shadowed_range(range: Callable[[int], list[int]]) -> int:
+    for _ in range(3):
+        y = 1
+    return y  # E: `y` may be uninitialized
+
+def literal() -> int:
+    for _ in [1, 2, 3]:
+        z = 1
+    return z
+
+def builtin_range() -> int:
+    for _ in range(3):
+        z = 1
+    return z
 "#,
 );
 

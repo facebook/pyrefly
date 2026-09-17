@@ -10,14 +10,14 @@ use ruff_python_ast::name::Name;
 use crate::alt::answers::LookupAnswer;
 use crate::alt::answers_solver::AnswersSolver;
 use crate::types::callable::Callable;
-use crate::types::callable::FuncMetadata;
-use crate::types::callable::Function;
 use crate::types::callable::Param;
 use crate::types::callable::ParamList;
 use crate::types::class::Class;
+use crate::types::function::FuncMetadata;
+use crate::types::function::Function;
 use crate::types::types::Type;
 
-impl<'a, Ans: LookupAnswer> AnswersSolver<'a, Ans> {
+impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     /// Wrap a parameter list and return type into a synthesized method `Type` bound to `cls`. Shared
     /// by the dataclass, attrs, and pydantic synthesizers, which all build methods this same way.
     pub(crate) fn synthesized_method(

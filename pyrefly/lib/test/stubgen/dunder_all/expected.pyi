@@ -2,7 +2,7 @@
 from typing import TypeAlias
 
 __all__ = ["public_func", "PublicClass", "PUBLIC_VAR", "Vector"]
-Vector: TypeAlias
+Vector: TypeAlias = list[float]
 
 
 def public_func(x: int) -> str: ...

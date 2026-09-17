@@ -5,6 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use pyrefly_python::ignore::TypeIgnoreUnknownTagBehavior as UnknownTagBehavior;
+
 use crate::state::require::Require;
 use crate::test::util::TestEnv;
 use crate::testcase;
@@ -49,6 +51,48 @@ testcase!(
 );
 
 testcase!(
+    test_pyrefly_top_level_ignore_typed,
+    r#"
+# pyrefly: ignore-errors[bad-assignment]
+x: int = "x"
+3 + "3"  # E:
+"#,
+);
+
+// A typed file-level directive is only honored in the preamble; placed after code
+// it is inert (the error on the following line is still reported) and additionally
+// flagged with a `misplaced-ignore` warning on the directive line.
+testcase!(
+    test_pyrefly_top_level_ignore_typed_not_at_top,
+    r#"
+x: int = "x"  # E:
+# pyrefly: ignore-errors[bad-assignment]  # E: has no effect here
+y: int = "y"  # E:
+"#,
+);
+
+// A blanket file-level directive after code is inert and flagged as misplaced.
+testcase!(
+    test_pyrefly_misplaced_ignore_errors_blanket,
+    r#"
+x: int = "x"  # E:
+# pyrefly: ignore-errors  # E: has no effect here
+y: int = "y"  # E:
+"#,
+);
+
+// A correctly-placed top-of-file directive suppresses everything and produces
+// no `misplaced-ignore` warning.
+testcase!(
+    test_pyrefly_misplaced_ignore_errors_top_of_file_ok,
+    r#"
+# pyrefly: ignore-errors
+x: int = "x"
+y: int = "y"
+"#,
+);
+
+testcase!(
     test_pyrefly_top_level_ignore_wrong_same_line,
     r#"
 3 + "3" # pyrefly: ignore-errors # E:
@@ -60,7 +104,7 @@ testcase!(
     test_pyrefly_top_level_ignore_wrong_own_line,
     r#"
 3 + "3" # E:
-# pyrefly: ignore-errors
+# pyrefly: ignore-errors # E: has no effect here
 3 + "3" # E:
 "#,
 );
@@ -175,6 +219,80 @@ x: int = "1"  # type: ignore
 y: int = "2"
 
 z: int = "3"  # E: `Literal['3']` is not assignable to `int`
+"#,
+);
+
+testcase!(
+    test_type_ignore_unrecognized_code_does_not_suppress,
+    TestEnv::new().with_type_ignore_unknown_tag_behavior(UnknownTagBehavior::NoEffect),
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[this-is-not-a-real-error]  # E: Argument `Literal['hello']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_type_ignore_unprefixed_pyrefly_code_does_not_suppress,
+    TestEnv::new().with_type_ignore_unknown_tag_behavior(UnknownTagBehavior::NoEffect),
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[bad-argument-type]  # E: Argument `Literal['hello']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_type_ignore_pyrefly_prefixed_code_suppresses,
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[pyrefly:bad-argument-type]
+"#,
+);
+
+testcase!(
+    test_type_ignore_mixed_tool_codes_suppresses_pyrefly_code,
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[arg-type, pyrefly:bad-argument-type]
+"#,
+);
+
+testcase!(
+    test_type_ignore_unknown_tag_downgrades_to_warning,
+    TestEnv::new().with_type_ignore_unknown_tag_behavior(UnknownTagBehavior::DowngradeToWarning),
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[arg-type]  # E: Argument `Literal['hello']` is not assignable to parameter `x` with type `int`
+"#,
+);
+
+testcase!(
+    test_type_ignore_unknown_tag_suppresses_by_default,
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[arg-type]
+"#,
+);
+
+testcase!(
+    test_type_ignore_mismatched_pyrefly_tag_is_not_affected_by_unknown_tag_behavior,
+    TestEnv::new().with_type_ignore_unknown_tag_behavior(UnknownTagBehavior::Suppress),
+    r#"
+def func(x: int) -> None:
+    pass
+
+func(x="hello")  # type: ignore[pyrefly:bad-return]  # E: Argument `Literal['hello']` is not assignable to parameter `x` with type `int`
 "#,
 );
 

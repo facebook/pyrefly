@@ -15,20 +15,20 @@ if TYPE_CHECKING:
 
 def test_view_negative_one_alone():
     """Test view with single -1"""
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
     y = x.view(-1)
-    assert_type(y, Tensor[200])  # Should be Tensor[200]
+    assert_type(y, Tensor[[200]])  # Should be Tensor[[200]]
 
 
 def test_view_with_positive_and_negative():
     """Test view with mix of positive and negative"""
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
     y = x.view(10, -1)
-    assert_type(y, Tensor[10, 20])  # Should be Tensor[10, 20]
+    assert_type(y, Tensor[[10, 20]])  # Should be Tensor[[10, 20]]
 
 
 def test_view_all_positive():
     """Test view with all positive"""
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
     y = x.view(4, 50)
-    assert_type(y, Tensor[4, 50])  # Should be Tensor[4, 50]
+    assert_type(y, Tensor[[4, 50]])  # Should be Tensor[[4, 50]]

@@ -1,0 +1,9 @@
+runtime_package = "numpy"
+stub_directory = "numpy-stubs"
+skip_modules = ["numpy._shapes"]
+
+[[member_targets]]
+stub_module = "numpy"
+stub_class = "ndarray"
+runtime_module = "numpy"
+runtime_class = "ndarray"

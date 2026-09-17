@@ -8,21 +8,25 @@
 //! Implementation of the `typeServer/getComputedType` TSP request.
 
 use lsp_server::ResponseError;
+use pyrefly_util::telemetry::TelemetryEvent;
 use tsp_types::GetTypeParams;
 use tsp_types::Type;
 
 use crate::lsp::non_wasm::server::TspInterface;
-use crate::tsp::server::TspConnection;
+use crate::lsp::non_wasm::transaction_manager::TransactionManager;
+use crate::tsp::server::TspServer;
 use crate::tsp::validation::parse_uri;
 
-impl<T: TspInterface> TspConnection<T> {
+impl<T: TspInterface> TspServer<T> {
     /// Return the computed (inferred) type at the given position.
     ///
     /// The computed type reflects the type checker's analysis of the code
     /// flow — e.g. after narrowing inside an `isinstance` guard the computed
     /// type of a variable may be more specific than its declared annotation.
-    pub fn handle_get_computed_type(
-        &self,
+    pub fn handle_get_computed_type<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         params: GetTypeParams,
     ) -> Result<Option<Type>, ResponseError> {
         self.validate_snapshot(params.snapshot)?;
@@ -33,6 +37,8 @@ impl<T: TspInterface> TspConnection<T> {
         let start = params.position();
         let end = params.end_position();
         Ok(self.inner().computed_type_at_range(
+            ide_transaction_manager,
+            telemetry_event,
             params.uri(),
             start.line,
             start.character,

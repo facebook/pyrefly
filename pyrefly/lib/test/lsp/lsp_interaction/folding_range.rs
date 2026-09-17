@@ -8,11 +8,10 @@
 use lsp_types::FoldingRange;
 use lsp_types::FoldingRangeKind;
 use lsp_types::Url;
+use pyrefly_lsp_test::object_model::InitializeSettings;
+use pyrefly_lsp_test::object_model::LspInteraction;
 use serde_json::json;
 use tempfile::TempDir;
-
-use super::object_model::InitializeSettings;
-use super::object_model::LspInteraction;
 
 fn get_test_files_root() -> TempDir {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -147,6 +146,44 @@ fn test_folding_ranges_comment_sections_explicitly_disabled() {
                 .any(|r| r.kind == Some(FoldingRangeKind::Region))
         })
         .expect("Expected no Region folding ranges when commentFoldingRanges is explicitly false");
+
+    interaction.shutdown().expect("Failed to shutdown");
+}
+
+#[test]
+fn test_explicit_region_folding_enabled_by_default() {
+    let test_files_root = get_test_files_root();
+    let root_path = test_files_root.path().to_path_buf();
+    std::fs::write(
+        root_path.join("test.py"),
+        "#region Example\nx = 1\n#endregion\n",
+    )
+    .expect("Failed to write test file");
+    let scope_uri = Url::from_file_path(&root_path).unwrap();
+    let mut interaction = LspInteraction::new();
+    interaction.set_root(root_path.clone());
+
+    interaction
+        .initialize(InitializeSettings {
+            workspace_folders: Some(vec![("test".to_owned(), scope_uri.clone())]),
+            initialization_options: None,
+            configuration: Some(None),
+            ..Default::default()
+        })
+        .expect("Failed to initialize");
+
+    interaction.client.did_open("test.py");
+    interaction
+        .client
+        .folding_range("test.py")
+        .expect_response_with(|ranges: Option<Vec<FoldingRange>>| {
+            ranges.unwrap_or_default().iter().any(|range| {
+                range.start_line == 0
+                    && range.end_line == 2
+                    && range.kind == Some(FoldingRangeKind::Region)
+            })
+        })
+        .expect("Expected an explicit Region folding range by default");
 
     interaction.shutdown().expect("Failed to shutdown");
 }

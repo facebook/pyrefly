@@ -14,9 +14,9 @@ from typing import assert_type, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+from shape_extensions import Elements, IntTuple, IntVar
 
 if TYPE_CHECKING:
-    from shape_extensions import Dim
     from torch import Tensor
 
 
@@ -32,7 +32,7 @@ class Fuser(nn.Module):
         self.w_y = nn.Linear(256, 128)
 
     def forward(self, x: Tensor, y: Tensor) -> Tensor:
-        # w_x and w_y each produce Tensor[*BsN, 128] with different *BsN.
+        # w_x and w_y each produce Tensor[[*Elements[BsN], 128]] with different *Elements[BsN].
         # Addition should degrade batch dims rather than erroring.
         return self.w_x(x) + self.w_y(y)
 
@@ -40,16 +40,16 @@ class Fuser(nn.Module):
 def test_add_bare_linear_outputs():
     """Adding two Linear outputs from bare inputs doesn't error."""
     m = Fuser()
-    x: Tensor[4, 256] = torch.randn(4, 256)
-    y: Tensor[4, 256] = torch.randn(4, 256)
+    x: Tensor[[4, 256]] = torch.randn(4, 256)
+    y: Tensor[[4, 256]] = torch.randn(4, 256)
     m(x, y)
 
 
 # --- Shaped inputs: explicitly variadic with different TypeVarTuples ---
 
 
-def add_different_variadics[*As, *Bs, C](
-    a: Tensor[*As, C], b: Tensor[*Bs, C]
+def add_different_variadics[As: IntTuple, Bs: IntTuple, C: IntVar](
+    a: Tensor[[*Elements[As], C]], b: Tensor[[*Elements[Bs], C]]
 ) -> Tensor:
     """Add two tensors with different variadic batch dims.
     The suffix C is shared; the middles *As and *Bs differ.
@@ -59,15 +59,17 @@ def add_different_variadics[*As, *Bs, C](
 
 def test_add_shaped_different_variadics():
     """Adding tensors with different *As, *Bs preserves suffix."""
-    a: Tensor[2, 3, 10] = torch.randn(2, 3, 10)
-    b: Tensor[4, 5, 10] = torch.randn(4, 5, 10)
-    out = add_different_variadics(a, b)
+    a: Tensor[[2, 3, 10]] = torch.randn(2, 3, 10)
+    b: Tensor[[4, 5, 10]] = torch.randn(4, 5, 10)
+    add_different_variadics(a, b)
 
 
 # --- Same variadic: should still broadcast correctly ---
 
 
-def add_same_variadic[*Bs, C](a: Tensor[*Bs, C], b: Tensor[*Bs, C]) -> Tensor[*Bs, C]:
+def add_same_variadic[Bs: IntTuple, C: IntVar](
+    a: Tensor[[*Elements[Bs], C]], b: Tensor[[*Elements[Bs], C]]
+) -> Tensor[[*Elements[Bs], C]]:
     """Add two tensors with the same variadic and same suffix.
     Since *Bs and C match, the result preserves the full shape."""
     return a + b
@@ -75,17 +77,17 @@ def add_same_variadic[*Bs, C](a: Tensor[*Bs, C], b: Tensor[*Bs, C]) -> Tensor[*B
 
 def test_add_same_variadic():
     """Adding tensors with same *Bs and same suffix works."""
-    a: Tensor[2, 3, 10] = torch.randn(2, 3, 10)
-    b: Tensor[2, 3, 10] = torch.randn(2, 3, 10)
+    a: Tensor[[2, 3, 10]] = torch.randn(2, 3, 10)
+    b: Tensor[[2, 3, 10]] = torch.randn(2, 3, 10)
     out = add_same_variadic(a, b)
-    assert_type(out, Tensor[2, 3, 10])
+    assert_type(out, Tensor[[2, 3, 10]])
 
 
 # --- Mul with different variadics ---
 
 
-def mul_different_variadics[*As, *Bs, C](
-    a: Tensor[*As, C], b: Tensor[*Bs, C]
+def mul_different_variadics[As: IntTuple, Bs: IntTuple, C: IntVar](
+    a: Tensor[[*Elements[As], C]], b: Tensor[[*Elements[Bs], C]]
 ) -> Tensor:
     """Multiply tensors with different variadic middles.
     Should degrade gracefully like addition."""
@@ -94,6 +96,6 @@ def mul_different_variadics[*As, *Bs, C](
 
 def test_mul_different_variadics():
     """Multiplying tensors with different *As, *Bs doesn't error."""
-    a: Tensor[2, 3, 10] = torch.randn(2, 3, 10)
-    b: Tensor[4, 5, 10] = torch.randn(4, 5, 10)
+    a: Tensor[[2, 3, 10]] = torch.randn(2, 3, 10)
+    b: Tensor[[4, 5, 10]] = torch.randn(4, 5, 10)
     mul_different_variadics(a, b)

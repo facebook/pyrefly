@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use crate::test::util::TestEnv;
 use crate::testcase;
 
 // At some point in the past, this test took many minutes and consumed 50Gb of RAM.
@@ -176,6 +177,58 @@ def test() -> None:
 "#,
 );
 
+// A protocol-member guard can be entered outside a `Subset` while checking for unsafe overlap.
+// The nested protocol result must not be cached because it depends on that guard.
+testcase!(
+    test_getattr_coinductive_protocol_cache_soundness,
+    r#"
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class P(Protocol):
+    @property
+    def x(self) -> str: ...
+
+class C:
+    def __getattr__(self: P, name: str) -> int:
+        return 0
+
+def check(x: C) -> None:
+    isinstance(x, P)  # E: Runtime checkable protocol `P` has an unsafe overlap with type `C`
+
+def use(x: P) -> None: ...
+use(C())  # E: Argument `C` is not assignable to parameter `x` with type `P` in function `use`
+"#,
+);
+
+// SCC restarts must not retain protocol results computed from recursive Answer fallbacks.
+testcase!(
+    test_protocol_cache_ignores_answers_scc,
+    r#"
+from __future__ import annotations
+
+from typing import Any, Generic, Protocol, Self, TypeVar
+
+P = TypeVar("P", bound="ProtoWithFactory")
+
+class ProtoWithFactory(Protocol):
+    @property
+    def factory(self) -> Factory[Self]: ...
+    @factory.setter
+    def factory(self, value: Any) -> None: ...
+
+class Factory(Generic[P]): ...
+
+class Base:
+    factory: Factory[Base]
+
+class Child(Base):
+    factory: Factory[Child]  # type: ignore
+
+class ChildFactory(Factory[Child]): ...
+"#,
+);
+
 // Soundness test for typed_dict_cache with coinductive assumptions.
 //
 // Similar to test_protocol_coinductive_cache_soundness, but the stale cache
@@ -229,3 +282,23 @@ def test() -> None:
     f(A())  # E: Argument `A` is not assignable to parameter `x` with type `P1 | P2`
 "#,
 );
+
+// A long operator chain nests one expression per operand while the parser's own
+// recursion stays flat, so nothing bounds the depth of the tree it produces.
+// Analyzing it used to overflow the stack and abort the process.
+#[test]
+fn test_deeply_nested_expression_is_rejected() {
+    let code = format!("x = {}\n", vec!["1"; 5000].join("+"));
+    let (state, handle) = TestEnv::one("main", &code).to_state();
+    let errors = state
+        .transaction()
+        .get_errors([&handle("main")])
+        .collect_errors()
+        .ordinary;
+    assert_eq!(errors.len(), 1, "got: {errors:#?}");
+    assert!(
+        errors[0].msg().contains("too deeply nested"),
+        "got: {:?}",
+        errors[0].msg()
+    );
+}

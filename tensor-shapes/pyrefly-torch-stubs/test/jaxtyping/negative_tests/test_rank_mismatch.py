@@ -11,6 +11,6 @@ from torch import Tensor
 
 def wrong_rank(x: Shaped[Tensor, "batch 3"]) -> Shaped[Tensor, "batch 3 4"]:
     """Return type has rank 3 but input has rank 2."""
-    # E: Returned type `Shaped[Tensor, "batch 3"]` is not assignable
-    #    to declared return type `Shaped[Tensor, "batch 3 4"]`
+    # E: Returned type `Tensor[IntTuple[batch, 3]]` is not assignable
+    #    to declared return type `Tensor[IntTuple[batch, 3, 4]]`
     return x

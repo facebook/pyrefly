@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use std::sync::Arc;
-
 use pyrefly_derive::TypeEq;
 use pyrefly_derive::Visit;
 use pyrefly_derive::VisitMut;
@@ -15,12 +13,12 @@ use starlark_map::small_set::SmallSet;
 use vec1::Vec1;
 
 use crate::callable::Callable;
-use crate::callable::FuncFlags;
-use crate::callable::FuncMetadata;
-use crate::callable::Function;
-use crate::callable::FunctionKind;
 use crate::callable::Params;
 use crate::callable::PrefixParam;
+use crate::function::FuncFlags;
+use crate::function::FuncMetadata;
+use crate::function::Function;
+use crate::function::FunctionKind;
 use crate::heap::TypeHeap;
 use crate::quantified::Quantified;
 use crate::simplify::unions;
@@ -28,7 +26,6 @@ use crate::types::Forall;
 use crate::types::Forallable;
 use crate::types::Overload;
 use crate::types::OverloadType;
-use crate::types::TParams;
 use crate::types::Type;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -56,7 +53,7 @@ pub enum CallableResidualKind {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[derive(Visit, VisitMut, TypeEq)]
 pub struct OverloadResidualIdentity {
-    pub witness_hash: u64,
+    pub argument_index: u32,
 }
 
 /// Per-branch result for a single var in an overload residual.
@@ -117,6 +114,26 @@ impl Type {
         Type::CallableResidual(Box::new(CallableResidual {
             kind: CallableResidualKind::Overload { identity, branches },
         }))
+    }
+
+    /// Whether this type is a placeholder for deferred generic callable structure.
+    pub fn is_generic_placeholder(&self) -> bool {
+        match self {
+            Type::CallableResidual(residual) => {
+                matches!(&residual.kind, CallableResidualKind::Generic { .. })
+            }
+            Type::Quantified(q) => q.needs_finalization,
+            _ => false,
+        }
+    }
+
+    /// Whether this type is a placeholder for deferred generic or overloaded callable structure.
+    pub fn is_placeholder(&self) -> bool {
+        match self {
+            Type::CallableResidual(_) => true,
+            Type::Quantified(q) => q.needs_finalization,
+            _ => false,
+        }
     }
 
     /// Check if the type contains an overload callable residual marker anywhere.
@@ -278,7 +295,8 @@ impl Type {
     /// Returns `None` if any branch type cannot be converted to an overload signature.
     fn try_combine_reconstructed_overload(&self, reconstructed: &[Type]) -> Option<Type> {
         let metadata = self
-            .visit_toplevel_func_metadata(&|metadata| Some(metadata.clone()))
+            .toplevel_func_metadata()
+            .cloned()
             .unwrap_or(FuncMetadata {
                 kind: FunctionKind::Overload,
                 flags: FuncFlags::default(),
@@ -286,8 +304,11 @@ impl Type {
         let signatures = reconstructed
             .iter()
             .cloned()
-            .map(|branch_ty| branch_ty.into_overload_signature(&metadata))
-            .collect::<Option<Vec<_>>>()?;
+            .map(|branch_ty| branch_ty.into_overload_signatures(&metadata))
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
         let signatures = Vec1::try_from_vec(signatures).ok()?;
         Some(Type::Overload(Overload {
             signatures,
@@ -295,45 +316,30 @@ impl Type {
         }))
     }
 
-    fn into_overload_signature(self, metadata: &FuncMetadata) -> Option<OverloadType> {
+    fn into_overload_signatures(self, metadata: &FuncMetadata) -> Option<Vec<OverloadType>> {
         match self {
-            Type::Function(function) => Some(OverloadType::Function(*function)),
+            Type::Function(function) => Some(vec![OverloadType::Function(*function)]),
             Type::Forall(forall) => match forall.body {
-                Forallable::Function(function) => Some(OverloadType::Forall(Forall {
+                Forallable::Function(function) => Some(vec![OverloadType::Forall(Forall {
                     tparams: forall.tparams,
                     body: function,
-                })),
-                Forallable::Callable(callable) => Some(OverloadType::Forall(Forall {
+                })]),
+                Forallable::Callable(callable) => Some(vec![OverloadType::Forall(Forall {
                     tparams: forall.tparams,
                     body: Function {
                         signature: callable,
                         metadata: metadata.clone(),
                     },
-                })),
+                })]),
                 Forallable::TypeAlias(_) => None,
             },
-            Type::Callable(callable) => Some(OverloadType::Function(Function {
+            Type::Callable(callable) => Some(vec![OverloadType::Function(Function {
                 signature: *callable,
                 metadata: metadata.clone(),
-            })),
+            })]),
+            Type::Overload(overload) => Some(overload.signatures.into_vec()),
             _ => None,
         }
-    }
-
-    /// Collect quantified type parameters for wrapping in a Forall.
-    fn quantified_tparams_for_forall(&self, heap: &TypeHeap) -> Arc<TParams> {
-        let callable_ty = match self {
-            Type::Callable(c) => heap.mk_callable(c.params.clone(), c.ret.clone()),
-            Type::Function(f) => {
-                heap.mk_callable(f.signature.params.clone(), f.signature.ret.clone())
-            }
-            _ => self.clone(),
-        };
-        let mut tparams = Vec::new();
-        callable_ty.for_each_quantified(&mut |q| tparams.push(q.clone()));
-        tparams.sort();
-        tparams.dedup();
-        Arc::new(TParams::new(tparams))
     }
 
     /// Finalize callable residuals at a boundary with one outer traversal.
@@ -383,10 +389,7 @@ impl Type {
                     consumed_residual |= phase_consumed;
                 }
                 if consumed_residual && !callable_slot {
-                    let tparams = self.quantified_tparams_for_forall(heap);
-                    if let Type::Callable(c) = std::mem::replace(self, Type::None) {
-                        *self = Forallable::Callable(*c).forall(tparams);
-                    }
+                    self.finalize_free_quantifieds_mut();
                     (true, true)
                 } else {
                     (changed, consumed_residual)
@@ -405,17 +408,11 @@ impl Type {
                     changed |= phase_changed;
                     consumed_residual |= phase_consumed;
                 }
-                if !changed {
-                    return (false, false);
-                }
                 if consumed_residual && !callable_slot {
-                    let tparams = self.quantified_tparams_for_forall(heap);
-                    if let Type::Function(f) = std::mem::replace(self, Type::None) {
-                        *self = Forallable::Function(*f).forall(tparams);
-                    }
+                    self.finalize_free_quantifieds_mut();
                     (true, true)
                 } else {
-                    (true, consumed_residual)
+                    (changed, consumed_residual)
                 }
             }
             Type::ClassType(_) if preserve_class_targs && !callable_slot => (false, false),
@@ -526,7 +523,11 @@ impl Type {
         }
 
         self.finalize_callable_residuals_mut(heap, false, preserve_class_targs);
-        self
+        if preserve_class_targs {
+            self.finalize_exposed_free_quantifieds()
+        } else {
+            self.finalize_free_quantifieds()
+        }
     }
 
     fn finalize_callable_residuals_in_phase_mut(
@@ -600,7 +601,7 @@ impl Callable {
         let mut changed = false;
         let mut consumed_residual = false;
         match &mut self.params {
-            Params::List(params) => {
+            Params::List(params) | Params::Partial(params) => {
                 for param in params.items_mut() {
                     let (param_changed, param_consumed) = param
                         .as_type_mut()
@@ -666,10 +667,9 @@ impl Function {
         let mut signature = self.signature.clone();
         let (changed, consumed_residual) =
             signature.finalize_residuals_in_phase_mut(heap, preserve_class_targs, phase);
-        if !changed {
-            return (false, false);
+        if changed {
+            self.signature = signature;
         }
-        self.signature = signature;
-        (true, consumed_residual)
+        (changed, consumed_residual)
     }
 }

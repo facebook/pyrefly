@@ -1,10 +1,9 @@
-#!/usr/bin/env fbpython
+#!/usr/bin/env python3
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-# pyre-strict
 
 """
 Test that everything works well
@@ -50,6 +49,7 @@ class TestFlags:
     run_tensor_shapes: bool
     run_conformance: bool
     run_jsonschema: bool
+    run_extension: bool
 
 
 def print_running(msg: str) -> None:
@@ -129,6 +129,25 @@ class Executor(abc.ABC):
     def jsonschema(self) -> None:
         raise NotImplementedError()
 
+    def extension(self) -> None:
+        """Test the VS Code extension's Python helper.
+
+        This is not abstract: `find_pyrefly.py` is a standalone stdlib script
+        shipped inside the extension and run by the user's own interpreter, so
+        neither build system produces it and the command is the same in both
+        modes.
+        """
+        run(
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "lsp/test",
+            ]
+        )
+
 
 @final
 class CargoExecutor(Executor):
@@ -193,10 +212,9 @@ class CargoExecutor(Executor):
         )
 
     def tensor_shapes(self) -> None:
-        run(["cargo", "build"])
-        # The runners resolve the debug pyrefly themselves, so we don't pass `--pyrefly`.
-        run([sys.executable, "tensor-shapes/pyrefly-torch-stubs/run_pyrefly.py"])
-        run([sys.executable, "tensor-shapes/numpy/run_pyrefly.py"])
+        # The runner builds the debug pyrefly itself, so we neither build here
+        # nor pass `--pyrefly`.
+        run([sys.executable, "tensor-shapes/run_tests.py", "--static-only"])
 
     def conformance(self) -> None:
         cargo_target_dir = os.environ.get("CARGO_TARGET_DIR", "target")
@@ -212,6 +230,7 @@ class CargoExecutor(Executor):
 
     def jsonschema(self) -> None:
         run(["python3", "schemas/validate_schemas.py"])
+        run(["python3", "test/sarif/validate_sarif.py"])
 
 
 @final
@@ -260,30 +279,9 @@ class BuckExecutor(Executor):
                 "Skipping tensor shape tests on CI because they're already scheduled."
             )
             return
-        run(
-            [
-                "buck2",
-                "test",
-                "tensor-shapes/pyrefly-torch-stubs/examples:torch_examples_test",
-                "tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_all_test",
-                "tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_error_test",
-                "tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_jaxtyping_test",
-                "tensor-shapes/pyrefly-torch-stubs/test:tensor_shapes_jaxtyping_error_test",
-                "tensor-shapes/numpy:numpy_arithmetic_static_test",
-                "tensor-shapes/numpy:numpy_broadcasting_static_test",
-                "tensor-shapes/numpy:numpy_creation_basics_static_test",
-                "tensor-shapes/numpy:numpy_dtype_properties_static_test",
-                "tensor-shapes/numpy:numpy_examples_static_test",
-                "tensor-shapes/numpy:numpy_linalg_static_test",
-                "tensor-shapes/numpy:numpy_math_ufuncs_static_test",
-                "tensor-shapes/numpy:numpy_random_static_test",
-                "tensor-shapes/numpy:numpy_reductions_static_test",
-                "tensor-shapes/numpy:numpy_runtime_test",
-                "--",
-                "--run-disabled",
-                "--return-zero-on-skips",
-            ]
-        )
+        # Same runner and same scope as the Cargo path; `--buck` only changes
+        # where the Pyrefly binary comes from. Runtime tests are left to CI.
+        run([sys.executable, "tensor-shapes/run_tests.py", "--static-only", "--buck"])
 
     def conformance(self) -> None:
         run(
@@ -303,6 +301,7 @@ class BuckExecutor(Executor):
                 "test",
                 "--reuse-current-config",
                 "schemas:test",
+                "test:sarif-schema",
             ]
         )
 
@@ -337,6 +336,11 @@ def run_tests(executor: Executor, test_flags: TestFlags) -> None:
         print_running("jsonschema tests")
         with timing():
             executor.jsonschema()
+
+    if test_flags.run_extension:
+        print_running("extension tests")
+        with timing():
+            executor.extension()
 
 
 def get_executor(mode: str) -> Executor:
@@ -400,6 +404,12 @@ def invoke_main() -> None:
         default=True,
         help="Whether to run jsonschema test or not",
     )
+    parser.add_argument(
+        "--extension",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to run the VS Code extension's Python tests or not",
+    )
     args = parser.parse_args()
     try:
         main(
@@ -411,6 +421,7 @@ def invoke_main() -> None:
                 run_tensor_shapes=args.tensor_shapes,
                 run_conformance=args.conformance,
                 run_jsonschema=args.jsonschema,
+                run_extension=args.extension,
             ),
         )
     except KeyboardInterrupt:

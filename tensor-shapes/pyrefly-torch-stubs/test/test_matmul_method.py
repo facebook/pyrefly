@@ -8,15 +8,18 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
 
 
-def test_matmul_method[N, M, K](a: Tensor[N, M], b: Tensor[M, K]):
+def test_matmul_method[N: IntVar, M: IntVar, K: IntVar](
+    a: Tensor[[N, M]], b: Tensor[[M, K]]
+):
     """Test .matmul() method"""
     c = a.matmul(b)
-    assert_type(c, Tensor[N, K])
+    assert_type(c, Tensor[[N, K]])
 
 
 test_matmul_method(torch.randn(5, 10), torch.randn(10, 7))

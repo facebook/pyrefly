@@ -8,6 +8,7 @@
 from typing import assert_type, TYPE_CHECKING
 
 import torch
+from shape_extensions import IntVar
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -15,33 +16,33 @@ if TYPE_CHECKING:
 
 def test_view_with_minus_one():
     """Test .view() with -1"""
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
     y = x.view(-1)  # Flatten
-    assert_type(y, Tensor[200])
-    assert_type(y, Tensor[200])
+    assert_type(y, Tensor[[200]])
+    assert_type(y, Tensor[[200]])
 
 
 def test_view_with_partial_minus_one():
     """Test .view() with partial -1"""
-    x: Tensor[10, 20] = torch.randn(10, 20)
+    x: Tensor[[10, 20]] = torch.randn(10, 20)
     y = x.view(2, -1)  # Should infer second dim as 100
-    assert_type(y, Tensor[2, 100])
-    assert_type(y, Tensor[2, 100])
+    assert_type(y, Tensor[[2, 100]])
+    assert_type(y, Tensor[[2, 100]])
 
 
-def test_view_1d_to_4d[C](x: Tensor[C]) -> Tensor[1, C, 1, 1]:
+def test_view_1d_to_4d[C: IntVar](x: Tensor[[C]]) -> Tensor[[1, C, 1, 1]]:
     """Test reshaping 1D to 4D with -1
 
     Takes a 1D tensor and reshapes it to [1, C, 1, 1] using -1 for automatic inference.
     The -1 will be inferred as C.
     """
     y = x.view(1, -1, 1, 1)  # -1 inferred as C
-    assert_type(y, Tensor[1, C, 1, 1])
-    assert_type(y, Tensor[1, C, 1, 1])
+    assert_type(y, Tensor[[1, C, 1, 1]])
+    assert_type(y, Tensor[[1, C, 1, 1]])
     return y
 
 
 # Test by calling with concrete tensor
 result = test_view_1d_to_4d(torch.randn(64))
-assert_type(result, Tensor[1, 64, 1, 1])
-assert_type(result, Tensor[1, 64, 1, 1])
+assert_type(result, Tensor[[1, 64, 1, 1]])
+assert_type(result, Tensor[[1, 64, 1, 1]])

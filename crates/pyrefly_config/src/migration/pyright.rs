@@ -47,6 +47,19 @@ impl ExecEnv {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TypeCheckingMode {
+    Off,
+    Basic,
+    Standard,
+    Strict,
+    /// basedpyright only
+    Recommended,
+    /// basedpyright only
+    All,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct PyrightConfig {
     #[serde(rename = "include")]
     pub project_includes: Option<Globs>,
@@ -60,10 +73,14 @@ pub struct PyrightConfig {
     pub python_platform: Option<String>,
     #[serde(rename = "pythonVersion")]
     pub python_version: Option<PythonVersion>,
+    #[serde(rename = "typeCheckingMode")]
+    pub type_checking_mode: Option<TypeCheckingMode>,
     #[serde(flatten)]
     pub errors: RuleOverrides,
     #[serde(default, rename = "executionEnvironments")]
     pub execution_environments: Vec<ExecEnv>,
+    #[serde(skip, default)]
+    pub is_basedpyright: bool,
 }
 
 use crate::migration::config_option_migrater::ConfigOptionMigrater;
@@ -77,6 +94,7 @@ use crate::migration::python_version::PythonVersionConfig;
 use crate::migration::search_path::SearchPath;
 use crate::migration::site_package_path::SitePackagePath;
 use crate::migration::sub_configs::SubConfigs;
+use crate::migration::type_checking_mode;
 
 impl PyrightConfig {
     pub fn parse(text: &str) -> anyhow::Result<Self> {
@@ -96,6 +114,7 @@ impl PyrightConfig {
             Box::new(SearchPath),
             Box::new(SitePackagePath),
             Box::new(IgnoreMissingImports),
+            Box::new(type_checking_mode::TypeCheckingMode),
             Box::new(ErrorCodes),
             Box::new(SubConfigs),
         ];
@@ -253,7 +272,6 @@ pub struct RuleOverrides {
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_unknown_argument_type: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
-    #[expect(unused)]
     pub report_unknown_lambda_type: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_unknown_variable_type: Option<Severity>,
@@ -301,7 +319,14 @@ pub struct RuleOverrides {
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
     pub report_incompatible_unannotated_override: Option<Severity>,
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    #[expect(unused)]
     pub report_unannotated_class_attribute: Option<Severity>,
+
+    // Decorator rules
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_untyped_class_decorator: Option<Severity>,
+    #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
+    pub report_untyped_function_decorator: Option<Severity>,
 
     // Name/redeclaration rules
     #[serde_as(as = "Option<FromInto<DiagnosticLevelOrBool>>")]
@@ -419,9 +444,22 @@ impl RuleOverrides {
             self.report_missing_parameter_type,
             ErrorKind::ImplicitAnyParameter,
         );
-        add(self.report_unknown_argument_type, ErrorKind::ImplicitAny);
-        add(self.report_unknown_variable_type, ErrorKind::ImplicitAny);
-        add(self.report_unknown_member_type, ErrorKind::ImplicitAny);
+        add(
+            self.report_unknown_argument_type,
+            ErrorKind::UnknownArgumentType,
+        );
+        add(
+            self.report_unknown_variable_type,
+            ErrorKind::UnknownVariableType,
+        );
+        add(
+            self.report_unknown_member_type,
+            ErrorKind::UnknownAttributeType,
+        );
+        add(
+            self.report_unknown_lambda_type,
+            ErrorKind::ImplicitAnyLambda,
+        );
         add(self.report_invalid_type_var_use, ErrorKind::InvalidTypeVar);
         add(self.report_unnecessary_cast, ErrorKind::RedundantCast);
         add(self.report_undefined_variable, ErrorKind::UnknownName);
@@ -497,13 +535,15 @@ impl RuleOverrides {
             self.report_incompatible_unannotated_override,
             ErrorKind::BadOverrideMutableAttribute,
         );
+
+        // Decorator rules
         add(
-            self.report_unannotated_class_attribute,
-            ErrorKind::ImplicitAnyAttribute,
+            self.report_untyped_class_decorator,
+            ErrorKind::UntypedClassDecorator,
         );
         add(
-            self.report_unannotated_class_attribute,
-            ErrorKind::UnannotatedProtocolMember,
+            self.report_untyped_function_decorator,
+            ErrorKind::UntypedFunctionDecorator,
         );
 
         // Name/redeclaration rules
@@ -548,10 +588,23 @@ impl RuleOverrides {
 #[error("No [tool.pyright] section found in pyproject.toml")]
 pub struct PyrightNotFoundError {}
 
+/// basedpyright itself rejects a `pyproject.toml` that carries both a
+/// `[tool.pyright]` and a `[tool.basedpyright]` section, so there is no
+/// well-defined config for us to migrate.
+#[derive(thiserror::Error, Debug)]
+#[error("Both `[tool.pyright]` and `[tool.basedpyright]` sections are not supported.")]
+pub struct BothPyrightSectionsError {}
+
+/// Migrate the pyright or basedpyright section of a `pyproject.toml`.
+///
+/// Exactly one of `[tool.pyright]` and `[tool.basedpyright]` must be present:
+/// this is the parse boundary that enforces that invariant, so callers do not
+/// have to check for the sections themselves before calling.
 pub fn parse_pyproject_toml(raw_file: &str) -> anyhow::Result<ConfigFile> {
     #[derive(Deserialize)]
     struct Tool {
         pyright: Option<PyrightConfig>,
+        basedpyright: Option<PyrightConfig>,
     }
 
     #[derive(Deserialize)]
@@ -559,11 +612,21 @@ pub fn parse_pyproject_toml(raw_file: &str) -> anyhow::Result<ConfigFile> {
         tool: Option<Tool>,
     }
 
-    toml::from_str::<PyProject>(raw_file)?
+    let tool = toml::from_str::<PyProject>(raw_file)?
         .tool
-        .and_then(|tool| tool.pyright)
-        .ok_or(anyhow::anyhow!(PyrightNotFoundError {}))
-        .map(PyrightConfig::convert)
+        .ok_or(anyhow::anyhow!(PyrightNotFoundError {}))?;
+
+    let config = match (tool.pyright, tool.basedpyright) {
+        (Some(pyright), None) => Ok(pyright),
+        (None, Some(mut basedpyright)) => {
+            basedpyright.is_basedpyright = true;
+            Ok(basedpyright)
+        }
+        (Some(_), Some(_)) => Err(anyhow::anyhow!(BothPyrightSectionsError {})),
+        (None, None) => Err(anyhow::anyhow!(PyrightNotFoundError {})),
+    }?;
+
+    Ok(PyrightConfig::convert(config))
 }
 
 #[cfg(test)]
@@ -572,6 +635,7 @@ mod tests {
     use pyrefly_python::sys_info::PythonPlatform;
 
     use super::*;
+    use crate::base::Preset;
     use crate::environment::environment::PythonEnvironment;
 
     #[test]
@@ -672,7 +736,7 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_from_pyproject() -> anyhow::Result<()> {
+    fn test_convert_from_pyproject() {
         // From https://microsoft.github.io/pyright/#/configuration?id=sample-pyprojecttoml-file
         let src = r#"[tool.pyright]
 include = ["src"]
@@ -698,7 +762,43 @@ executionEnvironments = [
   { root = "src" }
 ]
 "#;
-        parse_pyproject_toml(src).map(|_| ())
+        let result = parse_pyproject_toml(src).unwrap();
+        assert_eq!(result.preset, None);
+    }
+
+    #[test]
+    fn test_convert_from_pyproject_basedpyright() {
+        let src = r#"[tool.basedpyright]
+"#;
+        let result = parse_pyproject_toml(src).unwrap();
+        assert_eq!(result.preset, Some(Preset::All));
+    }
+
+    #[test]
+    fn test_convert_from_pyproject_explicit_type_checking_mode_basedpyright() {
+        let src = r#"[tool.basedpyright]
+typeCheckingMode = "basic"
+"#;
+        let result = parse_pyproject_toml(src).unwrap();
+        assert_eq!(result.preset, None);
+    }
+
+    #[test]
+    fn test_convert_from_pyproject_rejects_both_pyright_and_basedpyright() {
+        // basedpyright treats the two sections coexisting as an error, so there
+        // is no well-defined config to migrate. The check lives here rather than
+        // in the callers, so it applies no matter which path reaches the parser.
+        let src = r#"[tool.pyright]
+include = ["pyright.py"]
+
+[tool.basedpyright]
+include = ["basedpyright.py"]
+"#;
+        let err = parse_pyproject_toml(src).expect_err("coexisting sections should be rejected");
+        assert!(
+            err.downcast_ref::<BothPyrightSectionsError>().is_some(),
+            "expected BothPyrightSectionsError, got: {err:#}"
+        );
     }
 
     #[test]

@@ -322,7 +322,6 @@ with Foo() as foo:
 );
 
 testcase!(
-    bug = "conformance: Context manager with bool/__exit__ should not narrow type after raise in if block",
     test_context_manager_exception_suppression_conformance,
     r#"
 from typing import Any, Literal, assert_type
@@ -339,20 +338,273 @@ class Suppress2(CMBase):
     def __exit__(self, exc_type, exc_value, traceback) -> Literal[True]:
         return True
 
-# When __exit__ returns bool or Literal[True], exceptions may be suppressed
-# so we should NOT narrow x based on the raise
+class NoSuppress1(CMBase):
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        return None
+
+class NoSuppress2(CMBase):
+    def __exit__(self, exc_type, exc_value, traceback) -> Literal[False]:
+        return False
+
+class NoSuppress3(CMBase):
+    def __exit__(self, exc_type, exc_value, traceback) -> Any:
+        return False
+
+class NoSuppress4(CMBase):
+    def __exit__(self, exc_type, exc_value, traceback) -> None | bool:
+        return None
+
 def suppress1(x: int | str) -> None:
     if isinstance(x, int):
         with Suppress1():
             raise ValueError
-    # pyrefly incorrectly narrows x to str here, but exception might be suppressed
-    assert_type(x, int | str)  # E: assert_type(str, int | str) failed
+    assert_type(x, int | str)
 
 def suppress2(x: int | str) -> None:
     if isinstance(x, int):
         with Suppress2():
             raise ValueError
-    # pyrefly incorrectly narrows x to str here, but exception might be suppressed
-    assert_type(x, int | str)  # E: assert_type(str, int | str) failed
+    assert_type(x, int | str)
+
+def no_suppress1(x: int | str) -> None:
+    if isinstance(x, int):
+        with NoSuppress1():
+            raise ValueError
+    assert_type(x, str)
+
+def no_suppress2(x: int | str) -> None:
+    if isinstance(x, int):
+        with NoSuppress2():
+            raise ValueError
+    assert_type(x, str)
+
+def no_suppress3(x: int | str) -> None:
+    if isinstance(x, int):
+        with NoSuppress3():
+            raise ValueError
+    assert_type(x, str)
+
+def no_suppress4(x: int | str) -> None:
+    if isinstance(x, int):
+        with NoSuppress4():
+            raise ValueError
+    assert_type(x, str)
+"#,
+);
+
+testcase!(
+    test_with_suppression_multiple_items,
+    r#"
+from typing import assert_type
+
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def outer_suppresses(x: int | str) -> None:
+    if isinstance(x, int):
+        with Suppress(), NoSuppress():
+            raise ValueError
+    assert_type(x, int | str)
+
+def neither_suppresses(x: int | str) -> None:
+    if isinstance(x, int):
+        with NoSuppress(), NoSuppress():
+            raise ValueError
+    assert_type(x, str)
+"#,
+);
+
+testcase!(
+    test_with_suppression_async,
+    r#"
+from typing import assert_type
+
+class Suppress:
+    async def __aenter__(self) -> None: ...
+    async def __aexit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+async def f(x: int | str) -> None:
+    if isinstance(x, int):
+        async with Suppress():
+            raise ValueError
+    assert_type(x, int | str)
+"#,
+);
+
+testcase!(
+    test_with_suppression_no_return_call,
+    r#"
+from typing import NoReturn, assert_type
+
+def fail() -> NoReturn: ...
+
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def suppressed(x: int | str) -> None:
+    if isinstance(x, int):
+        with Suppress():
+            fail()
+    assert_type(x, int | str)
+
+def not_suppressed(x: int | str) -> None:
+    if isinstance(x, int):
+        with NoSuppress():
+            fail()
+    assert_type(x, str)
+"#,
+);
+
+testcase!(
+    test_with_suppression_uninitialized,
+    r#"
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+class NoSuppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+def suppressed(c: bool) -> int:
+    if c:
+        y = 1
+    else:
+        with Suppress():
+            raise ValueError
+    return y  # E: `y` may be uninitialized
+
+def not_suppressed(c: bool) -> int:
+    if c:
+        y = 1
+    else:
+        with NoSuppress():
+            raise ValueError
+    return y
+"#,
+);
+
+// `__exit__` runs for `return`/`break`/`continue`, but its return value is only
+// consulted when an exception is in flight, so a suppressing context manager cannot
+// cancel them the way it cancels a `raise`.
+testcase!(
+    test_with_terminators_are_not_suppressible,
+    r#"
+from typing import assert_type
+
+class Suppress:
+    def __enter__(self) -> None: ...
+    def __exit__(self, exc_type, exc_value, traceback) -> bool: ...
+
+def ret(x: int | str) -> None:
+    if isinstance(x, int):
+        with Suppress():
+            return
+    assert_type(x, str)
+
+def brk(x: int | str) -> None:
+    for _ in range(3):
+        if isinstance(x, int):
+            with Suppress():
+                break
+        assert_type(x, str)
+
+def cont(x: int | str) -> None:
+    for _ in range(3):
+        if isinstance(x, int):
+            with Suppress():
+                continue
+        assert_type(x, str)
+
+def raises(x: int | str) -> None:
+    if isinstance(x, int):
+        with Suppress():
+            raise ValueError
+    assert_type(x, int | str)
+
+def sys_exit(x: int | str) -> None:
+    import sys
+    if isinstance(x, int):
+        with Suppress():
+            sys.exit(1)
+    assert_type(x, int | str)
+
+def os_exit(x: int | str) -> None:
+    import os
+    if isinstance(x, int):
+        with Suppress():
+            os._exit(1)
+    assert_type(x, str)
+
+def ret_or_raise(c: bool, x: int | str) -> None:
+    if isinstance(x, int):
+        with Suppress():
+            if c:
+                return
+            else:
+                raise ValueError
+    assert_type(x, int | str)
+
+def ret_or_ret(c: bool, x: int | str) -> None:
+    if isinstance(x, int):
+        with Suppress():
+            if c:
+                return
+            else:
+                return
+    assert_type(x, str)
+
+def nested_ret(x: int | str) -> None:
+    if isinstance(x, int):
+        with Suppress():
+            with Suppress():
+                return
+    assert_type(x, str)
+
+def nested_raise(x: int | str) -> None:
+    if isinstance(x, int):
+        with Suppress():
+            with Suppress():
+                raise ValueError
+    assert_type(x, int | str)
+"#,
+);
+
+// The overload selected when an exception is in flight returns `bool`, so this context
+// manager can suppress. But `context_value_exit` unions the results of calling `__exit__`
+// with and without exception arguments, giving `bool | None`, which we treat as
+// non-suppressing. These overloads are the only way to spell "suppresses, but returns
+// `None` on the normal path": a plain `-> bool | None` is deliberately non-suppressing
+// (see `NoSuppress4` above).
+testcase!(
+    bug = "Overloaded `__exit__` suppressing only on the exception overload is not recognized",
+    test_with_suppression_overloaded_exit,
+    r#"
+from types import TracebackType
+from typing import assert_type, overload
+
+class CM:
+    def __enter__(self) -> None: ...
+    @overload
+    def __exit__(self, t: None, v: None, tb: None) -> None: ...
+    @overload
+    def __exit__(self, t: type[BaseException], v: BaseException, tb: TracebackType) -> bool: ...
+    def __exit__(self, t, v, tb) -> bool | None: ...
+
+def f(x: int | str) -> None:
+    if isinstance(x, int):
+        with CM():
+            raise ValueError
+    assert_type(x, str)  # should be `int | str`
 "#,
 );
