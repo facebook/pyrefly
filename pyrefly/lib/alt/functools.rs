@@ -7,16 +7,11 @@
 
 //! Type-checks `functools.partial(...)` bound arguments and synthesizes residual signatures.
 
-use std::sync::Arc;
-
 use itertools::Itertools;
-use pyrefly_types::heap::TypeHeap;
 use pyrefly_types::quantified::Quantified;
 use pyrefly_types::quantified::QuantifiedKind;
 use pyrefly_types::typed_dict::ExtraItems;
-use pyrefly_types::types::TParams;
 use pyrefly_types::types::Var;
-use pyrefly_util::visit::Visit;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use ruff_text_size::TextRange;
@@ -39,7 +34,6 @@ use crate::types::callable::Params;
 use crate::types::callable::PrefixParam;
 use crate::types::callable::Required;
 use crate::types::function::Function;
-use crate::types::types::Forallable;
 use crate::types::types::Overload;
 use crate::types::types::OverloadType;
 use crate::types::types::Type;
@@ -249,7 +243,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         // We handle a directly-typed function/callable and a generic (`Forall`-wrapped) function.
         // A generic target keeps its `tparams`: type variables the bound args don't pin stay symbolic
-        // in the residual and are re-scoped into a `Forall` below, so a partial over a generic
+        // in the residual and are finalized at the result boundary, so a partial over a generic
         // function (including decorator use) preserves its genericity instead of leaking a residual
         // through the stub. Class objects, bound methods, and unions defer.
         let Ok((sig, tparams)) = target_ty.toplevel_callable_signatures().exactly_one() else {
@@ -300,8 +294,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // doesn't report the remaining parameters as missing. For a generic target we instantiate the
         // type parameters as fresh vars and check against those, so a bound argument can *solve* a
         // typevar (e.g. pin it to an enclosing-scope typevar); the residual is then built from the
-        // solved signature, and only the typevars the bound args left unsolved are restored to their
-        // original quantified so they can be re-scoped into a `Forall` below.
+        // solved signature, and only the typevars the bound args left unsolved are restored as
+        // quantifieds marked for finalization at the result boundary.
         let sig = match &tparams {
             None => {
                 let mut callee = target_ty.clone();
@@ -365,53 +359,70 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         }
                     }
                 }
-                // Restore concretely-pinned residual-parameter typevars to their quantified *before*
-                // expanding, so the solution isn't baked into a residual parameter (freezing it too
-                // narrowly). `expand_with_bounds` then resolves the remaining vars: a bound argument
-                // that pins one substitutes it, while a typevar left unconstrained stays a `Var` and
-                // is restored below. Using `expand_with_bounds` (not `finish_quantified`) preserves
-                // that distinction; finishing would erase the unconstrained vars to `Any`.
-                let mut solved = self.heap.mk_callable_from(inst);
-                solved = solved.transform(&mut |t: &mut Type| {
-                    if let Type::Var(v) = t
-                        && regeneric_vars.contains(v)
-                        && let Some(q) = var_to_q.get(v)
-                    {
-                        *t = self.heap.mk_quantified(q.clone());
-                    }
-                });
-                self.solver().expand_with_bounds(&mut solved);
-                let solved = solved.transform(&mut |t: &mut Type| {
-                    if let Type::Var(v) = t
-                        && let Some(q) = var_to_q.get(v)
-                    {
-                        *t = self.heap.mk_quantified(q.clone());
-                    }
-                });
-                // Finalize the vars `instantiate_fresh_callable` registered. Their substitution was
-                // already applied manually above, and any specialization error was reported by the
-                // bound-argument check via `freeform_call_infer`, so dropping the result is safe.
+                // Finalize the vars `instantiate_fresh_callable` registered. Their substitution is
+                // applied by `partial_solved_signature` below, and any specialization error was reported by
+                // the bound-argument check via `freeform_call_infer`, so dropping the result is safe.
                 let _ = self.finish_quantified(qs, false);
-                match solved {
-                    Type::Callable(c) => *c,
-                    _ => unreachable!("built by mk_callable_from"),
-                }
+                self.partial_solved_signature(&inst, &var_to_q, &regeneric_vars)
             }
+        };
+        let build = |sig: &Callable| {
+            let residual = partial_residual(sig, &args[1..], &bound_kw_names)?;
+            // A `TypeGuard`/`TypeIs` narrows only in a direct call; the residual just returns `bool`.
+            let ret = match &sig.ret {
+                Type::TypeGuard(_) | Type::TypeIs(_) => self.stdlib.bool().clone().to_type(),
+                other => other.clone(),
+            };
+            let callable = Callable::partial(residual, ret);
+            // A free type parameter left in the residual is one the residual declares, which
+            // finishing the type at this boundary does.
+            Some(
+                self.heap
+                    .mk_callable_from(callable)
+                    .finalize_exposed_free_quantifieds(),
+            )
         };
         // The arguments can't be reduced to a residual (e.g. too many bound positionals); hand
         // back the nominal `partial[ret]` rather than re-running the stub over a `Forall`.
-        let Some(residual) = partial_residual(&sig, &args[1..], &bound_kw_names) else {
+        let Some(result) = build(&sig) else {
             return nominal_partial(self, sig.ret);
         };
-        // A `TypeGuard`/`TypeIs` narrows only in a direct call; the residual just returns `bool`.
-        let ret = match sig.ret {
-            Type::TypeGuard(_) | Type::TypeIs(_) => self.stdlib.bool().clone().to_type(),
-            other => other,
-        };
-        let callable = Callable::partial(residual, ret);
-        match tparams {
-            None => self.heap.mk_callable_from(callable),
-            Some(tparams) => restore_partial_generics(self.heap, callable, tparams),
+        result
+    }
+
+    /// The target's signature with the bound arguments' solutions applied.
+    ///
+    /// A type parameter still standing in a required residual parameter is one a later call can
+    /// solve, so it is marked for finalization before expanding rather than being frozen to what
+    /// the bound arguments happened to imply. `expand_with_bounds` then substitutes the ones a
+    /// bound argument pinned and leaves the rest, which are marked likewise. Finishing instead of
+    /// expanding would erase them all to `Any`.
+    fn partial_solved_signature(
+        &self,
+        inst: &Callable,
+        var_to_q: &SmallMap<Var, Quantified>,
+        regeneric_vars: &SmallSet<Var>,
+    ) -> Callable {
+        let mut solved = self.heap.mk_callable_from(inst.clone());
+        solved = solved.transform(&mut |t: &mut Type| {
+            if let Type::Var(v) = t
+                && regeneric_vars.contains(v)
+                && let Some(q) = var_to_q.get(v)
+            {
+                *t = self.heap.mk_quantified(q.clone().with_needs_finalization());
+            }
+        });
+        self.solver().expand_with_bounds(&mut solved);
+        let solved = solved.transform(&mut |t: &mut Type| {
+            if let Type::Var(v) = t
+                && let Some(q) = var_to_q.get(v)
+            {
+                *t = self.heap.mk_quantified(q.clone().with_needs_finalization());
+            }
+        });
+        match solved {
+            Type::Callable(c) => *c,
+            _ => unreachable!("built by mk_callable_from"),
         }
     }
 
@@ -464,29 +475,6 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
         *params = ParamList::new(expanded);
     }
-}
-
-/// Re-scope a partial residual over the target's still-used type parameters. After binding a prefix
-/// of a generic function's arguments, the type variables the bound args didn't pin remain in the
-/// residual signature; wrap the result in a `Forall` over exactly those, so calling the residual
-/// (e.g. when it is applied as a decorator) instantiates them afresh. Mirrors the decorator path's
-/// `restore_decoratee_generics`.
-fn restore_partial_generics(heap: &TypeHeap, callable: Callable, tparams: &TParams) -> Type {
-    let mut used: SmallSet<Quantified> = SmallSet::new();
-    callable.visit(&mut |ty: &Type| {
-        if let Type::Quantified(q) = ty {
-            used.insert((**q).clone());
-        }
-    });
-    let surviving: Vec<Quantified> = tparams
-        .iter()
-        .filter(|q| used.contains(*q))
-        .cloned()
-        .collect();
-    if surviving.is_empty() {
-        return heap.mk_callable_from(callable);
-    }
-    Forallable::Callable(callable).forall(Arc::new(TParams::new(surviving)))
 }
 
 /// Make every parameter of a callable optional, so a `functools.partial` construction can bind a
