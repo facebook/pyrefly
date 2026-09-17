@@ -19,10 +19,11 @@ import * as os from 'os';
 describe('parseSandboxConfig', () => {
     test('parses all fields', () => {
         const config = parseSandboxConfig(
-            'dir: my-example\nactive: main.py\nlinkText: Try it\ndescription: A demo'
+            'dir: my-example\nshared: microtorch\nactive: main.py\nlinkText: Try it\ndescription: A demo'
         );
         expect(config).toEqual({
             dir: 'my-example',
+            shared: 'microtorch',
             active: 'main.py',
             linkText: 'Try it',
             description: 'A demo',
@@ -33,6 +34,7 @@ describe('parseSandboxConfig', () => {
         const config = parseSandboxConfig('dir: my-example');
         expect(config).toEqual({
             dir: 'my-example',
+            shared: '',
             active: 'sandbox.py',
             linkText: 'Open this example in the Pyrefly sandbox',
             description: '',
@@ -171,6 +173,24 @@ describe('readSandboxFiles', () => {
         const files = readSandboxFiles(tmpDir);
         expect(files['sandbox.py']).toBe('x = "héllo 日本語"\n');
     });
+
+    test('merges shared files and lets the example override them', () => {
+        const sharedDir = fs.mkdtempSync(
+            path.join(os.tmpdir(), 'sandbox-shared-test-')
+        );
+        try {
+            fs.writeFileSync(path.join(sharedDir, 'library.pyi'), 'shared');
+            fs.writeFileSync(path.join(sharedDir, 'sandbox.py'), 'shared');
+            fs.writeFileSync(path.join(tmpDir, 'sandbox.py'), 'example');
+
+            expect(readSandboxFiles(tmpDir, sharedDir)).toEqual({
+                'library.pyi': 'shared',
+                'sandbox.py': 'example',
+            });
+        } finally {
+            fs.rmSync(sharedDir, { recursive: true });
+        }
+    });
 });
 
 describe('buildSandboxUrl', () => {
@@ -194,10 +214,14 @@ describe('buildSandboxUrl', () => {
             __dirname,
             '../../sandbox-examples/tensor-shapes-overview'
         );
+        const sharedDir = path.resolve(
+            __dirname,
+            '../../../tensor-shapes/microtorch'
+        );
         if (!fs.existsSync(examplesDir)) {
             return; // skip if examples not present
         }
-        const files = readSandboxFiles(examplesDir);
+        const files = readSandboxFiles(examplesDir, sharedDir);
         expect(files['sandbox.py']).toBeDefined();
         expect(files['pyrefly.toml']).toBeDefined();
         expect(files['torch.pyi']).toBeDefined();

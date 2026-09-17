@@ -548,6 +548,9 @@ const config: Config = {
                     beforeDefaultRemarkPlugins: [
                         [remarkSandboxPlugin, {
                             sandboxExamplesDir: path.resolve(__dirname, 'sandbox-examples'),
+                            sharedDirectories: {
+                                microtorch: path.resolve(__dirname, '../tensor-shapes/microtorch'),
+                            },
                         }],
                     ],
                 },
