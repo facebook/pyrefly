@@ -873,10 +873,12 @@ class E(A):
     def __init__(self: A): pass
 
 class C[T]:
+    # Overload stubs may use receiver annotations for selection; validation is
+    # skipped on overload variants (same as ordinary methods).
     @overload
-    def __init__(self: A, x: Literal[True]) -> None: ...  # E: `__init__` method self type `A` is not a superclass of class `C`
+    def __init__(self: A, x: Literal[True]) -> None: ...
     @overload
-    def __init__(self: B, x: Literal[False]) -> None: ...  # E: `__init__` method self type `B` is not a superclass of class `C`
+    def __init__(self: B, x: Literal[False]) -> None: ...
     def __init__(self, x):
         pass
 
@@ -934,13 +936,63 @@ class K:
     def __new__(cls: type[Any]): pass
 
 class C[T]:
+    # Overload stubs may use receiver annotations for selection; validation is
+    # skipped on overload variants (same as ordinary methods).
     @overload
-    def __new__(cls: type[A], x: Literal[True]): ...  # E: `__new__` method cls type `type[A]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> Self@C`
+    def __new__(cls: type[A], x: Literal[True]): ...  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[A], x: Literal[True]) -> Self@C`
     @overload
-    def __new__(cls: type[B], x: Literal[False]): ...  # E: `__new__` method cls type `type[B]` is not a superclass of class `C`  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> Self@C` accepts
+    def __new__(cls: type[B], x: Literal[False]): ...  # E: Implementation signature `(cls: type[Self@C], x: Unknown) -> Self@C` does not accept all arguments that overload signature `(cls: type[B], x: Literal[False]) -> Self@C` accepts
     def __new__(cls, x):
         pass
 
+    "#,
+);
+
+// Regression for https://github.com/facebook/pyrefly/issues/4701:
+// overloaded `__new__` may annotate `cls` with a concrete subclass for overload
+// selection, matching the accepted pattern for ordinary overloaded methods.
+testcase!(
+    test_new_overload_subclass_receiver,
+    r#"
+from typing import assert_type, overload
+
+class Path:
+    @overload
+    def __new__(cls: type[AbsPath], path: str) -> AbsPath: ...
+    @overload
+    def __new__(cls: type[RelPath], path: str) -> RelPath: ...
+    @overload
+    def __new__(cls: type[Path], path: str) -> AbsPath | RelPath: ...
+    def __new__(cls: type[Path], path: str) -> Path:
+        raise NotImplementedError
+
+class AbsPath(Path): ...
+class RelPath(Path): ...
+
+assert_type(Path("file"), AbsPath | RelPath)
+assert_type(AbsPath("file"), AbsPath)
+assert_type(RelPath("file"), RelPath)
+    "#,
+);
+
+// Same pattern for overloaded `__init__` with a concrete subclass `self`.
+testcase!(
+    test_init_overload_subclass_receiver,
+    r#"
+from typing import overload
+
+class InitBase:
+    @overload
+    def __init__(self: InitSubclass, value: int) -> None: ...
+    @overload
+    def __init__(self: InitBase, value: str) -> None: ...
+    def __init__(self, value: int | str):
+        pass
+
+class InitSubclass(InitBase): ...
+
+InitSubclass(1)
+InitBase("x")
     "#,
 );
 
