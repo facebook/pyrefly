@@ -52,11 +52,15 @@ use crate::dimension::Int;
 use crate::dimension::ShapeError;
 use crate::dimension::canonicalize;
 use crate::dimension::gradual_size;
-use crate::einops::RearrangeClassification;
-use crate::einops::evaluate_rearrange;
-use crate::einops::parse_rearrange_pattern;
+use crate::einops::EinopsPatternClassification;
+use crate::einops::EinopsPatternOperation;
+use crate::einops::evaluate_einops_pattern;
+use crate::einops::parse_einops_pattern;
+use crate::einsum::EinopsEinsumClassification;
 use crate::einsum::EinsumClassification;
+use crate::einsum::evaluate_einops_einsum;
 use crate::einsum::evaluate_einsum;
+use crate::einsum::parse_einops_einsum_equation;
 use crate::einsum::parse_einsum_equation;
 use crate::equality::TypeEq as TypeEqTrait;
 use crate::equality::TypeEqCtx;
@@ -1165,7 +1169,10 @@ pub enum TypeShapeDslIntrinsic {
     Any,
     Concat,
     Einsum,
+    EinopsEinsum,
     Rearrange,
+    Reduce,
+    Repeat,
     GufuncBroadcast,
     Gradual(TypeShapeDslDomain),
     IsConcreteInt,
@@ -1196,7 +1203,13 @@ pub enum TypeShapeDslExpressionKind {
         shapes: usize,
         parameter_origins: Option<Box<[usize]>>,
     },
+    EinopsEinsum {
+        shapes: usize,
+        parameter_origins: Option<Box<[usize]>>,
+    },
     Rearrange,
+    Reduce,
+    Repeat,
     GufuncBroadcast {
         shapes: usize,
         parameter_origins: Option<Box<[usize]>>,
@@ -3551,9 +3564,19 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         &mut self,
         call: &ExprCall,
         flow: &DslValidationFlow,
+        intrinsic: TypeShapeDslIntrinsic,
     ) -> Result<(), TypeShapeDslDefinitionError> {
-        const SHAPES_ERROR: &str =
-            "`dsl.einsum` shapes must be an `IntTuples` parameter or immutable alias";
+        let (arguments_error, shapes_error) = match intrinsic {
+            TypeShapeDslIntrinsic::Einsum => (
+                "`dsl.einsum` requires exactly two positional arguments",
+                "`dsl.einsum` shapes must be an `IntTuples` parameter or immutable alias",
+            ),
+            TypeShapeDslIntrinsic::EinopsEinsum => (
+                "`dsl.einops_einsum` requires exactly two positional arguments",
+                "`dsl.einops_einsum` shapes must be an `IntTuples` parameter or immutable alias",
+            ),
+            _ => unreachable!("einsum validation requires an einsum intrinsic"),
+        };
         if call.arguments.args.len() != 2
             || !call.arguments.keywords.is_empty()
             || call
@@ -3564,7 +3587,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         {
             return Err(TypeShapeDslDefinitionError {
                 range: call.arguments.range,
-                message: "`dsl.einsum` requires exactly two positional arguments",
+                message: arguments_error,
             });
         }
         self.validate_flag_string(&call.arguments.args[0], flow)?;
@@ -3572,7 +3595,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         let Expr::Name(_) = shapes else {
             return Err(TypeShapeDslDefinitionError {
                 range: shapes.range(),
-                message: SHAPES_ERROR,
+                message: shapes_error,
             });
         };
         let slot = self.slot(shapes, flow)?;
@@ -3582,25 +3605,49 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: shapes.range(),
-                    message: SHAPES_ERROR,
+                    message: shapes_error,
                 });
             }
         };
-        self.expressions.push(TypeShapeDslExpression {
-            range: call.range(),
-            kind: TypeShapeDslExpressionKind::Einsum {
+        let kind = match intrinsic {
+            TypeShapeDslIntrinsic::Einsum => TypeShapeDslExpressionKind::Einsum {
                 shapes: slot,
                 parameter_origins,
             },
+            TypeShapeDslIntrinsic::EinopsEinsum => TypeShapeDslExpressionKind::EinopsEinsum {
+                shapes: slot,
+                parameter_origins,
+            },
+            _ => unreachable!("einsum validation requires an einsum intrinsic"),
+        };
+        self.expressions.push(TypeShapeDslExpression {
+            range: call.range(),
+            kind,
         });
         Ok(())
     }
 
-    fn validate_rearrange(
+    fn validate_einops_pattern(
         &mut self,
         call: &ExprCall,
         flow: &DslValidationFlow,
+        intrinsic: TypeShapeDslIntrinsic,
     ) -> Result<Option<Box<[usize]>>, TypeShapeDslDefinitionError> {
+        let (message, kind) = match intrinsic {
+            TypeShapeDslIntrinsic::Rearrange => (
+                "`dsl.rearrange` requires exactly two positional arguments",
+                TypeShapeDslExpressionKind::Rearrange,
+            ),
+            TypeShapeDslIntrinsic::Reduce => (
+                "`dsl.reduce` requires exactly two positional arguments",
+                TypeShapeDslExpressionKind::Reduce,
+            ),
+            TypeShapeDslIntrinsic::Repeat => (
+                "`dsl.repeat` requires exactly two positional arguments",
+                TypeShapeDslExpressionKind::Repeat,
+            ),
+            _ => unreachable!("einops pattern validation requires an einops intrinsic"),
+        };
         if call.arguments.args.len() != 2
             || !call.arguments.keywords.is_empty()
             || call
@@ -3611,7 +3658,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
         {
             return Err(TypeShapeDslDefinitionError {
                 range: call.arguments.range,
-                message: "`dsl.rearrange` requires exactly two positional arguments",
+                message,
             });
         }
         self.validate_flag_string(&call.arguments.args[0], flow)?;
@@ -3619,7 +3666,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             self.validate_int_tuple_expression(&call.arguments.args[1], flow)?;
         self.expressions.push(TypeShapeDslExpression {
             range: call.range(),
-            kind: TypeShapeDslExpressionKind::Rearrange,
+            kind,
         });
         Ok(parameter_origins)
     }
@@ -3857,15 +3904,35 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                 merge_parameter_origins(left, right)
             }
             Expr::Call(call)
-                if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Einsum) =>
+                if matches!(
+                    self.intrinsic(&call.func),
+                    Some(TypeShapeDslIntrinsic::Einsum | TypeShapeDslIntrinsic::EinopsEinsum)
+                ) =>
             {
-                self.validate_einsum(call, flow)?;
+                self.validate_einsum(
+                    call,
+                    flow,
+                    self.intrinsic(&call.func)
+                        .expect("matched an einsum intrinsic"),
+                )?;
                 None
             }
             Expr::Call(call)
-                if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::Rearrange) =>
+                if matches!(
+                    self.intrinsic(&call.func),
+                    Some(
+                        TypeShapeDslIntrinsic::Rearrange
+                            | TypeShapeDslIntrinsic::Reduce
+                            | TypeShapeDslIntrinsic::Repeat
+                    )
+                ) =>
             {
-                self.validate_rearrange(call, flow)?
+                self.validate_einops_pattern(
+                    call,
+                    flow,
+                    self.intrinsic(&call.func)
+                        .expect("matched an einops pattern intrinsic"),
+                )?
             }
             Expr::Call(call)
                 if self.intrinsic(&call.func) == Some(TypeShapeDslIntrinsic::GufuncBroadcast) =>
@@ -3876,7 +3943,7 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
             _ => {
                 return Err(TypeShapeDslDefinitionError {
                     range: expression.range(),
-                    message: "IntTuple shape expressions support parameters, immutable aliases, restricted slices, `dsl.IntTuple`, `dsl.concat`, `dsl.einsum`, and `dsl._gufunc_broadcast`",
+                    message: "IntTuple shape expressions support parameters, immutable aliases, restricted slices, `dsl.IntTuple`, `dsl.concat`, `dsl.einsum`, `dsl.einops_einsum`, `dsl.rearrange`, `dsl.reduce`, `dsl.repeat`, and `dsl._gufunc_broadcast`",
                 });
             }
         };
@@ -3996,7 +4063,10 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                         TypeShapeDslIntrinsic::IntTuple
                             | TypeShapeDslIntrinsic::Concat
                             | TypeShapeDslIntrinsic::Einsum
+                            | TypeShapeDslIntrinsic::EinopsEinsum
                             | TypeShapeDslIntrinsic::Rearrange
+                            | TypeShapeDslIntrinsic::Reduce
+                            | TypeShapeDslIntrinsic::Repeat
                             | TypeShapeDslIntrinsic::GufuncBroadcast
                     )
                 ) =>
@@ -5008,7 +5078,10 @@ impl<'a, F: Fn(&Expr) -> Option<TypeShapeDslIntrinsic>> DslValidator<'a, F> {
                     TypeShapeDslIntrinsic::IntTuple
                     | TypeShapeDslIntrinsic::Concat
                     | TypeShapeDslIntrinsic::Einsum
+                    | TypeShapeDslIntrinsic::EinopsEinsum
                     | TypeShapeDslIntrinsic::Rearrange
+                    | TypeShapeDslIntrinsic::Reduce
+                    | TypeShapeDslIntrinsic::Repeat
                     | TypeShapeDslIntrinsic::GufuncBroadcast,
                 ) => {
                     self.validate_int_tuple_expression(returned, flow)?;
@@ -6833,7 +6906,8 @@ impl StructurallyValidatedTypeShapeDslFunction {
                     _ => unreachable!("validated concat operands are shapes"),
                 }
             }
-            TypeShapeDslExpressionKind::Einsum { shapes, .. } => {
+            operation @ (TypeShapeDslExpressionKind::Einsum { shapes, .. }
+            | TypeShapeDslExpressionKind::EinopsEinsum { shapes, .. }) => {
                 let Expr::Call(call) = expression else {
                     unreachable!("validated einsum expression is a call")
                 };
@@ -6849,34 +6923,54 @@ impl StructurallyValidatedTypeShapeDslFunction {
                             unreachable!("validated einsum equation is a string Flag")
                         }
                     };
-                let equation = match spec {
-                    Some(spec) => match parse_einsum_equation(&spec) {
-                        EinsumClassification::Supported(equation) => Some(equation),
-                        EinsumClassification::Unsupported(_) => None,
+                let operands = match environment.value(shapes) {
+                    DslValue::IntTuples(DslIntTuples::Fixed(operands)) => Some(operands.as_slice()),
+                    DslValue::IntTuples(DslIntTuples::Unbounded(_)) | DslValue::Unknown => None,
+                    _ => unreachable!("validated einsum operands are an IntTuples value"),
+                };
+                let Some((spec, operands)) = spec.zip(operands) else {
+                    return DslOutcome::Value(DslValue::Unknown);
+                };
+                let result = match operation {
+                    TypeShapeDslExpressionKind::Einsum { .. } => match parse_einsum_equation(&spec)
+                    {
+                        EinsumClassification::Supported(equation) => {
+                            evaluate_einsum(&equation, operands)
+                        }
+                        EinsumClassification::Unsupported(_) => {
+                            return DslOutcome::Value(DslValue::Unknown);
+                        }
                         EinsumClassification::Invalid(error) => {
                             return DslOutcome::Invalid(ShapeError::ShapeComputation {
                                 message: error.message(),
                             });
                         }
                     },
-                    None => None,
+                    TypeShapeDslExpressionKind::EinopsEinsum { .. } => {
+                        match parse_einops_einsum_equation(&spec) {
+                            EinopsEinsumClassification::Supported(equation) => {
+                                evaluate_einops_einsum(&equation, operands)
+                            }
+                            EinopsEinsumClassification::Invalid(error) => {
+                                return DslOutcome::Invalid(ShapeError::ShapeComputation {
+                                    message: error.message(),
+                                });
+                            }
+                        }
+                    }
+                    _ => unreachable!("matched an einsum operation"),
                 };
-                let operands = match environment.value(shapes) {
-                    DslValue::IntTuples(DslIntTuples::Fixed(operands)) => Some(operands.as_slice()),
-                    DslValue::IntTuples(DslIntTuples::Unbounded(_)) | DslValue::Unknown => None,
-                    _ => unreachable!("validated einsum operands are an IntTuples value"),
-                };
-                let Some((equation, operands)) = equation.zip(operands) else {
-                    return DslOutcome::Value(DslValue::Unknown);
-                };
-                match evaluate_einsum(&equation, operands) {
+                match result {
                     Ok(shape) => DslOutcome::Value(DslValue::Shape(shape)),
+                    Err(ShapeError::Unsupported { .. }) => DslOutcome::Value(DslValue::Unknown),
                     Err(error) => DslOutcome::Invalid(error),
                 }
             }
-            TypeShapeDslExpressionKind::Rearrange => {
+            operation @ (TypeShapeDslExpressionKind::Rearrange
+            | TypeShapeDslExpressionKind::Reduce
+            | TypeShapeDslExpressionKind::Repeat) => {
                 let Expr::Call(call) = expression else {
-                    unreachable!("validated rearrange expression is a call")
+                    unreachable!("validated einops pattern expression is a call")
                 };
                 let spec =
                     match self.evaluate_expression(&call.arguments.args[0], environment, budget) {
@@ -6887,15 +6981,21 @@ impl StructurallyValidatedTypeShapeDslFunction {
                             unreachable!("validated value expression cannot return gradual")
                         }
                         DslOutcome::Value(_) => {
-                            unreachable!("validated rearrange pattern is a string Flag")
+                            unreachable!("validated einops pattern is a string Flag")
                         }
                     };
+                let operation = match operation {
+                    TypeShapeDslExpressionKind::Rearrange => EinopsPatternOperation::Rearrange,
+                    TypeShapeDslExpressionKind::Reduce => EinopsPatternOperation::Reduce,
+                    TypeShapeDslExpressionKind::Repeat => EinopsPatternOperation::Repeat,
+                    _ => unreachable!("matched an einops pattern operation"),
+                };
                 let pattern = match spec {
-                    Some(spec) => match parse_rearrange_pattern(&spec) {
-                        RearrangeClassification::Supported(pattern) => Some(pattern),
-                        RearrangeClassification::Invalid(error) => {
+                    Some(spec) => match parse_einops_pattern(&spec, operation) {
+                        EinopsPatternClassification::Supported(pattern) => Some(pattern),
+                        EinopsPatternClassification::Invalid(error) => {
                             return DslOutcome::Invalid(ShapeError::ShapeComputation {
-                                message: error.message(),
+                                message: error.message(operation),
                             });
                         }
                     },
@@ -6912,13 +7012,13 @@ impl StructurallyValidatedTypeShapeDslFunction {
                             )
                         }
                         DslOutcome::Value(_) => {
-                            unreachable!("validated rearrange input is an IntTuple")
+                            unreachable!("validated einops input is an IntTuple")
                         }
                     };
                 let Some((pattern, input)) = pattern.zip(input) else {
                     return DslOutcome::Value(DslValue::Unknown);
                 };
-                match evaluate_rearrange(&pattern, &input, &HashMap::new()) {
+                match evaluate_einops_pattern(&pattern, &input, &HashMap::new()) {
                     Ok(shape) => DslOutcome::Value(DslValue::Shape(shape)),
                     Err(ShapeError::Unsupported { .. }) => DslOutcome::Value(DslValue::Unknown),
                     Err(error) => DslOutcome::Invalid(error),

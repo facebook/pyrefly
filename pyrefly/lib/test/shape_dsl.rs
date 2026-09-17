@@ -14414,6 +14414,76 @@ nonunit_input()  # E: Cannot evaluate type-level shape DSL call: einops.rearrang
 );
 
 testcase!(
+    test_type_shape_dsl_reduce_and_repeat,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, IntVar, type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def reduce(spec: str, shape: IntTuple) -> IntTuple:
+    return dsl.reduce(spec, shape)
+
+@type_shape_dsl_function
+def repeat(spec: str, shape: IntTuple) -> IntTuple:
+    return dsl.repeat(spec, shape)
+
+def reduced() -> ShapeBox[reduce("b c h w -> b c", IntTuple[2, 3, 5, 7])]: ...
+def kept_singletons() -> ShapeBox[reduce("b c h w -> b c () ()", IntTuple[2, 3, 5, 7])]: ...
+def ellipsis() -> ShapeBox[reduce("... bucket -> ... ()", IntTuple[2, 3, 5])]: ...
+def pooled() -> ShapeBox[reduce("b c (h 2) -> b c h", IntTuple[2, 3, 20])]: ...
+def anonymous_repeat() -> ShapeBox[repeat("b c -> b c 2", IntTuple[2, 3])]: ...
+def named_repeat() -> ShapeBox[repeat("b c -> b c copies", IntTuple[2, 3])]: ...
+
+assert_type(reduced(), ShapeBox[IntTuple[2, 3]])
+assert_type(kept_singletons(), ShapeBox[IntTuple[2, 3, 1, 1]])
+assert_type(ellipsis(), ShapeBox[IntTuple[2, 3, 1]])
+assert_type(pooled(), ShapeBox[IntTuple[2, 3, 10]])
+assert_type(anonymous_repeat(), ShapeBox[IntTuple[2, 3, 2]])
+assert_type(named_repeat(), ShapeBox[IntTuple])
+
+def symbolic[B: IntVar, C: IntVar](b: Int[B], c: Int[C]) -> ShapeBox[reduce("b c h -> b c", IntTuple[B, C, 5])]: ...
+
+def check_symbolic[B: IntVar, C: IntVar](b: Int[B], c: Int[C]) -> None:
+    assert_type(symbolic(b, c), ShapeBox[IntTuple[B, C]])
+"#,
+);
+
+testcase!(
+    test_type_shape_dsl_einops_einsum,
+    shape_extensions_env(),
+    r#"
+import shape_extensions.dsl as dsl
+from shape_extensions import Int, IntTuple, IntTuples, IntVar, type_shape_dsl_function
+from typing import assert_type
+
+class ShapeBox[Shape: IntTuple]: ...
+
+@type_shape_dsl_function
+def equation(spec: str, shapes: IntTuples) -> IntTuple:
+    return dsl.einops_einsum(spec, shapes)
+
+def matrix_product() -> ShapeBox[equation("batch row inner, batch inner col -> batch row col", tuple[IntTuple[2, 3, 5], IntTuple[2, 5, 7]])]: ...
+def dot_product() -> ShapeBox[equation("batch feature, batch feature -> batch", tuple[IntTuple[2, 5], IntTuple[2, 5]])]: ...
+def unsupported_ellipsis() -> ShapeBox[equation("... row, ... row -> ...", tuple[IntTuple[2, 3], IntTuple[2, 3]])]: ...
+def unknown_rank() -> ShapeBox[equation("... row -> ...", tuple[IntTuple])]: ...
+
+assert_type(matrix_product(), ShapeBox[IntTuple[2, 3, 7]])
+assert_type(dot_product(), ShapeBox[IntTuple[2]])
+assert_type(unsupported_ellipsis(), ShapeBox[IntTuple[2]])
+assert_type(unknown_rank(), ShapeBox[IntTuple])
+
+def symbolic[B: IntVar](b: Int[B]) -> ShapeBox[equation("batch row, batch col -> batch row col", tuple[IntTuple[B, 3], IntTuple[B, 7]])]: ...
+
+def check_symbolic[B: IntVar](b: Int[B]) -> None:
+    assert_type(symbolic(b), ShapeBox[IntTuple[B, 3, 7]])
+"#,
+);
+
+testcase!(
     test_type_shape_dsl_gufunc_primitive,
     shape_extensions_env(),
     r#"

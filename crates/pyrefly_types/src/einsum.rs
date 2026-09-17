@@ -21,8 +21,11 @@ use std::collections::HashMap;
 
 use crate::dimension::Int;
 use crate::dimension::ShapeError;
+use crate::einops::split_einops_arrow;
+use crate::einops::valid_einops_axis;
 use crate::shaped_array::IntTuple;
 use crate::shaped_array::IntTupleView;
+use crate::shaped_array::broadcast_shapes;
 
 /// One occurrence of a label: the input term it appears in and its position in that term.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,7 +37,7 @@ pub(crate) struct EinsumLocation {
 /// Every occurrence of one label, in source order.
 #[derive(Debug, Clone)]
 pub(crate) struct EinsumLabel {
-    pub(crate) name: char,
+    pub(crate) name: String,
     pub(crate) locations: Vec<EinsumLocation>,
 }
 
@@ -128,6 +131,256 @@ pub(crate) enum EinsumClassification {
     Invalid(EinsumEquationError),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EinopsEinsumError {
+    ArrowCount(usize),
+    InvalidAxis(String),
+    MissingOutputAxis(String),
+    RepeatedOutputAxis(String),
+    ParenthesizedAxis,
+    RepeatedEllipsis,
+    OutputOnlyEllipsis,
+}
+
+impl EinopsEinsumError {
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::ArrowCount(count) => {
+                format!("einops.einsum: pattern must contain exactly one '->', got {count}")
+            }
+            Self::InvalidAxis(axis) => format!("einops.einsum: invalid axis '{axis}'"),
+            Self::MissingOutputAxis(axis) => {
+                format!("einops.einsum: output axis '{axis}' does not appear in any input")
+            }
+            Self::RepeatedOutputAxis(axis) => {
+                format!("einops.einsum: output axis '{axis}' appears more than once")
+            }
+            Self::ParenthesizedAxis => {
+                "einops.einsum: parenthesized axes are not supported".to_owned()
+            }
+            Self::RepeatedEllipsis => {
+                "einops.einsum: each term may contain at most one ellipsis".to_owned()
+            }
+            Self::OutputOnlyEllipsis => {
+                "einops.einsum: ellipsis appears in the output but not any input".to_owned()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct EinopsEinsumEquation {
+    inputs: Vec<Vec<Option<usize>>>,
+    labels: Vec<String>,
+    output: Vec<Option<usize>>,
+}
+
+pub(crate) enum EinopsEinsumClassification {
+    Supported(EinopsEinsumEquation),
+    Invalid(EinopsEinsumError),
+}
+
+fn resolve_label_extent(
+    dimensions: impl IntoIterator<Item = Int>,
+    operation: &str,
+    label_kind: &str,
+    label: &str,
+) -> Result<Option<Int>, ShapeError> {
+    let mut extent = None;
+    let mut literal = None;
+    let mut agreed = true;
+    for dimension in dimensions {
+        if let Int::Literal(value) = &dimension {
+            match literal {
+                Some(previous) if previous != *value => {
+                    return Err(ShapeError::ShapeComputation {
+                        message: format!(
+                            "{operation}: {label_kind} '{label}' has conflicting dimensions {previous} and {value}"
+                        ),
+                    });
+                }
+                _ => literal = Some(*value),
+            }
+        }
+        match &extent {
+            None => extent = Some(dimension),
+            Some(known) => agreed &= *known == dimension,
+        }
+    }
+    Ok(literal
+        .map(Int::Literal)
+        .or_else(|| extent.filter(|_| agreed)))
+}
+
+/// Parses the named-axis, whitespace-separated equation syntax used by `einops.einsum`.
+pub(crate) fn parse_einops_einsum_equation(spec: &str) -> EinopsEinsumClassification {
+    let (inputs_spec, output_spec) = match split_einops_arrow(spec) {
+        Ok(parts) => parts,
+        Err(count) => {
+            return EinopsEinsumClassification::Invalid(EinopsEinsumError::ArrowCount(count));
+        }
+    };
+
+    let mut inputs = Vec::new();
+    let mut labels = Vec::new();
+    let mut label_indices: HashMap<String, usize> = HashMap::new();
+    let mut input_has_ellipsis = false;
+    for term in inputs_spec.split(',') {
+        let mut components = Vec::new();
+        let mut term_has_ellipsis = false;
+        for axis in term.split_whitespace() {
+            if axis == "..." {
+                if term_has_ellipsis {
+                    return EinopsEinsumClassification::Invalid(
+                        EinopsEinsumError::RepeatedEllipsis,
+                    );
+                }
+                input_has_ellipsis = true;
+                term_has_ellipsis = true;
+                components.push(None);
+                continue;
+            }
+            if axis.contains('(') || axis.contains(')') {
+                return EinopsEinsumClassification::Invalid(EinopsEinsumError::ParenthesizedAxis);
+            }
+            if !valid_einops_axis(axis) {
+                return EinopsEinsumClassification::Invalid(EinopsEinsumError::InvalidAxis(
+                    axis.to_owned(),
+                ));
+            }
+            let index = match label_indices.get(axis) {
+                Some(index) => *index,
+                None => {
+                    label_indices.insert(axis.to_owned(), labels.len());
+                    labels.push(axis.to_owned());
+                    labels.len() - 1
+                }
+            };
+            components.push(Some(index));
+        }
+        inputs.push(components);
+    }
+
+    let mut output = Vec::new();
+    let mut output_has_ellipsis = false;
+    for axis in output_spec.split_whitespace() {
+        if axis == "..." {
+            if output_has_ellipsis {
+                return EinopsEinsumClassification::Invalid(EinopsEinsumError::RepeatedEllipsis);
+            }
+            output_has_ellipsis = true;
+            output.push(None);
+            continue;
+        }
+        if axis.contains('(') || axis.contains(')') {
+            return EinopsEinsumClassification::Invalid(EinopsEinsumError::ParenthesizedAxis);
+        }
+        if !valid_einops_axis(axis) {
+            return EinopsEinsumClassification::Invalid(EinopsEinsumError::InvalidAxis(
+                axis.to_owned(),
+            ));
+        }
+        let Some(index) = label_indices.get(axis).copied() else {
+            return EinopsEinsumClassification::Invalid(EinopsEinsumError::MissingOutputAxis(
+                axis.to_owned(),
+            ));
+        };
+        if output.contains(&Some(index)) {
+            return EinopsEinsumClassification::Invalid(EinopsEinsumError::RepeatedOutputAxis(
+                axis.to_owned(),
+            ));
+        }
+        output.push(Some(index));
+    }
+    if output_has_ellipsis && !input_has_ellipsis {
+        return EinopsEinsumClassification::Invalid(EinopsEinsumError::OutputOnlyEllipsis);
+    }
+    EinopsEinsumClassification::Supported(EinopsEinsumEquation {
+        inputs,
+        labels,
+        output,
+    })
+}
+
+/// Projects an einops-style equation over its operand shapes, including broadcast ellipses.
+pub(crate) fn evaluate_einops_einsum(
+    equation: &EinopsEinsumEquation,
+    operands: &[IntTuple],
+) -> Result<IntTuple, ShapeError> {
+    if operands.len() != equation.inputs.len() {
+        return Err(ShapeError::ShapeComputation {
+            message: format!(
+                "einops.einsum: expected {} operands, got {}",
+                equation.inputs.len(),
+                operands.len()
+            ),
+        });
+    }
+
+    let mut extents = vec![Vec::new(); equation.labels.len()];
+    let mut ellipsis_shape = IntTuple::new(Vec::new());
+    for (input, operand) in equation.inputs.iter().zip(operands) {
+        let IntTupleView::Concrete(dimensions) = operand.view() else {
+            return Err(ShapeError::Unsupported {
+                message: "einops.einsum: statically known operand ranks are required".to_owned(),
+            });
+        };
+        let fixed_rank = input.iter().filter(|axis| axis.is_some()).count();
+        let has_ellipsis = input.iter().any(Option::is_none);
+        if dimensions.len() < fixed_rank || !has_ellipsis && dimensions.len() != fixed_rank {
+            return Err(ShapeError::ShapeComputation {
+                message: format!(
+                    "einops.einsum: expected operand rank {}{}, got {}",
+                    if has_ellipsis { "at least " } else { "" },
+                    fixed_rank,
+                    dimensions.len()
+                ),
+            });
+        }
+        let ellipsis_rank = dimensions.len() - fixed_rank;
+        let mut dimension = 0;
+        for axis in input {
+            match axis {
+                Some(axis) => {
+                    extents[*axis].push(dimensions[dimension].clone());
+                    dimension += 1;
+                }
+                None => {
+                    let found =
+                        IntTuple::new(dimensions[dimension..dimension + ellipsis_rank].to_vec());
+                    ellipsis_shape = broadcast_shapes(&ellipsis_shape, &found)?;
+                    dimension += ellipsis_rank;
+                }
+            }
+        }
+    }
+
+    let extents = extents
+        .into_iter()
+        .zip(&equation.labels)
+        .map(|(found, label)| {
+            resolve_label_extent(found, "einops.einsum", "axis", label)
+                .map(|extent| extent.unwrap_or(Int::Int))
+        })
+        .collect::<Result<Vec<_>, ShapeError>>()?;
+
+    let mut output = Vec::new();
+    for axis in &equation.output {
+        match axis {
+            Some(axis) => output.push(extents[*axis].clone()),
+            None => match ellipsis_shape.view() {
+                IntTupleView::Concrete(dimensions) => output.extend_from_slice(dimensions),
+                _ => {
+                    return Err(ShapeError::Unsupported {
+                        message: "einops.einsum: cannot determine ellipsis rank".to_owned(),
+                    });
+                }
+            },
+        }
+    }
+    Ok(IntTuple::new(output))
+}
+
 /// One lexical unit of an einsum equation. Whitespace is insignificant.
 enum EinsumToken {
     Label(char),
@@ -181,7 +434,7 @@ pub(crate) fn parse_einsum_equation(spec: &str) -> EinsumClassification {
     let mut has_ellipsis = false;
     let mut input_ranks = vec![0];
     let mut labels: Vec<EinsumLabel> = Vec::new();
-    let mut label_indices: HashMap<char, usize> = HashMap::new();
+    let mut label_indices: HashMap<String, usize> = HashMap::new();
     let mut output_labels = Vec::new();
     let mut in_output = false;
     let mut term_has_ellipsis = false;
@@ -202,6 +455,7 @@ pub(crate) fn parse_einsum_equation(spec: &str) -> EinsumClassification {
             }
             EinsumToken::Label(label) if in_output => output_labels.push(label),
             EinsumToken::Label(label) => {
+                let label = label.to_string();
                 let input = input_ranks.len() - 1;
                 let dimension = &mut input_ranks[input];
                 let location = EinsumLocation {
@@ -212,7 +466,7 @@ pub(crate) fn parse_einsum_equation(spec: &str) -> EinsumClassification {
                 match label_indices.get(&label) {
                     Some(index) => labels[*index].locations.push(location),
                     None => {
-                        label_indices.insert(label, labels.len());
+                        label_indices.insert(label.clone(), labels.len());
                         labels.push(EinsumLabel {
                             name: label,
                             locations: vec![location],
@@ -232,7 +486,7 @@ pub(crate) fn parse_einsum_equation(spec: &str) -> EinsumClassification {
 
     let mut output = Vec::with_capacity(output_labels.len());
     for label in output_labels {
-        let Some(index) = label_indices.get(&label).copied() else {
+        let Some(index) = label_indices.get(&label.to_string()).copied() else {
             return EinsumClassification::Invalid(EinsumEquationError::MissingOutputLabel(label));
         };
         if output.contains(&index) {
@@ -297,34 +551,12 @@ pub(crate) fn evaluate_einsum(
         .labels
         .iter()
         .map(|label| {
-            let mut extent: Option<Int> = None;
-            let mut literal = None;
-            let mut agreed = true;
-            for location in &label.locations {
-                let Some(found) = dimension(location) else {
-                    continue;
-                };
-                if let Int::Literal(value) = &found {
-                    match literal {
-                        Some(previous) if previous != *value => {
-                            return Err(ShapeError::ShapeComputation {
-                                message: format!(
-                                    "einsum: index '{}' has conflicting dimensions {previous} and {value}",
-                                    label.name
-                                ),
-                            });
-                        }
-                        _ => literal = Some(*value),
-                    }
-                }
-                match &extent {
-                    None => extent = Some(found),
-                    Some(known) => agreed &= *known == found,
-                }
-            }
-            Ok(literal
-                .map(Int::Literal)
-                .or_else(|| extent.filter(|_| agreed)))
+            resolve_label_extent(
+                label.locations.iter().filter_map(&dimension),
+                "einsum",
+                "index",
+                &label.name,
+            )
         })
         .collect::<Result<Vec<_>, ShapeError>>()?;
 
@@ -444,5 +676,47 @@ mod tests {
             classify("ij,!jk"),
             "invalid: einsum: unsupported character '!' in equation"
         );
+    }
+
+    #[test]
+    fn parses_named_axis_einops_equations() {
+        let EinopsEinsumClassification::Supported(equation) =
+            parse_einops_einsum_equation("batch row inner, batch inner col -> batch row col")
+        else {
+            panic!("expected a supported einops equation");
+        };
+        assert_eq!(
+            evaluate_einops_einsum(
+                &equation,
+                &[
+                    IntTuple::new(vec![Int::Literal(2), Int::Literal(3), Int::Literal(5)]),
+                    IntTuple::new(vec![Int::Literal(2), Int::Literal(5), Int::Literal(7)]),
+                ],
+            ),
+            Ok(IntTuple::new(vec![
+                Int::Literal(2),
+                Int::Literal(3),
+                Int::Literal(7),
+            ]))
+        );
+        let EinopsEinsumClassification::Supported(ellipsis) =
+            parse_einops_einsum_equation("... row, ... row -> ...")
+        else {
+            panic!("expected a supported ellipsis equation");
+        };
+        assert_eq!(
+            evaluate_einops_einsum(
+                &ellipsis,
+                &[
+                    IntTuple::new(vec![Int::Literal(2), Int::Literal(1), Int::Literal(5)]),
+                    IntTuple::new(vec![Int::Literal(3), Int::Literal(5)]),
+                ],
+            ),
+            Ok(IntTuple::new(vec![Int::Literal(2), Int::Literal(3)]))
+        );
+        assert!(matches!(
+            parse_einops_einsum_equation("batch row -> batch missing"),
+            EinopsEinsumClassification::Invalid(EinopsEinsumError::MissingOutputAxis(_))
+        ));
     }
 }
