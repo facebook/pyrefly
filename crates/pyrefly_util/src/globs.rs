@@ -1829,6 +1829,57 @@ mod tests {
     }
 
     #[test]
+    fn test_worktree_reads_the_common_exclude_rooted_at_the_worktree() {
+        // A linked worktree: `.git` is a `gitdir: ...` pointer file. The upward
+        // search for `.git/info/exclude` walks past the worktree root to the
+        // shared common dir and roots the exclude at the main checkout, so
+        // `**/.claude/worktrees/` matches the worktree's own path (#4525).
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path();
+        TestPath::setup_test_directory(
+            root,
+            vec![
+                TestPath::dir(
+                    ".git",
+                    vec![
+                        TestPath::dir(
+                            "info",
+                            vec![TestPath::file_with_contents(
+                                "exclude",
+                                "**/.claude/worktrees/",
+                            )],
+                        ),
+                        TestPath::dir("worktrees", vec![TestPath::dir("wt", vec![])]),
+                    ],
+                ),
+                TestPath::dir(
+                    ".claude",
+                    vec![TestPath::dir(
+                        "worktrees",
+                        vec![TestPath::dir("wt", vec![])],
+                    )],
+                ),
+            ],
+        );
+        let private = root.join(".git/worktrees/wt");
+        std::fs::write(private.join("commondir"), "../..\n").unwrap();
+        let worktree = root.join(".claude/worktrees/wt");
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", private.display()),
+        )
+        .unwrap();
+
+        let filter = GlobFilter::new(Globs::empty(), Some(&worktree), HiddenDirFilter::Disabled);
+
+        // The shared exclude is found through the pointer into the main checkout.
+        assert_eq!(filter.ignore_paths, vec![root.join(".git/info/exclude")]);
+        // BUG: rooted at the main checkout, `**/.claude/worktrees/` matches the
+        // worktree's own path and excludes every file inside it.
+        assert!(filter.is_excluded(&worktree.join("src/my_file.py")));
+    }
+
+    #[test]
     fn test_explicitly_specified_files_without_extension() {
         let tempdir = tempfile::tempdir().unwrap();
         let root = tempdir.path();
