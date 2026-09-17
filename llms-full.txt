@@ -11533,7 +11533,9 @@ This page documents the types, functions, and type-level constructs that make
 up pyrefly's tensor shape type system.
 
 ```sandbox
-dir: tensor-shapes-reference
+dir: reference
+source: microtorch
+shared: microtorch
 description: Experiment with Int operators, type-level arithmetic in shapes, and concatenation.
 ```
 
@@ -11956,7 +11958,9 @@ PEP 695 new-style generics (`class Foo[T]`) automatically use
 option requires old-style generics.
 
 ```sandbox
-dir: tensor-shapes-setup
+dir: setup
+source: microtorch
+shared: microtorch
 description: Experiment with Int arithmetic, TYPE_CHECKING imports, and building typed tensors — no setup required.
 ```
 
@@ -12434,7 +12438,9 @@ By the end, you'll understand `Int`, `Tensor[...]`, class-level type
 parameters, and method-level type parameters.
 
 ```sandbox
-dir: tensor-shapes-tutorial-basics
+dir: tutorial-basics
+source: microtorch
+shared: microtorch
 description: Try porting a simple MLP with class-level and method-level type parameters.
 ```
 
@@ -12861,7 +12867,9 @@ intermediate tensor — `Tensor[[B, T, NEmbedding]]` for embeddings,
 variables.
 
 ```sandbox
-dir: tensor-shapes-overview
+dir: overview
+source: microtorch
+shared: microtorch
 description: See tensor shape tracking, variadic batch dimensions, and shape mismatch errors in action.
 ```
 
