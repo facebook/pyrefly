@@ -1723,16 +1723,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let kws = arguments.keywords.map(CallKeyword::new);
                     // This error is raised elsewhere, swallow here to avoid duplicate errors
                     let swallowed_errors = self.error_swallower();
-                    let ret = self.call_infer(
-                        *call_target,
-                        &args,
-                        &kws,
-                        range,
-                        &swallowed_errors,
-                        None,
-                        None,
-                        None,
-                    );
+                    let ret = self
+                        .call_infer(
+                            *call_target,
+                            &args,
+                            &kws,
+                            range,
+                            &swallowed_errors,
+                            None,
+                            None,
+                            None,
+                        )
+                        .ty;
                     if let Type::TypeGuard(t) = ret {
                         return *t;
                     }
@@ -1748,16 +1750,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let kws = arguments.keywords.map(CallKeyword::new);
                     // This error is raised elsewhere, swallow here to avoid duplicate errors
                     let swallowed_errors = self.error_swallower();
-                    let ret = self.call_infer(
-                        *call_target,
-                        &args,
-                        &kws,
-                        range,
-                        &swallowed_errors,
-                        None,
-                        None,
-                        None,
-                    );
+                    let ret = self
+                        .call_infer(
+                            *call_target,
+                            &args,
+                            &kws,
+                            range,
+                            &swallowed_errors,
+                            None,
+                            None,
+                            None,
+                        )
+                        .ty;
                     if let Type::TypeIs(t) = ret {
                         let target = if is_builtin_callable {
                             // `callable` is annotated as `TypeIs[Callable[..., object]]` which is
@@ -1778,16 +1782,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let kws = arguments.keywords.map(CallKeyword::new);
                     // This error is raised elsewhere, swallow here to avoid duplicate errors
                     let swallowed_errors = self.error_swallower();
-                    let ret = self.call_infer(
-                        *call_target,
-                        &args,
-                        &kws,
-                        range,
-                        &swallowed_errors,
-                        None,
-                        None,
-                        None,
-                    );
+                    let ret = self
+                        .call_infer(
+                            *call_target,
+                            &args,
+                            &kws,
+                            range,
+                            &swallowed_errors,
+                            None,
+                            None,
+                            None,
+                        )
+                        .ty;
                     if let Type::TypeIs(t) = ret {
                         return self.subtract(ty, &t);
                     }

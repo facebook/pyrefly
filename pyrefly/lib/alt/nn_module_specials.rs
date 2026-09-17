@@ -142,16 +142,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                 errors,
                 None,
             );
-            current_ty = self.call_infer(
-                call_target,
-                &[CallArg::ty(arg_ref, range)],
-                &[],
-                range,
-                errors,
-                None,
-                None,
-                None,
-            );
+            current_ty = self
+                .call_infer(
+                    call_target,
+                    &[CallArg::ty(arg_ref, range)],
+                    &[],
+                    range,
+                    errors,
+                    None,
+                    None,
+                    None,
+                )
+                .ty;
         }
 
         Some(current_ty)

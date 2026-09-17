@@ -365,6 +365,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             hint,
             errors,
         )
+        .ty
     }
 
     /// `attr.fields(C)` / `attr.fields_dict(C)`: return a field-aware type and reject a non-attrs
@@ -427,6 +428,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             hint,
             errors,
         )
+        .ty
     }
 
     /// `attr.fields_dict(C)` maps each field name to its `Attribute[T]`, modeled as an anonymous

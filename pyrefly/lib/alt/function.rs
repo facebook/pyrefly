@@ -1958,16 +1958,18 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         // and Self-rewritten fallback without double-reporting.
         let try_call = |arg: &Type| {
             let call_errors = ErrorCollector::new(errors.module().dupe(), errors.style());
-            let ret = self.call_infer(
-                application.call_target.clone(),
-                &[CallArg::ty(arg, range)],
-                &[],
-                range,
-                &call_errors,
-                None,
-                None,
-                None,
-            );
+            let ret = self
+                .call_infer(
+                    application.call_target.clone(),
+                    &[CallArg::ty(arg, range)],
+                    &[],
+                    range,
+                    &call_errors,
+                    None,
+                    None,
+                    None,
+                )
+                .ty;
             (ret, call_errors)
         };
         let (primary_return, primary_errors) = try_call(&application.decoratee_arg);

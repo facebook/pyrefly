@@ -60,6 +60,7 @@ use crate::solver::solver::ArgumentKey;
 use crate::solver::solver::ArgumentSide;
 use crate::solver::solver::CallBoundary;
 use crate::solver::solver::CallContext;
+use crate::solver::solver::OverloadTable;
 use crate::solver::solver::QuantifiedHandle;
 use crate::solver::solver::SubsetError;
 use crate::solver::solver::TypeVarSpecializationError;
@@ -2062,15 +2063,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         } else {
             &no_keywords
         };
-        let actual_return = self.freeform_call_infer(
-            callback_ty,
-            forwarded_args,
-            forwarded_keywords,
-            callback_arg.range(),
-            arguments_range,
-            None,
-            &probe_errors,
-        );
+        let actual_return = self
+            .freeform_call_infer(
+                callback_ty,
+                forwarded_args,
+                forwarded_keywords,
+                callback_arg.range(),
+                arguments_range,
+                None,
+                &probe_errors,
+            )
+            .ty;
         if !probe_errors.is_empty() {
             return;
         }
@@ -2147,9 +2150,10 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
     // Callers can pass the same error collector for both, and most callers do. We use two collectors
     // for overload matching.
     //
-    // Returns: (return_type, specialization_errors, return_type_errors, argmap, defaults_used),
-    // where argmap maps each argument's source range to the parameter it was matched against and
-    // defaults_used contains type parameters that reached their declared default during finishing.
+    // Returns: (return_type, specialization_errors, return_type_errors, argmap, defaults_used,
+    // overload_table), where argmap maps each argument's source range to the parameter it was
+    // matched against and defaults_used contains type parameters that reached their declared
+    // default during finishing.
     pub fn callable_infer(
         &self,
         callable: Callable,
@@ -2172,6 +2176,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         Vec<ReturnTypeResolutionError>,
         ArgMap,
         SmallSet<Quantified>,
+        OverloadTable,
     ) {
         let hint = HintRef::filter_for_call(hint, tparams);
         self.callable_infer_with_hint(
@@ -2221,6 +2226,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         Vec<ReturnTypeResolutionError>,
         ArgMap,
         SmallSet<Quantified>,
+        OverloadTable,
     ) {
         let call_boundary = CallBoundary::new();
         let call_context = call_boundary
@@ -2450,7 +2456,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             let recorded_vars = call_context.captured_vars();
             self.solver().generalize_class_targs(targs, &recorded_vars);
         }
-        let (finish_result, defaults_used) = self.solver().finish_call_boundary(
+        let (overload_table, finish_result, defaults_used) = self.solver().finish_call_boundary(
             self.solver().config.infer_with_first_use,
             self.type_order(),
             call_boundary,
@@ -2500,6 +2506,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             return_type_errors,
             argmap,
             defaults_used,
+            overload_table,
         )
     }
 

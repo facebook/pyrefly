@@ -44,6 +44,7 @@ use crate::alt::unwrap::HintRef;
 use crate::config::error_kind::ErrorKind;
 use crate::error::collector::ErrorCollector;
 use crate::error::context::ErrorContext;
+use crate::solver::solver::OverloadTable;
 use crate::solver::solver::TypeVarSpecializationError;
 use crate::types::callable::Callable;
 use crate::types::callable::Params;
@@ -59,6 +60,7 @@ struct CalledOverload<'f> {
     func: &'f TargetWithTParams<Function>,
     res: Type,
     ctor_targs: Option<TArgs>,
+    table: OverloadTable,
     arg_errors: ErrorCollector,
     call_errors: ErrorCollector,
     specialization_errors: Vec<TypeVarSpecializationError>,
@@ -255,7 +257,8 @@ impl<'a, Ans: LookupAnswer> ArgsExpander<'a, Ans> {
 }
 
 impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
-    /// Calls an overloaded function, returning the return type and the closest matching overload signature.
+    /// Calls an overloaded function, returning the return type, the closest matching overload
+    /// signature, and the solutions that signature settled on.
     pub fn call_overloads(
         &self,
         overloads: Vec1<TargetWithTParams<Function>>,
@@ -271,7 +274,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         hint: Option<HintRef>,
         // If we're constructing a class, its type arguments. A successful call will fill these in.
         ctor_targs: Option<&mut TArgs>,
-    ) -> (Type, Callable) {
+    ) -> (Type, Callable, OverloadTable) {
         // There may be Expr values in args and keywords.
         // If we infer them for each overload, we may end up inferring them multiple times.
         // If those overloads contain nested overloads, then we can easily end up with O(2^n) perf.
@@ -305,6 +308,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     func: arity_closest_overload.unwrap().0,
                     res: self.heap.mk_any_error(),
                     ctor_targs: None,
+                    table: OverloadTable::default(),
                     arg_errors: self.error_collector(),
                     call_errors: self.error_collector(),
                     specialization_errors: Vec::new(),
@@ -382,6 +386,9 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         let first_overload = &matched_overloads[0];
                         let func = first_overload.func;
                         let ctor_targs = first_overload.ctor_targs.clone();
+                        // Several signatures matched and their results are unioned, so no single
+                        // table of solutions describes the call any more.
+                        let table = OverloadTable::default();
                         let argmap = first_overload.argmap.clone();
                         let arg_errors = self.error_collector();
                         let specialization_errors = first_overload.specialization_errors.clone();
@@ -397,6 +404,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                         closest_overload = CalledOverload {
                             func,
                             ctor_targs,
+                            table,
                             argmap,
                             res: self.unions(matched_overloads.into_map(|o| {
                                 arg_errors.extend(o.arg_errors);
@@ -488,6 +496,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             (
                 closest_overload.res,
                 closest_overload.func.1.signature.clone(),
+                closest_overload.table,
             )
         } else {
             if let Ok(specialization_errors) =
@@ -516,6 +525,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             (
                 self.heap.mk_any_error(),
                 closest_overload.func.1.signature.clone(),
+                OverloadTable::default(),
             )
         }
     }
@@ -1087,7 +1097,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
 
         let arg_errors = self.error_collector();
         let call_errors = self.error_collector();
-        let (res, specialization_errors, return_type_errors, argmap, defaults_used) = self
+        let (res, specialization_errors, return_type_errors, argmap, defaults_used, table) = self
             .callable_infer(
                 callable.1.signature.clone(),
                 Some(&metadata.kind),
@@ -1111,6 +1121,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             func: callable,
             res,
             ctor_targs: overload_ctor_targs,
+            table,
             arg_errors,
             call_errors,
             specialization_errors,

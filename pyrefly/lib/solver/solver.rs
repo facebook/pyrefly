@@ -166,6 +166,18 @@ pub struct OverloadBranch {
 
 type OverloadBranchesByArgument = SmallMap<ArgumentKey, Vec<OverloadBranch>>;
 
+/// The solutions a call boundary settled on: one row per consistent combination of overload
+/// branches, over the vars in `columns`. Handed to the return boundary, which instantiates the
+/// return type once per row.
+#[derive(Clone, Debug, Default)]
+pub struct OverloadTable {}
+
+impl OverloadTable {
+    pub fn is_empty(&self) -> bool {
+        true
+    }
+}
+
 /// What matching the call's arguments recorded, read when the call is finished.
 #[derive(Debug, Default)]
 struct ArgumentCaptures {
@@ -2081,6 +2093,7 @@ impl Solver {
         type_order: TypeOrder<Ans>,
         boundary: CallBoundary,
     ) -> (
+        OverloadTable,
         Result<(), Vec1<TypeVarSpecializationError>>,
         SmallSet<Quantified>,
     ) {
@@ -2096,12 +2109,13 @@ impl Solver {
         roots.extend(overload_branch_vars);
         let mut all_boundary_vars: Vec<Var> = roots.into_iter().collect();
         all_boundary_vars.sort_unstable();
-        self.finish_quantified_with_captures(
+        let (errors, defaults_used) = self.finish_quantified_with_captures(
             QuantifiedHandle(all_boundary_vars),
             infer_with_first_use,
             type_order,
             captures,
-        )
+        );
+        (OverloadTable::default(), errors, defaults_used)
     }
 
     fn finish_quantified_with_captures<Ans: LookupAnswer>(

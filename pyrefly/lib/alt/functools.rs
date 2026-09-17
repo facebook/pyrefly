@@ -56,15 +56,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         };
         let Some(CallArg::Arg(target)) = args.first() else {
             // No inspectable callable target (e.g. a `*args` splat); defer to the stub.
-            return self.freeform_call_infer(
-                partial_ty.clone(),
-                args,
-                kws,
-                callee_range,
-                arg_range,
-                hint,
-                errors,
-            );
+            return self
+                .freeform_call_infer(
+                    partial_ty.clone(),
+                    args,
+                    kws,
+                    callee_range,
+                    arg_range,
+                    hint,
+                    errors,
+                )
+                .ty;
         };
         let target_ty = target.infer(self, errors);
         // A class object / `type[C]` is callable via its constructor; normalize to that signature
@@ -176,7 +178,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     errors,
                 )
             } else {
-                result
+                result.ty
             }
         };
         // `partial(f)` with nothing bound is a pure forwarder; for an overloaded target hand the

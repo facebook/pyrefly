@@ -86,6 +86,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             None,
             None,
         )
+        .ty
     }
 
     /// Try to handle binary operations on symbolic integer types.

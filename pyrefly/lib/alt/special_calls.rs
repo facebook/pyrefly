@@ -145,15 +145,17 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         let arg_ty = arg.infer(self, errors);
         let args = [CallArg::ty(&arg_ty, arg.range())];
         // The ordinary call reports any argument/protocol errors and yields `int`.
-        let default = self.freeform_call_infer(
-            callee_ty,
-            &args,
-            keywords,
-            func_range,
-            arguments_range,
-            hint,
-            errors,
-        );
+        let default = self
+            .freeform_call_infer(
+                callee_ty,
+                &args,
+                keywords,
+                func_range,
+                arguments_range,
+                hint,
+                errors,
+            )
+            .ty;
         // Probe `__len__` silently, since `default` already emitted the real errors.
         let silent_errors = self.error_swallower();
         let int_ty = self.stdlib.int().clone().to_type();
