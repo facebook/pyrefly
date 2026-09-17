@@ -19,10 +19,11 @@ import * as os from 'os';
 describe('parseSandboxConfig', () => {
     test('parses all fields', () => {
         const config = parseSandboxConfig(
-            'dir: my-example\nshared: microtorch\nactive: main.py\nlinkText: Try it\ndescription: A demo'
+            'dir: my-example\nsource: microtorch\nshared: microtorch\nactive: main.py\nlinkText: Try it\ndescription: A demo'
         );
         expect(config).toEqual({
             dir: 'my-example',
+            source: 'microtorch',
             shared: 'microtorch',
             active: 'main.py',
             linkText: 'Try it',
@@ -34,6 +35,7 @@ describe('parseSandboxConfig', () => {
         const config = parseSandboxConfig('dir: my-example');
         expect(config).toEqual({
             dir: 'my-example',
+            source: '',
             shared: '',
             active: 'sandbox.py',
             linkText: 'Open this example in the Pyrefly sandbox',
@@ -212,7 +214,7 @@ describe('buildSandboxUrl', () => {
     test('reads real example directory and produces a working URL', () => {
         const examplesDir = path.resolve(
             __dirname,
-            '../../sandbox-examples/tensor-shapes-overview'
+            '../../../tensor-shapes/microtorch/examples/overview'
         );
         const sharedDir = path.resolve(
             __dirname,
