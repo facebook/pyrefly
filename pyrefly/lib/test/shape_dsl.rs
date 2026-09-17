@@ -1435,6 +1435,21 @@ def f[N: IntVar](x: Int[N]) -> None:
 );
 
 testcase!(
+    bug = "IntVar arguments display with illegal Int wrappers",
+    test_intvar_generic_display,
+    shape_extensions_env(),
+    r#"
+from typing import reveal_type
+from shape_extensions import IntVar
+
+class MLP[Input: IntVar, Output: IntVar]: ...
+
+def f(model: MLP[2, 3]) -> None:
+    reveal_type(model)  # E: revealed type: MLP[Int[2], Int[3]]
+"#,
+);
+
+testcase!(
     test_intvar_inference_chains_without_losing_kind,
     shape_extensions_env(),
     r#"
