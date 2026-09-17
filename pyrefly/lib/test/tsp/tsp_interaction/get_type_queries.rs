@@ -439,8 +439,9 @@ fn test_get_computed_type_in_unopened_file() {
 fn test_get_computed_type_in_bundled_typeshed() {
     // The real-world case behind #4228: Pylance never `didOpen`s bundled stdlib
     // stubs, so nodes inside `builtins.pyi` (which no editor opens) must still
-    // resolve. This exercises the by-path lookup that reuses the bundled
-    // typeshed handle the checker already analyzed.
+    // resolve. The handle is rebuilt from the materialized path, which gives a
+    // filesystem module distinct from the `bundled_*` one the checker analyzed;
+    // this pins that the answer is the same either way.
     let builtins = typeshed()
         .unwrap()
         .materialized_path_on_disk()

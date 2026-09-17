@@ -8,10 +8,12 @@
 //! Implementation of the `typeServer/getDeclaredType` TSP request.
 
 use lsp_server::ResponseError;
+use pyrefly_util::telemetry::TelemetryEvent;
 use tsp_types::GetTypeParams;
 use tsp_types::Type;
 
 use crate::lsp::non_wasm::server::TspInterface;
+use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 use crate::tsp::server::TspServer;
 use crate::tsp::validation::parse_uri;
 
@@ -25,8 +27,10 @@ impl<T: TspInterface> TspServer<T> {
     /// Currently piggy-backs on `type_at_position`, which returns the computed
     /// type. A future improvement can separate the annotation type from the
     /// inferred type in the binding infrastructure.
-    pub fn handle_get_declared_type(
-        &self,
+    pub fn handle_get_declared_type<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         params: GetTypeParams,
     ) -> Result<Option<Type>, ResponseError> {
         self.validate_snapshot(params.snapshot)?;
@@ -35,8 +39,12 @@ impl<T: TspInterface> TspServer<T> {
         // to notebook paths inside type_at_position.
         parse_uri(params.uri())?;
         let position = params.position();
-        Ok(self
-            .inner()
-            .type_at_position(params.uri(), position.line, position.character))
+        Ok(self.inner().type_at_position(
+            ide_transaction_manager,
+            telemetry_event,
+            params.uri(),
+            position.line,
+            position.character,
+        ))
     }
 }

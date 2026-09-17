@@ -8,10 +8,12 @@
 //! Implementation of the `typeServer/getExpectedType` TSP request.
 
 use lsp_server::ResponseError;
+use pyrefly_util::telemetry::TelemetryEvent;
 use tsp_types::GetTypeParams;
 use tsp_types::Type;
 
 use crate::lsp::non_wasm::server::TspInterface;
+use crate::lsp::non_wasm::transaction_manager::TransactionManager;
 use crate::tsp::server::TspServer;
 use crate::tsp::validation::parse_uri;
 
@@ -22,8 +24,10 @@ impl<T: TspInterface> TspServer<T> {
     /// For example, in `foo(4)` where `def foo(a: int | str)`, the expected
     /// type of the argument `4` is `int | str`. Where no expected-type context
     /// applies, this falls back to the computed type at the position.
-    pub fn handle_get_expected_type(
-        &self,
+    pub fn handle_get_expected_type<'a>(
+        &'a self,
+        ide_transaction_manager: &mut TransactionManager<'a>,
+        telemetry_event: &mut TelemetryEvent,
         params: GetTypeParams,
     ) -> Result<Option<Type>, ResponseError> {
         self.validate_snapshot(params.snapshot)?;
@@ -32,8 +36,12 @@ impl<T: TspInterface> TspServer<T> {
         // to notebook paths inside expected_type_at_position.
         parse_uri(params.uri())?;
         let position = params.position();
-        Ok(self
-            .inner()
-            .expected_type_at_position(params.uri(), position.line, position.character))
+        Ok(self.inner().expected_type_at_position(
+            ide_transaction_manager,
+            telemetry_event,
+            params.uri(),
+            position.line,
+            position.character,
+        ))
     }
 }
