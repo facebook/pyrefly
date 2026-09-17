@@ -50,7 +50,9 @@ jobs:
                   raise SystemExit(f"Expected exactly one {old!r} in {path}")
               return text.replace(old, new)
 
-          def stamp(build_dir_env: str, pins_shape_extensions: bool) -> None:
+          def stamp(
+              build_dir_env: str, dependencies: tuple[str, ...] = ()
+          ) -> None:
               pyproject = Path(os.environ[build_dir_env]) / "pyproject.toml"
               text = pyproject.read_text()
               text = replace_once(
@@ -59,19 +61,22 @@ jobs:
                   f'version = "{package_version}"',
                   pyproject,
               )
-              if pins_shape_extensions:
+              for dependency in dependencies:
                   text = replace_once(
                       text,
-                      '"pyrefly-shape-extensions==0.0.0"',
-                      f'"pyrefly-shape-extensions=={package_version}"',
+                      f'"{dependency}==0.0.0"',
+                      f'"{dependency}=={package_version}"',
                       pyproject,
                   )
               pyproject.write_text(text)
 
-          stamp("SHAPE_EXT_BUILD_DIR", pins_shape_extensions=False)
-          stamp("TORCH_STUBS_BUILD_DIR", pins_shape_extensions=True)
-          stamp("NUMPY_STUBS_BUILD_DIR", pins_shape_extensions=True)
-          stamp("EINOPS_STUBS_BUILD_DIR", pins_shape_extensions=True)
+          stamp("SHAPE_EXT_BUILD_DIR")
+          stamp("TORCH_STUBS_BUILD_DIR", ("pyrefly-shape-extensions",))
+          stamp("NUMPY_STUBS_BUILD_DIR", ("pyrefly-shape-extensions",))
+          stamp(
+              "EINOPS_STUBS_BUILD_DIR",
+              ("pyrefly-shape-extensions", "pyrefly-torch-stubs"),
+          )
           PY
 
           python -m pip install --upgrade build
@@ -264,6 +269,11 @@ jobs:
                   f"Requires-Dist: pyrefly-shape-extensions=={os.environ['PACKAGE_VERSION']}"
                   in metadata
               )
+              assert (
+                  f"Requires-Dist: pyrefly-torch-stubs=={os.environ['PACKAGE_VERSION']}"
+                  in metadata
+              )
+              assert "==0.0.0" not in metadata
 
           with tarfile.open(einops_stubs_sdists[0]) as t:
               names = set(t.getnames())
