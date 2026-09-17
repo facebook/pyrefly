@@ -94,7 +94,9 @@ impl LspEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LspEventKind {
     Priority,
+    /// An event that makes work triggered by preceding mutations redundant.
     Mutation,
+    /// A normal-priority event that does not count as a mutation for coalescing.
     Query,
 }
 
@@ -122,14 +124,13 @@ impl LspEvent {
             | Self::DrainWatchedFileChanges
             | Self::DidChangeWorkspaceFolders(_)
             | Self::DidChangeConfiguration(_)
-            | Self::LspResponse(_)
             | Self::DidOpenNotebookDocument(_)
             | Self::DidCloseNotebookDocument(_)
             | Self::DidSaveNotebookDocument(_)
             | Self::DidChangeNotebookDocument(_)
             | Self::InvalidateConfigFind
             | Self::Exit => LspEventKind::Mutation,
-            Self::LspRequest(_) => LspEventKind::Query,
+            Self::LspResponse(_) | Self::LspRequest(_) => LspEventKind::Query,
         }
     }
 }
@@ -137,7 +138,8 @@ impl LspEvent {
 pub struct LspQueue {
     /// The next id to use for a new event.
     id: AtomicUsize,
-    /// The index of the last event we are aware of that is a mutation. 0 = unknown.
+    /// The index of the last queued mutation. `recv` uses this to tell handlers
+    /// whether work triggered by an earlier mutation can be deferred. 0 = unknown.
     last_mutation: AtomicUsize,
     /// When the most recent document edit was enqueued, or `None` if no edit has
     /// happened yet. Used to debounce queries (e.g. inlay hints) that shouldn't
@@ -371,6 +373,7 @@ impl HeavyTaskQueue {
 
 #[cfg(test)]
 mod tests {
+    use lsp_types::TextDocumentItem;
     use lsp_types::Url;
     use lsp_types::VersionedTextDocumentIdentifier;
 
@@ -427,5 +430,41 @@ mod tests {
             queue.time_since_last_edit().expect("edit was enqueued") < elapsed,
             "a new edit should reset the debounce clock"
         );
+    }
+
+    #[test]
+    fn test_lsp_response_does_not_supersede_did_open() {
+        let queue = LspQueue::new();
+        queue
+            .send(LspEvent::DidOpenTextDocument(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: Url::parse("file:///test.py").unwrap(),
+                    language_id: "python".to_owned(),
+                    version: 1,
+                    text: "x: int = 'not an int'".to_owned(),
+                },
+            }))
+            .unwrap();
+        let response_id = RequestId::from(3);
+        queue
+            .send(LspEvent::LspResponse(Response::new_ok(
+                response_id.clone(),
+                serde_json::json!([{}]),
+            )))
+            .unwrap();
+
+        let (subsequent_mutation, event, _) = queue.recv().unwrap();
+        assert!(matches!(event, LspEvent::DidOpenTextDocument(_)));
+        assert!(
+            !subsequent_mutation,
+            "a client response must not suppress didOpen validation"
+        );
+
+        let (subsequent_mutation, event, _) = queue.recv().unwrap();
+        assert!(!subsequent_mutation);
+        assert!(matches!(
+            event,
+            LspEvent::LspResponse(Response { id, .. }) if id == response_id
+        ));
     }
 }
