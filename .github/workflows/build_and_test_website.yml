@@ -18,6 +18,7 @@ on:
     types: [opened]
     paths:
       - 'website/**'
+      - '.github/workflows/build_and_test_website.yml'
 
 # GitHub sets `head_ref` only for a pull request. A new push to a pull request
 # cancels the previous run. All other events use the unique `run_id`. Each of
