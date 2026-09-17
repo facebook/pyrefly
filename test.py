@@ -144,7 +144,7 @@ class Executor(abc.ABC):
                 "unittest",
                 "discover",
                 "-s",
-                "lsp/test",
+                "lsp/resources/test",
             ]
         )
 

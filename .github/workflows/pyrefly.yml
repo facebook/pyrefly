@@ -53,7 +53,7 @@ jobs:
     # `sysconfig` install schemes differ. It needs nothing that Cargo builds, so
     # it runs before the Rust steps.
     - name: Test the Pyrefly binary finder
-      run: python -m unittest discover -s lsp/test
+      run: python -m unittest discover -s lsp/resources/test
     - name: set windows cargo home
       # we need to set CARGO_HOME to a high-up directory on Windows machines, since some dependencies cloned
       # by Cargo have long paths and will cause builds/tests to fail

@@ -27,7 +27,7 @@ import unittest
 import venv
 from pathlib import Path
 
-FINDER: Path = Path(__file__).resolve().parent.parent / "resources" / "find_pyrefly.py"
+FINDER: Path = Path(__file__).resolve().parent.parent / "find_pyrefly.py"
 BINARY_NAME: str = "pyrefly" + (sysconfig.get_config_var("EXE") or "")
 
 
