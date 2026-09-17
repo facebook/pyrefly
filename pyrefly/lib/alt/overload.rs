@@ -959,7 +959,12 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
                     let _ = matched_overloads.split_off(split_point);
                 }
             }
-            let selected_overload = self.disambiguate_overloads(&matched_overloads);
+            let selected_overload = self.disambiguate_overload_results(
+                &matched_overloads
+                    .iter()
+                    .map(|o| o.res.clone())
+                    .collect::<Vec<_>>(),
+            );
             if let Some(idx) = selected_overload {
                 let overload = matched_overloads
                     .into_iter()
@@ -1006,7 +1011,7 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         }
     }
 
-    fn disambiguate_overloads(&self, matched_overloads: &[CalledOverload<'_>]) -> Option<usize> {
+    fn disambiguate_overload_results(&self, results: &[Type]) -> Option<usize> {
         // Step 6: does there exist a return type that is consistent with all materializations of
         // every other return type? If so, use this return type. Else, return Any.
         //
@@ -1015,15 +1020,15 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
         //
         // First, find a candidate return type.
         let mut candidate = 0;
-        for (i, o) in matched_overloads.iter().enumerate().skip(1) {
-            if !self.is_consistent(&o.res.materialize(), &matched_overloads[candidate].res) {
+        for (i, result) in results.iter().enumerate().skip(1) {
+            if !self.is_consistent(&result.materialize(), &results[candidate]) {
                 candidate = i;
             }
         }
         // We've already checked every return type after the candidate.
         // Check every return type before the candidate.
-        for o in matched_overloads.iter().take(candidate) {
-            if !self.is_consistent(&o.res.materialize(), &matched_overloads[candidate].res) {
+        for result in results.iter().take(candidate) {
+            if !self.is_consistent(&result.materialize(), &results[candidate]) {
                 return None;
             }
         }
