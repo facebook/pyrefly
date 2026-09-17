@@ -10,28 +10,7 @@ import {tmpdir} from 'os';
 import {join} from 'path';
 import * as vscode from 'vscode';
 import {resolveExecutable} from '../lspPath';
-import {PythonEnvironment} from '../python-environment';
-
-/** Records what the binary selection logged, so tests can read the reason. */
-function recordingChannel(lines: string[]): vscode.OutputChannel {
-  return {
-    name: 'recording',
-    append: (value: string) => void lines.push(value),
-    appendLine: (value: string) => void lines.push(value),
-    replace: () => {},
-    clear: () => {},
-    show: () => {},
-    hide: () => {},
-    dispose: () => {},
-  } as unknown as vscode.OutputChannel;
-}
-
-/** Only `getInterpreterPath` is ever called, but the class is nominally typed. */
-function fakeEnvironment(interpreter: string | undefined): PythonEnvironment {
-  return {
-    getInterpreterPath: async () => interpreter,
-  } as unknown as PythonEnvironment;
-}
+import {fakeEnvironment, recordingChannel} from './helpers';
 
 suite('resolveExecutable', () => {
   const extension = vscode.extensions.getExtension('meta.pyrefly');
