@@ -5,12 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+use std::path::PathBuf;
+
 use lsp_types::Hover;
 use lsp_types::HoverContents;
 use lsp_types::Position;
 use lsp_types::Range;
 use pretty_assertions::assert_eq;
 use pyrefly_build::handle::Handle;
+use pyrefly_python::module_name::ModuleName;
+use pyrefly_python::module_path::ModulePath;
 use ruff_text_size::TextSize;
 
 use crate::lsp::wasm::hover::HoverOptions;
@@ -1961,6 +1965,90 @@ local_function()
         "got: {}",
         reports[3]
     );
+}
+
+#[test]
+fn hover_uses_public_stub_docstring_when_executable_reexport_ends_in_stub() {
+    let mut test_env = TestEnv::new();
+    test_env.add_with_path(
+        "dependency",
+        "dependency.pyi",
+        r#"
+def internal() -> int:
+    """Dependency stub documentation."""
+    ...
+"#,
+    );
+    test_env.add_with_path(
+        "api",
+        "api.py",
+        "from dependency import internal as exported",
+    );
+    test_env.add_with_path(
+        "api",
+        "api.pyi",
+        r#"
+def exported() -> int:
+    """Public stub documentation."""
+    ...
+"#,
+    );
+    let main_code = r#"
+from api import exported
+
+exported()
+#   ^
+"#;
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+    let position = extract_cursors_for_test(main_code)[0];
+
+    let report = get_test_report(&state, &main_handle, position);
+    assert!(report.contains("(function) internal"), "got: {report}");
+    assert!(
+        report.contains("Public stub documentation."),
+        "got: {report}"
+    );
+    assert!(!report.contains("Dependency stub documentation."));
+}
+
+#[test]
+fn hover_in_dunder_all_prefers_stub_docstring() {
+    let mut test_env = TestEnv::new();
+    let lib_code = r#"
+def exported() -> int:
+    """Implementation documentation."""
+    return 1
+
+__all__ = ["exported"]
+#            ^
+"#;
+    test_env.add_with_path("lib", "lib.py", lib_code);
+    test_env.add_with_path(
+        "lib",
+        "lib.pyi",
+        r#"
+def exported() -> int:
+    """Public stub documentation."""
+    ...
+"#,
+    );
+    let sys_info = test_env.sys_info();
+    let (state, _) = test_env.to_state();
+    let lib_handle = Handle::new(
+        ModuleName::from_str("lib"),
+        ModulePath::memory(PathBuf::from("lib.py")),
+        sys_info,
+    );
+    let position = extract_cursors_for_test(lib_code)[0];
+
+    let report = get_test_report(&state, &lib_handle, position);
+    assert!(
+        report.contains("Public stub documentation."),
+        "got: {report}"
+    );
+    assert!(!report.contains("Implementation documentation."));
 }
 
 #[test]
