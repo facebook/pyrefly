@@ -144,39 +144,36 @@ impl Bounds {
     }
 }
 
-/// Per-call capture of generic witness information, stored on `CallBoundary`.
-/// Each entry records a single Forall instantiation's witness vars and the
-/// target vars that are allowed to observe the residualized answer.
+/// A generic argument the call matched: the vars its instantiation constrains, which finishing
+/// re-declares as type parameters rather than solving.
 #[derive(Clone, Debug)]
-struct GenericWitnessCapture {
+struct GenericArgument {
     argument: ArgumentKey,
     target_vars: SmallSet<Var>,
-    /// Union of origin_vars and deferred_vars from the witness — the quantified
-    /// vars constrained by this Forall instantiation.
-    witness_vars: SmallSet<Var>,
+    argument_vars: SmallSet<Var>,
 }
 
 /// Full per-branch capture used transiently during overload probing.
 #[derive(Clone, Debug)]
-pub struct OverloadBranchCapture {
+pub struct OverloadBranch {
     branch_index: usize,
     values: SmallMap<Var, Variable>,
-    /// Vars that had a generic residual at snapshot time. Used by
-    /// `materialize_overload_residual_branch_value` to decide whether
-    /// to produce a `callable_residual_generic`.
-    generic_residual_vars: SmallSet<Var>,
+    /// Vars already captured from a generic argument at snapshot time. Read by
+    /// `overload_branch_value_type` to decide whether a branch value should be
+    /// a free quantified.
+    generic_argument_vars: SmallSet<Var>,
 }
 
-type OverloadWitnessCapturesByArgument = SmallMap<ArgumentKey, Vec<OverloadBranchCapture>>;
+type OverloadBranchesByArgument = SmallMap<ArgumentKey, Vec<OverloadBranch>>;
 
-/// Witness captures collected during subset checking and consumed at solve boundaries.
+/// What matching the call's arguments recorded, read when the call is finished.
 #[derive(Debug, Default)]
-struct WitnessCaptures {
-    overload: OverloadWitnessCapturesByArgument,
-    generic: Vec<GenericWitnessCapture>,
+struct ArgumentCaptures {
+    overload: OverloadBranchesByArgument,
+    generic: Vec<GenericArgument>,
 }
 
-impl WitnessCaptures {
+impl ArgumentCaptures {
     fn captured_vars(&self) -> SmallSet<Var> {
         let mut vars: SmallSet<Var> = self
             .overload
@@ -187,20 +184,20 @@ impl WitnessCaptures {
         vars.extend(
             self.generic
                 .iter()
-                .flat_map(|c| c.witness_vars.iter().copied()),
+                .flat_map(|c| c.argument_vars.iter().copied()),
         );
         vars
     }
 }
 
-/// Witness-keyed pruning decisions threaded through finishing.
+/// What survived pruning, per argument, threaded through finishing.
 #[derive(Clone, Debug)]
-enum OverloadWitnessPruningDecision {
+enum OverloadPruning {
     AllPruned(OverloadAllPrunedCause),
     Surviving(SmallSet<usize>),
 }
 
-type OverloadPruningByWitness = SmallMap<ArgumentKey, OverloadWitnessPruningDecision>;
+type OverloadPruningByArgument = SmallMap<ArgumentKey, OverloadPruning>;
 
 #[derive(Clone, Debug)]
 struct OverloadSolvedConstraint {
@@ -817,25 +814,17 @@ impl Solver {
         }
     }
 
-    /// Witnesses track both origin and deferred vars for residual plumbing,
-    /// but overload branch capture snapshots only quantified vars. Only
-    /// quantified vars can carry the per-branch residual candidates that we
-    /// later materialize at finishing boundaries.
+    /// Only an unsolved quantified var can hold what a branch implies, since finishing the call
+    /// is what turns those into answers.
     pub(crate) fn var_is_quantified(&self, var: Var) -> bool {
         let variables = self.variables.lock();
         matches!(&*variables.get(var), Variable::Quantified { .. })
     }
 
-    /// Witnesses track both origin and deferred vars for residual plumbing,
-    /// but overload branch capture snapshots only quantified vars. Only
-    /// quantified vars can carry the per-branch residual candidates that we
-    /// later materialize at finishing boundaries.
-    pub(crate) fn overload_capture_quantified_vars(
-        &self,
-        witness: &ResidualWitnessContext,
-    ) -> Vec<Var> {
+    /// The vars an argument could fill in that are still waiting for an answer.
+    pub(crate) fn unsolved_argument_vars(&self, argument: &MatchedArgument) -> Vec<Var> {
         let variables = self.variables.lock();
-        witness
+        argument
             .capture_candidate_vars()
             .into_iter()
             .filter(|var| matches!(&*variables.get(*var), Variable::Quantified { .. }))
@@ -1014,26 +1003,26 @@ impl Solver {
         nonvars.into_iter().chain(wrapped_vars).chain(bare_vars)
     }
 
-    pub(crate) fn extract_overload_branch_capture(
+    pub(crate) fn extract_overload_branch(
         &self,
         branch_index: usize,
         vars: &[Var],
-        generic_captured_vars: &SmallSet<Var>,
-    ) -> OverloadBranchCapture {
+        generic_argument_vars_in_call: &SmallSet<Var>,
+    ) -> OverloadBranch {
         let variables = self.variables.lock();
         let values: SmallMap<Var, Variable> = vars
             .iter()
             .map(|var| (*var, variables.get(*var).clone()))
             .collect();
-        let generic_residual_vars: SmallSet<Var> = vars
+        let generic_argument_vars: SmallSet<Var> = vars
             .iter()
             .copied()
-            .filter(|var| generic_captured_vars.contains(var))
+            .filter(|var| generic_argument_vars_in_call.contains(var))
             .collect();
-        OverloadBranchCapture {
+        OverloadBranch {
             branch_index,
             values,
-            generic_residual_vars,
+            generic_argument_vars,
         }
     }
 
@@ -1500,7 +1489,7 @@ impl Solver {
             vs,
             false,
             &mut |_constraints| Some(VarSnapshot::default()),
-            &mut WitnessCaptures::default(),
+            &mut ArgumentCaptures::default(),
         );
 
         callable
@@ -1767,18 +1756,14 @@ impl Solver {
         }
     }
 
-    fn materialize_overload_residual_branch_value(
-        &self,
-        value: &Variable,
-        has_generic_residual: bool,
-    ) -> Type {
+    fn overload_branch_value_type(&self, value: &Variable, is_generic_argument: bool) -> Type {
         match value {
             Variable::Answer { ty, .. } | Variable::ResidualAnswer { ty, .. } => ty.clone(),
             Variable::Quantified { quantified, bounds } => {
                 if let Some(bound) = self.solve_bounds(bounds.clone()) {
                     return bound;
                 }
-                if has_generic_residual {
+                if is_generic_argument {
                     return self
                         .heap
                         .mk_quantified(quantified.clone().with_needs_finalization());
@@ -1788,7 +1773,7 @@ impl Solver {
             Variable::PartialQuantified(q) => quantified_gradual_type(q),
             Variable::PartialContained(_) | Variable::Recursive => self.heap.mk_any_implicit(),
             Variable::Unwrap(_) => {
-                unreachable!("overload residual capture should not include Unwrap vars")
+                unreachable!("an overload branch cannot bind an unwrap var")
             }
         }
     }
@@ -1798,34 +1783,33 @@ impl Solver {
         &self,
         argument: ArgumentKey,
         var: Var,
-        branch_captures: &[OverloadBranchCapture],
-        overload_pruning_by_witness: &OverloadPruningByWitness,
+        branches: &[OverloadBranch],
+        overload_pruning_by_argument: &OverloadPruningByArgument,
     ) -> Type {
         let identity = OverloadResidualIdentity {
             argument_index: argument.index(),
         };
-        let pruning_decision = overload_pruning_by_witness.get(&argument);
+        let pruning_decision = overload_pruning_by_argument.get(&argument);
         let surviving_branch_indices = match pruning_decision {
-            Some(OverloadWitnessPruningDecision::AllPruned(_)) => {
+            Some(OverloadPruning::AllPruned(_)) => {
                 // All candidate branches were pruned for this witness.
                 // Return Never immediately and avoid any branch materialization work.
                 return Type::never();
             }
-            Some(OverloadWitnessPruningDecision::Surviving(indices)) => indices.clone(),
-            None => branch_captures
+            Some(OverloadPruning::Surviving(indices)) => indices.clone(),
+            None => branches
                 .iter()
                 .filter(|capture| capture.values.contains_key(&var))
                 .map(|capture| capture.branch_index)
                 .collect(),
         };
-        let surviving_branches = branch_captures
+        let surviving_branches = branches
             .iter()
             .filter(|capture| surviving_branch_indices.contains(&capture.branch_index))
             .filter_map(|capture| {
                 let value = capture.values.get(&var)?;
-                let has_generic_residual = capture.generic_residual_vars.contains(&var);
-                let mut ty =
-                    self.materialize_overload_residual_branch_value(value, has_generic_residual);
+                let is_generic_argument = capture.generic_argument_vars.contains(&var);
+                let mut ty = self.overload_branch_value_type(value, is_generic_argument);
                 ty.flatten_overload_residual_markers(&self.heap);
                 Some(OverloadBranchProjection {
                     branch_index: capture.branch_index,
@@ -1865,7 +1849,7 @@ impl Solver {
     }
 
     /// Collect compatibility constraints without mutating the captured branch value.
-    fn branch_compatibility_constraints(
+    fn overload_branch_constraints(
         &self,
         branch_value: &Variable,
         solved_ty: &Type,
@@ -1956,17 +1940,16 @@ impl Solver {
     }
 
     /// Prune each argument's branches against the types its own variables solved to. Arguments
-    /// that share variables see each other's results when only overload branch survives pruning.
-    fn prune_overload_witnesses(
+    /// that share variables see each other's results when only one overload branch survives.
+    fn prune_overload_branches(
         &self,
         solved_vars: &SmallMap<Var, SolvedVarInfo>,
-        overload_witness_captures: &OverloadWitnessCapturesByArgument,
+        branches_by_argument: &OverloadBranchesByArgument,
         probe_constraints: &mut dyn FnMut(&[(Type, Type)]) -> Option<VarSnapshot>,
-    ) -> OverloadPruningByWitness {
+    ) -> OverloadPruningByArgument {
         let mut pruning = SmallMap::new();
-        for (argument, branch_captures) in overload_witness_captures {
-            let Some(decision) =
-                self.prune_one_argument(solved_vars, branch_captures, probe_constraints)
+        for (argument, branches) in branches_by_argument {
+            let Some(decision) = self.prune_one_argument(solved_vars, branches, probe_constraints)
             else {
                 continue;
             };
@@ -1980,37 +1963,37 @@ impl Solver {
     fn prune_one_argument(
         &self,
         solved_vars: &SmallMap<Var, SolvedVarInfo>,
-        branch_captures: &[OverloadBranchCapture],
+        branches: &[OverloadBranch],
         probe_constraints: &mut dyn FnMut(&[(Type, Type)]) -> Option<VarSnapshot>,
-    ) -> Option<OverloadWitnessPruningDecision> {
-        let solved_vars_in_witness = solved_vars
+    ) -> Option<OverloadPruning> {
+        let solved_vars_in_argument = solved_vars
             .iter()
             .filter_map(|(&var, solved_var)| {
-                branch_captures
+                branches
                     .iter()
                     .any(|capture| capture.values.contains_key(&var))
                     .then_some((var, solved_var))
             })
             .collect::<Vec<_>>();
-        if solved_vars_in_witness.is_empty() {
+        if solved_vars_in_argument.is_empty() {
             return None;
         }
         // A gradual solved type accepts every branch, so pruning against only gradual types
         // cannot tell them apart, and neither can anything else downstream.
-        if solved_vars_in_witness
+        if solved_vars_in_argument
             .iter()
             .all(|(_, solved_var)| solved_var.solved_ty.is_any())
         {
             return None;
         }
 
-        let mut surviving_branches = branch_captures
+        let mut surviving_branches = branches
             .iter()
             .filter_map(|capture| {
-                let constraints = solved_vars_in_witness.iter().try_fold(
+                let constraints = solved_vars_in_argument.iter().try_fold(
                     Vec::new(),
                     |mut constraints, (var, solved_var)| {
-                        constraints.extend(self.branch_compatibility_constraints(
+                        constraints.extend(self.overload_branch_constraints(
                             capture.values.get(var)?,
                             &solved_var.solved_ty,
                         ));
@@ -2034,10 +2017,10 @@ impl Solver {
                 .collect()
         };
         let decision = if surviving_branch_indices.is_empty() {
-            let mut solved_constraints = solved_vars_in_witness
+            let mut solved_constraints = solved_vars_in_argument
                 .iter()
                 .map(|(var, solved_var)| {
-                    let quantified_name = branch_captures
+                    let quantified_name = branches
                         .iter()
                         .find_map(|capture| {
                             capture.values.get(var).map(|branch_value| {
@@ -2056,9 +2039,9 @@ impl Solver {
                 .collect::<Vec<_>>();
             solved_constraints
                 .sort_by(|left, right| left.quantified_name.cmp(&right.quantified_name));
-            OverloadWitnessPruningDecision::AllPruned(OverloadAllPrunedCause { solved_constraints })
+            OverloadPruning::AllPruned(OverloadAllPrunedCause { solved_constraints })
         } else {
-            OverloadWitnessPruningDecision::Surviving(surviving_branch_indices)
+            OverloadPruning::Surviving(surviving_branch_indices)
         };
         Some(decision)
     }
@@ -2083,7 +2066,7 @@ impl Solver {
             vs,
             infer_with_first_use,
             type_order,
-            WitnessCaptures::default(),
+            ArgumentCaptures::default(),
         )
         .0
     }
@@ -2102,15 +2085,15 @@ impl Solver {
         SmallSet<Quantified>,
     ) {
         let (handles, captures) = boundary.into_parts();
-        let overload_capture_vars = captures
+        let overload_branch_vars = captures
             .overload
             .values()
-            .flat_map(|branch_captures| branch_captures.iter())
+            .flat_map(|branches| branches.iter())
             .flat_map(|capture| capture.values.keys().copied());
         let mut roots: SmallSet<Var> = handles.into_iter().flat_map(|handle| handle.0).collect();
         // Overload pruning must include solved vars even if they already
         // collapsed to `Answer` before boundary finishing.
-        roots.extend(overload_capture_vars);
+        roots.extend(overload_branch_vars);
         let mut all_boundary_vars: Vec<Var> = roots.into_iter().collect();
         all_boundary_vars.sort_unstable();
         self.finish_quantified_with_captures(
@@ -2126,7 +2109,7 @@ impl Solver {
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
         type_order: TypeOrder<Ans>,
-        mut captures: WitnessCaptures,
+        mut captures: ArgumentCaptures,
     ) -> (
         Result<(), Vec1<TypeVarSpecializationError>>,
         SmallSet<Quantified>,
@@ -2162,12 +2145,12 @@ impl Solver {
     fn is_from_generic_argument(
         &self,
         v: Var,
-        captures: &[GenericWitnessCapture],
+        captures: &[GenericArgument],
         root_map: &SmallMap<Var, Var>,
     ) -> bool {
         let v_root = root_map.get(&v).copied().unwrap_or(v);
         captures.iter().any(|capture| {
-            capture.witness_vars.iter().any(|argument_var| {
+            capture.argument_vars.iter().any(|argument_var| {
                 root_map.get(argument_var).copied().unwrap_or(*argument_var) == v_root
             })
         })
@@ -2182,7 +2165,7 @@ impl Solver {
         vs: QuantifiedHandle,
         infer_with_first_use: bool,
         probe_constraints: &mut dyn FnMut(&[(Type, Type)]) -> Option<VarSnapshot>,
-        captures: &mut WitnessCaptures,
+        captures: &mut ArgumentCaptures,
     ) -> (
         Result<(), Vec1<TypeVarSpecializationError>>,
         SmallSet<Quantified>,
@@ -2231,7 +2214,7 @@ impl Solver {
         }
         drop(lock);
 
-        let overload_pruning_by_witness = if has_overload_captures {
+        let overload_pruning_by_argument = if has_overload_captures {
             let solved_vars = {
                 let lock = self.variables.lock();
                 vs.0.iter()
@@ -2248,7 +2231,7 @@ impl Solver {
                     .collect()
             };
             let pruning =
-                self.prune_overload_witnesses(&solved_vars, &captures.overload, probe_constraints);
+                self.prune_overload_branches(&solved_vars, &captures.overload, probe_constraints);
 
             // Partial captures impose no compatibility constraint, but materialization still
             // needs their concrete solved value after pruning finishes.
@@ -2274,8 +2257,8 @@ impl Solver {
         } else {
             SmallMap::new()
         };
-        for decision in overload_pruning_by_witness.values() {
-            let OverloadWitnessPruningDecision::AllPruned(all_pruned_cause) = decision else {
+        for decision in overload_pruning_by_argument.values() {
+            let OverloadPruning::AllPruned(all_pruned_cause) = decision else {
                 continue;
             };
             err.push(TypeVarSpecializationError::IncompatibleOverloadArgument {
@@ -2291,7 +2274,7 @@ impl Solver {
         // Reverse map from var to the unique argument that recorded it. If a var appears under
         // more than one argument, it maps to None so we skip it — an ambiguous record should not
         // produce an overload residual.
-        let var_to_witness: SmallMap<Var, Option<ArgumentKey>> = {
+        let var_to_argument: SmallMap<Var, Option<ArgumentKey>> = {
             let mut map: SmallMap<Var, Option<ArgumentKey>> = SmallMap::new();
             for (&key, captures) in captures.overload.iter() {
                 for capture in captures {
@@ -2312,23 +2295,22 @@ impl Solver {
             map
         };
 
-        // Precompute union-find roots for all vars that appear in generic
-        // residual captures, so we can match vars by equivalence class without
-        // holding a mutable borrow during the main loop.
+        // Precompute union-find roots for every var a generic argument constrains, so we can
+        // match vars by equivalence class without holding a mutable borrow during the main loop.
         let root_map: SmallMap<Var, Var> = if !captures.generic.is_empty() {
             let lock = self.variables.lock();
             let all_vars = vs.0.iter().copied().chain(
                 captures
                     .generic
                     .iter()
-                    .flat_map(|c| c.witness_vars.iter().copied()),
+                    .flat_map(|c| c.argument_vars.iter().copied()),
             );
             all_vars.map(|v| (v, lock.get_root(v))).collect()
         } else {
             SmallMap::new()
         };
 
-        let mut reported_all_pruned_witnesses = SmallSet::new();
+        let mut reported_all_pruned_arguments = SmallSet::new();
         let lock = self.variables.lock();
         for &v in &vs.0 {
             let mut e = lock.get_mut(v);
@@ -2339,22 +2321,20 @@ impl Solver {
             {
                 let solved_bound = self.solve_bounds(mem::take(bounds));
 
-                let witness_argument = if solved_bound.is_none() {
-                    var_to_witness.get(&v).copied().flatten()
+                let recorded_argument = if solved_bound.is_none() {
+                    var_to_argument.get(&v).copied().flatten()
                 } else {
                     None
                 };
-                let all_pruned_witness = witness_argument.and_then(|argument| {
-                    match overload_pruning_by_witness.get(&argument) {
-                        Some(OverloadWitnessPruningDecision::AllPruned(cause)) => {
-                            Some((argument, cause))
-                        }
+                let all_pruned_argument = recorded_argument.and_then(|argument| {
+                    match overload_pruning_by_argument.get(&argument) {
+                        Some(OverloadPruning::AllPruned(cause)) => Some((argument, cause)),
                         _ => None,
                     }
                 });
 
-                if let Some((argument, all_pruned_cause)) = all_pruned_witness
-                    && reported_all_pruned_witnesses.insert(argument)
+                if let Some((argument, all_pruned_cause)) = all_pruned_argument
+                    && reported_all_pruned_arguments.insert(argument)
                 {
                     err.push(TypeVarSpecializationError::IncompatibleOverloadArgument {
                         solved_constraints: all_pruned_cause.solved_constraints.map(|constraint| {
@@ -2368,21 +2348,21 @@ impl Solver {
 
                 *e = if let Some(bound) = solved_bound {
                     Variable::answer(bound)
-                } else if all_pruned_witness.is_some() {
+                } else if all_pruned_argument.is_some() {
                     Variable::answer(Type::never())
-                } else if let Some(argument) = witness_argument {
-                    let overload_captures = captures.overload.get(&argument).unwrap_or_else(|| {
-                        unreachable!("overload materialization requires witness captures")
+                } else if let Some(argument) = recorded_argument {
+                    let overload_branches = captures.overload.get(&argument).unwrap_or_else(|| {
+                        unreachable!("overload materialization requires recorded branches")
                     });
-                    let target_vars: SmallSet<Var> = overload_captures
+                    let target_vars: SmallSet<Var> = overload_branches
                         .iter()
                         .flat_map(|c| c.values.keys().copied())
                         .collect();
                     let ty = self.materialize_overload_residual(
                         argument,
                         v,
-                        overload_captures,
-                        &overload_pruning_by_witness,
+                        overload_branches,
+                        &overload_pruning_by_argument,
                     );
                     Variable::residual_answer(target_vars, ty)
                 } else if self.is_from_generic_argument(v, &captures.generic, &root_map) {
@@ -2444,9 +2424,9 @@ impl Solver {
     pub fn generalize_class_targs(
         &self,
         targs: &mut TArgs,
-        vars_with_residual_captures: &SmallSet<Var>,
+        vars_with_overload_branches: &SmallSet<Var>,
     ) {
-        self.generalize_class_targs_impl(targs, vars_with_residual_captures, false)
+        self.generalize_class_targs_impl(targs, vars_with_overload_branches, false)
     }
 
     /// Like `generalize_class_targs`, but for type arguments that came from an expected type
@@ -2459,15 +2439,15 @@ impl Solver {
     pub fn generalize_class_targs_for_constructor_hint(
         &self,
         targs: &mut TArgs,
-        vars_with_residual_captures: &SmallSet<Var>,
+        vars_with_overload_branches: &SmallSet<Var>,
     ) {
-        self.generalize_class_targs_impl(targs, vars_with_residual_captures, true)
+        self.generalize_class_targs_impl(targs, vars_with_overload_branches, true)
     }
 
     fn generalize_class_targs_impl(
         &self,
         targs: &mut TArgs,
-        vars_with_residual_captures: &SmallSet<Var>,
+        vars_with_overload_branches: &SmallSet<Var>,
         constructor_hint: bool,
     ) {
         // Expanding targs might require the variables lock, so do that first.
@@ -2482,8 +2462,8 @@ impl Solver {
                 } = &mut *e
                     && *q == *param
                 {
-                    let has_residual_captures = vars_with_residual_captures.contains(v);
-                    if bounds.is_empty() && !has_residual_captures {
+                    let has_overload_branches = vars_with_overload_branches.contains(v);
+                    if bounds.is_empty() && !has_overload_branches {
                         *t = param.clone().to_type(&self.heap);
                     } else if !bounds.is_empty() {
                         // If the variable has bounds, finalize its type now.
@@ -2498,8 +2478,8 @@ impl Solver {
                             Variable::answer(solved)
                         };
                     }
-                    // Otherwise (residuals but no bounds): leave the var as
-                    // Quantified so finish_quantified can materialize residuals.
+                    // Otherwise leave it Quantified, so finishing the call can answer it from
+                    // the branches an argument recorded.
                 }
             }
         })
@@ -2718,7 +2698,7 @@ impl Solver {
     /// May cause partial variables to be resolved to an answer.
     ///
     /// If `call_context` is provided, the subset check runs with that context
-    /// active (e.g. to enable residual capture during call analysis).
+    /// active (e.g. to record an argument's branches during call analysis).
     pub fn is_subset_eq<'subset, Ans: LookupAnswer>(
         &self,
         got: &Type,
@@ -3121,15 +3101,17 @@ impl ArgumentSide {
 pub(crate) enum SubsetCacheContext {
     #[default]
     Default,
-    Witness {
+    MatchedArgument {
         argument: ArgumentKey,
         argument_side: ArgumentSide,
     },
 }
 
-// The context in which we are collecting residuals.
-// - The `argument` identifies which argument of the higher-order call this is
-// - The `target_vars` are vars allowed to observe the residualized answer
+// The argument whose match is being recorded.
+// - The `argument` identifies which argument of the call this is, so that two
+//   arguments with the same type stay apart.
+// - The `target_vars` are the vars this argument could fill in: those of the
+//   parameter it is matched against, plus its own.
 // - The `origin_vars` are `Vars` that correspond to scoped type parameters
 //   inside of that argument (the "origin" of the generic behavior)
 // - The `deferred_vars` are `Vars` that correspond to call-scope vars from
@@ -3139,17 +3121,16 @@ pub(crate) enum SubsetCacheContext {
 //
 // TODO(stroxler): Rethink the names of fields here. It would be difficult to restack.
 #[derive(Clone, Debug)]
-pub struct ResidualWitnessContext {
+pub struct MatchedArgument {
     argument: ArgumentKey,
-    /// Vars that are allowed to observe the residualized answer for this candidate.
     target_vars: SmallSet<Var>,
     argument_side: ArgumentSide,
     origin_vars: SmallSet<Var>,
     deferred_vars: SmallSet<Var>,
 }
 
-impl ResidualWitnessContext {
-    /// Build a witness for a Forall instantiation during subset checking.
+impl MatchedArgument {
+    /// Build the match context for a `Forall` argument during subset checking.
     pub fn for_forall(
         argument: ArgumentKey,
         vars: &QuantifiedHandle,
@@ -3168,7 +3149,7 @@ impl ResidualWitnessContext {
         }
     }
 
-    /// Build a witness for an overload residual during subset checking.
+    /// Build the match context for an overloaded argument during subset checking.
     pub fn for_overload(
         argument: ArgumentKey,
         eligible_vars: &[Var],
@@ -3205,10 +3186,10 @@ impl ResidualWitnessContext {
 #[derive(Debug, Default)]
 struct CallBoundaryState {
     quantified_handles: Vec<QuantifiedHandle>,
-    witness_captures: WitnessCaptures,
+    captures: ArgumentCaptures,
 }
 
-/// The unique owner of quantified vars and residual captures deferred to a call boundary.
+/// The unique owner of the quantified vars and recorded branches deferred to a call boundary.
 #[derive(Debug)]
 #[must_use = "Call boundaries must be passed to finish_call_boundary."]
 pub(crate) struct CallBoundary {
@@ -3224,7 +3205,7 @@ impl CallBoundary {
 
     pub(crate) fn context(&self) -> CallContext<'_> {
         CallContext {
-            witness: None,
+            matched_argument: None,
             argument_side: ArgumentSide::default(),
             argument: None,
             boundary: Some(self),
@@ -3245,58 +3226,54 @@ impl CallBoundary {
         }
     }
 
-    fn persist_overload_witness_captures(
-        &self,
-        argument: ArgumentKey,
-        branch_captures: Vec<OverloadBranchCapture>,
-    ) {
+    fn record_overload_branches(&self, argument: ArgumentKey, branches: Vec<OverloadBranch>) {
         self.state()
             .lock()
-            .witness_captures
+            .captures
             .overload
-            .insert(argument, branch_captures);
+            .insert(argument, branches);
     }
 
-    fn record_generic_residuals(&self, witness: &ResidualWitnessContext) {
+    fn record_generic_argument(&self, argument: &MatchedArgument) {
         let mut state = self.state().lock();
-        let capture = GenericWitnessCapture {
-            argument: witness.argument,
-            target_vars: witness.target_vars.clone(),
-            witness_vars: witness.capture_candidate_vars(),
+        let capture = GenericArgument {
+            argument: argument.argument,
+            target_vars: argument.target_vars.clone(),
+            argument_vars: argument.capture_candidate_vars(),
         };
         // Dedup: if an existing entry has the same (argument, target_vars),
-        // merge witness_vars into it instead of pushing a new entry.
-        for existing in state.witness_captures.generic.iter_mut() {
+        // merge argument_vars into it instead of pushing a new entry.
+        for existing in state.captures.generic.iter_mut() {
             if existing.argument == capture.argument && existing.target_vars == capture.target_vars
             {
-                existing.witness_vars.extend(capture.witness_vars);
+                existing.argument_vars.extend(capture.argument_vars);
                 return;
             }
         }
-        state.witness_captures.generic.push(capture);
+        state.captures.generic.push(capture);
     }
 
     fn captured_vars(&self) -> SmallSet<Var> {
-        self.state().lock().witness_captures.captured_vars()
+        self.state().lock().captures.captured_vars()
     }
 
-    fn generic_captured_vars(&self) -> SmallSet<Var> {
+    fn generic_argument_vars_in_call(&self) -> SmallSet<Var> {
         self.state()
             .lock()
-            .witness_captures
+            .captures
             .generic
             .iter()
-            .flat_map(|c| c.witness_vars.iter().copied())
+            .flat_map(|c| c.argument_vars.iter().copied())
             .collect()
     }
 
-    fn into_parts(mut self) -> (Vec<QuantifiedHandle>, WitnessCaptures) {
+    fn into_parts(mut self) -> (Vec<QuantifiedHandle>, ArgumentCaptures) {
         let state = self
             .state
             .take()
             .expect("a call boundary can only be consumed once")
             .into_inner();
-        (state.quantified_handles, state.witness_captures)
+        (state.quantified_handles, state.captures)
     }
 }
 
@@ -3312,7 +3289,7 @@ impl Drop for CallBoundary {
 /// Recursive subset-checking context. Boundary ownership remains with `CallBoundary`.
 #[derive(Clone, Debug, Default)]
 pub struct CallContext<'subset> {
-    witness: Option<ResidualWitnessContext>,
+    matched_argument: Option<MatchedArgument>,
     argument_side: ArgumentSide,
     /// Which argument of the call is being checked, when one is.
     argument: Option<ArgumentKey>,
@@ -3389,30 +3366,30 @@ impl<'subset> CallContext<'subset> {
     }
 
     pub fn with_outside_context(mut self) -> Self {
-        // Both capture writers require a non-default argument side, so this disables
-        // capture while retaining the boundary's previously collected captures.
-        self.witness = Default::default();
+        // Recording requires a non-default argument side, so this stops it while keeping the
+        // boundary's already-recorded branches.
+        self.matched_argument = Default::default();
         self.argument_side = Default::default();
         self.shape_extension_vars = Default::default();
         self.shape_extension_binding_source = None;
         self
     }
 
-    pub fn with_residual_witness(mut self, witness: ResidualWitnessContext) -> Self {
-        self.witness = Some(witness);
+    pub fn with_matched_argument(mut self, argument: MatchedArgument) -> Self {
+        self.matched_argument = Some(argument);
         self
     }
 
-    pub fn residual_witness(&self) -> Option<&ResidualWitnessContext> {
-        self.witness.as_ref()
+    pub fn matched_argument(&self) -> Option<&MatchedArgument> {
+        self.matched_argument.as_ref()
     }
 
-    pub fn residual_witness_mut(&mut self) -> Option<&mut ResidualWitnessContext> {
-        self.witness.as_mut()
+    pub fn matched_argument_mut(&mut self) -> Option<&mut MatchedArgument> {
+        self.matched_argument.as_mut()
     }
 
-    pub fn take_residual_witness(&mut self) -> Option<ResidualWitnessContext> {
-        self.witness.take()
+    pub fn take_matched_argument(&mut self) -> Option<MatchedArgument> {
+        self.matched_argument.take()
     }
 
     pub(crate) fn argument_side(&self) -> ArgumentSide {
@@ -3420,9 +3397,9 @@ impl<'subset> CallContext<'subset> {
     }
 
     fn residual_hooks_enabled(&self) -> bool {
-        match &self.witness {
-            Some(witness) => {
-                self.argument_side == witness.argument_side
+        match &self.matched_argument {
+            Some(argument) => {
+                self.argument_side == argument.argument_side
                     && !matches!(self.argument_side, ArgumentSide::NotAnalyzingACall)
             }
             None => false,
@@ -3430,12 +3407,12 @@ impl<'subset> CallContext<'subset> {
     }
 
     pub(crate) fn subset_cache_context(&self) -> SubsetCacheContext {
-        if let Some(witness) = &self.witness {
-            // Context-scoped cache keying preserves memoization while keeping
-            // witness/polarity-sensitive side effects isolated. Most checks run
-            // under Default context and keep prior cache behavior.
-            SubsetCacheContext::Witness {
-                argument: witness.argument,
+        if let Some(argument) = &self.matched_argument {
+            // Recording an argument's branches is a side effect of checking it, so a result
+            // memoized while matching one argument must not be reused for another, or for the
+            // opposite polarity. Checks outside an argument share one cache as before.
+            SubsetCacheContext::MatchedArgument {
+                argument: argument.argument,
                 argument_side: self.argument_side,
             }
         } else {
@@ -3443,44 +3420,44 @@ impl<'subset> CallContext<'subset> {
         }
     }
 
-    /// Persist overload probe captures. Finishing consumes these captures as the
-    /// authoritative pruning source.
-    pub(crate) fn persist_overload_witness_captures(
+    /// Record what each branch of an overloaded argument implies. Finishing the call reads these
+    /// as the authoritative source for pruning and for the solutions it settles on.
+    pub(crate) fn record_overload_branches(
         &self,
         argument: ArgumentKey,
-        branch_captures: Vec<OverloadBranchCapture>,
+        branches: Vec<OverloadBranch>,
     ) {
         assert!(
             self.residual_hooks_enabled(),
-            "overload residual capture requires an active witness"
+            "recording overload branches requires an active argument"
         );
         if let Some(boundary) = &self.boundary {
-            boundary.persist_overload_witness_captures(argument, branch_captures);
+            boundary.record_overload_branches(argument, branches);
         }
     }
 
-    /// Record generic residual information from a completed witness check.
-    pub(crate) fn record_generic_residuals(&self, witness: &ResidualWitnessContext) {
+    /// Record that a completed argument check captured type parameters from a generic argument.
+    pub(crate) fn record_generic_argument(&self, argument: &MatchedArgument) {
         assert!(
             !matches!(self.argument_side, ArgumentSide::NotAnalyzingACall),
-            "generic residual capture requires active call analysis"
+            "recording a generic argument requires active call analysis"
         );
         if let Some(boundary) = &self.boundary {
-            boundary.record_generic_residuals(witness);
+            boundary.record_generic_argument(argument);
         }
     }
 
-    /// Returns the union of all captured vars across both overload and generic
-    /// witness captures, without draining.
+    /// Returns the union of all captured vars across both overload and generic argument captures,
+    /// without draining.
     pub(crate) fn captured_vars(&self) -> SmallSet<Var> {
         self.boundary
             .map_or_else(SmallSet::new, CallBoundary::captured_vars)
     }
 
-    /// Returns the union of generic witness vars only, without draining.
-    pub(crate) fn generic_captured_vars(&self) -> SmallSet<Var> {
+    /// Returns the union of generic argument vars only, without draining.
+    pub(crate) fn generic_argument_vars_in_call(&self) -> SmallSet<Var> {
         self.boundary
-            .map_or_else(SmallSet::new, CallBoundary::generic_captured_vars)
+            .map_or_else(SmallSet::new, CallBoundary::generic_argument_vars_in_call)
     }
 }
 
@@ -3687,11 +3664,11 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         self.witness_deferred_vars.shift_remove(&argument)
     }
 
-    pub(crate) fn active_overload_residual_witness(&self) -> Option<ResidualWitnessContext> {
+    pub(crate) fn active_matched_argument(&self) -> Option<MatchedArgument> {
         if !self.active_call_context.residual_hooks_enabled() {
             return None;
         }
-        let mut witness = self.active_call_context.residual_witness()?.clone();
+        let mut witness = self.active_call_context.matched_argument()?.clone();
         if let Some(deferred_vars) = self.witness_deferred_vars.get(&witness.argument()) {
             witness.extend_deferred_vars(deferred_vars.clone());
         }
@@ -3702,15 +3679,15 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         if !self.active_call_context.residual_hooks_enabled() {
             return;
         }
-        let Some(witness) = self.active_call_context.residual_witness_mut() else {
+        let Some(argument) = self.active_call_context.matched_argument_mut() else {
             return;
         };
-        if !witness.origin_vars.contains(&origin_var) {
+        if !argument.origin_vars.contains(&origin_var) {
             return;
         }
-        let argument = witness.argument;
-        let target_vars = witness.target_vars.clone();
-        let deferred_vars = self.witness_deferred_vars.entry(argument).or_default();
+        let argument_key = argument.argument;
+        let target_vars = argument.target_vars.clone();
+        let deferred_vars = self.witness_deferred_vars.entry(argument_key).or_default();
         for var in other.collect_maybe_placeholder_vars() {
             if target_vars.contains(&var) {
                 deferred_vars.insert(var);
@@ -4707,7 +4684,7 @@ mod tests {
                 QuantifiedHandle(vec![var]),
                 false,
                 &mut |_| Some(VarSnapshot::default()),
-                &mut WitnessCaptures::default(),
+                &mut ArgumentCaptures::default(),
             )
             .0
             .expect_err("the violation recorded while matching arguments is reported");

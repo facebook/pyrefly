@@ -2447,8 +2447,8 @@ impl<'ctx, 'answer, Ans: LookupAnswer> AnswersSolver<'ctx, 'answer, Ans> {
             call_boundary.defer_quantified(self_qs);
         }
         if let Some(targs) = ctor_targs {
-            let residual_vars = call_context.captured_vars();
-            self.solver().generalize_class_targs(targs, &residual_vars);
+            let recorded_vars = call_context.captured_vars();
+            self.solver().generalize_class_targs(targs, &recorded_vars);
         }
         let (finish_result, defaults_used) = self.solver().finish_call_boundary(
             self.solver().config.infer_with_first_use,

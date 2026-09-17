@@ -53,9 +53,9 @@ use crate::alt::expr::TypeOrExpr;
 use crate::solver::shape::has_int_tuple_bound;
 use crate::solver::shape::type_as_intvar_solution;
 use crate::solver::solver::ArgumentSide;
+use crate::solver::solver::MatchedArgument;
 use crate::solver::solver::OpenTypedDictSubsetError;
 use crate::solver::solver::QuantifiedHandle;
-use crate::solver::solver::ResidualWitnessContext;
 use crate::solver::solver::Subset;
 use crate::solver::solver::SubsetCacheEntry;
 use crate::solver::solver::SubsetError;
@@ -198,7 +198,7 @@ fn any<T>(
 struct FreshForall {
     handle: QuantifiedHandle,
     ty: Type,
-    witness: Option<ResidualWitnessContext>,
+    argument: Option<MatchedArgument>,
 }
 
 impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
@@ -764,7 +764,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
             .type_order
             .get_protocol_member_names(protocol.class_object());
         for name in protocol_members {
-            let allow_residual_capture = name == dunder::CALL;
+            let records_overload_branches = name == dunder::CALL;
             if name == dunder::INIT || name == dunder::NEW {
                 // Protocols can't be instantiated
                 continue;
@@ -792,10 +792,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     self.is_subset_eq_for_protocol_member(
                         &got,
                         &want_no_self,
-                        allow_residual_capture,
+                        records_overload_branches,
                     )?;
                 } else {
-                    self.is_subset_eq_for_protocol_member(&got, &want, allow_residual_capture)?;
+                    self.is_subset_eq_for_protocol_member(&got, &want, records_overload_branches)?;
                 }
             } else {
                 self.type_order.is_protocol_subset_at_attr(
@@ -803,7 +803,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                     &protocol,
                     &name,
                     &mut |got, want| {
-                        self.is_subset_eq_for_protocol_member(got, want, allow_residual_capture)
+                        self.is_subset_eq_for_protocol_member(got, want, records_overload_branches)
                     },
                 )?;
             }
@@ -815,10 +815,10 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         &mut self,
         got: &Type,
         want: &Type,
-        allow_residual_capture: bool,
+        records_overload_branches: bool,
     ) -> Result<(), SubsetError> {
         self.with_active_call_context(
-            (!allow_residual_capture)
+            (!records_overload_branches)
                 .then(|| self.active_call_context.clone().with_outside_context()),
             |me| me.is_subset_eq(got, want),
         )
@@ -1494,11 +1494,9 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         })
     }
 
-    fn witness_and_captured_vars_for_overload(
-        &mut self,
-    ) -> Option<(ResidualWitnessContext, Vec<Var>)> {
-        if let Some(witness) = self.active_overload_residual_witness() {
-            let captured_vars = self.solver.overload_capture_quantified_vars(&witness);
+    fn witness_and_captured_vars_for_overload(&mut self) -> Option<(MatchedArgument, Vec<Var>)> {
+        if let Some(witness) = self.active_matched_argument() {
+            let captured_vars = self.solver.unsolved_argument_vars(&witness);
             if !captured_vars.is_empty() {
                 return Some((witness, captured_vars));
             }
@@ -1508,7 +1506,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
     fn is_subset_overload_with_active_witness(
         &mut self,
-        witness: &ResidualWitnessContext,
+        witness: &MatchedArgument,
         captured_vars: &[Var],
         overload: &Overload,
         want: &Type,
@@ -1516,15 +1514,16 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         let pre_probe_snapshot = self.solver.snapshot_exact_vars(captured_vars);
         let mut matched_any_branch = false;
         let mut successful_branch_captures = Vec::new();
-        let generic_captured_vars = self.active_call_context.generic_captured_vars();
+        let generic_argument_vars_in_call =
+            self.active_call_context.generic_argument_vars_in_call();
         for (branch_index, l) in overload.signatures.iter().enumerate() {
             let probe_snapshot = self.solver.snapshot_exact_vars(captured_vars);
             if self.is_subset_eq(&l.as_type(), want).is_ok() {
                 matched_any_branch = true;
-                successful_branch_captures.push(self.solver.extract_overload_branch_capture(
+                successful_branch_captures.push(self.solver.extract_overload_branch(
                     branch_index,
                     captured_vars,
-                    &generic_captured_vars,
+                    &generic_argument_vars_in_call,
                 ));
             }
             self.solver.restore_vars(probe_snapshot);
@@ -1535,7 +1534,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 unreachable!("successful overload probe must produce a branch capture");
             }
             self.active_call_context
-                .persist_overload_witness_captures(witness.argument(), successful_branch_captures);
+                .record_overload_branches(witness.argument(), successful_branch_captures);
             true
         } else {
             false
@@ -1560,12 +1559,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
                 && !eligible_vars.is_empty()
             {
                 let synthesized =
-                    ResidualWitnessContext::for_overload(argument, &eligible_vars, argument_side);
+                    MatchedArgument::for_overload(argument, &eligible_vars, argument_side);
                 self.with_active_call_context(
                     Some(
                         self.active_call_context
                             .clone()
-                            .with_residual_witness(synthesized),
+                            .with_matched_argument(synthesized),
                     ),
                     |me| {
                         let (witness, captured_vars) =
@@ -1667,8 +1666,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
 
     fn instantiate_fresh_forall(&self, forall: Forall<Forallable>, want: &Type) -> FreshForall {
         let (vs, got) = self.type_order.instantiate_fresh_forall(forall.clone());
-        let witness = self.active_call_context.argument().map(|argument| {
-            ResidualWitnessContext::for_forall(
+        let argument = self.active_call_context.argument().map(|argument| {
+            MatchedArgument::for_forall(
                 argument,
                 &vs,
                 want,
@@ -1678,7 +1677,7 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         FreshForall {
             handle: vs,
             ty: got,
-            witness,
+            argument,
         }
     }
 
@@ -1686,21 +1685,21 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         let FreshForall {
             handle,
             ty,
-            witness,
+            argument,
         } = got;
-        let has_witness = witness.is_some();
-        let (result, mut maybe_witness) = self.with_active_call_context(
-            witness.map(|witness| {
+        let has_argument = argument.is_some();
+        let (result, mut maybe_argument) = self.with_active_call_context(
+            argument.map(|argument| {
                 self.active_call_context
                     .clone()
-                    .with_residual_witness(witness)
+                    .with_matched_argument(argument)
             }),
             |me| {
                 (
                     me.is_subset_eq(&ty, want),
-                    has_witness.then(|| {
+                    has_argument.then(|| {
                         me.active_call_context
-                            .take_residual_witness()
+                            .take_matched_argument()
                             .expect("Active witness should still be present")
                     }),
                 )
@@ -1712,12 +1711,12 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
         );
         if result.is_ok()
             && in_call_analysis
-            && let Some(witness) = maybe_witness.as_mut()
+            && let Some(argument) = maybe_argument.as_mut()
         {
-            if let Some(deferred_vars) = self.take_witness_deferred_vars(witness.argument()) {
-                witness.extend_deferred_vars(deferred_vars);
+            if let Some(deferred_vars) = self.take_witness_deferred_vars(argument.argument()) {
+                argument.extend_deferred_vars(deferred_vars);
             }
-            self.active_call_context.record_generic_residuals(witness);
+            self.active_call_context.record_generic_argument(argument);
         }
         let handle = if in_call_analysis {
             match self.active_call_context.defer_quantified(handle) {
@@ -1761,8 +1760,8 @@ impl<'solver, 'subset, Ans: LookupAnswer> Subset<'solver, 'subset, Ans> {
     pub fn is_subset_eq_impl(&mut self, got: &Type, want: &Type) -> Result<(), SubsetError> {
         let context_key = self.active_call_context.subset_cache_context();
         let cache_key = if self.can_be_recursive(got, want) {
-            // Cache keys include residual context identity so witness-scoped
-            // comparisons do not suppress context-sensitive side effects.
+            // Cache keys include which argument is being matched, so argument-scoped comparisons
+            // do not suppress context-sensitive side effects.
             // The vast majority of checks run under `Default` context.
             let key = (got.clone(), want.clone(), context_key);
             if let Some(entry) = self.subset_cache.get(&key) {
