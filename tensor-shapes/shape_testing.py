@@ -217,6 +217,7 @@ def check_suites(
     suites: list[Suite],
     nocapture: bool = False,
     check_stubs: bool = True,
+    stub_search_paths: tuple[Path, ...] = (),
     site_package_paths: tuple[Path, ...] = (),
 ) -> int:
     """Type check the stubs and then every suite, returning the last nonzero exit code.
@@ -234,7 +235,12 @@ def check_suites(
         raise ValueError(f"no suites to check under {package_root}")
 
     failed = 0
-    for suite in [STUB_SUITE, *suites] if check_stubs else suites:
+    stub_suite = Suite(
+        name=STUB_SUITE.name,
+        patterns=STUB_SUITE.patterns,
+        extra_search_paths=stub_search_paths,
+    )
+    for suite in [stub_suite, *suites] if check_stubs else suites:
         files = suite.files(package_root)
         command = [
             *pyrefly,

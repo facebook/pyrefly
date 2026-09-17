@@ -23,6 +23,7 @@ from shape_testing import (  # noqa: E402
 from suites import SUITES  # noqa: E402
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
+TORCH_STUB_ROOT = PACKAGE_ROOT.parent / "pyrefly-torch-stubs"
 
 
 def main() -> int:
@@ -74,6 +75,7 @@ def main() -> int:
         package_root=PACKAGE_ROOT,
         suites=selected,
         nocapture=args.nocapture,
+        stub_search_paths=(TORCH_STUB_ROOT,),
         site_package_paths=(venv_site_packages(venv_python(args.python)),),
     )
 

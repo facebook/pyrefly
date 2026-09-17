@@ -20,15 +20,21 @@ from einops import (
     unpack,
 )
 from shape_extensions import assert_shape, IntTuple
-from torch import ones
+from torch import ones, Tensor
 
 
 def test_pattern_operations() -> None:
     image = ones((2, 3, 5, 7))
-    assert_shape(rearrange(image, "b c h w -> b h w c").shape, (2, 5, 7, 3))
-    assert_shape(reduce(np.ones((2, 3)), "row col -> row", "mean").shape, (2,))
+    rearranged = rearrange(image, "b c h w -> b h w c")
+    assert_type(rearranged, Tensor[[2, 5, 7, 3]])
+    assert_shape(rearranged.shape, (2, 5, 7, 3))
+    reduced = reduce(ones((2, 3)), "row col -> row", "mean")
+    assert_type(reduced, Tensor[[2]])
+    assert_shape(reduced.shape, (2,))
+    repeated = repeat(ones((2, 3)), "row col -> row col 2")
+    assert_type(repeated, Tensor[[2, 3, 2]])
     assert_shape(
-        repeat(jnp.ones((2, 3)), "row col -> row col 2").shape,
+        repeated.shape,
         (2, 3, 2),
     )
     assert_shape(
@@ -52,26 +58,15 @@ def test_pattern_operations() -> None:
 def test_einsum() -> None:
     left = ones((2, 3, 5))
     right = ones((2, 5, 7))
-    assert_shape(
-        einsum(
-            left,
-            right,
-            "batch row inner, batch inner col -> batch row col",
-        ).shape,
-        (2, 3, 7),
+    product = einsum(
+        left,
+        right,
+        "batch row inner, batch inner col -> batch row col",
     )
-    assert_shape(
-        einsum(np.ones((3, 3)), "row row ->").shape,
-        (),
-    )
-    assert_shape(
-        einsum(
-            jnp.ones((3,)),
-            jnp.ones((5,)),
-            "row, col -> row col",
-        ).shape,
-        (3, 5),
-    )
+    assert_type(product, Tensor[[2, 3, 7]])
+    assert_shape(product.shape, (2, 3, 7))
+    assert_type(einsum(ones((3, 3)), "row row ->"), Tensor[[]])
+    assert_type(einsum(ones((3,)), ones((5,)), "row, col -> row col"), Tensor[[3, 5]])
     assert_shape(
         einsum(
             ones((2,)),
@@ -86,6 +81,24 @@ def test_einsum() -> None:
     )
 
 
+def test_other_backends_at_runtime() -> None:
+    if not TYPE_CHECKING:
+        assert_shape(reduce(np.ones((2, 3)), "row col -> row", "mean").shape, (2,))
+        assert_shape(
+            repeat(jnp.ones((2, 3)), "row col -> row col 2").shape,
+            (2, 3, 2),
+        )
+        assert_shape(einsum(np.ones((3, 3)), "row row ->").shape, ())
+        assert_shape(
+            einsum(
+                jnp.ones((3,)),
+                jnp.ones((5,)),
+                "row, col -> row col",
+            ).shape,
+            (3, 5),
+        )
+
+
 def test_auxiliary_api() -> None:
     assert_type(__version__, str)
     tensor = ones((2, 3, 5))
@@ -98,8 +111,11 @@ def test_auxiliary_api() -> None:
     assert_shape(asnumpy(tensor).shape, (2, 3, 5))
 
     packed, packed_shapes = pack([ones((2, 3)), ones((2, 5))], "batch *")
+    assert_type(packed, Tensor[IntTuple])
     assert_shape(packed.shape, IntTuple, runtime=(2, 8))
     first, second = unpack(packed, packed_shapes, "batch *")
+    assert_type(first, Tensor[IntTuple])
+    assert_type(second, Tensor[IntTuple])
     assert_shape(first.shape, IntTuple, runtime=(2, 3))
     assert_shape(second.shape, IntTuple, runtime=(2, 5))
     assert issubclass(EinopsError, RuntimeError)
