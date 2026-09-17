@@ -4,7 +4,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""Run every tensor-shape stub test: static and runtime, for every library.
+"""Run every tensor-shape static and runtime test suite.
 
 This is the single entry point CI uses, internally and on GitHub, so that all
 of the shape coverage lands in one job rather than one job per library. The
@@ -26,10 +26,20 @@ from pathlib import Path
 from shape_testing import pyrefly_command, TENSOR_SHAPES_ROOT, venv_python
 
 PACKAGES: tuple[str, ...] = (
+    "microtorch",
     "pyrefly-torch-stubs",
     "pyrefly-numpy-stubs",
     "pyrefly-jax-stubs",
     "pyrefly-einops-stubs",
+)
+
+RUNTIME_PACKAGES: frozenset[str] = frozenset(
+    {
+        "pyrefly-torch-stubs",
+        "pyrefly-numpy-stubs",
+        "pyrefly-jax-stubs",
+        "pyrefly-einops-stubs",
+    }
 )
 
 
@@ -132,12 +142,13 @@ def main() -> int:
                 command.extend(["--pyrefly", pyrefly[0]])
             else:
                 command.append("--buck")
-            command.extend(["--python", str(python)])
+            if package != "microtorch":
+                command.extend(["--python", str(python)])
             if args.nocapture:
                 command.append("--nocapture")
             if not run(command):
                 failures.append(step)
-        if not args.static_only:
+        if not args.static_only and package in RUNTIME_PACKAGES:
             step = f"{package} runtime"
             print(f"\n=== {step} ===", flush=True)
             if not run([str(python), str(package_root / "run_runtime_tests.py")]):
