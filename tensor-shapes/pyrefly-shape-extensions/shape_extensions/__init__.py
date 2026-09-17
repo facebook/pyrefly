@@ -149,7 +149,10 @@ class Elements:
         return f"Elements[{self.shape!r}]"
 
 
-class Int[T]:
+_T = typing.TypeVar("_T")
+
+
+class Int(typing.Generic[_T]):
     """Symbolic integer type for dimension values.
 
     At runtime this is a no-op generic class. The type checker uses the
@@ -159,7 +162,7 @@ class Int[T]:
     pass
 
 
-class Flag[T]:
+class Flag(typing.Generic[_T]):
     """Marker for a literal-preserving value that controls type-level evaluation."""
 
     pass
@@ -171,7 +174,7 @@ class Index:
     pass
 
 
-class ProxyMethod[T]:
+class ProxyMethod(typing.Generic[_T]):
     """Type-checker marker for method forwarding annotations."""
 
     pass
@@ -375,7 +378,10 @@ class MapIntTuples:
         return tuple
 
 
-def type_shape_dsl_function[F: typing.Callable](fn: F) -> F:
+_F = typing.TypeVar("_F", bound=typing.Callable)
+
+
+def type_shape_dsl_function(fn: _F) -> _F:
     """Runtime no-op for a user-defined type-level shape DSL function."""
 
     return fn
