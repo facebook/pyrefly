@@ -4,7 +4,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from builtins import bool as py_bool
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from types import EllipsisType
 from typing import Any, Final, Literal, overload, SupportsIndex
 
@@ -421,6 +421,13 @@ class intp(generic): ...
 
 type _IndexScalar = int | bool_ | int32 | int64 | intp
 type _IndexSequence = Sequence[_IndexScalar] | Sequence[Sequence[_IndexScalar]]
+type _ArrayIndex = (
+    _BasicIndex
+    | _IndexScalar
+    | _IndexSequence
+    | ndarray
+    | tuple[_BasicIndex | _IndexScalar | _IndexSequence | ndarray, ...]
+)
 type _ArrayScalar = None | bool | int | float | complex | str | bytes | generic
 
 __version__: Final[str]
@@ -509,12 +516,20 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
     @overload
     def __getitem__(
         self: ndarray[Shape, DType],
-        key: _BasicIndex
-        | _IndexScalar
-        | _IndexSequence
-        | ndarray
-        | tuple[_BasicIndex | _IndexScalar | _IndexSequence | ndarray, ...],
+        key: _ArrayIndex,
     ) -> ndarray[IntTuple, DType]: ...
+    # Assignment preserves the receiver's shape; value broadcasting is gradual.
+    def __setitem__(self, key: _ArrayIndex, value: ArrayLike, /) -> None: ...
+    @overload
+    def __iter__[N: IntVar, M: IntVar](
+        self: ndarray[[N, M], DType], /
+    ) -> Iterator[ndarray[[M], DType]]: ...
+    # Scalar dtypes and iteration over other ranks remain gradual.
+    @overload
+    def __iter__(self, /) -> Iterator[Any]: ...
+    def __int__(self: ndarray[[]], /) -> int: ...
+    def __float__(self: ndarray[[]], /) -> float: ...
+    def __complex__(self: ndarray[[]], /) -> complex: ...
     # Only 2-D transpose is modeled for the NumPy shape-stub MVP.
     @property
     def T[N: IntVar, P: IntVar](
@@ -606,6 +621,116 @@ class ndarray[Shape: _Shape = _Shape, DType = Any]:
     def __rpow__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
     ) -> ndarray[_broadcast_shape(Shape, OtherShape), DType]: ...
+    # Scalar results also satisfy Python's truth-valued comparison protocols.
+    @overload
+    def __lt__(self: ndarray[[]], other: Any, /) -> Any: ...
+    @overload
+    def __lt__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape], /
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), _dtype[bool_]]: ...
+    @overload
+    def __lt__(
+        self, other: int | float | complex | str | bytes | generic, /
+    ) -> ndarray[Shape, _dtype[bool_]]: ...
+    @overload
+    def __lt__(self, other: ArrayLike, /) -> ndarray[IntTuple, _dtype[bool_]]: ...
+    @overload
+    def __le__(self: ndarray[[]], other: Any, /) -> Any: ...
+    @overload
+    def __le__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape], /
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), _dtype[bool_]]: ...
+    @overload
+    def __le__(
+        self, other: int | float | complex | str | bytes | generic, /
+    ) -> ndarray[Shape, _dtype[bool_]]: ...
+    @overload
+    def __le__(self, other: ArrayLike, /) -> ndarray[IntTuple, _dtype[bool_]]: ...
+    @overload
+    def __gt__(self: ndarray[[]], other: Any, /) -> Any: ...
+    @overload
+    def __gt__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape], /
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), _dtype[bool_]]: ...
+    @overload
+    def __gt__(
+        self, other: int | float | complex | str | bytes | generic, /
+    ) -> ndarray[Shape, _dtype[bool_]]: ...
+    @overload
+    def __gt__(self, other: ArrayLike, /) -> ndarray[IntTuple, _dtype[bool_]]: ...
+    @overload
+    def __ge__(self: ndarray[[]], other: Any, /) -> Any: ...
+    @overload
+    def __ge__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape], /
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), _dtype[bool_]]: ...
+    @overload
+    def __ge__(
+        self, other: int | float | complex | str | bytes | generic, /
+    ) -> ndarray[Shape, _dtype[bool_]]: ...
+    @overload
+    def __ge__(self, other: ArrayLike, /) -> ndarray[IntTuple, _dtype[bool_]]: ...
+    @overload
+    def __eq__(self: ndarray[[]], other: Any, /) -> Any: ...  # type: ignore[bad-override]
+    @overload
+    def __eq__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape], /
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), _dtype[bool_]]: ...
+    @overload
+    def __eq__(
+        self, other: int | float | complex | str | bytes | generic, /
+    ) -> ndarray[Shape, _dtype[bool_]]: ...
+    @overload
+    def __eq__(self, other: ArrayLike, /) -> ndarray[IntTuple, _dtype[bool_]]: ...
+    @overload
+    def __ne__(self: ndarray[[]], other: Any, /) -> Any: ...  # type: ignore[bad-override]
+    @overload
+    def __ne__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape], /
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape), _dtype[bool_]]: ...
+    @overload
+    def __ne__(
+        self, other: int | float | complex | str | bytes | generic, /
+    ) -> ndarray[Shape, _dtype[bool_]]: ...
+    @overload
+    def __ne__(self, other: ArrayLike, /) -> ndarray[IntTuple, _dtype[bool_]]: ...
+    def __invert__(self) -> ndarray[Shape, DType]: ...
+    @overload
+    def __and__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape], /
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape)]: ...
+    @overload
+    def __and__(self, other: _IndexScalar, /) -> ndarray[Shape]: ...
+    @overload
+    def __or__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape], /
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape)]: ...
+    @overload
+    def __or__(self, other: _IndexScalar, /) -> ndarray[Shape]: ...
+    @overload
+    def __xor__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape], /
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape)]: ...
+    @overload
+    def __xor__(self, other: _IndexScalar, /) -> ndarray[Shape]: ...
+    @overload
+    def __rand__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape], /
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape)]: ...
+    @overload
+    def __rand__(self, other: _IndexScalar, /) -> ndarray[Shape]: ...
+    @overload
+    def __ror__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape], /
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape)]: ...
+    @overload
+    def __ror__(self, other: _IndexScalar, /) -> ndarray[Shape]: ...
+    @overload
+    def __rxor__[OtherShape: _Shape](
+        self, other: ndarray[OtherShape], /
+    ) -> ndarray[_broadcast_shape(Shape, OtherShape)]: ...
+    @overload
+    def __rxor__(self, other: _IndexScalar, /) -> ndarray[Shape]: ...
     def __matmul__[OtherShape: _Shape](
         self, other: ndarray[OtherShape]
     ) -> ndarray[matmul_shape(Shape, OtherShape), DType]: ...
@@ -1251,9 +1376,12 @@ def asarray(
     like: Any,
 ) -> Any: ...
 def round[Shape: _Shape](x: ndarray[Shape]) -> ndarray[Shape]: ...
+@overload
 def clip[Shape: _Shape](
     a: ndarray[Shape], a_min: int | float, a_max: int | float
 ) -> ndarray[Shape]: ...
+@overload
+def clip(a: ArrayLike, a_min: ArrayLike | None, a_max: ArrayLike | None) -> Any: ...
 def fill_diagonal[N: IntVar, DType](
     a: ndarray[[N, N], DType],
     val: Any,
@@ -1312,6 +1440,7 @@ def mean[
 ](
     a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
 ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+@overload
 def min[
     Shape: _Shape,
     DType,
@@ -1320,6 +1449,11 @@ def min[
 ](
     a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
 ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+@overload
+def min(
+    a: Sequence[ArrayLike], axis: _Axis = None, *, keepdims: py_bool = False
+) -> Any: ...
+@overload
 def max[
     Shape: _Shape,
     DType,
@@ -1328,6 +1462,10 @@ def max[
 ](
     a: ndarray[Shape, DType], axis: Axis = None, *, keepdims: KeepDims = False
 ) -> ndarray[reduce_shape(Shape, Axis, KeepDims), Any]: ...
+@overload
+def max(
+    a: Sequence[ArrayLike], axis: _Axis = None, *, keepdims: py_bool = False
+) -> Any: ...
 @overload
 def argmin[N: IntVar, M: IntVar](
     a: ndarray[[N, M]],
