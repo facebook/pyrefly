@@ -2441,7 +2441,9 @@ mod tests {
                 .join("\n")
         );
         config.interpreters.skip_interpreter_query = true;
-        config.python_environment.interpreter_site_package_path = vec![source_root, site_packages];
+        config.python_environment.interpreter_site_package_path =
+            vec![source_root.clone(), site_packages];
+        config.python_environment.interpreter_editable_path = vec![source_root];
         let configure_errors = config.configure();
         assert!(
             configure_errors.is_empty(),
@@ -2470,11 +2472,11 @@ mod tests {
             .map(|error| error.path().as_path().to_path_buf())
             .collect::<Vec<_>>();
 
-        assert_eq!(check_result.checked_file_count, 1);
+        assert_eq!(check_result.checked_file_count, 2);
         assert_eq!(
             bad_assignments,
-            Vec::<PathBuf>::new(),
-            "editable and regular interpreter paths are excluded: {errors:#?}",
+            vec![source],
+            "the editable workspace source is now checked: {errors:#?}",
         );
     }
 
