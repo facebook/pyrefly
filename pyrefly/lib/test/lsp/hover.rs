@@ -1775,7 +1775,7 @@ Widget docstring"#
 }
 
 #[test]
-fn hover_currently_uses_py_docstring_when_pyi_docstring_is_nonempty() {
+fn hover_prefers_nonempty_pyi_docstring() {
     let mut test_env = TestEnv::new();
     test_env.add_with_path(
         "lib",
@@ -1808,10 +1808,46 @@ documented()
 
     let report = get_test_report(&state, &main_handle, position);
     assert!(
-        report.contains("Documentation from the implementation."),
+        report.contains("Documentation from the stub."),
         "got: {report}"
     );
-    assert!(!report.contains("Documentation from the stub."));
+    assert!(!report.contains("Documentation from the implementation."));
+}
+
+#[test]
+fn hover_falls_back_to_py_docstring_when_pyi_docstring_is_empty() {
+    let mut test_env = TestEnv::new();
+    test_env.add_with_path(
+        "lib",
+        "lib.py",
+        r#"def empty_stub() -> int:
+    """Fallback for an empty stub docstring."""
+    return 1
+"#,
+    );
+    test_env.add_with_path(
+        "lib",
+        "lib.pyi",
+        r#"def empty_stub() -> int:
+    """"""
+    ...
+"#,
+    );
+    let main_code = r#"from lib import empty_stub
+
+empty_stub()
+#    ^
+"#;
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+    let position = extract_cursors_for_test(main_code)[0];
+
+    let report = get_test_report(&state, &main_handle, position);
+    assert!(
+        report.contains("Fallback for an empty stub docstring."),
+        "got: {report}"
+    );
 }
 
 #[test]
@@ -2711,4 +2747,49 @@ method
     // Free functions have no class context, so targets fall back to inline code
     assert_sphinx_resolved_as_code(&report, "py-meth", "test");
     assert_sphinx_resolved_as_code(&report, "c-func", "other");
+}
+
+#[test]
+fn hover_does_not_mix_unrelated_interface_constructor_docstring() {
+    let mut test_env = TestEnv::new();
+    test_env.add_with_path(
+        "lib",
+        "lib.py",
+        r#"
+class W: ...
+
+def Widget(x: int) -> W:
+    """Factory doc from the implementation."""
+    return W()
+"#,
+    );
+    test_env.add_with_path(
+        "lib",
+        "lib.pyi",
+        r#"
+class Widget:
+    """Class doc from the stub."""
+    def __init__(self, x: int) -> None:
+        """Init doc from the stub."""
+        ...
+"#,
+    );
+    let main_code = r#"
+from lib import Widget
+
+Widget(1)
+#  ^
+"#;
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+    let position = extract_cursors_for_test(main_code)[0];
+
+    let report = get_test_report(&state, &main_handle, position);
+    assert!(report.contains("(function) Widget"), "got: {report}");
+    assert!(
+        report.contains("Factory doc from the implementation."),
+        "got: {report}"
+    );
+    assert!(!report.contains("from the stub"), "got: {report}");
 }

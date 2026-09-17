@@ -993,7 +993,23 @@ pub fn get_hover_with_verbosity(
                     item.module.code_at(item.definition_range) == identifier.id.as_str()
                 })
         });
-    let (kind, name, docstring_range, module) = if let Some(FindDefinitionItemWithDocstring {
+    let interface_definition = definition.as_ref().and_then(|executable| {
+        if keyword_argument_identifier.is_some() {
+            return None;
+        }
+        // Only borrow documentation from the same public symbol. Preferences may otherwise
+        // redirect a factory function to an unrelated stub constructor.
+        transaction
+            .find_definition(handle, position, FindPreference::default())
+            .ok()
+            .and_then(|items| items.into_vec().into_iter().next())
+            .filter(|interface| {
+                interface.module.path().is_interface()
+                    && executable.metadata.symbol_kind() == interface.metadata.symbol_kind()
+                    && executable.display_name == interface.display_name
+            })
+    });
+    let (kind, name, fallback_docstring) = if let Some(FindDefinitionItemWithDocstring {
         metadata,
         definition_range: definition_location,
         module,
@@ -1007,10 +1023,18 @@ pub fn get_hover_with_verbosity(
             display_name.as_deref(),
             fallback_name_from_type,
         );
-        (kind, name, docstring_range, Some(module))
+        let docstring = docstring_range.map(|range| Docstring(range, module));
+        (kind, name, docstring)
     } else {
-        (None, fallback_name_from_type, None, None)
+        (None, fallback_name_from_type, None)
     };
+    let docstring = interface_definition
+        .and_then(|item| {
+            item.docstring_range
+                .map(|range| Docstring(range, item.module))
+        })
+        .filter(|docstring| !docstring.resolve().trim().is_empty())
+        .or(fallback_docstring);
 
     let name = name.or_else(|| identifier_text_at(transaction, handle, position));
 
@@ -1067,12 +1091,6 @@ pub fn get_hover_with_verbosity(
             Some((display, can_increase)) => (Some(display), can_increase),
             None => (None, false),
         };
-
-    let docstring = if let (Some(docstring), Some(module)) = (docstring_range, module) {
-        Some(Docstring(docstring, module))
-    } else {
-        None
-    };
 
     let parameter_doc = resolve_hover_parameter_doc(transaction, handle, position);
 
