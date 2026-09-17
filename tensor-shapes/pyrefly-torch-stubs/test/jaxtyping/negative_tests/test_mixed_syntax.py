@@ -15,6 +15,6 @@ if TYPE_CHECKING:
 def mixed_syntax(
     x: Float[Tensor, "batch 3"],
 ) -> Tensor[[3]]:
-    # E: Returned type `Tensor[IntTuple[batch, 3]]` is not assignable
-    #    to declared return type `Tensor[IntTuple[3]]`
+    # E: Returned type `Tensor[[batch, 3]]` is not assignable
+    #    to declared return type `Tensor[[3]]`
     return x

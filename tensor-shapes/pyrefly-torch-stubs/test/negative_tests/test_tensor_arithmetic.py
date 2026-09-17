@@ -144,15 +144,15 @@ def chained_symbolic[B: IntVar, N: IntVar, M: IntVar](
 
 def add_wrong_shape(x: Tensor[[2, 3]]) -> Tensor[[4, 5]]:
     """Arithmetic preserves shape, so a different return shape is rejected."""
-    # E: Returned type `Tensor[IntTuple[2, 3]]` is not assignable
-    #    to declared return type `Tensor[IntTuple[4, 5]]`
+    # E: Returned type `Tensor[[2, 3]]` is not assignable
+    #    to declared return type `Tensor[[4, 5]]`
     return x + 1.0
 
 
 def mul_wrong_rank(x: Tensor[[2, 3]]) -> Tensor[[2, 3, 4]]:
     """Scalar multiplication preserves rank."""
-    # E: Returned type `Tensor[IntTuple[2, 3]]` is not assignable
-    #    to declared return type `Tensor[IntTuple[2, 3, 4]]`
+    # E: Returned type `Tensor[[2, 3]]` is not assignable
+    #    to declared return type `Tensor[[2, 3, 4]]`
     return x * 2.0
 
 
@@ -163,8 +163,8 @@ def mul_wrong_rank(x: Tensor[[2, 3]]) -> Tensor[[2, 3, 4]]:
 
 def broadcast_wrong_return(x: Tensor[[1, 3]], y: Tensor[[2, 3]]) -> Tensor[[1, 3]]:
     """Broadcast result is [2, 3], not [1, 3]."""
-    # E: Returned type `Tensor[IntTuple[2, 3]]` is not assignable
-    #    to declared return type `Tensor[IntTuple[1, 3]]`
+    # E: Returned type `Tensor[[2, 3]]` is not assignable
+    #    to declared return type `Tensor[[1, 3]]`
     return x + y
 
 
@@ -299,8 +299,8 @@ def broadcast_different_int_tuple[Ts: IntTuple, Us: IntTuple](
     x: Tensor[[*Elements[Ts], 3]], y: Tensor[[*Elements[Us], 3]]
 ) -> Tensor[[*Elements[Ts], 3]]:
     """Different IntTuples degrade to gradual batch dimensions."""
-    # E: Returned type `Tensor[IntTuple[*tuple[int, ...], 3]]` is not assignable
-    #    to declared return type `Tensor[IntTuple[*Elements[Ts], 3]]`
+    # E: Returned type `Tensor[[*tuple[int, ...], 3]]` is not assignable
+    #    to declared return type `Tensor[[*Elements[Ts], 3]]`
     return x + y
 
 

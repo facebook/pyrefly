@@ -437,7 +437,7 @@ def test_lax_shape_manipulation() -> None:
     except ValueError:
         pass
     try:
-        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `x`
+        # E: Argument `Array[[]]` is not assignable to parameter `x`
         lax.unstack(jnp.ones(()))
     except ValueError:
         pass

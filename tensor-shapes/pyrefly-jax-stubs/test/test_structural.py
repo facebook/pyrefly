@@ -285,7 +285,7 @@ def test_splitting() -> None:
     except ValueError:
         pass
     try:
-        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `x`
+        # E: Argument `Array[[]]` is not assignable to parameter `x`
         jnp.unstack(jnp.ones(()))
     except ValueError:
         pass
@@ -296,7 +296,7 @@ def test_splitting() -> None:
     except IndexError:
         pass
     try:
-        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `ary`
+        # E: Argument `Array[[]]` is not assignable to parameter `ary`
         jnp.split(jnp.ones(()), 2)
     except IndexError:
         pass
@@ -307,7 +307,7 @@ def test_splitting() -> None:
     except IndexError:
         pass
     try:
-        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `ary`
+        # E: Argument `Array[[]]` is not assignable to parameter `ary`
         jnp.hsplit(jnp.ones(()), 2)
     except IndexError:
         pass
@@ -318,7 +318,7 @@ def test_splitting() -> None:
     except IndexError:
         pass
     try:
-        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `ary`
+        # E: Argument `Array[[]]` is not assignable to parameter `ary`
         jnp.vsplit(jnp.ones(()), 2)
     except IndexError:
         pass
@@ -329,7 +329,7 @@ def test_splitting() -> None:
     except IndexError:
         pass
     try:
-        # E: Argument `Array[IntTuple[()]]` is not assignable to parameter `ary`
+        # E: Argument `Array[[]]` is not assignable to parameter `ary`
         jnp.dsplit(jnp.ones(()), 2)
     except IndexError:
         pass

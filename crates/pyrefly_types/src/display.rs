@@ -361,6 +361,15 @@ impl<'a> TypeDisplayContext<'a> {
         arg: &Type,
         output: &mut impl TypeOutput,
     ) -> fmt::Result {
+        if let Type::IntTuple(shape) = arg
+            && !shape.is_shapeless()
+            && matches!(
+                param.restriction(),
+                Restriction::Bound(Type::IntTuple(bound)) if bound.is_shapeless()
+            )
+        {
+            return self.fmt_shape_as_tuple_carrier(shape, output);
+        }
         if param.kind() == QuantifiedKind::IntVar
             && let Type::Int(dim) = arg
         {
