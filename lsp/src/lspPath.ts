@@ -233,10 +233,17 @@ export async function resolveExecutable(
   extensionUri: vscode.Uri,
   pythonEnv: PythonEnvironment,
   logChannel: vscode.OutputChannel,
+  // A parameter, not a read, because tests cannot reach most workspace shapes
+  // any other way: `updateWorkspaceFolders` terminates and restarts the
+  // extension host whenever the first folder is added, removed or changed.
+  // Taking the list rather than the root keeps "no folders" expressible, since
+  // passing `undefined` would fall through to the default.
+  workspaceFolders: readonly vscode.WorkspaceFolder[] = vscode.workspace
+    .workspaceFolders ?? [],
 ): Promise<Executable> {
-  // There may be more than one URI due to multi-root workspaces, so just take the primary root.
-  const globalCwd: vscode.Uri | undefined =
-    vscode.workspace.workspaceFolders?.[0]?.uri;
+  // There may be more than one folder due to multi-root workspaces, so just
+  // take the primary root.
+  const primaryRoot: vscode.Uri | undefined = workspaceFolders[0]?.uri;
 
   // `pyrefly.lspArguments` resolves to an empty array in some environments
   // (notably dev containers / remote, where the `machine-overridable` default
@@ -247,7 +254,7 @@ export async function resolveExecutable(
   const configuredArgs: string[] = requireSettingOrDefault('pyrefly.lspArguments', ['lsp']);
   const args: string[] = configuredArgs.length > 0 ? configuredArgs : ['lsp'];
 
-  const selection = await selectBinary(extensionUri, pythonEnv, globalCwd);
+  const selection = await selectBinary(extensionUri, pythonEnv, primaryRoot);
   // The binary is chosen dynamically, so which one we picked and why is the
   // first thing anyone debugging a bad server needs to know.
   logChannel.appendLine(
