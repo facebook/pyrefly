@@ -1851,6 +1851,119 @@ empty_stub()
 }
 
 #[test]
+fn hover_preserves_missing_stub_fallback_and_imported_definition_metadata() {
+    let mut test_env = TestEnv::new();
+    test_env.add_with_path(
+        "lib",
+        "lib.py",
+        r#"def source_only() -> int:
+    """Documentation for a source-only symbol."""
+    return 1
+
+class Service:
+    label: str = "source"
+    """Implementation attribute documentation."""
+    def run(self) -> int:
+        """Implementation method documentation."""
+        return 1
+"#,
+    );
+    test_env.add_with_path(
+        "lib",
+        "lib.pyi",
+        r#"class Service:
+    label: str
+    """Stub attribute documentation."""
+    def run(self) -> int:
+        """Stub method documentation."""
+        ...
+"#,
+    );
+    test_env.add_with_path(
+        "impl",
+        "impl.py",
+        r#"def implementation_name() -> int:
+    """Implementation re-export documentation."""
+    return 1
+"#,
+    );
+    test_env.add_with_path(
+        "api",
+        "api.py",
+        "from impl import implementation_name as exported",
+    );
+    test_env.add_with_path(
+        "api",
+        "api.pyi",
+        r#"def exported() -> int:
+    """Public stub documentation."""
+    ...
+"#,
+    );
+    let main_code = r#"from api import exported
+from lib import Service, source_only
+
+def local_function() -> int:
+    """Local documentation."""
+    return 1
+
+service = Service()
+source_only()
+#    ^
+service.run()
+#       ^
+service.label
+#       ^
+exported()
+#   ^
+local_function()
+#     ^
+"#;
+    test_env.add("main", main_code);
+    let (state, handle) = test_env.to_state();
+    let main_handle = handle("main");
+    let reports = extract_cursors_for_test(main_code)
+        .into_iter()
+        .map(|position| get_test_report(&state, &main_handle, position))
+        .collect::<Vec<_>>();
+
+    let expected = [
+        "Documentation for a source-only symbol.",
+        "Stub method documentation.",
+        "Stub attribute documentation.",
+        "Public stub documentation.",
+        "Local documentation.",
+    ];
+    assert_eq!(reports.len(), expected.len());
+    for (report, expected) in reports.iter().zip(expected) {
+        assert!(
+            report.contains(expected),
+            "expected {expected:?}, got: {report}"
+        );
+    }
+    assert!(
+        !reports[1].contains("Implementation method documentation."),
+        "got: {}",
+        reports[1]
+    );
+    assert!(
+        !reports[2].contains("Implementation attribute documentation."),
+        "got: {}",
+        reports[2]
+    );
+    assert!(
+        reports[3].contains("(function) implementation_name"),
+        "got: {}",
+        reports[3]
+    );
+    assert!(
+        !reports[3].contains("Implementation re-export documentation."),
+        "got: {}",
+        reports[3]
+    );
+}
+
+#[test]
 fn hover_on_dict_constructor_is_multiline() {
     let code = r#"
 x: dict[str, int]
