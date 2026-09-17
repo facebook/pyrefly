@@ -813,11 +813,16 @@ fn format_diagnostic_message_for_markdown(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    use std::path::Path;
     use std::path::PathBuf;
 
     use lsp_types::CodeActionKind;
+    use lsp_types::GlobPattern;
     use lsp_types::InitializeParams;
     use pyrefly_util::events::CategorizedEvents;
+    use pyrefly_util::globs::Glob;
+    use pyrefly_util::watch_pattern::WatchPattern;
     use serde_json::json;
 
     use super::SOURCE_FIX_ALL_PYREFLY;
@@ -825,6 +830,24 @@ mod tests {
     use super::client_uses_custom_hover_provider;
     use super::format_diagnostic_message_for_markdown;
     use super::matches_fix_all_kind;
+
+    /// Characterizes a pre-existing exact-watcher bug: `WatchPattern::File` is
+    /// exact internally, but raw LSP glob serialization treats filename
+    /// metacharacters as operators.
+    #[test]
+    fn test_exact_watch_pattern_serialization() {
+        let GlobPattern::String(raw_pattern) = Server::get_pattern_to_watch(
+            WatchPattern::file(PathBuf::from("config[prod]?.py")),
+            false,
+        ) else {
+            panic!("Expected a string glob pattern");
+        };
+        assert_eq!(raw_pattern, "config[prod]?.py");
+
+        let glob = Glob::new(raw_pattern).unwrap();
+        assert!(!glob.matches(Path::new("config[prod]?.py")));
+        assert!(glob.matches(Path::new("configpa.py")));
+    }
 
     #[test]
     fn test_format_diagnostic_message_for_markdown() {
