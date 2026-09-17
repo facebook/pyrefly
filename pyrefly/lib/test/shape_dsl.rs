@@ -13200,6 +13200,43 @@ def wrong_result(shape: IntTuple) -> IntTuple:
 );
 
 testcase!(
+    test_inttuple_protocol_structural_inference,
+    shape_extensions_env(),
+    r#"
+from shape_extensions import IntTuple, IntVar
+from typing import Protocol, assert_type
+
+class Array[Shape: IntTuple](Protocol):
+    @property
+    def shape(self) -> Shape: ...
+
+class FirstArray[Shape: IntTuple]:
+    shape: Shape
+
+class SecondArray[Shape: IntTuple]:
+    shape: Shape
+
+def transpose[Rows: IntVar, Columns: IntVar](
+    array: Array[IntTuple[Rows, Columns]],
+) -> Array[IntTuple[Columns, Rows]]: ...
+
+def check[Rows: IntVar, Columns: IntVar](
+    condition: bool,
+    first: FirstArray[IntTuple[Rows, Columns]],
+    second: SecondArray[IntTuple[Rows, Columns]],
+) -> None:
+    assert_type(transpose(first), Array[IntTuple[Columns, Rows]])
+    assert_type(transpose(second), Array[IntTuple[Columns, Rows]])
+    assert_type(
+        transpose(first if condition else second),
+        Array[IntTuple[Columns, Rows]],
+    )
+
+transpose(0)  # E: Argument `Literal[0]` is not assignable to parameter `array`
+"#,
+);
+
+testcase!(
     test_inttuple_carrier_call_inference,
     shape_extensions_env(),
     r#"
